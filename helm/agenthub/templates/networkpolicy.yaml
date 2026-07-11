@@ -1,0 +1,68 @@
+# --- Session namespace: everything locked down by default ---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: {{ .Values.sessionsNamespace }}
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# The backend may reach the terminal port of the agent pods (ingress)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-to-agent
+  namespace: {{ .Values.sessionsNamespace }}
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { agenthub.dev/component: agent }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} }
+      ports:
+        - { protocol: TCP, port: {{ .Values.agent.port }} }
+---
+# Agent egress: DNS, HTTP(S) (Anthropic/MCP/GitLab/package mirrors), and SSH (git)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-egress
+  namespace: {{ .Values.sessionsNamespace }}
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { agenthub.dev/component: agent }
+  policyTypes: [Egress]
+  egress:
+    - to: []
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 22 }
+        # Port 80 for package mirrors (apt/apk partly use HTTP)
+        - { protocol: TCP, port: 80 }
+---
+# Agent -> backend (status/notify/artifact URL callbacks)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-to-backend
+  namespace: {{ .Values.sessionsNamespace }}
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { agenthub.dev/component: agent }
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} }
+      ports:
+        - { protocol: TCP, port: 8080 }
+        - { protocol: TCP, port: 80 }

@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agenthub-frontend
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.frontend.replicas }}
+  selector:
+    matchLabels: { app: agenthub-frontend }
+  template:
+    metadata:
+      labels: { app: agenthub-frontend }
+    spec:
+      {{- if .Values.image.pullSecret }}
+      imagePullSecrets: [{ name: {{ .Values.image.pullSecret }} }]
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: frontend
+          image: {{ include "agenthub.frontendImage" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports: [{ containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources: {{ toYaml .Values.frontend.resources | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /, port: 8080 }
+            initialDelaySeconds: 3
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agenthub-frontend
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  selector: { app: agenthub-frontend }
+  ports: [{ port: 80, targetPort: 8080 }]

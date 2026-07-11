@@ -1,0 +1,35 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: agenthub
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+  annotations:
+    {{- with .Values.ingress.clusterIssuer }}
+    cert-manager.io/cluster-issuer: {{ . }}
+    {{- end }}
+    # Do not time out long WebSocket sessions (terminal)
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: {{ .Values.ingress.className }}
+  tls:
+    - hosts: [{{ .Values.ingress.host | quote }}]
+      secretName: {{ .Values.ingress.tlsSecretName }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          # API + WebSocket to the backend; /internal is deliberately NOT routed
+          - path: /api
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-backend, port: { number: 80 } }
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-backend, port: { number: 80 } }
+          # Everything else: SPA
+          - path: /
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-frontend, port: { number: 80 } }

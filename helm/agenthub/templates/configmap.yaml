@@ -1,0 +1,27 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agenthub-config
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+data:
+  AgentHub__Namespace: {{ .Values.sessionsNamespace | quote }}
+  AgentHub__AgentImage: {{ include "agenthub.agentImage" . | quote }}
+  AgentHub__AgentPort: {{ .Values.agent.port | quote }}
+  AgentHub__GitCloneImage: {{ .Values.agent.gitCloneImage | quote }}
+  AgentHub__ImagePullSecret: {{ .Values.image.pullSecret | quote }}
+  AgentHub__RuntimeClassName: {{ .Values.agent.runtimeClassName | quote }}
+  AgentHub__MaxCpu: {{ .Values.agent.maxCpu | quote }}
+  AgentHub__MaxMemory: {{ .Values.agent.maxMemory | quote }}
+  AgentHub__AllowCustomImage: {{ .Values.agent.allowCustomImage | quote }}
+  AgentHub__AllowRootSessions: {{ .Values.agent.allowRootSessions | quote }}
+  AgentHub__CallbackBaseUrl: "http://agenthub-backend.{{ .Release.Namespace }}.svc.cluster.local"
+  S3__ServiceUrl: {{ .Values.s3.serviceUrl | quote }}
+  S3__Region: {{ .Values.s3.region | quote }}
+  S3__Bucket: {{ .Values.s3.bucket | quote }}
+  N8n__WebhookUrl: {{ .Values.n8n.webhookUrl | quote }}
+  Oidc__Authority: {{ .Values.oidc.authority | quote }}
+  Oidc__Audience: {{ .Values.oidc.audience | quote }}
+  Oidc__ClientId: {{ .Values.oidc.clientId | quote }}
+  Oidc__Scope: {{ .Values.oidc.scope | quote }}
+  Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
+  FrontendOrigin: "https://{{ .Values.ingress.host }}"

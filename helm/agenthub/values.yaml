@@ -1,0 +1,78 @@
+# Namespace where the agent session pods run (must exist, PSA "restricted").
+# The release itself is installed into the control-plane namespace (e.g. "agenthub").
+sessionsNamespace: agenthub-sessions
+
+image:
+  # Base path; the component images are named {registry}/{backend|frontend|agent-runtime}:{tag}
+  registry: registry.example.com/agenthub
+  tag: 0.1.0
+  pullPolicy: IfNotPresent
+  # Name of an existing dockerconfigjson secret (empty = none). Must exist in the release
+  # namespace AND in the sessionsNamespace (agent pods use it to pull the agent-runtime image).
+  pullSecret: ""
+
+ingress:
+  host: agenthub.example.com
+  className: nginx
+  # cert-manager ClusterIssuer for the TLS certificate (empty = omit the annotation).
+  clusterIssuer: ""
+  tlsSecretName: agenthub-tls
+
+backend:
+  replicas: 2
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+frontend:
+  replicas: 1
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
+
+agent:
+  port: 7681
+  gitCloneImage: alpine/git:2.45.2
+  runtimeClassName: ""
+  maxCpu: "2"
+  maxMemory: 4Gi
+  # Users may specify a custom container image per session.
+  allowCustomImage: true
+  # Users may run sessions as root (tools can be installed).
+  # Requires PSA "baseline" (instead of "restricted") on the sessionsNamespace.
+  allowRootSessions: true
+
+# OAuth2/OIDC provider. Empty authority = auth disabled (dev mode, all requests as user "dev").
+oidc:
+  authority: ""
+  audience: agenthub
+  clientId: agenthub
+  scope: openid profile email
+  requireHttpsMetadata: true
+
+# S3/MinIO for session state, scrollback, and artifacts. Empty serviceUrl = AWS endpoints.
+s3:
+  serviceUrl: ""
+  region: us-east-1
+  bucket: agenthub
+  accessKey: ""
+  secretKey: ""
+
+n8n:
+  webhookUrl: ""
+
+# Dev Postgres inside the cluster. For prod: set enabled=false and externalDatabase.connectionString.
+postgres:
+  enabled: true
+  image: postgres:16-alpine
+  # false = emptyDir instead of a PVC (data is lost on pod restart). Only for testing,
+  # when no storage provisioner is available.
+  persistence: true
+  storage: 5Gi
+  storageClass: ""
+  # Required when enabled=true; written to the secret and embedded in the connection string.
+  password: ""
+
+externalDatabase:
+  # Only relevant when postgres.enabled=false, e.g. "Host=...;Database=...;Username=...;Password=..."
+  connectionString: ""

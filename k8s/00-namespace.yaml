@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agenthub            # control plane (backend, frontend)
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: agenthub-sessions   # only the agent pods run here
+  labels:
+    # "baseline" instead of "restricted" so root sessions (tool installation) are possible.
+    # Still forbidden: privileged, hostPath, hostNetwork, additional capabilities.
+    # If you don't allow root sessions (agent.allowRootSessions=false), you can switch to "restricted".
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
