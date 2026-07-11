@@ -1,0 +1,46 @@
+Open AgentHub Enterprise License
+
+Copyright (c) Open AgentHub authors. All rights reserved.
+
+This software and associated documentation files (the "Enterprise
+Software") consist of all files in this directory ("ee/") and its
+subdirectories, and any files elsewhere in this repository that are
+marked as covered by the Open AgentHub Enterprise License.
+
+The Enterprise Software is NOT licensed under the GNU Affero General
+Public License v3.0 that covers the rest of this repository. It is
+proprietary, source-available software.
+
+Subject to the terms below, you may view, copy, and modify the
+Enterprise Software, but you may USE IT IN PRODUCTION ONLY WITH A VALID
+OPEN AGENTHUB ENTERPRISE SUBSCRIPTION for the correct number of users.
+Subscriptions are available at https://open-agenthub.github.io.
+
+You may modify the Enterprise Software only as necessary for use with
+a valid subscription, and you may contribute such modifications back
+to the Open AgentHub maintainers under the project's Contributor
+License Agreement.
+
+You may NOT:
+
+  1. use the Enterprise Software in production without a valid
+     subscription that matches your usage;
+  2. copy, merge, publish, distribute, sublicense, sell, or otherwise
+     make the Enterprise Software (or any modification of it) available
+     to any third party;
+  3. remove or alter any license, copyright, or other proprietary
+     notices in the Enterprise Software; or
+  4. circumvent, disable, or work around any license-key, subscription,
+     or usage-limit enforcement in the Enterprise Software.
+
+You agree that Open AgentHub and/or its licensors (as applicable)
+retain all right, title and interest in and to all such modifications.
+
+THE ENTERPRISE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE ENTERPRISE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ENTERPRISE SOFTWARE.

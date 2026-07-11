@@ -188,3 +188,12 @@ The NetworkPolicy only allows agent egress to the backend.
 - **Job status detail view** for finished CronJob runs (`pods/log`).
 - node-pty ABI: builder and runtime image must use the same Node major version (22 here).
 - Custom images must be glibc-based (Debian/Ubuntu/Fedora…); Alpine/musl is not supported.
+
+## License
+
+Open AgentHub is an **open-core** project: the core (everything outside `ee/`) is free
+software under the [GNU AGPL-3.0](LICENSE) and fully functional without a license key,
+while the code in [`ee/`](ee/) is source-available under the commercial
+[Open AgentHub Enterprise License](ee/LICENSE) and powers the enterprise offering
+(6 €/user/month, 3-month free trial). Contributions require agreeing to our Contributor
+License Agreement — see [CONTRIBUTING.md](CONTRIBUTING.md).
