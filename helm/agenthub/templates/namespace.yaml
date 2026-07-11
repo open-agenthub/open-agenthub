@@ -1,0 +1,12 @@
+{{- if .Values.createSessionsNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.sessionsNamespace }}
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+    # "baseline" so opt-in root sessions (tool installation) are possible.
+    # Still forbidden: privileged, hostPath, hostNetwork, additional capabilities.
+    # If you disable root sessions (agent.allowRootSessions=false), you can use "restricted".
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+{{- end }}

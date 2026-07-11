@@ -78,28 +78,37 @@ You stay the supervisor. **Be your own digital team lead.**
 - **Dedicated PSA namespace** for sessions.
 - Optionally harden further: set `RuntimeClassName` to gVisor/Kata (in `appsettings`/ConfigMap).
 
-## Build & deploy (Helm, recommended)
+## Install (Helm, recommended)
+
+Prebuilt images are published to `ghcr.io/open-agenthub/open-agenthub/*` and the chart
+to our Helm repository:
 
 ```bash
-# Build & push images (your registry)
+helm repo add agenthub https://open-agenthub.github.io/open-agenthub
+helm install agenthub agenthub/agenthub -n agenthub --create-namespace \
+  --set postgres.password=<pw> \
+  --set ingress.host=hub.your-org.example \
+  --set oidc.authority=https://<oidc-provider>/realms/<realm>   # empty = auth off (dev mode!)
+```
+
+No cluster yet? The all-in-one quickstart installs k3s + Open AgentHub on a single host:
+
+```bash
+curl -fsSL https://open-agenthub.github.io/install.sh | sh
+```
+
+To build your own images instead (e.g. from a fork):
+
+```bash
 REG=registry.example.com/agenthub TAG=0.1.0
 docker build -t $REG/backend:$TAG       ./backend
 docker build -t $REG/frontend:$TAG      ./frontend
 docker build -t $REG/agent-runtime:$TAG ./agent-runtime
 docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG && docker push $REG/agent-runtime:$TAG
 
-# Namespaces + pull secrets (one-time; the secret is needed in BOTH namespaces)
-kubectl apply -f k8s/00-namespace.yaml
-kubectl create secret docker-registry agenthub-registry \
-  --docker-server=registry.example.com --docker-username=<user> \
-  --docker-password=<token> -n agenthub
-kubectl create secret docker-registry agenthub-registry ... -n agenthub-sessions
-
-# Deploy
-helm upgrade --install agenthub helm/agenthub -n agenthub \
-  -f my-values.yaml \
-  --set postgres.password=<pw> \
-  --set oidc.authority=https://<oidc-provider>/realms/<realm>   # empty = auth off (dev mode!)
+# private registry? create the pull secret in BOTH namespaces and set image.pullSecret
+helm upgrade --install agenthub helm/agenthub -n agenthub --create-namespace \
+  --set image.registry=$REG --set image.tag=$TAG --set postgres.password=<pw>
 ```
 
 All values (host, issuer, images, S3, OIDC) live in `helm/agenthub/values.yaml`; put

@@ -1,11 +1,14 @@
-# Namespace where the agent session pods run (must exist, PSA "restricted").
+# Namespace where the agent session pods run.
 # The release itself is installed into the control-plane namespace (e.g. "agenthub").
 sessionsNamespace: agenthub-sessions
+# Create the sessions namespace (incl. PSA labels) as part of the release.
+# Set to false if the namespace is managed outside of Helm.
+createSessionsNamespace: true
 
 image:
   # Base path; the component images are named {registry}/{backend|frontend|agent-runtime}:{tag}
-  registry: registry.example.com/agenthub
-  tag: 0.1.0
+  registry: ghcr.io/open-agenthub/open-agenthub
+  tag: latest
   pullPolicy: IfNotPresent
   # Name of an existing dockerconfigjson secret (empty = none). Must exist in the release
   # namespace AND in the sessionsNamespace (agent pods use it to pull the agent-runtime image).
