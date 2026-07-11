@@ -1,19 +1,37 @@
-# Open AgentHub
+<div align="center">
 
-**Your coding agent shouldn't live on your laptop.**
+# `>_` Open AgentHub
+
+**A home for your coding agent. Be your own digital team lead.**
+
+[![Build](https://github.com/open-agenthub/open-agenthub/actions/workflows/build-images.yml/badge.svg)](https://github.com/open-agenthub/open-agenthub/actions/workflows/build-images.yml)
+[![Helm chart](https://github.com/open-agenthub/open-agenthub/actions/workflows/release-chart.yml/badge.svg)](https://github.com/open-agenthub/open-agenthub/actions/workflows/release-chart.yml)
+[![Coverage](https://codecov.io/gh/open-agenthub/open-agenthub/branch/main/graph/badge.svg)](https://codecov.io/gh/open-agenthub/open-agenthub)
+[![Version](https://img.shields.io/github/v/release/open-agenthub/open-agenthub?include_prereleases&label=version&color=f2a33c)](https://github.com/open-agenthub/open-agenthub/releases)
+[![License](https://img.shields.io/badge/license-AGPL--3.0%20+%20commercial%20ee-blue)](LICENSE)
+[![Website](https://img.shields.io/badge/website-open--agenthub.github.io-f2a33c)](https://open-agenthub.github.io)
+
+[Website](https://open-agenthub.github.io) ·
+[Quick start](#quick-start) ·
+[Features](#features) ·
+[How it works](#how-it-works) ·
+[Security](#security) ·
+[Pricing](https://open-agenthub.github.io/#pricing)
+
+</div>
+
+---
 
 Everybody uses coding agents — but only while their laptop is open. What about the other
-16 hours of the day? The weekend? The time between meetings? claude.ai can't help there:
-it has no access to your git workspaces, can't commit, can't run your tests, can't reach
-company-internal resources.
+**16 hours of the day**? The weekend? The time between meetings? Cloud chat AIs can't help
+there: they have no access to your git workspaces, can't commit, can't run your tests,
+can't reach company-internal resources.
 
 Open AgentHub is the missing piece: **a secure place where your agent lives.** Each agent
 runs 24/7 in an isolated Kubernetes pod with access to your work environment — your repos,
 your credentials, your tools. Kick off a research task before you go to bed. Answer your
 agent's questions from your phone between meetings. Schedule recurring jobs for the night
 shift.
-
-You stay the supervisor. **Be your own digital team lead.**
 
 ```
  Browser/Phone ──HTTPS/WSS──► Backend (C# / ASP.NET Core)  ──K8s API──► Agent pod
@@ -27,17 +45,170 @@ You stay the supervisor. **Be your own digital team lead.**
 ## Features
 
 - **Interactive, autonomous, or scheduled sessions** — watch and answer live, hand off a
-  prompt for unattended work, or run recurring jobs as CronJobs.
-- **Mobile-first web UI** with live terminal streaming (xterm.js), reconnect with scrollback.
-- **Bring your own container image** — run the agent in your project's toolchain image;
-  Claude CLI, Node, and the terminal agent are copied in automatically.
-- **Opt-in root mode** to install tools inside the container (apt, npm -g, …) while the pod
-  stays unprivileged.
-- **Subscription login that sticks**: log in once via `/login` inside a session; the OAuth
-  credentials are stored per user and restored into every new session (incl. token refresh).
-  Alternatively, use an `ANTHROPIC_API_KEY`.
-- **Push notifications** when your agent has a question (via webhook, e.g. n8n → Slack/Push).
-- **OIDC login** with any provider (Keycloak, Auth0, …), Authorization Code Flow + PKCE.
+  prompt for unattended work, or run recurring jobs as CronJobs. Your agent works the
+  night shift.
+- **Supervise from anywhere** — mobile-first web UI with live terminal streaming
+  (xterm.js); reconnect from your phone and the scrollback replays.
+- **Bring your own container image** — run the agent inside your project's toolchain
+  image; the Claude CLI, Node, and the terminal agent are copied in automatically.
+- **Opt-in root mode** to install tools inside the container (apt, npm -g, …) while the
+  pod stays unprivileged.
+- **Bring your tools via MCP** — attach any MCP server (issue tracker, database,
+  observability) per session and turn the agent into a teammate.
+- **Subscription login that sticks** — log in once via `/login` inside a session; the
+  OAuth credentials are stored per user and restored into every new session (incl. token
+  refresh). Alternatively, use an `ANTHROPIC_API_KEY`.
+- **Push notifications** when your agent has a question (via webhook, e.g. n8n → Slack).
+- **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
+- **Security by default** — unprivileged pods, default-deny network policies, per-user
+  secrets, no API tokens in agent pods. [Details below.](#security)
+
+## Quick start
+
+### Option A — you have a Kubernetes cluster
+
+Prebuilt images come from `ghcr.io/open-agenthub/open-agenthub/*`; the chart from our
+Helm repository:
+
+```bash
+helm repo add agenthub https://open-agenthub.github.io/open-agenthub
+helm install agenthub agenthub/open-agenthub -n agenthub --create-namespace \
+  --set postgres.password=$(openssl rand -hex 16) \
+  --set ingress.host=hub.your-org.example
+```
+
+### Option B — you don't have Kubernetes
+
+The all-in-one quickstart installs k3s (single node) + Open AgentHub on a Linux host
+(recommended: 4 vCPU / 6 GB RAM — good for up to ~6 users):
+
+```bash
+curl -fsSL https://open-agenthub.github.io/install.sh | sh
+```
+
+### First steps after installation
+
+1. **Open the UI.** With an ingress: `https://<your-host>`. Without one:
+   `kubectl -n agenthub port-forward svc/agenthub-frontend 8080:80` → http://localhost:8080.
+2. **Enable authentication** (auth is *disabled* by default — fine for a first test, not
+   for anything reachable by others). See the
+   [provider examples below](#configuring-oauthoidc-login), then:
+   ```bash
+   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+     --set oidc.authority=<issuer-url> \
+     --set oidc.clientId=<client-id> \
+     --set oidc.audience=<expected-audience>
+   ```
+3. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
+   for repo access, and an Anthropic API key — or leave it out and run `/login` inside
+   your first session to use your Claude subscription (persists across sessions).
+4. **Start your first session**: pick a repo, a mode (interactive / autonomous /
+   scheduled), optionally a custom image and MCP config — and watch your agent work.
+
+All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
+[`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3/MinIO
+credentials enable session resume, history of finished sessions, and artifact uploads.
+
+### Configuring OAuth/OIDC login
+
+Open AgentHub speaks standard OIDC: the frontend runs the Authorization Code Flow with
+PKCE (public client, no secret), the backend validates the JWT access token against
+`oidc.authority` / `oidc.audience`. The user's `preferred_username` claim is the tenant
+key. Register the following in your provider:
+
+- **Redirect URI:** `https://<host>/auth/callback`
+- **Post-logout redirect URI:** `https://<host>`
+- **Allowed web origins / CORS:** `https://<host>`
+
+<details>
+<summary><b>Keycloak</b></summary>
+
+1. In your realm: **Clients → Create client** — Client ID `agenthub`, client type
+   *OpenID Connect*, **Client authentication: Off** (public), Standard Flow enabled,
+   PKCE method `S256` (Advanced → Proof Key for Code Exchange).
+2. Set redirect URI / post-logout URI / web origins as above.
+3. So the access token carries `aud=agenthub`: **Client scopes →
+   agenthub-dedicated → Add mapper → Audience**, included client audience: `agenthub`.
+
+```bash
+helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+  --set oidc.authority=https://keycloak.example.com/realms/myrealm \
+  --set oidc.clientId=agenthub \
+  --set oidc.audience=agenthub
+```
+</details>
+
+<details>
+<summary><b>Microsoft Entra ID (Azure AD)</b></summary>
+
+1. **App registrations → New registration** — name `agenthub`, supported account types
+   as needed. Platform **Single-page application** with redirect URI
+   `https://<host>/auth/callback` (SPA platform = PKCE without secret).
+2. **Expose an API → Add a scope**: Application ID URI `api://<application-client-id>`,
+   scope name e.g. `access`. (Without your own scope, Entra issues access tokens for
+   Microsoft Graph, which Open AgentHub cannot validate.)
+3. The frontend must request that scope:
+
+```bash
+helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+  --set oidc.authority=https://login.microsoftonline.com/<tenant-id>/v2.0 \
+  --set oidc.clientId=<application-client-id> \
+  --set oidc.audience=api://<application-client-id> \
+  --set oidc.scope="openid profile email api://<application-client-id>/access"
+```
+
+Note: Entra ID puts the username into `preferred_username` (usually the UPN) — works
+out of the box as the tenant key.
+</details>
+
+<details>
+<summary><b>Google</b></summary>
+
+1. **Google Cloud Console → APIs & Services → Credentials → Create OAuth client ID** —
+   application type *Web application*, authorized JavaScript origin `https://<host>`,
+   authorized redirect URI `https://<host>/auth/callback`.
+
+```bash
+helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+  --set oidc.authority=https://accounts.google.com \
+  --set oidc.clientId=<client-id>.apps.googleusercontent.com \
+  --set oidc.audience=<client-id>.apps.googleusercontent.com
+```
+
+⚠️ **Caveat:** Google issues *opaque* access tokens (not JWTs); only its **ID tokens**
+are verifiable JWTs. Open AgentHub currently validates the access token, so Google login
+requires the backend to validate the ID token instead — tracked as an open issue. Use
+Keycloak or Entra ID for production today, or put Google behind Keycloak/Dex as an
+identity broker (Keycloak's "Identity Providers → Google" works out of the box).
+</details>
+
+<details>
+<summary><b>Build your own images / deploy without Helm</b></summary>
+
+```bash
+# Build & push images (e.g. from a fork)
+REG=registry.example.com/agenthub TAG=0.1.0
+docker build -t $REG/backend:$TAG       ./backend
+docker build -t $REG/frontend:$TAG      ./frontend
+docker build -t $REG/agent-runtime:$TAG ./agent-runtime
+docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG && docker push $REG/agent-runtime:$TAG
+
+# private registry? create the pull secret in BOTH namespaces and set image.pullSecret
+helm upgrade --install agenthub helm/open-agenthub -n agenthub --create-namespace \
+  --set image.registry=$REG --set image.tag=$TAG --set postgres.password=<pw>
+```
+
+Plain manifests without Helm are available under [`k8s/`](k8s/) (namespaces, RBAC,
+backend, network policies, dev Postgres) — fill in the secrets before applying.
+
+</details>
+
+### Local development
+
+Backend: `cd backend && dotnet run` (uses `~/.kube/config`). Frontend:
+`cd frontend && npm install && npm run dev` (Vite proxies `/api` and `/ws` to
+`localhost:8080`). Leave `Oidc:Authority` empty to run without auth — every request acts
+as user `dev`.
 
 ## Components
 
@@ -48,6 +219,7 @@ You stay the supervisor. **Be your own digital team lead.**
 | `frontend/` | Vue 3 + Vite + xterm.js, mobile-first |
 | `helm/open-agenthub/` | Helm chart (recommended deployment) |
 | `k8s/` | Plain manifests (namespaces, RBAC, backend, NetworkPolicies) |
+| `ee/` | Enterprise features (commercial license, see below) |
 
 ## How it works
 
@@ -77,71 +249,6 @@ You stay the supervisor. **Be your own digital team lead.**
 - **NetworkPolicies**: default-deny; agent egress limited to DNS/HTTP(S)/SSH.
 - **Dedicated PSA namespace** for sessions.
 - Optionally harden further: set `RuntimeClassName` to gVisor/Kata (in `appsettings`/ConfigMap).
-
-## Install (Helm, recommended)
-
-Prebuilt images are published to `ghcr.io/open-agenthub/open-agenthub/*` and the chart
-to our Helm repository:
-
-```bash
-helm repo add agenthub https://open-agenthub.github.io/open-agenthub
-helm install agenthub agenthub/open-agenthub -n agenthub --create-namespace \
-  --set postgres.password=<pw> \
-  --set ingress.host=hub.your-org.example \
-  --set oidc.authority=https://<oidc-provider>/realms/<realm>   # empty = auth off (dev mode!)
-```
-
-No cluster yet? The all-in-one quickstart installs k3s + Open AgentHub on a single host:
-
-```bash
-curl -fsSL https://open-agenthub.github.io/install.sh | sh
-```
-
-To build your own images instead (e.g. from a fork):
-
-```bash
-REG=registry.example.com/agenthub TAG=0.1.0
-docker build -t $REG/backend:$TAG       ./backend
-docker build -t $REG/frontend:$TAG      ./frontend
-docker build -t $REG/agent-runtime:$TAG ./agent-runtime
-docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG && docker push $REG/agent-runtime:$TAG
-
-# private registry? create the pull secret in BOTH namespaces and set image.pullSecret
-helm upgrade --install agenthub helm/open-agenthub -n agenthub --create-namespace \
-  --set image.registry=$REG --set image.tag=$TAG --set postgres.password=<pw>
-```
-
-All values (host, issuer, images, S3, OIDC) live in `helm/open-agenthub/values.yaml`; put
-environment-specific overrides into your own values file (e.g. under `deploy/`, gitignored).
-OAuth provider setup: public client `agenthub` with PKCE, redirect URI
-`https://<host>/auth/callback`, post-logout `https://<host>`, web origins `https://<host>`.
-
-## Build & deploy (plain manifests, without Helm)
-
-```bash
-# Build images
-docker build -t registry.example.com/agenthub/backend:latest       ./backend
-docker build -t registry.example.com/agenthub/agent-runtime:latest ./agent-runtime
-docker push  registry.example.com/agenthub/backend:latest
-docker push  registry.example.com/agenthub/agent-runtime:latest
-
-# Cluster
-kubectl apply -f k8s/00-namespace.yaml
-kubectl apply -f k8s/10-rbac.yaml
-kubectl apply -f k8s/40-postgres.yaml      # dev DB; use a managed DB in production
-# Fill in secrets (Postgres password, S3 access/secret) BEFORE the backend starts:
-#   k8s/20-backend.yaml  -> Secret "agenthub-secrets"
-#   k8s/40-postgres.yaml -> Secret "postgres-secret"
-kubectl apply -f k8s/20-backend.yaml
-kubectl apply -f k8s/30-networkpolicy.yaml
-
-# Frontend
-cd frontend && npm install && npm run build   # serve dist/ behind an ingress/CDN
-```
-
-Local development: backend `dotnet run` (uses `~/.kube/config`), frontend `npm run dev`
-(Vite proxies `/api` and `/ws` to `localhost:8080`). Leave `Oidc:Authority` empty to run
-without auth (every request acts as user `dev`).
 
 ## Persistence, resume & notifications
 
@@ -197,6 +304,23 @@ The NetworkPolicy only allows agent egress to the backend.
 - **Job status detail view** for finished CronJob runs (`pods/log`).
 - node-pty ABI: builder and runtime image must use the same Node major version (22 here).
 - Custom images must be glibc-based (Debian/Ubuntu/Fedora…); Alpine/musl is not supported.
+- **Google login** requires ID-token validation (see the provider notes above) — open issue.
+- Automated tests & coverage reporting are still being built out — the coverage badge will
+  light up once the first test suite lands.
+
+## Enterprise
+
+Everything outside `ee/` is free forever (AGPL-3.0) and fully functional without a
+license. The **Enterprise edition** adds features for teams — session sharing across your
+org, org management, Slack integration — for **€6 / user / month** with a **3-month free
+trial**. See [pricing](https://open-agenthub.github.io/#pricing) or the
+[`ee/` README](ee/README.md).
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) — contributions
+require agreeing to our [CLA](.github/CLA.md) (dual licensing under AGPL-3.0 and the
+commercial license keeps the open-core model possible).
 
 ## License
 
