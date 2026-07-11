@@ -1,0 +1,15 @@
+apiVersion: v1
+entries:
+  open-agenthub:
+  - apiVersion: v2
+    appVersion: 0.1.0
+    created: "2026-07-11T20:12:25.050642226Z"
+    description: Open AgentHub – platform for running and controlling Claude Code
+      agents in Kubernetes
+    digest: fe8964911792f2e523cec9ef790c086452f134ea9329801fdf84dfb9835b61fc
+    name: open-agenthub
+    type: application
+    urls:
+    - https://github.com/open-agenthub/open-agenthub/releases/download/open-agenthub-0.1.0/open-agenthub-0.1.0.tgz
+    version: 0.1.0
+generated: "2026-07-11T20:12:25.050651853Z"
