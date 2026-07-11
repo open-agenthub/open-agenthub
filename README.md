@@ -46,7 +46,7 @@ You stay the supervisor. **Be your own digital team lead.**
 | `backend/` | ASP.NET Core: REST + WS proxy, K8s orchestration, JWT auth |
 | `agent-runtime/` | Container image: runs Claude Code under a PTY, streams via WS |
 | `frontend/` | Vue 3 + Vite + xterm.js, mobile-first |
-| `helm/agenthub/` | Helm chart (recommended deployment) |
+| `helm/open-agenthub/` | Helm chart (recommended deployment) |
 | `k8s/` | Plain manifests (namespaces, RBAC, backend, NetworkPolicies) |
 
 ## How it works
@@ -85,7 +85,7 @@ to our Helm repository:
 
 ```bash
 helm repo add agenthub https://open-agenthub.github.io/open-agenthub
-helm install agenthub agenthub/agenthub -n agenthub --create-namespace \
+helm install agenthub agenthub/open-agenthub -n agenthub --create-namespace \
   --set postgres.password=<pw> \
   --set ingress.host=hub.your-org.example \
   --set oidc.authority=https://<oidc-provider>/realms/<realm>   # empty = auth off (dev mode!)
@@ -107,11 +107,11 @@ docker build -t $REG/agent-runtime:$TAG ./agent-runtime
 docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG && docker push $REG/agent-runtime:$TAG
 
 # private registry? create the pull secret in BOTH namespaces and set image.pullSecret
-helm upgrade --install agenthub helm/agenthub -n agenthub --create-namespace \
+helm upgrade --install agenthub helm/open-agenthub -n agenthub --create-namespace \
   --set image.registry=$REG --set image.tag=$TAG --set postgres.password=<pw>
 ```
 
-All values (host, issuer, images, S3, OIDC) live in `helm/agenthub/values.yaml`; put
+All values (host, issuer, images, S3, OIDC) live in `helm/open-agenthub/values.yaml`; put
 environment-specific overrides into your own values file (e.g. under `deploy/`, gitignored).
 OAuth provider setup: public client `agenthub` with PKCE, redirect URI
 `https://<host>/auth/callback`, post-logout `https://<host>`, web origins `https://<host>`.
