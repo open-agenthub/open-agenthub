@@ -560,9 +560,14 @@ public sealed class KubernetesSessionService : ISessionService
                   export GIT_SSH_COMMAND="ssh -i /tmp/id -o IdentitiesOnly=yes -o UserKnownHostsFile=/secrets/creds/known_hosts -o StrictHostKeyChecking=yes"
                 fi
                 # HTTPS remotes: connected-provider OAuth tokens (credential store) win;
-                # otherwise fall back to a manually stored GitLab PAT.
+                # otherwise fall back to a manually stored GitLab PAT. Copy the store to a
+                # writable path — the secret mount is read-only, so git's credential store
+                # cannot take its lock there. $HOME is shared with the agent container, so
+                # rebuild the helper list idempotently (unset first).
+                git config --global --unset-all credential.helper 2>/dev/null || true
                 if [ -f /secrets/gitcreds/credentials ]; then
-                  git config --global credential.helper "store --file=/secrets/gitcreds/credentials"
+                  cp /secrets/gitcreds/credentials "$HOME/.git-credentials" && chmod 600 "$HOME/.git-credentials"
+                  git config --global credential.helper store
                 fi
                 if [ -f /secrets/creds/gitlab_token ]; then
                   git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
