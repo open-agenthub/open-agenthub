@@ -32,7 +32,13 @@ if (authEnabled)
         .AddJwtBearer(o =>
         {
             o.Authority = oidc["Authority"];
-            o.Audience = oidc["Audience"];
+            // Empty audience = skip audience validation. Providers like Keycloak
+            // do not put the client id into "aud" unless an audience mapper is
+            // configured on the client.
+            if (string.IsNullOrWhiteSpace(oidc["Audience"]))
+                o.TokenValidationParameters.ValidateAudience = false;
+            else
+                o.Audience = oidc["Audience"];
             o.RequireHttpsMetadata = oidc.GetValue("RequireHttpsMetadata", true);
             // WebSocket: the token may also arrive as a query parameter, since browser WebSockets cannot set headers.
             o.Events = new JwtBearerEvents
