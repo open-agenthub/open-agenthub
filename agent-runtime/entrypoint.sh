@@ -23,9 +23,12 @@ if [ -f /secrets/creds/ssh_key ]; then
   git config --global core.sshCommand "$GIT_SSH_COMMAND"
 fi
 
-# --- GitLab token for HTTPS remotes (optional) ---
+# --- HTTPS remotes: connected-provider OAuth tokens (read/write), then manual PAT fallback ---
+if [ -f /secrets/gitcreds/credentials ]; then
+  git config --global credential.helper "store --file=/secrets/gitcreds/credentials"
+fi
 if [ -f /secrets/creds/gitlab_token ]; then
-  git config --global credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
+  git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
 fi
 
 # --- Resume: restore saved Claude state from S3 ---
@@ -69,7 +72,8 @@ fi
 
 # --- Make the MCP config available to the project ---
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
-  TARGET="/workspace"; [ -d /workspace/repo ] && TARGET="/workspace/repo"
+  TARGET="${AGENTHUB_WORKDIR:-/workspace}"
+  [ -d "$TARGET" ] || TARGET="/workspace"
   cp /secrets/mcp/mcp.json "$TARGET/.mcp.json" || true
 fi
 

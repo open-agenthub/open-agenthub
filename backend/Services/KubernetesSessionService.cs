@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Storage;
@@ -21,6 +22,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly Kubernetes _k8s;
     private readonly ISessionStore _store;
     private readonly IArtifactStore _artifacts;
+    private readonly IGitAuthService _gitAuth;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -31,11 +33,12 @@ public sealed class KubernetesSessionService : ISessionService
     private static readonly TimeSpan PresignTtl = TimeSpan.FromHours(12);
 
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store,
-        IArtifactStore artifacts, ILogger<KubernetesSessionService> log)
+        IArtifactStore artifacts, IGitAuthService gitAuth, ILogger<KubernetesSessionService> log)
     {
         _log = log;
         _store = store;
         _artifacts = artifacts;
+        _gitAuth = gitAuth;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
@@ -149,11 +152,15 @@ public sealed class KubernetesSessionService : ISessionService
         ValidateQuantity(req.Cpu, "cpu");
         ValidateQuantity(req.Memory, "memory");
 
+        var repos = NormalizeRepos(req);
+        var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
+
         var id = Guid.NewGuid().ToString("n")[..12];
         var rec = new SessionRecord
         {
             Id = id, Owner = owner, Title = req.Title, Mode = req.Mode,
-            RepoUrl = req.RepoUrl, Schedule = req.Schedule,
+            RepoUrl = repos.FirstOrDefault()?.Url, ReposJson = SerializeRepos(repos),
+            Schedule = req.Schedule, McpConfigJson = mcp,
             Image = image, RunAsRoot = req.RunAsRoot,
             Cpu = req.Cpu, Memory = req.Memory,
             ClaudeSessionId = Guid.NewGuid().ToString(),
@@ -162,11 +169,54 @@ public sealed class KubernetesSessionService : ISessionService
         };
         await _store.UpsertAsync(rec, ct);
 
-        if (!string.IsNullOrWhiteSpace(req.McpConfigJson))
-            await CreateMcpSecretAsync(owner, id, req.McpConfigJson, ct);
+        if (mcp is not null)
+            await CreateMcpSecretAsync(owner, id, mcp, ct);
 
         await SpawnAsync(owner, rec, req, resume: false, ct);
         return ToInfo(rec, phase: rec.Status, podIp: null);
+    }
+
+    // Effective repo list: explicit Repos win; otherwise fold the legacy single-repo fields.
+    private static List<RepoRef> NormalizeRepos(CreateSessionRequest req)
+    {
+        if (req.Repos.Count > 0)
+            return req.Repos.Where(r => !string.IsNullOrWhiteSpace(r.Url)).ToList();
+        return string.IsNullOrWhiteSpace(req.RepoUrl)
+            ? new List<RepoRef>()
+            : new List<RepoRef> { new() { Url = req.RepoUrl!, Branch = req.RepoBranch } };
+    }
+
+    private static string? SerializeRepos(List<RepoRef> repos) =>
+        repos.Count == 0 ? null : JsonSerializer.Serialize(repos);
+
+    private static List<RepoRef> ParseRepos(SessionRecord rec) =>
+        string.IsNullOrWhiteSpace(rec.ReposJson)
+            ? (string.IsNullOrWhiteSpace(rec.RepoUrl) ? new() : new() { new() { Url = rec.RepoUrl! } })
+            : JsonSerializer.Deserialize<List<RepoRef>>(rec.ReposJson) ?? new();
+
+    // Assigns each repo a workspace subdirectory. A single repo keeps the legacy
+    // "/workspace/repo" path; multiple repos use their sanitized names (deduped).
+    private static IEnumerable<(RepoRef repo, string dest)> DestFor(List<RepoRef> repos)
+    {
+        if (repos.Count == 1) { yield return (repos[0], "repo"); yield break; }
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var r in repos)
+        {
+            var baseName = RepoDirName(r.Url);
+            var dest = baseName; var n = 1;
+            while (!used.Add(dest)) dest = $"{baseName}-{n++}";
+            yield return (r, dest);
+        }
+    }
+
+    private static string RepoDirName(string url)
+    {
+        var s = url.TrimEnd('/');
+        var slash = s.LastIndexOf('/');
+        var name = slash >= 0 ? s[(slash + 1)..] : s;
+        if (name.EndsWith(".git", StringComparison.OrdinalIgnoreCase)) name = name[..^4];
+        name = System.Text.RegularExpressions.Regex.Replace(name, "[^A-Za-z0-9._-]", "-");
+        return string.IsNullOrEmpty(name) ? "repo" : name;
     }
 
     public async Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default)
@@ -184,7 +234,8 @@ public sealed class KubernetesSessionService : ISessionService
 
         var req = new CreateSessionRequest
         {
-            Title = rec.Title, Mode = rec.Mode, RepoUrl = rec.RepoUrl,
+            Title = rec.Title, Mode = rec.Mode,
+            Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
             Image = rec.Image, RunAsRoot = rec.RunAsRoot,
             Cpu = rec.Cpu, Memory = rec.Memory
         };
@@ -201,7 +252,9 @@ public sealed class KubernetesSessionService : ISessionService
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
-        if (rec.Mode == SessionMode.Scheduled && (req.Image is not null || req.RunAsRoot is not null || req.Cpu is not null || req.Memory is not null))
+        if (rec.Mode == SessionMode.Scheduled &&
+            (req.Image is not null || req.RunAsRoot is not null || req.Cpu is not null || req.Memory is not null ||
+             req.McpConfigJson is not null || req.Repos is not null))
             throw new ArgumentException("Scheduled sessions run from a fixed CronJob spec — delete and recreate to change anything but the title.");
 
         if (!string.IsNullOrWhiteSpace(req.Title))
@@ -227,6 +280,28 @@ public sealed class KubernetesSessionService : ISessionService
         }
         if (req.Cpu is not null) { ValidateQuantity(req.Cpu, "cpu"); rec.Cpu = req.Cpu; }
         if (req.Memory is not null) { ValidateQuantity(req.Memory, "memory"); rec.Memory = req.Memory; }
+        if (req.Repos is not null)
+        {
+            var repos = req.Repos.Where(r => !string.IsNullOrWhiteSpace(r.Url)).ToList();
+            rec.ReposJson = SerializeRepos(repos);
+            rec.RepoUrl = repos.FirstOrDefault()?.Url;
+        }
+        if (req.McpConfigJson is not null)
+        {
+            // Empty string clears the MCP config; otherwise validate and replace.
+            var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
+            if (mcp is not null)
+            {
+                try { _ = JsonDocument.Parse(mcp); }
+                catch { throw new ArgumentException("MCP config is not valid JSON."); }
+                await CreateMcpSecretAsync(owner, id, mcp, ct);
+            }
+            else
+            {
+                try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
+            }
+            rec.McpConfigJson = mcp;
+        }
 
         await _store.UpsertAsync(rec, ct);
         _log.LogInformation("Updated session {Id} settings", id);
@@ -243,7 +318,26 @@ public sealed class KubernetesSessionService : ISessionService
 
     private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct)
     {
-        var podSpec = BuildPodSpec(owner, rec, req, resume);
+        // Repos that authenticate via a connected Git provider: mint a fresh
+        // git-credentials file into an ephemeral secret (rebuilt on every spawn/resume,
+        // so it always carries a currently-valid OAuth token). Read-only, session-scoped.
+        var hasGitCreds = false;
+        var store = await _gitAuth.BuildCredentialStoreAsync(owner, NormalizeRepos(req), ct);
+        if (store is not null)
+        {
+            await UpsertSecretAsync(new V1Secret
+            {
+                Metadata = new V1ObjectMeta
+                {
+                    Name = $"gitcreds-{rec.Id}", NamespaceProperty = _opts.Namespace,
+                    Labels = new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id }
+                },
+                Type = "Opaque", Data = new Dictionary<string, byte[]> { ["credentials"] = Encoding.UTF8.GetBytes(store) }
+            }, ct);
+            hasGitCreds = true;
+        }
+
+        var podSpec = BuildPodSpec(owner, rec, req, resume, hasGitCreds);
 
         if (rec.Mode == SessionMode.Scheduled)
         {
@@ -328,18 +422,21 @@ public sealed class KubernetesSessionService : ISessionService
         await TryDeletePodAsync($"session-{id}", ct);
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
+        try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         await _store.DeleteAsync(id, ct);
         _log.LogInformation("Deleted session {Id} (S3 artifacts are kept)", id);
     }
 
     // ---------------------------------------------------------------- Pod-Spec
 
-    private V1PodSpec BuildPodSpec(string owner, SessionRecord rec, CreateSessionRequest req, bool resume)
+    private V1PodSpec BuildPodSpec(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, bool hasGitCreds = false)
     {
         var credsSecret = CredsSecretName(owner);
         var ownerKey = Sanitize(owner);
-        var hasRepo = !string.IsNullOrWhiteSpace(req.RepoUrl);
-        var hasMcp = !resume && !string.IsNullOrWhiteSpace(req.McpConfigJson);
+        var repos = NormalizeRepos(req);
+        var hasRepo = repos.Count > 0;
+        // MCP secret (mcp-{id}) persists across resumes, so mount whenever configured.
+        var hasMcp = !string.IsNullOrWhiteSpace(req.McpConfigJson);
         var customImage = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image;
         var asRoot = req.RunAsRoot;
         var uid = asRoot ? 0L : 1000L;
@@ -371,6 +468,8 @@ public sealed class KubernetesSessionService : ISessionService
         };
         if (hasMcp)
             volumes.Add(new V1Volume { Name = "mcp", Secret = new V1SecretVolumeSource { SecretName = $"mcp-{rec.Id}", DefaultMode = 0x1A0 } });
+        if (hasGitCreds)
+            volumes.Add(new V1Volume { Name = "gitcreds", Secret = new V1SecretVolumeSource { SecretName = $"gitcreds-{rec.Id}", DefaultMode = 0x1A0 } });
         if (customImage is not null)
             volumes.Add(new V1Volume { Name = "runtime", EmptyDir = new V1EmptyDirVolumeSource() });
 
@@ -384,6 +483,8 @@ public sealed class KubernetesSessionService : ISessionService
         };
         if (hasMcp)
             mounts.Add(new V1VolumeMount { Name = "mcp", MountPath = "/secrets/mcp", ReadOnlyProperty = true });
+        if (hasGitCreds)
+            mounts.Add(new V1VolumeMount { Name = "gitcreds", MountPath = "/secrets/gitcreds", ReadOnlyProperty = true });
         if (customImage is not null)
             mounts.Add(new V1VolumeMount { Name = "runtime", MountPath = "/opt/agenthub" });
 
@@ -399,6 +500,7 @@ public sealed class KubernetesSessionService : ISessionService
             new() { Name = "AGENTHUB_CLAUDE_SESSION_ID", Value = rec.ClaudeSessionId },
             new() { Name = "AGENTHUB_PORT", Value = _opts.AgentPort.ToString() },
             new() { Name = "AGENTHUB_HAS_REPO", Value = hasRepo ? "1" : "0" },
+            new() { Name = "AGENTHUB_WORKDIR", Value = repos.Count == 1 ? "/workspace/repo" : "/workspace" },
             new() { Name = "AGENTHUB_HAS_MCP", Value = hasMcp ? "1" : "0" },
             new() { Name = "AGENTHUB_RESUME", Value = resume ? "1" : "0" },
             new() { Name = "AGENTHUB_PROMPT", Value = req.Prompt ?? "" },
@@ -446,19 +548,29 @@ public sealed class KubernetesSessionService : ISessionService
 
         if (hasRepo && !resume)
         {
+            // One line per repo: "<dest>\t<branch>\t<url>" (branch may be empty).
+            var reposEnv = string.Join("\n", DestFor(repos).Select(x => $"{x.dest}\t{x.repo.Branch}\t{x.repo.Url}"));
             var cloneScript = """
                 set -e
                 if [ -f /secrets/creds/ssh_key ]; then
                   cp /secrets/creds/ssh_key /tmp/id && chmod 600 /tmp/id
                   export GIT_SSH_COMMAND="ssh -i /tmp/id -o IdentitiesOnly=yes -o UserKnownHostsFile=/secrets/creds/known_hosts -o StrictHostKeyChecking=yes"
                 fi
-                # HTTPS remotes: same token credential helper as the agent container (entrypoint.sh)
-                if [ -f /secrets/creds/gitlab_token ]; then
-                  git config --global credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
+                # HTTPS remotes: connected-provider OAuth tokens (credential store) win;
+                # otherwise fall back to a manually stored GitLab PAT.
+                if [ -f /secrets/gitcreds/credentials ]; then
+                  git config --global credential.helper "store --file=/secrets/gitcreds/credentials"
                 fi
-                echo "Cloning $REPO_URL (branch: ${REPO_BRANCH:-default}) ..."
-                if [ -n "$REPO_BRANCH" ]; then git clone --branch "$REPO_BRANCH" "$REPO_URL" /workspace/repo
-                else git clone "$REPO_URL" /workspace/repo; fi
+                if [ -f /secrets/creds/gitlab_token ]; then
+                  git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
+                fi
+                TAB=$(printf '\t')
+                printf '%s\n' "$REPOS" | while IFS="$TAB" read -r dest branch url; do
+                  [ -z "$url" ] && continue
+                  echo "Cloning $url (branch: ${branch:-default}) -> /workspace/$dest"
+                  if [ -n "$branch" ]; then git clone --branch "$branch" "$url" "/workspace/$dest"
+                  else git clone "$url" "/workspace/$dest"; fi
+                done
                 echo "Clone finished."
                 """;
             initContainers.Add(new V1Container
@@ -467,8 +579,7 @@ public sealed class KubernetesSessionService : ISessionService
                 Command = new List<string> { "/bin/sh", "-c", cloneScript },
                 Env = new List<V1EnvVar>
                 {
-                    new() { Name = "REPO_URL", Value = req.RepoUrl },
-                    new() { Name = "REPO_BRANCH", Value = req.RepoBranch ?? "" },
+                    new() { Name = "REPOS", Value = reposEnv },
                     new() { Name = "HOME", Value = home }
                 },
                 VolumeMounts = mounts, SecurityContext = ContainerSecurity()
@@ -521,6 +632,8 @@ public sealed class KubernetesSessionService : ISessionService
     private static SessionInfo ToInfo(SessionRecord r, string phase, string? podIp) => new()
     {
         Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, RepoUrl = r.RepoUrl,
+        Repos = ParseRepos(r),
+        HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson), McpConfigJson = r.McpConfigJson,
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         QuestionPending = r.QuestionPending,
         CanResume = r.Mode != SessionMode.Scheduled && (phase == "Succeeded" || phase == "Failed"),

@@ -1,5 +1,5 @@
 import { auth, getToken, login } from './auth.js'
-export { initAuth, auth } from './auth.js'
+export { initAuth, auth, config } from './auth.js'
 
 // Bearer header from the current access token (empty in "auth disabled" mode).
 async function authHeaders() {
@@ -34,6 +34,11 @@ export const api = {
   storeCredentials: (data) => req('PUT', '/credentials', data),
   // Which credential fields have a stored value (booleans only, never values).
   getCredentialStatus: () => req('GET', '/credentials'),
+  // Git OAuth providers / connections.
+  gitProviders: () => req('GET', '/git/providers'),
+  gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),
+  gitDisconnect: (providerId) => req('DELETE', `/git/connections/${providerId}`),
+  gitProjects: (provider, q) => req('GET', `/git/projects?provider=${encodeURIComponent(provider)}&q=${encodeURIComponent(q || '')}`),
   async getTranscript(id) {
     const res = await fetch(`/api/sessions/${id}/transcript`, { headers: await authHeaders() })
     if (res.status === 401) handle401()

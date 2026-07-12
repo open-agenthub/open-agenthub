@@ -1,4 +1,5 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
+import { reactive } from 'vue'
 
 // Generic OIDC sign-in (Authorization Code + PKCE) via oidc-client-ts.
 // The provider config is fetched at RUNTIME from the backend (GET /api/config), because
@@ -9,10 +10,14 @@ let manager = null
 let user = null
 let enabled = false
 
+// Runtime backend config (e.g. whether Git OAuth providers are configured).
+export const config = reactive({ gitEnabled: false })
+
 export async function initAuth() {
   let cfg = { authority: '' }
   try { cfg = await (await fetch('/api/config')).json() }
   catch (e) { console.error('Could not load auth config (/api/config) – auth disabled', e) }
+  config.gitEnabled = !!cfg.gitEnabled
   enabled = !!cfg.authority
   if (!enabled) return
 

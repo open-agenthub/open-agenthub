@@ -1,6 +1,7 @@
 <script setup>
 import { ref } from 'vue'
 import { api } from '../api.js'
+import RepoPicker from './RepoPicker.vue'
 
 const props = defineProps({ session: Object })
 const emit = defineEmits(['close', 'updated'])
@@ -10,8 +11,10 @@ const f = ref({
   image: props.session.image || '',
   runAsRoot: !!props.session.runAsRoot,
   cpu: props.session.cpu || '500m',
-  memory: props.session.memory || '1Gi'
+  memory: props.session.memory || '1Gi',
+  mcpConfigJson: props.session.mcpConfigJson || ''
 })
+const repos = ref((props.session.repos || []).map(r => ({ ...r })))
 const busy = ref(false)
 const error = ref('')
 
@@ -19,6 +22,10 @@ const scheduled = props.session.mode === 'Scheduled'
 
 async function save() {
   busy.value = true; error.value = ''
+  if (f.value.mcpConfigJson.trim()) {
+    try { JSON.parse(f.value.mcpConfigJson) }
+    catch { error.value = 'MCP config is not valid JSON.'; busy.value = false; return }
+  }
   try {
     const payload = scheduled
       ? { title: f.value.title }
@@ -27,7 +34,9 @@ async function save() {
           image: f.value.image.trim(),          // empty = default agent image
           runAsRoot: f.value.runAsRoot,
           cpu: f.value.cpu.trim(),
-          memory: f.value.memory.trim()
+          memory: f.value.memory.trim(),
+          repos: repos.value,
+          mcpConfigJson: f.value.mcpConfigJson   // "" clears it
         }
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
@@ -48,6 +57,14 @@ async function save() {
         <input v-model="f.title" />
       </div>
       <template v-if="!scheduled">
+        <div class="field">
+          <label>Repositories</label>
+          <RepoPicker v-model="repos" />
+        </div>
+        <div class="field">
+          <label>MCP config (.mcp.json, empty = none)</label>
+          <textarea v-model="f.mcpConfigJson" placeholder='{ "mcpServers": { … } }'></textarea>
+        </div>
         <div class="field">
           <label>Container image (empty = default agent image)</label>
           <input v-model="f.image" placeholder="ghcr.io/…/my-image:tag" />
