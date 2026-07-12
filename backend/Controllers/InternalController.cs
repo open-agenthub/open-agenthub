@@ -83,6 +83,24 @@ public sealed class InternalController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>
+    /// Receives the terminal scrollback and stores it in Postgres so transcripts
+    /// are available even without S3 (uploaded periodically and on exit).
+    /// </summary>
+    [HttpPut("scrollback")]
+    public async Task<IActionResult> Scrollback(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        using var reader = new StreamReader(Request.Body);
+        var text = await reader.ReadToEndAsync(ct);
+        // Cap: matches the agent's in-memory scrollback buffer.
+        if (text.Length > 400_000) text = text[^400_000..];
+        await _store.SetScrollbackAsync(id, text, ct);
+        return NoContent();
+    }
+
     /// <summary>Mints a presigned PUT URL so the agent can upload an artifact to S3.</summary>
     [HttpPost("artifact-url")]
     public async Task<IActionResult> ArtifactUrl(string id, [FromQuery] string name, CancellationToken ct)

@@ -42,6 +42,9 @@ public interface ISessionStore
     Task<IReadOnlyList<SessionRecord>> ListAsync(string owner, CancellationToken ct = default);
     Task UpdateStatusAsync(string id, string status, CancellationToken ct = default);
     Task SetQuestionPendingAsync(string id, bool pending, CancellationToken ct = default);
+    /// <summary>Stores the terminal scrollback so transcripts work without S3.</summary>
+    Task SetScrollbackAsync(string id, string text, CancellationToken ct = default);
+    Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default);
     Task DeleteAsync(string id, CancellationToken ct = default);
 }
 
@@ -81,6 +84,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS memory TEXT NOT NULL DEFAULT '1Gi';
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_config TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS repos TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS scrollback TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -137,6 +141,22 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("p", pending);
         cmd.Parameters.AddWithValue("id", id);
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task SetScrollbackAsync(string id, string text, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET scrollback=@s, updated_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("s", text);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("SELECT scrollback FROM sessions WHERE id=@id");
+        cmd.Parameters.AddWithValue("id", id);
+        var v = await cmd.ExecuteScalarAsync(ct);
+        return v is string s ? s : null;
     }
 
     public async Task DeleteAsync(string id, CancellationToken ct = default)
