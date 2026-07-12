@@ -1,6 +1,6 @@
 Open AgentHub Enterprise License
 
-Copyright (c) Open AgentHub authors. All rights reserved.
+Copyright (c) 2026 Maik Boltze. All rights reserved.
 
 This software and associated documentation files (the "Enterprise
 Software") consist of all files in this directory ("ee/") and its
@@ -33,8 +33,9 @@ You may NOT:
   4. circumvent, disable, or work around any license-key, subscription,
      or usage-limit enforcement in the Enterprise Software.
 
-You agree that Open AgentHub and/or its licensors (as applicable)
-retain all right, title and interest in and to all such modifications.
+You agree that the copyright holder and/or his licensors (as
+applicable) retain all right, title and interest in and to all such
+modifications.
 
 THE ENTERPRISE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
 KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
@@ -44,3 +45,10 @@ LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
 OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
 WITH THE ENTERPRISE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 ENTERPRISE SOFTWARE.
+
+Where the Enterprise Software is obtained under the provider's General
+Terms and Conditions (Allgemeine Geschäftsbedingungen, AGB), the
+warranty and liability provisions of those terms prevail over the
+preceding paragraph. Nothing in this license excludes or limits any
+warranty or liability to the extent that it cannot be excluded or
+limited under applicable law.

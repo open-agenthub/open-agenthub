@@ -2,7 +2,9 @@
 
 Thank you for your interest in contributing to Open AgentHub (the
 "Project"). This Contributor License Agreement ("Agreement") documents
-the rights granted by contributors to the Open AgentHub maintainers.
+the rights granted by contributors to Maik Boltze, the maintainer of
+the Project (the "Maintainer", which includes any successor maintainer
+of the Project).
 This is a legally binding document, so please read it carefully before
 agreeing to it. By submitting a contribution to the Project and
 agreeing to this Agreement (e.g. via cla-assistant.io), You accept and
@@ -15,8 +17,8 @@ Contributions submitted to the Project.
    You intentionally submit to the Project for inclusion in, or
    documentation of, the Project.
 
-2. **Grant of Copyright License.** You hereby grant to the Open
-   AgentHub maintainers and to recipients of software distributed by
+2. **Grant of Copyright License.** You hereby grant to the Maintainer
+   and to recipients of software distributed by
    the Project a perpetual, worldwide, non-exclusive, no-charge,
    royalty-free, irrevocable copyright license to reproduce, prepare
    derivative works of, publicly display, publicly perform, sublicense,
@@ -25,8 +27,8 @@ Contributions submitted to the Project.
    GNU AGPL-3.0, under the Open AgentHub Enterprise License, and under
    other commercial license terms.
 
-3. **Grant of Patent License.** You hereby grant to the Open AgentHub
-   maintainers and to recipients of software distributed by the Project
+3. **Grant of Patent License.** You hereby grant to the Maintainer
+   and to recipients of software distributed by the Project
    a perpetual, worldwide, non-exclusive, no-charge, royalty-free,
    irrevocable (except as stated in this section) patent license to
    make, have made, use, offer to sell, sell, import, and otherwise
@@ -53,12 +55,12 @@ Contributions submitted to the Project.
    support for Your Contributions. Unless required by applicable law or
    agreed to in writing, You provide Your Contributions on an "AS IS"
    BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
-   or implied. The maintainers are under no obligation to accept or
+   or implied. The Maintainer is under no obligation to accept or
    include any Contribution.
 
 6. **Retention of Rights.** Except for the licenses granted herein, You
    reserve all right, title, and interest in and to Your Contributions.
 
-You agree to notify the Open AgentHub maintainers of any facts or
-circumstances of which You become aware that would make these
-representations inaccurate in any respect.
+You agree to notify the Maintainer of any facts or circumstances of
+which You become aware that would make these representations
+inaccurate in any respect.

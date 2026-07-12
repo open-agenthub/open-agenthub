@@ -312,8 +312,8 @@ The NetworkPolicy only allows agent egress to the backend.
 
 Everything outside `ee/` is free forever (AGPL-3.0) and fully functional without a
 license. The **Enterprise edition** adds features for teams — session sharing across your
-org, org management, Slack integration — for **€6 / user / month** with a **3-month free
-trial**. See [pricing](https://open-agenthub.github.io/#pricing) or the
+org, org management, Slack integration — for **€6 / user / month** (excl. VAT) with a
+**3-month free trial**. See [pricing](https://open-agenthub.github.io/#pricing) or the
 [`ee/` README](ee/README.md).
 
 ## Contributing
@@ -328,5 +328,5 @@ Open AgentHub is an **open-core** project: the core (everything outside `ee/`) i
 software under the [GNU AGPL-3.0](LICENSE) and fully functional without a license key,
 while the code in [`ee/`](ee/) is source-available under the commercial
 [Open AgentHub Enterprise License](ee/LICENSE) and powers the enterprise offering
-(6 €/user/month, 3-month free trial). Contributions require agreeing to our Contributor
+(6 €/user/month excl. VAT, 3-month free trial). Contributions require agreeing to our Contributor
 License Agreement — see [CONTRIBUTING.md](CONTRIBUTING.md).

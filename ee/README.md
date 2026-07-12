@@ -19,7 +19,7 @@ subscription for production use.
 Using the Enterprise Edition in production requires a valid
 **Open AgentHub Enterprise subscription**:
 
-- **6 € per user per month**
+- **6 € per user per month** (excl. VAT)
 - **3-month free trial**
 
 Pricing and sign-up: https://open-agenthub.github.io

@@ -50,7 +50,26 @@ onMounted(() => {
   <div v-if="needsLogin" class="login">
     <div class="login-card">
       <div class="brand">
-        <span class="pulse"></span>
+        <svg class="logo" width="30" height="22" viewBox="0 0 40 30" fill="none" aria-hidden="true">
+          <g fill="var(--muted)">
+            <circle cx="8.5" cy="8" r="2.9" />
+            <path d="M3.9 16 a4.6 4.6 0 0 1 9.2 0 Z" />
+            <rect x="4.4" y="13.8" width="8.2" height="5.6" rx="1" stroke="var(--bg)" stroke-width="1.4" />
+            <path d="M2.9 21.2 L14.1 21.2 L15.1 23.4 L1.9 23.4 Z" />
+          </g>
+          <g fill="var(--muted)">
+            <circle cx="31.5" cy="8" r="2.9" />
+            <path d="M26.9 16 a4.6 4.6 0 0 1 9.2 0 Z" />
+            <rect x="27.4" y="13.8" width="8.2" height="5.6" rx="1" stroke="var(--bg)" stroke-width="1.4" />
+            <path d="M25.9 21.2 L37.1 21.2 L38.1 23.4 L24.9 23.4 Z" />
+          </g>
+          <g fill="var(--accent)">
+            <circle cx="20" cy="7" r="3.3" />
+            <path d="M14.8 16.5 a5.2 5.2 0 0 1 10.4 0 Z" />
+            <rect x="15.2" y="13.6" width="9.6" height="6.4" rx="1.2" stroke="var(--bg)" stroke-width="1.6" />
+            <path d="M13.4 21.8 L26.6 21.8 L27.8 24.2 L12.2 24.2 Z" />
+          </g>
+        </svg>
         <span class="name">Open AgentHub</span>
         <span class="sub">Agent Control</span>
       </div>
@@ -62,7 +81,26 @@ onMounted(() => {
   <div v-else class="shell" :class="{ 'detail-open': activeSession }">
     <header class="topbar">
       <div class="brand">
-        <span class="pulse"></span>
+        <svg class="logo" width="30" height="22" viewBox="0 0 40 30" fill="none" aria-hidden="true">
+          <g fill="var(--muted)">
+            <circle cx="8.5" cy="8" r="2.9" />
+            <path d="M3.9 16 a4.6 4.6 0 0 1 9.2 0 Z" />
+            <rect x="4.4" y="13.8" width="8.2" height="5.6" rx="1" stroke="var(--bg)" stroke-width="1.4" />
+            <path d="M2.9 21.2 L14.1 21.2 L15.1 23.4 L1.9 23.4 Z" />
+          </g>
+          <g fill="var(--muted)">
+            <circle cx="31.5" cy="8" r="2.9" />
+            <path d="M26.9 16 a4.6 4.6 0 0 1 9.2 0 Z" />
+            <rect x="27.4" y="13.8" width="8.2" height="5.6" rx="1" stroke="var(--bg)" stroke-width="1.4" />
+            <path d="M25.9 21.2 L37.1 21.2 L38.1 23.4 L24.9 23.4 Z" />
+          </g>
+          <g fill="var(--accent)">
+            <circle cx="20" cy="7" r="3.3" />
+            <path d="M14.8 16.5 a5.2 5.2 0 0 1 10.4 0 Z" />
+            <rect x="15.2" y="13.6" width="9.6" height="6.4" rx="1.2" stroke="var(--bg)" stroke-width="1.6" />
+            <path d="M13.4 21.8 L26.6 21.8 L27.8 24.2 L12.2 24.2 Z" />
+          </g>
+        </svg>
         <span class="name">Open AgentHub</span>
         <span class="sub">Agent Control</span>
       </div>
@@ -108,8 +146,7 @@ onMounted(() => {
 .brand { display: flex; align-items: baseline; gap: 10px; }
 .brand .name { font-weight: 700; letter-spacing: .02em; }
 .brand .sub { color: var(--muted); font-size: 12px; font-family: var(--mono); }
-.pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--accent); align-self: center; box-shadow: 0 0 0 0 var(--accent); animation: pulse 2.4s infinite; }
-@keyframes pulse { 0% { box-shadow: 0 0 0 0 rgba(232,162,74,.5); } 70% { box-shadow: 0 0 0 8px rgba(232,162,74,0); } 100% { box-shadow: 0 0 0 0 rgba(232,162,74,0); } }
+.brand .logo { align-self: center; display: block; flex-shrink: 0; }
 .actions { display: flex; align-items: center; gap: 8px; }
 .actions .user { color: var(--muted); font-family: var(--mono); font-size: 13px; }
 .layout { flex: 1; display: flex; min-height: 0; }
