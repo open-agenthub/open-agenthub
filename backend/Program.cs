@@ -13,6 +13,7 @@ builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
 // S3 is optional: without an access key the platform runs without state/artifact persistence (no resume).
 if (!string.IsNullOrWhiteSpace(builder.Configuration["S3:AccessKey"]))
     builder.Services.AddSingleton<AgentHub.Api.Storage.IArtifactStore, AgentHub.Api.Storage.S3ArtifactStore>();
@@ -76,6 +77,8 @@ using (var scope = app.Services.CreateScope())
 {
     var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
     await store.InitializeAsync();
+    var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
+    await tokenStore.InitializeAsync();
 }
 
 app.UseCors();
