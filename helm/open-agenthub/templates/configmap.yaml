@@ -8,6 +8,7 @@ data:
   AgentHub__AgentImage: {{ include "agenthub.agentImage" . | quote }}
   AgentHub__AgentPort: {{ .Values.agent.port | quote }}
   AgentHub__GitCloneImage: {{ .Values.agent.gitCloneImage | quote }}
+  AgentHub__AgentImagePullPolicy: {{ .Values.agent.pullPolicy | default "IfNotPresent" | quote }}
   AgentHub__ImagePullSecret: {{ .Values.image.pullSecret | quote }}
   AgentHub__RuntimeClassName: {{ .Values.agent.runtimeClassName | quote }}
   AgentHub__MaxCpu: {{ .Values.agent.maxCpu | quote }}

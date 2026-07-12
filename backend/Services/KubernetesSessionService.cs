@@ -542,7 +542,7 @@ public sealed class KubernetesSessionService : ISessionService
                 """;
             initContainers.Add(new V1Container
             {
-                Name = "copy-runtime", Image = _opts.AgentImage, ImagePullPolicy = "IfNotPresent",
+                Name = "copy-runtime", Image = _opts.AgentImage, ImagePullPolicy = _opts.AgentImagePullPolicy,
                 Command = new List<string> { "/bin/sh", "-c", copyScript },
                 VolumeMounts = new List<V1VolumeMount> { new() { Name = "runtime", MountPath = "/opt/agenthub" } },
                 SecurityContext = ContainerSecurity()
@@ -596,7 +596,7 @@ public sealed class KubernetesSessionService : ISessionService
 
         var agent = new V1Container
         {
-            Name = "agent", Image = customImage ?? _opts.AgentImage, ImagePullPolicy = "IfNotPresent",
+            Name = "agent", Image = customImage ?? _opts.AgentImage, ImagePullPolicy = customImage is null ? _opts.AgentImagePullPolicy : "IfNotPresent",
             // In a foreign image the entrypoint lives in the copied runtime volume (requires bash in the image).
             Command = customImage is null ? null : new List<string> { "/bin/bash", "/opt/agenthub/entrypoint.sh" },
             Ports = new List<V1ContainerPort> { new() { ContainerPort = _opts.AgentPort, Name = "term" } },
@@ -704,6 +704,9 @@ public sealed class AgentHubOptions
     public string AgentImage { get; set; } = "";
     public int AgentPort { get; set; } = 7681;
     public string GitCloneImage { get; set; } = "alpine/git:2.45.2";
+    /// <summary>Pull policy for the agent/runtime image. Set "Always" when the agent
+    /// image uses a moving tag (e.g. :latest) so nodes don't serve a stale cache.</summary>
+    public string AgentImagePullPolicy { get; set; } = "IfNotPresent";
     public string ImagePullSecret { get; set; } = "";
     public string RuntimeClassName { get; set; } = "";
     public string MaxCpu { get; set; } = "2";
