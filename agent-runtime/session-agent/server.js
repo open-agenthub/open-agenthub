@@ -39,7 +39,11 @@ function buildCommand() {
   const args = [];
   if (HAS_MCP) args.push('--mcp-config', '/secrets/mcp/mcp.json');
 
-  if (RESUME && CSID) {
+  // Only --resume when the entrypoint actually restored a conversation; otherwise
+  // start fresh with a fixed id (e.g. no S3, or the previous run crashed before
+  // saving state — `claude --resume` on a missing conversation would abort).
+  const restored = fs.existsSync('/tmp/.state-restored');
+  if (RESUME && CSID && restored) {
     args.push('--resume', CSID);
   } else if (CSID) {
     args.push('--session-id', CSID); // fixed ID so the session can be resumed later
