@@ -24,8 +24,12 @@ if [ -f /secrets/creds/ssh_key ]; then
 fi
 
 # --- HTTPS remotes: connected-provider OAuth tokens (read/write), then manual PAT fallback ---
+# Copy the credential store to a writable path (the secret mount is read-only, so git's
+# store helper cannot lock it there). Rebuild the helper list idempotently.
+git config --global --unset-all credential.helper 2>/dev/null || true
 if [ -f /secrets/gitcreds/credentials ]; then
-  git config --global credential.helper "store --file=/secrets/gitcreds/credentials"
+  cp /secrets/gitcreds/credentials "$HOME/.git-credentials" && chmod 600 "$HOME/.git-credentials"
+  git config --global credential.helper store
 fi
 if [ -f /secrets/creds/gitlab_token ]; then
   git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
