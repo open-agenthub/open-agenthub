@@ -28,9 +28,12 @@ export const api = {
   listSessions: () => req('GET', '/sessions'),
   getSession: (id) => req('GET', `/sessions/${id}`),
   createSession: (data) => req('POST', '/sessions', data),
+  updateSession: (id, data) => req('PATCH', `/sessions/${id}`, data),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   deleteSession: (id) => req('DELETE', `/sessions/${id}`),
   storeCredentials: (data) => req('PUT', '/credentials', data),
+  // Which credential fields have a stored value (booleans only, never values).
+  getCredentialStatus: () => req('GET', '/credentials'),
   async getTranscript(id) {
     const res = await fetch(`/api/sessions/${id}/transcript`, { headers: await authHeaders() })
     if (res.status === 401) handle401()

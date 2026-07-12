@@ -1,5 +1,5 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
 
 const emit = defineEmits(['close'])
@@ -7,15 +7,35 @@ const c = ref({
   sshPrivateKey: '', gitlabToken: '', anthropicApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
 })
+// Which fields already have a stored value (values are never sent back).
+const stored = ref({})
+// Fields the user marked for removal.
+const clear = ref(new Set())
 const busy = ref(false)
 const error = ref('')
 const saved = ref(false)
 
+onMounted(async () => {
+  try { stored.value = await api.getCredentialStatus() } catch { /* older backend */ }
+})
+
+function toggleClear(field) {
+  const s = new Set(clear.value)
+  s.has(field) ? s.delete(field) : s.add(field)
+  clear.value = s
+}
+
+function placeholderFor(field, fallback) {
+  if (clear.value.has(field)) return 'will be removed on save'
+  return stored.value[field] ? '•••••• (stored — leave empty to keep)' : fallback
+}
+
 async function save() {
   busy.value = true; error.value = ''
   try {
-    // Only send filled-in fields (avoids overwriting with empty values).
+    // Only send filled-in fields; the backend merges, so untouched fields stay.
     const payload = Object.fromEntries(Object.entries(c.value).filter(([, v]) => v?.trim()))
+    if (clear.value.size) payload.clear = [...clear.value]
     await api.storeCredentials(payload)
     saved.value = true
     setTimeout(() => emit('close'), 800)
@@ -31,24 +51,42 @@ async function save() {
       <p class="note">Written directly to a per-user Kubernetes secret and never read back. Leave fields empty to keep existing values.</p>
 
       <div class="field">
-        <label>SSH private key (for GitLab)</label>
-        <textarea v-model="c.sshPrivateKey" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+        <label>SSH private key (for GitLab)
+          <span v-if="stored.sshPrivateKey" class="chip" :class="{ del: clear.has('sshPrivateKey') }" @click="toggleClear('sshPrivateKey')">{{ clear.has('sshPrivateKey') ? 'remove ✕' : 'stored ✓' }}</span>
+        </label>
+        <textarea v-model="c.sshPrivateKey" :placeholder="placeholderFor('sshPrivateKey', '-----BEGIN OPENSSH PRIVATE KEY-----')"></textarea>
       </div>
       <div class="field">
-        <label>known_hosts entry (GitLab host)</label>
-        <textarea v-model="c.gitKnownHosts" placeholder="gitlab.example.com ssh-ed25519 AAAA…"></textarea>
+        <label>known_hosts entry (GitLab host)
+          <span v-if="stored.gitKnownHosts" class="chip" :class="{ del: clear.has('gitKnownHosts') }" @click="toggleClear('gitKnownHosts')">{{ clear.has('gitKnownHosts') ? 'remove ✕' : 'stored ✓' }}</span>
+        </label>
+        <textarea v-model="c.gitKnownHosts" :placeholder="placeholderFor('gitKnownHosts', 'gitlab.example.com ssh-ed25519 AAAA…')"></textarea>
       </div>
       <div class="field">
-        <label>GitLab token (for HTTPS remotes, optional)</label>
-        <input v-model="c.gitlabToken" type="password" placeholder="glpat-…" />
+        <label>GitLab token (for HTTPS remotes, optional)
+          <span v-if="stored.gitlabToken" class="chip" :class="{ del: clear.has('gitlabToken') }" @click="toggleClear('gitlabToken')">{{ clear.has('gitlabToken') ? 'remove ✕' : 'stored ✓' }}</span>
+        </label>
+        <input v-model="c.gitlabToken" type="password" :placeholder="placeholderFor('gitlabToken', 'glpat-…')" />
       </div>
       <div class="field">
-        <label>Anthropic API key</label>
-        <input v-model="c.anthropicApiKey" type="password" placeholder="sk-ant-…" />
+        <label>Anthropic API key
+          <span v-if="stored.anthropicApiKey" class="chip" :class="{ del: clear.has('anthropicApiKey') }" @click="toggleClear('anthropicApiKey')">{{ clear.has('anthropicApiKey') ? 'remove ✕' : 'stored ✓' }}</span>
+        </label>
+        <input v-model="c.anthropicApiKey" type="password" :placeholder="placeholderFor('anthropicApiKey', 'sk-ant-…')" />
       </div>
       <div class="grid">
-        <div class="field"><label>Git name</label><input v-model="c.gitUserName" placeholder="Jane Doe" /></div>
-        <div class="field"><label>Git email</label><input v-model="c.gitUserEmail" placeholder="jane@…" /></div>
+        <div class="field">
+          <label>Git name
+            <span v-if="stored.gitUserName" class="chip" :class="{ del: clear.has('gitUserName') }" @click="toggleClear('gitUserName')">{{ clear.has('gitUserName') ? 'remove ✕' : 'stored ✓' }}</span>
+          </label>
+          <input v-model="c.gitUserName" :placeholder="placeholderFor('gitUserName', 'Jane Doe')" />
+        </div>
+        <div class="field">
+          <label>Git email
+            <span v-if="stored.gitUserEmail" class="chip" :class="{ del: clear.has('gitUserEmail') }" @click="toggleClear('gitUserEmail')">{{ clear.has('gitUserEmail') ? 'remove ✕' : 'stored ✓' }}</span>
+          </label>
+          <input v-model="c.gitUserEmail" :placeholder="placeholderFor('gitUserEmail', 'jane@…')" />
+        </div>
       </div>
 
       <p v-if="error" class="err">{{ error }}</p>
@@ -73,5 +111,11 @@ async function save() {
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
+.chip {
+  margin-left: 8px; font-family: var(--mono); font-size: 10px; cursor: pointer;
+  color: var(--ok); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
+}
+.chip:hover { border-color: var(--danger); color: var(--danger); }
+.chip.del { color: var(--danger); border-color: var(--danger); }
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }
 </style>

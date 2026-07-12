@@ -20,6 +20,8 @@ public sealed class SessionRecord
     /// <summary>Custom container image (null = default agent image).</summary>
     public string? Image { get; set; }
     public bool RunAsRoot { get; set; }
+    public string Cpu { get; set; } = "500m";
+    public string Memory { get; set; } = "1Gi";
     /// <summary>Token the agent pod uses to authenticate against the internal callback.</summary>
     public required string CallbackToken { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
@@ -70,6 +72,8 @@ public sealed class PostgresSessionStore : ISessionStore
             CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(callback_token);
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS image TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS run_as_root BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cpu TEXT NOT NULL DEFAULT '500m';
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS memory TEXT NOT NULL DEFAULT '1Gi';
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -79,13 +83,14 @@ public sealed class PostgresSessionStore : ISessionStore
     {
         const string sql = """
             INSERT INTO sessions (id, owner, title, mode, repo_url, schedule, claude_session_id,
-                                  status, question_pending, callback_token, image, run_as_root, created_at, updated_at)
-            VALUES (@id, @owner, @title, @mode, @repo, @sched, @csid, @status, @qp, @tok, @image, @root, @created, now())
+                                  status, question_pending, callback_token, image, run_as_root, cpu, memory, created_at, updated_at)
+            VALUES (@id, @owner, @title, @mode, @repo, @sched, @csid, @status, @qp, @tok, @image, @root, @cpu, @memory, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, mode = EXCLUDED.mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
                 question_pending = EXCLUDED.question_pending,
-                image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root, updated_at = now();
+                image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
+                cpu = EXCLUDED.cpu, memory = EXCLUDED.memory, updated_at = now();
             """;
         await using var cmd = _db.CreateCommand(sql);
         Bind(cmd, r);
@@ -133,7 +138,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, claude_session_id, status, question_pending, callback_token, created_at, updated_at, image, run_as_root FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, claude_session_id, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -157,6 +162,8 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("tok", r.CallbackToken);
         cmd.Parameters.AddWithValue("image", (object?)r.Image ?? DBNull.Value);
         cmd.Parameters.AddWithValue("root", r.RunAsRoot);
+        cmd.Parameters.AddWithValue("cpu", r.Cpu);
+        cmd.Parameters.AddWithValue("memory", r.Memory);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
     }
 
@@ -175,6 +182,8 @@ public sealed class PostgresSessionStore : ISessionStore
         CreatedAt = r.GetDateTime(10),
         UpdatedAt = r.GetDateTime(11),
         Image = r.IsDBNull(12) ? null : r.GetString(12),
-        RunAsRoot = r.GetBoolean(13)
+        RunAsRoot = r.GetBoolean(13),
+        Cpu = r.GetString(14),
+        Memory = r.GetString(15)
     };
 }
