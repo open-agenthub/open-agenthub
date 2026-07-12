@@ -19,9 +19,15 @@ public sealed class GitController : ControllerBase
         ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
         ?? "dev";
 
-    // Callback lands on the backend host (must match the OAuth app's redirect URI).
+    // Callback lands on the public host (must match the OAuth app's redirect URI
+    // exactly). Derived from FrontendOrigin rather than the request, because behind
+    // a TLS-terminating ingress Request.Scheme is "http" and would not match the
+    // registered https callback. Falls back to the request only if unset.
     private string RedirectUri(string providerId)
-        => $"{Request.Scheme}://{Request.Host}/api/git/callback/{providerId}";
+    {
+        var origin = (_cfg["FrontendOrigin"] ?? $"{Request.Scheme}://{Request.Host}").TrimEnd('/');
+        return $"{origin}/api/git/callback/{providerId}";
+    }
 
     [Authorize]
     [HttpGet("providers")]
