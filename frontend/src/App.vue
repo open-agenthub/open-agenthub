@@ -5,14 +5,17 @@ import SessionList from './components/SessionList.vue'
 import TerminalView from './components/TerminalView.vue'
 import NewSessionDialog from './components/NewSessionDialog.vue'
 import CredentialsDialog from './components/CredentialsDialog.vue'
+import EditSessionDialog from './components/EditSessionDialog.vue'
 
 const sessions = ref([])
 const activeId = ref(null)
 const showNew = ref(false)
 const showCreds = ref(false)
+const editId = ref(null)
 const error = ref('')
 
 const activeSession = computed(() => sessions.value.find(s => s.id === activeId.value) || null)
+const editSession = computed(() => sessions.value.find(s => s.id === editId.value) || null)
 
 // Auth enabled but no valid login: show the login page instead of the app.
 // State changes always go through a full-page redirect, so the state at mount time is sufficient.
@@ -24,6 +27,8 @@ async function refresh() {
 }
 
 async function onCreated(session) { showNew.value = false; await refresh(); activeId.value = session.id }
+
+async function onUpdated() { editId.value = null; await refresh() }
 
 async function resume(id) {
   await api.resumeSession(id)
@@ -119,7 +124,7 @@ onMounted(() => {
         </div>
         <p v-if="error" class="err">{{ error }}</p>
         <SessionList :sessions="sessions" :active="activeId"
-          @select="activeId = $event" @remove="remove" @resume="resume" />
+          @select="activeId = $event" @remove="remove" @resume="resume" @edit="editId = $event" />
       </aside>
 
       <section class="content">
@@ -134,6 +139,8 @@ onMounted(() => {
 
     <NewSessionDialog v-if="showNew" @close="showNew = false" @created="onCreated" />
     <CredentialsDialog v-if="showCreds" @close="showCreds = false" />
+    <EditSessionDialog v-if="editSession" :session="editSession" :key="editId"
+      @close="editId = null" @updated="onUpdated" />
   </div>
 </template>
 

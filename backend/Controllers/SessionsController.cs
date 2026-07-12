@@ -35,6 +35,14 @@ public sealed class SessionsController : ControllerBase
         catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
+    [HttpPatch("{id}")]
+    public async Task<ActionResult<SessionInfo>> Update(string id, [FromBody] UpdateSessionRequest req, CancellationToken ct)
+    {
+        try { return Ok(await _svc.UpdateSessionAsync(Owner, id, req, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
     [HttpPost("{id}/resume")]
     public async Task<ActionResult<SessionInfo>> Resume(string id, CancellationToken ct)
     {

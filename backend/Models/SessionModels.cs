@@ -44,6 +44,20 @@ public record CreateSessionRequest
     public string Memory { get; init; } = "1Gi";
 }
 
+/// <summary>
+/// Partial update of an existing session. Null = unchanged. Everything except
+/// the title only takes effect the next time the session is (re)started.
+/// </summary>
+public record UpdateSessionRequest
+{
+    public string? Title { get; init; }
+    /// <summary>Custom container image; empty string resets to the default agent image.</summary>
+    public string? Image { get; init; }
+    public bool? RunAsRoot { get; init; }
+    public string? Cpu { get; init; }
+    public string? Memory { get; init; }
+}
+
 /// <summary>View of a running or scheduled session.</summary>
 public record SessionInfo
 {
@@ -62,6 +76,8 @@ public record SessionInfo
     /// <summary>Custom image of the session (null = default agent image).</summary>
     public string? Image { get; init; }
     public bool RunAsRoot { get; init; }
+    public string Cpu { get; init; } = "500m";
+    public string Memory { get; init; } = "1Gi";
 }
 
 /// <summary>
@@ -77,4 +93,18 @@ public record UserCredentials
     public string? GitKnownHosts { get; init; }
     public string? GitUserName { get; init; }
     public string? GitUserEmail { get; init; }
+    /// <summary>Field names (camelCase, e.g. "gitlabToken") whose stored value should be removed.
+    /// Empty fields are otherwise left unchanged (merge semantics).</summary>
+    public List<string> Clear { get; init; } = new();
+}
+
+/// <summary>Which credential fields currently have a stored value (values are never returned).</summary>
+public record CredentialStatus
+{
+    public bool SshPrivateKey { get; init; }
+    public bool GitlabToken { get; init; }
+    public bool AnthropicApiKey { get; init; }
+    public bool GitKnownHosts { get; init; }
+    public bool GitUserName { get; init; }
+    public bool GitUserEmail { get; init; }
 }

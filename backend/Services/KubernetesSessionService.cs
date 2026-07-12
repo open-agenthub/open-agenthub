@@ -48,10 +48,26 @@ public sealed class KubernetesSessionService : ISessionService
 
     // ---------------------------------------------------------------- Credentials
 
+    // Credential form field (camelCase, as used by the frontend) -> secret key.
+    private static readonly IReadOnlyDictionary<string, string> CredentialKeys = new Dictionary<string, string>
+    {
+        ["sshPrivateKey"] = "ssh_key",
+        ["gitlabToken"] = "gitlab_token",
+        ["anthropicApiKey"] = "anthropic_api_key",
+        ["gitKnownHosts"] = "known_hosts",
+        ["gitUserName"] = "git_user_name",
+        ["gitUserEmail"] = "git_user_email"
+    };
+
     public async Task StoreCredentialsAsync(string owner, UserCredentials c, CancellationToken ct = default)
     {
         var name = CredsSecretName(owner);
-        var data = new Dictionary<string, byte[]>();
+
+        // Merge semantics: start from what is already stored, so a form where
+        // untouched fields stay empty never wipes existing values.
+        var data = (await ReadSecretOrNullAsync(name, ct))?.Data is { } existing
+            ? new Dictionary<string, byte[]>(existing)
+            : new Dictionary<string, byte[]>();
         void Put(string k, string? v) { if (!string.IsNullOrEmpty(v)) data[k] = Encoding.UTF8.GetBytes(v); }
 
         Put("ssh_key", Normalize(c.SshPrivateKey));
@@ -60,6 +76,10 @@ public sealed class KubernetesSessionService : ISessionService
         Put("known_hosts", c.GitKnownHosts);
         Put("git_user_name", c.GitUserName);
         Put("git_user_email", c.GitUserEmail);
+
+        foreach (var field in c.Clear)
+            if (CredentialKeys.TryGetValue(field, out var key))
+                data.Remove(key);
 
         await UpsertSecretAsync(new V1Secret
         {
@@ -71,6 +91,22 @@ public sealed class KubernetesSessionService : ISessionService
             Type = "Opaque", Data = data
         }, ct);
         _log.LogInformation("Stored credentials for {Owner} ({Keys} keys)", owner, data.Count);
+    }
+
+    /// <summary>Which credential fields have a stored value. Values are never returned.</summary>
+    public async Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default)
+    {
+        var keys = (await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data?.Keys.ToHashSet()
+                   ?? new HashSet<string>();
+        return new CredentialStatus
+        {
+            SshPrivateKey = keys.Contains("ssh_key"),
+            GitlabToken = keys.Contains("gitlab_token"),
+            AnthropicApiKey = keys.Contains("anthropic_api_key"),
+            GitKnownHosts = keys.Contains("known_hosts"),
+            GitUserName = keys.Contains("git_user_name"),
+            GitUserEmail = keys.Contains("git_user_email")
+        };
     }
 
     /// <summary>
@@ -110,6 +146,8 @@ public sealed class KubernetesSessionService : ISessionService
         }
         if (req.RunAsRoot && !_opts.AllowRootSessions)
             throw new ArgumentException("Root sessions are disabled on this instance.");
+        ValidateQuantity(req.Cpu, "cpu");
+        ValidateQuantity(req.Memory, "memory");
 
         var id = Guid.NewGuid().ToString("n")[..12];
         var rec = new SessionRecord
@@ -117,6 +155,7 @@ public sealed class KubernetesSessionService : ISessionService
             Id = id, Owner = owner, Title = req.Title, Mode = req.Mode,
             RepoUrl = req.RepoUrl, Schedule = req.Schedule,
             Image = image, RunAsRoot = req.RunAsRoot,
+            Cpu = req.Cpu, Memory = req.Memory,
             ClaudeSessionId = Guid.NewGuid().ToString(),
             CallbackToken = RandomToken(),
             Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending"
@@ -146,11 +185,60 @@ public sealed class KubernetesSessionService : ISessionService
         var req = new CreateSessionRequest
         {
             Title = rec.Title, Mode = rec.Mode, RepoUrl = rec.RepoUrl,
-            Image = rec.Image, RunAsRoot = rec.RunAsRoot
+            Image = rec.Image, RunAsRoot = rec.RunAsRoot,
+            Cpu = rec.Cpu, Memory = rec.Memory
         };
         await SpawnAsync(owner, rec, req, resume: true, ct);
         _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.ClaudeSessionId);
         return ToInfo(rec, phase: "Pending", podIp: null);
+    }
+
+    /// <summary>
+    /// Updates stored session settings. The title applies immediately; everything
+    /// else takes effect the next time the session is resumed (pod is rebuilt).
+    /// </summary>
+    public async Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        if (rec.Mode == SessionMode.Scheduled && (req.Image is not null || req.RunAsRoot is not null || req.Cpu is not null || req.Memory is not null))
+            throw new ArgumentException("Scheduled sessions run from a fixed CronJob spec — delete and recreate to change anything but the title.");
+
+        if (!string.IsNullOrWhiteSpace(req.Title))
+            rec.Title = req.Title.Trim();
+        if (req.Image is not null)
+        {
+            // Empty string resets to the default agent image.
+            var image = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image.Trim();
+            if (image is not null)
+            {
+                if (!_opts.AllowCustomImage)
+                    throw new ArgumentException("Custom images are disabled on this instance.");
+                if (image.Length > 300 || !System.Text.RegularExpressions.Regex.IsMatch(image, "^[A-Za-z0-9._/:@-]+$"))
+                    throw new ArgumentException("Invalid image reference.");
+            }
+            rec.Image = image;
+        }
+        if (req.RunAsRoot is { } asRoot)
+        {
+            if (asRoot && !_opts.AllowRootSessions)
+                throw new ArgumentException("Root sessions are disabled on this instance.");
+            rec.RunAsRoot = asRoot;
+        }
+        if (req.Cpu is not null) { ValidateQuantity(req.Cpu, "cpu"); rec.Cpu = req.Cpu; }
+        if (req.Memory is not null) { ValidateQuantity(req.Memory, "memory"); rec.Memory = req.Memory; }
+
+        await _store.UpsertAsync(rec, ct);
+        _log.LogInformation("Updated session {Id} settings", id);
+
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP);
+    }
+
+    private static void ValidateQuantity(string value, string what)
+    {
+        try { _ = new ResourceQuantity(value).ToDecimal(); }
+        catch { throw new ArgumentException($"Invalid {what} quantity: '{value}'."); }
     }
 
     private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct)
@@ -364,6 +452,10 @@ public sealed class KubernetesSessionService : ISessionService
                   cp /secrets/creds/ssh_key /tmp/id && chmod 600 /tmp/id
                   export GIT_SSH_COMMAND="ssh -i /tmp/id -o IdentitiesOnly=yes -o UserKnownHostsFile=/secrets/creds/known_hosts -o StrictHostKeyChecking=yes"
                 fi
+                # HTTPS remotes: same token credential helper as the agent container (entrypoint.sh)
+                if [ -f /secrets/creds/gitlab_token ]; then
+                  git config --global credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
+                fi
                 echo "Cloning $REPO_URL (branch: ${REPO_BRANCH:-default}) ..."
                 if [ -n "$REPO_BRANCH" ]; then git clone --branch "$REPO_BRANCH" "$REPO_URL" /workspace/repo
                 else git clone "$REPO_URL" /workspace/repo; fi
@@ -432,7 +524,7 @@ public sealed class KubernetesSessionService : ISessionService
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         QuestionPending = r.QuestionPending,
         CanResume = r.Mode != SessionMode.Scheduled && (phase == "Succeeded" || phase == "Failed"),
-        Image = r.Image, RunAsRoot = r.RunAsRoot
+        Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory
     };
 
     private V1ObjectMeta Meta(string name, string owner, string id, string component, string? title = null) => new()
@@ -454,6 +546,12 @@ public sealed class KubernetesSessionService : ISessionService
     private async Task TryDeletePodAsync(string name, CancellationToken ct)
     {
         try { await _k8s.CoreV1.DeleteNamespacedPodAsync(name, _opts.Namespace, gracePeriodSeconds: 5, cancellationToken: ct); } catch { }
+    }
+
+    private async Task<V1Secret?> ReadSecretOrNullAsync(string name, CancellationToken ct)
+    {
+        try { return await _k8s.CoreV1.ReadNamespacedSecretAsync(name, _opts.Namespace, cancellationToken: ct); }
+        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { return null; }
     }
 
     private async Task UpsertSecretAsync(V1Secret secret, CancellationToken ct)

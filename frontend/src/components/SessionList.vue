@@ -1,6 +1,6 @@
 <script setup>
 defineProps({ sessions: Array, active: String })
-defineEmits(['select', 'remove', 'resume'])
+defineEmits(['select', 'remove', 'resume', 'edit'])
 
 const phaseColor = {
   Running: 'var(--running)', Pending: 'var(--accent)', Scheduled: 'var(--muted)',
@@ -28,6 +28,7 @@ const modeLabel = { Interactive: 'interactive', Autonomous: 'autonomous', Schedu
       </div>
       <button v-if="s.canResume" class="resume" title="Resume"
               @click.stop="$emit('resume', s.id)">↻</button>
+      <button class="edit" title="Edit settings" @click.stop="$emit('edit', s.id)">✎</button>
       <button class="x" title="Delete" @click.stop="$emit('remove', s.id)">✕</button>
     </li>
     <li v-if="!sessions.length" class="none">No sessions yet.</li>
@@ -52,8 +53,9 @@ const modeLabel = { Interactive: 'interactive', Autonomous: 'autonomous', Schedu
 .cron { color: var(--running); }
 .ask-label { color: var(--accent); }
 .repo { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.resume, .x { background: none; border: none; color: var(--muted); padding: 4px 6px; font-size: 14px; }
+.resume, .edit, .x { background: none; border: none; color: var(--muted); padding: 4px 6px; font-size: 14px; }
 .resume:hover { color: var(--running); border: none; }
+.edit:hover { color: var(--accent); border: none; }
 .x:hover { color: var(--danger); border: none; }
 .none { color: var(--muted); font-size: 13px; padding: 12px; justify-content: center; }
 </style>

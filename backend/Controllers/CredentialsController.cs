@@ -29,4 +29,9 @@ public sealed class CredentialsController : ControllerBase
         await _svc.StoreCredentialsAsync(Owner, creds, ct);
         return NoContent();
     }
+
+    /// <summary>Which fields currently have a stored value — never the values themselves.</summary>
+    [HttpGet]
+    public async Task<ActionResult<CredentialStatus>> Status(CancellationToken ct)
+        => Ok(await _svc.GetCredentialStatusAsync(Owner, ct));
 }
