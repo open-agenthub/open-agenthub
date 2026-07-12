@@ -48,6 +48,8 @@ agent:
 # OAuth2/OIDC provider. Empty authority = auth disabled (dev mode, all requests as user "dev").
 oidc:
   authority: ""
+  # Expected "aud" claim of access tokens. Empty = skip audience validation
+  # (e.g. Keycloak without an audience mapper on the client).
   audience: agenthub
   clientId: agenthub
   scope: openid profile email
