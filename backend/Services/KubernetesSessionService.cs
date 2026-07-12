@@ -97,8 +97,6 @@ public sealed class KubernetesSessionService : ISessionService
 
     public async Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default)
     {
-        if (await GetCredsSecretAsync(owner, ct) is null)
-            throw new InvalidOperationException("No credentials stored. Please save your credentials first.");
         if (req.Mode is SessionMode.Autonomous or SessionMode.Scheduled && string.IsNullOrWhiteSpace(req.Prompt))
             throw new ArgumentException("A prompt is required for Autonomous/Scheduled sessions.");
 
@@ -277,7 +275,9 @@ public sealed class KubernetesSessionService : ISessionService
             new() { Name = "workspace", EmptyDir = new V1EmptyDirVolumeSource() },
             new() { Name = "home", EmptyDir = new V1EmptyDirVolumeSource() },
             new() { Name = "tmp", EmptyDir = new V1EmptyDirVolumeSource() },
-            new() { Name = "creds", Secret = new V1SecretVolumeSource { SecretName = credsSecret, DefaultMode = 0x1A0 } },
+            // Optional: sessions can start before the user ever saved credentials
+            // (all consumers check file existence; the volume is just empty then).
+            new() { Name = "creds", Secret = new V1SecretVolumeSource { SecretName = credsSecret, Optional = true, DefaultMode = 0x1A0 } },
             // Claude subscription login (optional; only exists after the first login)
             new() { Name = "claude", Secret = new V1SecretVolumeSource { SecretName = ClaudeSecretName(owner), Optional = true, DefaultMode = 0x1A0 } }
         };
@@ -454,12 +454,6 @@ public sealed class KubernetesSessionService : ISessionService
     private async Task TryDeletePodAsync(string name, CancellationToken ct)
     {
         try { await _k8s.CoreV1.DeleteNamespacedPodAsync(name, _opts.Namespace, gracePeriodSeconds: 5, cancellationToken: ct); } catch { }
-    }
-
-    private async Task<V1Secret?> GetCredsSecretAsync(string owner, CancellationToken ct)
-    {
-        try { return await _k8s.CoreV1.ReadNamespacedSecretAsync(CredsSecretName(owner), _opts.Namespace, cancellationToken: ct); }
-        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { return null; }
     }
 
     private async Task UpsertSecretAsync(V1Secret secret, CancellationToken ct)
