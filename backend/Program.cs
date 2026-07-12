@@ -22,6 +22,18 @@ else
 builder.Services.AddHttpClient<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Notifications.N8nNotifier>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IGitAuthService, GitAuthService>();
+
+// Enterprise license gate (offline-verified token).
+builder.Services.AddSingleton<AgentHub.Api.Licensing.IEnterpriseLicense, AgentHub.Api.Licensing.EnterpriseLicense>();
+
+// Enterprise: Slack integration (only active with a valid license + tokens).
+var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee.Slack.SlackOptions>() ?? new();
+builder.Services.AddSingleton(slackOpts);
+builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackThreadStore>();
+builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackClient>();
+builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Ee.Slack.SlackNotifier>();
+builder.Services.AddHostedService<AgentHub.Api.Ee.Slack.SlackSocketModeService>();
+
 builder.Services.AddHealthChecks();
 
 // --- Auth: generic OIDC/JWT provider (e.g. Keycloak). Multi-user separation via preferred_username. ---
@@ -79,6 +91,7 @@ using (var scope = app.Services.CreateScope())
     await store.InitializeAsync();
     var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
     await tokenStore.InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
 }
 
 app.UseCors();

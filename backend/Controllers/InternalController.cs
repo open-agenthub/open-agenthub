@@ -17,12 +17,18 @@ namespace AgentHub.Api.Controllers;
 public sealed class InternalController : ControllerBase
 {
     private readonly ISessionStore _store;
-    private readonly INotifier _notifier;
+    private readonly IEnumerable<INotifier> _notifiers;
     private readonly ISessionService _svc;
 
-    public InternalController(ISessionStore store, INotifier notifier, ISessionService svc)
+    public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc)
     {
-        _store = store; _notifier = notifier; _svc = svc;
+        _store = store; _notifiers = notifiers; _svc = svc;
+    }
+
+    private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
+    {
+        foreach (var n in _notifiers)
+            await n.NotifyAsync(rec, ev, message, ct);
     }
 
     public record StatusBody(string Status);
@@ -45,7 +51,7 @@ public sealed class InternalController : ControllerBase
         if (body.Status is "Succeeded" or "Failed")
         {
             await _store.SetQuestionPendingAsync(id, false, ct);
-            await _notifier.NotifyAsync(rec, body.Status.ToLowerInvariant(),
+            await NotifyAllAsync(rec, body.Status == "Succeeded" ? "finished" : "failed",
                 body.Status == "Succeeded" ? "Task completed." : "Session failed.", ct);
         }
         return NoContent();
@@ -59,7 +65,7 @@ public sealed class InternalController : ControllerBase
         if (rec is null) return Unauthorized();
 
         await _store.SetQuestionPendingAsync(id, true, ct);
-        await _notifier.NotifyAsync(rec, body.Event ?? "question",
+        await NotifyAllAsync(rec, body.Event ?? "question",
             string.IsNullOrWhiteSpace(body.Message) ? "The agent is waiting for your reply." : body.Message, ct);
         return NoContent();
     }

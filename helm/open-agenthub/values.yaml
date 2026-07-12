@@ -69,6 +69,23 @@ s3:
 n8n:
   webhookUrl: ""
 
+# Enterprise license (offline-verified). Enterprise features (ee/) only run with
+# a valid token. `token` is the signed license from the license service; `publicKey`
+# is that service's ECDSA P-256 public key (PEM) used to verify it offline.
+license:
+  token: ""
+  publicKey: ""
+
+# Enterprise features (require a valid license).
+ee:
+  # Slack integration: asks you in a Slack thread whenever a session waits for input,
+  # and turns your thread replies into the agent's answer. Uses Socket Mode.
+  slack:
+    enabled: false
+    channel: ""       # target channel id (e.g. C0123ABCD)
+    botToken: ""      # xoxb-… (chat.postMessage)
+    appToken: ""      # xapp-… (Socket Mode)
+
 # Git OAuth: lets users connect GitHub/GitLab accounts ("Connect" on the Account page)
 # so sessions clone/push their repos without a manual PAT. Optional — leave providers
 # empty to keep only the manual credentials flow.

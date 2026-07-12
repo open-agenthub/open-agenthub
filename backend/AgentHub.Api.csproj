@@ -7,6 +7,11 @@
     <RootNamespace>AgentHub.Api</RootNamespace>
   </PropertyGroup>
 
+  <!-- Enterprise Edition sources (source-available under ee/LICENSE, not AGPL). -->
+  <ItemGroup>
+    <Compile Include="../ee/backend/**/*.cs" />
+  </ItemGroup>
+
   <ItemGroup>
     <!-- Offizieller Kubernetes-Client -->
     <PackageReference Include="KubernetesClient" Version="14.0.2" />
