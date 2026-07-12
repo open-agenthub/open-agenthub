@@ -37,7 +37,7 @@ onMounted(() => {
   term = new Terminal({
     fontFamily: "'JetBrains Mono', monospace", fontSize: 13,
     cursorBlink: isLive.value, scrollback: 8000, disableStdin: !isLive.value,
-    theme: { background: '#0E1116', foreground: '#D7DCE3', cursor: '#E8A24A', selectionBackground: '#2A313C' }
+    theme: { background: '#0E1116', foreground: '#D7DCE3', cursor: '#5AA9F5', selectionBackground: '#2A313C' }
   })
   fit = new FitAddon(); term.loadAddon(fit); term.open(host.value); fit.fit()
 
