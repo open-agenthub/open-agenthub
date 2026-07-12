@@ -1,6 +1,8 @@
 <div align="center">
 
-# `>_` Open AgentHub
+<img src="frontend/public/favicon.svg" alt="Open AgentHub Logo" style="height: 150px"/>  
+  
+# Open AgentHub
 
 **A home for your coding agent. Be your own digital team lead.**
 
