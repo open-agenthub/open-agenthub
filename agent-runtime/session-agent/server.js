@@ -97,7 +97,17 @@ function persistScrollback(done) {
   try { fs.writeFileSync('/tmp/scrollback.log', scrollback); } catch {}
   execFile('/bin/sh', ['-c', `curl -fsS -T /tmp/scrollback.log "${SCROLL_PUT}"`], () => done && done());
 }
-function persistAll(done) { persistScrollback(() => persistState(done)); }
+// Also store the transcript via the backend callback, so it is available even
+// on instances without S3 (autonomous runs would otherwise leave nothing behind).
+function backupScrollback(done) {
+  if (!CALLBACK) return done && done();
+  fetch(`${CALLBACK}/scrollback`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'text/plain', 'X-Agent-Token': TOKEN },
+    body: scrollback
+  }).catch(() => {}).finally(() => done && done());
+}
+function persistAll(done) { backupScrollback(() => persistScrollback(() => persistState(done))); }
 
 function postStatus(status, done) {
   if (!CALLBACK) return done && done();
