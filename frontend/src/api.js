@@ -34,6 +34,11 @@ export const api = {
   storeCredentials: (data) => req('PUT', '/credentials', data),
   // Which credential fields have a stored value (booleans only, never values).
   getCredentialStatus: () => req('GET', '/credentials'),
+  // Personal API tokens for driving sessions remotely.
+  listApiTokens: () => req('GET', '/tokens'),
+  // Returns the plaintext token exactly once (in the `token` field).
+  createApiToken: (name) => req('POST', '/tokens', { name }),
+  deleteApiToken: (id) => req('DELETE', `/tokens/${id}`),
   // Git OAuth providers / connections.
   gitProviders: () => req('GET', '/git/providers'),
   gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),

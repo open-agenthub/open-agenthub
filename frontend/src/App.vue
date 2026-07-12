@@ -5,6 +5,7 @@ import SessionList from './components/SessionList.vue'
 import TerminalView from './components/TerminalView.vue'
 import NewSessionDialog from './components/NewSessionDialog.vue'
 import CredentialsDialog from './components/CredentialsDialog.vue'
+import SettingsDialog from './components/SettingsDialog.vue'
 import EditSessionDialog from './components/EditSessionDialog.vue'
 import AccountDialog from './components/AccountDialog.vue'
 
@@ -12,6 +13,7 @@ const sessions = ref([])
 const activeId = ref(null)
 const showNew = ref(false)
 const showCreds = ref(false)
+const showSettings = ref(false)
 const showAccount = ref(false)
 const editId = ref(null)
 const error = ref('')
@@ -138,6 +140,7 @@ onMounted(() => {
         <span class="user">{{ auth.user }}</span>
         <button v-if="gitEnabled.gitEnabled" @click="showAccount = true">Account</button>
         <button @click="showCreds = true">Credentials</button>
+        <button @click="showSettings = true">Settings</button>
         <button v-if="auth.enabled" @click="auth.logout()">Sign out</button>
       </div>
     </header>
@@ -165,6 +168,7 @@ onMounted(() => {
 
     <NewSessionDialog v-if="showNew" @close="showNew = false" @created="onCreated" />
     <CredentialsDialog v-if="showCreds" @close="showCreds = false" />
+    <SettingsDialog v-if="showSettings" @close="showSettings = false" />
     <AccountDialog v-if="showAccount" @close="showAccount = false" />
     <EditSessionDialog v-if="editSession" :session="editSession" :key="editId"
       @close="editId = null" @updated="onUpdated" />
