@@ -36,12 +36,16 @@ if [ -f /secrets/creds/gitlab_token ]; then
 fi
 
 # --- Resume: restore saved Claude state from S3 ---
+# Writes /tmp/.state-restored only on success, so server.js knows whether a
+# conversation actually exists to `--resume` (without S3 there is none, and
+# `claude --resume` on a missing conversation aborts the whole session).
 if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; then
   echo "[entrypoint] Downloading session state from S3 …"
-  if curl -fsS -o /tmp/state.tgz "$AGENTHUB_STATE_GET_URL"; then
-    tar xzf /tmp/state.tgz -C "$HOME" && echo "[entrypoint] State restored."
+  if curl -fsS -o /tmp/state.tgz "$AGENTHUB_STATE_GET_URL" && tar xzf /tmp/state.tgz -C "$HOME" 2>/dev/null; then
+    touch /tmp/.state-restored
+    echo "[entrypoint] State restored."
   else
-    echo "[entrypoint] WARN: State download failed – starting without history."
+    echo "[entrypoint] WARN: no saved state – starting fresh without history."
   fi
 fi
 
