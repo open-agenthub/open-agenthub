@@ -7,11 +7,18 @@ organizations. Unlike the rest of this repository, the code in `ee/` is
 [Open AgentHub Enterprise License](./LICENSE) and requires a valid
 subscription for production use.
 
-## Planned enterprise features
+## Enterprise features
+
+- **Slack integration** ✅ — when a session waits for input you are asked in a
+  Slack thread (with the new terminal output), and your thread replies are sent
+  back to the agent. Uses Socket Mode (no public endpoint). Backend sources under
+  [`backend/Slack/`](./backend/Slack); configured via `ee.slack.*` and gated by a
+  valid license (`license.token` / `license.publicKey`). See the chart `values.yaml`.
+
+### Planned
 
 - **Session sharing** between members of an organization
-- **Organization management** (teams, roles, quotas)
-- **Slack integration** (notifications, answer your agent from Slack)
+- **Organization management** (teams, roles, quotas), user/seat & cost admin
 - **SSO group mapping** (map OIDC/IdP groups to AgentHub organizations and roles)
 
 ## Subscription

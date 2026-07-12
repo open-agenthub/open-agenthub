@@ -26,6 +26,9 @@ data:
   Oidc__Scope: {{ .Values.oidc.scope | quote }}
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
   FrontendOrigin: "https://{{ .Values.ingress.host }}"
+  License__PublicKey: {{ .Values.license.publicKey | quote }}
+  Ee__Slack__Enabled: {{ .Values.ee.slack.enabled | quote }}
+  Ee__Slack__Channel: {{ .Values.ee.slack.channel | quote }}
   {{- range $i, $p := .Values.git.providers }}
   Git__Providers__{{ $i }}__Id: {{ $p.id | quote }}
   Git__Providers__{{ $i }}__Type: {{ $p.type | quote }}
