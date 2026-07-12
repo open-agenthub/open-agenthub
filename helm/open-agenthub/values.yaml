@@ -36,6 +36,9 @@ frontend:
 agent:
   port: 7681
   gitCloneImage: alpine/git:2.45.2
+  # Pull policy for the agent-runtime image in session pods. Use "Always" when
+  # the image tag moves (e.g. :latest) so nodes don't serve a stale cache.
+  pullPolicy: IfNotPresent
   runtimeClassName: ""
   maxCpu: "2"
   maxMemory: 4Gi
