@@ -1,14 +1,14 @@
 <script setup>
 import { ref, computed } from 'vue'
 import { api } from '../api.js'
+import RepoPicker from './RepoPicker.vue'
 
 const emit = defineEmits(['close', 'created'])
 
+const repos = ref([])
 const form = ref({
   title: '',
   mode: 'Interactive',
-  repoUrl: '',
-  repoBranch: '',
   prompt: '',
   schedule: '0 6 * * 1-5',
   mcpConfigJson: '',
@@ -35,8 +35,7 @@ async function submit() {
     const session = await api.createSession({
       title: form.value.title || 'Session',
       mode: form.value.mode,
-      repoUrl: form.value.repoUrl || null,
-      repoBranch: form.value.repoBranch || null,
+      repos: repos.value,
       prompt: form.value.prompt || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
       mcpConfigJson: form.value.mcpConfigJson || null,
@@ -74,15 +73,9 @@ async function submit() {
         </select>
       </div>
 
-      <div class="grid">
-        <div class="field">
-          <label>GitLab repo (optional)</label>
-          <input v-model="form.repoUrl" placeholder="git@gitlab.example.com:team/repo.git" />
-        </div>
-        <div class="field">
-          <label>Branch</label>
-          <input v-model="form.repoBranch" placeholder="main" />
-        </div>
+      <div class="field">
+        <label>Repositories (optional — pick one or more)</label>
+        <RepoPicker v-model="repos" />
       </div>
 
       <div class="field" v-if="needsPrompt">

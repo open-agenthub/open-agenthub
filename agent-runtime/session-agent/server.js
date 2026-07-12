@@ -30,7 +30,9 @@ const TOKEN     = process.env.AGENTHUB_CALLBACK_TOKEN || '';
 const STATE_PUT = process.env.AGENTHUB_STATE_PUT_URL || '';
 const SCROLL_PUT= process.env.AGENTHUB_SCROLLBACK_PUT_URL || '';
 const HOME      = process.env.HOME || '/home/agent';
-const CWD       = HAS_REPO ? '/workspace/repo' : '/workspace';
+// Working dir: the backend sets AGENTHUB_WORKDIR (/workspace/repo for a single
+// repo, /workspace when multiple repos are checked out side by side).
+const CWD       = process.env.AGENTHUB_WORKDIR || (HAS_REPO ? '/workspace/repo' : '/workspace');
 
 // ---- Claude command ------------------------------------------------------------
 function buildCommand() {

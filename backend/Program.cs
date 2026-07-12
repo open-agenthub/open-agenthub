@@ -19,6 +19,8 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["S3:AccessKey"]))
 else
     builder.Services.AddSingleton<AgentHub.Api.Storage.IArtifactStore, AgentHub.Api.Storage.NullArtifactStore>();
 builder.Services.AddHttpClient<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Notifications.N8nNotifier>();
+builder.Services.AddHttpClient();
+builder.Services.AddSingleton<IGitAuthService, GitAuthService>();
 builder.Services.AddHealthChecks();
 
 // --- Auth: generic OIDC/JWT provider (e.g. Keycloak). Multi-user separation via preferred_username. ---
@@ -86,11 +88,13 @@ app.MapHealthChecks("/healthz").AllowAnonymous();
 
 // Runtime config for the frontend (static nginx image, no build-time env vars):
 // empty authority = auth disabled, so the frontend does not enforce a login.
-app.MapGet("/api/config", () => Results.Ok(new
+app.MapGet("/api/config", (IGitAuthService git) => Results.Ok(new
 {
     authority = oidc["Authority"] ?? "",
     clientId = oidc["ClientId"] ?? "agenthub",
-    scope = oidc["Scope"] ?? "openid profile email"
+    scope = oidc["Scope"] ?? "openid profile email",
+    // Lets the UI show the "Connect GitHub/GitLab" account section only when configured.
+    gitEnabled = git.AnyConfigured
 })).AllowAnonymous();
 
 var agentPort = builder.Configuration.GetValue("AgentHub:AgentPort", 7681);

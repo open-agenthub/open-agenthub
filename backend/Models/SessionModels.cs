@@ -11,13 +11,27 @@ public enum SessionMode
     Scheduled
 }
 
+/// <summary>A repository to check out into the session workspace.</summary>
+public record RepoRef
+{
+    /// <summary>Clone URL (SSH or HTTPS).</summary>
+    public required string Url { get; init; }
+    public string? Branch { get; init; }
+    /// <summary>Id of the connected Git provider whose OAuth token authenticates the
+    /// clone/push (null = anonymous, SSH key, or manual PAT).</summary>
+    public string? ProviderId { get; init; }
+}
+
 /// <summary>Request to start a new session.</summary>
 public record CreateSessionRequest
 {
     public string Title { get; init; } = "Untitled";
     public SessionMode Mode { get; init; } = SessionMode.Interactive;
 
-    /// <summary>Optional repo cloned at startup (SSH or HTTPS URL).</summary>
+    /// <summary>Repositories cloned at startup (each into /workspace/&lt;name&gt;).</summary>
+    public List<RepoRef> Repos { get; init; } = new();
+
+    /// <summary>Legacy single-repo fields; folded into Repos when Repos is empty.</summary>
     public string? RepoUrl { get; init; }
     public string? RepoBranch { get; init; }
 
@@ -56,6 +70,10 @@ public record UpdateSessionRequest
     public bool? RunAsRoot { get; init; }
     public string? Cpu { get; init; }
     public string? Memory { get; init; }
+    /// <summary>MCP config (.mcp.json); null = unchanged, empty string = remove all MCP servers.</summary>
+    public string? McpConfigJson { get; init; }
+    /// <summary>Replacement repo list; null = unchanged.</summary>
+    public List<RepoRef>? Repos { get; init; }
 }
 
 /// <summary>View of a running or scheduled session.</summary>
@@ -65,7 +83,13 @@ public record SessionInfo
     public required string Title { get; init; }
     public required string Owner { get; init; }
     public required SessionMode Mode { get; init; }
+    /// <summary>First repo URL (backward-compatible display field).</summary>
     public string? RepoUrl { get; init; }
+    public List<RepoRef> Repos { get; init; } = new();
+    /// <summary>Whether the session has an MCP configuration.</summary>
+    public bool HasMcp { get; init; }
+    /// <summary>MCP config JSON (returned so the edit dialog can prefill it).</summary>
+    public string? McpConfigJson { get; init; }
     public required string Phase { get; init; }       // Pending | Running | Succeeded | Failed | Scheduled
     public string? PodIp { get; init; }
     public DateTime CreatedAt { get; init; }

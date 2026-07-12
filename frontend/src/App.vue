@@ -1,18 +1,21 @@
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { api, auth } from './api.js'
+import { ref, computed, onMounted, watch } from 'vue'
+import { api, auth, config } from './api.js'
 import SessionList from './components/SessionList.vue'
 import TerminalView from './components/TerminalView.vue'
 import NewSessionDialog from './components/NewSessionDialog.vue'
 import CredentialsDialog from './components/CredentialsDialog.vue'
 import EditSessionDialog from './components/EditSessionDialog.vue'
+import AccountDialog from './components/AccountDialog.vue'
 
 const sessions = ref([])
 const activeId = ref(null)
 const showNew = ref(false)
 const showCreds = ref(false)
+const showAccount = ref(false)
 const editId = ref(null)
 const error = ref('')
+const gitEnabled = config
 
 const activeSession = computed(() => sessions.value.find(s => s.id === activeId.value) || null)
 const editSession = computed(() => sessions.value.find(s => s.id === editId.value) || null)
@@ -43,10 +46,32 @@ async function remove(id) {
   await refresh()
 }
 
+// Deep-linkable sessions: the active session id lives in the URL path (/s/{id}),
+// so a session can be linked and survives reloads / back-forward navigation.
+function idFromLocation() {
+  const m = location.pathname.match(/^\/s\/([^/]+)/)
+  if (m) return decodeURIComponent(m[1])
+  return new URLSearchParams(location.search).get('session') // legacy ?session=
+}
+
+let syncingFromHistory = false // suppress the watch while reacting to back/forward
+
+watch(activeId, (id) => {
+  if (syncingFromHistory) return
+  const target = id ? `/s/${encodeURIComponent(id)}` : '/'
+  if (location.pathname + location.search !== target) history.pushState({ id }, '', target)
+})
+
 onMounted(() => {
   if (needsLogin) return
-  const fromUrl = new URLSearchParams(location.search).get('session')
+  if (location.pathname.startsWith('/account')) showAccount.value = true
+  const fromUrl = idFromLocation()
   if (fromUrl) activeId.value = fromUrl
+  window.addEventListener('popstate', () => {
+    syncingFromHistory = true
+    activeId.value = idFromLocation()
+    syncingFromHistory = false
+  })
   refresh(); setInterval(refresh, 5000)
 })
 </script>
@@ -111,6 +136,7 @@ onMounted(() => {
       </div>
       <div class="actions">
         <span class="user">{{ auth.user }}</span>
+        <button v-if="gitEnabled.gitEnabled" @click="showAccount = true">Account</button>
         <button @click="showCreds = true">Credentials</button>
         <button v-if="auth.enabled" @click="auth.logout()">Sign out</button>
       </div>
@@ -139,6 +165,7 @@ onMounted(() => {
 
     <NewSessionDialog v-if="showNew" @close="showNew = false" @created="onCreated" />
     <CredentialsDialog v-if="showCreds" @close="showCreds = false" />
+    <AccountDialog v-if="showAccount" @close="showAccount = false" />
     <EditSessionDialog v-if="editSession" :session="editSession" :key="editId"
       @close="editId = null" @updated="onUpdated" />
   </div>

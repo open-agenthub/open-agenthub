@@ -22,6 +22,11 @@ public sealed class SessionRecord
     public bool RunAsRoot { get; set; }
     public string Cpu { get; set; } = "500m";
     public string Memory { get; set; } = "1Gi";
+    /// <summary>MCP configuration (.mcp.json content); null/empty = no MCP servers.</summary>
+    public string? McpConfigJson { get; set; }
+    /// <summary>Repositories to check out, as a JSON array of {url,branch,providerId}. Null = none.
+    /// (RepoUrl mirrors the first entry for display and backward compatibility.)</summary>
+    public string? ReposJson { get; set; }
     /// <summary>Token the agent pod uses to authenticate against the internal callback.</summary>
     public required string CallbackToken { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
@@ -74,6 +79,8 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS run_as_root BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cpu TEXT NOT NULL DEFAULT '500m';
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS memory TEXT NOT NULL DEFAULT '1Gi';
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_config TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS repos TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -83,14 +90,17 @@ public sealed class PostgresSessionStore : ISessionStore
     {
         const string sql = """
             INSERT INTO sessions (id, owner, title, mode, repo_url, schedule, claude_session_id,
-                                  status, question_pending, callback_token, image, run_as_root, cpu, memory, created_at, updated_at)
-            VALUES (@id, @owner, @title, @mode, @repo, @sched, @csid, @status, @qp, @tok, @image, @root, @cpu, @memory, @created, now())
+                                  status, question_pending, callback_token, image, run_as_root, cpu, memory,
+                                  mcp_config, repos, created_at, updated_at)
+            VALUES (@id, @owner, @title, @mode, @repo, @sched, @csid, @status, @qp, @tok, @image, @root, @cpu, @memory,
+                    @mcp, @repos, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, mode = EXCLUDED.mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
                 question_pending = EXCLUDED.question_pending,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
-                cpu = EXCLUDED.cpu, memory = EXCLUDED.memory, updated_at = now();
+                cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
+                mcp_config = EXCLUDED.mcp_config, repos = EXCLUDED.repos, updated_at = now();
             """;
         await using var cmd = _db.CreateCommand(sql);
         Bind(cmd, r);
@@ -138,7 +148,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, claude_session_id, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, claude_session_id, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -164,6 +174,8 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("root", r.RunAsRoot);
         cmd.Parameters.AddWithValue("cpu", r.Cpu);
         cmd.Parameters.AddWithValue("memory", r.Memory);
+        cmd.Parameters.AddWithValue("mcp", (object?)r.McpConfigJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("repos", (object?)r.ReposJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
     }
 
@@ -184,6 +196,8 @@ public sealed class PostgresSessionStore : ISessionStore
         Image = r.IsDBNull(12) ? null : r.GetString(12),
         RunAsRoot = r.GetBoolean(13),
         Cpu = r.GetString(14),
-        Memory = r.GetString(15)
+        Memory = r.GetString(15),
+        McpConfigJson = r.IsDBNull(16) ? null : r.GetString(16),
+        ReposJson = r.IsDBNull(17) ? null : r.GetString(17)
     };
 }

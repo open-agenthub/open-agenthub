@@ -25,3 +25,11 @@ data:
   Oidc__Scope: {{ .Values.oidc.scope | quote }}
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
   FrontendOrigin: "https://{{ .Values.ingress.host }}"
+  {{- range $i, $p := .Values.git.providers }}
+  Git__Providers__{{ $i }}__Id: {{ $p.id | quote }}
+  Git__Providers__{{ $i }}__Type: {{ $p.type | quote }}
+  Git__Providers__{{ $i }}__DisplayName: {{ $p.displayName | default $p.id | quote }}
+  Git__Providers__{{ $i }}__BaseUrl: {{ $p.baseUrl | default "" | quote }}
+  Git__Providers__{{ $i }}__ClientId: {{ $p.clientId | quote }}
+  Git__Providers__{{ $i }}__Scopes: {{ $p.scopes | default "" | quote }}
+  {{- end }}
