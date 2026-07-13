@@ -35,8 +35,11 @@ const STATE_PUT = process.env.AGENTHUB_STATE_PUT_URL || '';
 const SCROLL_PUT= process.env.AGENTHUB_SCROLLBACK_PUT_URL || '';
 const HOME      = process.env.HOME || '/home/agent';
 // Working dir: the backend sets AGENTHUB_WORKDIR (/workspace/repo for a single
-// repo, /workspace when multiple repos are checked out side by side).
-const CWD       = process.env.AGENTHUB_WORKDIR || (HAS_REPO ? '/workspace/repo' : '/workspace');
+// repo, /workspace when multiple repos are checked out side by side). Fall back to
+// /workspace if the target does not exist (e.g. a repo that was not (re)cloned) so
+// node-pty's chdir cannot fail.
+const WORKDIR   = process.env.AGENTHUB_WORKDIR || (HAS_REPO ? '/workspace/repo' : '/workspace');
+const CWD       = fs.existsSync(WORKDIR) ? WORKDIR : '/workspace';
 
 // ---- Claude command ------------------------------------------------------------
 function buildCommand() {
