@@ -247,6 +247,30 @@ public sealed class KubernetesSessionService : ISessionService
     }
 
     /// <summary>
+    /// Pauses a session: deleting the pod sends SIGTERM, whereupon the agent uploads
+    /// its Claude state + scrollback to S3 during the grace period (see server.js).
+    /// The session is marked "Paused" and can later be resumed from that saved state.
+    /// </summary>
+    public async Task<SessionInfo> PauseSessionAsync(string owner, string id, CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        if (rec.Mode == SessionMode.Scheduled)
+            throw new ArgumentException("Scheduled sessions cannot be paused; they run on their schedule.");
+
+        // Longer grace than a plain delete so the graceful state upload can finish
+        // before the container is killed (the k8s default of 30s is plenty; the
+        // agent uploads state, then exits).
+        await TryDeletePodAsync($"session-{id}", ct, _opts.PauseGracePeriodSeconds);
+
+        rec.Status = SessionStatus.Paused;
+        rec.QuestionPending = false;
+        await _store.UpsertAsync(rec, ct);
+        _log.LogInformation("Paused session {Id} (pod removed, state uploaded to S3)", id);
+        return ToInfo(rec, phase: SessionStatus.Paused, podIp: null);
+    }
+
+    /// <summary>
     /// Updates stored session settings. The title applies immediately; everything
     /// else takes effect the next time the session is resumed (pod is rebuilt).
     /// </summary>
@@ -653,7 +677,7 @@ public sealed class KubernetesSessionService : ISessionService
         HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson), McpConfigJson = r.McpConfigJson,
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         QuestionPending = r.QuestionPending,
-        CanResume = r.Mode != SessionMode.Scheduled && (phase == "Succeeded" || phase == "Failed"),
+        CanResume = SessionStatus.CanResume(r.Mode, phase),
         Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory
     };
 
@@ -673,9 +697,9 @@ public sealed class KubernetesSessionService : ISessionService
         catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { return null; }
     }
 
-    private async Task TryDeletePodAsync(string name, CancellationToken ct)
+    private async Task TryDeletePodAsync(string name, CancellationToken ct, int gracePeriodSeconds = 5)
     {
-        try { await _k8s.CoreV1.DeleteNamespacedPodAsync(name, _opts.Namespace, gracePeriodSeconds: 5, cancellationToken: ct); } catch { }
+        try { await _k8s.CoreV1.DeleteNamespacedPodAsync(name, _opts.Namespace, gracePeriodSeconds: gracePeriodSeconds, cancellationToken: ct); } catch { }
     }
 
     private async Task<V1Secret?> ReadSecretOrNullAsync(string name, CancellationToken ct)
@@ -724,4 +748,7 @@ public sealed class AgentHubOptions
     public bool AllowCustomImage { get; set; } = true;
     /// <summary>Users may run their session as root (namespace needs PSA "baseline").</summary>
     public bool AllowRootSessions { get; set; } = true;
+    /// <summary>Grace period (seconds) when pausing a session, so the agent can upload
+    /// its state to S3 before the container is killed.</summary>
+    public int PauseGracePeriodSeconds { get; set; } = 30;
 }
