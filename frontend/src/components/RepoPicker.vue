@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import { api, config } from '../api.js'
+import { repoShortName } from '../lib/text.js'
 
 // v-model: array of { url, branch, providerId }
 const props = defineProps({ modelValue: { type: Array, default: () => [] } })
@@ -60,7 +61,7 @@ function addManual() {
     <!-- selected repos -->
     <div v-if="repos.length" class="chips">
       <span v-for="(r, i) in repos" :key="r.url + i" class="chip">
-        {{ r.url.replace(/^https?:\/\/[^/]+\//, '').replace(/\.git$/, '') }}<span v-if="r.branch" class="br">@{{ r.branch }}</span>
+        {{ repoShortName(r.url) }}<span v-if="r.branch" class="br">@{{ r.branch }}</span>
         <button class="x" @click="removeRepo(i)">✕</button>
       </span>
     </div>

@@ -8,6 +8,7 @@ import CredentialsDialog from './components/CredentialsDialog.vue'
 import SettingsDialog from './components/SettingsDialog.vue'
 import EditSessionDialog from './components/EditSessionDialog.vue'
 import AccountDialog from './components/AccountDialog.vue'
+import { sessionMatches } from './lib/text.js'
 
 const sessions = ref([])
 const activeId = ref(null)
@@ -20,13 +21,7 @@ const error = ref('')
 const search = ref('')
 const gitEnabled = config
 
-const filteredSessions = computed(() => {
-  const q = search.value.trim().toLowerCase()
-  if (!q) return sessions.value
-  return sessions.value.filter(s =>
-    [s.title, s.repoUrl, s.mode, ...(s.repos || []).map(r => r.url)]
-      .filter(Boolean).some(v => v.toLowerCase().includes(q)))
-})
+const filteredSessions = computed(() => sessions.value.filter(s => sessionMatches(s, search.value)))
 
 const activeSession = computed(() => sessions.value.find(s => s.id === activeId.value) || null)
 const editSession = computed(() => sessions.value.find(s => s.id === editId.value) || null)
@@ -202,7 +197,7 @@ onMounted(() => {
 .sidebar { width: 340px; border-right: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 16px; }
 .sidebar-head h2 { margin: 0; font-size: 15px; }
-.session-search { margin: 0 16px 10px; padding: 7px 10px; font-size: 13px; }
+.session-search { width: calc(100% - 32px); box-sizing: border-box; margin: 0 16px 10px; padding: 7px 10px; font-size: 13px; }
 .content { flex: 1; display: flex; min-width: 0; }
 .empty { margin: auto; max-width: 380px; text-align: center; color: var(--muted); padding: 24px; }
 .empty .hint { font-size: 13px; line-height: 1.5; margin-top: 8px; }
