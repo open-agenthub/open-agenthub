@@ -19,6 +19,7 @@ data:
   S3__ServiceUrl: {{ .Values.s3.serviceUrl | quote }}
   S3__Region: {{ .Values.s3.region | quote }}
   S3__Bucket: {{ .Values.s3.bucket | quote }}
+  S3__InsecureTls: {{ .Values.s3.insecureTls | default false | quote }}
   N8n__WebhookUrl: {{ .Values.n8n.webhookUrl | quote }}
   Oidc__Authority: {{ .Values.oidc.authority | quote }}
   Oidc__Audience: {{ .Values.oidc.audience | quote }}

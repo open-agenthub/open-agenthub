@@ -44,8 +44,19 @@ public sealed class S3ArtifactStore : IArtifactStore
         var s3cfg = new AmazonS3Config { ForcePathStyle = true }; // MinIO prefers path-style
         if (!string.IsNullOrEmpty(s["ServiceUrl"])) s3cfg.ServiceURL = s["ServiceUrl"];
         if (!string.IsNullOrEmpty(s["Region"])) s3cfg.AuthenticationRegion = s["Region"];
+        // Internal MinIO endpoints often use a self-signed certificate. Opt-in only.
+        if (s.GetValue("InsecureTls", false)) s3cfg.HttpClientFactory = new InsecureHttpClientFactory();
 
         _s3 = new AmazonS3Client(s["AccessKey"], s["SecretKey"], s3cfg);
+    }
+
+    /// <summary>Produces HttpClients that skip TLS server-certificate validation
+    /// (for internal S3/MinIO endpoints with a self-signed certificate). Opt-in.</summary>
+    private sealed class InsecureHttpClientFactory : Amazon.Runtime.HttpClientFactory
+    {
+        public override HttpClient CreateHttpClient(Amazon.Runtime.IClientConfig config) =>
+            new(new HttpClientHandler { ServerCertificateCustomValidationCallback = (_, _, _, _) => true });
+        public override string GetConfigUniqueString(Amazon.Runtime.IClientConfig config) => "insecure-tls";
     }
 
     public string PresignPut(string key, TimeSpan ttl) => Presign(key, HttpVerb.PUT, ttl);

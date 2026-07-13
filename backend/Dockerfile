@@ -1,13 +1,16 @@
 # ---- build ----
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# Built from the repo ROOT (see .github/workflows/build-images.yml) so the
+# enterprise sources in ../ee/backend (referenced by the .csproj) are in context.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
-COPY AgentHub.Api.csproj .
-RUN dotnet restore
-COPY . .
-RUN dotnet publish -c Release -o /app --no-restore
+COPY backend/AgentHub.Api.csproj backend/
+RUN dotnet restore backend/AgentHub.Api.csproj
+COPY backend/ backend/
+COPY ee/ ee/
+RUN dotnet publish backend/AgentHub.Api.csproj -c Release -o /app --no-restore
 
 # ---- runtime (non-root) ----
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app .
 # distroless-like: non-root user 1000

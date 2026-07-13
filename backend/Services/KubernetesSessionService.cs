@@ -26,6 +26,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
+    private readonly bool _s3Insecure;
 
     private const string OwnerLabel = "agenthub.dev/owner";
     private const string SessionLabel = "agenthub.dev/session";
@@ -42,6 +43,7 @@ public sealed class KubernetesSessionService : ISessionService
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
+        _s3Insecure = cfg.GetValue("S3:InsecureTls", false);
 
         var config = KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
@@ -516,6 +518,7 @@ public sealed class KubernetesSessionService : ISessionService
             new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = string.Join(",", req.AllowedTools) },
             new() { Name = "AGENTHUB_CALLBACK_URL", Value = $"{_callbackBaseUrl}/internal/sessions/{rec.Id}" },
             new() { Name = "AGENTHUB_CALLBACK_TOKEN", Value = rec.CallbackToken },
+            new() { Name = "AGENTHUB_S3_INSECURE", Value = _s3Insecure ? "1" : "0" },
             new() { Name = "AGENTHUB_STATE_PUT_URL", Value = statePut },
             new() { Name = "AGENTHUB_STATE_GET_URL", Value = stateGet },
             new() { Name = "AGENTHUB_SCROLLBACK_PUT_URL", Value = scrollPut },
