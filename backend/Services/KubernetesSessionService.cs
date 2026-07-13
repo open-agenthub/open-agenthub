@@ -608,7 +608,10 @@ public sealed class KubernetesSessionService : ISessionService
             });
         }
 
-        if (hasRepo && !resume)
+        // Clone on resume too: the workspace lives in an emptyDir and is gone after a
+        // pause/stop, so a resumed session needs a fresh checkout (Claude's own state
+        // is restored separately from S3). Also ensures the working dir exists.
+        if (hasRepo)
         {
             // One line per repo: "<dest>\t<branch>\t<url>" (branch may be empty).
             var reposEnv = string.Join("\n", DestFor(repos).Select(x => $"{x.dest}\t{x.repo.Branch}\t{x.repo.Url}"));
