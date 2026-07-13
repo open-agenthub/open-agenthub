@@ -553,6 +553,32 @@ public sealed class KubernetesSessionService : ISessionService
             }
         };
 
+        // OpenTelemetry: let Claude Code export token/cost metrics to the internal backend.
+        // Claude Code reads these OTEL_* vars natively; the exporter POSTs OTLP/HTTP protobuf to
+        // <endpoint>/v1/metrics (handled by OtelController). Delta temporality so the backend can
+        // simply sum increments (also correct across resumes, which reuse the same session.id).
+        if (_opts.TelemetryEnabled)
+        {
+            var otlpBase = string.IsNullOrWhiteSpace(_opts.TelemetryOtlpEndpoint)
+                ? $"{_callbackBaseUrl}/internal/otel"
+                : _opts.TelemetryOtlpEndpoint.TrimEnd('/');
+            env.Add(new() { Name = "CLAUDE_CODE_ENABLE_TELEMETRY", Value = "1" });
+            env.Add(new() { Name = "OTEL_METRICS_EXPORTER", Value = "otlp" });
+            // Only metrics are collected; keep traces/logs off so nothing 404s our metrics endpoint.
+            env.Add(new() { Name = "OTEL_TRACES_EXPORTER", Value = "none" });
+            env.Add(new() { Name = "OTEL_LOGS_EXPORTER", Value = "none" });
+            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_PROTOCOL", Value = "http/protobuf" });
+            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_ENDPOINT", Value = otlpBase });
+            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", Value = "delta" });
+            // Export fairly often so the dashboard reflects a running session without a long lag.
+            env.Add(new() { Name = "OTEL_METRIC_EXPORT_INTERVAL", Value = "30000" });
+            env.Add(new()
+            {
+                Name = "OTEL_RESOURCE_ATTRIBUTES",
+                Value = $"session.id={rec.Id},user.id={Uri.EscapeDataString(owner)}"
+            });
+        }
+
         var initContainers = new List<V1Container>();
 
         // Custom image: copy the session-agent, Node runtime, and Claude CLI from the default
@@ -751,4 +777,9 @@ public sealed class AgentHubOptions
     /// <summary>Grace period (seconds) when pausing a session, so the agent can upload
     /// its state to S3 before the container is killed.</summary>
     public int PauseGracePeriodSeconds { get; set; } = 30;
+    /// <summary>Enable Claude Code OpenTelemetry metrics export (token/cost usage) from session pods.</summary>
+    public bool TelemetryEnabled { get; set; }
+    /// <summary>Optional OTLP endpoint base override. Empty = derive from CallbackBaseUrl
+    /// (the internal backend service); the OTEL SDK appends "/v1/metrics".</summary>
+    public string TelemetryOtlpEndpoint { get; set; } = "";
 }
