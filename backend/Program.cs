@@ -115,19 +115,28 @@ app.MapGet("/api/config", (IGitAuthService git) => Results.Ok(new
 
 var agentPort = builder.Configuration.GetValue("AgentHub:AgentPort", 7681);
 
-// --- Terminal stream: browser WS -> proxy -> agent pod ---
-app.Map("/ws/sessions/{id}/terminal", async (HttpContext ctx, string id,
-        ISessionService sessions, ILoggerFactory lf) =>
+// --- Terminal / shell streams: browser WS -> proxy -> agent pod ---
+// The agent serves the Claude terminal on "/" and an interactive bash shell on
+// "/shell" (same port). Both proxy routes share auth and the owner check.
+static string? WsOwner(HttpContext ctx)
+    => ctx.User.FindFirstValue("preferred_username") ?? ctx.User.FindFirstValue(ClaimTypes.NameIdentifier);
+
+async Task ProxyWs(HttpContext ctx, string id, ISessionService sessions, ILoggerFactory lf, string upstreamPath)
 {
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
     if (ctx.User.Identity?.IsAuthenticated != true) { ctx.Response.StatusCode = 401; return; }
-
-    var owner = ctx.User.FindFirstValue("preferred_username")
-                ?? ctx.User.FindFirstValue(ClaimTypes.NameIdentifier);
+    var owner = WsOwner(ctx);
     if (owner is null) { ctx.Response.StatusCode = 401; return; }
+    await TerminalProxy.HandleAsync(ctx, owner, id, sessions, lf, agentPort, upstreamPath);
+}
 
-    await TerminalProxy.HandleAsync(ctx, owner, id, sessions, lf, agentPort);
-}).RequireAuthorization();
+app.Map("/ws/sessions/{id}/terminal", (HttpContext ctx, string id,
+        ISessionService sessions, ILoggerFactory lf) => ProxyWs(ctx, id, sessions, lf, "/"))
+    .RequireAuthorization();
+
+app.Map("/ws/sessions/{id}/shell", (HttpContext ctx, string id,
+        ISessionService sessions, ILoggerFactory lf) => ProxyWs(ctx, id, sessions, lf, "/shell"))
+    .RequireAuthorization();
 
 app.Run();
 

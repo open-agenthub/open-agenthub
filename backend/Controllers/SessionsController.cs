@@ -51,6 +51,14 @@ public sealed class SessionsController : ControllerBase
         catch (ArgumentException e) { return BadRequest(e.Message); }
     }
 
+    [HttpPost("{id}/pause")]
+    public async Task<ActionResult<SessionInfo>> Pause(string id, CancellationToken ct)
+    {
+        try { return Ok(await _svc.PauseSessionAsync(Owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
     [HttpGet("{id}/transcript")]
     public async Task<IActionResult> Transcript(string id, CancellationToken ct)
     {

@@ -30,6 +30,7 @@ export const api = {
   createSession: (data) => req('POST', '/sessions', data),
   updateSession: (id, data) => req('PATCH', `/sessions/${id}`, data),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
+  pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
   deleteSession: (id) => req('DELETE', `/sessions/${id}`),
   storeCredentials: (data) => req('PUT', '/credentials', data),
   // Which credential fields have a stored value (booleans only, never values).
@@ -52,9 +53,14 @@ export const api = {
 }
 
 // WebSocket URL including the token (browser WebSockets cannot set headers).
-export async function terminalUrl(id) {
+async function wsUrl(id, kind) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const t = await getToken()
   const q = t ? `?access_token=${encodeURIComponent(t)}` : ''
-  return `${proto}://${location.host}/ws/sessions/${id}/terminal${q}`
+  return `${proto}://${location.host}/ws/sessions/${id}/${kind}${q}`
 }
+
+// The shared Claude terminal.
+export const terminalUrl = (id) => wsUrl(id, 'terminal')
+// An interactive bash shell in the same pod.
+export const shellUrl = (id) => wsUrl(id, 'shell')

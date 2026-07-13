@@ -45,6 +45,11 @@ async function resume(id) {
   activeId.value = id
 }
 
+async function pause(id) {
+  await api.pauseSession(id)
+  await refresh()
+}
+
 async function remove(id) {
   if (!confirm('Really delete this session? (S3 artifacts are kept)')) return
   await api.deleteSession(id)
@@ -159,12 +164,12 @@ onMounted(() => {
                autocapitalize="off" autocomplete="off" spellcheck="false" />
         <p v-if="error" class="err">{{ error }}</p>
         <SessionList :sessions="filteredSessions" :active="activeId"
-          @select="activeId = $event" @remove="remove" @resume="resume" @edit="editId = $event" />
+          @select="activeId = $event" @remove="remove" @resume="resume" @pause="pause" @edit="editId = $event" />
       </aside>
 
       <section class="content">
         <TerminalView v-if="activeSession" :session="activeSession" :key="activeId"
-          @back="activeId = null" @resume="resume" />
+          @back="activeId = null" @resume="resume" @pause="pause" />
         <div v-else class="empty">
           <p>No session selected.</p>
           <p class="hint">Select a session on the left or start a new one. You can watch, reply, let agents work autonomously or on a schedule, and resume finished sessions.</p>

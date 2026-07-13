@@ -90,7 +90,7 @@ public record SessionInfo
     public bool HasMcp { get; init; }
     /// <summary>MCP config JSON (returned so the edit dialog can prefill it).</summary>
     public string? McpConfigJson { get; init; }
-    public required string Phase { get; init; }       // Pending | Running | Succeeded | Failed | Scheduled
+    public required string Phase { get; init; }       // Pending | Running | Paused | Succeeded | Failed | Scheduled
     public string? PodIp { get; init; }
     public DateTime CreatedAt { get; init; }
     public string? Schedule { get; init; }

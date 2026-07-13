@@ -10,6 +10,10 @@
  * Protocol browser <-> agent:
  *   Server -> client: raw terminal output (text)
  *   Client -> server: JSON { type:"input", data } | { type:"resize", cols, rows }
+ *
+ * Two WebSocket paths on the same port:
+ *   /       -> the shared Claude terminal (scrollback replayed on connect)
+ *   /shell  -> an interactive `bash -l` shell, spawned on demand per connection
  */
 
 const pty = require('node-pty');
@@ -129,7 +133,14 @@ setInterval(() => { if (!exited) persistAll(); }, 30_000);
 
 // ---- WebSocket ---------------------------------------------------------------
 const wss = new WebSocketServer({ port: PORT, handleProtocols: () => 'tty' });
-wss.on('connection', ws => {
+wss.on('connection', (ws, req) => {
+  const path = (req && req.url ? req.url : '/').split('?')[0];
+  if (path === '/shell') handleShell(ws);
+  else handleAgent(ws);
+});
+
+// Shared Claude terminal: all clients see the same PTY and its scrollback.
+function handleAgent(ws) {
   clients.add(ws);
   if (scrollback) safeSend(ws, scrollback);
   ws.on('message', raw => {
@@ -139,9 +150,33 @@ wss.on('connection', ws => {
   });
   ws.on('close', () => clients.delete(ws));
   ws.on('error', () => clients.delete(ws));
-});
+}
 
-console.log(`[agent] WebSocket terminal listening on :${PORT}`);
+// Interactive shell: a fresh `bash -l` PTY per connection, spawned on demand in
+// the working directory. Independent of the Claude terminal (own process, no
+// shared scrollback); killed when the client disconnects.
+function handleShell(ws) {
+  let sh;
+  try {
+    sh = pty.spawn('bash', ['-l'], { name: 'xterm-256color', cols: 120, rows: 32, cwd: CWD, env: process.env });
+  } catch (e) {
+    safeSend(ws, `\r\n[agent] Failed to start shell: ${e && e.message}\r\n`);
+    try { ws.close(1011); } catch {}
+    return;
+  }
+  sh.onData(d => safeSend(ws, d));
+  sh.onExit(() => { try { ws.close(1000); } catch {} });
+  ws.on('message', raw => {
+    let m; try { m = JSON.parse(raw.toString()); } catch { return; }
+    if (m.type === 'input' && typeof m.data === 'string') sh.write(m.data);
+    else if (m.type === 'resize' && m.cols > 0 && m.rows > 0) { try { sh.resize(m.cols, m.rows); } catch {} }
+  });
+  const cleanup = () => { try { sh.kill(); } catch {} };
+  ws.on('close', cleanup);
+  ws.on('error', cleanup);
+}
+
+console.log(`[agent] WebSocket terminal listening on :${PORT} (paths: / and /shell)`);
 postStatus('Running');
 
 for (const sig of ['SIGTERM', 'SIGINT'])
