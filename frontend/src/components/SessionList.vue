@@ -1,11 +1,9 @@
 <script setup>
-defineProps({ sessions: Array, active: String })
-defineEmits(['select', 'remove', 'resume', 'edit'])
+import { PHASE_COLORS, canPause } from '../lib/status.js'
 
-const phaseColor = {
-  Running: 'var(--running)', Pending: 'var(--accent)', Scheduled: 'var(--muted)',
-  Succeeded: 'var(--ok)', Failed: 'var(--danger)'
-}
+defineProps({ sessions: Array, active: String })
+defineEmits(['select', 'remove', 'resume', 'pause', 'edit'])
+
 const modeLabel = { Interactive: 'interactive', Autonomous: 'autonomous', Scheduled: 'scheduled' }
 </script>
 
@@ -15,7 +13,7 @@ const modeLabel = { Interactive: 'interactive', Autonomous: 'autonomous', Schedu
         :class="{ active: s.id === active }"
         @click="$emit('select', s.id)">
       <span class="dot" :class="{ ask: s.questionPending }"
-            :style="{ background: s.questionPending ? 'var(--accent)' : (phaseColor[s.phase] || 'var(--muted)') }"></span>
+            :style="{ background: s.questionPending ? 'var(--accent)' : (PHASE_COLORS[s.phase] || 'var(--muted)') }"></span>
       <div class="info">
         <div class="title">{{ s.title }}</div>
         <div class="meta">
@@ -26,6 +24,8 @@ const modeLabel = { Interactive: 'interactive', Autonomous: 'autonomous', Schedu
         </div>
         <div v-if="s.repoUrl" class="repo">{{ s.repoUrl }}</div>
       </div>
+      <button v-if="canPause(s)" class="pause" title="Pause"
+              @click.stop="$emit('pause', s.id)">⏸</button>
       <button v-if="s.canResume" class="resume" title="Resume"
               @click.stop="$emit('resume', s.id)">↻</button>
       <button class="edit" title="Edit settings" @click.stop="$emit('edit', s.id)">✎</button>
@@ -53,7 +53,8 @@ const modeLabel = { Interactive: 'interactive', Autonomous: 'autonomous', Schedu
 .cron { color: var(--running); }
 .ask-label { color: var(--accent); }
 .repo { font-size: 11px; color: var(--muted); font-family: var(--mono); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.resume, .edit, .x { background: none; border: none; color: var(--muted); padding: 4px 6px; font-size: 14px; }
+.pause, .resume, .edit, .x { background: none; border: none; color: var(--muted); padding: 4px 6px; font-size: 14px; }
+.pause:hover { color: var(--accent); border: none; }
 .resume:hover { color: var(--running); border: none; }
 .edit:hover { color: var(--accent); border: none; }
 .x:hover { color: var(--danger); border: none; }

@@ -11,7 +11,7 @@ namespace AgentHub.Api.WebSockets;
 public static class TerminalProxy
 {
     public static async Task HandleAsync(HttpContext ctx, string owner, string sessionId,
-        ISessionService sessions, ILoggerFactory lf, int agentPort)
+        ISessionService sessions, ILoggerFactory lf, int agentPort, string upstreamPath = "/")
     {
         var log = lf.CreateLogger("TerminalProxy");
 
@@ -34,7 +34,7 @@ public static class TerminalProxy
 
         try
         {
-            await upstream.ConnectAsync(new Uri($"ws://{session.PodIp}:{agentPort}/"), ctx.RequestAborted);
+            await upstream.ConnectAsync(new Uri($"ws://{session.PodIp}:{agentPort}{upstreamPath}"), ctx.RequestAborted);
         }
         catch (Exception ex)
         {
