@@ -14,6 +14,8 @@ builder.Services.AddControllers().AddJsonOptions(o =>
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
+// Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
+builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
 // S3 is optional: without an access key the platform runs without state/artifact persistence (no resume).
 if (!string.IsNullOrWhiteSpace(builder.Configuration["S3:AccessKey"]))
     builder.Services.AddSingleton<AgentHub.Api.Storage.IArtifactStore, AgentHub.Api.Storage.S3ArtifactStore>();
@@ -91,6 +93,7 @@ using (var scope = app.Services.CreateScope())
     await store.InitializeAsync();
     var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
     await tokenStore.InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
 }
 

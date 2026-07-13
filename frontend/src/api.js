@@ -39,6 +39,9 @@ export const api = {
   // Returns the plaintext token exactly once (in the `token` field).
   createApiToken: (name) => req('POST', '/tokens', { name }),
   deleteApiToken: (id) => req('DELETE', `/tokens/${id}`),
+  // Token/cost usage dashboard (fed by the agents' OpenTelemetry exporter).
+  usageSummary: () => req('GET', '/usage/summary'),
+  usageSessions: () => req('GET', '/usage/sessions'),
   // Git OAuth providers / connections.
   gitProviders: () => req('GET', '/git/providers'),
   gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),

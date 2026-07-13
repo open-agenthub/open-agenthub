@@ -16,6 +16,8 @@ data:
   AgentHub__AllowCustomImage: {{ .Values.agent.allowCustomImage | quote }}
   AgentHub__AllowRootSessions: {{ .Values.agent.allowRootSessions | quote }}
   AgentHub__CallbackBaseUrl: "http://agenthub-backend.{{ .Release.Namespace }}.svc.cluster.local"
+  AgentHub__TelemetryEnabled: {{ .Values.telemetry.enabled | default false | quote }}
+  AgentHub__TelemetryOtlpEndpoint: {{ .Values.telemetry.otlpEndpoint | default "" | quote }}
   S3__ServiceUrl: {{ .Values.s3.serviceUrl | quote }}
   S3__Region: {{ .Values.s3.region | quote }}
   S3__Bucket: {{ .Values.s3.bucket | quote }}
