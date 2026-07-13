@@ -1,4 +1,6 @@
 # Build artifacts
+**/bin/
+**/obj/
 backend/bin/
 backend/obj/
 frontend/node_modules/
