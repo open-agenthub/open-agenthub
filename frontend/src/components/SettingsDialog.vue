@@ -1,8 +1,28 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { api } from '../api.js'
+import { api, config } from '../api.js'
 
 const emit = defineEmits(['close'])
+
+// --- Slack (per-user) ---
+const slackEnabled = computed(() => config.slackEnabled)
+const slack = ref({ enabled: true, channelOverride: '', email: null, connected: false })
+const slackBusy = ref(false)
+const slackSaved = ref(false)
+
+async function loadSlack() {
+  if (!config.slackEnabled) return
+  try { slack.value = await api.slackMe() } catch { /* leave defaults */ }
+}
+async function saveSlack() {
+  slackBusy.value = true; slackSaved.value = false
+  try {
+    await api.setSlackPrefs({ enabled: slack.value.enabled, channelOverride: slack.value.channelOverride || null })
+    slackSaved.value = true
+    await loadSlack()
+  } catch (e) { error.value = String(e.message || e) }
+  finally { slackBusy.value = false }
+}
 
 const tokens = ref([])
 const loading = ref(true)
@@ -23,7 +43,7 @@ async function load() {
   finally { loading.value = false }
 }
 
-onMounted(load)
+onMounted(() => { load(); loadSlack() })
 
 async function create() {
   const name = newName.value.trim()
@@ -69,7 +89,30 @@ const curlStatus = computed(() =>
 <template>
   <div class="overlay" @click.self="$emit('close')">
     <div class="modal">
-      <h3>Settings — API tokens</h3>
+      <h3>Settings</h3>
+
+      <section v-if="slackEnabled" class="slack">
+        <h4>Slack notifications</h4>
+        <p class="note">
+          When a session waits for your input, you get a Slack thread and can answer from there.
+          By default we message you directly, resolved from your account email<span v-if="slack.email"> ({{ slack.email }})</span>.
+          <span :class="slack.connected ? 'ok-text' : 'muted'">
+            {{ slack.connected ? '✓ connected' : 'not connected — no matching Slack user, set a channel below' }}
+          </span>
+        </p>
+        <label class="check">
+          <input type="checkbox" v-model="slack.enabled" /> Send me Slack notifications
+        </label>
+        <div class="field">
+          <label>Channel override (optional — a channel/DM id like C0123ABCD; leave empty to use your DM)</label>
+          <input v-model="slack.channelOverride" placeholder="auto (your Slack DM)" :disabled="!slack.enabled" />
+        </div>
+        <div class="slack-actions">
+          <button class="primary" :disabled="slackBusy" @click="saveSlack">{{ slackSaved ? 'Saved ✓' : slackBusy ? 'Saving…' : 'Save' }}</button>
+        </div>
+      </section>
+
+      <h4>API tokens</h4>
       <p class="note">
         Personal API tokens let you start sessions and query their status from outside the UI.
         A token acts on your behalf. The full value is shown only once at creation — store it safely.
@@ -148,6 +191,14 @@ const curlStatus = computed(() =>
 .help pre { background: rgba(0,0,0,.3); border: 1px solid var(--border); border-radius: 8px; padding: 10px; overflow-x: auto; font-family: var(--mono); font-size: 11px; }
 .help .muted { margin: 10px 0 4px; }
 .muted { color: var(--muted); font-size: 12px; }
+.ok-text { color: var(--ok); font-size: 12px; }
+.slack { border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 16px; }
+.slack h4, .modal h4 { margin: 0 0 6px; font-size: 14px; }
+.slack .field { margin: 10px 0; display: flex; flex-direction: column; gap: 4px; }
+.slack .field label { font-size: 12px; color: var(--muted); }
+.slack .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.slack .check input { width: auto; }
+.slack-actions { display: flex; justify-content: flex-end; }
 .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
 </style>

@@ -28,12 +28,12 @@ public sealed class SlackClient
     }
 
     /// <summary>Posts a message (optionally into a thread) and returns its ts, or null on failure.</summary>
-    public async Task<string?> PostMessageAsync(string text, string? threadTs, CancellationToken ct)
+    public async Task<string?> PostMessageAsync(string channel, string text, string? threadTs, CancellationToken ct)
     {
         var c = Client(_opts.BotToken);
         var body = new Dictionary<string, object?>
         {
-            ["channel"] = _opts.Channel,
+            ["channel"] = channel,
             ["text"] = text,
             ["unfurl_links"] = false,
             ["unfurl_media"] = false
@@ -51,6 +51,32 @@ public sealed class SlackClient
             return null;
         }
         catch (Exception ex) { _log.LogWarning(ex, "Slack chat.postMessage error"); return null; }
+    }
+
+    /// <summary>Resolves a user's email to their DM channel id (lookupByEmail → conversations.open).</summary>
+    public async Task<string?> OpenImByEmailAsync(string email, CancellationToken ct)
+    {
+        var c = Client(_opts.BotToken);
+        try
+        {
+            using var lr = await c.GetAsync($"https://slack.com/api/users.lookupByEmail?email={Uri.EscapeDataString(email)}", ct);
+            using var ldoc = JsonDocument.Parse(await lr.Content.ReadAsStringAsync(ct));
+            if (!ldoc.RootElement.TryGetProperty("ok", out var lok) || !lok.GetBoolean())
+            {
+                _log.LogInformation("Slack lookupByEmail for {Email} failed: {Err}", email,
+                    ldoc.RootElement.TryGetProperty("error", out var le) ? le.GetString() : "unknown");
+                return null;
+            }
+            var userId = ldoc.RootElement.GetProperty("user").GetProperty("id").GetString();
+
+            using var or = await c.PostAsJsonAsync("https://slack.com/api/conversations.open",
+                new { users = userId }, ct);
+            using var odoc = JsonDocument.Parse(await or.Content.ReadAsStringAsync(ct));
+            if (odoc.RootElement.TryGetProperty("ok", out var ook) && ook.GetBoolean())
+                return odoc.RootElement.GetProperty("channel").GetProperty("id").GetString();
+            return null;
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Slack DM resolution for {Email} failed", email); return null; }
     }
 
     /// <summary>Opens a Socket Mode connection and returns the wss URL to connect to.</summary>
