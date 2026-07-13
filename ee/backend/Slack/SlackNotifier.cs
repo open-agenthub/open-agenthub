@@ -24,17 +24,13 @@ public sealed class SlackNotifier : INotifier
     private readonly SlackClient _slack;
     private readonly SlackThreadStore _threads;
     private readonly ISlackTargetResolver _resolver;
-    private readonly ISessionService _sessions;
-    private readonly int _agentPort;
     private readonly string _frontendOrigin;
     private readonly ILogger<SlackNotifier> _log;
 
     public SlackNotifier(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
-        SlackThreadStore threads, ISlackTargetResolver resolver, ISessionService sessions,
-        IConfiguration cfg, ILogger<SlackNotifier> log)
+        SlackThreadStore threads, ISlackTargetResolver resolver, IConfiguration cfg, ILogger<SlackNotifier> log)
     {
-        _opts = opts; _license = license; _slack = slack; _threads = threads; _resolver = resolver; _sessions = sessions;
-        _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
+        _opts = opts; _license = license; _slack = slack; _threads = threads; _resolver = resolver;
         _frontendOrigin = cfg["FrontendOrigin"] ?? "";
         _log = log;
     }
@@ -71,30 +67,21 @@ public sealed class SlackNotifier : INotifier
                 await _threads.UpsertAsync(thread, ct);
             }
 
-            // New terminal output since the last update (best-effort; needs a running pod).
-            var delta = await NewOutputAsync(s, thread, ct);
-            if (!string.IsNullOrWhiteSpace(delta))
-                await _slack.PostMessageAsync(thread.Channel, $"```{Trim(delta, 2800)}```", thread.ThreadTs, ct);
-
-            await _slack.PostMessageAsync(thread.Channel, $":raising_hand: {Escape(message)}", thread.ThreadTs, ct);
+            // Post the question itself as a clean Slack quote. We deliberately do NOT
+            // dump the terminal scrollback: Claude's full-screen TUI is a mess of ANSI
+            // redraws once stripped. The web terminal (linked in the thread header) has
+            // the full context; here we keep it readable and answerable.
+            await _slack.PostMessageAsync(thread.Channel, Quote(message), thread.ThreadTs, ct);
         }
         catch (Exception ex) { _log.LogWarning(ex, "Slack notify failed for session {Id}", s.Id); }
     }
 
-    private async Task<string> NewOutputAsync(SessionRecord s, SlackThread thread, CancellationToken ct)
-    {
-        try
-        {
-            var info = await _sessions.GetSessionAsync(s.Owner, s.Id, ct);
-            if (info?.PodIp is not { Length: > 0 } podIp || info.Phase != "Running") return "";
-            var full = AgentTerminal.StripAnsi(await AgentTerminal.ReadScrollbackAsync(podIp, _agentPort, ct));
-            var delta = full.Length > thread.PostedLen ? full[thread.PostedLen..] : "";
-            await _threads.SetPostedLenAsync(s.Id, full.Length, ct);
-            return delta.Trim();
-        }
-        catch (Exception ex) { _log.LogDebug(ex, "Could not read agent scrollback for {Id}", s.Id); return ""; }
-    }
-
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
-    private static string Trim(string s, int max) => s.Length <= max ? s : "…" + s[^max..];
+    // Render as a Slack blockquote (each line prefixed with "> "), trimmed to a sane length.
+    private static string Quote(string s)
+    {
+        s = Escape(s.Trim());
+        if (s.Length > 2000) s = s[..2000] + " …";
+        return ":raising_hand: " + string.Join("\n", s.Split('\n').Select(l => "> " + l));
+    }
 }
