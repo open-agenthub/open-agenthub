@@ -54,12 +54,21 @@ function urlFor() {
 }
 
 async function connect() {
-  ws = new WebSocket(await urlFor())
-  ws.onopen = () => { setStatus('connected'); sendResize() }
-  ws.onmessage = (ev) => term.write(typeof ev.data === 'string' ? ev.data : new Uint8Array(ev.data))
-  ws.onclose = () => { setStatus('disconnected'); if (isLive.value) setTimeout(() => term && connect(), 2000) }
-  ws.onerror = () => { setStatus('error') }
+  if (ws && ws.readyState <= WebSocket.OPEN) { try { ws.close() } catch {} } // drop a stale socket first
+  const sock = new WebSocket(await urlFor())
+  ws = sock
+  sock.onopen = () => { setStatus('connected'); sendResize() }
+  sock.onmessage = (ev) => term.write(typeof ev.data === 'string' ? ev.data : new Uint8Array(ev.data))
+  sock.onclose = () => { if (ws !== sock) return; setStatus('disconnected'); if (isLive.value) setTimeout(() => term && connect(), 2000) }
+  sock.onerror = () => { if (ws === sock) setStatus('error') }
 }
+
+// Reconnect when the pod comes back (e.g. after resume): the old socket died with
+// the old pod and, once the session is Paused, the reconnect loop stops — so when
+// the phase returns to Running we (re)connect explicitly.
+watch(() => props.session?.phase, (phase) => {
+  if (phase === 'Running' && term && (!ws || ws.readyState >= WebSocket.CLOSING)) connect()
+})
 
 async function loadTranscript() {
   setStatus('history')
