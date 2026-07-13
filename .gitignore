@@ -10,3 +10,6 @@ agent-runtime/session-agent/node_modules/
 # Local environment-specific deployment values (registries, hosts, secrets)
 deploy/
 *.local.yaml
+
+# Agent worktrees / local Claude state
+.claude/
