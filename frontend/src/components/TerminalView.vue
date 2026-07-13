@@ -10,7 +10,24 @@ const emit = defineEmits(['back', 'resume'])
 const host = ref(null)
 const status = ref('connecting…')
 const mobileInput = ref('')
-let term, fit, ws, ro
+let term, fit, ws, ro, fitTimer
+
+// Debounced, no-op-avoiding fit: continuous resizes (window drag, Google Meet
+// tab-share re-layout) fired fit() on every frame, which flickered. Only refit
+// when the computed grid actually changes, and coalesce bursts.
+function scheduleFit(after) {
+  clearTimeout(fitTimer)
+  fitTimer = setTimeout(() => {
+    if (!term || !fit) return
+    try {
+      const dims = fit.proposeDimensions?.()
+      if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
+      if (dims.cols === term.cols && dims.rows === term.rows) return
+      fit.fit()
+      after?.()
+    } catch {}
+  }, 120)
+}
 
 const isLive = computed(() => props.session?.phase === 'Running' || props.session?.phase === 'Pending')
 
@@ -43,17 +60,17 @@ onMounted(() => {
 
   if (isLive.value) {
     term.onData(d => send({ type: 'input', data: d }))
-    ro = new ResizeObserver(() => { try { fit.fit(); sendResize() } catch {} })
+    ro = new ResizeObserver(() => scheduleFit(sendResize))
     ro.observe(host.value)
     connect()
   } else {
-    ro = new ResizeObserver(() => { try { fit.fit() } catch {} })
+    ro = new ResizeObserver(() => scheduleFit())
     ro.observe(host.value)
     loadTranscript()
   }
 })
 
-onBeforeUnmount(() => { ro?.disconnect(); ws?.close(); term?.dispose(); term = null })
+onBeforeUnmount(() => { clearTimeout(fitTimer); ro?.disconnect(); ws?.close(); term?.dispose(); term = null })
 </script>
 
 <template>

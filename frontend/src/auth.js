@@ -21,19 +21,27 @@ export async function initAuth() {
   enabled = !!cfg.authority
   if (!enabled) return
 
+  // Request offline_access so we get a refresh token (needed to survive long idle
+  // periods / overnight without a redirect).
+  const scope = cfg.scope || 'openid profile email'
   manager = new UserManager({
     authority: cfg.authority,
     client_id: cfg.clientId,
-    scope: cfg.scope || 'openid profile email',
+    scope: /\boffline_access\b/.test(scope) ? scope : `${scope} offline_access`,
     response_type: 'code',                                 // code flow; PKCE (S256) is the default
     redirect_uri: `${location.origin}/auth/callback`,
     post_logout_redirect_uri: location.origin,
     automaticSilentRenew: true,                            // renews via refresh token before expiry
+    accessTokenExpiringNotificationTimeInSeconds: 120,     // start renewing 2 min before expiry
     userStore: new WebStorageStateStore({ store: localStorage })
   })
   manager.events.addUserLoaded(u => { user = u })
   manager.events.addUserSignedOut(() => { user = null })
   manager.events.addSilentRenewError(e => console.error('Silent renew failed', e))
+
+  // Belt-and-braces: proactively refresh every 4 minutes so the token never lapses
+  // while the tab sits idle (automaticSilentRenew alone can miss after long sleep).
+  setInterval(() => { if (user) manager.signinSilent().then(u => { if (u) user = u }).catch(() => {}) }, 4 * 60 * 1000)
 
   // Returning from the provider: exchange the code for tokens, then clean up the URL.
   const q = new URLSearchParams(location.search)
