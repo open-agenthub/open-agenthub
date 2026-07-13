@@ -42,34 +42,23 @@ const WORKDIR   = process.env.AGENTHUB_WORKDIR || (HAS_REPO ? '/workspace/repo' 
 const CWD       = fs.existsSync(WORKDIR) ? WORKDIR : '/workspace';
 
 // ---- Claude command ------------------------------------------------------------
-function buildCommand() {
+function buildCommand(allowResume) {
   const args = [];
   if (HAS_MCP) args.push('--mcp-config', '/secrets/mcp/mcp.json');
 
-  // Only --resume when the entrypoint actually restored a conversation; otherwise
-  // start fresh with a fixed id (e.g. no S3, or the previous run crashed before
-  // saving state — `claude --resume` on a missing conversation would abort).
+  // Resume only when the entrypoint restored state AND we still want to try it.
+  // If resume fails (no conversation for this id — e.g. an empty session), we
+  // relaunch with allowResume=false, which uses a fresh --session-id instead.
   const restored = fs.existsSync('/tmp/.state-restored');
-  if (RESUME && CSID && restored) {
-    args.push('--resume', CSID);
-  } else if (CSID) {
-    args.push('--session-id', CSID); // fixed ID so the session can be resumed later
+  if (allowResume && RESUME && CSID && restored) args.push('--resume', CSID);
+  else if (CSID) args.push('--session-id', CSID);
+
+  if (MODE !== 'interactive') {
+    args.push('-p', PROMPT, '--permission-mode', 'acceptEdits');
+    if (ALLOWED.length) args.push('--allowedTools', ALLOWED.join(','));
   }
-
-  if (MODE === 'interactive') return { cmd: 'claude', args };
-
-  // autonomous / scheduled: headless, permissions limited via allowlist
-  args.push('-p', PROMPT, '--permission-mode', 'acceptEdits');
-  if (ALLOWED.length) args.push('--allowedTools', ALLOWED.join(','));
   return { cmd: 'claude', args };
 }
-
-const { cmd, args } = buildCommand();
-console.log(`[agent] mode=${MODE} resume=${RESUME} cwd=${CWD} cmd=${cmd} ${args.join(' ')}`);
-
-const term = pty.spawn(cmd, args, {
-  name: 'xterm-256color', cols: 120, rows: 32, cwd: CWD, env: process.env
-});
 
 // ---- Scrollback --------------------------------------------------------------
 const MAX_BUFFER = 1_000_000;
@@ -78,20 +67,48 @@ function remember(c) { scrollback += c; if (scrollback.length > MAX_BUFFER) scro
 
 const clients = new Set();
 let exited = false;
+let term;                 // current Claude PTY (reassigned if we relaunch fresh)
+let retriedFresh = false; // guard: only fall back from --resume once
+let usedResume = false;
+let sawNoConversation = false;
+let launchedAt = 0;
 
-term.onData(data => { remember(data); for (const ws of clients) safeSend(ws, data); });
+function startClaude(allowResume) {
+  const { cmd, args } = buildCommand(allowResume);
+  usedResume = args.includes('--resume');
+  sawNoConversation = false;
+  launchedAt = Date.now();
+  console.log(`[agent] mode=${MODE} resume=${usedResume} cwd=${CWD} cmd=${cmd} ${args.join(' ')}`);
+  term = pty.spawn(cmd, args, { name: 'xterm-256color', cols: 120, rows: 32, cwd: CWD, env: process.env });
 
-term.onExit(({ exitCode, signal }) => {
-  exited = true;
-  const msg = `\r\n[agent] Session ended (code ${exitCode}${signal ? `, signal ${signal}` : ''}).\r\n`;
-  remember(msg);
-  for (const ws of clients) { safeSend(ws, msg); try { ws.close(1000); } catch {} }
-  // Save the final state, report the status, then exit.
-  persistAll(() => {
-    postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
-      setTimeout(() => process.exit(exitCode || 0), MODE === 'interactive' ? 1500 : 200));
+  term.onData(data => {
+    if (usedResume && !retriedFresh && data.includes('No conversation found')) sawNoConversation = true;
+    remember(data);
+    for (const ws of clients) safeSend(ws, data);
   });
-});
+
+  term.onExit(({ exitCode, signal }) => {
+    // Resume with nothing to resume → relaunch once as a fresh session.
+    if (usedResume && !retriedFresh && exitCode !== 0 &&
+        (sawNoConversation || Date.now() - launchedAt < 10000)) {
+      retriedFresh = true;
+      remember('\r\n[agent] No saved conversation to resume — starting fresh.\r\n');
+      startClaude(false);
+      return;
+    }
+    exited = true;
+    const msg = `\r\n[agent] Session ended (code ${exitCode}${signal ? `, signal ${signal}` : ''}).\r\n`;
+    remember(msg);
+    for (const ws of clients) { safeSend(ws, msg); try { ws.close(1000); } catch {} }
+    // Save the final state, report the status, then exit.
+    persistAll(() => {
+      postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
+        setTimeout(() => process.exit(exitCode || 0), MODE === 'interactive' ? 1500 : 200));
+    });
+  });
+}
+
+startClaude(true);
 
 function safeSend(ws, data) { if (ws.readyState === ws.OPEN) { try { ws.send(data); } catch {} } }
 
