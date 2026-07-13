@@ -9,6 +9,7 @@
   --running:   #4FC3D9;   /* active */
   --ok:        #6FCF97;
   --danger:    #E5736B;
+  --paused:    #C9A227;   /* paused: state saved, pod stopped */
   --radius:    10px;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
   --ui: 'Inter', system-ui, sans-serif;
