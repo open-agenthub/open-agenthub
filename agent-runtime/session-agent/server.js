@@ -89,17 +89,19 @@ term.onExit(({ exitCode, signal }) => {
 function safeSend(ws, data) { if (ws.readyState === ws.OPEN) { try { ws.send(data); } catch {} } }
 
 // ---- Persistence to S3 ---------------------------------------------------------
+// -k for presigned uploads to an internal S3/MinIO with a self-signed cert (opt-in).
+const CURL_K = process.env.AGENTHUB_S3_INSECURE === '1' ? '-k ' : '';
 function persistState(done) {
   if (!STATE_PUT) return done && done();
   // Pack up ~/.claude and upload it via presigned PUT.
   execFile('/bin/sh', ['-c',
-    `tar czf /tmp/state.tgz -C "${HOME}" .claude 2>/dev/null && curl -fsS -T /tmp/state.tgz "${STATE_PUT}"`
+    `tar czf /tmp/state.tgz -C "${HOME}" .claude 2>/dev/null && curl -fsS ${CURL_K}-T /tmp/state.tgz "${STATE_PUT}"`
   ], () => done && done());
 }
 function persistScrollback(done) {
   if (!SCROLL_PUT) return done && done();
   try { fs.writeFileSync('/tmp/scrollback.log', scrollback); } catch {}
-  execFile('/bin/sh', ['-c', `curl -fsS -T /tmp/scrollback.log "${SCROLL_PUT}"`], () => done && done());
+  execFile('/bin/sh', ['-c', `curl -fsS ${CURL_K}-T /tmp/scrollback.log "${SCROLL_PUT}"`], () => done && done());
 }
 // Also store the transcript via the backend callback, so it is available even
 // on instances without S3 (autonomous runs would otherwise leave nothing behind).

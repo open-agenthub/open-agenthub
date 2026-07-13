@@ -41,7 +41,9 @@ fi
 # `claude --resume` on a missing conversation aborts the whole session).
 if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; then
   echo "[entrypoint] Downloading session state from S3 …"
-  if curl -fsS -o /tmp/state.tgz "$AGENTHUB_STATE_GET_URL" && tar xzf /tmp/state.tgz -C "$HOME" 2>/dev/null; then
+  # -k for internal MinIO with a self-signed certificate (opt-in via env).
+  [ "${AGENTHUB_S3_INSECURE:-0}" = "1" ] && CURL_K="-k" || CURL_K=""
+  if curl -fsS $CURL_K -o /tmp/state.tgz "$AGENTHUB_STATE_GET_URL" && tar xzf /tmp/state.tgz -C "$HOME" 2>/dev/null; then
     touch /tmp/.state-restored
     echo "[entrypoint] State restored."
   else

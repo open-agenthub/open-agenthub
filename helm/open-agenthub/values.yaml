@@ -47,6 +47,9 @@ agent:
   # Users may run sessions as root (tools can be installed).
   # Requires PSA "baseline" (instead of "restricted") on the sessionsNamespace.
   allowRootSessions: true
+  # Extra TCP egress ports allowed from session pods (besides 53/80/443/22),
+  # e.g. [9000] for a self-hosted S3/MinIO on a non-standard port.
+  extraEgressPorts: []
 
 # OAuth2/OIDC provider. Empty authority = auth disabled (dev mode, all requests as user "dev").
 oidc:
@@ -65,6 +68,8 @@ s3:
   bucket: agenthub
   accessKey: ""
   secretKey: ""
+  # Skip TLS certificate validation — only for internal MinIO with a self-signed cert.
+  insecureTls: false
 
 n8n:
   webhookUrl: ""

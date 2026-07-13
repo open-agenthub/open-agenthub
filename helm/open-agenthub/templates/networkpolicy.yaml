@@ -47,6 +47,10 @@ spec:
         - { protocol: TCP, port: 22 }
         # Port 80 for package mirrors (apt/apk partly use HTTP)
         - { protocol: TCP, port: 80 }
+        {{- range .Values.agent.extraEgressPorts }}
+        # Extra egress ports (e.g. a self-hosted S3/MinIO on a non-standard port)
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
 ---
 # Agent -> backend (status/notify/artifact URL callbacks)
 apiVersion: networking.k8s.io/v1
