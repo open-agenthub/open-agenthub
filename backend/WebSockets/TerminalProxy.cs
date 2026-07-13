@@ -24,6 +24,10 @@ public static class TerminalProxy
             return;
         }
 
+        // Opening the terminal counts as "seen" — clear the waiting-for-reply flag so
+        // the badge does not stick around after the user engages with the session.
+        try { await sessions.ClearQuestionAsync(owner, sessionId, ctx.RequestAborted); } catch { }
+
         using var client = await ctx.WebSockets.AcceptWebSocketAsync();
         using var upstream = new ClientWebSocket();
         upstream.Options.AddSubProtocol("tty");

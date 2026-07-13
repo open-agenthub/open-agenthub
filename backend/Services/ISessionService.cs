@@ -16,6 +16,8 @@ public interface ISessionService
     Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default);
     Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default);
     Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default);
+    /// <summary>Clears the "waiting for reply" flag (e.g. once the user opens the terminal).</summary>
+    Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default);
     Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default);
     Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default);
     Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default);

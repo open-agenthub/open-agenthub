@@ -17,7 +17,16 @@ const showSettings = ref(false)
 const showAccount = ref(false)
 const editId = ref(null)
 const error = ref('')
+const search = ref('')
 const gitEnabled = config
+
+const filteredSessions = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  if (!q) return sessions.value
+  return sessions.value.filter(s =>
+    [s.title, s.repoUrl, s.mode, ...(s.repos || []).map(r => r.url)]
+      .filter(Boolean).some(v => v.toLowerCase().includes(q)))
+})
 
 const activeSession = computed(() => sessions.value.find(s => s.id === activeId.value) || null)
 const editSession = computed(() => sessions.value.find(s => s.id === editId.value) || null)
@@ -151,8 +160,10 @@ onMounted(() => {
           <h2>Sessions</h2>
           <button class="primary" @click="showNew = true">New Session</button>
         </div>
+        <input v-model="search" class="session-search" placeholder="Search sessions…"
+               autocapitalize="off" autocomplete="off" spellcheck="false" />
         <p v-if="error" class="err">{{ error }}</p>
-        <SessionList :sessions="sessions" :active="activeId"
+        <SessionList :sessions="filteredSessions" :active="activeId"
           @select="activeId = $event" @remove="remove" @resume="resume" @edit="editId = $event" />
       </aside>
 
@@ -191,6 +202,7 @@ onMounted(() => {
 .sidebar { width: 340px; border-right: 1px solid var(--border); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
 .sidebar-head { display: flex; align-items: center; justify-content: space-between; padding: 16px; }
 .sidebar-head h2 { margin: 0; font-size: 15px; }
+.session-search { margin: 0 16px 10px; padding: 7px 10px; font-size: 13px; }
 .content { flex: 1; display: flex; min-width: 0; }
 .empty { margin: auto; max-width: 380px; text-align: center; color: var(--muted); padding: 24px; }
 .empty .hint { font-size: 13px; line-height: 1.5; margin-top: 8px; }

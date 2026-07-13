@@ -401,6 +401,12 @@ public sealed class KubernetesSessionService : ISessionService
         return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP);
     }
 
+    public async Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (await _store.GetAsync(owner, id, ct) is not null)
+            await _store.SetQuestionPendingAsync(id, false, ct);
+    }
+
     public async Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default)
     {
         if (await _store.GetAsync(owner, id, ct) is null) return null;
