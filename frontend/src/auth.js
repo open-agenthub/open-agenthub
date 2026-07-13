@@ -10,14 +10,15 @@ let manager = null
 let user = null
 let enabled = false
 
-// Runtime backend config (e.g. whether Git OAuth providers are configured).
-export const config = reactive({ gitEnabled: false })
+// Runtime backend config (e.g. whether Git OAuth providers / Slack are configured).
+export const config = reactive({ gitEnabled: false, slackEnabled: false })
 
 export async function initAuth() {
   let cfg = { authority: '' }
   try { cfg = await (await fetch('/api/config')).json() }
   catch (e) { console.error('Could not load auth config (/api/config) – auth disabled', e) }
   config.gitEnabled = !!cfg.gitEnabled
+  config.slackEnabled = !!cfg.slackEnabled
   enabled = !!cfg.authority
   if (!enabled) return
 

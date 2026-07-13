@@ -33,6 +33,8 @@ var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee
 builder.Services.AddSingleton(slackOpts);
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackThreadStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackClient>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.UserDirectory>();
+builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.ISlackTargetResolver, AgentHub.Api.Ee.Slack.SlackTargetResolver>();
 builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Ee.Slack.SlackNotifier>();
 builder.Services.AddHostedService<AgentHub.Api.Ee.Slack.SlackSocketModeService>();
 
@@ -95,6 +97,7 @@ using (var scope = app.Services.CreateScope())
     await tokenStore.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
 }
 
 app.UseCors();
@@ -102,18 +105,45 @@ app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
 
+// Capture the signed-in identity (owner + email + name) once per process per user,
+// so background notifiers (Slack) can resolve a user's email without a request context.
+{
+    var seen = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
+    app.Use(async (ctx, next) =>
+    {
+        if (ctx.User.Identity?.IsAuthenticated == true)
+        {
+            var owner = ctx.User.FindFirstValue("preferred_username") ?? ctx.User.FindFirstValue(ClaimTypes.NameIdentifier);
+            if (owner is not null && seen.TryAdd(owner, 0))
+            {
+                var email = ctx.User.FindFirstValue(ClaimTypes.Email) ?? ctx.User.FindFirstValue("email");
+                var name = ctx.User.FindFirstValue("name") ?? ctx.User.FindFirstValue(ClaimTypes.Name);
+                try
+                {
+                    await ctx.RequestServices.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>()
+                        .RecordLoginAsync(owner, email, name, ctx.RequestAborted);
+                }
+                catch { seen.TryRemove(owner, out _); } // retry on the next request
+            }
+        }
+        await next();
+    });
+}
+
 app.MapControllers();
 app.MapHealthChecks("/healthz").AllowAnonymous();
 
 // Runtime config for the frontend (static nginx image, no build-time env vars):
 // empty authority = auth disabled, so the frontend does not enforce a login.
-app.MapGet("/api/config", (IGitAuthService git) => Results.Ok(new
+app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptions slack) => Results.Ok(new
 {
     authority = oidc["Authority"] ?? "",
     clientId = oidc["ClientId"] ?? "agenthub",
     scope = oidc["Scope"] ?? "openid profile email",
     // Lets the UI show the "Connect GitHub/GitLab" account section only when configured.
-    gitEnabled = git.AnyConfigured
+    gitEnabled = git.AnyConfigured,
+    // Lets the UI show the per-user Slack settings section only when Slack is enabled.
+    slackEnabled = slack.Enabled
 })).AllowAnonymous();
 
 var agentPort = builder.Configuration.GetValue("AgentHub:AgentPort", 7681);

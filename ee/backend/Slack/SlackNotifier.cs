@@ -23,15 +23,17 @@ public sealed class SlackNotifier : INotifier
     private readonly IEnterpriseLicense _license;
     private readonly SlackClient _slack;
     private readonly SlackThreadStore _threads;
+    private readonly ISlackTargetResolver _resolver;
     private readonly ISessionService _sessions;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
     private readonly ILogger<SlackNotifier> _log;
 
     public SlackNotifier(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
-        SlackThreadStore threads, ISessionService sessions, IConfiguration cfg, ILogger<SlackNotifier> log)
+        SlackThreadStore threads, ISlackTargetResolver resolver, ISessionService sessions,
+        IConfiguration cfg, ILogger<SlackNotifier> log)
     {
-        _opts = opts; _license = license; _slack = slack; _threads = threads; _sessions = sessions;
+        _opts = opts; _license = license; _slack = slack; _threads = threads; _resolver = resolver; _sessions = sessions;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
         _frontendOrigin = cfg["FrontendOrigin"] ?? "";
         _log = log;
@@ -48,30 +50,33 @@ public sealed class SlackNotifier : INotifier
             if (eventType is "finished" or "failed")
             {
                 if (thread is not null)
-                    await _slack.PostMessageAsync($":checkered_flag: *{eventType}* — {message}", thread.ThreadTs, ct);
+                    await _slack.PostMessageAsync(thread.Channel, $":checkered_flag: *{eventType}* — {message}", thread.ThreadTs, ct);
                 return;
             }
             if (eventType != "question") return;
 
-            // Create the thread on first contact.
+            // Create the thread on first contact — in the session owner's resolved
+            // conversation (their Slack DM, an override, or the fallback channel).
             if (thread is null)
             {
+                var channel = await _resolver.ResolveAsync(s.Owner, ct);
+                if (channel is null) return; // no Slack target for this user (opted out / not found)
                 var header = $":robot_face: *{Escape(s.Title)}* (`{s.Mode}`)\n" +
                              $"Session `{s.Id}` — owner `{s.Owner}`\n" +
                              (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"{_frontendOrigin}/s/{s.Id}\n") +
                              "_Reply in this thread to answer the agent._";
-                var ts = await _slack.PostMessageAsync(header, null, ct);
+                var ts = await _slack.PostMessageAsync(channel, header, null, ct);
                 if (ts is null) return;
-                thread = new SlackThread(s.Id, s.Owner, _opts.Channel, ts, 0);
+                thread = new SlackThread(s.Id, s.Owner, channel, ts, 0);
                 await _threads.UpsertAsync(thread, ct);
             }
 
             // New terminal output since the last update (best-effort; needs a running pod).
             var delta = await NewOutputAsync(s, thread, ct);
             if (!string.IsNullOrWhiteSpace(delta))
-                await _slack.PostMessageAsync($"```{Trim(delta, 2800)}```", thread.ThreadTs, ct);
+                await _slack.PostMessageAsync(thread.Channel, $"```{Trim(delta, 2800)}```", thread.ThreadTs, ct);
 
-            await _slack.PostMessageAsync($":raising_hand: {Escape(message)}", thread.ThreadTs, ct);
+            await _slack.PostMessageAsync(thread.Channel, $":raising_hand: {Escape(message)}", thread.ThreadTs, ct);
         }
         catch (Exception ex) { _log.LogWarning(ex, "Slack notify failed for session {Id}", s.Id); }
     }

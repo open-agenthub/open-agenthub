@@ -43,6 +43,9 @@ export const api = {
   // Token/cost usage dashboard (fed by the agents' OpenTelemetry exporter).
   usageSummary: () => req('GET', '/usage/summary'),
   usageSessions: () => req('GET', '/usage/sessions'),
+  // Per-user Slack preferences.
+  slackMe: () => req('GET', '/slack/me'),
+  setSlackPrefs: (data) => req('PUT', '/slack/me', data),
   // Git OAuth providers / connections.
   gitProviders: () => req('GET', '/git/providers'),
   gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),

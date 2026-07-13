@@ -106,7 +106,7 @@ public sealed class SlackSocketModeService : BackgroundService
         var info = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
         if (info?.PodIp is not { Length: > 0 } podIp || info.Phase != "Running")
         {
-            await _slack.PostMessageAsync(":warning: Session is not running — cannot deliver the reply.", threadTs, ct);
+            await _slack.PostMessageAsync(thread.Channel, ":warning: Session is not running — cannot deliver the reply.", threadTs, ct);
             return;
         }
 
