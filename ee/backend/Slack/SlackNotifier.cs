@@ -77,11 +77,13 @@ public sealed class SlackNotifier : INotifier
     }
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
-    // Render as a Slack blockquote (each line prefixed with "> "), trimmed to a sane length.
+    // A label line, then the message as a Slack blockquote — each line must START with
+    // "> " for Slack to render it as a quote.
     private static string Quote(string s)
     {
         s = Escape(s.Trim());
-        if (s.Length > 2000) s = s[..2000] + " …";
-        return ":raising_hand: " + string.Join("\n", s.Split('\n').Select(l => "> " + l));
+        if (s.Length > 2500) s = s[..2500] + " …";
+        var quoted = string.Join("\n", s.Split('\n').Select(l => "> " + l));
+        return ":speech_balloon: *The agent says:*\n" + quoted;
     }
 }
