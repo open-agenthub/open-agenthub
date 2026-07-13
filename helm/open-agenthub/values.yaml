@@ -74,6 +74,16 @@ s3:
 n8n:
   webhookUrl: ""
 
+# Token/cost usage dashboard via OpenTelemetry. When enabled, session pods export
+# Claude Code's token/cost metrics (OTLP/HTTP protobuf) to the internal backend service,
+# which aggregates them per session/owner for the "Usage" view. Agent->backend egress is
+# already permitted by the networkpolicy, so no extra egress rule is needed.
+telemetry:
+  enabled: false
+  # Optional OTLP endpoint base override (the exporter appends "/v1/metrics").
+  # Empty = the internal backend service (http://agenthub-backend.<ns>.svc.cluster.local/internal/otel).
+  otlpEndpoint: ""
+
 # Enterprise license (offline-verified). Enterprise features (ee/) only run with
 # a valid token. `token` is the signed license from the license service; `publicKey`
 # is that service's ECDSA P-256 public key (PEM) used to verify it offline.
