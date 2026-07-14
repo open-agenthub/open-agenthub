@@ -51,11 +51,16 @@ if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; th
   fi
 fi
 
-# --- Restore Claude subscription login (if saved previously) ---
-if [ -f /secrets/claude/credentials.json ] && [ ! -f "$HOME/.claude/.credentials.json" ]; then
+# --- Restore Claude subscription login ---
+# The per-user secret is the source of truth (the watcher below uploads it on every
+# token refresh, from whichever of the user's pods is active). Restore it AFTER the
+# S3 state restore and ALWAYS overwrite, so a stale .credentials.json bundled in the
+# S3 session state cannot shadow a newer login.
+if [ -f /secrets/claude/credentials.json ]; then
+  mkdir -p "$HOME/.claude"
   cp /secrets/claude/credentials.json "$HOME/.claude/.credentials.json"
   chmod 600 "$HOME/.claude/.credentials.json"
-  echo "[entrypoint] Claude login restored."
+  echo "[entrypoint] Claude login restored from secret."
 fi
 # Skip the onboarding wizard if no Claude config file exists yet.
 [ -f "$HOME/.claude.json" ] || printf '{"hasCompletedOnboarding": true}\n' > "$HOME/.claude.json"
