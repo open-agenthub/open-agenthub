@@ -569,13 +569,18 @@ public sealed class KubernetesSessionService : ISessionService
             env.Add(new() { Name = "OTEL_LOGS_EXPORTER", Value = "none" });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_PROTOCOL", Value = "http/protobuf" });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_ENDPOINT", Value = otlpBase });
+            // Also set the metrics-specific endpoint to the full path, so it works whether
+            // or not the exporter appends "/v1/metrics" to the base.
+            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", Value = $"{otlpBase}/v1/metrics" });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", Value = "delta" });
             // Export fairly often so the dashboard reflects a running session without a long lag.
             env.Add(new() { Name = "OTEL_METRIC_EXPORT_INTERVAL", Value = "30000" });
+            // Custom keys: Claude Code sets its own session.id/user.id resource attributes,
+            // so we use agenthub.* (read back by OtlpMetricsParser) to avoid the collision.
             env.Add(new()
             {
                 Name = "OTEL_RESOURCE_ATTRIBUTES",
-                Value = $"session.id={rec.Id},user.id={Uri.EscapeDataString(owner)}"
+                Value = $"agenthub.session_id={rec.Id},agenthub.owner={owner}"
             });
         }
 

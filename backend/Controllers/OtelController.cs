@@ -49,8 +49,11 @@ public sealed class OtelController : ControllerBase
             return BadRequest();
         }
 
+        var stored = 0;
         foreach (var d in deltas)
-            await _usage.AddDeltaAsync(d, ct);
+            if (await _usage.AddDeltaAsync(d, ct)) stored++;
+        _log.LogInformation("OTLP metrics: {Bytes}B, {Deltas} session-delta(s), {Stored} stored; sessions=[{Ids}]",
+            ms.Length, deltas.Count, stored, string.Join(",", deltas.Select(d => d.SessionId)));
 
         // OTLP expects an ExportMetricsServiceResponse; an empty protobuf message (zero bytes)
         // is a valid "everything accepted" response.

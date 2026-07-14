@@ -41,9 +41,19 @@ public static class OtlpMetricsParser
     public const string TokenMetric = "claude_code.token.usage";
     public const string CostMetric = "claude_code.cost.usage";
 
-    private const string SessionIdKey = "session.id";
-    private const string UserIdKey = "user.id";
+    // Claude Code sets its OWN resource attributes "session.id" and "user.id" (its
+    // account/session), which would shadow ours. We therefore tag pods with custom
+    // "agenthub.*" keys and read those first, falling back to the standard keys.
+    private static readonly string[] SessionIdKeys = { "agenthub.session_id", "session.id" };
+    private static readonly string[] UserIdKeys = { "agenthub.owner", "user.id" };
     private const string TypeKey = "type";
+
+    private static string? Pick(Dictionary<string, string> attrs, string[] keys)
+    {
+        foreach (var k in keys)
+            if (attrs.TryGetValue(k, out var v) && !string.IsNullOrEmpty(v)) return v;
+        return null;
+    }
 
     public static IReadOnlyList<SessionUsageDelta> Parse(ReadOnlySpan<byte> payload)
     {
@@ -71,8 +81,8 @@ public static class OtlpMetricsParser
             if (field == 1 && wire == ProtobufReader.WireLen) // resource
             {
                 var attrs = ParseResourceAttributes(reader.ReadLengthDelimited());
-                attrs.TryGetValue(SessionIdKey, out resSession);
-                attrs.TryGetValue(UserIdKey, out resUser);
+                resSession = Pick(attrs, SessionIdKeys);
+                resUser = Pick(attrs, UserIdKeys);
             }
             else if (field == 2 && wire == ProtobufReader.WireLen) // scope_metrics
             {
@@ -163,9 +173,9 @@ public static class OtlpMetricsParser
             if (k is not null && v is not null) attrs[k] = v;
         }
 
-        var sessionId = attrs.GetValueOrDefault(SessionIdKey) ?? resSession;
+        var sessionId = Pick(attrs, SessionIdKeys) ?? resSession;
         if (string.IsNullOrEmpty(sessionId)) return;
-        var userId = attrs.GetValueOrDefault(UserIdKey) ?? resUser;
+        var userId = Pick(attrs, UserIdKeys) ?? resUser;
 
         if (!acc.TryGetValue(sessionId, out var delta))
             acc[sessionId] = delta = new SessionUsageDelta { SessionId = sessionId };
