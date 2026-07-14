@@ -57,6 +57,11 @@ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--a
 label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 5px; letter-spacing: .02em; }
 .field { margin-bottom: 14px; }
 
+/* Dialogs used as embedded pages (rendered inside the content area instead of a
+   modal overlay) — no backdrop, no accidental click-outside close. */
+.embed { flex: 1; min-height: 0; overflow-y: auto; background: var(--bg); }
+.embed-inner { width: 100%; max-width: 760px; margin: 0 auto; padding: 20px; box-sizing: border-box; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }

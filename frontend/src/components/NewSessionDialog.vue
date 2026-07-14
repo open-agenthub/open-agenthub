@@ -4,6 +4,7 @@ import { api } from '../api.js'
 import RepoPicker from './RepoPicker.vue'
 
 const emit = defineEmits(['close', 'created'])
+const props = defineProps({ embedded: { type: Boolean, default: false } })
 
 const repos = ref([])
 const form = ref({
@@ -55,8 +56,8 @@ async function submit() {
 </script>
 
 <template>
-  <div class="overlay" @click.self="$emit('close')">
-    <div class="modal">
+  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
+    <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3>New Session</h3>
 
       <div class="field">

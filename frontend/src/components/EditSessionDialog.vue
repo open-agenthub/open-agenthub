@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { api } from '../api.js'
 import RepoPicker from './RepoPicker.vue'
 
-const props = defineProps({ session: Object })
+const props = defineProps({ session: Object, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'updated'])
 
 const f = ref({
@@ -46,8 +46,8 @@ async function save() {
 </script>
 
 <template>
-  <div class="overlay" @click.self="$emit('close')">
-    <div class="modal">
+  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
+    <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3>Edit session</h3>
       <p class="note" v-if="scheduled">Scheduled sessions run from a fixed CronJob spec — only the title can be changed here.</p>
       <p class="note" v-else>The title applies immediately. Image, root mode and resources take effect the next time the session is resumed.</p>

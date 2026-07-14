@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { api, config } from '../api.js'
 
 const emit = defineEmits(['close'])
+const props = defineProps({ embedded: { type: Boolean, default: false } })
 
 // --- Slack (per-user) ---
 const slackEnabled = computed(() => config.slackEnabled)
@@ -87,8 +88,8 @@ const curlStatus = computed(() =>
 </script>
 
 <template>
-  <div class="overlay" @click.self="$emit('close')">
-    <div class="modal">
+  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
+    <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3>Settings</h3>
 
       <section v-if="slackEnabled" class="slack">
@@ -159,7 +160,7 @@ const curlStatus = computed(() =>
       </details>
 
       <div class="row">
-        <button @click="$emit('close')">Close</button>
+        <button v-if="!embedded" @click="$emit('close')">Close</button>
       </div>
     </div>
   </div>

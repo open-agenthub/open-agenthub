@@ -46,6 +46,12 @@ export const api = {
   // Per-user Slack preferences.
   slackMe: () => req('GET', '/slack/me'),
   setSlackPrefs: (data) => req('PUT', '/slack/me', data),
+  // Admin area: license activation (stored in DB) + seat management.
+  adminAccess: () => req('GET', '/admin/access'),
+  adminOverview: () => req('GET', '/admin/overview'),
+  activateLicense: (token) => req('POST', '/admin/license', { token }),
+  deactivateLicense: () => req('DELETE', '/admin/license'),
+  setUserSeat: (owner, licensed) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/license`, { licensed }),
   // Git OAuth providers / connections.
   gitProviders: () => req('GET', '/git/providers'),
   gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),
