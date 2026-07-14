@@ -57,10 +57,10 @@ public sealed class SlackNotifier : INotifier
             {
                 var channel = await _resolver.ResolveAsync(s.Owner, ct);
                 if (channel is null) return; // no Slack target for this user (opted out / not found)
-                var header = $":robot_face: *{Escape(s.Title)}* (`{s.Mode}`)\n" +
+                var header = $":robot_face: *Open AgentHub* · *{Escape(s.Title)}* (`{s.Mode}`)\n" +
                              $"Session `{s.Id}` — owner `{s.Owner}`\n" +
-                             (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"{_frontendOrigin}/s/{s.Id}\n") +
-                             "_Reply in this thread to answer the agent._";
+                             (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"<{_frontendOrigin}/s/{s.Id}|Open the session ↗>\n") +
+                             "_Your coding agent needs you. Reply in this thread to answer it._";
                 var ts = await _slack.PostMessageAsync(channel, header, null, ct);
                 if (ts is null) return;
                 thread = new SlackThread(s.Id, s.Owner, channel, ts, 0);
