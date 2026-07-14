@@ -19,13 +19,12 @@ public class EnterpriseLicenseTests
         public Task SetTokenAsync(string? t, CancellationToken ct = default) { Token = t; return Task.CompletedTask; }
     }
 
-    // Builds a license backed by the given token (in the store) and public key (in config), reloaded.
+    // Builds a license backed by the given token (in the store), verified against the
+    // supplied public key (defaults to the embedded production key), reloaded.
     private static EnterpriseLicense Build(string? token = null, string? publicKey = null)
     {
-        var cfg = new ConfigurationBuilder()
-            .AddInMemoryCollection(new[] { new KeyValuePair<string, string?>("License:PublicKey", publicKey) })
-            .Build();
-        var lic = new EnterpriseLicense(cfg, new FakeStore(token), NullLogger<EnterpriseLicense>.Instance);
+        var lic = new EnterpriseLicense(new FakeStore(token), NullLogger<EnterpriseLicense>.Instance,
+            publicKey ?? EnterpriseLicense.PublicKeyPem);
         lic.ReloadAsync().GetAwaiter().GetResult();
         return lic;
     }
@@ -89,11 +88,8 @@ public class EnterpriseLicenseTests
     public async Task Reload_PicksUpNewlyActivatedToken()
     {
         var (token, pub) = IssueToken(seats: 10, validUntil: DateTime.UtcNow.AddDays(30));
-        var cfg = new ConfigurationBuilder()
-            .AddInMemoryCollection(new[] { new KeyValuePair<string, string?>("License:PublicKey", pub) })
-            .Build();
         var store = new FakeStore(null);
-        var lic = new EnterpriseLicense(cfg, store, NullLogger<EnterpriseLicense>.Instance);
+        var lic = new EnterpriseLicense(store, NullLogger<EnterpriseLicense>.Instance, pub);
         await lic.ReloadAsync();
         Assert.False(lic.Enabled);
 
@@ -102,5 +98,16 @@ public class EnterpriseLicenseTests
         await lic.ReloadAsync();
         Assert.True(lic.Enabled);
         Assert.Equal(10, lic.Status.Seats);
+    }
+
+    [Fact]
+    public void EmbeddedKey_RejectsSelfSignedToken()
+    {
+        // A self-hoster who signs their own token with their own key must NOT pass:
+        // the embedded key is the only accepted issuer, and it isn't a config value.
+        var (token, _) = IssueToken(seats: 999, validUntil: DateTime.UtcNow.AddYears(10));
+        var lic = Build(token); // verified against the embedded production key
+        Assert.False(lic.Enabled);
+        Assert.True(lic.Status.Present);
     }
 }

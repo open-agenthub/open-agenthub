@@ -29,7 +29,6 @@ data:
   Oidc__Scope: {{ .Values.oidc.scope | quote }}
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
   FrontendOrigin: "https://{{ .Values.ingress.host }}"
-  License__PublicKey: {{ .Values.license.publicKey | quote }}
   Ee__Admins: {{ .Values.ee.admins | default "" | quote }}
   Ee__BillingPortalUrl: {{ .Values.ee.billingPortalUrl | default "" | quote }}
   Ee__Slack__Enabled: {{ .Values.ee.slack.enabled | quote }}
