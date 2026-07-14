@@ -84,13 +84,11 @@ telemetry:
   # Empty = the internal backend service (http://agenthub-backend.<ns>.svc.cluster.local/internal/otel).
   otlpEndpoint: ""
 
-# Enterprise license (offline-verified). Enterprise features (ee/) only run with
-# a valid token. The token itself is NOT a chart value — it is activated in the app's
-# Admin area and stored in the database, so enterprise features can't be unlocked by
-# flipping a Helm flag. `publicKey` is the license service's ECDSA P-256 public key
-# (PEM) that the app uses to verify the activated token offline.
-license:
-  publicKey: ""
+# Enterprise license (offline-verified). Enterprise features (ee/) only run with a
+# valid token. Neither the token nor the verification key are chart values: the token
+# is activated in the app's Admin area (stored in the DB), and the public key used to
+# verify it is compiled into the binary (EnterpriseLicense.PublicKeyPem). This way
+# enterprise features can't be unlocked by flipping a Helm flag or swapping the key.
 
 # Enterprise features (require a valid license).
 ee:
