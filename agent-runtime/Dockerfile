@@ -26,10 +26,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && useradd -m -u 1000 -s /bin/bash agent
 
 COPY --from=builder /opt/session-agent/node_modules /opt/session-agent/node_modules
-COPY session-agent/server.js       /opt/session-agent/server.js
-COPY session-agent/notify-hook.sh  /opt/session-agent/notify-hook.sh
-COPY entrypoint.sh                 /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /opt/session-agent/notify-hook.sh
+COPY session-agent/server.js           /opt/session-agent/server.js
+COPY session-agent/notify-hook.sh      /opt/session-agent/notify-hook.sh
+COPY session-agent/pretooluse-hook.sh  /opt/session-agent/pretooluse-hook.sh
+COPY entrypoint.sh                     /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /opt/session-agent/notify-hook.sh /opt/session-agent/pretooluse-hook.sh
 
 USER 1000:1000
 ENV HOME=/home/agent

@@ -1,4 +1,5 @@
 using AgentHub.Api.Notifications;
+using AgentHub.Api.Permissions;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
 using Microsoft.AspNetCore.Authorization;
@@ -19,10 +20,14 @@ public sealed class InternalController : ControllerBase
     private readonly ISessionStore _store;
     private readonly IEnumerable<INotifier> _notifiers;
     private readonly ISessionService _svc;
+    private readonly PermissionStore _permissions;
+    private readonly IPermissionNotifier _permNotifier;
 
-    public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc)
+    public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
+        PermissionStore permissions, IPermissionNotifier permNotifier)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
+        _permissions = permissions; _permNotifier = permNotifier;
     }
 
     private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
@@ -105,6 +110,43 @@ public sealed class InternalController : ControllerBase
         if (text.Length > 400_000) text = text[^400_000..];
         await _store.SetScrollbackAsync(id, text, ct);
         return NoContent();
+    }
+
+    public record PermissionBody(string Tool, string? Input);
+
+    /// <summary>
+    /// The agent's PreToolUse hook asks whether a tool may run. If the owner has a Slack
+    /// target, we post an interactive prompt and return an id to poll; otherwise we tell
+    /// the hook to fall back to the normal permission flow ("ask").
+    /// </summary>
+    [HttpPost("permission")]
+    public async Task<IActionResult> RequestPermission(string id, [FromBody] PermissionBody body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        var req = new PermissionRequest
+        {
+            Id = Guid.NewGuid().ToString("n")[..12],
+            SessionId = id, Owner = rec.Owner,
+            Tool = string.IsNullOrWhiteSpace(body.Tool) ? "a tool" : body.Tool.Trim(),
+            Summary = body.Input
+        };
+        await _permissions.CreateAsync(req, ct);
+        if (!await _permNotifier.PostAsync(req, ct))
+        {
+            await _permissions.DeleteAsync(req.Id, ct);   // no out-of-band approver → normal flow
+            return Ok(new { decision = "ask" });
+        }
+        return Ok(new { id = req.Id });
+    }
+
+    /// <summary>Polled by the hook: returns "allow" | "allowAlways" | "deny" | "pending".</summary>
+    [HttpGet("permission/{reqId}")]
+    public async Task<IActionResult> PermissionStatus(string id, string reqId, CancellationToken ct)
+    {
+        if (await AuthAsync(id, ct) is null) return Unauthorized();
+        return Ok(new { decision = await _permissions.GetDecisionAsync(reqId, ct) ?? "pending" });
     }
 
     /// <summary>Mints a presigned PUT URL so the agent can upload an artifact to S3.</summary>

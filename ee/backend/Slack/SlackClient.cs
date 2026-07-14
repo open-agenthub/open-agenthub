@@ -53,6 +53,36 @@ public sealed class SlackClient
         catch (Exception ex) { _log.LogWarning(ex, "Slack chat.postMessage error"); return null; }
     }
 
+    /// <summary>Posts a message with Block Kit blocks (e.g. buttons); returns its ts.</summary>
+    public async Task<string?> PostBlocksAsync(string channel, string fallbackText, object blocks, string? threadTs, CancellationToken ct)
+    {
+        var c = Client(_opts.BotToken);
+        var body = new Dictionary<string, object?>
+        {
+            ["channel"] = channel, ["text"] = fallbackText, ["blocks"] = blocks, ["unfurl_links"] = false
+        };
+        if (threadTs is not null) body["thread_ts"] = threadTs;
+        try
+        {
+            using var resp = await c.PostAsJsonAsync("https://slack.com/api/chat.postMessage", body, ct);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var root = doc.RootElement;
+            if (root.TryGetProperty("ok", out var ok) && ok.GetBoolean()) return root.GetProperty("ts").GetString();
+            _log.LogWarning("Slack postMessage(blocks) failed: {Err}", root.TryGetProperty("error", out var e) ? e.GetString() : "unknown");
+            return null;
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Slack postMessage(blocks) error"); return null; }
+    }
+
+    /// <summary>Replaces a message's text/blocks (chat.update) — used to show a resolved decision.</summary>
+    public async Task UpdateMessageAsync(string channel, string ts, string text, object? blocks, CancellationToken ct)
+    {
+        var c = Client(_opts.BotToken);
+        var body = new Dictionary<string, object?> { ["channel"] = channel, ["ts"] = ts, ["text"] = text, ["blocks"] = blocks ?? Array.Empty<object>() };
+        try { await c.PostAsJsonAsync("https://slack.com/api/chat.update", body, ct); }
+        catch (Exception ex) { _log.LogWarning(ex, "Slack chat.update error"); }
+    }
+
     /// <summary>Resolves a user's email to their DM channel id (lookupByEmail → conversations.open).</summary>
     public async Task<string?> OpenImByEmailAsync(string email, CancellationToken ct)
     {

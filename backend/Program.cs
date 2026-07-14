@@ -34,8 +34,10 @@ builder.Services.AddSingleton(slackOpts);
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackThreadStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackClient>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.UserDirectory>();
+builder.Services.AddSingleton<AgentHub.Api.Permissions.PermissionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.ISlackTargetResolver, AgentHub.Api.Ee.Slack.SlackTargetResolver>();
 builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Ee.Slack.SlackNotifier>();
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier, AgentHub.Api.Ee.Slack.SlackPermissionNotifier>();
 builder.Services.AddHostedService<AgentHub.Api.Ee.Slack.SlackSocketModeService>();
 
 builder.Services.AddHealthChecks();
@@ -98,6 +100,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
 }
 
 app.UseCors();
