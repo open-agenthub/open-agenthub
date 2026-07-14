@@ -25,8 +25,10 @@ builder.Services.AddHttpClient<AgentHub.Api.Notifications.INotifier, AgentHub.Ap
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IGitAuthService, GitAuthService>();
 
-// Enterprise license gate (offline-verified token).
+// Enterprise license gate (offline-verified token, activated via the admin UI, stored in the DB).
+builder.Services.AddSingleton<AgentHub.Api.Licensing.ILicenseStore, AgentHub.Api.Licensing.LicenseStore>();
 builder.Services.AddSingleton<AgentHub.Api.Licensing.IEnterpriseLicense, AgentHub.Api.Licensing.EnterpriseLicense>();
+builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
 
 // Enterprise: Slack integration (only active with a valid license + tokens).
 var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee.Slack.SlackOptions>() ?? new();
@@ -101,6 +103,9 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
+    // License token lives in the DB — create its table, then load & verify it.
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.ILicenseStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();
 }
 
 app.UseCors();

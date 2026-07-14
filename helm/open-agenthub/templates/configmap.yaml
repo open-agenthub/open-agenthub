@@ -30,6 +30,8 @@ data:
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
   FrontendOrigin: "https://{{ .Values.ingress.host }}"
   License__PublicKey: {{ .Values.license.publicKey | quote }}
+  Ee__Admins: {{ .Values.ee.admins | default "" | quote }}
+  Ee__BillingPortalUrl: {{ .Values.ee.billingPortalUrl | default "" | quote }}
   Ee__Slack__Enabled: {{ .Values.ee.slack.enabled | quote }}
   Ee__Slack__Channel: {{ .Values.ee.slack.channel | quote }}
   {{- range $i, $p := .Values.git.providers }}

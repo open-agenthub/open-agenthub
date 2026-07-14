@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
 
 const emit = defineEmits(['close'])
+const props = defineProps({ embedded: { type: Boolean, default: false } })
 const providers = ref([])
 const error = ref('')
 const loading = ref(true)
@@ -37,8 +38,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="overlay" @click.self="$emit('close')">
-    <div class="modal">
+  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
+    <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3>Account · Git connections</h3>
       <p class="note">Connect a GitHub or GitLab account so sessions can list, clone and push your projects — no personal access token needed. Tokens are stored server-side and never shown.</p>
 
@@ -57,7 +58,7 @@ onMounted(() => {
       </div>
 
       <p v-if="error" class="err">{{ error }}</p>
-      <div class="row"><button @click="$emit('close')">Close</button></div>
+      <div v-if="!embedded" class="row"><button @click="$emit('close')">Close</button></div>
     </div>
   </div>
 </template>

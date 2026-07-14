@@ -38,15 +38,22 @@ public sealed class SlackPermissionNotifier : IPermissionNotifier
     private readonly SlackClient _slack;
     private readonly ISlackTargetResolver _resolver;
     private readonly PermissionStore _store;
+    private readonly SlackThreadStore _threads;
 
     public SlackPermissionNotifier(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
-        ISlackTargetResolver resolver, PermissionStore store)
-    { _opts = opts; _license = license; _slack = slack; _resolver = resolver; _store = store; }
+        ISlackTargetResolver resolver, PermissionStore store, SlackThreadStore threads)
+    { _opts = opts; _license = license; _slack = slack; _resolver = resolver; _store = store; _threads = threads; }
 
     public async Task<bool> PostAsync(PermissionRequest req, CancellationToken ct = default)
     {
         if (!_opts.CanPost || !_license.Enabled) return false;
-        var channel = await _resolver.ResolveAsync(req.Owner, ct);
+
+        // Post the request into the session's Slack thread so the approval sits right
+        // under the conversation it belongs to. Fall back to the owner's DM (top-level)
+        // if the session doesn't have a thread yet.
+        var thread = await _threads.GetBySessionAsync(req.SessionId, ct);
+        var channel = thread?.Channel ?? await _resolver.ResolveAsync(req.Owner, ct);
+        var threadTs = thread?.ThreadTs;
         if (channel is null) return false;
 
         var summary = string.IsNullOrWhiteSpace(req.Summary) ? "" : $"\n> {Escape(Trim(req.Summary!, 600))}";
@@ -70,7 +77,7 @@ public sealed class SlackPermissionNotifier : IPermissionNotifier
             }
         };
 
-        var ts = await _slack.PostBlocksAsync(channel, $"Permission request: {req.Tool}", blocks, null, ct);
+        var ts = await _slack.PostBlocksAsync(channel, $"Permission request: {req.Tool}", blocks, threadTs, ct);
         if (ts is null) return false;
         await _store.SetSlackMessageAsync(req.Id, channel, ts, ct);
         return true;

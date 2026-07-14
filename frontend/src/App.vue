@@ -4,20 +4,19 @@ import { api, auth, config } from './api.js'
 import SessionList from './components/SessionList.vue'
 import TerminalView from './components/TerminalView.vue'
 import NewSessionDialog from './components/NewSessionDialog.vue'
-import CredentialsDialog from './components/CredentialsDialog.vue'
-import SettingsDialog from './components/SettingsDialog.vue'
-import UsageDialog from './components/UsageDialog.vue'
 import EditSessionDialog from './components/EditSessionDialog.vue'
-import AccountDialog from './components/AccountDialog.vue'
+import SettingsView from './components/SettingsView.vue'
+import AdminView from './components/AdminView.vue'
 import { sessionMatches } from './lib/text.js'
 
 const sessions = ref([])
 const activeId = ref(null)
-const showNew = ref(false)
-const showCreds = ref(false)
-const showSettings = ref(false)
-const showUsage = ref(false)
-const showAccount = ref(false)
+// The content area shows either the active session's terminal or a full-height page
+// (settings / admin / new / edit) — deliberately pages, not popups, so a stray click
+// beside a dialog can't dismiss it.
+const page = ref(null)          // null | 'settings' | 'admin' | 'new' | 'edit'
+const settingsTab = ref('credentials')
+const isAdmin = ref(false)
 const editId = ref(null)
 const error = ref('')
 const search = ref('')
@@ -27,6 +26,13 @@ const filteredSessions = computed(() => sessions.value.filter(s => sessionMatche
 
 const activeSession = computed(() => sessions.value.find(s => s.id === activeId.value) || null)
 const editSession = computed(() => sessions.value.find(s => s.id === editId.value) || null)
+const detailOpen = computed(() => !!activeSession.value || !!page.value)
+
+function openSettings(tab = 'credentials') { settingsTab.value = tab; page.value = 'settings' }
+function openAdmin() { page.value = 'admin' }
+function openNew() { page.value = 'new' }
+function openEdit(id) { editId.value = id; page.value = 'edit' }
+function closePage() { page.value = null; editId.value = null }
 
 // Auth enabled but no valid login: show the login page instead of the app.
 // State changes always go through a full-page redirect, so the state at mount time is sufficient.
@@ -37,9 +43,9 @@ async function refresh() {
   catch (e) { error.value = String(e.message || e) }
 }
 
-async function onCreated(session) { showNew.value = false; await refresh(); activeId.value = session.id }
+async function onCreated(session) { closePage(); await refresh(); activeId.value = session.id }
 
-async function onUpdated() { editId.value = null; await refresh() }
+async function onUpdated() { closePage(); await refresh() }
 
 async function resume(id) {
   await api.resumeSession(id)
@@ -75,9 +81,12 @@ watch(activeId, (id) => {
   if (location.pathname + location.search !== target) history.pushState({ id }, '', target)
 })
 
-onMounted(() => {
+function selectSession(id) { closePage(); activeId.value = id }
+
+onMounted(async () => {
   if (needsLogin) return
-  if (location.pathname.startsWith('/account')) showAccount.value = true
+  // OAuth account-connect returns to /account — open Settings on the Git accounts tab.
+  if (location.pathname.startsWith('/account')) openSettings('account')
   const fromUrl = idFromLocation()
   if (fromUrl) activeId.value = fromUrl
   window.addEventListener('popstate', () => {
@@ -86,6 +95,8 @@ onMounted(() => {
     syncingFromHistory = false
   })
   refresh(); setInterval(refresh, 5000)
+  // Show the Admin nav only to admins (bootstrap mode = everyone until Ee:Admins is set).
+  try { isAdmin.value = (await api.adminAccess()).isAdmin } catch { /* admin area unavailable */ }
 })
 </script>
 
@@ -121,7 +132,7 @@ onMounted(() => {
     </div>
   </div>
 
-  <div v-else class="shell" :class="{ 'detail-open': activeSession }">
+  <div v-else class="shell" :class="{ 'detail-open': detailOpen }">
     <header class="topbar">
       <div class="brand">
         <svg class="logo" width="30" height="22" viewBox="0 0 40 30" fill="none" aria-hidden="true">
@@ -149,10 +160,8 @@ onMounted(() => {
       </div>
       <div class="actions">
         <span class="user">{{ auth.user }}</span>
-        <button v-if="gitEnabled.gitEnabled" @click="showAccount = true">Account</button>
-        <button @click="showUsage = true">Usage</button>
-        <button @click="showCreds = true">Credentials</button>
-        <button @click="showSettings = true">Settings</button>
+        <button v-if="isAdmin" :class="{ on: page === 'admin' }" @click="openAdmin">Admin</button>
+        <button :class="{ on: page === 'settings' }" @click="openSettings()">Settings</button>
         <button v-if="auth.enabled" @click="auth.logout()">Sign out</button>
       </div>
     </header>
@@ -161,32 +170,38 @@ onMounted(() => {
       <aside class="sidebar">
         <div class="sidebar-head">
           <h2>Sessions</h2>
-          <button class="primary" @click="showNew = true">New Session</button>
+          <button class="primary" @click="openNew">New Session</button>
         </div>
         <input v-model="search" class="session-search" placeholder="Search sessions…"
                autocapitalize="off" autocomplete="off" spellcheck="false" />
         <p v-if="error" class="err">{{ error }}</p>
         <SessionList :sessions="filteredSessions" :active="activeId"
-          @select="activeId = $event" @remove="remove" @resume="resume" @pause="pause" @edit="editId = $event" />
+          @select="selectSession" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" />
       </aside>
 
       <section class="content">
-        <TerminalView v-if="activeSession" :session="activeSession" :key="activeId"
+        <SettingsView v-if="page === 'settings'" :initial-tab="settingsTab" @close="closePage" />
+        <AdminView v-else-if="page === 'admin'" @close="closePage" />
+
+        <div v-else-if="page === 'new'" class="page">
+          <div class="page-bar"><button class="back" @click="closePage">‹ Back</button><span class="page-title">New session</span></div>
+          <NewSessionDialog embedded @close="closePage" @created="onCreated" />
+        </div>
+
+        <div v-else-if="page === 'edit' && editSession" class="page">
+          <div class="page-bar"><button class="back" @click="closePage">‹ Back</button><span class="page-title">Edit session</span></div>
+          <EditSessionDialog :session="editSession" :key="editId" embedded @close="closePage" @updated="onUpdated" />
+        </div>
+
+        <TerminalView v-else-if="activeSession" :session="activeSession" :key="activeId"
           @back="activeId = null" @resume="resume" @pause="pause" />
+
         <div v-else class="empty">
           <p>No session selected.</p>
           <p class="hint">Select a session on the left or start a new one. You can watch, reply, let agents work autonomously or on a schedule, and resume finished sessions.</p>
         </div>
       </section>
     </main>
-
-    <NewSessionDialog v-if="showNew" @close="showNew = false" @created="onCreated" />
-    <CredentialsDialog v-if="showCreds" @close="showCreds = false" />
-    <SettingsDialog v-if="showSettings" @close="showSettings = false" />
-    <UsageDialog v-if="showUsage" @close="showUsage = false" />
-    <AccountDialog v-if="showAccount" @close="showAccount = false" />
-    <EditSessionDialog v-if="editSession" :session="editSession" :key="editId"
-      @close="editId = null" @updated="onUpdated" />
   </div>
 </template>
 
@@ -208,6 +223,12 @@ onMounted(() => {
 .sidebar-head h2 { margin: 0; font-size: 15px; }
 .session-search { width: calc(100% - 32px); box-sizing: border-box; margin: 0 16px 10px; padding: 7px 10px; font-size: 13px; }
 .content { flex: 1; display: flex; min-width: 0; }
+.actions button.on { color: var(--text); border-color: var(--accent); }
+.page { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
+.page-bar { display: flex; align-items: center; gap: 12px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--panel); }
+.page-title { font-size: 13px; font-weight: 600; }
+.back { background: none; border: none; color: var(--muted); }
+.back:hover { color: var(--accent); border: none; }
 .empty { margin: auto; max-width: 380px; text-align: center; color: var(--muted); padding: 24px; }
 .empty .hint { font-size: 13px; line-height: 1.5; margin-top: 8px; }
 .err { color: var(--danger); font-size: 12px; padding: 0 16px; font-family: var(--mono); }

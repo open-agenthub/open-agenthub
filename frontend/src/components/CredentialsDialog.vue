@@ -3,6 +3,7 @@ import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
 
 const emit = defineEmits(['close'])
+const props = defineProps({ embedded: { type: Boolean, default: false } })
 const c = ref({
   sshPrivateKey: '', gitlabToken: '', anthropicApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
@@ -45,8 +46,8 @@ async function save() {
 </script>
 
 <template>
-  <div class="overlay" @click.self="$emit('close')">
-    <div class="modal">
+  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
+    <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3>Credentials</h3>
       <p class="note">Written directly to a per-user Kubernetes secret and never read back. Leave fields empty to keep existing values.</p>
 
@@ -91,7 +92,7 @@ async function save() {
 
       <p v-if="error" class="err">{{ error }}</p>
       <div class="row">
-        <button @click="$emit('close')">Close</button>
+        <button v-if="!embedded" @click="$emit('close')">Close</button>
         <button class="primary" :disabled="busy" @click="save">
           {{ saved ? 'Saved ✓' : busy ? 'Saving…' : 'Save' }}
         </button>

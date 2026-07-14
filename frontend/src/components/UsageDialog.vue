@@ -4,6 +4,7 @@ import { api } from '../api.js'
 import { formatTokens, formatTokensExact, formatCost, totalTokens, percent } from '../lib/usage.js'
 
 const emit = defineEmits(['close'])
+const props = defineProps({ embedded: { type: Boolean, default: false } })
 
 const summary = ref(null)
 const sessions = ref([])
@@ -47,8 +48,8 @@ function fmtDate(d) {
 </script>
 
 <template>
-  <div class="overlay" @click.self="$emit('close')">
-    <div class="modal">
+  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
+    <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3>Usage</h3>
       <p class="note">
         Token and cost usage across your sessions, collected from the agents via OpenTelemetry.
@@ -118,7 +119,7 @@ function fmtDate(d) {
 
       <div class="row">
         <button @click="load" :disabled="loading">Refresh</button>
-        <button @click="$emit('close')">Close</button>
+        <button v-if="!embedded" @click="$emit('close')">Close</button>
       </div>
     </div>
   </div>

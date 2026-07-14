@@ -85,14 +85,21 @@ telemetry:
   otlpEndpoint: ""
 
 # Enterprise license (offline-verified). Enterprise features (ee/) only run with
-# a valid token. `token` is the signed license from the license service; `publicKey`
-# is that service's ECDSA P-256 public key (PEM) used to verify it offline.
+# a valid token. The token itself is NOT a chart value — it is activated in the app's
+# Admin area and stored in the database, so enterprise features can't be unlocked by
+# flipping a Helm flag. `publicKey` is the license service's ECDSA P-256 public key
+# (PEM) that the app uses to verify the activated token offline.
 license:
-  token: ""
   publicKey: ""
 
 # Enterprise features (require a valid license).
 ee:
+  # Comma-separated list of admin usernames (preferred_username). Empty = every
+  # signed-in user is an admin (bootstrap; lock this down for real deployments).
+  admins: ""
+  # Optional link to the billing portal (Stripe customer portal via the license service),
+  # surfaced in the Admin area for subscription/invoice management.
+  billingPortalUrl: ""
   # Slack integration: asks you in a Slack thread whenever a session waits for input,
   # and turns your thread replies into the agent's answer. Uses Socket Mode.
   slack:
