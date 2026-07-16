@@ -11,6 +11,7 @@ public interface ISessionService
     /// so new sessions start without requiring another login.</summary>
     Task StoreClaudeCredentialsAsync(string owner, string credentialsJson, CancellationToken ct = default);
     Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default);
+    Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);
     Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Pauses a running session: uploads its state, removes the pod and marks it "Paused".
     /// A paused session is resumable via the normal resume path.</summary>
