@@ -37,9 +37,24 @@ docker build --tag 'open-agenthub-dev/backend:local' (Join-Path $repoRoot 'backe
 docker build --tag 'open-agenthub-dev/frontend:local' (Join-Path $repoRoot 'frontend')
 docker build --tag 'open-agenthub-dev/agent-runtime:local' (Join-Path $repoRoot 'agent-runtime')
 
-$passwordBytes = New-Object byte[] 32
-[System.Security.Cryptography.RandomNumberGenerator]::Fill($passwordBytes)
-$postgresPassword = [Convert]::ToHexString($passwordBytes).ToLowerInvariant()
+$passwordBytes = $null
+$encodedPassword = kubectl -n $controlNamespace get secret postgres-secret -o "jsonpath={.data.password}" 2>$null
+if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($encodedPassword)) {
+    try {
+        $postgresPassword = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encodedPassword))
+    } catch {
+        throw 'The existing postgres-secret contains an invalid password value.'
+    }
+} else {
+    helm status $releaseName --namespace $controlNamespace *> $null
+    if ($LASTEXITCODE -eq 0) {
+        throw 'The existing Helm release is missing postgres-secret; refusing to rotate the database password.'
+    }
+
+    $passwordBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($passwordBytes)
+    $postgresPassword = [Convert]::ToHexString($passwordBytes).ToLowerInvariant()
+}
 
 try {
     Write-Host 'Deploying the development release...'
@@ -51,6 +66,7 @@ try {
         --set-string "postgres.password=$postgresPassword"
 
     kubectl -n $controlNamespace rollout status statefulset/postgres --timeout=180s
+    kubectl -n $controlNamespace rollout restart deployment/agenthub-backend deployment/agenthub-frontend
     kubectl -n $controlNamespace rollout status deployment/agenthub-backend --timeout=180s
     kubectl -n $controlNamespace rollout status deployment/agenthub-frontend --timeout=180s
 
