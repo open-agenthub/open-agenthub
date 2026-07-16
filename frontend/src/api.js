@@ -29,6 +29,19 @@ export const api = {
   getSession: (id) => req('GET', `/sessions/${id}`),
   createSession: (data) => req('POST', '/sessions', data),
   updateSession: (id, data) => req('PATCH', `/sessions/${id}`, data),
+  duplicateSession: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/duplicate`, data),
+  listProjects: () => req('GET', '/projects'),
+  createProject: (data) => req('POST', '/projects', data),
+  updateProject: (id, data) => req('PATCH', `/projects/${encodeURIComponent(id)}`, data),
+  deleteProject: (id) => req('DELETE', `/projects/${encodeURIComponent(id)}`),
+  listSessionShares: (id) => req('GET', `/ee/sessions/${encodeURIComponent(id)}/shares`),
+  createShareUser: (id, data) => req('POST', `/ee/sessions/${encodeURIComponent(id)}/shares/users`, data),
+  updateShareUser: (id, recipient, data) => req('PATCH', `/ee/sessions/${encodeURIComponent(id)}/shares/users/${encodeURIComponent(recipient)}`, data),
+  deleteShareUser: (id, recipient) => req('DELETE', `/ee/sessions/${encodeURIComponent(id)}/shares/users/${encodeURIComponent(recipient)}`),
+  createShareLink: (id, data) => req('POST', `/ee/sessions/${encodeURIComponent(id)}/shares/links`, data),
+  updateShareLink: (id, linkId, data) => req('PATCH', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`, data),
+  deleteShareLink: (id, linkId) => req('DELETE', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`),
+  updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
   deleteSession: (id) => req('DELETE', `/sessions/${id}`),
@@ -63,6 +76,7 @@ export const api = {
     return res.ok ? res.text() : ''
   }
 }
+export const sharedTerminalUrl = (token) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/shared/${encodeURIComponent(token)}/terminal`
 
 // WebSocket URL including the token (browser WebSockets cannot set headers).
 async function wsUrl(id, kind) {
@@ -74,5 +88,17 @@ async function wsUrl(id, kind) {
 
 // The shared Claude terminal.
 export const terminalUrl = (id) => wsUrl(id, 'terminal')
+export async function getSharedSession(token) {
+  const res = await fetch(`/api/shared/${encodeURIComponent(token)}/session`)
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+  return res.json()
+}
+
+export async function getSharedTranscript(token) {
+  const res = await fetch(`/api/shared/${encodeURIComponent(token)}/transcript`)
+  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+  return res.text()
+}
+
 // An interactive bash shell in the same pod.
 export const shellUrl = (id) => wsUrl(id, 'shell')
