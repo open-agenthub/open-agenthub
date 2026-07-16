@@ -43,6 +43,14 @@ public sealed class SessionsController : ControllerBase
         catch (ArgumentException e) { return BadRequest(e.Message); }
     }
 
+    [HttpPost("{id}/duplicate")]
+    public async Task<ActionResult<SessionInfo>> Duplicate(string id, [FromBody] DuplicateSessionRequest request, CancellationToken ct)
+    {
+        try { return Ok(await _svc.DuplicateSessionAsync(Owner, id, request, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
     [HttpPost("{id}/resume")]
     public async Task<ActionResult<SessionInfo>> Resume(string id, CancellationToken ct)
     {
