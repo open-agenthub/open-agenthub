@@ -22,7 +22,7 @@ require_command() {
   }
 }
 
-for command in docker kubectl helm curl; do
+for command in docker kubectl helm curl base64; do
   require_command "$command"
 done
 
@@ -45,7 +45,28 @@ docker build --tag 'open-agenthub-dev/backend:local' "$script_dir/backend"
 docker build --tag 'open-agenthub-dev/frontend:local' "$script_dir/frontend"
 docker build --tag 'open-agenthub-dev/agent-runtime:local' "$script_dir/agent-runtime"
 
-postgres_password="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+decode_base64() {
+  if printf '' | base64 --decode >/dev/null 2>&1; then
+    printf '%s' "$1" | base64 --decode
+  else
+    printf '%s' "$1" | base64 -D
+  fi
+}
+
+encoded_password=''
+if encoded_password="$(kubectl -n "$control_namespace" get secret postgres-secret -o 'jsonpath={.data.password}' 2>/dev/null)" &&
+  [[ -n "$encoded_password" ]]; then
+  if ! postgres_password="$(decode_base64 "$encoded_password")" || [[ -z "$postgres_password" ]]; then
+    printf 'The existing postgres-secret contains an invalid password value.\n' >&2
+    exit 1
+  fi
+else
+  if helm status "$release_name" --namespace "$control_namespace" >/dev/null 2>&1; then
+    printf 'The existing Helm release is missing postgres-secret; refusing to rotate the database password.\n' >&2
+    exit 1
+  fi
+  postgres_password="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+fi
 backend_forward_pid=''
 frontend_forward_pid=''
 
@@ -70,6 +91,7 @@ helm upgrade --install "$release_name" "$chart_path" \
   --set-string "postgres.password=$postgres_password"
 
 kubectl -n "$control_namespace" rollout status statefulset/postgres --timeout=180s
+kubectl -n "$control_namespace" rollout restart deployment/agenthub-backend deployment/agenthub-frontend
 kubectl -n "$control_namespace" rollout status deployment/agenthub-backend --timeout=180s
 kubectl -n "$control_namespace" rollout status deployment/agenthub-frontend --timeout=180s
 
