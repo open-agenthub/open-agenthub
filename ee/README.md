@@ -15,12 +15,18 @@ subscription for production use.
   [`backend/Slack/`](./backend/Slack); configured via `ee.slack.*` and gated by a
   valid license (`license.token` / `license.publicKey`). See the chart `values.yaml`.
 
-### Planned
 
-- **Session sharing** between members of an organization
-- **Organization management** (teams, roles, quotas), user/seat & cost admin
-- **SSO group mapping** (map OIDC/IdP groups to AgentHub organizations and roles)
 
+- **Session sharing** — owners can share a live session with a known user or a secret link.
+  A Viewer can view terminal output and transcripts. A Collaborator can also send terminal
+  input and resize events.
+- **Share lifecycle controls** — owners choose the role, may set link expiration, and can
+  change roles or revoke direct grants and links at any time.
+- **Session-wide MCP restrictions** — owners can block MCP servers or exact tools for the
+  shared session. The policy applies to every participant, including the owner, and is
+  enforced before tool execution.
+- **Owner-only controls** — sharing does not grant shell access, settings, project,
+  duplication, lifecycle, or sharing-management permissions.
 ## Subscription
 
 Using the Enterprise Edition in production requires a valid

@@ -1,0 +1,55 @@
+# Docker Desktop Kubernetes development profile.
+sessionsNamespace: agenthub-dev-sessions
+createSessionsNamespace: true
+
+image:
+  registry: open-agenthub-dev
+  tag: local
+  pullPolicy: IfNotPresent
+  pullSecret: ""
+
+ingress:
+  enabled: false
+  host: localhost
+  className: nginx
+  clusterIssuer: ""
+  tlsSecretName: agenthub-dev-tls
+
+frontendOrigin: http://localhost:8080
+
+backend:
+  replicas: 1
+  environment: Development
+  developmentAuth:
+    enabled: true
+    headerName: X-AgentHub-Test-User
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 512Mi }
+
+frontend:
+  replicas: 1
+  resources:
+    requests: { cpu: 10m, memory: 32Mi }
+    limits: { cpu: 200m, memory: 128Mi }
+
+agent:
+  pullPolicy: IfNotPresent
+
+oidc:
+  authority: ""
+
+postgres:
+  enabled: true
+  persistence: false
+  storage: 1Gi
+  storageClass: ""
+  password: ""
+
+s3:
+  serviceUrl: ""
+  accessKey: ""
+  secretKey: ""
+
+telemetry:
+  enabled: false

@@ -57,6 +57,7 @@ shift.
   pod stays unprivileged.
 - **Bring your tools via MCP** — attach any MCP server (issue tracker, database,
   observability) per session and turn the agent into a teammate.
+- **Community Edition projects and session duplication** — organize sessions into personal projects and duplicate reusable settings into an independent session without copying conversation state or credentials.
 - **Subscription login that sticks** — log in once via `/login` inside a session; the
   OAuth credentials are stored per user and restored into every new session (incl. token
   refresh). Alternatively, use an `ANTHROPIC_API_KEY`.
@@ -205,6 +206,44 @@ backend, network policies, dev Postgres) — fill in the secrets before applying
 
 </details>
 
+### Docker Desktop Kubernetes development
+
+For a local Kubernetes environment, the setup scripts build the three images locally, deploy
+the agenthub-dev Helm release into the agenthub-dev control namespace, and use
+agenthub-dev-sessions for session pods. They refuse to run unless the active kubectl
+context is docker-desktop.
+
+On Windows PowerShell:
+
+~~~
+.\setup-dev.ps1
+~~~
+
+Use .\setup-dev.ps1 -NoPortForward when you want the checks and deployment without a
+foreground port-forward. On Bash-compatible shells:
+
+~~~
+./setup-dev.sh
+~~~
+
+Use ./setup-dev.sh --no-port-forward for the same non-blocking behavior. The default
+command checks the backend and frontend, then serves the UI at
+http://localhost:8080 until you stop the port-forward. PostgreSQL uses ephemeral storage
+and a generated password for this development release.
+
+The development profile enables header-based test identities so local integration tests can
+exercise owner, viewer, and collaborator behavior without an external identity provider.
+This authentication is local-only, guarded by the Development environment, and must not
+be enabled for a production deployment. The profile is defined in
+helm/open-agenthub/values-dev.yaml.
+
+To inspect or remove the release:
+
+~~~
+kubectl -n agenthub-dev get pods
+helm uninstall agenthub-dev -n agenthub-dev
+kubectl delete namespace agenthub-dev-sessions
+~~~
 ### Local development
 
 Backend: `cd backend && dotnet run` (uses `~/.kube/config`). Frontend:
