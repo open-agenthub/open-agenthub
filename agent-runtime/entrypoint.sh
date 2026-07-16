@@ -92,13 +92,19 @@ if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   cp /secrets/mcp/mcp.json "$TARGET/.mcp.json" || true
 fi
 
-# --- Register Claude hooks (notification always; PreToolUse only interactively, so
-#     autonomous/scheduled runs are not blocked waiting on a Slack approval) ---
+# --- Register Claude hooks (notification always; MCP policy in every mode; the
+#     interactive approval hook remains interactive-only) ----------------------
 PRETOOL_HOOK=""
 if [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
   PRETOOL_HOOK=",
     \"PreToolUse\": [
+      { \"matcher\": \"*\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$RUNTIME/mcp-policy-hook.sh\", \"timeout\": 5 } ] },
       { \"matcher\": \"*\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$RUNTIME/pretooluse-hook.sh\", \"timeout\": 300 } ] }
+    ]"
+else
+  PRETOOL_HOOK=",
+    \"PreToolUse\": [
+      { \"matcher\": \"*\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$RUNTIME/mcp-policy-hook.sh\", \"timeout\": 5 } ] }
     ]"
 fi
 cat > "$HOME/.claude/settings.json" <<JSON
