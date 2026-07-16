@@ -3,7 +3,7 @@ import { ref } from 'vue'
 import { api } from '../api.js'
 import RepoPicker from './RepoPicker.vue'
 
-const props = defineProps({ session: Object, embedded: { type: Boolean, default: false } })
+const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'updated'])
 
 const f = ref({
@@ -12,7 +12,8 @@ const f = ref({
   runAsRoot: !!props.session.runAsRoot,
   cpu: props.session.cpu || '500m',
   memory: props.session.memory || '1Gi',
-  mcpConfigJson: props.session.mcpConfigJson || ''
+  mcpConfigJson: props.session.mcpConfigJson || '',
+  projectId: props.session.projectId || '',
 })
 const repos = ref((props.session.repos || []).map(r => ({ ...r })))
 const busy = ref(false)
@@ -28,7 +29,7 @@ async function save() {
   }
   try {
     const payload = scheduled
-      ? { title: f.value.title }
+      ? { title: f.value.title, projectId: f.value.projectId || null }
       : {
           title: f.value.title,
           image: f.value.image.trim(),          // empty = default agent image
@@ -36,7 +37,8 @@ async function save() {
           cpu: f.value.cpu.trim(),
           memory: f.value.memory.trim(),
           repos: repos.value,
-          mcpConfigJson: f.value.mcpConfigJson   // "" clears it
+          mcpConfigJson: f.value.mcpConfigJson,  // "" clears it
+          projectId: f.value.projectId || null
         }
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
@@ -56,6 +58,7 @@ async function save() {
         <label>Title</label>
         <input v-model="f.title" />
       </div>
+      <div class="field"><label>Project</label><select v-model="f.projectId"><option value="">Ungrouped</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
       <template v-if="!scheduled">
         <div class="field">
           <label>Repositories</label>
