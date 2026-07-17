@@ -33,7 +33,7 @@ if (-not (Test-Path -LiteralPath $valuesPath)) {
 }
 
 Write-Host 'Building local images...'
-docker build --tag 'open-agenthub-dev/backend:local' (Join-Path $repoRoot 'backend')
+docker build --file (Join-Path $repoRoot 'backend/Dockerfile') --tag 'open-agenthub-dev/backend:local' $repoRoot
 docker build --tag 'open-agenthub-dev/frontend:local' (Join-Path $repoRoot 'frontend')
 docker build --tag 'open-agenthub-dev/agent-runtime:local' (Join-Path $repoRoot 'agent-runtime')
 
@@ -118,6 +118,10 @@ try {
     Write-Host 'Development release is ready.'
     Write-Host 'Control namespace: agenthub-dev'
     Write-Host 'Sessions namespace: agenthub-dev-sessions'
+    Write-Host '  Logs: kubectl -n agenthub-dev logs deployment/agenthub-backend --follow'
+    Write-Host '  Redeploy: .\setup-dev.ps1 -NoPortForward'
+    Write-Host '  Uninstall: helm uninstall agenthub-dev -n agenthub-dev'
+    Write-Host '  Remove sessions: kubectl delete namespace agenthub-dev-sessions'
     if (-not $NoPortForward) {
         Write-Host 'Serving the frontend at http://localhost:8080. Press Ctrl+C to stop.'
         kubectl -n $controlNamespace port-forward svc/agenthub-frontend 8080:80

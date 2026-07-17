@@ -41,7 +41,7 @@ if [[ ! -f "$values_path" ]]; then
 fi
 
 printf 'Building local images...\n'
-docker build --tag 'open-agenthub-dev/backend:local' "$script_dir/backend"
+docker build --file "$script_dir/backend/Dockerfile" --tag 'open-agenthub-dev/backend:local' "$script_dir"
 docker build --tag 'open-agenthub-dev/frontend:local' "$script_dir/frontend"
 docker build --tag 'open-agenthub-dev/agent-runtime:local' "$script_dir/agent-runtime"
 
@@ -125,6 +125,10 @@ unset postgres_password
 printf 'Development release is ready.\n'
 printf 'Control namespace: agenthub-dev\n'
 printf 'Sessions namespace: agenthub-dev-sessions\n'
+printf '  Logs: kubectl -n agenthub-dev logs deployment/agenthub-backend --follow\n'
+printf '  Redeploy: ./setup-dev.sh --no-port-forward\n'
+printf '  Uninstall: helm uninstall agenthub-dev -n agenthub-dev\n'
+printf '  Remove sessions: kubectl delete namespace agenthub-dev-sessions\n'
 
 if [[ "$no_port_forward" == true ]]; then
   printf 'Port-forward skipped (--no-port-forward).\n'
