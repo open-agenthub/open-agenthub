@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Encodings.Web;
 using AgentHub.Api.Services;
 using AgentHub.Api.WebSockets;
+using AgentHub.Api.Ee.Sharing;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
@@ -13,6 +14,10 @@ builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
+builder.Services.AddSingleton<SessionShareStore>();
+builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
@@ -103,6 +108,8 @@ using (var scope = app.Services.CreateScope())
 {
     var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
     await store.InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
     var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
     await tokenStore.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
@@ -178,9 +185,41 @@ async Task ProxyWs(HttpContext ctx, string id, ISessionService sessions, ILogger
 }
 
 app.Map("/ws/sessions/{id}/terminal", (HttpContext ctx, string id,
-        ISessionService sessions, ILoggerFactory lf) => ProxyWs(ctx, id, sessions, lf, "/"))
+        ISessionAccessService access, ISessionService sessions, ILoggerFactory lf) => ProxySharedWs(ctx, id, access, sessions, lf))
     .RequireAuthorization();
 
+// The access service knows who may attach (owner, invited user, link token) and at
+// which level; the live session (pod IP, phase) still comes from the session service
+// under the owner's identity.
+async Task ProxyResolvedWs(HttpContext ctx, SessionAccessResult resolved, ISessionService sessions, ILoggerFactory lf)
+{
+    var live = await sessions.GetSessionAsync(resolved.Session.Owner, resolved.Session.Id, ctx.RequestAborted);
+    if (live is null) { ctx.Response.StatusCode = 404; return; }
+    if (resolved.Level == SessionAccessLevel.Owner)
+        try { await sessions.ClearQuestionAsync(resolved.Session.Owner, resolved.Session.Id, ctx.RequestAborted); } catch { }
+    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level), lf, agentPort);
+}
+
+async Task ProxySharedWs(HttpContext ctx, string id, ISessionAccessService access, ISessionService sessions, ILoggerFactory lf)
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    var principal = WsOwner(ctx);
+    if (principal is null) { ctx.Response.StatusCode = 401; return; }
+    var resolved = await access.ResolveUserAsync(principal, id, ctx.RequestAborted);
+    if (resolved is null) { ctx.Response.StatusCode = 404; return; }
+    await ProxyResolvedWs(ctx, resolved, sessions, lf);
+}
+
+async Task ProxyLinkWs(HttpContext ctx, string token, ISessionAccessService access, ISessionService sessions, ILoggerFactory lf)
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    var resolved = await access.ResolveTokenAsync(token, ctx.RequestAborted);
+    if (resolved is null) { ctx.Response.StatusCode = 404; return; }
+    await ProxyResolvedWs(ctx, resolved, sessions, lf);
+}
+
+app.Map("/ws/shared/{token}/terminal", (HttpContext ctx, string token,
+    ISessionAccessService access, ISessionService sessions, ILoggerFactory lf) => ProxyLinkWs(ctx, token, access, sessions, lf));
 app.Map("/ws/sessions/{id}/shell", (HttpContext ctx, string id,
         ISessionService sessions, ILoggerFactory lf) => ProxyWs(ctx, id, sessions, lf, "/shell"))
     .RequireAuthorization();

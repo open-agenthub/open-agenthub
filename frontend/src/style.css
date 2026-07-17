@@ -65,3 +65,5 @@ label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 5px; l
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+.readonly { border: 1px solid var(--paused); border-radius: 999px; padding: 3px 8px; }

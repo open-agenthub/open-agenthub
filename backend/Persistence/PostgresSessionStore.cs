@@ -12,6 +12,9 @@ public sealed class SessionRecord
     public SessionMode Mode { get; set; }
     public string? RepoUrl { get; set; }
     public string? Schedule { get; set; }
+    public string? ProjectId { get; set; }
+    public string? Prompt { get; set; }
+    public string? AllowedToolsJson { get; set; }
     /// <summary>Claude Code session ID assigned by us (used for --resume).</summary>
     public required string ClaudeSessionId { get; init; }
     /// <summary>Pending | Running | Succeeded | Failed | Scheduled.</summary>
@@ -85,6 +88,10 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_config TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS repos TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS scrollback TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS project_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS prompt TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS allowed_tools TEXT;
+            CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(owner, project_id);
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -95,16 +102,18 @@ public sealed class PostgresSessionStore : ISessionStore
         const string sql = """
             INSERT INTO sessions (id, owner, title, mode, repo_url, schedule, claude_session_id,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
-                                  mcp_config, repos, created_at, updated_at)
+                                  mcp_config, repos, project_id, prompt, allowed_tools, created_at, updated_at)
             VALUES (@id, @owner, @title, @mode, @repo, @sched, @csid, @status, @qp, @tok, @image, @root, @cpu, @memory,
-                    @mcp, @repos, @created, now())
+                    @mcp, @repos, @project, @prompt, @allowedTools, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, mode = EXCLUDED.mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
                 question_pending = EXCLUDED.question_pending,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
-                mcp_config = EXCLUDED.mcp_config, repos = EXCLUDED.repos, updated_at = now();
+                mcp_config = EXCLUDED.mcp_config, repos = EXCLUDED.repos,
+                project_id = EXCLUDED.project_id, prompt = EXCLUDED.prompt,
+                allowed_tools = EXCLUDED.allowed_tools, updated_at = now();
             """;
         await using var cmd = _db.CreateCommand(sql);
         Bind(cmd, r);
@@ -168,7 +177,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, claude_session_id, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, claude_session_id, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, prompt, allowed_tools FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -196,6 +205,9 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("memory", r.Memory);
         cmd.Parameters.AddWithValue("mcp", (object?)r.McpConfigJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("repos", (object?)r.ReposJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("project", (object?)r.ProjectId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("prompt", (object?)r.Prompt ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("allowedTools", (object?)r.AllowedToolsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
     }
 
@@ -218,6 +230,9 @@ public sealed class PostgresSessionStore : ISessionStore
         Cpu = r.GetString(14),
         Memory = r.GetString(15),
         McpConfigJson = r.IsDBNull(16) ? null : r.GetString(16),
-        ReposJson = r.IsDBNull(17) ? null : r.GetString(17)
+        ReposJson = r.IsDBNull(17) ? null : r.GetString(17),
+        ProjectId = r.IsDBNull(18) ? null : r.GetString(18),
+        Prompt = r.IsDBNull(19) ? null : r.GetString(19),
+        AllowedToolsJson = r.IsDBNull(20) ? null : r.GetString(20)
     };
 }

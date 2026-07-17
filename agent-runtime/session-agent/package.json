@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "commonjs",
+  "scripts": {
+    "test": "node --test"
+  },
   "main": "server.js",
   "dependencies": {
     "node-pty": "^1.0.0",

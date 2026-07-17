@@ -15,6 +15,7 @@ image:
   pullSecret: ""
 
 ingress:
+  enabled: true
   host: agenthub.example.com
   className: nginx
   # cert-manager ClusterIssuer for the TLS certificate (empty = omit the annotation).
@@ -23,6 +24,10 @@ ingress:
 
 backend:
   replicas: 2
+  environment: Production
+  developmentAuth:
+    enabled: false
+    headerName: X-AgentHub-Test-User
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 512Mi }
@@ -32,6 +37,9 @@ frontend:
   resources:
     requests: { cpu: 10m, memory: 32Mi }
     limits: { cpu: 200m, memory: 128Mi }
+
+# Override for a local browser origin when ingress is disabled.
+frontendOrigin: ""
 
 agent:
   port: 7681

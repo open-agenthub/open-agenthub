@@ -21,6 +21,7 @@ public sealed class KubernetesSessionService : ISessionService
 {
     private readonly Kubernetes _k8s;
     private readonly ISessionStore _store;
+    private readonly IProjectStore _projects;
     private readonly IArtifactStore _artifacts;
     private readonly IGitAuthService _gitAuth;
     private readonly ILogger<KubernetesSessionService> _log;
@@ -33,11 +34,12 @@ public sealed class KubernetesSessionService : ISessionService
     private const string ComponentLabel = "agenthub.dev/component";
     private static readonly TimeSpan PresignTtl = TimeSpan.FromHours(12);
 
-    public KubernetesSessionService(IConfiguration cfg, ISessionStore store,
+    public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
         IArtifactStore artifacts, IGitAuthService gitAuth, ILogger<KubernetesSessionService> log)
     {
         _log = log;
         _store = store;
+        _projects = projects;
         _artifacts = artifacts;
         _gitAuth = gitAuth;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
@@ -153,6 +155,7 @@ public sealed class KubernetesSessionService : ISessionService
             throw new ArgumentException("Root sessions are disabled on this instance.");
         ValidateQuantity(req.Cpu, "cpu");
         ValidateQuantity(req.Memory, "memory");
+        await ValidateProjectAsync(owner, req.ProjectId, ct);
 
         var repos = NormalizeRepos(req);
         var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
@@ -163,6 +166,8 @@ public sealed class KubernetesSessionService : ISessionService
             Id = id, Owner = owner, Title = req.Title, Mode = req.Mode,
             RepoUrl = repos.FirstOrDefault()?.Url, ReposJson = SerializeRepos(repos),
             Schedule = req.Schedule, McpConfigJson = mcp,
+            ProjectId = req.ProjectId, Prompt = req.Prompt,
+            AllowedToolsJson = SerializeAllowedTools(req.AllowedTools),
             Image = image, RunAsRoot = req.RunAsRoot,
             Cpu = req.Cpu, Memory = req.Memory,
             ClaudeSessionId = Guid.NewGuid().ToString(),
@@ -178,6 +183,14 @@ public sealed class KubernetesSessionService : ISessionService
         return ToInfo(rec, phase: rec.Status, podIp: null);
     }
 
+    public async Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default)
+    {
+        var source = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        await ValidateProjectAsync(owner, request.ProjectId, ct);
+        return await CreateSessionAsync(owner, SessionDuplication.CopyableRequest(source, request), ct);
+    }
+
     // Effective repo list: explicit Repos win; otherwise fold the legacy single-repo fields.
     private static List<RepoRef> NormalizeRepos(CreateSessionRequest req)
     {
@@ -191,10 +204,24 @@ public sealed class KubernetesSessionService : ISessionService
     private static string? SerializeRepos(List<RepoRef> repos) =>
         repos.Count == 0 ? null : JsonSerializer.Serialize(repos);
 
+    private static string? SerializeAllowedTools(List<string> tools) =>
+        tools.Count == 0 ? null : JsonSerializer.Serialize(tools);
+
     private static List<RepoRef> ParseRepos(SessionRecord rec) =>
         string.IsNullOrWhiteSpace(rec.ReposJson)
             ? (string.IsNullOrWhiteSpace(rec.RepoUrl) ? new() : new() { new() { Url = rec.RepoUrl! } })
             : JsonSerializer.Deserialize<List<RepoRef>>(rec.ReposJson) ?? new();
+
+    private static List<string> ParseAllowedTools(SessionRecord rec) =>
+        string.IsNullOrWhiteSpace(rec.AllowedToolsJson)
+            ? new()
+            : JsonSerializer.Deserialize<List<string>>(rec.AllowedToolsJson) ?? new();
+
+    private async Task ValidateProjectAsync(string owner, string? projectId, CancellationToken ct)
+    {
+        if (projectId is not null && await _projects.GetAsync(owner, projectId, ct) is null)
+            throw new ArgumentException("Project not found.");
+    }
 
     // Assigns each repo a workspace subdirectory. A single repo keeps the legacy
     // "/workspace/repo" path; multiple repos use their sanitized names (deduped).
@@ -238,6 +265,7 @@ public sealed class KubernetesSessionService : ISessionService
         {
             Title = rec.Title, Mode = rec.Mode,
             Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
+            ProjectId = rec.ProjectId, Prompt = rec.Prompt, AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot,
             Cpu = rec.Cpu, Memory = rec.Memory
         };
@@ -327,6 +355,11 @@ public sealed class KubernetesSessionService : ISessionService
                 try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
             }
             rec.McpConfigJson = mcp;
+        }
+        if (req.ProjectIdSpecified)
+        {
+            await ValidateProjectAsync(owner, req.ProjectId, ct);
+            rec.ProjectId = req.ProjectId;
         }
 
         await _store.UpsertAsync(rec, ct);
@@ -710,6 +743,7 @@ public sealed class KubernetesSessionService : ISessionService
         Repos = ParseRepos(r),
         HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson), McpConfigJson = r.McpConfigJson,
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
+        ProjectId = r.ProjectId, Prompt = r.Prompt, AllowedTools = ParseAllowedTools(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
         Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory
