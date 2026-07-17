@@ -26,9 +26,15 @@ builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IGitAuthService, GitAuthService>();
 
 // Enterprise license gate (offline-verified token, activated via the admin UI, stored in the DB).
-builder.Services.AddSingleton<AgentHub.Api.Licensing.ILicenseStore, AgentHub.Api.Licensing.LicenseStore>();
+// Register the concrete store once and alias the interface to it, so the seat reporter can
+// use the extra check-in methods while everything else depends on ILicenseStore.
+builder.Services.AddSingleton<AgentHub.Api.Licensing.LicenseStore>();
+builder.Services.AddSingleton<AgentHub.Api.Licensing.ILicenseStore>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Licensing.LicenseStore>());
 builder.Services.AddSingleton<AgentHub.Api.Licensing.IEnterpriseLicense, AgentHub.Api.Licensing.EnterpriseLicense>();
 builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
+// Monthly seat heartbeat: reports the licensed-user count and renews the license token.
+builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
 
 // Enterprise: Slack integration (only active with a valid license + tokens).
 var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee.Slack.SlackOptions>() ?? new();

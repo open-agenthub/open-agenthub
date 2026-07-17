@@ -31,6 +31,8 @@ data:
   FrontendOrigin: "https://{{ .Values.ingress.host }}"
   Ee__Admins: {{ .Values.ee.admins | default "" | quote }}
   Ee__BillingPortalUrl: {{ .Values.ee.billingPortalUrl | default "" | quote }}
+  Ee__License__ServiceUrl: {{ .Values.ee.license.serviceUrl | default "" | quote }}
+  Ee__License__ReportIntervalHours: {{ .Values.ee.license.reportIntervalHours | default 24 | quote }}
   Ee__Slack__Enabled: {{ .Values.ee.slack.enabled | quote }}
   Ee__Slack__Channel: {{ .Values.ee.slack.channel | quote }}
   {{- range $i, $p := .Values.git.providers }}
