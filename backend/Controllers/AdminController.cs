@@ -19,11 +19,11 @@ public sealed class AdminController : ControllerBase
 {
     private readonly AdminAccess _access;
     private readonly IEnterpriseLicense _license;
-    private readonly ILicenseStore _store;
+    private readonly LicenseStore _store;
     private readonly UserDirectory _dir;
     private readonly IConfiguration _cfg;
 
-    public AdminController(AdminAccess access, IEnterpriseLicense license, ILicenseStore store,
+    public AdminController(AdminAccess access, IEnterpriseLicense license, LicenseStore store,
         UserDirectory dir, IConfiguration cfg)
     { _access = access; _license = license; _store = store; _dir = dir; _cfg = cfg; }
 
@@ -38,7 +38,7 @@ public sealed class AdminController : ControllerBase
     public sealed record SeatInfo(int Used, int Included);
     public sealed record Overview(
         bool IsAdmin, LicenseStatus License, SeatInfo Seats,
-        IReadOnlyList<AdminUser> Users, string? BillingPortalUrl);
+        IReadOnlyList<AdminUser> Users, string? BillingPortalUrl, DateTime? LastCheckIn);
 
     [HttpGet("overview")]
     public async Task<IActionResult> GetOverview(CancellationToken ct)
@@ -47,8 +47,9 @@ public sealed class AdminController : ControllerBase
         var status = _license.Status;
         var used = await _dir.CountLicensedAsync(ct);
         var users = await _dir.ListAsync(ct);
+        var lastCheckIn = await _store.GetLastReportAsync(ct);
         return Ok(new Overview(
-            true, status, new SeatInfo(used, status.Seats), users, _cfg["Ee:BillingPortalUrl"]));
+            true, status, new SeatInfo(used, status.Seats), users, _cfg["Ee:BillingPortalUrl"], lastCheckIn));
     }
 
     public sealed record ActivateReq(string Token);

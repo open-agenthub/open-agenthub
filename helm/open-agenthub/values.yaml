@@ -98,6 +98,12 @@ ee:
   # Optional link to the billing portal (Stripe customer portal via the license service),
   # surfaced in the Admin area for subscription/invoice management.
   billingPortalUrl: ""
+  # License service the instance reports its seat count to (heartbeat). Reporting renews
+  # the license token; the reported month-close count drives Stripe seat billing. Empty
+  # disables reporting. See the privacy policy — only an aggregate user count is sent.
+  license:
+    serviceUrl: ""
+    reportIntervalHours: 24
   # Slack integration: asks you in a Slack thread whenever a session waits for input,
   # and turns your thread replies into the agent's answer. Uses Socket Mode.
   slack:

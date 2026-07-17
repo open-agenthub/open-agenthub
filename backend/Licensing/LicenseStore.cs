@@ -30,11 +30,14 @@ public sealed class LicenseStore : ILicenseStore
     {
         const string ddl = """
             CREATE TABLE IF NOT EXISTS app_license (
-                id         INTEGER PRIMARY KEY DEFAULT 1,
-                token      TEXT,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                id             INTEGER PRIMARY KEY DEFAULT 1,
+                token          TEXT,
+                updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
                 CONSTRAINT app_license_singleton CHECK (id = 1)
             );
+            -- Last successful seat check-in to the license service (heartbeat). Added via
+            -- migration so existing single-row tables pick it up.
+            ALTER TABLE app_license ADD COLUMN IF NOT EXISTS last_report_at TIMESTAMPTZ;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -53,6 +56,23 @@ public sealed class LicenseStore : ILicenseStore
             ON CONFLICT (id) DO UPDATE SET token = EXCLUDED.token, updated_at = now();
             """);
         cmd.Parameters.AddWithValue("t", (object?)token ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>When the last successful seat check-in happened, or null if never.</summary>
+    public async Task<DateTime?> GetLastReportAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("SELECT last_report_at FROM app_license WHERE id = 1");
+        return await cmd.ExecuteScalarAsync(ct) as DateTime?;
+    }
+
+    public async Task SetLastReportAsync(DateTime whenUtc, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("""
+            INSERT INTO app_license (id, last_report_at) VALUES (1, @t)
+            ON CONFLICT (id) DO UPDATE SET last_report_at = EXCLUDED.last_report_at;
+            """);
+        cmd.Parameters.AddWithValue("t", whenUtc);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 }
