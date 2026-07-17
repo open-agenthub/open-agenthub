@@ -2,36 +2,37 @@
 
 const assert = require('node:assert/strict');
 const { createServer } = require('node:http');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const test = require('node:test');
 
+const runtimeDir = path.join(__dirname, '..', '..');
+const sessionAgentDir = path.join(__dirname, '..');
+const bashPath = process.platform === 'win32'
+  ? 'C:\\Program Files\\Git\\bin\\bash.exe'
+  : 'bash';
 const hookPath = './mcp-policy-hook.sh';
+
+function runtimeEnvironment(environment) {
+  return {
+    ...process.env,
+    ...environment,
+    ...(process.platform === 'win32' ? {
+      AGENTHUB_NODE_BIN: '/c/Program Files/nodejs/node.exe',
+      AGENTHUB_CURL_BIN: '/c/Windows/System32/curl.exe'
+    } : {})
+  };
+}
 
 function runHook(input, environment = {}) {
   return new Promise((resolve, reject) => {
-    const child = process.platform === 'win32'
-      ? spawn('bash', [
-        '-c',
-        'export PATH="/mnt/c/Program Files/nodejs:$PATH"; exec ./mcp-policy-hook.sh'
-      ], {
-        cwd: path.join(__dirname, '..'),
-        env: {
-          ...process.env,
-          ...environment,
-          ...(process.platform === 'win32' ? { AGENTHUB_NODE_BIN: '/mnt/c/Program Files/nodejs/node.exe', AGENTHUB_CURL_BIN: '/mnt/c/WINDOWS/system32/curl.exe' } : {})
-        },
-        stdio: ['pipe', 'pipe', 'pipe']
-      })
-      : spawn('bash', [hookPath], {
-        cwd: path.join(__dirname, '..'),
-        env: {
-          ...process.env,
-          ...environment,
-          ...(process.platform === 'win32' ? { AGENTHUB_NODE_BIN: '/mnt/c/Program Files/nodejs/node.exe', AGENTHUB_CURL_BIN: '/mnt/c/WINDOWS/system32/curl.exe' } : {})
-        },
-        stdio: ['pipe', 'pipe', 'pipe']
-      });
+    const child = spawn(bashPath, [hookPath], {
+      cwd: sessionAgentDir,
+      env: runtimeEnvironment(environment),
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
     let stdout = '';
     let stderr = '';
     const timeout = setTimeout(() => {
@@ -73,7 +74,7 @@ function startPolicyServer(response) {
         body: JSON.parse(body)
       });
       responseStream.writeHead(response.status || 200, { 'Content-Type': 'application/json' });
-      responseStream.end(response.body);
+      responseStream.end(request.url === '/mcp-policy' ? response.body : '{}');
     });
   });
 
@@ -89,6 +90,40 @@ function startPolicyServer(response) {
       });
     });
   });
+}
+
+function createApprovalHook() {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-approval-'));
+  const scriptPath = path.join(directory, 'approval-hook.sh');
+  fs.writeFileSync(scriptPath, `#!/usr/bin/env bash
+payload="$(cat)"
+"\${AGENTHUB_CURL_BIN:-curl}" -fsS -X POST \\
+  -H "X-Agent-Token: \${AGENTHUB_CALLBACK_TOKEN:-}" \\
+  -H 'Content-Type: application/json' \\
+  --data "$payload" "\${AGENTHUB_CALLBACK_URL}/permission" >/dev/null
+printf '%s\\n' '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"ask","permissionDecisionReason":"approval"}}'
+`);
+  fs.chmodSync(scriptPath, 0o755);
+  return process.platform === 'win32'
+    ? `/${scriptPath[0].toLowerCase()}${scriptPath.slice(2).replaceAll('\\', '/')}`
+    : scriptPath;
+}
+
+function renderSettings(mode) {
+  const result = require('node:child_process').spawnSync(
+    bashPath,
+    [hookPath, '--settings'],
+    {
+      encoding: 'utf8',
+      cwd: sessionAgentDir,
+      env: runtimeEnvironment({
+        AGENTHUB_MODE: mode,
+        AGENTHUB_RUNTIME: '/opt/session-agent'
+      })
+    }
+  );
+  assert.equal(result.status, 0, result.stderr);
+  return JSON.parse(result.stdout);
 }
 
 async function closedServerUrl() {
@@ -178,4 +213,97 @@ test('MCP policy ignores non-MCP tools', async () => {
   );
 
   assert.deepEqual(result.output, {});
+});
+
+test('MCP policy denies before interactive approval can be requested', async () => {
+  const server = await startPolicyServer({
+    body: JSON.stringify({ restricted: true, decision: 'deny' })
+  });
+
+  try {
+    const result = await runHook(
+      { tool_name: 'mcp__server__tool' },
+      {
+        AGENTHUB_CALLBACK_URL: server.url,
+        AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+        AGENTHUB_MODE: 'interactive',
+        AGENTHUB_APPROVAL_HOOK: createApprovalHook()
+      }
+    );
+
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.deepEqual(server.requests.map(request => request.path), ['/mcp-policy']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('MCP policy delegates allowed interactive calls to approval after policy', async () => {
+  const server = await startPolicyServer({
+    body: JSON.stringify({ restricted: true, decision: 'allow' })
+  });
+
+  try {
+    const result = await runHook(
+      { tool_name: 'mcp__server__tool' },
+      {
+        AGENTHUB_CALLBACK_URL: server.url,
+        AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+        AGENTHUB_MODE: 'interactive',
+        AGENTHUB_APPROVAL_HOOK: createApprovalHook()
+      }
+    );
+
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'ask');
+    assert.deepEqual(server.requests.map(request => request.path), ['/mcp-policy', '/permission']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('MCP policy settings use deterministic MCP and built-in matchers interactively', () => {
+  const settings = renderSettings('interactive');
+
+  assert.equal(settings.hooks.Notification.length, 1);
+  assert.deepEqual(settings.hooks.PreToolUse, [
+    {
+      matcher: 'mcp__.*',
+      hooks: [{
+        type: 'command',
+        command: '/opt/session-agent/mcp-policy-hook.sh',
+        timeout: 300
+      }]
+    },
+    {
+      matcher: '^(?!mcp__).*',
+      hooks: [{
+        type: 'command',
+        command: '/opt/session-agent/pretooluse-hook.sh',
+        timeout: 300
+      }]
+    }
+  ]);
+});
+
+test('MCP policy settings register only MCP tools for non-interactive modes', () => {
+  for (const mode of ['autonomous', 'scheduled']) {
+    const settings = renderSettings(mode);
+    assert.deepEqual(settings.hooks.PreToolUse, [{
+      matcher: 'mcp__.*',
+      hooks: [{
+        type: 'command',
+        command: '/opt/session-agent/mcp-policy-hook.sh',
+        timeout: 5
+      }]
+    }]);
+  }
+});
+
+test('MCP policy hook is copied into the runtime image and made executable', () => {
+  const dockerfile = fs.readFileSync(path.join(runtimeDir, 'Dockerfile'), 'utf8');
+
+  assert.match(dockerfile,
+    /COPY session-agent\/mcp-policy-hook\.sh\s+\/opt\/session-agent\/mcp-policy-hook\.sh/);
+  assert.match(dockerfile,
+    /RUN chmod \+x[^\n]*\/opt\/session-agent\/mcp-policy-hook\.sh/);
 });
