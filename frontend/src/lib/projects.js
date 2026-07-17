@@ -11,6 +11,7 @@ export function groupSessions(projects, sessions, query) {
       id: project.id,
       name: project.name,
       color: project.color,
+      sortOrder: project.sortOrder,
       sessions: ownedSessions.filter(session => session.projectId === project.id)
     }))
     .filter(group => !query?.trim() || group.sessions.length)
