@@ -5,6 +5,44 @@ NODE_BIN="${AGENTHUB_NODE_BIN:-node}"
 CURL_BIN="${AGENTHUB_CURL_BIN:-curl}"
 if [ "$NODE_BIN" = "node" ] && [ -x "/mnt/c/Program Files/nodejs/node.exe" ]; then NODE_BIN="/mnt/c/Program Files/nodejs/node.exe"; fi
 if [ "$CURL_BIN" = "curl" ] && [ -x "/mnt/c/WINDOWS/system32/curl.exe" ]; then CURL_BIN="/mnt/c/WINDOWS/system32/curl.exe"; fi
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+APPROVAL_HOOK="${AGENTHUB_APPROVAL_HOOK:-$SCRIPT_DIR/pretooluse-hook.sh}"
+
+render_settings() {
+  if [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
+    cat <<JSON
+{
+  "hooks": {
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/notify-hook.sh" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/mcp-policy-hook.sh", "timeout": 300 } ] },
+      { "matcher": "^(?!mcp__).*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/pretooluse-hook.sh", "timeout": 300 } ] }
+    ]
+  }
+}
+JSON
+  else
+    cat <<JSON
+{
+  "hooks": {
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/notify-hook.sh" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/mcp-policy-hook.sh", "timeout": 5 } ] }
+    ]
+  }
+}
+JSON
+  fi
+}
+
+if [ "${1:-}" = "--settings" ]; then
+  render_settings
+  exit 0
+fi
 # Claude Code PreToolUse hook for the session-wide MCP sharing policy.
 payload="$(cat)"
 
@@ -13,7 +51,12 @@ emit_deny() {
   exit 0
 }
 
-emit_allow() {
+continue_flow() {
+  if [ "${AGENTHUB_MODE:-}" = "interactive" ]; then
+    printf '%s' "$payload" | "$APPROVAL_HOOK"
+    exit $?
+  fi
+
   printf '{}\n'
   exit 0
 }
@@ -29,14 +72,14 @@ tool="$(printf '%s' "$payload" | "$NODE_BIN" -e '
 
 case "$tool" in
   mcp__*) ;;
-  *) emit_allow ;;
+  *) continue_flow ;;
 esac
 
 fail_closed() {
   if [ "${AGENTHUB_MCP_POLICY:-0}" = "1" ]; then
     emit_deny
   fi
-  emit_allow
+  continue_flow
 }
 
 if [ -z "${AGENTHUB_CALLBACK_URL:-}" ]; then
@@ -75,4 +118,4 @@ fi
 if [ "$decision" = "deny" ]; then
   emit_deny
 fi
-emit_allow
+continue_flow
