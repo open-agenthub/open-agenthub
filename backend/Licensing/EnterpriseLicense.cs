@@ -38,13 +38,14 @@ public sealed class EnterpriseLicense : IEnterpriseLicense
     // The official Open AgentHub license public key (ECDSA P-256 / ES256), embedded at
     // compile time — deliberately NOT a configuration/Helm value, so it can't be swapped
     // for a self-signed key to forge a license. Verification is fully offline; only the
-    // matching PRIVATE key (held by the license service) can issue valid tokens. Bypassing
-    // this requires recompiling ee/, which is a breach of the Enterprise License.
-    // Replace with the production key before a real launch; keep the private key offline.
+    // matching PRIVATE key (held by the production license service) can issue valid
+    // tokens. Bypassing this requires recompiling ee/, which is a breach of the
+    // Enterprise License. This key mirrors
+    // https://license.instances.open-agenthub.on-mb.com/.well-known/license-public-key
     public const string PublicKeyPem =
         "-----BEGIN PUBLIC KEY-----\n" +
-        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAETxyd2SCxYDJbsKe9BWlKdAAUwv6d\n" +
-        "MNGT/WNFHFSA7Z8e9dSvUU1GnoL0F97kRQPG514DgBuGHGtMV/xd8gI0GQ==\n" +
+        "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAENDMdfhXxq6QIPPLuuGr334DRiK49\n" +
+        "bNvN8FuXbCoRUJ2r+UwS3QNdzamE1S3objGVAhdlPbrZWNwH/Aa/CQUHuQ==\n" +
         "-----END PUBLIC KEY-----";
 
     private readonly ILicenseStore _store;
