@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 
 const props = defineProps({ session: Object, embedded: { type: Boolean, default: false } })
@@ -9,12 +9,23 @@ const recipient = ref(''); const role = ref('Viewer'); const expiresAt = ref('')
 const blockedServers = ref(''); const blockedTools = ref(''); const oneTimeUrl = ref(''); const error = ref('')
 const linkDrafts = ref({})
 const people = computed(() => data.value.users || data.value.directShares || [])
+let loadGeneration = 0
 const links = computed(() => data.value.links || [])
 const serverNames = computed(() => { try { return Object.keys(JSON.parse(props.session.mcpConfigJson || '{}').mcpServers || {}) } catch { return [] } })
 function list(value) { return value.split(/[\n,]/).map(item => item.trim()).filter(Boolean) }
 async function load() {
-  try { data.value = await api.listSessionShares(props.session.id); linkDrafts.value = Object.fromEntries((data.value.links || []).map(link => [link.id, { role: link.role, expiresAt: link.expiresAt ? link.expiresAt.slice(0, 16) : '' }])); blockedServers.value = (data.value.policy?.blockedServers || []).join('\n'); blockedTools.value = (data.value.policy?.blockedTools || []).join('\n') }
-  catch (e) { error.value = String(e.message || e) }
+  const generation = ++loadGeneration
+  const sessionId = props.session.id
+  try {
+    const result = await api.listSessionShares(sessionId)
+    if (generation !== loadGeneration || sessionId !== props.session.id) return
+    data.value = result
+    linkDrafts.value = Object.fromEntries((result.links || []).map(link => [link.id, { role: link.role, expiresAt: link.expiresAt ? link.expiresAt.slice(0, 16) : '' }]))
+    blockedServers.value = (result.policy?.blockedServers || []).join('\n')
+    blockedTools.value = (result.policy?.blockedTools || []).join('\n')
+  } catch (e) {
+    if (generation === loadGeneration) error.value = String(e.message || e)
+  }
 }
 async function addPerson() { if (!recipient.value.trim()) return; await api.createShareUser(props.session.id, { recipient: recipient.value.trim(), role: role.value }); recipient.value = ''; await load() }
 async function changePerson(person, value) { await api.updateShareUser(props.session.id, person.recipient || person.owner, { role: value }); await load() }
@@ -25,6 +36,19 @@ async function removeLink(link) { await api.deleteShareLink(props.session.id, li
 async function savePolicy() { await api.updateMcpPolicy(props.session.id, { blockedServers: list(blockedServers.value), blockedTools: list(blockedTools.value) }); await load() }
 async function copyLink() { await navigator.clipboard?.writeText(oneTimeUrl.value) }
 onMounted(load)
+function reset() {
+  data.value = { users: [], links: [], policy: { blockedServers: [], blockedTools: [] } }
+  recipient.value = ''
+  role.value = 'Viewer'
+  expiresAt.value = ''
+  blockedServers.value = ''
+  blockedTools.value = ''
+  oneTimeUrl.value = ''
+  error.value = ''
+  linkDrafts.value = {}
+  load()
+}
+watch(() => props.session.id, reset)
 </script>
 <template>
   <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')"><div :class="embedded ? 'embed-inner' : 'modal'"><h3>Share session</h3><p class="note">Roles control terminal input. Session settings, shell access, projects, and sharing remain owner-only.</p>
