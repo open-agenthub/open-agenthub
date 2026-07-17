@@ -9,6 +9,7 @@ public sealed record LicenseStatus
 {
     public bool Valid { get; init; }
     public bool Present { get; init; }        // a token is stored (valid or not)
+    public Guid? LicenseId { get; init; }     // license id from the token (for seat reporting)
     public string? Plan { get; init; }        // trial | subscription | granted
     public int Seats { get; init; }
     public string? Org { get; init; }
@@ -88,7 +89,7 @@ public sealed class EnterpriseLicense : IEnterpriseLicense
             var expired = claims.ValidUntil <= DateTime.UtcNow;
             return new LicenseStatus
             {
-                Valid = !expired, Present = true,
+                Valid = !expired, Present = true, LicenseId = claims.LicenseId,
                 Plan = claims.Plan, Seats = claims.Seats, Org = claims.Org, Email = claims.Email,
                 ValidUntil = claims.ValidUntil,
                 Reason = expired ? "License expired." : ""
@@ -119,6 +120,7 @@ public sealed class EnterpriseLicense : IEnterpriseLicense
             using var payload = JsonDocument.Parse(Base64UrlDecode(parts[1]));
             var root = payload.RootElement;
             return new LicenseClaims(
+                root.TryGetProperty("lid", out var l) && l.TryGetGuid(out var lid) ? lid : null,
                 root.TryGetProperty("org", out var o) ? o.GetString() : null,
                 root.TryGetProperty("email", out var e) ? e.GetString() : null,
                 root.TryGetProperty("seats", out var s) ? s.GetInt32() : 0,
@@ -137,5 +139,5 @@ public sealed class EnterpriseLicense : IEnterpriseLicense
         return Convert.FromBase64String(s);
     }
 
-    private sealed record LicenseClaims(string? Org, string? Email, int Seats, string? Plan, DateTime ValidUntil);
+    private sealed record LicenseClaims(Guid? LicenseId, string? Org, string? Email, int Seats, string? Plan, DateTime ValidUntil);
 }
