@@ -24,6 +24,15 @@ describe('groupSessions', () => {
     ])
   })
 
+  it('preserves project sort order for reorder controls', () => {
+    const groups = groupSessions(projects, sessions, '')
+
+    expect(groups.slice(0, 2).map(group => [group.id, group.sortOrder])).toEqual([
+      ['p1', 0],
+      ['p2', 2]
+    ])
+  })
+
   it('filters across project groups and hides empty groups', () => {
     const groups = groupSessions(projects, sessions, 'notes')
 

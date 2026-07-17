@@ -6,7 +6,7 @@ describe('empty project visibility', () => {
     const projects = [{ id: 'p1', name: 'Empty', sortOrder: 0 }]
 
     expect(groupSessions(projects, [], '')).toEqual([
-      { id: 'p1', name: 'Empty', color: undefined, sessions: [] }
+      { id: 'p1', name: 'Empty', color: undefined, sortOrder: 0, sessions: [] }
     ])
     expect(groupSessions(projects, [], 'missing')).toEqual([])
   })
