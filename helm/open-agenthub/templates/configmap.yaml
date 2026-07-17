@@ -4,6 +4,9 @@ metadata:
   name: agenthub-config
   labels: {{ include "agenthub.labels" . | nindent 4 }}
 data:
+  ASPNETCORE_ENVIRONMENT: {{ .Values.backend.environment | default "Production" | quote }}
+  DevelopmentAuth__Enabled: {{ .Values.backend.developmentAuth.enabled | default false | quote }}
+  DevelopmentAuth__HeaderName: {{ .Values.backend.developmentAuth.headerName | default "X-AgentHub-Test-User" | quote }}
   AgentHub__Namespace: {{ .Values.sessionsNamespace | quote }}
   AgentHub__AgentImage: {{ include "agenthub.agentImage" . | quote }}
   AgentHub__AgentPort: {{ .Values.agent.port | quote }}
@@ -28,7 +31,7 @@ data:
   Oidc__ClientId: {{ .Values.oidc.clientId | quote }}
   Oidc__Scope: {{ .Values.oidc.scope | quote }}
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
-  FrontendOrigin: "https://{{ .Values.ingress.host }}"
+  FrontendOrigin: {{ .Values.frontendOrigin | default (printf "https://%s" .Values.ingress.host) | quote }}
   Ee__Admins: {{ .Values.ee.admins | default "" | quote }}
   Ee__BillingPortalUrl: {{ .Values.ee.billingPortalUrl | default "" | quote }}
   Ee__License__ServiceUrl: {{ .Values.ee.license.serviceUrl | default "" | quote }}

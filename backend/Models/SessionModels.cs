@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using AgentHub.Api.Persistence;
+
 namespace AgentHub.Api.Models;
 
 /// <summary>Operating mode of an agent session.</summary>
@@ -38,6 +41,9 @@ public record CreateSessionRequest
     /// <summary>Initial prompt – required for Autonomous/Scheduled.</summary>
     public string? Prompt { get; init; }
 
+    /// <summary>Optional personal project that owns the session grouping.</summary>
+    public string? ProjectId { get; init; }
+
     /// <summary>Cron expression, only for Scheduled (e.g. "0 6 * * 1-5").</summary>
     public string? Schedule { get; init; }
 
@@ -74,6 +80,44 @@ public record UpdateSessionRequest
     public string? McpConfigJson { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
+    /// <summary>Replacement project assignment; null removes the assignment when supplied.</summary>
+    private string? _projectId;
+    [JsonIgnore]
+    public bool ProjectIdSpecified { get; private set; }
+    public string? ProjectId
+    {
+        get => _projectId;
+        init { _projectId = value; ProjectIdSpecified = true; }
+    }
+}
+
+public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp);
+
+public static class SessionDuplication
+{
+    public static CreateSessionRequest CopyableRequest(SessionRecord source, DuplicateSessionRequest request) => new()
+    {
+        Title = request.Title,
+        ProjectId = request.ProjectId,
+        Mode = source.Mode,
+        Repos = Deserialize<List<RepoRef>>(source.ReposJson),
+        RepoUrl = source.RepoUrl,
+        Prompt = source.Prompt,
+        Schedule = source.Schedule,
+        McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
+        AllowedTools = Deserialize<List<string>>(source.AllowedToolsJson),
+        Image = source.Image,
+        RunAsRoot = source.RunAsRoot,
+        Cpu = source.Cpu,
+        Memory = source.Memory
+    };
+
+    private static T Deserialize<T>(string? json) where T : new()
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new T();
+        try { return System.Text.Json.JsonSerializer.Deserialize<T>(json) ?? new T(); }
+        catch (System.Text.Json.JsonException) { return new T(); }
+    }
 }
 
 /// <summary>View of a running or scheduled session.</summary>
@@ -82,6 +126,7 @@ public record SessionInfo
     public required string Id { get; init; }
     public required string Title { get; init; }
     public required string Owner { get; init; }
+    public string? ProjectId { get; init; }
     public required SessionMode Mode { get; init; }
     /// <summary>First repo URL (backward-compatible display field).</summary>
     public string? RepoUrl { get; init; }
@@ -93,6 +138,8 @@ public record SessionInfo
     public required string Phase { get; init; }       // Pending | Running | Paused | Succeeded | Failed | Scheduled
     public string? PodIp { get; init; }
     public DateTime CreatedAt { get; init; }
+    public string? Prompt { get; init; }
+    public IReadOnlyList<string> AllowedTools { get; init; } = Array.Empty<string>();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>

@@ -92,24 +92,9 @@ if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   cp /secrets/mcp/mcp.json "$TARGET/.mcp.json" || true
 fi
 
-# --- Register Claude hooks (notification always; PreToolUse only interactively, so
-#     autonomous/scheduled runs are not blocked waiting on a Slack approval) ---
-PRETOOL_HOOK=""
-if [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
-  PRETOOL_HOOK=",
-    \"PreToolUse\": [
-      { \"matcher\": \"*\", \"hooks\": [ { \"type\": \"command\", \"command\": \"$RUNTIME/pretooluse-hook.sh\", \"timeout\": 300 } ] }
-    ]"
-fi
-cat > "$HOME/.claude/settings.json" <<JSON
-{
-  "hooks": {
-    "Notification": [
-      { "hooks": [ { "type": "command", "command": "$RUNTIME/notify-hook.sh" } ] }
-    ]$PRETOOL_HOOK
-  }
-}
-JSON
+# --- Register Claude hooks ----------------------------------------------------
+AGENTHUB_RUNTIME="$RUNTIME" \
+  "$RUNTIME/mcp-policy-hook.sh" --settings > "$HOME/.claude/settings.json"
 
 echo "[entrypoint] Starting session-agent (mode=${AGENTHUB_MODE:-interactive}, resume=${AGENTHUB_RESUME:-0}, runtime=$RUNTIME)"
 exec node "$RUNTIME/server.js"

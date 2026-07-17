@@ -30,7 +30,8 @@ COPY session-agent/server.js           /opt/session-agent/server.js
 COPY session-agent/notify-hook.sh      /opt/session-agent/notify-hook.sh
 COPY session-agent/pretooluse-hook.sh  /opt/session-agent/pretooluse-hook.sh
 COPY entrypoint.sh                     /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh /opt/session-agent/notify-hook.sh /opt/session-agent/pretooluse-hook.sh
+COPY session-agent/mcp-policy-hook.sh  /opt/session-agent/mcp-policy-hook.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /opt/session-agent/notify-hook.sh /opt/session-agent/pretooluse-hook.sh /opt/session-agent/mcp-policy-hook.sh
 
 USER 1000:1000
 ENV HOME=/home/agent
