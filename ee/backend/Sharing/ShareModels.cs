@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 
@@ -10,6 +11,32 @@ public enum ShareRole
 {
     Viewer,
     Collaborator
+}
+
+public sealed class ShareRoleJsonConverter : JsonConverter<ShareRole>
+{
+    public override ShareRole Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.String)
+            throw new JsonException("Share role must be a string.");
+
+        var value = reader.GetString();
+        if (string.Equals(value, nameof(ShareRole.Viewer), StringComparison.OrdinalIgnoreCase))
+            return ShareRole.Viewer;
+        if (string.Equals(value, nameof(ShareRole.Collaborator), StringComparison.OrdinalIgnoreCase))
+            return ShareRole.Collaborator;
+
+        throw new JsonException("Share role must be Viewer or Collaborator.");
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        ShareRole value,
+        JsonSerializerOptions options)
+        => writer.WriteStringValue(value.ToString());
 }
 
 public enum SessionAccessLevel
@@ -121,10 +148,17 @@ public sealed record SessionSharingOverview(
     IReadOnlyList<SessionShareLink> Links,
     SessionMcpPolicy? McpPolicy);
 
-public sealed record CreateUserShareRequest(string Recipient, ShareRole Role);
-public sealed record UpdateShareRoleRequest(ShareRole Role);
-public sealed record CreateShareLinkRequest(ShareRole Role, DateTime? ExpiresAt);
-public sealed record UpdateShareLinkRequest(ShareRole Role, DateTime? ExpiresAt);
+public sealed record CreateUserShareRequest(
+    string Recipient,
+    [property: JsonConverter(typeof(ShareRoleJsonConverter))] ShareRole Role);
+public sealed record UpdateShareRoleRequest(
+    [property: JsonConverter(typeof(ShareRoleJsonConverter))] ShareRole Role);
+public sealed record CreateShareLinkRequest(
+    [property: JsonConverter(typeof(ShareRoleJsonConverter))] ShareRole Role,
+    DateTime? ExpiresAt);
+public sealed record UpdateShareLinkRequest(
+    [property: JsonConverter(typeof(ShareRoleJsonConverter))] ShareRole Role,
+    DateTime? ExpiresAt);
 public sealed record UpdateMcpPolicyRequest(
     IReadOnlyList<string> BlockedServers,
     IReadOnlyList<string> BlockedTools);
@@ -192,7 +226,9 @@ public static class SharedSessionSanitizer
                             && url.ValueKind == JsonValueKind.String
                             && !string.IsNullOrWhiteSpace(url.GetString()))
                         {
-                            urls.Add(url.GetString()!);
+                            var sanitized = SanitizeRepositoryUrl(url.GetString());
+                            if (sanitized is not null)
+                                urls.Add(sanitized);
                         }
                     }
                 }
@@ -203,9 +239,78 @@ public static class SharedSessionSanitizer
             }
         }
 
-        if (!string.IsNullOrWhiteSpace(session.RepoUrl))
-            urls.Add(session.RepoUrl);
+        if (SanitizeRepositoryUrl(session.RepoUrl) is { } legacyUrl)
+            urls.Add(legacyUrl);
 
         return urls.Distinct(StringComparer.Ordinal).ToArray();
+    }
+
+    private static string? SanitizeRepositoryUrl(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return null;
+
+        var candidate = value.Trim();
+        if (candidate.Any(char.IsControl))
+            return null;
+
+        if (candidate.Contains("://", StringComparison.Ordinal))
+        {
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri)
+                || string.IsNullOrWhiteSpace(uri.Host))
+            {
+                return null;
+            }
+
+            try
+            {
+                var builder = new UriBuilder(uri)
+                {
+                    UserName = "",
+                    Password = "",
+                    Query = "",
+                    Fragment = ""
+                };
+                return builder.Uri.AbsoluteUri;
+            }
+            catch (UriFormatException)
+            {
+                return null;
+            }
+        }
+
+        var suffixIndex = candidate.IndexOfAny(['?', '#']);
+        if (suffixIndex >= 0)
+            candidate = candidate[..suffixIndex];
+
+        var userInfoIndex = candidate.LastIndexOf('@');
+        var hostStart = userInfoIndex + 1;
+        int separatorIndex;
+
+        if (hostStart < candidate.Length && candidate[hostStart] == '[')
+        {
+            var hostEnd = candidate.IndexOf(']', hostStart + 1);
+            if (hostEnd < 0 || hostEnd + 1 >= candidate.Length || candidate[hostEnd + 1] != ':')
+                return null;
+            separatorIndex = hostEnd + 1;
+        }
+        else
+        {
+            separatorIndex = candidate.IndexOf(':', hostStart);
+        }
+
+        if (separatorIndex <= hostStart || separatorIndex == candidate.Length - 1)
+            return null;
+
+        var host = candidate[hostStart..separatorIndex];
+        var path = candidate[(separatorIndex + 1)..];
+        if (host.Any(character => char.IsWhiteSpace(character) || char.IsControl(character))
+            || path.Any(character => char.IsWhiteSpace(character) || char.IsControl(character))
+            || host.IndexOfAny(['/', '\\', '@']) >= 0)
+        {
+            return null;
+        }
+
+        return $"{host}:{path}";
     }
 }
