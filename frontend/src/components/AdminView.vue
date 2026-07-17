@@ -57,6 +57,10 @@ function fmtDate(d) {
   if (!d) return '—'
   try { return new Date(d).toLocaleDateString() } catch { return d }
 }
+function fmtDateTime(d) {
+  if (!d) return '—'
+  try { return new Date(d).toLocaleString() } catch { return d }
+}
 </script>
 
 <template>
@@ -116,6 +120,9 @@ function fmtDate(d) {
             </div>
             <p class="note">
               Every user who signs in gets a seat automatically. Revoke a seat to free it up.
+              The seat count is reported to the license service as a monthly heartbeat, which
+              also renews the license token; the count at month close is what gets billed.
+              <br />Last check-in: <b>{{ data.lastCheckIn ? fmtDateTime(data.lastCheckIn) : 'never' }}</b>
               <span v-if="overBooked" class="reason">You are over your licensed seat count — reduce seats or upgrade your plan.</span>
             </p>
 
