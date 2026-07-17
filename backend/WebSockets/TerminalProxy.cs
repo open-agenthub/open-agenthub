@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using AgentHub.Api.Models;
 using AgentHub.Api.Services;
 
 namespace AgentHub.Api.WebSockets;
@@ -51,6 +52,37 @@ public static class TerminalProxy
         cts.Cancel();
     }
 
+    /// <summary>Proxy for an already access-checked session (sharing): read-only unless canWrite.</summary>
+    public static async Task HandleAsync(HttpContext ctx, SessionInfo session, bool canWrite,
+        ILoggerFactory lf, int agentPort, string upstreamPath = "/")
+    {
+        var log = lf.CreateLogger("TerminalProxy");
+        if (string.IsNullOrEmpty(session.PodIp) || session.Phase != "Running")
+        {
+            ctx.Response.StatusCode = 409;
+            await ctx.Response.WriteAsync($"Session not ready (phase={session.Phase}).");
+            return;
+        }
+        using var client = await ctx.WebSockets.AcceptWebSocketAsync();
+        using var upstream = new ClientWebSocket();
+        upstream.Options.AddSubProtocol("tty");
+        try { await upstream.ConnectAsync(new Uri($"ws://{session.PodIp}:{agentPort}{upstreamPath}"), ctx.RequestAborted); }
+        catch (Exception ex)
+        {
+            log.LogWarning(ex, "Upstream connection to {Pod} failed", session.PodIp);
+            await client.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "agent unreachable", CancellationToken.None);
+            return;
+        }
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+        var toBrowser = Pump(upstream, client, cts.Token);
+        if (canWrite)
+        {
+            var toAgent = Pump(client, upstream, cts.Token);
+            await Task.WhenAny(toAgent, toBrowser);
+        }
+        else await toBrowser;
+        cts.Cancel();
+    }
     private static async Task Pump(WebSocket from, WebSocket to, CancellationToken ct)
     {
         var buf = new byte[16 * 1024];
