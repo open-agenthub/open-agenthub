@@ -1,0 +1,9 @@
+# The backend image builds from the repo root (ee/ must be in context), so this
+# root .dockerignore is the one Docker actually applies — backend/.dockerignore
+# only covers builds whose context is backend/ itself.
+**/bin/
+**/obj/
+**/node_modules/
+**/.git/
+.claude/
+.worktrees/
