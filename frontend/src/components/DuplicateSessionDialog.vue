@@ -1,13 +1,22 @@
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { api } from '../api.js'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'duplicated'])
-const title = ref(`Copy of ${props.session.title}`)
-const projectId = ref(props.session.projectId || '')
+const title = ref('')
+const projectId = ref('')
 const includeMcp = ref(true)
 const busy = ref(false); const error = ref('')
+function reset(session) {
+  title.value = `Copy of ${session.title}`
+  projectId.value = session.projectId || ''
+  includeMcp.value = true
+  busy.value = false
+  error.value = ''
+}
+reset(props.session)
+watch(() => props.session.id, () => reset(props.session))
 async function submit() {
   busy.value = true; error.value = ''
   try { emit('duplicated', await api.duplicateSession(props.session.id, { title: title.value.trim() || `Copy of ${props.session.title}`, projectId: projectId.value || null, includeMcp: includeMcp.value })) }

@@ -13,7 +13,7 @@ export function groupSessions(projects, sessions, query) {
       color: project.color,
       sessions: ownedSessions.filter(session => session.projectId === project.id)
     }))
-    .filter(group => group.sessions.length)
+    .filter(group => !query?.trim() || group.sessions.length)
 
   const sharedSessions = matchingSessions.filter(session => session.accessRole && session.accessRole !== 'Owner')
   if (sharedSessions.length) groups.push({ id: 'shared', name: 'Shared with me', sessions: sharedSessions })

@@ -1,25 +1,35 @@
 <script setup>
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api } from '../api.js'
 import RepoPicker from './RepoPicker.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'updated'])
 
-const f = ref({
-  title: props.session.title,
-  image: props.session.image || '',
-  runAsRoot: !!props.session.runAsRoot,
-  cpu: props.session.cpu || '500m',
-  memory: props.session.memory || '1Gi',
-  mcpConfigJson: props.session.mcpConfigJson || '',
-  projectId: props.session.projectId || '',
-})
-const repos = ref((props.session.repos || []).map(r => ({ ...r })))
+const f = ref({})
+const repos = ref([])
 const busy = ref(false)
 const error = ref('')
 
-const scheduled = props.session.mode === 'Scheduled'
+const scheduled = computed(() => props.session.mode === 'Scheduled')
+
+function reset(session) {
+  f.value = {
+    title: session.title,
+    image: session.image || '',
+    runAsRoot: !!session.runAsRoot,
+    cpu: session.cpu || '500m',
+    memory: session.memory || '1Gi',
+    mcpConfigJson: session.mcpConfigJson || '',
+    projectId: session.projectId || '',
+  }
+  repos.value = (session.repos || []).map(repo => ({ ...repo }))
+  busy.value = false
+  error.value = ''
+}
+
+reset(props.session)
+watch(() => props.session.id, () => reset(props.session))
 
 async function save() {
   busy.value = true; error.value = ''
@@ -28,7 +38,7 @@ async function save() {
     catch { error.value = 'MCP config is not valid JSON.'; busy.value = false; return }
   }
   try {
-    const payload = scheduled
+    const payload = scheduled.value
       ? { title: f.value.title, projectId: f.value.projectId || null }
       : {
           title: f.value.title,
