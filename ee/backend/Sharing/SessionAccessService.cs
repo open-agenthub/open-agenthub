@@ -1,3 +1,4 @@
+using AgentHub.Api.Licensing;
 using AgentHub.Api.Persistence;
 
 namespace AgentHub.Api.Ee.Sharing;
@@ -28,7 +29,8 @@ public interface ISessionAccessService
         CancellationToken ct = default);
 }
 
-public sealed class SessionAccessService(ISessionAccessStore store) : ISessionAccessService
+public sealed class SessionAccessService(ISessionAccessStore store, IEnterpriseLicense license)
+    : ISessionAccessService
 {
     public async Task<SessionAccessResult?> ResolveUserAsync(
         string principal,
@@ -43,6 +45,9 @@ public sealed class SessionAccessService(ISessionAccessStore store) : ISessionAc
             return null;
 
         var owns = string.Equals(stored.Session.Owner, principal, StringComparison.Ordinal);
+        if (!owns && !license.Enabled)
+            return null;
+
         var level = SessionAccessRules.Resolve(owns, stored.Role);
         return level == SessionAccessLevel.None
             ? null
@@ -54,6 +59,8 @@ public sealed class SessionAccessService(ISessionAccessStore store) : ISessionAc
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(token))
+            return null;
+        if (!license.Enabled)
             return null;
 
         var stored = await store.FindTokenAccessAsync(token, ct);

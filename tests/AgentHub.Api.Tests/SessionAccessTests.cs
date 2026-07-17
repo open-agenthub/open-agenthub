@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using AgentHub.Api.Ee.Sharing;
 using AgentHub.Api.Licensing;
 using AgentHub.Api.Models;
@@ -46,8 +48,8 @@ public class SessionAccessTests
             Owner = "owner-1",
             Title = "Shared session",
             Mode = SessionMode.Interactive,
-            RepoUrl = "https://example.test/legacy.git",
-            ReposJson = """[{"url":"https://example.test/repo.git","branch":"secret-branch","providerId":"credential-id"}]""",
+            RepoUrl = "https://legacy-user:legacy-token@example.test/legacy.git?auth=secret#fragment",
+            ReposJson = """[{"url":"https://user:token@example.test/repo.git?auth=secret#fragment"},{"url":"ssh://git:token@example.test/team/repo.git?auth=secret#fragment"},{"url":"git:token@example.test:team/repo.git?auth=secret#fragment"}]""",
             ClaudeSessionId = "claude-secret",
             CallbackToken = "callback-secret",
             McpConfigJson = """{"mcpServers":{"private":{"env":{"TOKEN":"secret"}}}}""",
@@ -68,7 +70,7 @@ public class SessionAccessTests
         Assert.False(dto.CanShell);
         Assert.Null(dto.McpConfigJson);
         Assert.Equal(
-            ["https://example.test/repo.git", "https://example.test/legacy.git"],
+            ["https://example.test/repo.git", "ssh://example.test/team/repo.git", "example.test:team/repo.git", "https://example.test/legacy.git"],
             dto.RepositoryUrls);
 
         var properties = dto.GetType().GetProperties().Select(p => p.Name).ToHashSet(StringComparer.Ordinal);
@@ -82,13 +84,30 @@ public class SessionAccessTests
     }
 
     [Fact]
+    public void ShareRoleJson_RejectsNumericInputWithoutChangingGlobalEnumSettings()
+    {
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+        options.Converters.Add(new JsonStringEnumConverter());
+
+        var valid = JsonSerializer.Deserialize<CreateUserShareRequest>(
+            """{"recipient":"recipient-1","role":"Collaborator"}""",
+            options);
+
+        Assert.NotNull(valid);
+        Assert.Equal(ShareRole.Collaborator, valid.Role);
+        Assert.Throws<JsonException>(() => JsonSerializer.Deserialize<CreateUserShareRequest>(
+            """{"recipient":"recipient-1","role":1}""",
+            options));
+    }
+
+    [Fact]
     public async Task ResolveUserAsync_OwnerWinsOverStoredGrant()
     {
         var source = new FakeAccessStore
         {
             UserAccess = new StoredSessionAccess(Session("owner-1"), ShareRole.Viewer)
         };
-        var service = new SessionAccessService(source);
+        var service = new SessionAccessService(source, new FakeLicense(enabled: true));
 
         var result = await service.ResolveUserAsync("owner-1", "session-1", CancellationToken.None);
 
@@ -104,7 +123,7 @@ public class SessionAccessTests
         {
             UserAccess = new StoredSessionAccess(Session(), ShareRole.Collaborator)
         };
-        var service = new SessionAccessService(source);
+        var service = new SessionAccessService(source, new FakeLicense(enabled: true));
 
         var result = await service.ResolveUserAsync("recipient-1", "session-1", CancellationToken.None);
 
@@ -120,7 +139,7 @@ public class SessionAccessTests
         {
             TokenAccess = new StoredSessionAccess(Session(), ShareRole.Viewer)
         };
-        var service = new SessionAccessService(source);
+        var service = new SessionAccessService(source, new FakeLicense(enabled: true));
 
         var allowed = await service.ResolveTokenAsync("valid-token", CancellationToken.None);
         source.TokenAccess = null;
@@ -130,6 +149,50 @@ public class SessionAccessTests
         Assert.Equal(SessionAccessLevel.Viewer, allowed.Level);
         Assert.Equal("owner-1", allowed.SharedBy);
         Assert.Null(denied);
+    }
+
+    [Fact]
+    public async Task ResolveUserAsync_DeniesDirectGrantWhenEnterpriseLicenseIsDisabled()
+    {
+        var source = new FakeAccessStore
+        {
+            UserAccess = new StoredSessionAccess(Session(), ShareRole.Collaborator)
+        };
+        var service = new SessionAccessService(source, new FakeLicense(enabled: false));
+
+        var result = await service.ResolveUserAsync("recipient-1", "session-1", CancellationToken.None);
+
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task ResolveUserAsync_PreservesOwnerAccessWhenEnterpriseLicenseIsDisabled()
+    {
+        var source = new FakeAccessStore
+        {
+            UserAccess = new StoredSessionAccess(Session("owner-1"), null)
+        };
+        var service = new SessionAccessService(source, new FakeLicense(enabled: false));
+
+        var result = await service.ResolveUserAsync("owner-1", "session-1", CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(SessionAccessLevel.Owner, result.Level);
+    }
+
+    [Fact]
+    public async Task ResolveTokenAsync_DeniesLinkWithoutStoreLookupWhenEnterpriseLicenseIsDisabled()
+    {
+        var source = new FakeAccessStore
+        {
+            TokenAccess = new StoredSessionAccess(Session(), ShareRole.Viewer)
+        };
+        var service = new SessionAccessService(source, new FakeLicense(enabled: false));
+
+        var result = await service.ResolveTokenAsync("valid-token", CancellationToken.None);
+
+        Assert.Null(result);
+        Assert.Equal(0, source.TokenLookupCount);
     }
 
     [Fact]
@@ -177,6 +240,7 @@ public class SessionAccessTests
     {
         public StoredSessionAccess? UserAccess { get; set; }
         public StoredSessionAccess? TokenAccess { get; set; }
+        public int TokenLookupCount { get; private set; }
 
         public Task<StoredSessionAccess?> FindUserAccessAsync(
             string principal, string sessionId, CancellationToken ct = default)
@@ -184,7 +248,10 @@ public class SessionAccessTests
 
         public Task<StoredSessionAccess?> FindTokenAccessAsync(
             string token, CancellationToken ct = default)
-            => Task.FromResult(TokenAccess);
+        {
+            TokenLookupCount++;
+            return Task.FromResult(TokenAccess);
+        }
     }
 
     private sealed class FakeAccessService : ISessionAccessService
