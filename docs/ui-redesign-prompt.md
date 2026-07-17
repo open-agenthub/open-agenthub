@@ -1,11 +1,6 @@
 # Claude Design prompt — Open AgentHub web UI
 
-Paste the prompt below into Claude Design (claude.ai/design). It produces a
-coherent, role-adaptive redesign of the Open AgentHub control UI with a proper
-design system. Attach screenshots of the current app (session list, session
-terminal with the Agent/Shell tabs, New/Edit dialogs, Account, Credentials,
-Settings, Usage) so it builds on the existing structure rather than inventing a
-new information architecture.
+Paste the prompt below into Claude Design (claude.ai/design).
 
 ---
 
@@ -55,6 +50,11 @@ with a short technical subtitle over raw jargon.
 - **Enterprise features require a valid license** (Slack notifications today; more
   later). Everything enterprise is gated on the license being active.
 
+All settings - should be run inside the a settings page. provide for admin two parts - normal user settings for their own settings and admin settings with user management, license management etc.
+Usage data must not be provided inside settings. it can be somewhere outside because its interesting for everyone.
+
+Do not use popup dialogs.
+
 ### New in this redesign — licensing, admin & billing
 Open AgentHub is open-core: the core is free (AGPL), enterprise features need a paid
 subscription. The license is **activated inside the app and stored in the database**
@@ -76,14 +76,6 @@ subscription. The license is **activated inside the app and stored in the databa
    These talk to a billing backend; design the states (loading, empty, past-due,
    canceled).
 
-### Slack (design the message + interaction, not the transport)
-When a session waits for input, the user gets a **Slack thread** and answers from
-there. Design the in-Slack presentation: a branded header that makes clear
-**Open AgentHub** sent it (name + small logo/emoji, session title, link back to the
-web session), the agent's question as a readable quote, and — importantly —
-**permission requests as interactive Slack buttons** (e.g. "Allow Bash", "Allow
-once", "Deny"). Provide the message layouts (question, permission request with
-buttons, resolved/answered, finished/failed) as block-kit-style mockups.
 
 ### Deliverables
 1. A **design system**: color tokens (refined **dark** default + a clean **light**
@@ -127,3 +119,4 @@ buttons, resolved/answered, finished/failed) as block-kit-style mockups.
 
 Start with the design tokens and the app shell, then the dashboard and the session
 detail, then licensing/admin/billing, then the Slack mockups.
+Have always UX and modern design in mind.
