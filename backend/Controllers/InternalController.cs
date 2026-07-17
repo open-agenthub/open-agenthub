@@ -2,6 +2,7 @@ using AgentHub.Api.Notifications;
 using AgentHub.Api.Permissions;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
+using AgentHub.Api.Ee.Sharing;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -22,12 +23,13 @@ public sealed class InternalController : ControllerBase
     private readonly ISessionService _svc;
     private readonly PermissionStore _permissions;
     private readonly IPermissionNotifier _permNotifier;
+    private readonly SessionShareStore _shares;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
-        PermissionStore permissions, IPermissionNotifier permNotifier)
+        PermissionStore permissions, IPermissionNotifier permNotifier, SessionShareStore shares)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
-        _permissions = permissions; _permNotifier = permNotifier;
+        _permissions = permissions; _permNotifier = permNotifier; _shares = shares;
     }
 
     private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
@@ -149,6 +151,16 @@ public sealed class InternalController : ControllerBase
         return Ok(new { decision = await _permissions.GetDecisionAsync(reqId, ct) ?? "pending" });
     }
 
+    /// <summary>Evaluates the live MCP restriction policy for this session.</summary>
+    [HttpPost("mcp-policy")]
+    public async Task<IActionResult> McpPolicy(string id, [FromBody] PermissionBody body, CancellationToken ct)
+    {
+        if (await AuthAsync(id, ct) is null) return Unauthorized();
+        var policy = await _shares.GetMcpPolicyAsync(id, ct);
+        var blocked = policy is not null && McpPolicyMatcher.IsBlocked(
+            body.Tool ?? string.Empty, policy.BlockedServers, policy.BlockedTools);
+        return Ok(new { decision = blocked ? "deny" : "allow" });
+    }
     /// <summary>Mints a presigned PUT URL so the agent can upload an artifact to S3.</summary>
     [HttpPost("artifact-url")]
     public async Task<IActionResult> ArtifactUrl(string id, [FromQuery] string name, CancellationToken ct)
