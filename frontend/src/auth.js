@@ -78,6 +78,8 @@ export const auth = {
   get enabled() { return enabled },
   get isAuthenticated() { return !enabled || (!!user && !user.expired) },
   get user() { return enabled ? (user?.profile?.preferred_username ?? '–') : 'dev' },
+  get displayName() { return enabled ? (user?.profile?.name ?? this.user) : 'dev' },
+  get email() { return enabled ? (user?.profile?.email ?? null) : null },
   login,
   logout: () => manager?.signoutRedirect()
 }

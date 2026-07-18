@@ -3,7 +3,13 @@ import { ref, computed, onMounted } from 'vue'
 import { api, config } from '../api.js'
 
 const emit = defineEmits(['close'])
-const props = defineProps({ embedded: { type: Boolean, default: false } })
+// section: 'all' (legacy combined view) or 'notifications' | 'tokens' for a single settings tab.
+const props = defineProps({
+  embedded: { type: Boolean, default: false },
+  section: { type: String, default: 'all' }
+})
+const showSlack = computed(() => ['all', 'notifications'].includes(props.section))
+const showTokens = computed(() => ['all', 'tokens'].includes(props.section))
 
 // --- Slack (per-user) ---
 const slackEnabled = computed(() => config.slackEnabled)
@@ -90,9 +96,11 @@ const curlStatus = computed(() =>
 <template>
   <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
     <div :class="embedded ? 'embed-inner' : 'modal'">
-      <h3>Settings</h3>
+      <h3 v-if="section === 'notifications'">Notifications</h3>
+      <h3 v-else-if="section === 'tokens'">API tokens</h3>
+      <h3 v-else>Settings</h3>
 
-      <section v-if="slackEnabled" class="slack">
+      <section v-if="showSlack && slackEnabled" class="slack">
         <h4>Slack notifications</h4>
         <p class="note">
           When a session waits for your input, you get a Slack thread and can answer from there.
@@ -113,7 +121,10 @@ const curlStatus = computed(() =>
         </div>
       </section>
 
-      <h4>API tokens</h4>
+      <p v-if="showSlack && !slackEnabled" class="note">Slack is not enabled on this instance — there is nothing to configure here yet.</p>
+
+      <template v-if="showTokens">
+      <h4 v-if="section === 'all'">API tokens</h4>
       <p class="note">
         Personal API tokens let you start sessions and query their status from outside the UI.
         A token acts on your behalf. The full value is shown only once at creation — store it safely.
@@ -158,6 +169,7 @@ const curlStatus = computed(() =>
         <p class="muted">Check its status (use the <code>id</code> from the response):</p>
         <pre>{{ curlStatus }}</pre>
       </details>
+      </template>
 
       <div class="row">
         <button v-if="!embedded" @click="$emit('close')">Close</button>

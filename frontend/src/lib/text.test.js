@@ -21,3 +21,12 @@ describe('sessionMatches', () => {
   it('matches by mode', () => expect(sessionMatches(s, 'autonomous')).toBe(true))
   it('no match', () => expect(sessionMatches(s, 'zzz')).toBe(false))
 })
+
+import { initials } from './text.js'
+
+describe('initials', () => {
+  it('takes first letters of two words', () => expect(initials('Mira Berger')).toBe('MB'))
+  it('splits usernames on separators', () => expect(initials('mira.berger')).toBe('MB'))
+  it('single word gives one letter', () => expect(initials('dev')).toBe('D'))
+  it('handles empty', () => expect(initials('')).toBe('?'))
+})

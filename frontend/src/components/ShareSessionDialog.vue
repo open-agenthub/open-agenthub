@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
+import { initials } from '../lib/text.js'
 
 const props = defineProps({ session: Object, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])
@@ -28,7 +29,10 @@ async function load() {
   }
 }
 async function addPerson() { if (!recipient.value.trim()) return; await api.createShareUser(props.session.id, { recipient: recipient.value.trim(), role: role.value }); recipient.value = ''; await load() }
-async function changePerson(person, value) { await api.updateShareUser(props.session.id, person.recipient || person.owner, { role: value }); await load() }
+async function changePerson(person, value) {
+  if (value === 'Remove') { await removePerson(person); return }
+  await api.updateShareUser(props.session.id, person.recipient || person.owner, { role: value }); await load()
+}
 async function removePerson(person) { await api.deleteShareUser(props.session.id, person.recipient || person.owner); await load() }
 async function createLink() { const result = await api.createShareLink(props.session.id, { role: role.value, expiresAt: expiresAt.value || null }); oneTimeUrl.value = result.url || result.oneTimeUrl || ''; await load() }
 async function saveLink(link) { const draft = linkDrafts.value[link.id]; await api.updateShareLink(props.session.id, link.id, { role: draft.role, expiresAt: draft.expiresAt || null }); await load() }
@@ -51,14 +55,71 @@ function reset() {
 watch(() => props.session.id, reset)
 </script>
 <template>
-  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')"><div :class="embedded ? 'embed-inner' : 'modal'"><h3>Share session</h3><p class="note">Roles control terminal input. Session settings, shell access, projects, and sharing remain owner-only.</p>
-    <section><h4>People</h4><div class="inline"><input v-model="recipient" placeholder="Known user" /><select v-model="role"><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button></div><div v-for="person in people" :key="person.recipient || person.owner" class="item"><span>{{ person.recipient || person.owner }}</span><select :value="person.role" @change="changePerson(person, $event.target.value)"><option>Viewer</option><option>Collaborator</option></select><button class="danger" @click="removePerson(person)">Revoke</button></div></section>
-    <section><h4>Secret links</h4><div class="inline"><select v-model="role"><option>Viewer</option><option>Collaborator</option></select><input v-model="expiresAt" type="datetime-local" /><button @click="createLink">Create link</button></div><p v-if="oneTimeUrl" class="one-time">Copy this one-time link now; it cannot be shown again.<button @click="copyLink">Copy</button><code>{{ oneTimeUrl }}</code></p><div v-for="link in links" :key="link.id" class="item link-edit"><span>{{ link.id }}</span><select v-model="linkDrafts[link.id].role" :data-link-role="link.id"><option>Viewer</option><option>Collaborator</option></select><input v-model="linkDrafts[link.id].expiresAt" :data-link-expiration="link.id" type="datetime-local" /><button :data-save-link="link.id" @click="saveLink(link)">Save</button><button class="danger" @click="removeLink(link)">Revoke</button></div></section>
-    <section><h4>MCP security</h4><p class="note">Restrictions apply to every participant, including you, on the next MCP call. Earlier transcript content may already contain tool results.</p><p v-if="serverNames.length" class="servers">Configured servers: {{ serverNames.join(', ') }}</p><div class="field"><label>Blocked servers (one per line)</label><textarea v-model="blockedServers" placeholder="server-name"></textarea></div><div class="field"><label>Blocked exact tool names (one per line)</label><textarea v-model="blockedTools" placeholder="mcp__server__tool"></textarea></div><button @click="savePolicy">Save MCP policy</button></section>
-    <p v-if="error" class="err">{{ error }}</p><div class="row"><button @click="$emit('close')">Close</button></div>
+  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')"><div :class="embedded ? 'embed-inner share-inner' : 'modal'">
+    <h3 v-if="!embedded" class="form-title">Share session</h3>
+    <p class="note">Roles control terminal input. Session settings, shell access, projects, and sharing remain owner-only.</p>
+
+    <section>
+      <div class="add-row"><input v-model="recipient" placeholder="Add people by username…" @keyup.enter="addPerson" /><select v-model="role" class="fit"><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button></div>
+      <div v-for="person in people" :key="person.recipient || person.owner" class="person">
+        <span class="avatar">{{ initials(person.recipient || person.owner) }}</span>
+        <span class="pname">{{ person.recipient || person.owner }}</span>
+        <select class="fit" :value="person.role" @change="changePerson(person, $event.target.value)"><option>Viewer</option><option>Collaborator</option><option>Remove</option></select>
+      </div>
+    </section>
+
+    <section class="bordered">
+      <div class="link-intro"><div><div class="sect-title">Share by link</div><div class="sub">Anyone with the link — treat it like a secret.</div></div>
+        <div class="add-row tight"><select v-model="role" class="fit"><option>Viewer</option><option>Collaborator</option></select><input v-model="expiresAt" class="fit exp" type="datetime-local" /><button @click="createLink">Create link</button></div>
+      </div>
+      <p v-if="oneTimeUrl" class="one-time">Copy this one-time link now; it cannot be shown again.<button class="copy" @click="copyLink">Copy</button><code>{{ oneTimeUrl }}</code></p>
+      <div v-for="link in links" :key="link.id" class="person link-edit">
+        <span class="pname mono">{{ link.id }}</span>
+        <select v-model="linkDrafts[link.id].role" class="fit" :data-link-role="link.id"><option>Viewer</option><option>Collaborator</option></select>
+        <input v-model="linkDrafts[link.id].expiresAt" class="fit exp" :data-link-expiration="link.id" type="datetime-local" />
+        <button :data-save-link="link.id" @click="saveLink(link)">Save</button>
+        <button class="danger" @click="removeLink(link)">Revoke</button>
+      </div>
+    </section>
+
+    <section class="bordered">
+      <div class="sect-title">MCP security</div>
+      <p class="sub">Restrictions apply to every participant, including you, on the next MCP call. Earlier transcript content may already contain tool results.</p>
+      <p v-if="serverNames.length" class="servers">Configured servers: {{ serverNames.join(', ') }}</p>
+      <div class="field"><label>Blocked servers (one per line)</label><textarea v-model="blockedServers" placeholder="server-name"></textarea></div>
+      <div class="field"><label>Blocked exact tool names (one per line)</label><textarea v-model="blockedTools" placeholder="mcp__server__tool"></textarea></div>
+      <button @click="savePolicy">Save MCP policy</button>
+    </section>
+
+    <p v-if="error" class="err">{{ error }}</p>
+    <div v-if="!embedded" class="row"><button @click="$emit('close')">Close</button></div>
   </div></div>
 </template>
 <style scoped>
-.overlay { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: center; overflow-y: auto; padding: 24px; background: rgba(5,7,10,.7); } .modal { width: 660px; max-width: 100%; padding: 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); } h3 { margin: 0 0 6px; } h4 { margin: 18px 0 8px; font-size: 14px; } section { border-top: 1px solid var(--border); } .note { color: var(--muted); font-size: 12px; line-height: 1.5; } .inline, .item { display: flex; gap: 8px; align-items: center; margin: 7px 0; } .inline input { flex: 1; } .inline select, .item select { width: auto; } .item { justify-content: space-between; font-size: 13px; } .item span { overflow: hidden; text-overflow: ellipsis; } .link-edit input { min-width: 190px; } .one-time { border: 1px solid var(--accent); padding: 10px; font-size: 12px; } code { display: block; overflow-wrap: anywhere; margin-top: 6px; color: var(--accent); } .servers { font: 12px var(--mono); color: var(--muted); } .row { display: flex; justify-content: flex-end; margin-top: 18px; } .err { color: var(--danger); font: 12px var(--mono); }
-@media (max-width: 760px) { .link-edit { align-items: stretch; flex-direction: column; } .link-edit select, .link-edit input { width: 100%; } }
+.overlay { position: fixed; inset: 0; z-index: 50; display: flex; justify-content: center; overflow-y: auto; padding: 24px; background: rgba(10,9,8,.7); }
+.modal { width: 640px; max-width: 100%; padding: 22px; border: 1px solid var(--border-2); border-radius: var(--radius-lg); background: var(--panel); }
+.share-inner { padding: 14px 20px 20px; }
+.form-title { font-size: 18px; margin: 0 0 6px; }
+.note, .sub { color: var(--muted-2); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
+.sub { margin: 2px 0 0; }
+.sect-title { font-weight: 600; font-size: 13px; color: var(--text); }
+section { margin-top: 6px; }
+section.bordered { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
+.add-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 10px; }
+.add-row.tight { margin: 0; flex-wrap: wrap; }
+.add-row input { flex: 1; }
+.fit { width: auto; }
+.exp { min-width: 170px; }
+.person { display: flex; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; }
+.avatar { width: 26px; height: 26px; border-radius: 50%; background: #3d3a33; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: #d6d1c8; font-weight: 700; flex-shrink: 0; }
+.pname { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.mono { font-family: var(--mono); font-size: 12px; font-weight: 400; }
+.link-intro { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+.one-time { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; font-size: 12px; margin: 10px 0 0; }
+.one-time .copy { margin-left: 8px; padding: 3px 10px; font-size: 11px; }
+.one-time code { display: block; overflow-wrap: anywhere; margin-top: 6px; color: var(--accent); font-family: var(--mono); }
+.servers { font: 12px var(--mono); color: var(--muted-2); }
+.row { display: flex; justify-content: flex-end; margin-top: 16px; }
+.err { color: var(--danger); font: 12px var(--mono); }
+@media (max-width: 760px) { .person.link-edit { align-items: stretch; flex-direction: column; } .person.link-edit select, .person.link-edit input { width: 100%; } }
 </style>

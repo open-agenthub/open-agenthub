@@ -4,11 +4,10 @@ import { api } from '../api.js'
 import { groupSessions } from '../lib/projects.js'
 import SessionList from './SessionList.vue'
 
-const props = defineProps({ projects: Array, sessions: Array, active: String })
+const props = defineProps({ projects: Array, sessions: Array, active: String, query: { type: String, default: '' } })
 const emit = defineEmits(['new', 'select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share', 'projects-changed'])
-const query = ref('')
 const collapsed = ref(new Set())
-const groups = computed(() => groupSessions(props.projects, props.sessions, query.value))
+const groups = computed(() => groupSessions(props.projects, props.sessions, props.query))
 
 function isCollapsed(id) { return collapsed.value.has(id) }
 function toggleGroup(id) {
@@ -50,21 +49,33 @@ async function removeProject(project) {
 </script>
 
 <template>
-  <div class="sidebar-head"><h2>Sessions</h2><button class="primary" @click="$emit('new')">New Session</button></div>
-  <div class="project-actions"><input v-model="query" class="session-search" placeholder="Search sessions…" /><button title="Create project" @click="createProject">+ Project</button></div>
   <div class="project-groups">
     <section v-for="group in groups" :key="group.id" class="project-group">
-      <header class="group-head"><button class="group-title" :data-toggle-group="group.id" :aria-expanded="!isCollapsed(group.id)" @click="toggleGroup(group.id)"><span class="chevron">{{ isCollapsed(group.id) ? '›' : '⌄' }}</span><i v-if="group.color" :style="{ background: group.color }"></i>{{ group.name }} <small>{{ group.sessions.length }}</small></button>
-        <span v-if="group.id !== 'shared' && group.id !== 'ungrouped'" class="group-controls"><button @click="reorder(group, -1)">↑</button><button @click="reorder(group, 1)">↓</button><button @click="rename(group)">✎</button><button @click="recolor(group)">●</button><button @click="removeProject(group)">×</button></span>
+      <header class="group-head">
+        <button class="group-title" :data-toggle-group="group.id" :aria-expanded="!isCollapsed(group.id)" @click="toggleGroup(group.id)"><span class="chevron">{{ isCollapsed(group.id) ? '▸' : '▾' }}</span><i v-if="group.color" :style="{ background: group.color }"></i>{{ group.name }} <small>{{ group.sessions.length }}</small></button>
+        <span v-if="group.id !== 'shared' && group.id !== 'ungrouped'" class="group-controls"><button title="Move up" @click="reorder(group, -1)">↑</button><button title="Move down" @click="reorder(group, 1)">↓</button><button title="Rename" @click="rename(group)">✎</button><button title="Color" @click="recolor(group)">●</button><button title="Delete project" @click="removeProject(group)">×</button></span>
       </header>
       <SessionList v-if="!isCollapsed(group.id)" :sessions="group.sessions" :active="active" @select="$emit('select', $event)" @remove="$emit('remove', $event)" @resume="$emit('resume', $event)" @pause="$emit('pause', $event)" @edit="$emit('edit', $event)" @duplicate="$emit('duplicate', $event)" @share="$emit('share', $event)" />
     </section>
     <p v-if="!groups.length" class="none">No matching sessions.</p>
+    <button class="new-project" @click="createProject">+ New project</button>
   </div>
 </template>
 
 <style scoped>
-.project-actions { display: flex; gap: 8px; padding: 0 16px 10px; } .session-search { margin: 0; flex: 1; } .project-actions button { padding: 6px 8px; font-size: 12px; white-space: nowrap; }
-.project-groups { overflow-y: auto; padding-bottom: 16px; } .project-group { margin: 0 0 8px; } .group-head { display: flex; align-items: center; justify-content: space-between; padding: 7px 16px 3px; color: var(--muted); font-size: 12px; font-weight: 600; } .group-title { display: flex; align-items: center; gap: 6px; padding: 2px 0; border: 0; background: none; color: inherit; font-size: inherit; font-weight: inherit; } .group-title:hover { border: 0; color: var(--text); } .chevron { width: 10px; color: var(--accent); } .group-title i { width: 9px; height: 9px; border-radius: 50%; } small { font-family: var(--mono); font-weight: 400; } .group-controls { display: flex; opacity: .55; } .group-controls button { border: 0; background: none; padding: 1px 3px; font-size: 12px; color: var(--muted); } .group-controls button:hover { color: var(--accent); border: 0; }
-.none { color: var(--muted); font-size: 13px; text-align: center; padding: 16px; }
+.project-groups { padding-bottom: 8px; }
+.project-group { margin: 0 0 6px; }
+.group-head { display: flex; align-items: center; justify-content: space-between; padding: 4px 8px 2px 4px; color: var(--muted-3); font-size: 12px; font-weight: 600; }
+.group-title { display: flex; align-items: center; gap: 7px; padding: 2px 4px; border: 0; background: none; color: inherit; font-size: inherit; font-weight: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group-title:hover { border: 0; background: none; color: var(--muted); }
+.chevron { width: 10px; }
+.group-title i { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+small { font-family: var(--mono); font-weight: 400; color: var(--faint); }
+.group-controls { display: flex; opacity: 0; transition: opacity .12s; }
+.group-head:hover .group-controls { opacity: .8; }
+.group-controls button { border: 0; background: none; padding: 1px 3px; font-size: 12px; color: var(--muted-3); font-weight: 400; }
+.group-controls button:hover { color: var(--accent); border: 0; background: none; }
+.none { color: var(--muted-3); font-size: 13px; text-align: center; padding: 16px; }
+.new-project { display: block; border: 0; background: none; color: var(--faint); font-size: 12px; font-weight: 600; padding: 6px 8px; }
+.new-project:hover { color: var(--muted); background: none; }
 </style>

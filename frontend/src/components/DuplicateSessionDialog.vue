@@ -24,11 +24,27 @@ async function submit() {
 }
 </script>
 <template>
-  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')"><div :class="embedded ? 'embed-inner' : 'modal'"><h3>Duplicate session</h3><p class="note">Creates an independent session without conversation history, artifacts, or sharing settings.</p>
-    <div class="field"><label>Title</label><input v-model="title" /></div><div class="field"><label>Project</label><select v-model="projectId"><option value="">Ungrouped</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
-    <label class="check"><input v-model="includeMcp" type="checkbox" /> Include MCP configuration</label><p v-if="error" class="err">{{ error }}</p><div class="row"><button @click="$emit('close')">Cancel</button><button class="primary" :disabled="busy" @click="submit">{{ busy ? 'Duplicating…' : 'Duplicate' }}</button></div>
+  <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')"><div :class="embedded ? 'embed-inner' : 'modal'">
+    <h3 class="form-title">Duplicate session</h3>
+    <p class="note">Copies the configuration of “{{ session.title }}” into an independent new session — without conversation history, artifacts, or sharing settings.</p>
+    <div class="card sect">
+      <div class="field"><label>Title</label><input v-model="title" /></div>
+      <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
+      <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration</span></label>
+    </div>
+    <p v-if="error" class="err">{{ error }}</p>
+    <div class="row"><button class="primary" :disabled="busy" @click="submit">{{ busy ? 'Duplicating…' : 'Duplicate' }}</button><button @click="$emit('close')">Cancel</button></div>
   </div></div>
 </template>
 <style scoped>
-.overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 24px; background: rgba(5,7,10,.7); } .modal { width: 480px; max-width: 100%; padding: 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); } h3 { margin: 0 0 6px; } .note { margin: 0 0 16px; color: var(--muted); font-size: 12px; line-height: 1.5; } .check { display: flex; gap: 8px; align-items: center; } .check input { width: auto; } .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; } .err { color: var(--danger); font: 12px var(--mono); }
+.overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: flex-start; justify-content: center; overflow-y: auto; padding: 24px; background: rgba(10,9,8,.7); }
+.modal { width: 520px; max-width: 100%; padding: 22px; border: 1px solid var(--border-2); border-radius: var(--radius-lg); background: var(--panel); }
+.embed-inner { max-width: 680px; }
+.form-title { font-size: 20px; margin: 0 0 6px; }
+.note { margin: 0 0 16px; color: var(--muted-2); font-size: 12px; line-height: 1.5; }
+.sect { padding: 18px 20px; margin-bottom: 16px; }
+.check { display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--text); cursor: pointer; margin: 0; }
+.check input { width: auto; }
+.row { display: flex; gap: 10px; }
+.err { color: var(--danger); font: 12px var(--mono); }
 </style>
