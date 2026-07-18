@@ -5,9 +5,10 @@ import SessionsView from './SessionsView.vue'
 import HomeView from './HomeView.vue'
 
 const mocks = vi.hoisted(() => ({
-  api: { usageSummary: vi.fn(), usageSessions: vi.fn() }
+  api: { usageSummary: vi.fn(), usageSessions: vi.fn(), getCredentialStatus: vi.fn().mockResolvedValue({}) },
+  config: { gitEnabled: false }
 }))
-vi.mock('../api.js', () => ({ api: mocks.api }))
+vi.mock('../api.js', () => ({ api: mocks.api, config: mocks.config }))
 
 const sessions = [
   { id: 's1', title: 'Fix checkout', phase: 'Running', mode: 'Autonomous', projectId: 'p1', repoUrl: 'https://x/shop/web.git' },
@@ -86,5 +87,64 @@ describe('HomeView', () => {
     const wrapper = mount(HomeView, { props: { sessions } })
     await flushPromises()
     expect(wrapper.text()).toContain('NEEDS YOU')
+  })
+})
+
+import SessionSearch from './SessionSearch.vue'
+
+describe('SessionSearch', () => {
+  const list = [
+    { id: 'a', title: 'Alpha task', phase: 'Running' },
+    { id: 'b', title: 'Beta task', phase: 'Paused' },
+    { id: 'c', title: 'Gamma other', phase: 'Running' }
+  ]
+
+  it('shows matching sessions in a dropdown', async () => {
+    const wrapper = mount(SessionSearch, { props: { sessions: list, modelValue: 'task', 'onUpdate:modelValue': v => wrapper.setProps({ modelValue: v }) } })
+    await wrapper.get('input').trigger('focus')
+    expect(wrapper.findAll('[data-search-result]')).toHaveLength(2)
+  })
+
+  it('navigates with arrow keys and opens the highlighted session on Enter', async () => {
+    const wrapper = mount(SessionSearch, { props: { sessions: list, modelValue: 'task', 'onUpdate:modelValue': v => wrapper.setProps({ modelValue: v }) } })
+    const input = wrapper.get('input')
+    await input.trigger('focus')
+    await input.trigger('keydown', { key: 'ArrowDown' })
+    expect(wrapper.findAll('[data-search-result]')[1].classes()).toContain('hl')
+    await input.trigger('keydown', { key: 'Enter' })
+    expect(wrapper.emitted('select')[0]).toEqual(['b'])
+  })
+
+  it('wraps the highlight and supports ArrowUp', async () => {
+    const wrapper = mount(SessionSearch, { props: { sessions: list, modelValue: 'task', 'onUpdate:modelValue': v => wrapper.setProps({ modelValue: v }) } })
+    const input = wrapper.get('input')
+    await input.trigger('focus')
+    await input.trigger('keydown', { key: 'ArrowUp' })
+    expect(wrapper.findAll('[data-search-result]')[1].classes()).toContain('hl')
+  })
+
+  it('selects on click', async () => {
+    const wrapper = mount(SessionSearch, { props: { sessions: list, modelValue: 'gamma' } })
+    await wrapper.get('input').trigger('focus')
+    await wrapper.get('[data-search-result="c"]').trigger('mousedown')
+    expect(wrapper.emitted('select')[0]).toEqual(['c'])
+  })
+})
+
+import CredentialsDialog from './CredentialsDialog.vue'
+
+describe('CredentialsDialog git hint', () => {
+  it('points at account connect when git OAuth is configured', () => {
+    mocks.config.gitEnabled = true
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    expect(wrapper.find('[data-git-hint="connect"]').exists()).toBe(true)
+    wrapper.get('[data-git-hint="connect"] button').trigger('click')
+    expect(wrapper.emitted('accounts')).toBeTruthy()
+  })
+
+  it('explains the Helm values when git OAuth is not configured', () => {
+    mocks.config.gitEnabled = false
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    expect(wrapper.find('[data-git-hint="helm"]').text()).toContain('git.providers')
   })
 })

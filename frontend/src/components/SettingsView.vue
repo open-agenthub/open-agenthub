@@ -62,7 +62,7 @@ const active = ref(props.initialTab)
         </div>
       </div>
       <AccountDialog v-else-if="active === 'account'" embedded />
-      <CredentialsDialog v-else-if="active === 'credentials'" embedded />
+      <CredentialsDialog v-else-if="active === 'credentials'" embedded @accounts="active = 'account'" />
       <SettingsDialog v-else-if="active === 'notifications'" embedded section="notifications" />
       <SettingsDialog v-else-if="active === 'tokens'" embedded section="tokens" />
       <AdminView v-else-if="active === 'users'" embedded section="seats" />

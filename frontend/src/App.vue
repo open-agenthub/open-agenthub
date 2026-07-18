@@ -13,6 +13,7 @@ import ShareSessionDialog from './components/ShareSessionDialog.vue'
 import SettingsView from './components/SettingsView.vue'
 import AdminView from './components/AdminView.vue'
 import SharedSessionView from './components/SharedSessionView.vue'
+import SessionSearch from './components/SessionSearch.vue'
 import { sharedTokenFromPath } from './lib/routes.js'
 import { initials } from './lib/text.js'
 
@@ -137,7 +138,7 @@ onBeforeUnmount(() => {
     </aside>
     <div class="main">
       <header class="topbar">
-        <div class="search"><span class="search-icon">⌕</span><input ref="searchBox" v-model="query" placeholder="Find a session…" /><span class="kbd">⌘K</span></div>
+        <SessionSearch ref="searchBox" v-model="query" :sessions="sessions" @select="selectSession" />
         <span class="spacer"></span>
         <button class="icon-btn" :class="{ on: page === 'settings' }" title="Settings" @click="openSettings()">⚙</button>
         <button v-if="auth.enabled" class="ghost" title="Sign out" @click="auth.logout()">Sign out</button>
@@ -188,11 +189,6 @@ onBeforeUnmount(() => {
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 .topbar { height: 56px; flex-shrink: 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 24px; }
-.search { flex: 1; max-width: 400px; display: flex; align-items: center; gap: 8px; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); padding: 0 12px; color: var(--muted-3); }
-.search input { flex: 1; background: none; border: none; padding: 8px 0; font-size: 14px; }
-.search input:focus { outline: none; }
-.search:focus-within { border-color: var(--accent); }
-.kbd { font-family: var(--mono); font-size: 11px; border: 1px solid var(--border-3); border-radius: 5px; padding: 0 5px; }
 .spacer { flex: 1; }
 .icon-btn { width: 34px; height: 34px; border-radius: 10px; border: none; background: none; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 16px; padding: 0; }
 .icon-btn:hover, .icon-btn.on { background: var(--panel-2); color: var(--text); }
