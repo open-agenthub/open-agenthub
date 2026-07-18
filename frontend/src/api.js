@@ -63,6 +63,8 @@ export const api = {
   adminAccess: () => req('GET', '/admin/access'),
   adminOverview: () => req('GET', '/admin/overview'),
   activateLicense: (token) => req('POST', '/admin/license', { token }),
+  // Starts a Stripe checkout on the license service; returns { url } to redirect to.
+  startLicenseCheckout: (data) => req('POST', '/admin/license/checkout', data),
   deactivateLicense: () => req('DELETE', '/admin/license'),
   setUserSeat: (owner, licensed) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/license`, { licensed }),
   // Git OAuth providers / connections.

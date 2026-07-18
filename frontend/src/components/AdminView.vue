@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { api } from '../api.js'
+import { api, auth } from '../api.js'
 import { licenseBadge, licenseBadgeLabel, seatOverbooked } from '../lib/license.js'
 
 defineEmits(['close'])
@@ -62,6 +62,35 @@ async function toggleSeat(u) {
   catch (e) { error.value = String(e.message || e) }
 }
 
+// --- "Get enterprise license" → Stripe checkout on the license service ---
+const checkoutOpen = ref(false)
+const checkoutBusy = ref(false)
+const checkout = ref({ email: '', org: '', seats: 1 })
+
+function openCheckout() {
+  checkout.value = {
+    email: auth.email || '',
+    org: checkout.value.org || '',
+    seats: Math.max(1, data.value?.users?.length || 1)
+  }
+  checkoutOpen.value = true
+}
+
+async function startCheckout() {
+  checkoutBusy.value = true; error.value = ''
+  try {
+    const res = await api.startLicenseCheckout({
+      email: checkout.value.email.trim(),
+      org: checkout.value.org.trim(),
+      seats: Number(checkout.value.seats) || 1,
+      returnUrl: `${location.origin}/license/activate`
+    })
+    if (res?.url) location.href = res.url
+    else error.value = 'The license service did not return a checkout URL.'
+  } catch (e) { error.value = String(e.message || e) }
+  finally { checkoutBusy.value = false }
+}
+
 function fmtDate(d) {
   if (!d) return '—'
   try { return new Date(d).toLocaleDateString() } catch { return d }
@@ -88,6 +117,35 @@ function fmtDateTime(d) {
         <p v-if="loading" class="muted">Loading…</p>
 
         <template v-else>
+          <!-- No active license: one clear path to get one (shown on every admin tab) -->
+          <section v-if="!lic.valid" class="card cta">
+            <div class="card-head">
+              <h4>Enterprise features are locked</h4>
+              <span class="badge off">unlicensed</span>
+            </div>
+            <p class="note">
+              The core stays free and fully usable. An enterprise license unlocks session
+              sharing, Slack notifications and more — new customers get a 3-month free trial.
+            </p>
+            <div v-if="!checkoutOpen" class="row start">
+              <button class="primary" data-get-license @click="openCheckout">Get enterprise license</button>
+            </div>
+            <div v-else class="checkout-form">
+              <div class="cgrid">
+                <div class="field"><label>Billing email</label><input v-model="checkout.email" type="email" placeholder="billing@company.com" /></div>
+                <div class="field"><label>Organization</label><input v-model="checkout.org" placeholder="ACME GmbH" /></div>
+                <div class="field seats-field"><label>Seats</label><input v-model.number="checkout.seats" type="number" min="1" /></div>
+              </div>
+              <div class="row start">
+                <button class="primary" data-start-checkout :disabled="checkoutBusy || !checkout.email.trim() || !checkout.org.trim()" @click="startCheckout">
+                  {{ checkoutBusy ? 'Redirecting…' : 'Continue to checkout →' }}
+                </button>
+                <button @click="checkoutOpen = false">Cancel</button>
+                <span class="muted">You will be redirected to Stripe and back here afterwards — the license activates automatically.</span>
+              </div>
+            </div>
+          </section>
+
           <!-- License -->
           <section v-if="showLicense" class="card">
             <div class="card-head">
@@ -130,12 +188,16 @@ function fmtDateTime(d) {
                 {{ seats.used }}<template v-if="seats.included"> / {{ seats.included }}</template> in use
               </span>
             </div>
-            <p class="note">
+            <p v-if="lic.valid" class="note">
               Every user who signs in gets a seat automatically. Revoke a seat to free it up.
               The seat count is reported to the license service as a monthly heartbeat, which
               also renews the license token; the count at month close is what gets billed.
               <br />Last check-in: <b>{{ data.lastCheckIn ? fmtDateTime(data.lastCheckIn) : 'never' }}</b>
               <span v-if="overBooked" class="reason">You are over your licensed seat count — reduce seats or upgrade your plan.</span>
+            </p>
+            <p v-else class="note">
+              Everyone who signs in appears here. Without an active license there are no
+              enterprise seats — get a license above and every user becomes licensed automatically.
             </p>
 
             <p v-if="!data.users.length" class="muted">No users have signed in yet.</p>
@@ -145,10 +207,11 @@ function fmtDateTime(d) {
                   <span class="uname">{{ u.displayName || u.owner }}</span>
                   <span class="umeta">{{ u.email || u.owner }} · seen {{ fmtDate(u.updatedAt) }}</span>
                 </div>
-                <label class="seat">
+                <label v-if="lic.valid" class="seat">
                   <input type="checkbox" :checked="u.licensed" @change="toggleSeat(u)" />
                   <span>{{ u.licensed ? 'licensed' : 'no seat' }}</span>
                 </label>
+                <span v-else class="badge off" data-user-unlicensed>unlicensed</span>
               </div>
             </div>
           </section>
@@ -178,6 +241,12 @@ function fmtDateTime(d) {
 .back { background: none; border: none; color: var(--muted); }
 .back:hover { color: var(--accent); border: none; }
 .pane-head { font-size: 22px; margin: 0 0 16px; }
+.cta { border-color: #4a3e1e; background: #1f1b12; }
+.checkout-form { margin-top: 4px; }
+.cgrid { display: grid; grid-template-columns: 1.4fr 1.4fr 0.6fr; gap: 12px; }
+.seats-field input { font-family: var(--mono); }
+.row.start { justify-content: flex-start; }
+@media (max-width: 620px) { .cgrid { grid-template-columns: 1fr; } }
 .card { background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius-lg); padding: 18px 20px; margin-bottom: 16px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .card-head h4 { margin: 0; font-size: 15px; }
