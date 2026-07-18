@@ -12,6 +12,8 @@ $requiredContext = 'docker-desktop'
 $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $chartPath = Join-Path $repoRoot 'helm/open-agenthub'
 $valuesPath = Join-Path $chartPath 'values-dev.yaml'
+# Optional, gitignored personal overrides (git OAuth apps, Slack tokens, …).
+$localValuesPath = Join-Path $chartPath 'values-dev.local.yaml'
 
 function Require-Command([string]$Name) {
     if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
@@ -58,12 +60,21 @@ if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($encodedPassword)
 
 try {
     Write-Host 'Deploying the development release...'
-    helm upgrade --install $releaseName $chartPath `
-        --namespace $controlNamespace `
-        --create-namespace `
-        --values $valuesPath `
-        --set "sessionsNamespace=$sessionsNamespace" `
-        --set-string "postgres.password=$postgresPassword"
+    $helmArgs = @(
+        'upgrade', '--install', $releaseName, $chartPath,
+        '--namespace', $controlNamespace,
+        '--create-namespace',
+        '--values', $valuesPath
+    )
+    if (Test-Path -LiteralPath $localValuesPath) {
+        Write-Host "Applying local overrides from $localValuesPath"
+        $helmArgs += @('--values', $localValuesPath)
+    }
+    $helmArgs += @(
+        '--set', "sessionsNamespace=$sessionsNamespace",
+        '--set-string', "postgres.password=$postgresPassword"
+    )
+    helm @helmArgs
 
     kubectl -n $controlNamespace rollout status statefulset/postgres --timeout=180s
     kubectl -n $controlNamespace rollout restart deployment/agenthub-backend deployment/agenthub-frontend

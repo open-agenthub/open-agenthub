@@ -35,6 +35,8 @@ fi
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 chart_path="$script_dir/helm/open-agenthub"
 values_path="$chart_path/values-dev.yaml"
+# Optional, gitignored personal overrides (git OAuth apps, Slack tokens, …).
+local_values_path="$chart_path/values-dev.local.yaml"
 if [[ ! -f "$values_path" ]]; then
   printf 'Development values file not found: %s\n' "$values_path" >&2
   exit 1
@@ -83,10 +85,15 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 printf 'Deploying the development release...\n'
+helm_values=(--values "$values_path")
+if [[ -f "$local_values_path" ]]; then
+  printf 'Applying local overrides from %s\n' "$local_values_path"
+  helm_values+=(--values "$local_values_path")
+fi
 helm upgrade --install "$release_name" "$chart_path" \
   --namespace "$control_namespace" \
   --create-namespace \
-  --values "$values_path" \
+  "${helm_values[@]}" \
   --set "sessionsNamespace=$sessions_namespace" \
   --set-string "postgres.password=$postgres_password"
 

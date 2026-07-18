@@ -1,8 +1,8 @@
 <script setup>
 import { ref, onMounted } from 'vue'
-import { api } from '../api.js'
+import { api, config } from '../api.js'
 
-const emit = defineEmits(['close'])
+const emit = defineEmits(['close', 'accounts'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
 const c = ref({
   sshPrivateKey: '', gitlabToken: '', anthropicApiKey: '',
@@ -50,6 +50,18 @@ async function save() {
     <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3>Credentials</h3>
       <p class="note">Written directly to a per-user Kubernetes secret and never read back. Leave fields empty to keep existing values.</p>
+
+      <div v-if="config.gitEnabled" class="git-hint" data-git-hint="connect">
+        <div class="gh-text"><b>Easier for repositories:</b> connect your GitHub/GitLab account — sessions then clone
+        and push through it without any pasted tokens.</div>
+        <button class="gh-btn" @click="$emit('accounts')">Connect an account →</button>
+      </div>
+      <div v-else class="git-hint" data-git-hint="helm">
+        <div class="gh-text"><b>Tip for admins:</b> account connect (OAuth) is not configured on this instance.
+        Register an OAuth app at your GitHub/GitLab and set <code>git.providers</code>
+        (clientId/clientSecret) plus <code>git.stateKey</code> in the Helm values — users can then connect
+        their accounts here instead of pasting tokens.</div>
+      </div>
 
       <div class="field">
         <label>SSH private key (for GitLab)
@@ -109,6 +121,11 @@ async function save() {
 .modal { width: 540px; max-width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
 .modal h3 { margin: 0 0 6px; }
 .note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 16px; }
+.git-hint { display: flex; align-items: center; gap: 14px; border: 1px dashed var(--border-3); border-radius: var(--radius-lg); padding: 12px 16px; margin-bottom: 16px; }
+.gh-text { flex: 1; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.gh-text b { color: var(--text); }
+.gh-text code { font-family: var(--mono); font-size: 12px; color: var(--accent); }
+.gh-btn { flex-shrink: 0; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
