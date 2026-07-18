@@ -4,6 +4,15 @@ import { api } from '../api.js'
 import { licenseBadge, licenseBadgeLabel, seatOverbooked } from '../lib/license.js'
 
 defineEmits(['close'])
+const props = defineProps({
+  embedded: { type: Boolean, default: false },
+  // 'all' (standalone admin page) or one of 'license' | 'seats' | 'billing'
+  // when a settings tab renders just one slice.
+  section: { type: String, default: 'all' }
+})
+const showLicense = computed(() => ['all', 'license'].includes(props.section))
+const showSeats = computed(() => ['all', 'seats'].includes(props.section))
+const showBilling = computed(() => ['all', 'billing'].includes(props.section))
 
 const data = ref(null)
 const loading = ref(true)
@@ -65,19 +74,22 @@ function fmtDateTime(d) {
 
 <template>
   <div class="admin-page">
-    <div class="bar">
+    <div v-if="!embedded" class="bar">
       <button class="back" @click="$emit('close')">‹ Back</button>
       <span class="title">Admin</span>
     </div>
 
     <div class="embed">
       <div class="embed-inner">
+        <h3 v-if="embedded && section === 'license'" class="pane-head">License</h3>
+        <h3 v-else-if="embedded && section === 'seats'" class="pane-head">Users &amp; seats</h3>
+        <h3 v-else-if="embedded && section === 'billing'" class="pane-head">Billing &amp; invoices</h3>
         <p v-if="error" class="err">{{ error }}</p>
         <p v-if="loading" class="muted">Loading…</p>
 
         <template v-else>
           <!-- License -->
-          <section class="card">
+          <section v-if="showLicense" class="card">
             <div class="card-head">
               <h4>Enterprise license</h4>
               <span class="badge" :class="{ ok: badge === 'active', bad: badge === 'invalid', off: badge === 'off' }">
@@ -111,7 +123,7 @@ function fmtDateTime(d) {
           </section>
 
           <!-- Seats / users -->
-          <section class="card">
+          <section v-if="showSeats" class="card">
             <div class="card-head">
               <h4>Seats &amp; users</h4>
               <span class="badge" :class="overBooked ? 'bad' : 'ok'">
@@ -142,7 +154,7 @@ function fmtDateTime(d) {
           </section>
 
           <!-- Billing -->
-          <section class="card">
+          <section v-if="showBilling" class="card">
             <div class="card-head"><h4>Billing</h4></div>
             <p class="note">
               Subscription, invoices and cancellation are managed through the billing portal.
@@ -165,7 +177,8 @@ function fmtDateTime(d) {
 .bar .title { font-size: 13px; font-weight: 600; }
 .back { background: none; border: none; color: var(--muted); }
 .back:hover { color: var(--accent); border: none; }
-.card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 18px; margin-bottom: 16px; }
+.pane-head { font-size: 22px; margin: 0 0 16px; }
+.card { background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius-lg); padding: 18px 20px; margin-bottom: 16px; }
 .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
 .card-head h4 { margin: 0; font-size: 15px; }
 .badge { font-size: 11px; font-family: var(--mono); padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }

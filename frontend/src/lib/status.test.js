@@ -37,3 +37,25 @@ describe('tabLabel', () => {
   })
   it('passes through unknown kinds', () => expect(tabLabel('foo')).toBe('foo'))
 })
+
+import { sessionStatus, statusStyle, STATUS_STYLES } from './status.js'
+
+describe('sessionStatus', () => {
+  it('surfaces a pending question as Waiting', () =>
+    expect(sessionStatus({ phase: 'Running', questionPending: true })).toBe('Waiting'))
+  it('maps Succeeded to Done and Pending to Starting', () => {
+    expect(sessionStatus({ phase: 'Succeeded' })).toBe('Done')
+    expect(sessionStatus({ phase: 'Pending' })).toBe('Starting')
+  })
+  it('passes through other phases', () => expect(sessionStatus({ phase: 'Paused' })).toBe('Paused'))
+  it('handles null', () => expect(sessionStatus(null)).toBe('Unknown'))
+})
+
+describe('statusStyle', () => {
+  it('has styles for every display status', () => {
+    for (const s of ['Running', 'Starting', 'Waiting', 'Scheduled', 'Paused', 'Done', 'Failed'])
+      expect(STATUS_STYLES[s]).toBeTruthy()
+  })
+  it('falls back for unknown status', () =>
+    expect(statusStyle({ phase: 'Weird' }).color).toBe('var(--muted)'))
+})

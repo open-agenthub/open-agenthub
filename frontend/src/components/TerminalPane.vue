@@ -100,7 +100,7 @@ function reconnectForCurrentSession() {
 }
 
 onMounted(() => {
-  term = new Terminal({ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, cursorBlink: canSend.value, disableStdin: !canSend.value, theme: { background: '#0E1116', foreground: '#D7DCE3' } })
+  term = new Terminal({ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, cursorBlink: canSend.value, disableStdin: !canSend.value, theme: { background: '#0e0d0b', foreground: '#c9c4bb' } })
   fit = new FitAddon()
   term.loadAddon(fit)
   term.open(host.value)
@@ -152,5 +152,5 @@ onBeforeUnmount(() => {
   fit = undefined
 })
 </script>
-<template><div class="pane"><div ref="host" class="term"></div><div v-if="canSend && kind === 'agent'" class="mobile-input"><input v-model="mobileInput" placeholder="Type a reply and send…" @keyup.enter="send({ type: 'input', data: mobileInput + '\r' }); mobileInput = ''" /><button class="primary" @click="send({ type: 'input', data: mobileInput + '\r' }); mobileInput = ''">Send</button></div></div></template>
-<style scoped>.pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0E1116; } .term { flex: 1; min-height: 0; padding: 8px 10px; } .mobile-input { display: none; gap: 8px; padding: 10px; background: var(--panel); } .mobile-input input { flex: 1; } @media (max-width: 760px) { .mobile-input { display: flex; } }</style>
+<template><div class="pane"><div ref="host" class="term"></div><div v-if="canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="send({ type: 'input', data: mobileInput + '\r' }); mobileInput = ''" /><button class="primary" @click="send({ type: 'input', data: mobileInput + '\r' }); mobileInput = ''">Send</button></div></div></template>
+<style scoped>.pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; } .term { flex: 1; min-height: 0; padding: 10px 12px; } .composer { display: flex; gap: 10px; padding: 12px 16px; background: var(--bg); border-top: 1px solid var(--border); } .composer input { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); } .composer button { align-self: center; padding: 9px 18px; }</style>

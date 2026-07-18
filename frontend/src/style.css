@@ -1,18 +1,34 @@
 :root {
-  --bg:        #0E1116;
-  --panel:     #161B22;
-  --panel-2:   #1C222C;
-  --border:    #2A313C;
-  --text:      #D7DCE3;
-  --muted:     #7A8493;
+  /* Warm dark theme (Claude Design "Team Lead" direction). */
+  --bg:        #131211;
+  --sidebar:   #171614;
+  --panel:     #1a1917;   /* cards */
+  --panel-2:   #23211d;   /* raised / active */
+  --hover:     #1d1b18;   /* row hover */
+  --input:     #161511;
+  --border:    #26241f;
+  --border-2:  #2e2b25;   /* card borders */
+  --border-3:  #3a362e;   /* outlined buttons */
+  --text:      #E9E6E1;
+  --strong:    #FFFFFF;
+  --muted:     #a39e96;
+  --muted-2:   #8d8880;
+  --muted-3:   #78736A;
+  --faint:     #57534b;
   --accent:    #5AA9F5;   /* signal blue: attention/control */
-  --running:   #4FC3D9;   /* active */
-  --ok:        #6FCF97;
-  --danger:    #E5736B;
-  --paused:    #C9A227;   /* paused: state saved, pod stopped */
-  --radius:    10px;
+  --accent-2:  #8CC5FA;   /* accent hover */
+  --on-accent: #10151C;
+  --running:   #5FD68B;   /* running/healthy */
+  --ok:        #5FD68B;
+  --warn:      #F5C55A;   /* waiting on you */
+  --sched:     #c9b8f9;   /* scheduled */
+  --danger:    #F57A6A;
+  --paused:    #a39e96;
+  --radius:    11px;
+  --radius-lg: 16px;
   --mono: 'JetBrains Mono', ui-monospace, monospace;
-  --ui: 'Inter', system-ui, sans-serif;
+  --ui: 'Public Sans', system-ui, sans-serif;
+  --display: 'Bricolage Grotesque Variable', 'Bricolage Grotesque', 'Public Sans', system-ui, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -21,49 +37,66 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--ui);
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
 }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 5px; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--accent-2); }
+
+h1, h2, h3, h4 { font-family: var(--display); letter-spacing: -0.02em; color: var(--strong); }
 
 button {
   font-family: var(--ui);
   cursor: pointer;
-  border: 1px solid var(--border);
-  background: var(--panel-2);
-  color: var(--text);
-  border-radius: 8px;
+  border: 1px solid var(--border-3);
+  background: transparent;
+  color: #d6d1c8;
+  border-radius: var(--radius);
   padding: 8px 14px;
-  font-size: 14px;
-  transition: border-color .15s, background .15s;
+  font-size: 13px;
+  font-weight: 600;
+  transition: border-color .15s, background .15s, color .15s;
 }
-button:hover { border-color: var(--accent); }
+button:hover { background: var(--panel-2); color: var(--strong); }
 button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-button.primary { background: var(--accent); color: #0d0f12; border-color: var(--accent); font-weight: 600; }
-button.danger:hover { border-color: var(--danger); color: var(--danger); }
+button.primary { background: var(--accent); color: var(--on-accent); border-color: var(--accent); font-weight: 700; }
+button.primary:hover { background: var(--accent-2); border-color: var(--accent-2); color: var(--on-accent); }
+button.danger:hover { border-color: var(--danger); color: var(--danger); background: rgba(245,122,106,0.08); }
 button:disabled { opacity: .45; cursor: not-allowed; }
+button.ghost { border: none; background: none; padding: 4px 8px; color: var(--muted); }
+button.ghost:hover { background: var(--panel-2); color: var(--text); }
 
 input, select, textarea {
   width: 100%;
-  background: var(--bg);
-  border: 1px solid var(--border);
+  background: var(--input);
+  border: 1px solid var(--border-2);
   color: var(--text);
-  border-radius: 8px;
-  padding: 9px 11px;
+  border-radius: 10px;
+  padding: 9px 12px;
   font-size: 14px;
   font-family: var(--ui);
 }
-textarea { font-family: var(--mono); resize: vertical; min-height: 72px; }
+textarea { font-family: var(--mono); font-size: 13px; resize: vertical; min-height: 72px; }
 input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
 
-label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 5px; letter-spacing: .02em; }
+label { display: block; font-size: 12px; color: var(--muted-2); margin: 0 0 6px; }
 .field { margin-bottom: 14px; }
+
+/* Cards — the design's building block. */
+.card { background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius-lg); }
+
+/* Status pill (Running / Waiting / Scheduled / …). */
+.pill { font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 999px; white-space: nowrap; }
 
 /* Dialogs used as embedded pages (rendered inside the content area instead of a
    modal overlay) — no backdrop, no accidental click-outside close. */
 .embed { flex: 1; min-height: 0; overflow-y: auto; background: var(--bg); }
-.embed-inner { width: 100%; max-width: 760px; margin: 0 auto; padding: 20px; box-sizing: border-box; }
+.embed-inner { width: 100%; max-width: 760px; margin: 0 auto; padding: 26px 24px; box-sizing: border-box; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
 
-.readonly { border: 1px solid var(--paused); border-radius: 999px; padding: 3px 8px; }
+.readonly { border: 1px solid var(--warn); color: var(--warn); border-radius: 999px; padding: 3px 10px; }
