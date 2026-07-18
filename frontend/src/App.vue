@@ -26,6 +26,7 @@ const isAdmin = ref(false)
 const settingsTab = ref('credentials')
 const query = ref('')
 const searchBox = ref(null)
+const banner = ref(null) // { kind: 'ok' | 'warn' | 'error', text }
 const sharedToken = sharedTokenFromPath(location.pathname)
 const activeSession = computed(() => sessions.value.find(session => session.id === activeId.value) || null)
 const editSession = computed(() => sessions.value.find(session => session.id === editId.value) || null)
@@ -72,6 +73,27 @@ function onKey(e) {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); searchBox.value?.focus() }
 }
 
+// Landing point of the license-service checkout redirect: activate the license
+// that came back in the URL, then show the users tab so the effect is visible.
+async function handleLicenseReturn() {
+  if (location.pathname !== '/license/activate') return false
+  const params = new URLSearchParams(location.search)
+  const token = params.get('license')
+  history.replaceState({}, '', '/')
+  if (token) {
+    try {
+      await api.activateLicense(token)
+      banner.value = { kind: 'ok', text: 'Enterprise license activated ✓ — all seats are licensed now.' }
+    } catch (e) {
+      banner.value = { kind: 'error', text: `The license could not be activated: ${String(e.message || e)}` }
+    }
+  } else if (params.get('checkout') === 'pending') {
+    banner.value = { kind: 'warn', text: 'Payment is still processing — you will receive the license key by email; activate it under Settings → License.' }
+  }
+  openSettings('users')
+  return true
+}
+
 watch(activeId, id => {
   const target = id ? `/s/${encodeURIComponent(id)}` : '/'
   if (!id && location.pathname === '/account') return
@@ -80,7 +102,7 @@ watch(activeId, id => {
 
 onMounted(async () => {
   if (needsLogin || sharedToken) return
-  restoreLocation()
+  if (!(await handleLicenseReturn())) restoreLocation()
   window.addEventListener('popstate', restoreLocation)
   window.addEventListener('keydown', onKey)
   await refresh()
@@ -121,6 +143,10 @@ onBeforeUnmount(() => {
         <button v-if="auth.enabled" class="ghost" title="Sign out" @click="auth.logout()">Sign out</button>
         <span class="avatar" :title="auth.user" @click="openSettings()">{{ initials(auth.user) }}</span>
       </header>
+      <div v-if="banner" class="banner" :class="banner.kind">
+        <span>{{ banner.text }}</span>
+        <button class="ghost" @click="banner = null">✕</button>
+      </div>
       <section class="content">
         <SettingsView v-if="page === 'settings'" :initial-tab="settingsTab" :is-admin="isAdmin" @close="closePage" />
         <AdminView v-else-if="page === 'admin'" @close="closePage" />
@@ -172,6 +198,10 @@ onBeforeUnmount(() => {
 .icon-btn:hover, .icon-btn.on { background: var(--panel-2); color: var(--text); }
 .avatar { width: 34px; height: 34px; border-radius: 50%; background: #3d3a33; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #d6d1c8; cursor: pointer; border: 2px solid var(--border); flex-shrink: 0; }
 .avatar:hover { border-color: var(--accent); }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 24px; font-size: 13px; font-weight: 600; border-bottom: 1px solid var(--border); }
+.banner.ok { color: var(--ok); background: rgba(95,214,139,0.08); }
+.banner.warn { color: var(--warn); background: rgba(245,197,90,0.08); }
+.banner.error { color: var(--danger); background: rgba(245,122,106,0.08); }
 .content { display: flex; flex: 1; min-width: 0; min-height: 0; }
 .page { display: flex; flex: 1; min-width: 0; }
 
