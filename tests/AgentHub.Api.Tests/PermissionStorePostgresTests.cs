@@ -71,7 +71,11 @@ public class PermissionStorePostgresTests
     {
         await using var database = await PostgresPermissionDatabase.CreateAsync();
         await database.Store.CreateAsync(NewRequest("req-1", "session-a", tool: "Bash"));
+        await Task.Delay(10); // created_at has finite resolution — make the ordering strict
         await database.Store.CreateAsync(NewRequest("req-2", "session-a", tool: "WebFetch"));
+
+        // Both pending — the newest one wins.
+        Assert.Equal("WebFetch", await database.Store.GetPendingBySessionAsync("session-a"));
 
         await database.Store.ResolveAsync("req-2", "allow");
 

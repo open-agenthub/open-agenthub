@@ -27,7 +27,6 @@ public sealed class SlackSocketModeService : BackgroundService
     private readonly SlackThreadStore _threads;
     private readonly AgentHub.Api.Permissions.PermissionStore _permissions;
     private readonly ISessionService _sessions;
-    private readonly AgentHub.Api.Persistence.ISessionStore _store;
     private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
@@ -35,13 +34,12 @@ public sealed class SlackSocketModeService : BackgroundService
 
     public SlackSocketModeService(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
         SlackThreadStore threads, AgentHub.Api.Permissions.PermissionStore permissions,
-        ISessionService sessions, AgentHub.Api.Persistence.ISessionStore store,
-        WorkingIndicator indicator, IConfiguration cfg, ILogger<SlackSocketModeService> log)
+        ISessionService sessions, WorkingIndicator indicator, IConfiguration cfg, ILogger<SlackSocketModeService> log)
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _permissions = permissions;
-        _sessions = sessions; _store = store; _indicator = indicator;
+        _sessions = sessions; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
-        _frontendOrigin = cfg["FrontendOrigin"] ?? "";
+        _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
     }
 
@@ -99,7 +97,16 @@ public sealed class SlackSocketModeService : BackgroundService
         }
     }
 
+    // A failure while handling one event (Postgres/k8s hiccup, Slack API error) must not
+    // tear down the socket loop — the envelope was already acked, so just log and move on.
     private async Task HandleEventAsync(JsonElement root, CancellationToken ct)
+    {
+        try { await HandleEventCoreAsync(root, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _log.LogWarning(ex, "Handling a Slack event failed; continuing"); }
+    }
+
+    private async Task HandleEventCoreAsync(JsonElement root, CancellationToken ct)
     {
         if (!root.TryGetProperty("payload", out var payload) ||
             !payload.TryGetProperty("event", out var ev)) return;
@@ -148,11 +155,11 @@ public sealed class SlackSocketModeService : BackgroundService
     private async Task PostStatusAsync(SlackThread thread, string threadTs, CancellationToken ct)
     {
         var live = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
-        var rec = await _store.GetAsync(thread.Owner, thread.SessionId, ct);
         var pendingTool = await _permissions.GetPendingBySessionAsync(thread.SessionId, ct);
         var link = _frontendOrigin.Length == 0 ? null : $"{_frontendOrigin}/s/{thread.SessionId}";
         var text = AgentHub.Api.Chat.ChatFormatting.StatusText(
-            live?.Phase ?? "Unknown", rec?.QuestionPending ?? false, pendingTool, link);
+            live?.Phase ?? "Unknown", live?.QuestionPending ?? false,
+            pendingTool is null ? null : Escape(pendingTool), link);
         await _slack.PostMessageAsync(thread.Channel, text, threadTs, ct);
     }
 
@@ -192,7 +199,7 @@ public sealed class SlackSocketModeService : BackgroundService
         var suffix = decision == "allowAlways" ? " (won't ask again this run)" : "";
         if (channel is not null && ts is not null)
             await _slack.UpdateMessageAsync(channel, ts,
-                $"{verb} — *{resolved.Tool}*{suffix}" + (user is null ? "" : $" · by {user}"), null, ct);
+                $"{verb} — *{Escape(resolved.Tool)}*{suffix}" + (user is null ? "" : $" · by {user}"), null, ct);
     }
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
