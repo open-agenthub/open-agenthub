@@ -1,0 +1,25 @@
+allow_managed_hooks_only = true
+
+[features]
+hooks = true
+
+[hooks]
+managed_dir = "/opt/session-agent/codex"
+
+[[hooks.PreToolUse]]
+matcher = "*"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/policy-hook.js"
+timeout = 10
+statusMessage = "Checking session policy"
+
+[[hooks.PermissionRequest]]
+matcher = "*"
+
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/policy-hook.js"
+timeout = 250
+statusMessage = "Waiting for session approval"

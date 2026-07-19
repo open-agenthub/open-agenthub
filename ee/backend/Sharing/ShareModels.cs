@@ -143,6 +143,11 @@ public sealed record SessionMcpPolicy(
     IReadOnlyList<string> BlockedTools,
     DateTime UpdatedAt);
 
+public interface ISessionMcpPolicyReader
+{
+    Task<SessionMcpPolicy?> GetMcpPolicyAsync(string sessionId, CancellationToken ct = default);
+}
+
 public sealed record SessionSharingOverview(
     IReadOnlyList<DirectSessionShare> Users,
     IReadOnlyList<SessionShareLink> Links,

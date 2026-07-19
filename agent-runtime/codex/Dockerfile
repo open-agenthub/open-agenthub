@@ -22,6 +22,7 @@ COPY session-agent/package.json /opt/session-agent/package.json
 COPY session-agent/server.js /opt/session-agent/server.js
 COPY common /opt/session-agent/common
 COPY codex /opt/session-agent/codex
+COPY codex/requirements.toml /etc/codex/requirements.toml
 COPY codex/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \
     /opt/session-agent/common/entrypoint-common.sh \
