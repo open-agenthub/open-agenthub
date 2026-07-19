@@ -7,7 +7,8 @@ public sealed record ChatBinding(
     string Platform, string SessionId, string Owner, string ChatId,
     string? ThreadId,      // Telegram forum topic id; null for DMs/Signal
     string? StatusRef,     // message id/timestamp of the "working…" indicator
-    bool Active);          // the chat's current default session (plain replies go here)
+    bool Active);          // the chat's current default session (plain replies go here). Callers must upsert
+                           // with Active=false and flip via SetActiveAsync — UpsertAsync does not clear other rows' flags.
 
 /// <summary>Maps sessions to their chat conversations and outgoing messages to sessions (reply routing).</summary>
 public sealed class ChatBindingStore
@@ -33,6 +34,7 @@ public sealed class ChatBindingStore
                 thread_id   TEXT,
                 status_ref  TEXT,
                 active      BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (platform, session_id)
             );
             CREATE INDEX IF NOT EXISTS idx_chat_bindings_chat ON chat_session_bindings(platform, chat_id);
@@ -74,7 +76,7 @@ public sealed class ChatBindingStore
 
     /// <summary>Binding for a Telegram forum topic (platform + chat + thread).</summary>
     public async Task<ChatBinding?> GetByThreadAsync(string platform, string chatId, string threadId, CancellationToken ct = default)
-        => await QueryOne("WHERE platform = @p AND chat_id = @a AND thread_id = @b", ct, ("p", platform), ("a", chatId), ("b", threadId));
+        => await QueryOne("WHERE platform = @p AND chat_id = @a AND thread_id = @b LIMIT 1", ct, ("p", platform), ("a", chatId), ("b", threadId));
 
     /// <summary>The chat's active session (plain messages without reply go here).</summary>
     public async Task<ChatBinding?> GetActiveAsync(string platform, string chatId, CancellationToken ct = default)
@@ -91,11 +93,11 @@ public sealed class ChatBindingStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    /// <summary>All bindings of a chat (for !sessions). The caller enriches with live session data.</summary>
+    /// <summary>All bindings of a chat (for !sessions), most recently created session first. The caller enriches with live session data.</summary>
     public async Task<IReadOnlyList<ChatBinding>> ListByChatAsync(string platform, string chatId, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand(
-            $"SELECT {Columns} FROM chat_session_bindings WHERE platform = @p AND chat_id = @c");
+            $"SELECT {Columns} FROM chat_session_bindings WHERE platform = @p AND chat_id = @c ORDER BY created_at DESC");
         cmd.Parameters.AddWithValue("p", platform);
         cmd.Parameters.AddWithValue("c", chatId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
