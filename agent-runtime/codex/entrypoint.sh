@@ -33,14 +33,17 @@ apikey)
   fi
   ;;
 subscription)
+  AUTH_EXPECT_CREATE=1
   if [ -f /secrets/codex/auth.json ]; then
     cp /secrets/codex/auth.json "$CODEX_HOME/auth.json"
     chmod 600 "$CODEX_HOME/auth.json"
+    AUTH_EXPECT_CREATE=0
     echo "[entrypoint] Codex login restored from secret."
   fi
 
   if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
-    node "$RUNTIME/codex/auth-watcher.js" &
+    AGENTHUB_CODEX_AUTH_EXPECT_CREATE="$AUTH_EXPECT_CREATE" \
+      node "$RUNTIME/codex/auth-watcher.js" &
   fi
   if [ ! -f "$CODEX_HOME/auth.json" ] && [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
     codex login --device-auth

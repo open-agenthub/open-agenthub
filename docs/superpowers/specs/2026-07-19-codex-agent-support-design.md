@@ -35,7 +35,7 @@ The pod receives only the credential selected for that session:
 | Claude | Subscription | writable copy of the user's Claude credential file |
 | Claude | API key | `ANTHROPIC_API_KEY` from the general user credential Secret |
 | Codex | Subscription | writable copy of the user's Codex `auth.json` under `CODEX_HOME` |
-| Codex | API key | `CODEX_API_KEY` only for the Codex process invocation |
+| Codex | API key | `CODEX_API_KEY` in the Codex process environment and its descendants |
 | Claude | Auto | current compatibility behavior for migrated sessions |
 
 Subscription mode never injects the provider API key. API-key mode never mounts the subscription Secret. This reduces credential exposure and makes the selected billing source deterministic.
@@ -46,7 +46,15 @@ An Interactive subscription session may start without a stored login. Claude use
 
 Autonomous and Scheduled sessions perform an authentication preflight. If their selected credential is unavailable, the session fails before starting the provider CLI and records a clear, non-secret diagnostic in scrollback and status.
 
-For Codex API-key sessions, `CODEX_API_KEY` is scoped to the `codex exec` process, matching the documented non-interactive CLI contract. Interactive Codex API-key sessions create an ephemeral file-based login by piping the key to `codex login --with-api-key` at startup; that file is not uploaded to the subscription Secret.
+For Codex API-key sessions, `CODEX_API_KEY` is scoped to the `codex exec` process environment and may be inherited by its descendants, matching the documented non-interactive CLI contract. Interactive Codex API-key sessions create an ephemeral file-based login by piping the key to `codex login --with-api-key` at startup; that file is not uploaded to the subscription Secret.
+
+### Credential trust boundary
+
+Session provider credentials are not isolated from code or tools executed as the agent user. In Codex API-key Autonomous and Scheduled sessions, descendants may inherit `CODEX_API_KEY`; in subscription sessions, `auth.json` is readable by the same agent user. Only trusted repositories and prompts may be run with provider credentials present.
+
+Policy hooks are guardrails, not secret isolation. Network and pod isolation must be used to limit credential exposure and blast radius. Subscription mode avoids API-key billing, but it does not provide secret isolation from the running agent or its descendants.
+
+Task 8 README and deployment documentation must state this trusted-code constraint explicitly.
 
 OpenAI documents that Codex stores file-based credentials in `$CODEX_HOME/auth.json`, refreshes ChatGPT sign-in tokens during active use, supports device-code authentication for headless systems, and supports `CODEX_API_KEY` for `codex exec`. The implementation pins file-based storage in the container instead of relying on an unavailable OS keyring. See [Authentication](https://learn.chatgpt.com/docs/auth) and [Non-interactive mode](https://learn.chatgpt.com/docs/non-interactive-mode).
 

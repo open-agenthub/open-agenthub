@@ -78,6 +78,29 @@ test('Codex watcher uploads creation and retries unchanged content after failure
   });
 });
 
+test('Codex watcher uploads login created before its first poll when creation was expected', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-watcher-'));
+  const source = path.join(directory, 'auth.json');
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source,
+      callbackUrl,
+      callbackToken: 'synthetic-callback-token',
+      intervalMs: 60_000,
+      expectCreate: true
+    });
+    try {
+      fs.writeFileSync(source, fixture('created-before-first-poll'));
+      await watcher.ready;
+      await watcher.poll();
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].body, fixture('created-before-first-poll'));
+    } finally {
+      watcher.stop();
+    }
+  });
+});
+
 test('Codex watcher rejects invalid shape and content over backend 64 KiB limit', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-watcher-'));
   const source = path.join(directory, 'auth.json');

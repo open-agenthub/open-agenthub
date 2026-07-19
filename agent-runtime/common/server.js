@@ -23,6 +23,9 @@ function createCommonServer(options = {}) {
   if (childEnv !== undefined && (!childEnv || typeof childEnv !== 'object' || Array.isArray(childEnv))) {
     throw new Error('Agent driver prepare childEnv must be an object');
   }
+  // This scopes values to the provider PTY, not to the provider executable alone:
+  // commands and tools launched by the provider inherit this environment. Code
+  // running as the agent user is therefore inside the credential trust boundary.
   const agentEnv = childEnv === undefined ? env : { ...env, ...childEnv };
 
   const port = parseInt(env.AGENTHUB_PORT || '7681', 10);
