@@ -11,6 +11,9 @@ public sealed class TelegramClient
     /// <summary>Telegram caps forum topic names at 128 characters.</summary>
     private const int MaxTopicNameLength = 128;
 
+    /// <summary>Telegram caps message text at 4096 characters.</summary>
+    private const int MaxMessageLength = 4096;
+
     private readonly IHttpClientFactory _http;
     private readonly TelegramOptions _opts;
     private readonly ILogger<TelegramClient> _log;
@@ -21,21 +24,39 @@ public sealed class TelegramClient
 
     private string Url(string method) => $"https://api.telegram.org/bot{_opts.BotToken}/{method}";
 
-    /// <summary>POSTs a Bot API method and returns the parsed response document when ok=true, else null (logged).</summary>
-    private async Task<JsonDocument?> PostAsync(string method, object body, CancellationToken ct)
+    /// <summary>POSTs a Bot API method. Returns (doc, null) when ok=true, (null, description) on an API
+    /// error and (null, null) on transport/parse errors (both logged). Retries ONCE when the API answers
+    /// 429 with parameters.retry_after (capped at 30s) — enough for multi-chunk sends and indicator
+    /// edits without a token bucket.</summary>
+    private async Task<(JsonDocument? Doc, string? Error)> PostAsync(string method, object body, CancellationToken ct)
     {
-        try
+        for (var attempt = 0; ; attempt++)
         {
-            var c = _http.CreateClient();
-            using var resp = await c.PostAsJsonAsync(Url(method), body, ct);
-            var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
-            if (doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean()) return doc;
-            _log.LogWarning("Telegram {Method} failed: {Description}", method,
-                doc.RootElement.TryGetProperty("description", out var d) ? d.GetString() : "unknown");
-            doc.Dispose();
-            return null;
+            try
+            {
+                var c = _http.CreateClient();
+                using var resp = await c.PostAsJsonAsync(Url(method), body, ct);
+                var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+                if (doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean()) return (doc, null);
+
+                var description = doc.RootElement.TryGetProperty("description", out var d) ? d.GetString() : null;
+                if (attempt == 0 &&
+                    doc.RootElement.TryGetProperty("parameters", out var p) &&
+                    p.TryGetProperty("retry_after", out var ra) && ra.TryGetInt64(out var retryAfter))
+                {
+                    doc.Dispose();
+                    var delay = TimeSpan.FromSeconds(Math.Clamp(retryAfter, 0, 30));
+                    _log.LogDebug("Telegram {Method} rate-limited, retrying once in {Delay}s", method, delay.TotalSeconds);
+                    await Task.Delay(delay, ct);
+                    continue;
+                }
+
+                doc.Dispose();
+                _log.LogWarning("Telegram {Method} failed: {Description}", method, description ?? "unknown");
+                return (null, description);
+            }
+            catch (Exception ex) { _log.LogWarning(ex, "Telegram {Method} error", method); return (null, null); }
         }
-        catch (Exception ex) { _log.LogWarning(ex, "Telegram {Method} error", method); return null; }
     }
 
     /// <summary>Bot API ids are 64-bit ints; convert our string ids back for the wire (verbatim fallback).</summary>
@@ -46,6 +67,13 @@ public sealed class TelegramClient
     /// the formatting) and returns its message_id, or null on failure.</summary>
     public async Task<string?> SendMessageAsync(string chatId, string text, string? threadId, object? replyMarkup, CancellationToken ct)
     {
+        if (text.Length > MaxMessageLength)
+        {
+            // Callers should split via ChatFormatting; degrade instead of silently getting null.
+            _log.LogWarning("Telegram sendMessage text of {Length} chars exceeds the {Max} limit — truncating", text.Length, MaxMessageLength);
+            text = text[..MaxMessageLength];
+        }
+
         var body = new Dictionary<string, object?>
         {
             ["chat_id"] = AsId(chatId),
@@ -55,14 +83,15 @@ public sealed class TelegramClient
         if (threadId is not null) body["message_thread_id"] = AsId(threadId);
         if (replyMarkup is not null) body["reply_markup"] = replyMarkup;
 
-        using var doc = await PostAsync("sendMessage", body, ct);
+        using var doc = (await PostAsync("sendMessage", body, ct)).Doc;
         if (doc is null) return null;
         return doc.RootElement.TryGetProperty("result", out var result) && result.TryGetProperty("message_id", out var mid)
             ? mid.GetInt64().ToString(CultureInfo.InvariantCulture) : null;
     }
 
-    /// <summary>Replaces a message's text/markup; returns whether Telegram accepted the edit
-    /// (the WorkingIndicator uses the bool to stop updating deleted messages).</summary>
+    /// <summary>Replaces a message's text/markup. Returns false ONLY when the message is definitively
+    /// gone/uneditable (the WorkingIndicator uses that to stop its loop); transient failures (429,
+    /// network, unknown errors) and "not modified" no-ops return true.</summary>
     public async Task<bool> EditMessageTextAsync(string chatId, string messageId, string text, object? replyMarkup, CancellationToken ct)
     {
         var body = new Dictionary<string, object?>
@@ -73,15 +102,22 @@ public sealed class TelegramClient
         };
         if (replyMarkup is not null) body["reply_markup"] = replyMarkup;
 
-        using var doc = await PostAsync("editMessageText", body, ct);
-        return doc is not null;
+        var (doc, error) = await PostAsync("editMessageText", body, ct);
+        if (doc is not null) { doc.Dispose(); return true; }
+        if (error is null) return true; // transport/parse error — transient, keep going
+
+        var e = error.ToLowerInvariant();
+        if (e.Contains("message is not modified")) return true; // no-op edit — success
+        return !(e.Contains("message to edit not found")
+              || e.Contains("message can't be edited")
+              || e.Contains("chat not found"));
     }
 
     /// <summary>Deletes a message — used to remove the transient "working…" status. Log-and-swallow.</summary>
     public async Task DeleteMessageAsync(string chatId, string messageId, CancellationToken ct)
     {
         var body = new Dictionary<string, object?> { ["chat_id"] = AsId(chatId), ["message_id"] = AsId(messageId) };
-        using var _ = await PostAsync("deleteMessage", body, ct);
+        using var _ = (await PostAsync("deleteMessage", body, ct)).Doc;
     }
 
     /// <summary>Creates a forum topic and returns its message_thread_id, or null on failure.</summary>
@@ -90,7 +126,7 @@ public sealed class TelegramClient
         if (name.Length > MaxTopicNameLength) name = name[..MaxTopicNameLength];
         var body = new Dictionary<string, object?> { ["chat_id"] = AsId(chatId), ["name"] = name };
 
-        using var doc = await PostAsync("createForumTopic", body, ct);
+        using var doc = (await PostAsync("createForumTopic", body, ct)).Doc;
         if (doc is null) return null;
         return doc.RootElement.TryGetProperty("result", out var result) && result.TryGetProperty("message_thread_id", out var tid)
             ? tid.GetInt64().ToString(CultureInfo.InvariantCulture) : null;
@@ -101,7 +137,7 @@ public sealed class TelegramClient
     {
         var body = new Dictionary<string, object?> { ["callback_query_id"] = callbackId };
         if (text is not null) body["text"] = text;
-        using var _ = await PostAsync("answerCallbackQuery", body, ct);
+        using var _ = (await PostAsync("answerCallbackQuery", body, ct)).Doc;
     }
 
     /// <summary>Long-polls getUpdates (timeout=50s) and returns the raw JSON of each update plus the next
@@ -152,7 +188,7 @@ public sealed class TelegramClient
     {
         if (_botUsername is not null) return _botUsername;
 
-        using var doc = await PostAsync("getMe", new { }, ct);
+        using var doc = (await PostAsync("getMe", new { }, ct)).Doc;
         if (doc is null) return null;
         if (doc.RootElement.TryGetProperty("result", out var result) &&
             result.TryGetProperty("username", out var un) && un.GetString() is { Length: > 0 } username)
