@@ -44,6 +44,23 @@ public static class ChatFormatting
         return chunks;
     }
 
+    /// <summary>
+    /// Builds the labeled chat messages for one agent answer (pure — exposed for tests):
+    /// the text split into maxLen chunks, the first prefixed with a "The agent says"
+    /// label, continuations with a counter. The text itself stays verbatim: no escaping,
+    /// no quote prefixes — just a label line per chunk. Shared by the Telegram and
+    /// Signal notifiers (both send plain text).
+    /// </summary>
+    public static IReadOnlyList<string> BuildAnswerMessages(string message, int maxLen = 4000)
+    {
+        var chunks = Split(message.Trim(), maxLen);
+        return chunks.Select((c, i) =>
+        {
+            var label = i == 0 ? "💬 The agent says:\n" : $"… ({i + 1}/{chunks.Count})\n";
+            return label + c;
+        }).ToList();
+    }
+
     public static string StatusText(string phase, bool questionPending, string? pendingTool, string? link)
     {
         var lines = new List<string> { $"Status: {phase}" };
