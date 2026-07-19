@@ -466,7 +466,7 @@ mkdir -p "$CODEX_HOME"
 printf '%s\n' 'cli_auth_credentials_store = "file"' > "$CODEX_HOME/config.toml"
 ```
 
-In Subscription mode, copy `/secrets/codex/auth.json` to `$CODEX_HOME/auth.json`, mode `600`, then start the watcher. With no file in Interactive mode, run `codex login --device-auth` before the TUI. In API-key Interactive mode, pipe `OPENAI_API_KEY` to `codex login --with-api-key`, unset it, and do not start the watcher. In API-key Autonomous/Scheduled mode, expose `CODEX_API_KEY` only on the `codex exec` child environment.
+In Subscription mode, copy `/secrets/codex/auth.json` to `$CODEX_HOME/auth.json`, mode `600`, then start the watcher. With no file in Interactive mode, run `codex login --device-auth` before the TUI. In API-key Interactive mode, pipe `CODEX_API_KEY` to `codex login --with-api-key`, unset it, and do not start the watcher. In API-key Autonomous/Scheduled mode, expose `CODEX_API_KEY` on the `codex exec` process environment and its descendants, but not the long-lived session-agent parent or separate shell PTYs.
 
 - [ ] **Step 6: Implement MCP TOML conversion and state exclusions**
 

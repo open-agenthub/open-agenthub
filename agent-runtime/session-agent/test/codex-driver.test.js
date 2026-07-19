@@ -89,6 +89,7 @@ test('Codex entrypoint owns config, auth mode, watcher, and stale-auth ordering'
   assert.match(entrypoint, /apikey\)/);
   assert.match(entrypoint, /CODEX_API_KEY is required/);
   assert.match(entrypoint, /auth-watcher\.js/);
+  assert.match(entrypoint, /AGENTHUB_CODEX_AUTH_EXPECT_CREATE/);
   assert.match(entrypoint, /mcp-config\.js/);
   assert.match(entrypoint, /AGENTHUB_DRIVER="\$RUNTIME\/codex\/driver\.js"/);
   assert.ok(entrypoint.indexOf('source "$COMMON_ENTRYPOINT"') < entrypoint.indexOf('rm -f "$CODEX_HOME/auth.json"'));
