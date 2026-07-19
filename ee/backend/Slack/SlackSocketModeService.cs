@@ -120,6 +120,9 @@ public sealed class SlackSocketModeService : BackgroundService
         await AgentTerminal.SendInputAsync(podIp, _agentPort, textReply, ct);
         _log.LogInformation("Delivered Slack reply to session {Id}", thread.SessionId);
 
+        // A previous status message may still be up (second reply while working) — remove it first.
+        if (thread.StatusTs is { } oldTs) await _slack.DeleteMessageAsync(thread.Channel, oldTs, ct);
+
         // Show a lightweight "working…" indicator until the session's next event.
         var statusTs = await _slack.PostMessageAsync(thread.Channel, WorkingIndicator.Frames[0], threadTs, ct);
         if (statusTs is not null)
