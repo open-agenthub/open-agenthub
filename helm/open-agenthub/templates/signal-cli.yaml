@@ -1,0 +1,60 @@
+{{- if .Values.chat.signal.enabled }}
+# signal-cli-rest-api: Signal transport for the chat integration (json-rpc mode).
+#
+# One-time number registration (the account data then lives on the PVC):
+#   kubectl -n <namespace> port-forward svc/agenthub-signal-cli 8080:8080
+#   curl -X POST http://localhost:8080/v1/register/<number>
+#   curl -X POST http://localhost:8080/v1/register/<number>/verify/<token>   # SMS/voice code
+# Or link as a secondary device to an existing Signal account via QR code:
+#   http://localhost:8080/v1/qrcodelink?device_name=agenthub
+# Full API reference: http://localhost:8080/v1/docs
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agenthub-signal-cli
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  # Always a PVC (no emptyDir option): the Signal registration/keys MUST survive
+  # pod restarts, otherwise the number has to be re-registered.
+  accessModes: ["ReadWriteOnce"]
+  resources: { requests: { storage: {{ .Values.chat.signal.storage }} } }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agenthub-signal-cli
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  # RWO volume: replace the old pod before the new one mounts.
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: agenthub-signal-cli }
+  template:
+    metadata:
+      labels: { app: agenthub-signal-cli }
+    spec:
+      containers:
+        - name: signal-cli
+          image: {{ .Values.chat.signal.image | quote }}
+          env:
+            - { name: MODE, value: json-rpc }
+          ports: [{ containerPort: 8080 }]
+          volumeMounts:
+            - { name: data, mountPath: /home/.local/share/signal-cli }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+      volumes:
+        - name: data
+          persistentVolumeClaim: { claimName: agenthub-signal-cli }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agenthub-signal-cli
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  selector: { app: agenthub-signal-cli }
+  ports: [{ port: 8080, targetPort: 8080 }]
+{{- end }}

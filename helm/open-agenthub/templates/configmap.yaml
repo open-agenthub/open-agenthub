@@ -38,6 +38,12 @@ data:
   Ee__License__ReportIntervalHours: {{ .Values.ee.license.reportIntervalHours | default 24 | quote }}
   Ee__Slack__Enabled: {{ .Values.ee.slack.enabled | quote }}
   Ee__Slack__Channel: {{ .Values.ee.slack.channel | quote }}
+  Chat__Telegram__Enabled: {{ .Values.chat.telegram.enabled | quote }}
+  Chat__Signal__Enabled: {{ .Values.chat.signal.enabled | quote }}
+  {{- if .Values.chat.signal.enabled }}
+  Chat__Signal__Number: {{ .Values.chat.signal.number | quote }}
+  Chat__Signal__ApiUrl: "http://agenthub-signal-cli.{{ .Release.Namespace }}.svc.cluster.local:8080"
+  {{- end }}
   {{- range $i, $p := .Values.git.providers }}
   Git__Providers__{{ $i }}__Id: {{ $p.id | quote }}
   Git__Providers__{{ $i }}__Type: {{ $p.type | quote }}
