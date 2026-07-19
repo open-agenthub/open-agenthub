@@ -27,6 +27,13 @@ query, and browser desktop notifications.
   re-linking steals the chat from its previous owner (last `/link` wins — the
   linker proved chat membership + AgentHub login); a Signal number conflict is
   rejected (409) so nobody can squat or unbind someone else's verified number.
+- **Group authority** (decided during review): in a linked Telegram group,
+  authority is chat-level — every member can reply to sessions and approve
+  permission prompts (mirrors Slack's thread behavior; a linked group is by
+  definition a trusted collaborator space). The group header discloses this.
+  Sender-level checks would require storing the owner's Telegram user id —
+  deliberately out of scope. Only ONE backend replica may run the Telegram
+  long-poll (Telegram returns 409 for concurrent getUpdates consumers).
 
 ## Architecture
 
