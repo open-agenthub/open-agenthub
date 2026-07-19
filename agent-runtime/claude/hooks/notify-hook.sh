@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Called by Claude Code on the Notification event (hook payload as JSON on stdin).
-# Forwards the agent's actual last message (from the transcript) to the backend,
-# which relays it to Slack — falling back to the generic notification text.
 payload="$(cat)"
 
 body="$(printf '%s' "$payload" | node -e '
@@ -9,7 +6,6 @@ body="$(printf '%s' "$payload" | node -e '
   process.stdin.on("data", c => d += c).on("end", () => {
     let p = {}; try { p = JSON.parse(d); } catch {}
     let msg = p.message || "The agent is waiting for your reply.";
-    // Prefer the last assistant text turn from the transcript (the real question).
     try {
       const fs = require("fs");
       const lines = fs.readFileSync(p.transcript_path, "utf8").trim().split("\n");

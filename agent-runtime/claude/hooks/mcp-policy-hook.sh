@@ -14,11 +14,11 @@ render_settings() {
 {
   "hooks": {
     "Notification": [
-      { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/notify-hook.sh" } ] }
+      { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/notify-hook.sh" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/mcp-policy-hook.sh", "timeout": 300 } ] },
-      { "matcher": "^(?!mcp__).*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/pretooluse-hook.sh", "timeout": 300 } ] }
+      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 300 } ] },
+      { "matcher": "^(?!mcp__).*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/pretooluse-hook.sh", "timeout": 300 } ] }
     ]
   }
 }
@@ -28,10 +28,10 @@ JSON
 {
   "hooks": {
     "Notification": [
-      { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/notify-hook.sh" } ] }
+      { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/notify-hook.sh" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/mcp-policy-hook.sh", "timeout": 5 } ] }
+      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 5 } ] }
     ]
   }
 }
@@ -43,7 +43,7 @@ if [ "${1:-}" = "--settings" ]; then
   render_settings
   exit 0
 fi
-# Claude Code PreToolUse hook for the session-wide MCP sharing policy.
+
 payload="$(cat)"
 
 emit_deny() {
@@ -56,7 +56,6 @@ continue_flow() {
     printf '%s' "$payload" | "$APPROVAL_HOOK"
     exit $?
   fi
-
   printf '{}\n'
   exit 0
 }
