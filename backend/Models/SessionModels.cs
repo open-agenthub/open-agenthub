@@ -24,6 +24,41 @@ public sealed record AgentPolicy
     public IReadOnlyList<string> AllowedCommands { get; init; } = Array.Empty<string>();
 }
 
+public static class AgentConfiguration
+{
+    public static void ValidateForCreate(AgentKind agent, AgentAuthMode authMode)
+    {
+        ValidateAgent(agent);
+        ValidateAuthMode(authMode);
+    }
+
+    public static void ValidateForUpdate(AgentKind? agent, AgentAuthMode? authMode)
+    {
+        if (agent is { } selectedAgent) ValidateAgent(selectedAgent);
+        if (authMode is { } selectedAuthMode) ValidateAuthMode(selectedAuthMode);
+    }
+
+    public static AgentPolicy ResolvePolicy(AgentPolicy policy, IReadOnlyList<string> legacyAllowedTools) =>
+        IsEmpty(policy) && legacyAllowedTools.Count > 0
+            ? policy with { AllowedTools = legacyAllowedTools.ToArray() }
+            : policy;
+
+    private static void ValidateAgent(AgentKind agent)
+    {
+        if (agent is not AgentKind.Claude and not AgentKind.Codex)
+            throw new ArgumentException("Unsupported agent kind.");
+    }
+
+    private static void ValidateAuthMode(AgentAuthMode authMode)
+    {
+        if (authMode is not AgentAuthMode.Subscription and not AgentAuthMode.ApiKey)
+            throw new ArgumentException("Authentication mode must be Subscription or ApiKey.");
+    }
+
+    private static bool IsEmpty(AgentPolicy policy) =>
+        policy.AllowedTools.Count == 0 && policy.AllowedMcpTools.Count == 0 && policy.AllowedCommands.Count == 0;
+}
+
 /// <summary>A repository to check out into the session workspace.</summary>
 public record RepoRef
 {
