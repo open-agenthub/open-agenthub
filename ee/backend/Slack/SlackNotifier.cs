@@ -71,17 +71,37 @@ public sealed class SlackNotifier : INotifier
             // messages if it exceeds Slack's comfortable size. We deliberately do NOT
             // dump the terminal scrollback: Claude's full-screen TUI is a mess of ANSI
             // redraws once stripped. The web terminal (linked in the thread header) has
-            // the full context; here we keep it readable and answerable. Each line must
-            // START with "> " for Slack to render it as a blockquote.
-            var chunks = AgentHub.Api.Chat.ChatFormatting.Split(Escape(message.Trim()), 3800);
-            for (var i = 0; i < chunks.Count; i++)
+            // the full context; here we keep it readable and answerable.
+            var messages = BuildAnswerMessages(message);
+            for (var i = 0; i < messages.Count; i++)
             {
-                var quoted = string.Join("\n", chunks[i].Split('\n').Select(l => "> " + l));
-                var label = i == 0 ? ":speech_balloon: *The agent says:*" : $"_… ({i + 1}/{chunks.Count})_";
-                await _slack.PostMessageAsync(thread.Channel, label + "\n" + quoted, thread.ThreadTs, ct);
+                if (i > 0) await Task.Delay(1100, ct); // Slack tolerates ~1 msg/s/channel
+                if (await _slack.PostMessageAsync(thread.Channel, messages[i], thread.ThreadTs, ct) is null)
+                {
+                    _log.LogWarning("Slack chunk {Index}/{Count} failed for session {Id} — stopping to avoid silent gaps", i + 1, messages.Count, s.Id);
+                    break;
+                }
             }
         }
         catch (Exception ex) { _log.LogWarning(ex, "Slack notify failed for session {Id}", s.Id); }
+    }
+
+    /// <summary>
+    /// Builds the labeled, blockquoted Slack messages for one agent answer (pure — exposed
+    /// for tests). Splits the raw text first and escapes each chunk afterwards, so a hard
+    /// split can never cut through an escaped entity and escaping never inflates a chunk
+    /// past the split point. Each line must START with "&gt; " for Slack to render it as
+    /// a blockquote.
+    /// </summary>
+    public static IReadOnlyList<string> BuildAnswerMessages(string message)
+    {
+        var chunks = AgentHub.Api.Chat.ChatFormatting.Split(message.Trim(), 3800);
+        return chunks.Select((c, i) =>
+        {
+            var quoted = string.Join("\n", Escape(c).Split('\n').Select(l => "> " + l));
+            var label = i == 0 ? ":speech_balloon: *The agent says:*" : $"_… ({i + 1}/{chunks.Count})_";
+            return label + "\n" + quoted;
+        }).ToList();
     }
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
