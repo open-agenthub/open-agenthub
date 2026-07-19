@@ -115,16 +115,9 @@ public sealed class TelegramNotifier : INotifier
 
     /// <summary>
     /// Builds the labeled Telegram messages for one agent answer (pure — exposed for
-    /// tests). Telegram messages go out without parse_mode, so the text stays verbatim:
-    /// no escaping, no quote prefixes — just a label line per chunk.
+    /// tests). Telegram messages go out without parse_mode, so the text stays verbatim.
+    /// Thin wrapper over the shared <see cref="ChatFormatting.BuildAnswerMessages"/>.
     /// </summary>
     public static IReadOnlyList<string> BuildAnswerMessages(string message)
-    {
-        var chunks = ChatFormatting.Split(message.Trim(), 4000);
-        return chunks.Select((c, i) =>
-        {
-            var label = i == 0 ? "💬 The agent says:\n" : $"… ({i + 1}/{chunks.Count})\n";
-            return label + c;
-        }).ToList();
-    }
+        => ChatFormatting.BuildAnswerMessages(message);
 }

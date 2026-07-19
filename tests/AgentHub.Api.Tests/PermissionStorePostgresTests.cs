@@ -24,6 +24,27 @@ public class PermissionStorePostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task GetByPromptMessage_FindsPrompt()
+    {
+        await using var database = await PostgresPermissionDatabase.CreateAsync();
+        await database.Store.CreateAsync(NewRequest("req-1", "session-a"));
+        await database.Store.SetPromptMessageAsync("req-1", "signal", "+15551234567", "1700000000123");
+
+        var found = await database.Store.GetByPromptMessageAsync("signal", "+15551234567", "1700000000123");
+
+        Assert.NotNull(found);
+        Assert.Equal("req-1", found.Id);
+        Assert.Equal("session-a", found.SessionId);
+        Assert.Equal("Bash", found.Tool);
+        Assert.Null(found.Decision);
+
+        // Any mismatch in the triple → null.
+        Assert.Null(await database.Store.GetByPromptMessageAsync("signal", "+15551234567", "999"));
+        Assert.Null(await database.Store.GetByPromptMessageAsync("telegram", "+15551234567", "1700000000123"));
+        Assert.Null(await database.Store.GetByPromptMessageAsync("signal", "+10000000000", "1700000000123"));
+    }
+
+    [PostgreSqlFact]
     public async Task Resolve_SetsTheDecisionOnlyOnce()
     {
         await using var database = await PostgresPermissionDatabase.CreateAsync();

@@ -82,6 +82,17 @@ builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier>(sp =
 builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionPromptEditor>(sp =>
     sp.GetRequiredService<AgentHub.Api.Chat.Telegram.TelegramPermissionNotifier>());
 builder.Services.AddHostedService<AgentHub.Api.Chat.Telegram.TelegramUpdateService>();
+
+// Community: Signal notifier + reaction-based permission prompts + receive loop.
+// Registered AFTER Telegram — the permission relay chain is Slack → Telegram → Signal.
+builder.Services.AddSingleton<AgentHub.Api.Chat.Signal.SignalPermissionNotifier>();
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Chat.Signal.SignalPermissionNotifier>());
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionPromptEditor>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Chat.Signal.SignalPermissionNotifier>());
+builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Chat.Signal.SignalNotifier>();
+builder.Services.AddHostedService<AgentHub.Api.Chat.Signal.SignalReceiveService>();
+
 // Safety net: expires pending permission prompts whose hook never called /expire.
 builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepService>();
 

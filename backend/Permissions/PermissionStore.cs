@@ -108,6 +108,22 @@ public sealed class PermissionStore
         return Map(r);
     }
 
+    /// <summary>The request whose chat prompt is the given message (platform + conversation +
+    /// message ref), or null. Used by reaction/quote-based deciders (Signal) that only know
+    /// which message was reacted to, not the request id.</summary>
+    public async Task<PermissionRequest?> GetByPromptMessageAsync(string platform, string channel, string messageRef, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("""
+            SELECT id, session_id, owner, tool, summary, decision, channel, message_ts, platform
+            FROM permission_requests WHERE platform=@p AND channel=@c AND message_ts=@m
+            """);
+        cmd.Parameters.AddWithValue("p", platform);
+        cmd.Parameters.AddWithValue("c", channel);
+        cmd.Parameters.AddWithValue("m", messageRef);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        return await r.ReadAsync(ct) ? Map(r) : null;
+    }
+
     /// <summary>Sets the decision if still pending (and, when given, belonging to the session);
     /// returns the request (for updating the chat prompt) or null.</summary>
     public async Task<PermissionRequest?> ResolveAsync(string id, string decision, string? sessionId = null, CancellationToken ct = default)
