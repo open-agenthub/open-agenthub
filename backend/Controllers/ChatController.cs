@@ -100,6 +100,10 @@ public sealed partial class ChatController : ControllerBase
     [GeneratedRegex(@"^\+[1-9][0-9]{6,14}\z")]
     private static partial Regex E164();
 
+    /// <summary>Visual separators people type into phone numbers: whitespace, dashes, parens, dots.</summary>
+    [GeneratedRegex(@"[\s\-().]")]
+    private static partial Regex SeparatorChars();
+
     /// <summary>
     /// Saves Signal prefs. Setting a new number sends a verification code to it via Signal and
     /// answers 202 — the user proves ownership through POST signal/verify. Unchanged/absent
@@ -109,13 +113,20 @@ public sealed partial class ChatController : ControllerBase
     public async Task<IActionResult> UpdateSignal([FromBody] SignalPrefs prefs, CancellationToken ct)
     {
         var owner = Owner;
+
+        // Validate BEFORE persisting anything — a 400 must not mutate the user row.
+        string? number = null;
+        if (!string.IsNullOrWhiteSpace(prefs.Number))
+        {
+            // Strip visual separators and rewrite the 00 international prefix to +.
+            number = SeparatorChars().Replace(prefs.Number, "");
+            if (number.StartsWith("00", StringComparison.Ordinal)) number = $"+{number[2..]}";
+            if (!E164().IsMatch(number))
+                return BadRequest(new { error = "Invalid phone number. Use international format, e.g. +15551234567." });
+        }
+
         await _dir.SetSignalEnabledAsync(owner, prefs.Enabled, ct);
-
-        if (string.IsNullOrWhiteSpace(prefs.Number)) return NoContent();
-
-        var number = prefs.Number.Replace(" ", "").Replace("-", "");
-        if (!E164().IsMatch(number))
-            return BadRequest(new { error = "Invalid phone number. Use international format, e.g. +15551234567." });
+        if (number is null) return NoContent();
 
         var user = await _dir.GetAsync(owner, ct);
         if (number == user?.SignalNumber) return NoContent();
@@ -134,9 +145,9 @@ public sealed partial class ChatController : ControllerBase
     }
 
     /// <summary>
-    /// Verify attempts per owner within a sliding 10-minute window. In-memory on purpose: codes are
-    /// 6 digits with a 10-minute TTL, so brute force must be blocked at the consumer. Static — the
-    /// controller is per-request.
+    /// Verify attempts per owner within a fixed 10-minute window (starts at the first failure,
+    /// resets when it lapses). In-memory on purpose: codes are 6 digits with a 10-minute TTL,
+    /// so brute force must be blocked at the consumer. Static — the controller is per-request.
     /// </summary>
     private static readonly ConcurrentDictionary<string, (int Failures, DateTimeOffset WindowStart)> _verifyFailures = new();
     private const int MaxVerifyFailures = 5;
@@ -160,14 +171,14 @@ public sealed partial class ChatController : ControllerBase
             return BadRequest(new { error = "Invalid or expired code." });
         }
 
-        var consumed = await _codes.ConsumeAsync(body.Code?.Trim() ?? "", "signal-verify", ct);
+        // Owner-scoped consume: another user's guess neither validates nor burns this code.
+        var consumed = await _codes.ConsumeAsync(body.Code?.Trim() ?? "", "signal-verify", owner, ct);
         if (consumed is null) return Fail();
 
-        // The code must belong to the caller AND match the number currently on file —
-        // a code minted for a previously saved number is worthless.
+        // The code must match the number currently on file — a code minted for a
+        // previously saved number is worthless.
         var user = await _dir.GetAsync(owner, ct);
-        var (codeOwner, payload) = consumed.Value;
-        if (codeOwner != owner || payload is null || payload != user?.SignalNumber) return Fail();
+        if (consumed.Value.Payload is not { } payload || payload != user?.SignalNumber) return Fail();
 
         await _dir.SetSignalVerifiedAsync(owner, true, ct);
         _verifyFailures.TryRemove(owner, out _);
