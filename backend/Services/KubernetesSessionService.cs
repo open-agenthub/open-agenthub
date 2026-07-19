@@ -142,8 +142,7 @@ public sealed class KubernetesSessionService : ISessionService
     {
         if (req.Mode is SessionMode.Autonomous or SessionMode.Scheduled && string.IsNullOrWhiteSpace(req.Prompt))
             throw new ArgumentException("A prompt is required for Autonomous/Scheduled sessions.");
-        if (req.AuthMode == AgentAuthMode.Auto)
-            throw new ArgumentException("Auto authentication is only supported for migrated sessions.");
+        AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode);
 
         var image = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image.Trim();
         if (image is not null)
@@ -212,13 +211,8 @@ public sealed class KubernetesSessionService : ISessionService
     private static string? SerializeAllowedTools(IReadOnlyList<string> tools) =>
         tools.Count == 0 ? null : JsonSerializer.Serialize(tools);
 
-    private static bool IsEmpty(AgentPolicy policy) =>
-        policy.AllowedTools.Count == 0 && policy.AllowedMcpTools.Count == 0 && policy.AllowedCommands.Count == 0;
-
     private static AgentPolicy EffectivePolicy(AgentPolicy policy, IReadOnlyList<string> allowedTools) =>
-        IsEmpty(policy) && allowedTools.Count > 0
-            ? policy with { AllowedTools = allowedTools.ToArray() }
-            : policy;
+        AgentConfiguration.ResolvePolicy(policy, allowedTools);
 
     private static string SerializePolicy(AgentPolicy policy) => JsonSerializer.Serialize(policy);
 
@@ -385,14 +379,11 @@ public sealed class KubernetesSessionService : ISessionService
             await ValidateProjectAsync(owner, req.ProjectId, ct);
             rec.ProjectId = req.ProjectId;
         }
+        AgentConfiguration.ValidateForUpdate(req.Agent, req.AuthMode);
         if (req.Agent is { } agent)
             rec.Agent = agent;
         if (req.AuthMode is { } authMode)
-        {
-            if (authMode == AgentAuthMode.Auto)
-                throw new ArgumentException("Auto authentication is only supported for migrated sessions.");
             rec.AuthMode = authMode;
-        }
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
