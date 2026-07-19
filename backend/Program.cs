@@ -41,6 +41,9 @@ builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
 // Monthly seat heartbeat: reports the licensed-user count and renews the license token.
 builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
 
+// Community chat integrations (Telegram/Signal): session-to-conversation bindings.
+builder.Services.AddSingleton<AgentHub.Api.Chat.ChatBindingStore>();
+
 // Enterprise: Slack integration (only active with a valid license + tokens).
 var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee.Slack.SlackOptions>() ?? new();
 builder.Services.AddSingleton(slackOpts);
@@ -114,6 +117,7 @@ using (var scope = app.Services.CreateScope())
     await tokenStore.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
     // License token lives in the DB — create its table, then load & verify it.
