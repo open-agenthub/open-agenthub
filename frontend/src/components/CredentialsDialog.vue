@@ -5,7 +5,7 @@ import { api, config } from '../api.js'
 const emit = defineEmits(['close', 'accounts'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
 const c = ref({
-  sshPrivateKey: '', gitlabToken: '', anthropicApiKey: '',
+  sshPrivateKey: '', gitlabToken: '', anthropicApiKey: '', openAiApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
 })
 // Which fields already have a stored value (values are never sent back).
@@ -87,6 +87,16 @@ async function save() {
         </label>
         <input v-model="c.anthropicApiKey" type="password" :placeholder="placeholderFor('anthropicApiKey', 'sk-ant-…')" />
       </div>
+      <div class="field">
+        <label>OpenAI API key
+          <button v-if="stored.openAiApiKey" type="button" class="chip" :class="{ del: clear.has('openAiApiKey') }"
+            data-clear="openAiApiKey" :aria-label="clear.has('openAiApiKey') ? 'Keep stored OpenAI API key' : 'Remove stored OpenAI API key'"
+            @click="toggleClear('openAiApiKey')">{{ clear.has('openAiApiKey') ? 'remove ✕' : 'stored ✓' }}</button>
+        </label>
+        <input v-model="c.openAiApiKey" data-credential="openAiApiKey" type="password" autocomplete="off"
+          :placeholder="placeholderFor('openAiApiKey', 'sk-…')" />
+        <small>Used only when a Codex session selects API key billing. The key remains write-only.</small>
+      </div>
       <div class="grid">
         <div class="field">
           <label>Git name
@@ -105,7 +115,7 @@ async function save() {
       <p v-if="error" class="err">{{ error }}</p>
       <div class="row">
         <button v-if="!embedded" @click="$emit('close')">Close</button>
-        <button class="primary" :disabled="busy" @click="save">
+        <button class="primary" data-save-credentials :disabled="busy" @click="save">
           {{ saved ? 'Saved ✓' : busy ? 'Saving…' : 'Save' }}
         </button>
       </div>
@@ -129,8 +139,9 @@ async function save() {
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
+small { display: block; margin-top: 5px; color: var(--muted-3); font-size: 11px; line-height: 1.4; }
 .chip {
-  margin-left: 8px; font-family: var(--mono); font-size: 10px; cursor: pointer;
+  width: auto; margin-left: 8px; font-family: var(--mono); font-size: 10px; cursor: pointer; background: none;
   color: var(--ok); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px;
 }
 .chip:hover { border-color: var(--danger); color: var(--danger); }

@@ -150,7 +150,8 @@ public record UpdateSessionRequest
     }
 }
 
-public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp);
+public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
+    AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null);
 
 public static class SessionDuplication
 {
@@ -164,10 +165,12 @@ public static class SessionDuplication
         Prompt = source.Prompt,
         Schedule = source.Schedule,
         McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
-        Agent = source.Agent,
-        AuthMode = source.AuthMode,
-        Policy = Deserialize<AgentPolicy>(source.AgentPolicyJson),
-        AllowedTools = Deserialize<List<string>>(source.AllowedToolsJson),
+        Agent = request.Agent ?? source.Agent,
+        AuthMode = request.AuthMode ?? source.AuthMode,
+        Policy = request.Policy ?? Deserialize<AgentPolicy>(source.AgentPolicyJson),
+        // An explicit structured policy, including an empty default-deny policy,
+        // supersedes legacy AllowedTools instead of rehydrating it later.
+        AllowedTools = request.Policy is null ? Deserialize<List<string>>(source.AllowedToolsJson) : new List<string>(),
         Image = source.Image,
         RunAsRoot = source.RunAsRoot,
         Cpu = source.Cpu,
@@ -245,4 +248,6 @@ public record CredentialStatus
     public bool OpenAiApiKey { get; init; }
     public bool GitUserName { get; init; }
     public bool GitUserEmail { get; init; }
+    public bool ClaudeSubscription { get; init; }
+    public bool CodexSubscription { get; init; }
 }

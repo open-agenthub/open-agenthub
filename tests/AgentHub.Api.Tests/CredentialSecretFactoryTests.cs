@@ -40,4 +40,16 @@ public class CredentialSecretFactoryTests
         Assert.False(secret.Data.ContainsKey(otherKey));
         Assert.Single(secret.Data);
     }
+
+    [Fact]
+    public void CredentialStatus_ReportsProviderSecretsAsSeparateBooleans()
+    {
+        var status = CredentialSecretFactory.CredentialStatus(
+            new Dictionary<string, byte[]>(),
+            new Dictionary<string, byte[]> { ["credentials.json"] = Encoding.UTF8.GetBytes("secret") },
+            new Dictionary<string, byte[]>());
+
+        Assert.True(status.ClaudeSubscription);
+        Assert.False(status.CodexSubscription);
+    }
 }

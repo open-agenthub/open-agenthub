@@ -88,7 +88,7 @@ async function wsUrl(id, kind) {
   return `${proto}://${location.host}/ws/sessions/${id}/${kind}${q}`
 }
 
-// The shared Claude terminal.
+// The selected agent's shared terminal.
 export const terminalUrl = (id) => wsUrl(id, 'terminal')
 export async function getSharedSession(token) {
   const res = await fetch(`/api/shared/${encodeURIComponent(token)}/session`)

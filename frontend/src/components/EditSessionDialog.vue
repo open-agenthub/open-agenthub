@@ -1,7 +1,9 @@
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
+import { defaultAgentForm, policyPayload } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
+import AgentDecisionCard from './AgentDecisionCard.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'updated'])
@@ -11,8 +13,10 @@ const repos = ref([])
 const advOpen = ref(false)
 const busy = ref(false)
 const error = ref('')
+const credentialStatus = ref({})
 
 const scheduled = computed(() => props.session.mode === 'Scheduled')
+const automated = computed(() => props.session.mode !== 'Interactive')
 
 function reset(session) {
   f.value = {
@@ -23,6 +27,7 @@ function reset(session) {
     memory: session.memory || '1Gi',
     mcpConfigJson: session.mcpConfigJson || '',
     projectId: session.projectId || '',
+    ...defaultAgentForm(session)
   }
   repos.value = (session.repos || []).map(repo => ({ ...repo }))
   busy.value = false
@@ -31,6 +36,10 @@ function reset(session) {
 
 reset(props.session)
 watch(() => props.session.id, () => reset(props.session))
+
+onMounted(async () => {
+  try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
+})
 
 async function save() {
   busy.value = true; error.value = ''
@@ -43,6 +52,7 @@ async function save() {
       ? { title: f.value.title, projectId: f.value.projectId || null }
       : {
           title: f.value.title,
+          policy: policyPayload(f.value),
           image: f.value.image.trim(),          // empty = default agent image
           runAsRoot: f.value.runAsRoot,
           cpu: f.value.cpu.trim(),
@@ -51,6 +61,10 @@ async function save() {
           mcpConfigJson: f.value.mcpConfigJson,  // "" clears it
           projectId: f.value.projectId || null
         }
+    if (!scheduled.value && f.value.authMode !== 'Auto') {
+      payload.agent = f.value.agent
+      payload.authMode = f.value.authMode
+    }
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
   } catch (e) { error.value = String(e.message || e) }
@@ -62,7 +76,7 @@ async function save() {
   <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
     <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3 class="form-title">Edit session</h3>
-      <p class="note" v-if="scheduled">Scheduled sessions run from a fixed CronJob spec — only title and project can be changed here.</p>
+      <p class="note" v-if="scheduled">Scheduled sessions run from a fixed CronJob spec — delete and recreate the session to change its agent, billing, policy, or runtime settings.</p>
       <p class="note" v-else>The title applies immediately. Image, root mode and resources take effect the next time the session is resumed.</p>
 
       <div class="card sect">
@@ -73,16 +87,33 @@ async function save() {
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
       </div>
       <template v-if="!scheduled">
+        <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode" :mode="session.mode"
+          :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" />
         <div class="card sect">
           <label>Repositories</label>
           <RepoPicker v-model="repos" />
         </div>
         <div class="card adv">
-          <button class="adv-head" @click="advOpen = !advOpen">
-            <span><b>Advanced</b><span class="dim adv-sub">MCP, container, resources</span></span>
+          <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">
+            <span><b>Advanced</b><span class="dim adv-sub">policy, MCP, container, resources</span></span>
             <span class="dim">{{ advOpen ? '▾' : '▸' }}</span>
           </button>
           <div v-if="advOpen" class="adv-body">
+            <div v-if="automated" class="policy-block">
+              <p class="policy-note">Automation is default-deny. Add one exact name, pattern, or command prefix per line; empty fields allow nothing.</p>
+              <div class="field">
+                <label>Built-in tools and patterns</label>
+                <textarea v-model="f.allowedToolsRaw" data-policy="allowedTools" :placeholder="f.agent === 'Codex' ? 'Read\nEdit' : 'Read\nEdit\nBash(git*)'" />
+              </div>
+              <div class="field">
+                <label>Full MCP tool names and patterns</label>
+                <textarea v-model="f.allowedMcpToolsRaw" data-policy="allowedMcpTools" placeholder="mcp__docs__search\nmcp__git__*" />
+              </div>
+              <div class="field">
+                <label>Shell command prefixes</label>
+                <textarea v-model="f.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="f.agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'" />
+              </div>
+            </div>
             <div class="field">
               <label>Extra tools <span class="dim">— MCP servers (.mcp.json), empty = none</span></label>
               <textarea v-model="f.mcpConfigJson" placeholder='{ "mcpServers": { … } }'></textarea>
@@ -102,7 +133,7 @@ async function save() {
 
       <p v-if="error" class="err">{{ error }}</p>
       <div class="row">
-        <button class="primary" :disabled="busy" @click="save">{{ busy ? 'Saving…' : 'Save changes' }}</button>
+        <button class="primary" data-submit :disabled="busy" @click="save">{{ busy ? 'Saving…' : 'Save changes' }}</button>
         <button @click="$emit('close')">Cancel</button>
         <span class="dim note-inline">Changes apply on next agent turn — the session keeps running.</span>
       </div>
@@ -125,11 +156,17 @@ async function save() {
 .adv-head:hover { background: var(--hover); }
 .adv-sub { margin-left: 10px; font-size: 12px; }
 .adv-body { padding: 14px 20px 20px; border-top: 1px solid var(--border); }
+.policy-block { margin-bottom: 18px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.policy-note { margin: 0 0 12px; color: var(--muted-2); font-size: 12px; line-height: 1.5; }
 .grid3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; }
 .check { display: flex; align-items: flex-start; gap: 10px; margin: 4px 0 0; font-size: 13px; color: var(--text); cursor: pointer; }
 .check input { width: auto; margin-top: 2px; }
 .row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
 .note-inline { font-size: 12px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
-@media (max-width: 760px) { .grid3 { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  .grid3 { grid-template-columns: 1fr; }
+  .row { align-items: stretch; flex-wrap: wrap; }
+  .note-inline { flex-basis: 100%; }
+}
 </style>

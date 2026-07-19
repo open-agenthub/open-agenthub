@@ -43,6 +43,43 @@ public sealed class SessionDuplicationTests
     }
 
     [Fact]
+    public void DuplicateRequest_AppliesExplicitAgentAuthAndPolicyOverrides()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "Claude", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+            AgentSessionId = "thread", CallbackToken = "token"
+        };
+        var requestedPolicy = new AgentPolicy { AllowedCommands = ["npm test"] };
+
+        var copy = SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, AgentKind.Codex, AgentAuthMode.ApiKey, requestedPolicy));
+
+        Assert.Equal(AgentKind.Codex, copy.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
+        Assert.Equal(["npm test"], copy.Policy.AllowedCommands);
+    }
+
+    [Fact]
+    public void DuplicateRequest_ExplicitEmptyPolicyDoesNotRestoreLegacyAllowedTools()
+    {
+        var source = new SessionRecord
+        {
+            Id = "legacy", Owner = "alice", Title = "Legacy", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Auto,
+            AgentSessionId = "thread", CallbackToken = "token",
+            AllowedToolsJson = "[\"Read\"]"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, AgentKind.Claude, AgentAuthMode.Subscription, new AgentPolicy()));
+
+        Assert.Empty(copy.Policy.AllowedTools);
+        Assert.Empty(copy.AllowedTools);
+    }
+
+    [Fact]
     public void UpdateRequest_DistinguishesOmittedProjectFromExplicitRemoval()
     {
         var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
