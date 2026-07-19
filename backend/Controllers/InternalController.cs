@@ -152,7 +152,7 @@ public sealed class InternalController : ControllerBase
             Id = Guid.NewGuid().ToString("n")[..12],
             SessionId = id, Owner = rec.Owner,
             Tool = string.IsNullOrWhiteSpace(body.Tool) ? "a tool" : body.Tool.Trim(),
-            Summary = body.Input
+            Summary = PermissionRequestDescriptor.ForTool(body.Tool)
         };
         await _permissions.CreateAsync(req, ct);
         if (!await _permNotifier.PostAsync(req, ct))

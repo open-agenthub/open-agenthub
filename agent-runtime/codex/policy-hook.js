@@ -32,8 +32,16 @@ function emitDecision(eventName, behavior) {
   }
 }
 
+function isMcpTool(tool) {
+  return typeof tool === 'string' && tool.startsWith('mcp__');
+}
+
 function failClosed(eventName = 'PreToolUse') {
   if (!isInteractive()) emitDecision(eventName, 'deny');
+}
+
+function failPolicyClosed(eventName, tool) {
+  if (!isInteractive() || isMcpTool(tool)) emitDecision(eventName, 'deny');
 }
 
 async function readInput() {
@@ -112,8 +120,12 @@ async function policyDecision(tool, input) {
   return parseDecision(response, ['allow', 'deny', 'ask']);
 }
 
-function approvalSummary(input) {
-  try { return JSON.stringify(input).slice(0, 800); } catch { return ''; }
+function approvalDescriptor(tool) {
+  if (tool === 'Bash') return 'Bash command';
+  if (isMcpTool(tool)) return 'MCP tool request';
+  if (tool === 'apply_patch' || tool === 'Edit' || tool === 'Write')
+    return 'File change request';
+  return 'Tool request';
 }
 
 function boundedInteger(value, fallback, minimum, maximum) {
@@ -121,13 +133,23 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Number.isInteger(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
 }
 
+async function emitApproved(tool, input) {
+  try {
+    const recheck = await policyDecision(tool, input);
+    emitDecision('PermissionRequest', recheck === 'deny' ? 'deny' : 'allow');
+  } catch {
+    if (isMcpTool(tool)) emitDecision('PermissionRequest', 'deny');
+    // Non-MCP interactive failures preserve Codex's normal permission flow.
+  }
+}
+
 async function handlePermissionRequest(tool, input) {
   const initial = await requestJson('/permission', {
-    method: 'POST', body: { tool, input: approvalSummary(input) }
+    method: 'POST', body: { tool, input: approvalDescriptor(tool) }
   });
   if (typeof initial.decision === 'string') {
     const decision = parseDecision(initial, ['allow', 'allowAlways', 'deny', 'ask']);
-    if (decision === 'allow' || decision === 'allowAlways') emitDecision('PermissionRequest', 'allow');
+    if (decision === 'allow' || decision === 'allowAlways') await emitApproved(tool, input);
     else if (decision === 'deny') emitDecision('PermissionRequest', 'deny');
     return;
   }
@@ -140,7 +162,8 @@ async function handlePermissionRequest(tool, input) {
     const response = await requestJson(`/permission/${encodeURIComponent(initial.id)}`);
     const decision = parseDecision(response, ['allow', 'allowAlways', 'deny', 'pending']);
     if (decision === 'pending') continue;
-    emitDecision('PermissionRequest', decision === 'deny' ? 'deny' : 'allow');
+    if (decision === 'deny') emitDecision('PermissionRequest', 'deny');
+    else await emitApproved(tool, input);
     return;
   }
 }
@@ -168,7 +191,7 @@ async function main() {
   try {
     policy = await policyDecision(tool, input);
   } catch {
-    failClosed(eventName);
+    failPolicyClosed(eventName, tool);
     return;
   }
 
