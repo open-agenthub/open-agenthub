@@ -27,17 +27,21 @@ public sealed class SlackSocketModeService : BackgroundService
     private readonly SlackThreadStore _threads;
     private readonly AgentHub.Api.Permissions.PermissionStore _permissions;
     private readonly ISessionService _sessions;
+    private readonly AgentHub.Api.Persistence.ISessionStore _store;
     private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
+    private readonly string _frontendOrigin;
     private readonly ILogger<SlackSocketModeService> _log;
 
     public SlackSocketModeService(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
         SlackThreadStore threads, AgentHub.Api.Permissions.PermissionStore permissions,
-        ISessionService sessions, WorkingIndicator indicator, IConfiguration cfg, ILogger<SlackSocketModeService> log)
+        ISessionService sessions, AgentHub.Api.Persistence.ISessionStore store,
+        WorkingIndicator indicator, IConfiguration cfg, ILogger<SlackSocketModeService> log)
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _permissions = permissions;
-        _sessions = sessions; _indicator = indicator;
+        _sessions = sessions; _store = store; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
+        _frontendOrigin = cfg["FrontendOrigin"] ?? "";
         _log = log;
     }
 
@@ -110,6 +114,13 @@ public sealed class SlackSocketModeService : BackgroundService
         var thread = await _threads.GetByThreadTsAsync(threadTs, ct);
         if (thread is null) return;
 
+        // "!status" is answered by the hub itself instead of being typed into the session.
+        if (textReply.Trim().Equals("!status", StringComparison.OrdinalIgnoreCase))
+        {
+            await PostStatusAsync(thread, threadTs, ct);
+            return;
+        }
+
         var info = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
         if (info?.PodIp is not { Length: > 0 } podIp || info.Phase != "Running")
         {
@@ -131,6 +142,18 @@ public sealed class SlackSocketModeService : BackgroundService
             var channel = thread.Channel;
             _indicator.Start(thread.SessionId, (text, c) => _slack.UpdateMessageAsync(channel, statusTs, text, null, c));
         }
+    }
+
+    /// <summary>Answers a "!status" thread reply with the session's current state.</summary>
+    private async Task PostStatusAsync(SlackThread thread, string threadTs, CancellationToken ct)
+    {
+        var live = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
+        var rec = await _store.GetAsync(thread.Owner, thread.SessionId, ct);
+        var pendingTool = await _permissions.GetPendingBySessionAsync(thread.SessionId, ct);
+        var link = _frontendOrigin.Length == 0 ? null : $"{_frontendOrigin}/s/{thread.SessionId}";
+        var text = AgentHub.Api.Chat.ChatFormatting.StatusText(
+            live?.Phase ?? "Unknown", rec?.QuestionPending ?? false, pendingTool, link);
+        await _slack.PostMessageAsync(thread.Channel, text, threadTs, ct);
     }
 
     // Handles a Block Kit button click on a permission prompt (perm:<decision>:<id>).
