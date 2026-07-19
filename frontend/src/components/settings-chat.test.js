@@ -100,6 +100,39 @@ describe('chat settings sections', () => {
     expect(wrapper.get('[data-signal-verify-msg]').text()).toContain('verified ✓')
   })
 
+  it('shows "Invalid or expired code." when verification fails with 400', async () => {
+    mocks.config.signalEnabled = true
+    // A saved-but-unverified number makes the verify field visible on load.
+    mocks.api.chatMe.mockResolvedValue({
+      ...chatMeDefault(),
+      signal: { configured: true, number: '+15551234567', verified: false, enabled: true }
+    })
+    const err = new Error('400 bad code'); err.status = 400
+    mocks.api.verifySignal.mockRejectedValue(err)
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.get('[data-signal-code]').setValue('000000')
+    await wrapper.get('[data-signal-verify]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-signal-verify-msg]').text()).toBe('Invalid or expired code.')
+  })
+
+  it('maps a 503 on save to the not-configured sentence', async () => {
+    mocks.config.signalEnabled = true
+    const err = new Error('503 {"error":"Signal is not configured on this instance."}'); err.status = 503
+    mocks.api.setSignalPrefs.mockRejectedValue(err)
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.get('[data-signal-number]').setValue('+15551234567')
+    await wrapper.get('[data-signal-save]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-signal-msg]').text()).toBe('Signal is not configured on this instance.')
+  })
+
   it('maps signal error statuses to inline messages', async () => {
     mocks.config.signalEnabled = true
     const err = new Error('409 taken'); err.status = 409
