@@ -1,0 +1,52 @@
+namespace AgentHub.Api.Chat;
+
+/// <summary>Platform-neutral chat text helpers: session tags, headers, splitting.</summary>
+public static class ChatFormatting
+{
+    /// <summary>Short session tag shown in chat (first 4 chars of the session id).</summary>
+    public static string Tag(string sessionId) => sessionId.Length <= 4 ? sessionId : sessionId[..4];
+
+    /// <summary>True when <paramref name="tag"/> is a non-empty prefix of the session id.</summary>
+    public static bool MatchesTag(string tag, string sessionId)
+        => tag.Length > 0 && sessionId.StartsWith(tag, StringComparison.OrdinalIgnoreCase);
+
+    public static string Header(string sessionId, string title) => $"🤖 #{Tag(sessionId)} · {title}";
+
+    /// <summary>
+    /// Splits text into chunks of at most maxLen, preferring line boundaries; a single
+    /// line longer than maxLen is hard-split. Joining chunks with "\n" (or "" for
+    /// hard-split-only input) reproduces the original text.
+    /// </summary>
+    public static IReadOnlyList<string> Split(string text, int maxLen)
+    {
+        var chunks = new List<string>();
+        if (string.IsNullOrEmpty(text)) return chunks;
+        var current = new System.Text.StringBuilder();
+        foreach (var rawLine in text.Split('\n'))
+        {
+            var line = rawLine;
+            while (line.Length > maxLen) // hard split an overlong line
+            {
+                if (current.Length > 0) { chunks.Add(current.ToString()); current.Clear(); }
+                chunks.Add(line[..maxLen]);
+                line = line[maxLen..];
+            }
+            if (current.Length + line.Length + 1 > maxLen && current.Length > 0)
+            { chunks.Add(current.ToString()); current.Clear(); }
+            if (current.Length > 0) current.Append('\n');
+            current.Append(line);
+        }
+        if (current.Length > 0) chunks.Add(current.ToString());
+        return chunks;
+    }
+
+    public static string StatusText(string phase, bool questionPending, string? pendingTool, string? link)
+    {
+        var lines = new List<string> { $"Status: {phase}" };
+        if (questionPending) lines.Add("💬 Waiting for your reply.");
+        if (pendingTool is not null) lines.Add($"🔒 Permission pending: {pendingTool}");
+        if (!questionPending && pendingTool is null && phase == "Running") lines.Add("⏳ Claude is working.");
+        if (!string.IsNullOrEmpty(link)) lines.Add(link);
+        return string.Join("\n", lines);
+    }
+}
