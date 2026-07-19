@@ -246,7 +246,7 @@ public sealed class KubernetesSessionService : ISessionService
         };
         await SpawnAsync(owner, rec, req, resume: true, ct);
         _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.AgentSessionId);
-        return ToInfo(rec, phase: "Pending", podIp: null);
+        return ToInfo(rec, phase: rec.Status, podIp: null);
     }
 
     /// <summary>
@@ -381,7 +381,19 @@ public sealed class KubernetesSessionService : ISessionService
             hasGitCreds = true;
         }
 
-        var podSpec = BuildPodSpec(owner, rec, req, resume, hasGitCreds);
+        var context = await BuildPodContextAsync(owner, rec, resume, hasGitCreds, ct);
+        var diagnostic = AgentPodSpecFactory.MissingCredentialDiagnostic(rec, context);
+        if (diagnostic is not null)
+        {
+            rec.Status = "Failed";
+            await _store.UpsertAsync(rec, ct);
+            await _store.SetScrollbackAsync(rec.Id, diagnostic, ct);
+            _log.LogWarning("Session {Id} failed credential preflight for {Agent}/{AuthMode}",
+                rec.Id, rec.Agent, rec.AuthMode);
+            return;
+        }
+
+        var podSpec = AgentPodSpecFactory.Build(rec, req, context);
 
         if (rec.Mode == SessionMode.Scheduled)
         {
@@ -482,235 +494,56 @@ public sealed class KubernetesSessionService : ISessionService
 
     // ---------------------------------------------------------------- Pod-Spec
 
-    private V1PodSpec BuildPodSpec(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, bool hasGitCreds = false)
+    private async Task<PodBuildContext> BuildPodContextAsync(
+        string owner, SessionRecord record, bool resume, bool hasGitCredentials, CancellationToken ct)
     {
-        var credsSecret = CredsSecretName(owner);
+        var hasApiKey = false;
+        var hasSubscription = false;
+        if (record.Mode is SessionMode.Autonomous or SessionMode.Scheduled)
+        {
+            var apiKey = record.Agent == AgentKind.Codex ? "openai_api_key" : "anthropic_api_key";
+            var providerKey = record.Agent == AgentKind.Codex ? "auth.json" : "credentials.json";
+            if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
+                hasApiKey = await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
+            if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
+                hasSubscription = await HasSecretKeyAsync(ProviderSecretName(owner, record.Agent), providerKey, ct);
+        }
+
         var ownerKey = Sanitize(owner);
-        var repos = NormalizeRepos(req);
-        var hasRepo = repos.Count > 0;
-        // MCP secret (mcp-{id}) persists across resumes, so mount whenever configured.
-        var hasMcp = !string.IsNullOrWhiteSpace(req.McpConfigJson);
-        var customImage = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image;
-        var asRoot = req.RunAsRoot;
-        var uid = asRoot ? 0L : 1000L;
-        var home = asRoot ? "/root" : "/home/agent";
-
-        // Root sessions: unprivileged (no privileged mode, seccomp, no privilege escalation), but UID 0 with
-        // default capabilities and a writable rootfs so apt & friends work.
-        var podSecurity = new V1PodSecurityContext
+        var claudeImage = string.IsNullOrWhiteSpace(_opts.ClaudeAgentImage) ? _opts.AgentImage : _opts.ClaudeAgentImage;
+        return new PodBuildContext
         {
-            RunAsNonRoot = !asRoot, RunAsUser = uid, RunAsGroup = uid, FsGroup = uid,
-            SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
-        };
-        V1SecurityContext ContainerSecurity() => new()
-        {
-            AllowPrivilegeEscalation = false, ReadOnlyRootFilesystem = !asRoot, RunAsNonRoot = !asRoot, RunAsUser = uid,
-            Capabilities = asRoot ? null : new V1Capabilities { Drop = new List<string> { "ALL" } }
-        };
-
-        var volumes = new List<V1Volume>
-        {
-            new() { Name = "workspace", EmptyDir = new V1EmptyDirVolumeSource() },
-            new() { Name = "home", EmptyDir = new V1EmptyDirVolumeSource() },
-            new() { Name = "tmp", EmptyDir = new V1EmptyDirVolumeSource() },
-            // Optional: sessions can start before the user ever saved credentials
-            // (all consumers check file existence; the volume is just empty then).
-            new() { Name = "creds", Secret = new V1SecretVolumeSource { SecretName = credsSecret, Optional = true, DefaultMode = 0x1A0 } },
-            // Claude subscription login (optional; only exists after the first login)
-            new() { Name = "claude", Secret = new V1SecretVolumeSource { SecretName = ProviderSecretName(owner, AgentKind.Claude), Optional = true, DefaultMode = 0x1A0 } }
-        };
-        if (hasMcp)
-            volumes.Add(new V1Volume { Name = "mcp", Secret = new V1SecretVolumeSource { SecretName = $"mcp-{rec.Id}", DefaultMode = 0x1A0 } });
-        if (hasGitCreds)
-            volumes.Add(new V1Volume { Name = "gitcreds", Secret = new V1SecretVolumeSource { SecretName = $"gitcreds-{rec.Id}", DefaultMode = 0x1A0 } });
-        if (customImage is not null)
-            volumes.Add(new V1Volume { Name = "runtime", EmptyDir = new V1EmptyDirVolumeSource() });
-
-        var mounts = new List<V1VolumeMount>
-        {
-            new() { Name = "workspace", MountPath = "/workspace" },
-            new() { Name = "home", MountPath = home },
-            new() { Name = "tmp", MountPath = "/tmp" },
-            new() { Name = "creds", MountPath = "/secrets/creds", ReadOnlyProperty = true },
-            new() { Name = "claude", MountPath = "/secrets/claude", ReadOnlyProperty = true }
-        };
-        if (hasMcp)
-            mounts.Add(new V1VolumeMount { Name = "mcp", MountPath = "/secrets/mcp", ReadOnlyProperty = true });
-        if (hasGitCreds)
-            mounts.Add(new V1VolumeMount { Name = "gitcreds", MountPath = "/secrets/gitcreds", ReadOnlyProperty = true });
-        if (customImage is not null)
-            mounts.Add(new V1VolumeMount { Name = "runtime", MountPath = "/opt/agenthub" });
-
-        var statePut = _artifacts.PresignPut(IArtifactStore.StateKey(ownerKey, rec.Id), PresignTtl);
-        var scrollPut = _artifacts.PresignPut(IArtifactStore.ScrollbackKey(ownerKey, rec.Id), PresignTtl);
-        var stateGet = resume ? _artifacts.PresignGet(IArtifactStore.StateKey(ownerKey, rec.Id), PresignTtl) : "";
-
-        var env = new List<V1EnvVar>
-        {
-            new() { Name = "HOME", Value = home },
-            new() { Name = "AGENTHUB_MODE", Value = req.Mode.ToString().ToLowerInvariant() },
-            new() { Name = "AGENTHUB_SESSION_ID", Value = rec.Id },
-            new() { Name = "AGENTHUB_CLAUDE_SESSION_ID", Value = rec.AgentSessionId },
-            new() { Name = "AGENTHUB_PORT", Value = _opts.AgentPort.ToString() },
-            new() { Name = "AGENTHUB_HAS_REPO", Value = hasRepo ? "1" : "0" },
-            new() { Name = "AGENTHUB_WORKDIR", Value = repos.Count == 1 ? "/workspace/repo" : "/workspace" },
-            new() { Name = "AGENTHUB_HAS_MCP", Value = hasMcp ? "1" : "0" },
-            new() { Name = "AGENTHUB_RESUME", Value = resume ? "1" : "0" },
-            new() { Name = "AGENTHUB_PROMPT", Value = req.Prompt ?? "" },
-            new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = string.Join(",", EffectivePolicy(req.Policy, req.AllowedTools).AllowedTools) },
-            new() { Name = "AGENTHUB_CALLBACK_URL", Value = $"{_callbackBaseUrl}/internal/sessions/{rec.Id}" },
-            new() { Name = "AGENTHUB_CALLBACK_TOKEN", Value = rec.CallbackToken },
-            new() { Name = "AGENTHUB_S3_INSECURE", Value = _s3Insecure ? "1" : "0" },
-            new() { Name = "AGENTHUB_STATE_PUT_URL", Value = statePut },
-            new() { Name = "AGENTHUB_STATE_GET_URL", Value = stateGet },
-            new() { Name = "AGENTHUB_SCROLLBACK_PUT_URL", Value = scrollPut },
-            new()
+            Owner = owner,
+            CredentialsSecretName = CredsSecretName(owner),
+            ClaudeCredentialSecretName = ProviderSecretName(owner, AgentKind.Claude),
+            CodexCredentialSecretName = ProviderSecretName(owner, AgentKind.Codex),
+            HasSelectedApiKey = hasApiKey,
+            HasSelectedSubscriptionCredential = hasSubscription,
+            HasGitCredentials = hasGitCredentials,
+            CallbackUrl = $"{_callbackBaseUrl}/internal/sessions/{record.Id}",
+            StatePutUrl = _artifacts.PresignPut(IArtifactStore.StateKey(ownerKey, record.Id), PresignTtl),
+            StateGetUrl = resume ? _artifacts.PresignGet(IArtifactStore.StateKey(ownerKey, record.Id), PresignTtl) : "",
+            ScrollbackPutUrl = _artifacts.PresignPut(IArtifactStore.ScrollbackKey(ownerKey, record.Id), PresignTtl),
+            S3Insecure = _s3Insecure,
+            RuntimeImages = new AgentRuntimeImages(claudeImage, _opts.CodexAgentImage, _opts.AgentImagePullPolicy),
+            Runtime = new AgentPodRuntimeSettings
             {
-                Name = "ANTHROPIC_API_KEY",
-                ValueFrom = new V1EnvVarSource { SecretKeyRef = new V1SecretKeySelector { Name = credsSecret, Key = "anthropic_api_key", Optional = true } }
+                AgentPort = _opts.AgentPort,
+                GitCloneImage = _opts.GitCloneImage,
+                ImagePullSecret = _opts.ImagePullSecret,
+                RuntimeClassName = _opts.RuntimeClassName,
+                MaxCpu = _opts.MaxCpu,
+                MaxMemory = _opts.MaxMemory,
+                TelemetryEnabled = _opts.TelemetryEnabled,
+                TelemetryOtlpEndpoint = _opts.TelemetryOtlpEndpoint
             }
-        };
-
-        // OpenTelemetry: let Claude Code export token/cost metrics to the internal backend.
-        // Claude Code reads these OTEL_* vars natively; the exporter POSTs OTLP/HTTP protobuf to
-        // <endpoint>/v1/metrics (handled by OtelController). Delta temporality so the backend can
-        // simply sum increments (also correct across resumes, which reuse the same session.id).
-        if (_opts.TelemetryEnabled)
-        {
-            var otlpBase = string.IsNullOrWhiteSpace(_opts.TelemetryOtlpEndpoint)
-                ? $"{_callbackBaseUrl}/internal/otel"
-                : _opts.TelemetryOtlpEndpoint.TrimEnd('/');
-            env.Add(new() { Name = "CLAUDE_CODE_ENABLE_TELEMETRY", Value = "1" });
-            env.Add(new() { Name = "OTEL_METRICS_EXPORTER", Value = "otlp" });
-            // Only metrics are collected; keep traces/logs off so nothing 404s our metrics endpoint.
-            env.Add(new() { Name = "OTEL_TRACES_EXPORTER", Value = "none" });
-            env.Add(new() { Name = "OTEL_LOGS_EXPORTER", Value = "none" });
-            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_PROTOCOL", Value = "http/protobuf" });
-            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_ENDPOINT", Value = otlpBase });
-            // Also set the metrics-specific endpoint to the full path, so it works whether
-            // or not the exporter appends "/v1/metrics" to the base.
-            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", Value = $"{otlpBase}/v1/metrics" });
-            env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", Value = "delta" });
-            // Export fairly often so the dashboard reflects a running session without a long lag.
-            env.Add(new() { Name = "OTEL_METRIC_EXPORT_INTERVAL", Value = "30000" });
-            // Custom keys: Claude Code sets its own session.id/user.id resource attributes,
-            // so we use agenthub.* (read back by OtlpMetricsParser) to avoid the collision.
-            env.Add(new()
-            {
-                Name = "OTEL_RESOURCE_ATTRIBUTES",
-                Value = $"agenthub.session_id={rec.Id},agenthub.owner={owner}"
-            });
-        }
-
-        var initContainers = new List<V1Container>();
-
-        // Custom image: copy the session-agent, Node runtime, and Claude CLI from the default
-        // image into an emptyDir so they are available inside the foreign image.
-        if (customImage is not null)
-        {
-            const string copyScript = """
-                set -e
-                mkdir -p /opt/agenthub/bin /opt/agenthub/lib
-                cp -r /opt/session-agent /opt/agenthub/session-agent
-                cp /usr/local/bin/node /opt/agenthub/bin/node
-                cp -r /usr/local/lib/node_modules /opt/agenthub/lib/node_modules
-                cp /usr/local/bin/entrypoint.sh /opt/agenthub/entrypoint.sh
-                # claude launcher: resolve the symlink target of the global npm install and link it
-                target=$(readlink -f /usr/local/bin/claude)
-                ln -sf "/opt/agenthub/${target#/usr/local/}" /opt/agenthub/bin/claude
-                chmod -R a+rX /opt/agenthub
-                chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/claude)"
-                echo "Runtime copied to /opt/agenthub."
-                """;
-            initContainers.Add(new V1Container
-            {
-                Name = "copy-runtime", Image = _opts.AgentImage, ImagePullPolicy = _opts.AgentImagePullPolicy,
-                Command = new List<string> { "/bin/sh", "-c", copyScript },
-                VolumeMounts = new List<V1VolumeMount> { new() { Name = "runtime", MountPath = "/opt/agenthub" } },
-                SecurityContext = ContainerSecurity()
-            });
-        }
-
-        // Clone on resume too: the workspace lives in an emptyDir and is gone after a
-        // pause/stop, so a resumed session needs a fresh checkout (Claude's own state
-        // is restored separately from S3). Also ensures the working dir exists.
-        if (hasRepo)
-        {
-            // One line per repo: "<dest>\t<branch>\t<url>" (branch may be empty).
-            var reposEnv = string.Join("\n", DestFor(repos).Select(x => $"{x.dest}\t{x.repo.Branch}\t{x.repo.Url}"));
-            var cloneScript = """
-                set -e
-                if [ -f /secrets/creds/ssh_key ]; then
-                  cp /secrets/creds/ssh_key /tmp/id && chmod 600 /tmp/id
-                  export GIT_SSH_COMMAND="ssh -i /tmp/id -o IdentitiesOnly=yes -o UserKnownHostsFile=/secrets/creds/known_hosts -o StrictHostKeyChecking=yes"
-                fi
-                # HTTPS remotes: connected-provider OAuth tokens (credential store) win;
-                # otherwise fall back to a manually stored GitLab PAT. Copy the store to a
-                # writable path — the secret mount is read-only, so git's credential store
-                # cannot take its lock there. $HOME is shared with the agent container, so
-                # rebuild the helper list idempotently (unset first).
-                git config --global --unset-all credential.helper 2>/dev/null || true
-                if [ -f /secrets/gitcreds/credentials ]; then
-                  cp /secrets/gitcreds/credentials "$HOME/.git-credentials" && chmod 600 "$HOME/.git-credentials"
-                  git config --global credential.helper store
-                fi
-                if [ -f /secrets/creds/gitlab_token ]; then
-                  git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
-                fi
-                TAB=$(printf '\t')
-                printf '%s\n' "$REPOS" | while IFS="$TAB" read -r dest branch url; do
-                  [ -z "$url" ] && continue
-                  echo "Cloning $url (branch: ${branch:-default}) -> /workspace/$dest"
-                  if [ -n "$branch" ]; then git clone --branch "$branch" "$url" "/workspace/$dest"
-                  else git clone "$url" "/workspace/$dest"; fi
-                done
-                echo "Clone finished."
-                """;
-            initContainers.Add(new V1Container
-            {
-                Name = "git-clone", Image = _opts.GitCloneImage,
-                Command = new List<string> { "/bin/sh", "-c", cloneScript },
-                Env = new List<V1EnvVar>
-                {
-                    new() { Name = "REPOS", Value = reposEnv },
-                    new() { Name = "HOME", Value = home }
-                },
-                VolumeMounts = mounts, SecurityContext = ContainerSecurity()
-            });
-        }
-
-        var agent = new V1Container
-        {
-            Name = "agent", Image = customImage ?? _opts.AgentImage, ImagePullPolicy = customImage is null ? _opts.AgentImagePullPolicy : "IfNotPresent",
-            // In a foreign image the entrypoint lives in the copied runtime volume (requires bash in the image).
-            Command = customImage is null ? null : new List<string> { "/bin/bash", "/opt/agenthub/entrypoint.sh" },
-            Ports = new List<V1ContainerPort> { new() { ContainerPort = _opts.AgentPort, Name = "term" } },
-            Env = env, VolumeMounts = mounts, SecurityContext = ContainerSecurity(),
-            Resources = new V1ResourceRequirements
-            {
-                Requests = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(req.Cpu), ["memory"] = new(req.Memory) },
-                Limits = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(_opts.MaxCpu), ["memory"] = new(_opts.MaxMemory) }
-            },
-            ReadinessProbe = new V1Probe { TcpSocket = new V1TCPSocketAction { Port = _opts.AgentPort }, InitialDelaySeconds = 5, PeriodSeconds = 10 }
-        };
-
-        return new V1PodSpec
-        {
-            RestartPolicy = "Never",
-            AutomountServiceAccountToken = false,
-            ServiceAccountName = "agenthub-agent",
-            SecurityContext = podSecurity,
-            EnableServiceLinks = false,
-            ImagePullSecrets = string.IsNullOrEmpty(_opts.ImagePullSecret) ? null : new List<V1LocalObjectReference> { new() { Name = _opts.ImagePullSecret } },
-            InitContainers = initContainers.Count > 0 ? initContainers : null,
-            Containers = new List<V1Container> { agent },
-            Volumes = volumes,
-            RuntimeClassName = string.IsNullOrEmpty(_opts.RuntimeClassName) ? null : _opts.RuntimeClassName
         };
     }
 
-    // ---------------------------------------------------------------- Helpers
+    private async Task<bool> HasSecretKeyAsync(string secretName, string key, CancellationToken ct) =>
+        (await ReadSecretOrNullAsync(secretName, ct))?.Data?.ContainsKey(key) == true;
 
+    // ---------------------------------------------------------------- Helpers
     private async Task CreateMcpSecretAsync(string owner, string id, string json, CancellationToken ct) =>
         await UpsertSecretAsync(new V1Secret
         {
@@ -793,7 +626,10 @@ public sealed class KubernetesSessionService : ISessionService
 public sealed class AgentHubOptions
 {
     public string Namespace { get; set; } = "agenthub-sessions";
+    /// <summary>Legacy Claude image option; used when ClaudeAgentImage is unset.</summary>
     public string AgentImage { get; set; } = "";
+    public string ClaudeAgentImage { get; set; } = "";
+    public string CodexAgentImage { get; set; } = "";
     public int AgentPort { get; set; } = 7681;
     public string GitCloneImage { get; set; } = "alpine/git:2.45.2";
     /// <summary>Pull policy for the agent/runtime image. Set "Always" when the agent
