@@ -109,8 +109,10 @@ ee:
   # License service the instance reports its seat count to (heartbeat). Reporting renews
   # the license token; the reported month-close count drives Stripe seat billing. Empty
   # disables reporting. See the privacy policy — only an aggregate user count is sent.
+  # Whatever URL is configured, tokens are only accepted if signed by the official
+  # service key — the verifying public key is compiled into the backend binary.
   license:
-    serviceUrl: ""
+    serviceUrl: "https://license.instances.open-agenthub.on-mb.com"
     reportIntervalHours: 24
   # Slack integration: asks you in a Slack thread whenever a session waits for input,
   # and turns your thread replies into the agent's answer. Uses Socket Mode.
