@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using AgentHub.Api.Models;
 using AgentHub.Api.Notifications;
 using AgentHub.Api.Permissions;
@@ -25,10 +26,10 @@ public sealed class InternalController : ControllerBase
     private readonly ISessionService _svc;
     private readonly PermissionStore _permissions;
     private readonly IPermissionNotifier _permNotifier;
-    private readonly SessionShareStore _shares;
+    private readonly ISessionMcpPolicyReader _shares;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
-        PermissionStore permissions, IPermissionNotifier permNotifier, SessionShareStore shares)
+        PermissionStore permissions, IPermissionNotifier permNotifier, ISessionMcpPolicyReader shares)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifier = permNotifier; _shares = shares;
@@ -133,6 +134,7 @@ public sealed class InternalController : ControllerBase
     }
 
     public record PermissionBody(string Tool, string? Input);
+    public record AgentPolicyBody(string Tool, JsonElement Input);
 
     /// <summary>
     /// The agent's PreToolUse hook asks whether a tool may run. If the owner has a Slack
@@ -179,6 +181,42 @@ public sealed class InternalController : ControllerBase
             body.Tool ?? string.Empty, policy.BlockedServers, policy.BlockedTools);
         return Ok(new { decision = blocked ? "deny" : "allow" });
     }
+
+    /// <summary>Evaluates persisted Codex policy after the authoritative live sharing policy.</summary>
+    [HttpPost("agent-policy")]
+    public async Task<IActionResult> AgentPolicy(string id, [FromBody] AgentPolicyBody body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        if ((body.Tool ?? string.Empty).StartsWith("mcp__", StringComparison.Ordinal))
+        {
+            var sharing = await _shares.GetMcpPolicyAsync(id, ct);
+            if (sharing is not null && McpPolicyMatcher.IsBlocked(
+                    body.Tool ?? string.Empty, sharing.BlockedServers, sharing.BlockedTools))
+                return Ok(new { decision = "deny", reason = "Blocked by the session MCP sharing policy." });
+        }
+
+        if (rec.Mode == SessionMode.Interactive)
+            return Ok(new { decision = "ask", reason = "Interactive approval required." });
+
+        AgentPolicy policy;
+        try
+        {
+            policy = string.IsNullOrWhiteSpace(rec.AgentPolicyJson)
+                ? new AgentPolicy()
+                : JsonSerializer.Deserialize<AgentPolicy>(rec.AgentPolicyJson,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? new AgentPolicy();
+        }
+        catch (JsonException)
+        {
+            policy = new AgentPolicy();
+        }
+
+        var result = AgentPolicyMatcher.Decide(policy, body.Tool ?? string.Empty, body.Input);
+        return Ok(new { decision = result.Decision, reason = result.Reason });
+    }
+
     /// <summary>Mints a presigned PUT URL so the agent can upload an artifact to S3.</summary>
     [HttpPost("artifact-url")]
     public async Task<IActionResult> ArtifactUrl(string id, [FromQuery] string name, CancellationToken ct)

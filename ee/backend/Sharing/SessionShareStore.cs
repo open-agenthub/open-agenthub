@@ -6,7 +6,7 @@ using NpgsqlTypes;
 
 namespace AgentHub.Api.Ee.Sharing;
 
-public sealed class SessionShareStore : ISessionAccessStore
+public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyReader
 {
     private readonly NpgsqlDataSource _db;
     private readonly ILogger<SessionShareStore> _logger;
