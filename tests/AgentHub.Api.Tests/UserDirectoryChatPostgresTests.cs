@@ -27,6 +27,54 @@ public class UserDirectoryChatPostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task TelegramLink_SecondUserSteals()
+    {
+        await using var database = await PostgresUserDirectoryDatabase.CreateAsync();
+        await database.Directory.RecordLoginAsync("alice", "alice@example.com", "Alice");
+        await database.Directory.RecordLoginAsync("bob", "bob@example.com", "Bob");
+
+        Assert.False(await database.Directory.SetTelegramLinkAsync("alice", "chat-x", isForum: false));
+        Assert.True(await database.Directory.SetTelegramLinkAsync("bob", "chat-x", isForum: false));
+
+        var linked = await database.Directory.GetByTelegramChatAsync("chat-x");
+        Assert.NotNull(linked);
+        Assert.Equal("bob", linked.Owner);
+
+        var alice = await database.Directory.GetAsync("alice");
+        Assert.NotNull(alice);
+        Assert.Null(alice.TelegramChatId);
+    }
+
+    [PostgreSqlFact]
+    public async Task SignalNumber_ConflictReturnsFalse()
+    {
+        await using var database = await PostgresUserDirectoryDatabase.CreateAsync();
+        await database.Directory.RecordLoginAsync("alice", "alice@example.com", "Alice");
+        await database.Directory.RecordLoginAsync("bob", "bob@example.com", "Bob");
+
+        Assert.True(await database.Directory.SetSignalNumberAsync("alice", "+15550009999"));
+        Assert.False(await database.Directory.SetSignalNumberAsync("bob", "+15550009999"));
+
+        var bob = await database.Directory.GetAsync("bob");
+        Assert.NotNull(bob);
+        Assert.Null(bob.SignalNumber);
+    }
+
+    [PostgreSqlFact]
+    public async Task SignalNumber_ResaveSameNumber_KeepsVerified()
+    {
+        await using var database = await PostgresUserDirectoryDatabase.CreateAsync();
+        await database.Directory.SetSignalNumberAsync("maik", "+15550001111");
+        await database.Directory.SetSignalVerifiedAsync("maik", true);
+
+        Assert.True(await database.Directory.SetSignalNumberAsync("maik", "+15550001111"));
+
+        var user = await database.Directory.GetAsync("maik");
+        Assert.NotNull(user);
+        Assert.True(user.SignalVerified);
+    }
+
+    [PostgreSqlFact]
     public async Task SignalNumberChange_ResetsVerification()
     {
         await using var database = await PostgresUserDirectoryDatabase.CreateAsync();
@@ -57,6 +105,8 @@ public class UserDirectoryChatPostgresTests
         Assert.True(user.TelegramEnabled);
         Assert.True(user.SignalEnabled);
         Assert.Null(user.TelegramChatId);
+        Assert.False(user.TelegramForum);
+        Assert.Null(user.SignalNumber);
         Assert.False(user.SignalVerified);
     }
 }
