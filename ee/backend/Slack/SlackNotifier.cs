@@ -67,23 +67,22 @@ public sealed class SlackNotifier : INotifier
                 await _threads.UpsertAsync(thread, ct);
             }
 
-            // Post the question itself as a clean Slack quote. We deliberately do NOT
+            // Post the question itself as a clean Slack quote, split across follow-up
+            // messages if it exceeds Slack's comfortable size. We deliberately do NOT
             // dump the terminal scrollback: Claude's full-screen TUI is a mess of ANSI
             // redraws once stripped. The web terminal (linked in the thread header) has
-            // the full context; here we keep it readable and answerable.
-            await _slack.PostMessageAsync(thread.Channel, Quote(message), thread.ThreadTs, ct);
+            // the full context; here we keep it readable and answerable. Each line must
+            // START with "> " for Slack to render it as a blockquote.
+            var chunks = AgentHub.Api.Chat.ChatFormatting.Split(Escape(message.Trim()), 3800);
+            for (var i = 0; i < chunks.Count; i++)
+            {
+                var quoted = string.Join("\n", chunks[i].Split('\n').Select(l => "> " + l));
+                var label = i == 0 ? ":speech_balloon: *The agent says:*" : $"_… ({i + 1}/{chunks.Count})_";
+                await _slack.PostMessageAsync(thread.Channel, label + "\n" + quoted, thread.ThreadTs, ct);
+            }
         }
         catch (Exception ex) { _log.LogWarning(ex, "Slack notify failed for session {Id}", s.Id); }
     }
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
-    // A label line, then the message as a Slack blockquote — each line must START with
-    // "> " for Slack to render it as a quote.
-    private static string Quote(string s)
-    {
-        s = Escape(s.Trim());
-        if (s.Length > 2500) s = s[..2500] + " …";
-        var quoted = string.Join("\n", s.Split('\n').Select(l => "> " + l));
-        return ":speech_balloon: *The agent says:*\n" + quoted;
-    }
 }
