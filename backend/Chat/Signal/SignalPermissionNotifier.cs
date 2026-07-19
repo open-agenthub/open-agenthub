@@ -30,9 +30,11 @@ public sealed class SignalPermissionNotifier : IPermissionNotifier, IPermissionP
         if (!_opts.CanRun) return false;
 
         // Prefer the session's existing conversation, else the owner's verified number.
+        // A binding whose target no longer matches the owner's current verified, enabled
+        // number (numbers get recycled, users opt out) is treated as absent.
         string number;
         var binding = await _bindings.GetAsync("signal", req.SessionId, ct);
-        if (binding is not null)
+        if (binding is not null && await IsBindingCurrentAsync(binding, ct))
         {
             number = binding.ChatId;
         }
@@ -52,6 +54,14 @@ public sealed class SignalPermissionNotifier : IPermissionNotifier, IPermissionP
         if (ts is null) return false;
         await _store.SetPromptMessageAsync(req.Id, "signal", number, ts, ct);
         return true;
+    }
+
+    /// <summary>True when the binding's target still is the owner's current, verified and
+    /// enabled Signal number — a stale target must never receive a permission prompt.</summary>
+    private async Task<bool> IsBindingCurrentAsync(ChatBinding binding, CancellationToken ct)
+    {
+        var user = await _users.GetAsync(binding.Owner, ct);
+        return user is { SignalEnabled: true, SignalVerified: true } && user.SignalNumber == binding.ChatId;
     }
 
     /// <summary>The request can no longer be answered. Signal cannot edit the prompt,

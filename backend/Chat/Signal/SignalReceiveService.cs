@@ -16,6 +16,13 @@ namespace AgentHub.Api.Chat.Signal;
 /// </summary>
 public sealed class SignalReceiveService : BackgroundService
 {
+    /// <summary>A half-open TCP connection would hang ReceiveAsync forever (no keep-alive
+    /// timeout on this runtime): no complete message within this window → reconnect.</summary>
+    private static readonly TimeSpan ReceiveWatchdogTimeout = TimeSpan.FromMinutes(15);
+
+    /// <summary>Anything bigger than this is not a chat event we care about — skip it.</summary>
+    private const int MaxMessageBytes = 4 * 1024 * 1024;
+
     private readonly SignalOptions _opts;
     private readonly SignalClient _signal;
     private readonly ChatBindingStore _bindings;
@@ -63,12 +70,25 @@ public sealed class SignalReceiveService : BackgroundService
         await ws.ConnectAsync(_signal.GetReceiveUri(), ct);
         _log.LogInformation("Signal receive WebSocket connected.");
 
-        // signal-cli keeps the socket open and pushes frames — no artificial idle
-        // timeout; Close frames and transport errors bubble to the resilience loop.
+        // signal-cli keeps the socket open and pushes frames. A watchdog caps the wait
+        // per message (deadline reset after every received one): when it fires we treat
+        // it as a normal reconnect, not an error — idle chats reconnecting every 15 min
+        // are harmless, dead sockets recover.
         var buf = new byte[64 * 1024];
         while (ws.State == WebSocketState.Open && !ct.IsCancellationRequested)
         {
-            var (text, closed) = await ReceiveFullAsync(ws, buf, ct);
+            string text;
+            bool closed;
+            using (var watchdog = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                watchdog.CancelAfter(ReceiveWatchdogTimeout);
+                try { (text, closed) = await ReceiveFullAsync(ws, buf, watchdog.Token); }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    _log.LogDebug("Signal receive socket idle for {Timeout} — reconnecting", ReceiveWatchdogTimeout);
+                    break;
+                }
+            }
             if (closed) break;
             if (text.Length == 0) continue;
 
@@ -98,7 +118,7 @@ public sealed class SignalReceiveService : BackgroundService
 
         if (e is { ReactionEmoji: not null, ReactionTargetTimestamp: not null })
         {
-            await HandleReactionAsync(e, ct);
+            await HandleReactionAsync(e, user, ct);
             return;
         }
 
@@ -110,11 +130,13 @@ public sealed class SignalReceiveService : BackgroundService
         if (text.Equals("always", StringComparison.OrdinalIgnoreCase) && e.QuotedTimestamp is not null)
         {
             var req = await _permissions.GetByPromptMessageAsync("signal", e.Sender, e.QuotedTimestamp, ct);
-            if (req is not null)
+            if (req is not null && req.Owner == user.Owner)
             {
                 var resolved = await _permissions.ResolveAsync(req.Id, "allowAlways", ct: ct);
-                if (resolved is not null)
-                    await _signal.SendAsync(e.Sender, $"✅ Allowed — {resolved.Tool} (won't ask again this run)", ct);
+                // A typed message deserves feedback either way (reactions stay silent).
+                await _signal.SendAsync(e.Sender, resolved is not null
+                    ? $"✅ Allowed — {resolved.Tool} (won't ask again this run)"
+                    : "Already decided/expired — see the web terminal.", ct);
                 return;
             }
         }
@@ -142,18 +164,13 @@ public sealed class SignalReceiveService : BackgroundService
     /// <summary>👍/👎 on a permission prompt resolves it; other emoji (and reactions on
     /// non-prompt messages) are ignored. Already-decided/expired prompts stay silent —
     /// reaction spam must not produce message spam.</summary>
-    private async Task HandleReactionAsync(SignalEnvelope e, CancellationToken ct)
+    private async Task HandleReactionAsync(SignalEnvelope e, AppUser user, CancellationToken ct)
     {
         var req = await _permissions.GetByPromptMessageAsync("signal", e.Sender, e.ReactionTargetTimestamp!, ct);
         if (req is null) return;
+        if (req.Owner != user.Owner) return; // never decide another account's request
 
-        // StartsWith tolerates skin-tone variants (👍🏽) — still the same gesture.
-        var decision = e.ReactionEmoji switch
-        {
-            not null when e.ReactionEmoji.StartsWith("👍", StringComparison.Ordinal) => "allow",
-            not null when e.ReactionEmoji.StartsWith("👎", StringComparison.Ordinal) => "deny",
-            _ => null
-        };
+        var decision = ReactionDecision(e.ReactionEmoji!);
         if (decision is null) return;
 
         var resolved = await _permissions.ResolveAsync(req.Id, decision, ct: ct);
@@ -162,6 +179,14 @@ public sealed class SignalReceiveService : BackgroundService
         var verb = decision == "deny" ? "⛔ Denied" : "✅ Allowed";
         await _signal.SendAsync(e.Sender, $"{verb} — {resolved.Tool}", ct);
     }
+
+    /// <summary>Maps a reaction emoji to a permission decision: 👍 → "allow", 👎 → "deny",
+    /// anything else → null. StartsWith tolerates skin-tone variants (👍🏽) — still the
+    /// same gesture. Pure — exposed for tests.</summary>
+    public static string? ReactionDecision(string emoji)
+        => emoji.StartsWith("👍", StringComparison.Ordinal) ? "allow"
+         : emoji.StartsWith("👎", StringComparison.Ordinal) ? "deny"
+         : null;
 
     // ------------------------------------------------------------------- commands
 
@@ -278,16 +303,22 @@ public sealed class SignalReceiveService : BackgroundService
         return await _bindings.GetActiveAsync("signal", e.Sender, ct);
     }
 
-    private static async Task<(string text, bool closed)> ReceiveFullAsync(ClientWebSocket ws, byte[] buf, CancellationToken ct)
+    private async Task<(string text, bool closed)> ReceiveFullAsync(ClientWebSocket ws, byte[] buf, CancellationToken ct)
     {
         using var ms = new MemoryStream();
         WebSocketReceiveResult msg;
+        var oversized = false;
         do
         {
             msg = await ws.ReceiveAsync(buf, ct);
             if (msg.MessageType == WebSocketMessageType.Close) return ("", true);
-            ms.Write(buf, 0, msg.Count);
+            if (!oversized && ms.Length + msg.Count > MaxMessageBytes)
+            {
+                oversized = true; // drain the rest of the message, then drop it
+                _log.LogWarning("Signal receive message exceeds {Max} bytes — skipping it", MaxMessageBytes);
+            }
+            if (!oversized) ms.Write(buf, 0, msg.Count);
         } while (!msg.EndOfMessage);
-        return (Encoding.UTF8.GetString(ms.ToArray()), false);
+        return (oversized ? "" : Encoding.UTF8.GetString(ms.ToArray()), false);
     }
 }

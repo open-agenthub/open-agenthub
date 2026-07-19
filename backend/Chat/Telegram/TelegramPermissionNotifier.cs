@@ -30,9 +30,11 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
         if (!_opts.CanRun) return false;
 
         // Prefer the session's existing conversation (topic/DM), else the owner's DM.
+        // A binding whose target no longer matches the owner's currently linked, enabled
+        // chat (chats get re-linked, users opt out) is treated as absent.
         string? chatId, threadId;
         var binding = await _bindings.GetAsync("telegram", req.SessionId, ct);
-        if (binding is not null)
+        if (binding is not null && await IsBindingCurrentAsync(binding, ct))
         {
             chatId = binding.ChatId;
             threadId = binding.ThreadId;
@@ -58,6 +60,14 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
         if (mid is null) return false;
         await _store.SetPromptMessageAsync(req.Id, "telegram", chatId, mid, ct);
         return true;
+    }
+
+    /// <summary>True when the binding's target still is the owner's currently linked,
+    /// enabled Telegram chat — a stale target must never receive a permission prompt.</summary>
+    private async Task<bool> IsBindingCurrentAsync(ChatBinding binding, CancellationToken ct)
+    {
+        var user = await _users.GetAsync(binding.Owner, ct);
+        return user is { TelegramEnabled: true } && user.TelegramChatId == binding.ChatId;
     }
 
     /// <summary>The request can no longer be answered: drop the buttons so the prompt doesn't look alive.</summary>

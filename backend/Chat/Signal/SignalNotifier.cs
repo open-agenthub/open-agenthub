@@ -40,6 +40,15 @@ public sealed class SignalNotifier : INotifier
             // The session produced an event — the working indicator (if any) is obsolete.
             // On Signal it is a static message (no edits), so remove it best-effort.
             _indicator.Stop(s.Id);
+
+            // Numbers get recycled and users opt out or verify a new number: the stored
+            // binding is only a hint — the user row decides where (and whether) to send.
+            if (binding is not null && !await IsBindingCurrentAsync(binding, ct))
+            {
+                if (eventType != "question") return; // never send to a stale/opted-out target
+                binding = null; // the create path re-validates and re-binds at the current number
+            }
+
             if (binding?.StatusRef is { } statusRef)
             {
                 await _signal.TryDeleteAsync(binding.ChatId, statusRef, ct);
@@ -105,6 +114,14 @@ public sealed class SignalNotifier : INotifier
         await _bindings.UpsertAsync(binding, ct);
         await _bindings.RecordMessageAsync("signal", binding.ChatId, headerTs, s.Id, ct);
         return binding;
+    }
+
+    /// <summary>True when the binding's target still is the owner's current, verified and
+    /// enabled Signal number — a stale target must never receive session content.</summary>
+    private async Task<bool> IsBindingCurrentAsync(ChatBinding binding, CancellationToken ct)
+    {
+        var user = await _users.GetAsync(binding.Owner, ct);
+        return user is { SignalEnabled: true, SignalVerified: true } && user.SignalNumber == binding.ChatId;
     }
 
     /// <summary>
