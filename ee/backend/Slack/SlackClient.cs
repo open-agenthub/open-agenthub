@@ -74,13 +74,21 @@ public sealed class SlackClient
         catch (Exception ex) { _log.LogWarning(ex, "Slack postMessage(blocks) error"); return null; }
     }
 
-    /// <summary>Replaces a message's text/blocks (chat.update) — used to show a resolved decision.</summary>
-    public async Task UpdateMessageAsync(string channel, string ts, string text, object? blocks, CancellationToken ct)
+    /// <summary>Replaces a message's text/blocks (chat.update); returns whether Slack accepted the edit.</summary>
+    public async Task<bool> UpdateMessageAsync(string channel, string ts, string text, object? blocks, CancellationToken ct)
     {
         var c = Client(_opts.BotToken);
         var body = new Dictionary<string, object?> { ["channel"] = channel, ["ts"] = ts, ["text"] = text, ["blocks"] = blocks ?? Array.Empty<object>() };
-        try { await c.PostAsJsonAsync("https://slack.com/api/chat.update", body, ct); }
-        catch (Exception ex) { _log.LogWarning(ex, "Slack chat.update error"); }
+        try
+        {
+            using var resp = await c.PostAsJsonAsync("https://slack.com/api/chat.update", body, ct);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var root = doc.RootElement;
+            if (root.TryGetProperty("ok", out var ok) && ok.GetBoolean()) return true;
+            _log.LogWarning("Slack chat.update failed: {Err}", root.TryGetProperty("error", out var e) ? e.GetString() : "unknown");
+            return false;
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Slack chat.update error"); return false; }
     }
 
     /// <summary>Deletes a message (chat.delete) — used to remove the transient "working…" status.</summary>
