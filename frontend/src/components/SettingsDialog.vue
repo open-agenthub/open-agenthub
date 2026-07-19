@@ -66,7 +66,11 @@ async function saveTelegram() {
 async function generateTelegramCode() {
   tgBusy.value = true; tgError.value = ''
   try { tgLink.value = await api.telegramLinkCode() }
-  catch (e) { tgError.value = String(e.message || e) }
+  catch (e) {
+    tgError.value = e.status === 503
+      ? 'Telegram is not configured on this instance.'
+      : String(e.message || e)
+  }
   finally { tgBusy.value = false }
 }
 
@@ -105,14 +109,17 @@ async function saveSignal() {
       signalMsg.value = 'Verification code sent via Signal — enter it below.'
     } else {
       signalMsg.value = 'Saved ✓'
-      await loadChat()
     }
     signalMsgOk.value = true
+    // Refresh in both branches: after a 202 the status line must show the newly
+    // persisted (unverified) number, not a stale "verified ✓ (+old)".
+    await loadChat()
   } catch (e) {
     signalMsgOk.value = false
     signalMsg.value =
       e.status === 409 ? 'This number is already linked to another account.'
       : e.status === 400 ? 'Please enter a valid number in international format.'
+      : e.status === 503 ? 'Signal is not configured on this instance.'
       : String(e.message || e)
   } finally { signalBusy.value = false }
 }
@@ -237,10 +244,10 @@ const curlStatus = computed(() =>
           <input type="checkbox" v-model="chat.telegram.enabled" /> Send me Telegram notifications
         </label>
         <div v-if="tgLink" class="field" data-telegram-link>
-          <label>
+          <p class="note">
             Open the link, or send /link {{ tgLink.code }} to the bot — in a DM or in your forum group.
             The code expires in 10 minutes.
-          </label>
+          </p>
           <div>
             <code data-telegram-code>{{ tgLink.code }}</code>
             <a v-if="tgLink.deepLink" :href="tgLink.deepLink" target="_blank" rel="noopener">Open in Telegram</a>
@@ -271,7 +278,7 @@ const curlStatus = computed(() =>
         </div>
         <p v-if="signalMsg" :class="signalMsgOk ? 'ok-text' : 'err'" data-signal-msg>{{ signalMsg }}</p>
         <div class="slack-actions">
-          <button class="primary" :disabled="signalBusy" data-signal-save @click="saveSignal">{{ signalBusy ? 'Saving…' : 'Save' }}</button>
+          <button class="primary" :disabled="signalBusy || verifyBusy" data-signal-save @click="saveSignal">{{ signalBusy ? 'Saving…' : 'Save' }}</button>
         </div>
         <template v-if="showSignalVerify">
           <div class="field">
@@ -279,7 +286,7 @@ const curlStatus = computed(() =>
             <input v-model="signalCode" placeholder="123456" maxlength="6" inputmode="numeric" data-signal-code />
           </div>
           <div class="slack-actions">
-            <button :disabled="verifyBusy || !signalCode.trim()" data-signal-verify @click="verifySignalCode">{{ verifyBusy ? 'Verifying…' : 'Verify' }}</button>
+            <button :disabled="signalBusy || verifyBusy || !signalCode.trim()" data-signal-verify @click="verifySignalCode">{{ verifyBusy ? 'Verifying…' : 'Verify' }}</button>
           </div>
         </template>
         <!-- Outside the verify block: "verified ✓" must stay visible after the block collapses. -->

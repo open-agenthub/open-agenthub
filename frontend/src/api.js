@@ -20,7 +20,12 @@ async function req(method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   })
   if (res.status === 401) handle401()
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+  if (!res.ok) {
+    // `.status` lets callers map specific failures (e.g. 503) to inline messages.
+    const err = new Error(`${res.status} ${await res.text()}`)
+    err.status = res.status
+    throw err
+  }
   return res.status === 204 ? null : res.json()
 }
 
