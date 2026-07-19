@@ -17,8 +17,8 @@ render_settings() {
       { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/notify-hook.sh" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/mcp-policy-hook.sh", "timeout": 300 } ] },
-      { "matcher": "^(?!mcp__).*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/pretooluse-hook.sh", "timeout": 300 } ] }
+      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/mcp-policy-hook.sh", "timeout": 1900 } ] },
+      { "matcher": "^(?!mcp__).*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent}/pretooluse-hook.sh", "timeout": 1900 } ] }
     ]
   }
 }

@@ -15,8 +15,10 @@ namespace AgentHub.Api.Ee.Slack;
 /// <see cref="SlackSocketModeService"/>. Returns false when the user has no Slack
 /// target (or Slack/license is off), so the caller falls back to the normal prompt.
 /// </summary>
-public sealed class SlackPermissionNotifier : IPermissionNotifier
+public sealed class SlackPermissionNotifier : IPermissionNotifier, IPermissionPromptEditor
 {
+    public string Platform => "slack";
+
     private readonly SlackOptions _opts;
     private readonly IEnterpriseLicense _license;
     private readonly SlackClient _slack;
@@ -63,8 +65,16 @@ public sealed class SlackPermissionNotifier : IPermissionNotifier
 
         var ts = await _slack.PostBlocksAsync(channel, $"Permission request: {req.Tool}", blocks, threadTs, ct);
         if (ts is null) return false;
-        await _store.SetSlackMessageAsync(req.Id, channel, ts, ct);
+        await _store.SetPromptMessageAsync(req.Id, "slack", channel, ts, ct);
         return true;
+    }
+
+    /// <summary>The hook stopped polling: drop the buttons so the prompt doesn't look alive.</summary>
+    public async Task MarkExpiredAsync(PermissionRequest req, CancellationToken ct = default)
+    {
+        if (req.Channel is null || req.MessageTs is null) return;
+        await _slack.UpdateMessageAsync(req.Channel, req.MessageTs,
+            $":hourglass: *Expired* — *{Escape(req.Tool)}*. Please answer in the web terminal.", null, ct);
     }
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");

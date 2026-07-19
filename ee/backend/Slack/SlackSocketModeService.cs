@@ -133,7 +133,18 @@ public sealed class SlackSocketModeService : BackgroundService
             ? un.GetString() : (u.TryGetProperty("name", out var nm) ? nm.GetString() : null);
 
         var resolved = await _permissions.ResolveAsync(reqId, decision, ct);
-        if (resolved is null) return; // already decided or unknown
+        if (resolved is null)
+        {
+            // Already decided or expired (or unknown) — reflect the final state instead
+            // of leaving the click apparently dead.
+            var existing = await _permissions.GetAsync(reqId, ct);
+            if (existing is { Channel: not null, MessageTs: not null })
+                await _slack.UpdateMessageAsync(existing.Channel, existing.MessageTs,
+                    existing.Decision == "expired"
+                        ? $":hourglass: *Expired* — *{Escape(existing.Tool)}*. Please answer in the web terminal."
+                        : $":information_source: Already decided ({existing.Decision}) — *{Escape(existing.Tool)}*.", null, ct);
+            return;
+        }
 
         // Update the original message to reflect the decision and drop the buttons.
         var channel = p.TryGetProperty("container", out var cont) && cont.TryGetProperty("channel_id", out var ch)
@@ -145,6 +156,8 @@ public sealed class SlackSocketModeService : BackgroundService
             await _slack.UpdateMessageAsync(channel, ts,
                 $"{verb} — *{resolved.Tool}*{suffix}" + (user is null ? "" : $" · by {user}"), null, ct);
     }
+
+    private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
     private static async Task<(string text, bool closed)> ReceiveFullAsync(ClientWebSocket ws, byte[] buf, CancellationToken ct)
     {
