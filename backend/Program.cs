@@ -45,6 +45,10 @@ builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatBindingStore>();
 builder.Services.AddSingleton<AgentHub.Api.Chat.WorkingIndicator>();
 
+// Community: Telegram/Signal chat integrations (no license required).
+var telegramOpts = builder.Configuration.GetSection("Chat:Telegram").Get<AgentHub.Api.Chat.Telegram.TelegramOptions>() ?? new();
+builder.Services.AddSingleton(telegramOpts);
+
 // Enterprise: Slack integration (only active with a valid license + tokens).
 var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee.Slack.SlackOptions>() ?? new();
 builder.Services.AddSingleton(slackOpts);
@@ -175,7 +179,9 @@ app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptio
     // Lets the UI show the "Connect GitHub/GitLab" account section only when configured.
     gitEnabled = git.AnyConfigured,
     // Lets the UI show the per-user Slack settings section only when Slack is enabled.
-    slackEnabled = slack.Enabled
+    slackEnabled = slack.Enabled,
+    // Same for the community Telegram integration.
+    telegramEnabled = telegramOpts.Enabled
 })).AllowAnonymous();
 
 var agentPort = builder.Configuration.GetValue("AgentHub:AgentPort", 7681);
