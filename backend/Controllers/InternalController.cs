@@ -36,8 +36,10 @@ public sealed class InternalController : ControllerBase
 
     private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
     {
-        foreach (var n in _notifiers)
-            await n.NotifyAsync(rec, ev, message, ct);
+        // Fan out in parallel: one slow platform (e.g. Telegram's ~1 msg/s chunk pacing)
+        // must not delay the others or the agent hook's POST. Every notifier catches
+        // its own failures internally, so WhenAll never observes an exception.
+        await Task.WhenAll(_notifiers.Select(n => n.NotifyAsync(rec, ev, message, ct)));
     }
 
     public record StatusBody(string Status);

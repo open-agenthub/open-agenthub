@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using Npgsql;
 
 namespace AgentHub.Api.Chat;
@@ -42,11 +43,30 @@ public sealed class ChatLinkCodeStore
     /// </summary>
     public async Task<string> CreateAsync(string owner, string purpose, string? payload = null, CancellationToken ct = default)
     {
-        var code = purpose == "signal-verify"
-            ? Random.Shared.Next(100000, 1000000).ToString(CultureInfo.InvariantCulture)
-            : Guid.NewGuid().ToString("n")[..8];
+        // The code column is a global PK — a fresh code can collide with another user's
+        // live code (realistic for 6-digit verify codes). Regenerate and retry, max 3 attempts.
+        for (var attempt = 1; ; attempt++)
+        {
+            var code = NewCode(purpose);
+            try
+            {
+                await InsertFreshAsync(owner, purpose, code, payload, ct);
+                return code;
+            }
+            catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation && attempt < 3)
+            {
+                // collision with another owner's code — roll the dice again
+            }
+        }
+    }
 
-        // Delete-then-insert in one transaction: exactly one active code per owner+purpose.
+    private static string NewCode(string purpose) => purpose == "signal-verify"
+        ? RandomNumberGenerator.GetInt32(100000, 1000000).ToString(CultureInfo.InvariantCulture)
+        : Guid.NewGuid().ToString("n")[..8];
+
+    /// <summary>Delete-then-insert in one transaction: exactly one active code per owner+purpose.</summary>
+    private async Task InsertFreshAsync(string owner, string purpose, string code, string? payload, CancellationToken ct)
+    {
         await using var conn = await _db.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
 
@@ -69,7 +89,6 @@ public sealed class ChatLinkCodeStore
         }
 
         await tx.CommitAsync(ct);
-        return code;
     }
 
     /// <summary>

@@ -50,6 +50,18 @@ public class ChatLinkCodePostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task Consume_ExpiredCode_Null()
+    {
+        await using var database = await PostgresLinkCodeDatabase.CreateAsync();
+
+        var code = await database.Store.CreateAsync("erin", "telegram");
+        await database.ExecuteSqlAsync(
+            "UPDATE chat_link_codes SET created_at = now() - interval '11 minutes'");
+
+        Assert.Null(await database.Store.ConsumeAsync(code, "telegram"));
+    }
+
+    [PostgreSqlFact]
     public async Task SignalVerify_CodeIsSixDigits()
     {
         await using var database = await PostgresLinkCodeDatabase.CreateAsync();
@@ -67,15 +79,27 @@ internal sealed class PostgresLinkCodeDatabase : IAsyncDisposable
 {
     private readonly string _baseConnectionString;
     private readonly string _schema;
+    private readonly string _scopedConnectionString;
 
-    private PostgresLinkCodeDatabase(string baseConnectionString, string schema, ChatLinkCodeStore store)
+    private PostgresLinkCodeDatabase(string baseConnectionString, string schema,
+        string scopedConnectionString, ChatLinkCodeStore store)
     {
         _baseConnectionString = baseConnectionString;
         _schema = schema;
+        _scopedConnectionString = scopedConnectionString;
         Store = store;
     }
 
     public ChatLinkCodeStore Store { get; }
+
+    /// <summary>Runs raw SQL inside the test schema (e.g. to backdate created_at).</summary>
+    public async Task ExecuteSqlAsync(string sql)
+    {
+        await using var connection = new NpgsqlConnection(_scopedConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
+    }
 
     public static async Task<PostgresLinkCodeDatabase> CreateAsync()
     {
@@ -110,7 +134,7 @@ internal sealed class PostgresLinkCodeDatabase : IAsyncDisposable
         try
         {
             await store.InitializeAsync();
-            return new PostgresLinkCodeDatabase(baseConnectionString, schema, store);
+            return new PostgresLinkCodeDatabase(baseConnectionString, schema, builder.ConnectionString, store);
         }
         catch
         {
