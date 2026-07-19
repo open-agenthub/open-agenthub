@@ -27,7 +27,7 @@ public class ChatFormattingTests
         var text = string.Join("\n", Enumerable.Repeat("0123456789", 5)); // 54 chars
         var chunks = ChatFormatting.Split(text, 25);
         Assert.All(chunks, c => Assert.True(c.Length <= 25));
-        Assert.Equal(text, string.Join("\n", chunks)); // lossless
+        Assert.Equal(text, string.Join("\n", chunks)); // content preserved
         Assert.Equal(new[] { "0123456789\n0123456789", "0123456789\n0123456789", "0123456789" }, chunks);
     }
 
@@ -42,6 +42,22 @@ public class ChatFormattingTests
 
     [Fact]
     public void Split_EmptyText_NoChunks() => Assert.Empty(ChatFormatting.Split("", 100));
+
+    [Fact]
+    public void Split_DoesNotCutSurrogatePairs()
+    {
+        var chunks = ChatFormatting.Split(new string('a', 4) + "😀😀", 5);
+        Assert.All(chunks, c => Assert.False(char.IsHighSurrogate(c[^1])));
+        Assert.Equal("aaaa😀😀", string.Concat(chunks));
+
+        var atCut = ChatFormatting.Split("😀😀😀", 5);
+        Assert.All(atCut, c => Assert.False(char.IsHighSurrogate(c[^1])));
+        Assert.Equal("😀😀😀", string.Concat(atCut));
+    }
+
+    [Fact]
+    public void Split_RejectsNonPositiveMaxLen()
+        => Assert.Throws<ArgumentOutOfRangeException>(() => ChatFormatting.Split("x", 0));
 
     [Fact]
     public void Header_ContainsTagAndTitle()

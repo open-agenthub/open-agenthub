@@ -14,11 +14,13 @@ public static class ChatFormatting
 
     /// <summary>
     /// Splits text into chunks of at most maxLen, preferring line boundaries; a single
-    /// line longer than maxLen is hard-split. Joining chunks with "\n" (or "" for
-    /// hard-split-only input) reproduces the original text.
+    /// line longer than maxLen is hard-split (never inside a surrogate pair). Blank lines
+    /// at chunk boundaries and leading/trailing newlines may be dropped; content lines
+    /// are preserved in order.
     /// </summary>
     public static IReadOnlyList<string> Split(string text, int maxLen)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxLen, 1);
         var chunks = new List<string>();
         if (string.IsNullOrEmpty(text)) return chunks;
         var current = new System.Text.StringBuilder();
@@ -28,8 +30,10 @@ public static class ChatFormatting
             while (line.Length > maxLen) // hard split an overlong line
             {
                 if (current.Length > 0) { chunks.Add(current.ToString()); current.Clear(); }
-                chunks.Add(line[..maxLen]);
-                line = line[maxLen..];
+                var cut = maxLen;
+                if (cut > 1 && char.IsHighSurrogate(line[cut - 1])) cut--; // keep surrogate pairs intact
+                chunks.Add(line[..cut]);
+                line = line[cut..];
             }
             if (current.Length + line.Length + 1 > maxLen && current.Length > 0)
             { chunks.Add(current.ToString()); current.Clear(); }
