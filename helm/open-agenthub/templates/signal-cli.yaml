@@ -13,6 +13,8 @@ kind: PersistentVolumeClaim
 metadata:
   name: agenthub-signal-cli
   labels: {{ include "agenthub.labels" . | nindent 4 }}
+  # Survive `helm uninstall`: losing this volume means re-registering the number.
+  annotations: { "helm.sh/resource-policy": keep }
 spec:
   # Always a PVC (no emptyDir option): the Signal registration/keys MUST survive
   # pod restarts, otherwise the number has to be re-registered.
