@@ -1,14 +1,20 @@
 using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace AgentHub.Api.Chat.Signal;
 
 /// <summary>Thin client for the signal-cli-rest-api service (bbernhard, json-rpc mode).
 /// Outbound sends go over REST; the receive WebSocket is owned by the background service —
-/// this client only derives the URI. SECURITY: recipient phone numbers are PII — never log them.</summary>
-public sealed class SignalClient
+/// this client only derives the URI. SECURITY: recipient phone numbers are PII — never log
+/// them; error bodies are redacted before logging.</summary>
+public sealed partial class SignalClient
 {
+    /// <summary>Anything that looks like an E.164 number inside an error body.</summary>
+    [GeneratedRegex(@"\+\d{6,15}")]
+    private static partial Regex PhoneNumbers();
+
     /// <summary>Signal handles long messages fine; this just guards against absurd payloads.</summary>
     private const int MaxMessageLength = 60000;
 
@@ -44,9 +50,9 @@ public sealed class SignalClient
             var content = await resp.Content.ReadAsStringAsync(ct);
             if (!resp.IsSuccessStatusCode)
             {
-                // The body may contain error details but no secrets; keep it short.
-                _log.LogWarning("Signal send failed: {Status} {Body}",
-                    (int)resp.StatusCode, content.Length > 200 ? content[..200] : content);
+                // Error details help operators, but redact phone numbers (PII) and keep it short.
+                var snippet = PhoneNumbers().Replace(content.Length > 200 ? content[..200] : content, "+***");
+                _log.LogWarning("Signal send failed: {Status} {Body}", (int)resp.StatusCode, snippet);
                 return null;
             }
 
@@ -64,7 +70,10 @@ public sealed class SignalClient
     /// <summary>Remote-deletes one of OUR OWN sent messages (identified by its sent timestamp).
     /// signal-cli-rest-api ≥0.70 exposes this via POST /v2/send with remote_delete_timestamp, but the
     /// endpoint shape varies by version — operators can verify theirs at {ApiUrl}/v1/docs (swagger).
-    /// Returns false when unsupported or failing; the caller treats false as "leave the message".</summary>
+    /// Returns false when unsupported or failing; the caller treats false as "leave the message".
+    /// VERSION DRIFT: success is judged purely on a 2xx status — older versions may answer 2xx while
+    /// ignoring the unknown remote_delete_timestamp field (a regular send does not happen because no
+    /// message/text is present, so the worst case is that the delete silently does not occur).</summary>
     public async Task<bool> TryDeleteAsync(string recipient, string timestampToDelete, CancellationToken ct)
     {
         if (!long.TryParse(timestampToDelete, NumberStyles.Integer, CultureInfo.InvariantCulture, out var ts))

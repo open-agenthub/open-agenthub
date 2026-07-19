@@ -50,6 +50,23 @@ public class ChatLinkCodePostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task Consume_WrongOwner_Null_AndCodeSurvives()
+    {
+        await using var database = await PostgresLinkCodeDatabase.CreateAsync();
+
+        var code = await database.Store.CreateAsync("frank", "signal-verify", payload: "+15551234567");
+
+        // Someone else guessing the code neither validates nor burns it …
+        Assert.Null(await database.Store.ConsumeAsync(code, "signal-verify", owner: "mallory"));
+
+        // … the rightful owner can still consume it.
+        var consumed = await database.Store.ConsumeAsync(code, "signal-verify", owner: "frank");
+        Assert.NotNull(consumed);
+        Assert.Equal("frank", consumed.Value.Owner);
+        Assert.Equal("+15551234567", consumed.Value.Payload);
+    }
+
+    [PostgreSqlFact]
     public async Task Consume_ExpiredCode_Null()
     {
         await using var database = await PostgresLinkCodeDatabase.CreateAsync();

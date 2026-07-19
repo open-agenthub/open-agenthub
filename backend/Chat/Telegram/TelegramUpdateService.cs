@@ -196,7 +196,7 @@ public sealed class TelegramUpdateService : BackgroundService
             return;
         }
 
-        var consumed = await _codes.ConsumeAsync(code, "telegram", ct);
+        var consumed = await _codes.ConsumeAsync(code, "telegram", ct: ct);
         if (consumed is null)
         {
             _linkAttempts[u.ChatId] = bucket with { Count = bucket.Count + 1 };

@@ -60,4 +60,10 @@ public class SignalEnvelopeTests
         Assert.Null(SignalEnvelope.Parse("""{"envelope":{"sourceNumber":"+4917","timestamp":7,"dataMessage":{"timestamp":7}}}"""));
         Assert.Null(SignalEnvelope.Parse("not json"));
     }
+
+    [Fact]
+    public void NonStringMessage_Null()
+    {
+        Assert.Null(SignalEnvelope.Parse("""{"envelope":{"sourceNumber":"+4917","timestamp":8,"dataMessage":{"message":123,"timestamp":8}}}"""));
+    }
 }

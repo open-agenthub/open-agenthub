@@ -94,9 +94,13 @@ public sealed class ChatLinkCodeStore
     /// <summary>
     /// Atomically consumes a live (less than 10 minutes old) code — the DELETE … RETURNING
     /// makes double-spending impossible. Null when the code is unknown, expired, already
-    /// used or was created for a different purpose.
+    /// used or was created for a different purpose. With a non-null <paramref name="owner"/>
+    /// only that owner's own code matches — another user's guess neither consumes nor burns
+    /// it (Signal verify passes the caller; the Telegram /link path doesn't, since there
+    /// the code IS the identity).
     /// </summary>
-    public async Task<(string Owner, string? Payload)?> ConsumeAsync(string code, string purpose, CancellationToken ct = default)
+    public async Task<(string Owner, string? Payload)?> ConsumeAsync(string code, string purpose,
+        string? owner = null, CancellationToken ct = default)
     {
         // Cheap hygiene: sweep expired rows so the table never accumulates dead codes.
         await using (var sweep = _db.CreateCommand(
@@ -105,14 +109,16 @@ public sealed class ChatLinkCodeStore
             await sweep.ExecuteNonQueryAsync(ct);
         }
 
-        const string sql = """
+        var sql = $"""
             DELETE FROM chat_link_codes
             WHERE code = @c AND purpose = @p AND created_at > now() - interval '10 minutes'
+                  {(owner is null ? "" : "AND owner = @o")}
             RETURNING owner, payload
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("c", code);
         cmd.Parameters.AddWithValue("p", purpose);
+        if (owner is not null) cmd.Parameters.AddWithValue("o", owner);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return null;
         return (r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1));

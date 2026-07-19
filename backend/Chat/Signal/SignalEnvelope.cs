@@ -32,7 +32,8 @@ public sealed record SignalEnvelope(
             {
                 if (reaction.TryGetProperty("isRemove", out var rem) && rem.ValueKind == JsonValueKind.True)
                     return null;
-                if (reaction.TryGetProperty("emoji", out var emoji) && emoji.GetString() is { Length: > 0 } em &&
+                if (reaction.TryGetProperty("emoji", out var emoji) && emoji.ValueKind == JsonValueKind.String &&
+                    emoji.GetString() is { Length: > 0 } em &&
                     reaction.TryGetProperty("targetSentTimestamp", out var target) && target.TryGetInt64(out var targetTs))
                 {
                     return new SignalEnvelope(sender, tsStr, Text: null, QuotedTimestamp: null,
@@ -42,7 +43,8 @@ public sealed record SignalEnvelope(
                 return null;
             }
 
-            if (data.TryGetProperty("message", out var msg) && msg.GetString() is { Length: > 0 } text)
+            if (data.TryGetProperty("message", out var msg) && msg.ValueKind == JsonValueKind.String &&
+                msg.GetString() is { Length: > 0 } text)
             {
                 string? quoted = null;
                 if (data.TryGetProperty("quote", out var quote) &&
@@ -56,6 +58,11 @@ public sealed record SignalEnvelope(
         }
         catch (JsonException)
         {
+            return null;
+        }
+        catch (InvalidOperationException)
+        {
+            // A field had an unexpected JSON kind (e.g. dataMessage as a number) — junk, ignore.
             return null;
         }
     }
