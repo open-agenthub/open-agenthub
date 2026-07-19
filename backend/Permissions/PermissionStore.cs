@@ -134,6 +134,25 @@ public sealed class PermissionStore
         return await cmd.ExecuteScalarAsync(ct) as string;
     }
 
+    /// <summary>
+    /// Expires all still-pending requests older than <paramref name="olderThan"/> and
+    /// returns them (full rows, so the sweeper can defuse their chat prompts). Safety
+    /// net for hooks that died without calling the /expire endpoint.
+    /// </summary>
+    public async Task<IReadOnlyList<PermissionRequest>> ExpireStaleAsync(TimeSpan olderThan, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("""
+            UPDATE permission_requests SET decision='expired', decided_at=now()
+            WHERE decision IS NULL AND created_at < now() - @age
+            RETURNING id, session_id, owner, tool, summary, decision, channel, message_ts, platform
+            """);
+        cmd.Parameters.Add(new NpgsqlParameter("age", NpgsqlTypes.NpgsqlDbType.Interval) { Value = olderThan });
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<PermissionRequest>();
+        while (await r.ReadAsync(ct)) list.Add(Map(r));
+        return list;
+    }
+
     private static string SessionFilter(string? sessionId) => sessionId is null ? "" : " AND session_id=@sid";
 
     private static void AddSessionParam(NpgsqlCommand cmd, string? sessionId)

@@ -86,6 +86,27 @@ public class PermissionStorePostgresTests
         Assert.Null(await database.Store.GetPendingBySessionAsync("session-a"));
     }
 
+    [PostgreSqlFact]
+    public async Task ExpireStale_OnlyAffectsOldPending()
+    {
+        await using var database = await PostgresPermissionDatabase.CreateAsync();
+        await database.Store.CreateAsync(NewRequest("old-pending", "session-a"));
+        await database.Store.CreateAsync(NewRequest("fresh-pending", "session-a"));
+        await database.Store.CreateAsync(NewRequest("old-decided", "session-a"));
+        await database.Store.ResolveAsync("old-decided", "allow");
+        await database.ExecuteSqlAsync(
+            "UPDATE permission_requests SET created_at = now() - interval '40 minutes' WHERE id IN ('old-pending', 'old-decided')");
+
+        var expired = await database.Store.ExpireStaleAsync(TimeSpan.FromMinutes(35));
+
+        var row = Assert.Single(expired);
+        Assert.Equal("old-pending", row.Id);
+        Assert.Equal("expired", row.Decision);
+        Assert.Equal("expired", await database.Store.GetDecisionAsync("old-pending"));
+        Assert.Null(await database.Store.GetDecisionAsync("fresh-pending"));   // still pending
+        Assert.Equal("allow", await database.Store.GetDecisionAsync("old-decided")); // untouched
+    }
+
     private static PermissionRequest NewRequest(string id, string sessionId, string tool = "Bash") => new()
     {
         Id = id,
@@ -150,6 +171,16 @@ internal sealed class PostgresPermissionDatabase : IAsyncDisposable
             await DropSchemaAsync(baseConnectionString, schema);
             throw;
         }
+    }
+
+    /// <summary>Raw SQL against the test schema — for backdating rows and similar fixture tweaks.</summary>
+    public async Task ExecuteSqlAsync(string sql)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString) { SearchPath = _schema };
+        await using var connection = new NpgsqlConnection(builder.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
     }
 
     public ValueTask DisposeAsync()

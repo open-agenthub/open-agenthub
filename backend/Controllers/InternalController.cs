@@ -22,16 +22,16 @@ public sealed class InternalController : ControllerBase
     private readonly IEnumerable<INotifier> _notifiers;
     private readonly ISessionService _svc;
     private readonly PermissionStore _permissions;
-    private readonly IPermissionNotifier _permNotifier;
+    private readonly IEnumerable<IPermissionNotifier> _permNotifiers;
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly SessionShareStore _shares;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
-        PermissionStore permissions, IPermissionNotifier permNotifier,
+        PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
         IEnumerable<IPermissionPromptEditor> promptEditors, SessionShareStore shares)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
-        _permissions = permissions; _permNotifier = permNotifier; _promptEditors = promptEditors; _shares = shares;
+        _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
     }
 
     private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
@@ -139,7 +139,7 @@ public sealed class InternalController : ControllerBase
             Summary = body.Input
         };
         await _permissions.CreateAsync(req, ct);
-        if (!await _permNotifier.PostAsync(req, ct))
+        if (!await PermissionRelay.TryPostAsync(_permNotifiers, req, ct))
         {
             await _permissions.DeleteAsync(req.Id, ct);   // no out-of-band approver → normal flow
             return Ok(new { decision = "ask" });

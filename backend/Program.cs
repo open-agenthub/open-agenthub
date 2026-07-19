@@ -70,6 +70,18 @@ builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionPromptEditor>(
     sp.GetRequiredService<AgentHub.Api.Ee.Slack.SlackPermissionNotifier>());
 builder.Services.AddHostedService<AgentHub.Api.Ee.Slack.SlackSocketModeService>();
 
+// Community: Telegram permission prompts + long polling. Registered AFTER the Slack
+// block on purpose — the permission relay tries notifiers in registration order
+// (Slack first, then Telegram).
+builder.Services.AddSingleton<AgentHub.Api.Chat.Telegram.TelegramPermissionNotifier>();
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Chat.Telegram.TelegramPermissionNotifier>());
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionPromptEditor>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Chat.Telegram.TelegramPermissionNotifier>());
+builder.Services.AddHostedService<AgentHub.Api.Chat.Telegram.TelegramUpdateService>();
+// Safety net: expires pending permission prompts whose hook never called /expire.
+builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepService>();
+
 builder.Services.AddHealthChecks();
 
 // --- Auth: generic OIDC/JWT provider (e.g. Keycloak). Multi-user separation via preferred_username. ---
