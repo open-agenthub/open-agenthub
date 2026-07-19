@@ -34,7 +34,7 @@ public sealed class SlackNotifier : INotifier
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _resolver = resolver;
         _indicator = indicator;
-        _frontendOrigin = cfg["FrontendOrigin"] ?? "";
+        _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
     }
 
