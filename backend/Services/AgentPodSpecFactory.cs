@@ -82,12 +82,20 @@ public static class AgentPodSpecFactory
             Capabilities = asRoot ? null : new V1Capabilities { Drop = new List<string> { "ALL" } }
         };
 
+        var credentialItems = new List<V1KeyToPath>
+        {
+            ProjectCredential("ssh_key"),
+            ProjectCredential("known_hosts"),
+            ProjectCredential("gitlab_token"),
+            ProjectCredential("git_user_name"),
+            ProjectCredential("git_user_email")
+        };
         var volumes = new List<V1Volume>
         {
             new() { Name = "workspace", EmptyDir = new V1EmptyDirVolumeSource() },
             new() { Name = "home", EmptyDir = new V1EmptyDirVolumeSource() },
             new() { Name = "tmp", EmptyDir = new V1EmptyDirVolumeSource() },
-            new() { Name = "creds", Secret = new V1SecretVolumeSource { SecretName = context.CredentialsSecretName, Optional = true, DefaultMode = 0x1A0 } }
+            new() { Name = "creds", Secret = new V1SecretVolumeSource { SecretName = context.CredentialsSecretName, Optional = true, DefaultMode = 0x1A0, Items = credentialItems } }
         };
         var mounts = new List<V1VolumeMount>
         {
@@ -129,6 +137,7 @@ public static class AgentPodSpecFactory
 
         void AddApiKey(string envName, string secretKey)
         {
+            credentialItems.Add(ProjectCredential(secretKey));
             env.Add(new V1EnvVar
             {
                 Name = envName,
@@ -318,6 +327,9 @@ public static class AgentPodSpecFactory
             RuntimeClassName = string.IsNullOrEmpty(context.Runtime.RuntimeClassName) ? null : context.Runtime.RuntimeClassName
         };
     }
+
+    private static V1KeyToPath ProjectCredential(string key) =>
+        new() { Key = key, Path = key };
 
     private static List<RepoRef> NormalizeRepos(CreateSessionRequest request)
     {

@@ -18,6 +18,9 @@ public class AgentPodSpecFactoryTests
     {
         var pod = Build(agent, auth);
         var container = Assert.Single(pod.Containers);
+        var projectedCredentialItems = Assert.Single(pod.Volumes, v => v.Name == "creds").Secret.Items;
+        Assert.NotNull(projectedCredentialItems);
+        var projectedCredentialKeys = projectedCredentialItems.Select(i => i.Key).ToList();
 
         Assert.Equal(expectedImage, container.Image);
         Assert.Equal(expectedVolume is not null, pod.Volumes.Any(v => v.Name == expectedVolume));
@@ -26,6 +29,13 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(expectedVolume == "codex", pod.Volumes.Any(v => v.Name == "codex"));
         Assert.Equal(expectedEnv == "ANTHROPIC_API_KEY", container.Env.Any(e => e.Name == "ANTHROPIC_API_KEY"));
         Assert.Equal(expectedEnv == "CODEX_API_KEY", container.Env.Any(e => e.Name == "CODEX_API_KEY"));
+        Assert.Contains("ssh_key", projectedCredentialKeys);
+        Assert.Contains("known_hosts", projectedCredentialKeys);
+        Assert.Contains("gitlab_token", projectedCredentialKeys);
+        Assert.Contains("git_user_name", projectedCredentialKeys);
+        Assert.Contains("git_user_email", projectedCredentialKeys);
+        Assert.Equal(expectedEnv == "ANTHROPIC_API_KEY", projectedCredentialKeys.Contains("anthropic_api_key"));
+        Assert.Equal(expectedEnv == "CODEX_API_KEY", projectedCredentialKeys.Contains("openai_api_key"));
     }
 
     [Theory]
@@ -57,6 +67,11 @@ public class AgentPodSpecFactoryTests
         Assert.Contains(container.Env, e => e.Name == "ANTHROPIC_API_KEY" &&
             e.ValueFrom?.SecretKeyRef?.Name == "creds-owner" &&
             e.ValueFrom.SecretKeyRef.Key == "anthropic_api_key" && e.ValueFrom.SecretKeyRef.Optional == true);
+        var projectedCredentialItems = Assert.Single(pod.Volumes, v => v.Name == "creds").Secret.Items;
+        Assert.NotNull(projectedCredentialItems);
+        var projectedCredentialKeys = projectedCredentialItems.Select(i => i.Key).ToList();
+        Assert.Contains("anthropic_api_key", projectedCredentialKeys);
+        Assert.DoesNotContain("openai_api_key", projectedCredentialKeys);
         Assert.DoesNotContain(container.Env, e => e.Name == "CODEX_API_KEY");
         Assert.Empty(pod.InitContainers ?? Array.Empty<V1Container>());
         Assert.False(pod.AutomountServiceAccountToken);

@@ -135,9 +135,6 @@ public sealed class KubernetesSessionService : ISessionService
         };
         await _store.UpsertAsync(rec, ct);
 
-        if (mcp is not null)
-            await CreateMcpSecretAsync(owner, id, mcp, ct);
-
         await SpawnAsync(owner, rec, req, resume: false, ct);
         return ToInfo(rec, phase: rec.Status, podIp: null);
     }
@@ -362,37 +359,51 @@ public sealed class KubernetesSessionService : ISessionService
 
     private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct)
     {
-        // Repos that authenticate via a connected Git provider: mint a fresh
-        // git-credentials file into an ephemeral secret (rebuilt on every spawn/resume,
-        // so it always carries a currently-valid OAuth token). Read-only, session-scoped.
-        var hasGitCreds = false;
-        var store = await _gitAuth.BuildCredentialStoreAsync(owner, NormalizeRepos(req), ct);
-        if (store is not null)
-        {
-            await UpsertSecretAsync(new V1Secret
+        var context = await BuildPodContextAsync(owner, rec, resume, hasGitCredentials: false, ct);
+        var preparation = await AgentSessionResourceOrchestrator.PrepareAsync(
+            rec,
+            context,
+            async (diagnostic, resourceCt) =>
             {
-                Metadata = new V1ObjectMeta
+                rec.Status = "Failed";
+                await _store.UpsertAsync(rec, resourceCt);
+                await _store.SetScrollbackAsync(rec.Id, diagnostic, resourceCt);
+                _log.LogWarning("Session {Id} failed credential preflight for {Agent}/{AuthMode}",
+                    rec.Id, rec.Agent, rec.AuthMode);
+            },
+            async resourceCt =>
+            {
+                if (!resume && !string.IsNullOrWhiteSpace(rec.McpConfigJson))
+                    await CreateMcpSecretAsync(owner, rec.Id, rec.McpConfigJson, resourceCt);
+
+                // Connected Git-provider credentials are session-scoped and must only be
+                // materialized after credential preflight succeeds.
+                var credentialStore = await _gitAuth.BuildCredentialStoreAsync(
+                    owner, NormalizeRepos(req), resourceCt);
+                if (credentialStore is null) return false;
+
+                await UpsertSecretAsync(new V1Secret
                 {
-                    Name = $"gitcreds-{rec.Id}", NamespaceProperty = _opts.Namespace,
-                    Labels = new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id }
-                },
-                Type = "Opaque", Data = new Dictionary<string, byte[]> { ["credentials"] = Encoding.UTF8.GetBytes(store) }
-            }, ct);
-            hasGitCreds = true;
-        }
+                    Metadata = new V1ObjectMeta
+                    {
+                        Name = $"gitcreds-{rec.Id}", NamespaceProperty = _opts.Namespace,
+                        Labels = new Dictionary<string, string>
+                        {
+                            [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id
+                        }
+                    },
+                    Type = "Opaque",
+                    Data = new Dictionary<string, byte[]>
+                    {
+                        ["credentials"] = Encoding.UTF8.GetBytes(credentialStore)
+                    }
+                }, resourceCt);
+                return true;
+            },
+            ct);
+        if (!preparation.ShouldSpawn) return;
 
-        var context = await BuildPodContextAsync(owner, rec, resume, hasGitCreds, ct);
-        var diagnostic = AgentPodSpecFactory.MissingCredentialDiagnostic(rec, context);
-        if (diagnostic is not null)
-        {
-            rec.Status = "Failed";
-            await _store.UpsertAsync(rec, ct);
-            await _store.SetScrollbackAsync(rec.Id, diagnostic, ct);
-            _log.LogWarning("Session {Id} failed credential preflight for {Agent}/{AuthMode}",
-                rec.Id, rec.Agent, rec.AuthMode);
-            return;
-        }
-
+        context = context with { HasGitCredentials = preparation.HasGitCredentials };
         var podSpec = AgentPodSpecFactory.Build(rec, req, context);
 
         if (rec.Mode == SessionMode.Scheduled)
