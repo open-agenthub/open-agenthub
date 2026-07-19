@@ -66,12 +66,28 @@ public class PermissionStorePostgresTests
         Assert.Equal("expired", await database.Store.GetDecisionAsync("req-1"));
     }
 
-    private static PermissionRequest NewRequest(string id, string sessionId) => new()
+    [PostgreSqlFact]
+    public async Task GetPendingBySession_ReturnsNewestUndecided()
+    {
+        await using var database = await PostgresPermissionDatabase.CreateAsync();
+        await database.Store.CreateAsync(NewRequest("req-1", "session-a", tool: "Bash"));
+        await database.Store.CreateAsync(NewRequest("req-2", "session-a", tool: "WebFetch"));
+
+        await database.Store.ResolveAsync("req-2", "allow");
+
+        Assert.Equal("Bash", await database.Store.GetPendingBySessionAsync("session-a"));
+
+        await database.Store.ResolveAsync("req-1", "deny");
+
+        Assert.Null(await database.Store.GetPendingBySessionAsync("session-a"));
+    }
+
+    private static PermissionRequest NewRequest(string id, string sessionId, string tool = "Bash") => new()
     {
         Id = id,
         SessionId = sessionId,
         Owner = "owner-a",
-        Tool = "Bash",
+        Tool = tool,
         Summary = "ls"
     };
 }

@@ -125,6 +125,15 @@ public sealed class PermissionStore
         return Map(r);
     }
 
+    /// <summary>Tool name of the newest still-undecided request of a session, or null.</summary>
+    public async Task<string?> GetPendingBySessionAsync(string sessionId, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand(
+            "SELECT tool FROM permission_requests WHERE session_id=@s AND decision IS NULL ORDER BY created_at DESC LIMIT 1");
+        cmd.Parameters.AddWithValue("s", sessionId);
+        return await cmd.ExecuteScalarAsync(ct) as string;
+    }
+
     private static string SessionFilter(string? sessionId) => sessionId is null ? "" : " AND session_id=@sid";
 
     private static void AddSessionParam(NpgsqlCommand cmd, string? sessionId)
