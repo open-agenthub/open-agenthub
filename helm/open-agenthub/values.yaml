@@ -82,6 +82,18 @@ s3:
 n8n:
   webhookUrl: ""
 
+# Community chat integrations: session updates + replies via Telegram and/or Signal.
+# Docs: see README "Chat integrations". Both default off.
+chat:
+  telegram:
+    enabled: false
+    botToken: ""      # from @BotFather
+  signal:
+    enabled: false
+    number: ""        # registered sender number, e.g. "+15551234567"
+    image: bbernhard/signal-cli-rest-api:0.94
+    storage: 1Gi      # PVC for the number registration/keys
+
 # Token/cost usage dashboard via OpenTelemetry. When enabled, session pods export
 # Claude Code's token/cost metrics (OTLP/HTTP protobuf) to the internal backend service,
 # which aggregates them per session/owner for the "Usage" view. Agent->backend egress is
