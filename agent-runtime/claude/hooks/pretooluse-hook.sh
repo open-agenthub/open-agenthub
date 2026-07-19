@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Claude Code PreToolUse hook. Asks the backend whether the tool may run; the backend
-# may prompt the user via Slack (interactive buttons). Falls back to the normal
-# permission flow ("ask") when there is no out-of-band approver or on timeout.
 payload="$(cat)"
 
 emit() {
@@ -9,7 +6,7 @@ emit() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"%s","permissionDecisionReason":"Open AgentHub"}}\n' "$pd"
   exit 0
 }
-field() { # extract a top-level string field from JSON on stdin
+field() {
   node -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{let p={};try{p=JSON.parse(d)}catch{};process.stdout.write((p["'"$1"'"]||"")+"")})'
 }
 
@@ -31,7 +28,6 @@ dec="$(printf '%s' "$resp" | field decision)"
 id="$(printf '%s' "$resp" | field id)"
 [ -z "$id" ] && emit ask
 
-# Poll for the decision (~4 min); the hook 'timeout' in settings.json is the hard cap.
 for _ in $(seq 1 120); do
   sleep 2
   dec="$(curl -fsS -H "X-Agent-Token: $AGENTHUB_CALLBACK_TOKEN" "$AGENTHUB_CALLBACK_URL/permission/$id" 2>/dev/null | field decision)"

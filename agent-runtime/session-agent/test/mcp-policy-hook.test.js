@@ -13,7 +13,7 @@ const sessionAgentDir = path.join(__dirname, '..');
 const bashPath = process.platform === 'win32'
   ? 'C:\\Program Files\\Git\\bin\\bash.exe'
   : 'bash';
-const hookPath = './mcp-policy-hook.sh';
+const hookPath = path.join('..', 'claude', 'hooks', 'mcp-policy-hook.sh');
 
 function runtimeEnvironment(environment) {
   return {
@@ -118,7 +118,7 @@ function renderSettings(mode) {
       cwd: sessionAgentDir,
       env: runtimeEnvironment({
         AGENTHUB_MODE: mode,
-        AGENTHUB_RUNTIME: '/opt/session-agent'
+        AGENTHUB_RUNTIME: '/opt/session-agent/claude/hooks'
       })
     }
   );
@@ -270,7 +270,7 @@ test('MCP policy settings use deterministic MCP and built-in matchers interactiv
       matcher: 'mcp__.*',
       hooks: [{
         type: 'command',
-        command: '/opt/session-agent/mcp-policy-hook.sh',
+        command: '/opt/session-agent/claude/hooks/mcp-policy-hook.sh',
         timeout: 300
       }]
     },
@@ -278,7 +278,7 @@ test('MCP policy settings use deterministic MCP and built-in matchers interactiv
       matcher: '^(?!mcp__).*',
       hooks: [{
         type: 'command',
-        command: '/opt/session-agent/pretooluse-hook.sh',
+        command: '/opt/session-agent/claude/hooks/pretooluse-hook.sh',
         timeout: 300
       }]
     }
@@ -292,18 +292,16 @@ test('MCP policy settings register only MCP tools for non-interactive modes', ()
       matcher: 'mcp__.*',
       hooks: [{
         type: 'command',
-        command: '/opt/session-agent/mcp-policy-hook.sh',
+        command: '/opt/session-agent/claude/hooks/mcp-policy-hook.sh',
         timeout: 5
       }]
     }]);
   }
 });
 
-test('MCP policy hook is copied into the runtime image and made executable', () => {
-  const dockerfile = fs.readFileSync(path.join(runtimeDir, 'Dockerfile'), 'utf8');
+test('MCP policy hook is copied into the Claude runtime image and made executable', () => {
+  const dockerfile = fs.readFileSync(path.join(runtimeDir, 'claude', 'Dockerfile'), 'utf8');
 
-  assert.match(dockerfile,
-    /COPY session-agent\/mcp-policy-hook\.sh\s+\/opt\/session-agent\/mcp-policy-hook\.sh/);
-  assert.match(dockerfile,
-    /RUN chmod \+x[^\n]*\/opt\/session-agent\/mcp-policy-hook\.sh/);
+  assert.ok(dockerfile.includes('COPY claude /opt/session-agent/claude'));
+  assert.ok(dockerfile.includes('/opt/session-agent/claude/hooks/mcp-policy-hook.sh'));
 });
