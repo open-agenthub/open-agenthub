@@ -32,16 +32,32 @@ describe('agent session helpers', () => {
     })
   })
 
-  it('preserves structured or legacy policy values when hydrating an existing session', () => {
+  it('preserves structured policy values without filling empty categories from legacy data', () => {
     expect(defaultAgentForm({
       agent: 'Claude', authMode: 'Auto',
       allowedTools: ['Read'],
       policy: { allowedTools: [], allowedMcpTools: ['mcp__git__*'], allowedCommands: ['git status'] }
     })).toMatchObject({
       agent: 'Claude', authMode: 'Auto',
-      allowedToolsRaw: 'Read',
+      allowedToolsRaw: '',
       allowedMcpToolsRaw: 'mcp__git__*',
       allowedCommandsRaw: 'git status'
+    })
+  })
+
+  it('uses legacy allowed tools only when structured policy is absent', () => {
+    expect(defaultAgentForm({ agent: 'Claude', authMode: 'Auto', allowedTools: ['Read'], policy: null }))
+      .toMatchObject({ allowedToolsRaw: 'Read', allowedMcpToolsRaw: '', allowedCommandsRaw: '' })
+  })
+
+  it('preserves an explicitly empty structured policy as default deny', () => {
+    expect(defaultAgentForm({
+      agent: 'Codex', authMode: 'ApiKey',
+      policy: { allowedTools: [], allowedMcpTools: [], allowedCommands: [] }
+    })).toMatchObject({
+      allowedToolsRaw: '',
+      allowedMcpToolsRaw: '',
+      allowedCommandsRaw: ''
     })
   })
 

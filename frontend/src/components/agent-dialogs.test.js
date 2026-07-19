@@ -73,7 +73,7 @@ describe('agent-aware session dialogs', () => {
 
   it('edits agent, auth, and policy while exposing legacy Auto only on migrated sessions', async () => {
     const wrapper = mount(EditSessionDialog, {
-      props: { session: { ...baseSession, authMode: 'Auto', allowedTools: ['Read'], policy: {} }, projects: [] },
+      props: { session: { ...baseSession, authMode: 'Auto', allowedTools: ['Read'], policy: null }, projects: [] },
       ...mountOptions
     })
     expect(wrapper.find('[data-auth-option="Auto"]').exists()).toBe(true)
@@ -101,6 +101,21 @@ describe('agent-aware session dialogs', () => {
     expect(payload).not.toHaveProperty('agent')
   })
 
+  it('resubmits an explicitly empty automated Edit policy as default deny', async () => {
+    const wrapper = mount(EditSessionDialog, {
+      props: { session: { ...baseSession, policy: { allowedTools: [], allowedMcpTools: [], allowedCommands: [] } }, projects: [] },
+      ...mountOptions
+    })
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toBe('')
+    expect(wrapper.get('[data-policy="allowedMcpTools"]').element.value).toBe('')
+    expect(wrapper.get('[data-policy="allowedCommands"]').element.value).toBe('')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[0][1].policy).toEqual({
+      allowedTools: [], allowedMcpTools: [], allowedCommands: []
+    })
+  })
+
   it('keeps scheduled edit restrictions honest by hiding ignored runtime controls', () => {
     const wrapper = mount(EditSessionDialog, { props: { session: { ...baseSession, mode: 'Scheduled' }, projects: [] }, ...mountOptions })
     expect(wrapper.find('[data-agent-card]').exists()).toBe(false)
@@ -125,6 +140,20 @@ describe('agent-aware session dialogs', () => {
       props: { session: { ...baseSession, authMode: 'Auto' }, projects: [] }
     })
     expect(wrapper.find('[data-auth-option="Auto"]').exists()).toBe(true)
+  })
+
+  it('resubmits an explicitly empty automated Duplicate policy as default deny', async () => {
+    const wrapper = mount(DuplicateSessionDialog, {
+      props: { session: { ...baseSession, policy: { allowedTools: [], allowedMcpTools: [], allowedCommands: [] } }, projects: [] }
+    })
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toBe('')
+    expect(wrapper.get('[data-policy="allowedMcpTools"]').element.value).toBe('')
+    expect(wrapper.get('[data-policy="allowedCommands"]').element.value).toBe('')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession.mock.calls[0][1].policy).toEqual({
+      allowedTools: [], allowedMcpTools: [], allowedCommands: []
+    })
   })
 
   it('shows non-blocking Interactive subscription login guidance and automation readiness', async () => {

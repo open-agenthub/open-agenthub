@@ -280,10 +280,7 @@ public sealed class KubernetesSessionService : ISessionService
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
-        if (rec.Mode == SessionMode.Scheduled &&
-            (req.Image is not null || req.RunAsRoot is not null || req.Cpu is not null || req.Memory is not null ||
-             req.McpConfigJson is not null || req.Repos is not null))
-            throw new ArgumentException("Scheduled sessions run from a fixed CronJob spec — delete and recreate to change anything but the title.");
+        SessionUpdateValidator.Validate(rec, req);
 
         if (!string.IsNullOrWhiteSpace(req.Title))
             rec.Title = req.Title.Trim();
@@ -335,7 +332,6 @@ public sealed class KubernetesSessionService : ISessionService
             await ValidateProjectAsync(owner, req.ProjectId, ct);
             rec.ProjectId = req.ProjectId;
         }
-        AgentConfiguration.ValidateForUpdate(req.Agent, req.AuthMode);
         if (req.Agent is { } agent)
             rec.Agent = agent;
         if (req.AuthMode is { } authMode)
