@@ -180,10 +180,11 @@ async function main() {
   const eventName = payload?.hook_event_name;
   const tool = payload?.tool_name;
   const input = payload?.tool_input;
+  const decisionEvent = eventName === 'PermissionRequest' ? eventName : 'PreToolUse';
   if (!['PreToolUse', 'PermissionRequest'].includes(eventName)
       || typeof tool !== 'string' || tool.length === 0 || tool.length > 256
-      || input === undefined) {
-    failClosed(eventName === 'PermissionRequest' ? eventName : 'PreToolUse');
+      || input === null || typeof input !== 'object' || Array.isArray(input)) {
+    failPolicyClosed(decisionEvent, tool);
     return;
   }
 
