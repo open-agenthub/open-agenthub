@@ -82,39 +82,54 @@ public sealed class PermissionStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<string?> GetDecisionAsync(string id, CancellationToken ct = default)
+    // When a sessionId is given, the query additionally requires the request to belong to
+    // that session — the internal endpoints pass it so one session's token cannot touch
+    // another session's requests. The Slack click path only has the request id (null).
+    public async Task<string?> GetDecisionAsync(string id, string? sessionId = null, CancellationToken ct = default)
     {
-        await using var cmd = _db.CreateCommand("SELECT decision FROM permission_requests WHERE id=@id");
+        await using var cmd = _db.CreateCommand(
+            $"SELECT decision FROM permission_requests WHERE id=@id{SessionFilter(sessionId)}");
         cmd.Parameters.AddWithValue("id", id);
+        AddSessionParam(cmd, sessionId);
         return await cmd.ExecuteScalarAsync(ct) as string;
     }
 
-    /// <summary>Returns the full request row, or null if unknown.</summary>
-    public async Task<PermissionRequest?> GetAsync(string id, CancellationToken ct = default)
+    /// <summary>Returns the full request row, or null if unknown (or not in the given session).</summary>
+    public async Task<PermissionRequest?> GetAsync(string id, string? sessionId = null, CancellationToken ct = default)
     {
-        await using var cmd = _db.CreateCommand("""
+        await using var cmd = _db.CreateCommand($"""
             SELECT id, session_id, owner, tool, summary, decision, channel, message_ts, platform
-            FROM permission_requests WHERE id=@id
+            FROM permission_requests WHERE id=@id{SessionFilter(sessionId)}
             """);
         cmd.Parameters.AddWithValue("id", id);
+        AddSessionParam(cmd, sessionId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return null;
         return Map(r);
     }
 
-    /// <summary>Sets the decision if still pending; returns the request (for updating the chat prompt) or null.</summary>
-    public async Task<PermissionRequest?> ResolveAsync(string id, string decision, CancellationToken ct = default)
+    /// <summary>Sets the decision if still pending (and, when given, belonging to the session);
+    /// returns the request (for updating the chat prompt) or null.</summary>
+    public async Task<PermissionRequest?> ResolveAsync(string id, string decision, string? sessionId = null, CancellationToken ct = default)
     {
-        await using var cmd = _db.CreateCommand("""
+        await using var cmd = _db.CreateCommand($"""
             UPDATE permission_requests SET decision=@d, decided_at=now()
-            WHERE id=@id AND decision IS NULL
+            WHERE id=@id AND decision IS NULL{SessionFilter(sessionId)}
             RETURNING id, session_id, owner, tool, summary, decision, channel, message_ts, platform
             """);
         cmd.Parameters.AddWithValue("d", decision);
         cmd.Parameters.AddWithValue("id", id);
+        AddSessionParam(cmd, sessionId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         if (!await r.ReadAsync(ct)) return null;
         return Map(r);
+    }
+
+    private static string SessionFilter(string? sessionId) => sessionId is null ? "" : " AND session_id=@sid";
+
+    private static void AddSessionParam(NpgsqlCommand cmd, string? sessionId)
+    {
+        if (sessionId is not null) cmd.Parameters.AddWithValue("sid", sessionId);
     }
 
     private static PermissionRequest Map(NpgsqlDataReader r) => new()

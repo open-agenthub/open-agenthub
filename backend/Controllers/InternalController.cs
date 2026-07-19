@@ -145,24 +145,33 @@ public sealed class InternalController : ControllerBase
         return Ok(new { id = req.Id });
     }
 
-    /// <summary>Polled by the hook: returns "allow" | "allowAlways" | "deny" | "pending".</summary>
+    /// <summary>Polled by the hook: returns "allow" | "allowAlways" | "deny" | "expired" | "pending".</summary>
     [HttpGet("permission/{reqId}")]
     public async Task<IActionResult> PermissionStatus(string id, string reqId, CancellationToken ct)
     {
         if (await AuthAsync(id, ct) is null) return Unauthorized();
-        return Ok(new { decision = await _permissions.GetDecisionAsync(reqId, ct) ?? "pending" });
+        return Ok(new { decision = await _permissions.GetDecisionAsync(reqId, id, ct) ?? "pending" });
     }
 
-    /// <summary>The hook gave up waiting: mark the request expired and defuse the chat prompt.</summary>
+    /// <summary>
+    /// The hook gave up waiting: mark the request expired and defuse the chat prompt.
+    /// Returns the final decision — if a click won the race against this expire, the
+    /// hook gets that decision back and can still honor it.
+    /// </summary>
     [HttpPost("permission/{reqId}/expire")]
     public async Task<IActionResult> ExpirePermission(string id, string reqId, CancellationToken ct)
     {
         if (await AuthAsync(id, ct) is null) return Unauthorized();
-        var resolved = await _permissions.ResolveAsync(reqId, "expired", ct);
-        if (resolved?.Platform is { } platform)
+        var resolved = await _permissions.ResolveAsync(reqId, "expired", id, ct);
+        if (resolved is null)
+        {
+            var existing = await _permissions.GetAsync(reqId, id, ct);
+            return Ok(new { decision = existing?.Decision ?? "expired" });
+        }
+        if (resolved.Platform is { } platform)
             foreach (var e in _promptEditors.Where(e => e.Platform == platform))
                 await e.MarkExpiredAsync(resolved, ct);
-        return NoContent();
+        return Ok(new { decision = "expired" });
     }
 
     /// <summary>Evaluates the live MCP restriction policy for this session.</summary>

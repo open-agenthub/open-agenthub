@@ -73,9 +73,12 @@ public sealed class SlackPermissionNotifier : IPermissionNotifier, IPermissionPr
     public async Task MarkExpiredAsync(PermissionRequest req, CancellationToken ct = default)
     {
         if (req.Channel is null || req.MessageTs is null) return;
-        await _slack.UpdateMessageAsync(req.Channel, req.MessageTs,
-            $":hourglass: *Expired* — *{Escape(req.Tool)}*. Please answer in the web terminal.", null, ct);
+        await _slack.UpdateMessageAsync(req.Channel, req.MessageTs, ExpiredMessage(req.Tool), null, ct);
     }
+
+    /// <summary>Prompt text once the request can no longer be answered out-of-band.</summary>
+    public static string ExpiredMessage(string tool)
+        => $":hourglass: *Expired* — *{Escape(tool)}*. Please answer in the web terminal.";
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
     private static string Trim(string s, int max) => s.Length <= max ? s : s[..max] + " …";
