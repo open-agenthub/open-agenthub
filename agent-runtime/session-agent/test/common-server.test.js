@@ -289,3 +289,34 @@ test('common transport does not infer resume merely because the first launch all
   assert.equal(missingResumeChecks, 0);
   assert.deepEqual(harness.exits, [1]);
 });
+
+test('common transport scopes a Codex API key to agent child and keeps parent and shell clean', () => {
+  const harness = createHarness({ CODEX_API_KEY: 'synthetic-api-key' }, {
+    prepare(env) {
+      const key = env.CODEX_API_KEY;
+      delete env.CODEX_API_KEY;
+      return { childEnv: { CODEX_API_KEY: key } };
+    }
+  });
+  assert.equal(harness.runtime.env.CODEX_API_KEY, undefined);
+  assert.equal(harness.spawns[0].options.env.CODEX_API_KEY, 'synthetic-api-key');
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/shell');
+  assert.equal(harness.spawns[1].options.env.CODEX_API_KEY, undefined);
+});
+
+test('common transport keeps Claude-style prepare child environment unchanged', () => {
+  const harness = createHarness({ ANTHROPIC_API_KEY: 'synthetic-claude-key' });
+  assert.equal(harness.spawns[0].options.env, harness.runtime.env);
+  assert.equal(harness.spawns[0].options.env.ANTHROPIC_API_KEY, 'synthetic-claude-key');
+});
+
+test('common transport production archive includes Codex state but excludes auth', () => {
+  const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/codex-state' }, {
+    name: 'Codex', stateDir: '.codex', authFilename: 'auth.json'
+  });
+  harness.intervals[0].callback();
+  assert.equal(harness.commands.length, 1);
+  assert.match(harness.commands[0].args[1], /"\.codex"/);
+  assert.match(harness.commands[0].args[1], /--exclude="\.codex\/auth\.json"/);
+});

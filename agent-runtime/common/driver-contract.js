@@ -6,6 +6,10 @@ const REQUIRED = ['name', 'stateDir', 'authFilename', 'buildCommand', 'isResumeC
   'isMissingResume', 'prepare'];
 const SAFE_RELATIVE_NAME = /^(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 
+// prepare(env) may scrub values from the long-lived parent environment and return
+// { childEnv: { ... } } with values merged only into the provider agent PTY. The
+// common shell terminal always receives the scrubbed parent environment.
+
 function validateDriver(driver) {
   if (!driver || typeof driver !== 'object') throw new Error('Agent driver must export an object');
   for (const key of REQUIRED) {

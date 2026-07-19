@@ -9,12 +9,12 @@ namespace AgentHub.Api.Tests;
 public class AgentPodSpecFactoryTests
 {
     [Theory]
-    [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "runtime-claude", "claude", null)]
-    [InlineData(AgentKind.Claude, AgentAuthMode.ApiKey, "runtime-claude", null, "ANTHROPIC_API_KEY")]
-    [InlineData(AgentKind.Codex, AgentAuthMode.Subscription, "runtime-codex", "codex", null)]
-    [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey, "runtime-codex", null, "CODEX_API_KEY")]
+    [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "subscription", "runtime-claude", "claude", null)]
+    [InlineData(AgentKind.Claude, AgentAuthMode.ApiKey, "apikey", "runtime-claude", null, "ANTHROPIC_API_KEY")]
+    [InlineData(AgentKind.Codex, AgentAuthMode.Subscription, "subscription", "runtime-codex", "codex", null)]
+    [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey, "apikey", "runtime-codex", null, "CODEX_API_KEY")]
     public void Build_CredentialSelection_MountsOnlySelectedCredential(
-        AgentKind agent, AgentAuthMode auth, string expectedImage, string? expectedVolume, string? expectedEnv)
+        AgentKind agent, AgentAuthMode auth, string expectedAuthMode, string expectedImage, string? expectedVolume, string? expectedEnv)
     {
         var pod = Build(agent, auth);
         var container = Assert.Single(pod.Containers);
@@ -23,6 +23,8 @@ public class AgentPodSpecFactoryTests
         var projectedCredentialKeys = projectedCredentialItems.Select(i => i.Key).ToList();
 
         Assert.Equal(expectedImage, container.Image);
+        Assert.Contains(container.Env, e => e.Name == "AGENTHUB_AUTH_MODE" &&
+            e.Value == expectedAuthMode && e.ValueFrom is null);
         Assert.Equal(expectedVolume is not null, pod.Volumes.Any(v => v.Name == expectedVolume));
         Assert.Equal(expectedEnv is not null, container.Env.Any(e => e.Name == expectedEnv));
         Assert.Equal(expectedVolume == "claude", pod.Volumes.Any(v => v.Name == "claude"));
@@ -62,6 +64,8 @@ public class AgentPodSpecFactoryTests
 
         Assert.Equal("runtime-claude", container.Image);
         Assert.Null(container.Command);
+        Assert.Contains(container.Env, e => e.Name == "AGENTHUB_AUTH_MODE" &&
+            e.Value == "auto" && e.ValueFrom is null);
         Assert.Equal(new[] { "workspace", "home", "tmp", "creds", "claude" }, pod.Volumes.Select(v => v.Name));
         Assert.Equal(new[] { "workspace", "home", "tmp", "creds", "claude" }, container.VolumeMounts.Select(v => v.Name));
         Assert.Contains(container.Env, e => e.Name == "ANTHROPIC_API_KEY" &&
