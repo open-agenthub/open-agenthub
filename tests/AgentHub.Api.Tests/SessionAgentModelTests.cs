@@ -78,9 +78,9 @@ public sealed class SessionAgentModelTests
     }
 
     [Fact]
-    public void EmptyStructuredPolicy_UsesLegacyAllowedTools()
+    public void OmittedStructuredPolicy_UsesLegacyAllowedTools()
     {
-        var policy = AgentConfiguration.ResolvePolicy(new AgentPolicy(), ["Read", "Write"]);
+        var policy = AgentConfiguration.ResolvePolicy(null, ["Read", "Write"]);
 
         Assert.Equal(["Read", "Write"], policy.AllowedTools);
         Assert.Empty(policy.AllowedMcpTools);
@@ -99,6 +99,42 @@ public sealed class SessionAgentModelTests
     }
 
     [Fact]
+    public void CreateRequest_OmittedPolicyFallsBackToLegacyAllowedTools()
+    {
+        var request = DeserializeCreateRequest("{\"allowedTools\":[\"Read\"]}");
+
+        Assert.Null(request.Policy);
+        var policy = AgentConfiguration.ResolvePolicy(request.Policy, request.AllowedTools);
+        Assert.Equal(["Read"], policy.AllowedTools);
+    }
+
+    [Theory]
+    [InlineData("{\"policy\":{},\"allowedTools\":[\"Read\"]}")]
+    [InlineData("{\"policy\":{\"allowedTools\":[],\"allowedMcpTools\":[],\"allowedCommands\":[]},\"allowedTools\":[\"Read\"]}")]
+    public void CreateRequest_ExplicitEmptyPolicyOverridesLegacyAllowedTools(string json)
+    {
+        var request = DeserializeCreateRequest(json);
+
+        Assert.NotNull(request.Policy);
+        var policy = AgentConfiguration.ResolvePolicy(request.Policy, request.AllowedTools);
+        Assert.Empty(policy.AllowedTools);
+        Assert.Empty(policy.AllowedMcpTools);
+        Assert.Empty(policy.AllowedCommands);
+    }
+
+    [Fact]
+    public void CreateRequest_OmittedPolicyAndLegacyToolsResolveToEmptyPolicy()
+    {
+        var request = DeserializeCreateRequest("{}");
+
+        Assert.Null(request.Policy);
+        var policy = AgentConfiguration.ResolvePolicy(request.Policy, request.AllowedTools);
+        Assert.Empty(policy.AllowedTools);
+        Assert.Empty(policy.AllowedMcpTools);
+        Assert.Empty(policy.AllowedCommands);
+    }
+
+    [Fact]
     public void UpdateRequest_DistinguishesOmittedFromExplicitEmptyPolicy()
     {
         var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
@@ -109,5 +145,11 @@ public sealed class SessionAgentModelTests
         Assert.Null(omitted.Policy);
         Assert.NotNull(explicitEmpty.Policy);
         Assert.Empty(explicitEmpty.Policy.AllowedTools);
+    }
+
+    private static CreateSessionRequest DeserializeCreateRequest(string json)
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        return System.Text.Json.JsonSerializer.Deserialize<CreateSessionRequest>(json, options)!;
     }
 }
