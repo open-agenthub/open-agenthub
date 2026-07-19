@@ -83,6 +83,15 @@ public sealed class SlackClient
         catch (Exception ex) { _log.LogWarning(ex, "Slack chat.update error"); }
     }
 
+    /// <summary>Deletes a message (chat.delete) — used to remove the transient "working…" status.</summary>
+    public async Task DeleteMessageAsync(string channel, string ts, CancellationToken ct)
+    {
+        var c = Client(_opts.BotToken);
+        var body = new Dictionary<string, object?> { ["channel"] = channel, ["ts"] = ts };
+        try { await c.PostAsJsonAsync("https://slack.com/api/chat.delete", body, ct); }
+        catch (Exception ex) { _log.LogWarning(ex, "Slack chat.delete error"); }
+    }
+
     /// <summary>Resolves a user's email to their DM channel id (lookupByEmail → conversations.open).</summary>
     public async Task<string?> OpenImByEmailAsync(string email, CancellationToken ct)
     {

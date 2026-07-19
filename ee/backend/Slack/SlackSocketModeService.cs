@@ -7,6 +7,7 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using AgentHub.Api.Chat;
 using AgentHub.Api.Licensing;
 using AgentHub.Api.Permissions;
 using AgentHub.Api.Services;
@@ -26,15 +27,16 @@ public sealed class SlackSocketModeService : BackgroundService
     private readonly SlackThreadStore _threads;
     private readonly AgentHub.Api.Permissions.PermissionStore _permissions;
     private readonly ISessionService _sessions;
+    private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
     private readonly ILogger<SlackSocketModeService> _log;
 
     public SlackSocketModeService(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
         SlackThreadStore threads, AgentHub.Api.Permissions.PermissionStore permissions,
-        ISessionService sessions, IConfiguration cfg, ILogger<SlackSocketModeService> log)
+        ISessionService sessions, WorkingIndicator indicator, IConfiguration cfg, ILogger<SlackSocketModeService> log)
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _permissions = permissions;
-        _sessions = sessions;
+        _sessions = sessions; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
         _log = log;
     }
@@ -117,6 +119,15 @@ public sealed class SlackSocketModeService : BackgroundService
 
         await AgentTerminal.SendInputAsync(podIp, _agentPort, textReply, ct);
         _log.LogInformation("Delivered Slack reply to session {Id}", thread.SessionId);
+
+        // Show a lightweight "working…" indicator until the session's next event.
+        var statusTs = await _slack.PostMessageAsync(thread.Channel, WorkingIndicator.Frames[0], threadTs, ct);
+        if (statusTs is not null)
+        {
+            await _threads.SetStatusTsAsync(thread.SessionId, statusTs, ct);
+            var channel = thread.Channel;
+            _indicator.Start(thread.SessionId, (text, c) => _slack.UpdateMessageAsync(channel, statusTs, text, null, c));
+        }
     }
 
     // Handles a Block Kit button click on a permission prompt (perm:<decision>:<id>).
