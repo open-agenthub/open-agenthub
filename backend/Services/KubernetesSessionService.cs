@@ -138,11 +138,17 @@ public sealed class KubernetesSessionService : ISessionService
 
     // ---------------------------------------------------------------- Create / Resume
 
-    public async Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default)
+    public Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default)
+        => CreateSessionCoreAsync(owner, req, allowMigratedClaudeAuto: false, ct);
+
+    private async Task<SessionInfo> CreateSessionCoreAsync(string owner, CreateSessionRequest req, bool allowMigratedClaudeAuto, CancellationToken ct)
     {
         if (req.Mode is SessionMode.Autonomous or SessionMode.Scheduled && string.IsNullOrWhiteSpace(req.Prompt))
             throw new ArgumentException("A prompt is required for Autonomous/Scheduled sessions.");
-        AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode);
+        if (allowMigratedClaudeAuto)
+            AgentConfiguration.ValidateForDuplicatedSession(req.Agent, req.AuthMode);
+        else
+            AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode);
 
         var image = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image.Trim();
         if (image is not null)
@@ -192,7 +198,9 @@ public sealed class KubernetesSessionService : ISessionService
         var source = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         await ValidateProjectAsync(owner, request.ProjectId, ct);
-        return await CreateSessionAsync(owner, SessionDuplication.CopyableRequest(source, request), ct);
+        var copy = SessionDuplication.CopyableRequest(source, request);
+        var allowMigratedClaudeAuto = source.Agent == AgentKind.Claude && source.AuthMode == AgentAuthMode.Auto;
+        return await CreateSessionCoreAsync(owner, copy, allowMigratedClaudeAuto, ct);
     }
 
     // Effective repo list: explicit Repos win; otherwise fold the legacy single-repo fields.

@@ -53,4 +53,20 @@ public sealed class SessionDuplicationTests
         Assert.True(removed!.ProjectIdSpecified);
         Assert.Null(removed.ProjectId);
     }
-}
+
+    [Fact]
+    public void DuplicateRequest_PreservesMigratedClaudeAutoAuthentication()
+    {
+        var source = new SessionRecord
+        {
+            Id = "legacy", Owner = "alice", Title = "Legacy", Mode = SessionMode.Interactive,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Auto,
+            AgentSessionId = "legacy-thread", CallbackToken = "token"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
+
+        Assert.Equal(AgentKind.Claude, copy.Agent);
+        Assert.Equal(AgentAuthMode.Auto, copy.AuthMode);
+        AgentConfiguration.ValidateForDuplicatedSession(copy.Agent, copy.AuthMode);
+    }}

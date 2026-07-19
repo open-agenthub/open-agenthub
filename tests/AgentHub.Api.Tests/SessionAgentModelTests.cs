@@ -41,10 +41,18 @@ public sealed class SessionAgentModelTests
         Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForCreate(agent, AgentAuthMode.Subscription));
     }
 
-    [Fact]
-    public void UpdateConfiguration_RejectsUndefinedNumericModes()
+    [Theory]
+    [InlineData(AgentAuthMode.Auto)]
+    [InlineData((AgentAuthMode)99)]
+    public void UpdateConfiguration_RejectsNonExplicitAuthenticationModes(AgentAuthMode authMode)
     {
-        Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForUpdate(AgentKind.Codex, (AgentAuthMode)99));
+        Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForUpdate(AgentKind.Codex, authMode));
+    }
+
+    [Fact]
+    public void DuplicatedCodexSession_CannotUseAutoAuthentication()
+    {
+        Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForDuplicatedSession(AgentKind.Codex, AgentAuthMode.Auto));
     }
 
     [Fact]
