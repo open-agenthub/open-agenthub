@@ -23,13 +23,15 @@ public sealed class InternalController : ControllerBase
     private readonly ISessionService _svc;
     private readonly PermissionStore _permissions;
     private readonly IPermissionNotifier _permNotifier;
+    private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly SessionShareStore _shares;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
-        PermissionStore permissions, IPermissionNotifier permNotifier, SessionShareStore shares)
+        PermissionStore permissions, IPermissionNotifier permNotifier,
+        IEnumerable<IPermissionPromptEditor> promptEditors, SessionShareStore shares)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
-        _permissions = permissions; _permNotifier = permNotifier; _shares = shares;
+        _permissions = permissions; _permNotifier = permNotifier; _promptEditors = promptEditors; _shares = shares;
     }
 
     private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
@@ -149,6 +151,18 @@ public sealed class InternalController : ControllerBase
     {
         if (await AuthAsync(id, ct) is null) return Unauthorized();
         return Ok(new { decision = await _permissions.GetDecisionAsync(reqId, ct) ?? "pending" });
+    }
+
+    /// <summary>The hook gave up waiting: mark the request expired and defuse the chat prompt.</summary>
+    [HttpPost("permission/{reqId}/expire")]
+    public async Task<IActionResult> ExpirePermission(string id, string reqId, CancellationToken ct)
+    {
+        if (await AuthAsync(id, ct) is null) return Unauthorized();
+        var resolved = await _permissions.ResolveAsync(reqId, "expired", ct);
+        if (resolved?.Platform is { } platform)
+            foreach (var e in _promptEditors.Where(e => e.Platform == platform))
+                await e.MarkExpiredAsync(resolved, ct);
+        return NoContent();
     }
 
     /// <summary>Evaluates the live MCP restriction policy for this session.</summary>

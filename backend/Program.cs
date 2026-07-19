@@ -53,7 +53,13 @@ builder.Services.AddSingleton<AgentHub.Api.Persistence.UserDirectory>();
 builder.Services.AddSingleton<AgentHub.Api.Permissions.PermissionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.ISlackTargetResolver, AgentHub.Api.Ee.Slack.SlackTargetResolver>();
 builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Ee.Slack.SlackNotifier>();
-builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier, AgentHub.Api.Ee.Slack.SlackPermissionNotifier>();
+// Slack permission prompts: one instance posts them (IPermissionNotifier) and later
+// defuses expired ones (IPermissionPromptEditor) — register once, alias both interfaces.
+builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackPermissionNotifier>();
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Ee.Slack.SlackPermissionNotifier>());
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionPromptEditor>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Ee.Slack.SlackPermissionNotifier>());
 builder.Services.AddHostedService<AgentHub.Api.Ee.Slack.SlackSocketModeService>();
 
 builder.Services.AddHealthChecks();
