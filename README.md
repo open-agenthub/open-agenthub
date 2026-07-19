@@ -38,7 +38,7 @@ shift.
 ```
  Browser/Phone ──HTTPS/WSS──► Backend (C# / ASP.NET Core)  ──K8s API──► Agent pod
    Vue 3 + xterm.js            - Auth (OIDC, any provider)              - isolated, unprivileged
-                               - Session orchestration                  - git + ssh + claude-code
+                               - Session orchestration                  - git + ssh + selected CLI
                                - WS terminal proxy                      - session-agent (PTY+WS)
                                                                         - Claude Code or Codex
                                                                         - selected secrets/MCP mounted
