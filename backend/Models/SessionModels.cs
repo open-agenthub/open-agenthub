@@ -14,6 +14,16 @@ public enum SessionMode
     Scheduled
 }
 
+public enum AgentKind { Claude, Codex }
+public enum AgentAuthMode { Auto, Subscription, ApiKey }
+
+public sealed record AgentPolicy
+{
+    public IReadOnlyList<string> AllowedTools { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> AllowedMcpTools { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> AllowedCommands { get; init; } = Array.Empty<string>();
+}
+
 /// <summary>A repository to check out into the session workspace.</summary>
 public record RepoRef
 {
@@ -50,7 +60,10 @@ public record CreateSessionRequest
     /// <summary>MCP configuration as a JSON string (.mcp.json format), mounted into the container.</summary>
     public string? McpConfigJson { get; init; }
 
-    /// <summary>Allowlist of permitted tools for autonomous mode.</summary>
+    public AgentKind Agent { get; init; } = AgentKind.Claude;
+    public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
+    public AgentPolicy Policy { get; init; } = new();
+    /// <summary>Deprecated compatibility input; used only when Policy is empty.</summary>
     public List<string> AllowedTools { get; init; } = new();
 
     /// <summary>Custom container image (glibc-based, bash+git+curl recommended). Empty = default agent image.</summary>
@@ -78,6 +91,9 @@ public record UpdateSessionRequest
     public string? Memory { get; init; }
     /// <summary>MCP config (.mcp.json); null = unchanged, empty string = remove all MCP servers.</summary>
     public string? McpConfigJson { get; init; }
+    public AgentKind? Agent { get; init; }
+    public AgentAuthMode? AuthMode { get; init; }
+    public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
     /// <summary>Replacement project assignment; null removes the assignment when supplied.</summary>
@@ -105,6 +121,9 @@ public static class SessionDuplication
         Prompt = source.Prompt,
         Schedule = source.Schedule,
         McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
+        Agent = source.Agent,
+        AuthMode = source.AuthMode,
+        Policy = Deserialize<AgentPolicy>(source.AgentPolicyJson),
         AllowedTools = Deserialize<List<string>>(source.AllowedToolsJson),
         Image = source.Image,
         RunAsRoot = source.RunAsRoot,
@@ -115,7 +134,7 @@ public static class SessionDuplication
     private static T Deserialize<T>(string? json) where T : new()
     {
         if (string.IsNullOrWhiteSpace(json)) return new T();
-        try { return System.Text.Json.JsonSerializer.Deserialize<T>(json) ?? new T(); }
+        try { return System.Text.Json.JsonSerializer.Deserialize<T>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)) ?? new T(); }
         catch (System.Text.Json.JsonException) { return new T(); }
     }
 }
@@ -140,6 +159,9 @@ public record SessionInfo
     public DateTime CreatedAt { get; init; }
     public string? Prompt { get; init; }
     public IReadOnlyList<string> AllowedTools { get; init; } = Array.Empty<string>();
+    public AgentKind Agent { get; init; } = AgentKind.Claude;
+    public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Auto;
+    public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>
