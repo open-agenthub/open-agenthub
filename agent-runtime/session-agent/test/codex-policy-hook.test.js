@@ -132,6 +132,52 @@ test('interactive MCP initial policy callback failure fails closed for every hoo
   }
 });
 
+test('interactive MCP invalid tool input denies before any callback or approval', async () => {
+  const server = await startServer([]);
+  const invalidEvents = [
+    { hook_event_name: 'PreToolUse', tool_name: 'mcp__docs__search' },
+    { hook_event_name: 'PermissionRequest', tool_name: 'mcp__docs__search' },
+    { hook_event_name: 'PreToolUse', tool_name: 'mcp__docs__search', tool_input: null },
+    { hook_event_name: 'PermissionRequest', tool_name: 'mcp__docs__search', tool_input: 'invalid' },
+    { hook_event_name: 'PermissionRequest', tool_name: 'mcp__docs__search', tool_input: [] }
+  ];
+  try {
+    for (const payload of invalidEvents) {
+      const result = await runHook(payload, {
+        AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive'
+      });
+      if (payload.hook_event_name === 'PermissionRequest') {
+        assert.deepEqual(result.output, {
+          hookSpecificOutput: {
+            hookEventName: 'PermissionRequest',
+            decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+          }
+        });
+      } else {
+        assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+      }
+      assert.equal(result.stderr, '');
+    }
+    assert.deepEqual(server.requests, []);
+  } finally {
+    await server.close();
+  }
+});
+
+test('interactive non-MCP missing tool input retains normal permission flow', async () => {
+  const server = await startServer([]);
+  try {
+    const result = await runHook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' }, {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive'
+    });
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+    assert.deepEqual(server.requests, []);
+  } finally {
+    await server.close();
+  }
+});
+
 test('non-interactive callback and malformed-response failures fail closed', async () => {
   const unavailable = await runHook(preTool(), {
     AGENTHUB_CALLBACK_URL: 'http://127.0.0.1:1', AGENTHUB_MODE: 'autonomous'
