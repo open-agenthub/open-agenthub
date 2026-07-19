@@ -38,6 +38,14 @@ public static class AgentConfiguration
         if (authMode is { } selectedAuthMode) ValidateAuthMode(selectedAuthMode);
     }
 
+    public static void ValidateForDuplicatedSession(AgentKind agent, AgentAuthMode authMode)
+    {
+        ValidateAgent(agent);
+        if (agent == AgentKind.Claude && authMode == AgentAuthMode.Auto) return;
+        ValidateAuthMode(authMode);
+    }
+
+
     public static AgentPolicy ResolvePolicy(AgentPolicy policy, IReadOnlyList<string> legacyAllowedTools) =>
         IsEmpty(policy) && legacyAllowedTools.Count > 0
             ? policy with { AllowedTools = legacyAllowedTools.ToArray() }
