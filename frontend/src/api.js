@@ -24,6 +24,24 @@ async function req(method, path, body) {
   return res.status === 204 ? null : res.json()
 }
 
+// Like req(), but resolves to the HTTP status code (the caller distinguishes
+// e.g. 202 "verification sent" from 204 "saved") and throws an Error carrying
+// `.status` so failures (400/409/429/503) can be mapped to inline messages.
+async function reqStatus(method, path, body) {
+  const res = await fetch(`/api${path}`, {
+    method,
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    body: body ? JSON.stringify(body) : undefined
+  })
+  if (res.status === 401) handle401()
+  if (!res.ok) {
+    const err = new Error(`${res.status} ${await res.text()}`)
+    err.status = res.status
+    throw err
+  }
+  return res.status
+}
+
 export const api = {
   listSessions: () => req('GET', '/sessions'),
   getSession: (id) => req('GET', `/sessions/${id}`),
@@ -59,6 +77,15 @@ export const api = {
   // Per-user Slack preferences.
   slackMe: () => req('GET', '/slack/me'),
   setSlackPrefs: (data) => req('PUT', '/slack/me', data),
+  // Per-user Telegram/Signal chat settings.
+  chatMe: () => req('GET', '/chat/me'),
+  telegramLinkCode: () => req('POST', '/chat/telegram/link-code'),
+  setTelegramPrefs: (data) => req('PUT', '/chat/telegram', data),
+  unlinkTelegram: () => req('DELETE', '/chat/telegram'),
+  // 204 = saved, 202 = verification code sent; throws with .status on 400/409/503.
+  setSignalPrefs: (data) => reqStatus('PUT', '/chat/signal', data),
+  // 204 = verified; throws with .status on 400 (invalid/expired) / 429 (too many attempts).
+  verifySignal: (code) => reqStatus('POST', '/chat/signal/verify', { code }),
   // Admin area: license activation (stored in DB) + seat management.
   adminAccess: () => req('GET', '/admin/access'),
   adminOverview: () => req('GET', '/admin/overview'),
