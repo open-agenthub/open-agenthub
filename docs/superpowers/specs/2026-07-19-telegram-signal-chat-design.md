@@ -22,6 +22,11 @@ query, and browser desktop notifications.
   number once directly on the container.
 - Everything lives in the AGPL core under `backend/Chat/` — deliberate
   contrast to the Slack EE integration. No `IEnterpriseLicense` checks.
+- **Uniqueness semantics** (decided during review): `telegram_chat_id` and
+  `signal_number` are unique across users (partial unique indexes). Telegram
+  re-linking steals the chat from its previous owner (last `/link` wins — the
+  linker proved chat membership + AgentHub login); a Signal number conflict is
+  rejected (409) so nobody can squat or unbind someone else's verified number.
 
 ## Architecture
 
