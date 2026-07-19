@@ -125,14 +125,54 @@ function createHarness(environment = {}, driverOverrides = {}) {
 test('common transport validates every required driver export', () => {
   const valid = {
     name: 'Example', stateDir: '.example', authFilename: 'auth.json',
-    buildCommand() {}, isMissingResume() {}, prepare() {}
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
   };
   assert.equal(validateDriver(valid), valid);
 
-  for (const key of ['name', 'stateDir', 'authFilename', 'buildCommand', 'isMissingResume', 'prepare']) {
+  for (const key of ['name', 'stateDir', 'authFilename', 'buildCommand', 'isResumeCommand',
+    'isMissingResume', 'prepare']) {
     const invalid = { ...valid };
     delete invalid[key];
     assert.throws(() => validateDriver(invalid), new RegExp(`missing ${key}`, 'i'));
+  }
+  assert.throws(() => validateDriver({ ...valid, name: '' }), /missing name/i);
+});
+
+test('common transport accepts only safe single relative archive names', () => {
+  const valid = {
+    name: 'Example', stateDir: '.claude', authFilename: '.credentials.json',
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
+  };
+
+  for (const [stateDir, authFilename] of [
+    ['.claude', '.credentials.json'],
+    ['.codex', 'auth.json']
+  ]) {
+    assert.doesNotThrow(() => validateDriver({ ...valid, stateDir, authFilename }));
+  }
+
+  for (const [field, value] of [
+    ['stateDir', ''],
+    ['stateDir', '.'],
+    ['stateDir', '..'],
+    ['stateDir', '../escape'],
+    ['stateDir', 'nested/path'],
+    ['stateDir', 'nested\\path'],
+    ['stateDir', '"quoted"'],
+    ['stateDir', 'bad name'],
+    ['stateDir', 'bad;name'],
+    ['authFilename', ''],
+    ['authFilename', '.'],
+    ['authFilename', '..'],
+    ['authFilename', '../auth.json'],
+    ['authFilename', 'nested/auth.json'],
+    ['authFilename', 'nested\\auth.json'],
+    ['authFilename', "'quoted'"],
+    ['authFilename', 'bad\nname'],
+    ['authFilename', '$HOME']
+  ]) {
+    assert.throws(() => validateDriver({ ...valid, [field]: value }),
+      new RegExp(field + ' must be a safe single relative name', 'i'));
   }
 });
 
@@ -229,6 +269,23 @@ test('common transport retries a missing resume once and then launches fresh', (
   assert.deepEqual(harness.spawns.map(spawn => spawn.args), [['resume'], ['fresh']]);
   const socket = new FakeSocket();
   harness.runtime.webSocketServer.connect(socket, '/');
-  assert.match(socket.sent[0], /No saved session to resume.*starting fresh/s);
+  assert.match(socket.sent[0], /No saved conversation to resume — starting fresh\./);
   assert.equal(checks.length, 1);
+});
+
+test('common transport does not infer resume merely because the first launch allows it', () => {
+  let missingResumeChecks = 0;
+  const harness = createHarness({}, {
+    isResumeCommand: () => false,
+    isMissingResume: () => {
+      missingResumeChecks++;
+      return true;
+    }
+  });
+
+  harness.terminals[0].emitExit({ exitCode: 1, signal: 0 });
+
+  assert.equal(harness.terminals.length, 1);
+  assert.equal(missingResumeChecks, 0);
+  assert.deepEqual(harness.exits, [1]);
 });

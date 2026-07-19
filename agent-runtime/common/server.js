@@ -94,9 +94,7 @@ function createCommonServer(options = {}) {
 
   function startAgent(allowResume) {
     const command = driver.buildCommand(env, allowResume);
-    attemptedResume = typeof driver.isResumeCommand === 'function'
-      ? driver.isResumeCommand(command, env)
-      : allowResume;
+    attemptedResume = driver.isResumeCommand(command);
     attemptOutput = '';
     launchedAt = now();
     console.log('[agent] driver=' + driver.name + ' mode=' + mode + ' resume=' + attemptedResume +
@@ -116,7 +114,7 @@ function createCommonServer(options = {}) {
       if (attemptedResume && !retriedFresh &&
           driver.isMissingResume(attemptOutput, exitCode, elapsedMs)) {
         retriedFresh = true;
-        remember('\r\n[agent] No saved session to resume — starting fresh.\r\n');
+        remember('\r\n[agent] No saved conversation to resume — starting fresh.\r\n');
         startAgent(false);
         return;
       }
