@@ -8,6 +8,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using AgentHub.Api.Licensing;
+using AgentHub.Api.Permissions;
 using AgentHub.Api.Services;
 
 namespace AgentHub.Api.Ee.Slack;
