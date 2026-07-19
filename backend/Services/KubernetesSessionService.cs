@@ -71,7 +71,9 @@ public sealed class KubernetesSessionService : ISessionService
     public async Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default)
     {
         var data = (await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data ?? new Dictionary<string, byte[]>();
-        return CredentialSecretFactory.CredentialStatus(data);
+        var claude = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Claude), ct))?.Data;
+        var codex = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Codex), ct))?.Data;
+        return CredentialSecretFactory.CredentialStatus(data, claude, codex);
     }
 
     /// <summary>
@@ -145,7 +147,7 @@ public sealed class KubernetesSessionService : ISessionService
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         await ValidateProjectAsync(owner, request.ProjectId, ct);
         var copy = SessionDuplication.CopyableRequest(source, request);
-        var allowMigratedClaudeAuto = source.Agent == AgentKind.Claude && source.AuthMode == AgentAuthMode.Auto;
+        var allowMigratedClaudeAuto = copy.Agent == AgentKind.Claude && copy.AuthMode == AgentAuthMode.Auto;
         return await CreateSessionCoreAsync(owner, copy, allowMigratedClaudeAuto, ct);
     }
 

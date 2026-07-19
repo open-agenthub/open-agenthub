@@ -1,7 +1,9 @@
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
+import { defaultAgentForm, defaultPolicy, policyPayload } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
+import AgentDecisionCard from './AgentDecisionCard.vue'
 
 const emit = defineEmits(['close', 'created'])
 const props = defineProps({ embedded: { type: Boolean, default: false }, projects: { type: Array, default: () => [] } })
@@ -13,6 +15,7 @@ const MODES = [
 ]
 const repos = ref([])
 const advOpen = ref(false)
+const credentialStatus = ref({})
 const form = ref({
   title: '',
   mode: 'Interactive',
@@ -20,7 +23,7 @@ const form = ref({
   schedule: '0 6 * * 1-5',
   projectId: '',
   mcpConfigJson: '',
-  allowedToolsRaw: 'Edit,Bash(git*),Read',
+  ...defaultAgentForm(),
   image: '',
   runAsRoot: false,
   cpu: '500m',
@@ -33,6 +36,20 @@ const needsPrompt = computed(() => form.value.mode !== 'Interactive')
 const needsSchedule = computed(() => form.value.mode === 'Scheduled')
 const modeHint = computed(() => MODES.find(m => m.key === form.value.mode)?.hint)
 
+onMounted(async () => {
+  try { credentialStatus.value = await api.getCredentialStatus() } catch { /* readiness stays advisory */ }
+})
+
+watch(() => form.value.agent, (agent, previousAgent) => {
+  const previousDefaults = defaultPolicy(previousAgent)
+  const current = policyPayload(form.value)
+  if (JSON.stringify(current) !== JSON.stringify(previousDefaults)) return
+  const next = defaultPolicy(agent)
+  form.value.allowedToolsRaw = next.allowedTools.join('\n')
+  form.value.allowedMcpToolsRaw = next.allowedMcpTools.join('\n')
+  form.value.allowedCommandsRaw = next.allowedCommands.join('\n')
+})
+
 async function submit() {
   error.value = ''
   if (form.value.mcpConfigJson.trim()) {
@@ -44,12 +61,14 @@ async function submit() {
     const session = await api.createSession({
       title: form.value.title || 'Session',
       mode: form.value.mode,
+      agent: form.value.agent,
+      authMode: form.value.authMode,
       repos: repos.value,
       prompt: form.value.prompt || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
       projectId: form.value.projectId || null,
       mcpConfigJson: form.value.mcpConfigJson || null,
-      allowedTools: form.value.allowedToolsRaw.split(',').map(s => s.trim()).filter(Boolean),
+      policy: policyPayload(form.value),
       image: form.value.image.trim() || null,
       runAsRoot: form.value.runAsRoot,
       cpu: form.value.cpu,
@@ -77,10 +96,13 @@ async function submit() {
         <div class="field">
           <label>Mode</label>
           <div class="chips-box">
-            <button v-for="m in MODES" :key="m.key" class="chip" :class="{ on: form.mode === m.key }" @click="form.mode = m.key">{{ m.key }}</button>
+            <button v-for="m in MODES" :key="m.key" type="button" class="chip" :class="{ on: form.mode === m.key }"
+              :aria-pressed="form.mode === m.key" data-mode-option @click="form.mode = m.key">{{ m.key }}</button>
           </div>
           <small class="hint">{{ modeHint }}</small>
         </div>
+        <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
+          :mode="form.mode" :credential-status="credentialStatus" />
         <div class="field" v-if="needsSchedule">
           <label>Schedule <span class="dim">— cron, UTC</span></label>
           <input v-model="form.schedule" class="mono short" placeholder="0 6 * * 1-5" />
@@ -101,14 +123,25 @@ async function submit() {
       </div>
 
       <div class="card adv">
-        <button class="adv-head" @click="advOpen = !advOpen">
-          <span><b>Advanced</b><span class="dim adv-sub">tools, MCP, container, resources</span></span>
+        <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">
+          <span><b>Advanced</b><span class="dim adv-sub">policy, MCP, container, resources</span></span>
           <span class="dim">{{ advOpen ? '▾' : '▸' }}</span>
         </button>
         <div v-if="advOpen" class="adv-body">
-          <div class="field" v-if="needsPrompt">
-            <label>Allowed tools <span class="dim">— allowlist, comma-separated</span></label>
-            <input v-model="form.allowedToolsRaw" class="mono" placeholder="Edit,Bash(git*),Read" />
+          <div v-if="needsPrompt" class="policy-block">
+            <p class="policy-note">Automation is default-deny. Add one exact name, pattern, or command prefix per line; empty fields allow nothing in that category.</p>
+            <div class="field">
+              <label>Built-in tools and patterns</label>
+              <textarea v-model="form.allowedToolsRaw" data-policy="allowedTools" :placeholder="form.agent === 'Codex' ? 'Read\nEdit' : 'Read\nEdit\nBash(git*)'" />
+            </div>
+            <div class="field">
+              <label>Full MCP tool names and patterns</label>
+              <textarea v-model="form.allowedMcpToolsRaw" data-policy="allowedMcpTools" placeholder="mcp__docs__search\nmcp__git__*" />
+            </div>
+            <div class="field">
+              <label>Shell command prefixes</label>
+              <textarea v-model="form.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="form.agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'" />
+            </div>
           </div>
           <div class="field">
             <label>Extra tools <span class="dim">— MCP servers the agent can use (.mcp.json)</span></label>
@@ -129,9 +162,9 @@ async function submit() {
       <p v-if="error" class="err">{{ error }}</p>
 
       <div class="row">
-        <button class="primary" :disabled="busy" @click="submit">{{ busy ? 'Starting…' : 'Start session' }}</button>
+        <button class="primary" data-submit :disabled="busy" @click="submit">{{ busy ? 'Starting…' : 'Start session' }}</button>
         <button @click="$emit('close')">Cancel</button>
-        <span class="dim note-inline">Claude &amp; the terminal agent are set up in the container automatically.</span>
+        <span class="dim note-inline">The selected agent and terminal tools are set up automatically.</span>
       </div>
     </div>
   </div>
@@ -158,11 +191,17 @@ async function submit() {
 .adv-head:hover { background: var(--hover); }
 .adv-sub { margin-left: 10px; font-size: 12px; }
 .adv-body { padding: 14px 20px 20px; border-top: 1px solid var(--border); }
+.policy-block { margin-bottom: 18px; padding-bottom: 4px; border-bottom: 1px solid var(--border); }
+.policy-note { margin: 0 0 12px; color: var(--muted-2); font-size: 12px; line-height: 1.5; }
 .grid3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; }
 .check { display: flex; align-items: flex-start; gap: 10px; margin: 4px 0 0; font-size: 13px; color: var(--text); cursor: pointer; }
 .check input { width: auto; margin-top: 2px; }
 .row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
 .note-inline { font-size: 12px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
-@media (max-width: 760px) { .grid3 { grid-template-columns: 1fr; } }
+@media (max-width: 760px) {
+  .grid3 { grid-template-columns: 1fr; }
+  .row { align-items: stretch; flex-wrap: wrap; }
+  .note-inline { flex-basis: 100%; }
+}
 </style>

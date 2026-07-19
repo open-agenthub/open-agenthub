@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { repoShortName, sessionMatches } from '../lib/text.js'
+import { authLabel } from '../lib/agent.js'
 
 const props = defineProps({
   sessions: { type: Array, default: () => [] },
@@ -70,7 +71,7 @@ function repoLine(s) {
         <div v-for="s in grp.sessions" :key="s.id" class="row" @click="$emit('select', s.id)">
           <div class="row-status">
             <span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span>
-            <span class="mode">{{ s.mode }}</span>
+            <span class="mode">{{ s.mode }}<template v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></template></span>
           </div>
           <div class="row-main">
             <div class="row-title">{{ s.title }}</div>
@@ -111,7 +112,7 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .row { padding: 12px 18px; display: flex; align-items: center; gap: 12px; cursor: pointer; }
 .row + .row { border-top: 1px solid var(--border); }
 .row:hover { background: var(--hover); }
-.row-status { width: 88px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
+.row-status { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
 .st { font-size: 11px; font-weight: 700; }
 .mode { font-size: 11px; color: var(--muted-3); font-weight: 600; }
 .row-main { flex: 1; min-width: 0; }
@@ -123,4 +124,9 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .act:hover { background: var(--panel-2); color: var(--text); }
 .act.del:hover { background: rgba(245,122,106,0.12); color: var(--danger); }
 .empty { margin: 40px auto; text-align: center; color: var(--muted); }
+@media (max-width: 620px) {
+  .sessions-page { padding: 20px 16px; }
+  .row { align-items: flex-start; padding: 12px; }
+  .row-status { width: 112px; }
+}
 </style>

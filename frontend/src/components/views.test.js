@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../api.js', () => ({ api: mocks.api, config: mocks.config }))
 
 const sessions = [
-  { id: 's1', title: 'Fix checkout', phase: 'Running', mode: 'Autonomous', projectId: 'p1', repoUrl: 'https://x/shop/web.git' },
+  { id: 's1', title: 'Fix checkout', phase: 'Running', mode: 'Autonomous', agent: 'Codex', authMode: 'ApiKey', projectId: 'p1', repoUrl: 'https://x/shop/web.git' },
   { id: 's2', title: 'Nightly deps', phase: 'Running', mode: 'Interactive', questionPending: true, projectId: 'p1' },
   { id: 's3', title: 'Docs pass', phase: 'Paused', mode: 'Interactive', canResume: true },
   { id: 's4', title: 'From a friend', phase: 'Running', mode: 'Interactive', accessRole: 'Viewer', sharedBy: 'jonas' }
@@ -57,6 +57,13 @@ describe('SessionsView', () => {
   it('applies the search query', () => {
     const wrapper = mount(SessionsView, { props: { sessions, projects, query: 'docs' } })
     expect(wrapper.findAll('.row-title').map(t => t.text())).toEqual(['Docs pass'])
+  })
+
+  it('labels agent and billing on every session row', () => {
+    const wrapper = mount(SessionsView, { props: { sessions, projects } })
+    const row = wrapper.findAll('.row').find(item => item.text().includes('Fix checkout'))
+    expect(row.text()).toContain('Codex')
+    expect(row.text()).toContain('API key')
   })
 })
 
@@ -128,6 +135,19 @@ describe('SessionSearch', () => {
     await wrapper.get('input').trigger('focus')
     await wrapper.get('[data-search-result="c"]').trigger('mousedown')
     expect(wrapper.emitted('select')[0]).toEqual(['c'])
+  })
+})
+
+import TerminalView from './TerminalView.vue'
+
+describe('TerminalView session identity', () => {
+  it('labels the selected agent and billing source in session detail', () => {
+    const wrapper = mount(TerminalView, {
+      props: { session: sessions[0] },
+      global: { stubs: { TerminalPane: true, ShareSessionDialog: true } }
+    })
+    expect(wrapper.find('.meta').text()).toContain('Codex')
+    expect(wrapper.find('.meta').text()).toContain('API key')
   })
 })
 

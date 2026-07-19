@@ -45,7 +45,9 @@ public static class CredentialSecretFactory
         return Secret(name, @namespace, ownerLabelValue, data);
     }
 
-    public static CredentialStatus CredentialStatus(IDictionary<string, byte[]> data) => new()
+    public static CredentialStatus CredentialStatus(IDictionary<string, byte[]> data,
+        IDictionary<string, byte[]>? claudeSubscription = null,
+        IDictionary<string, byte[]>? codexSubscription = null) => new()
     {
         SshPrivateKey = data.ContainsKey("ssh_key"),
         GitlabToken = data.ContainsKey("gitlab_token"),
@@ -53,7 +55,9 @@ public static class CredentialSecretFactory
         OpenAiApiKey = data.ContainsKey("openai_api_key"),
         GitKnownHosts = data.ContainsKey("known_hosts"),
         GitUserName = data.ContainsKey("git_user_name"),
-        GitUserEmail = data.ContainsKey("git_user_email")
+        GitUserEmail = data.ContainsKey("git_user_email"),
+        ClaudeSubscription = claudeSubscription?.ContainsKey("credentials.json") == true,
+        CodexSubscription = codexSubscription?.ContainsKey("auth.json") == true
     };
 
     public static V1Secret CreateProviderSecret(string name, string @namespace, string ownerLabelValue,

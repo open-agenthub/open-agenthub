@@ -14,11 +14,13 @@ describe('repoShortName', () => {
 })
 
 describe('sessionMatches', () => {
-  const s = { title: 'Fix billing', repoUrl: 'https://x/team/pay.git', mode: 'Autonomous', repos: [{ url: 'https://x/team/pay.git' }] }
+  const s = { title: 'Fix billing', repoUrl: 'https://x/team/pay.git', mode: 'Autonomous', agent: 'Codex', authMode: 'ApiKey', repos: [{ url: 'https://x/team/pay.git' }] }
   it('matches empty query', () => expect(sessionMatches(s, '')).toBe(true))
   it('matches by title', () => expect(sessionMatches(s, 'billing')).toBe(true))
   it('matches by repo', () => expect(sessionMatches(s, 'pay')).toBe(true))
   it('matches by mode', () => expect(sessionMatches(s, 'autonomous')).toBe(true))
+  it('matches by agent', () => expect(sessionMatches(s, 'codex')).toBe(true))
+  it('matches by authentication label', () => expect(sessionMatches(s, 'api key')).toBe(true))
   it('no match', () => expect(sessionMatches(s, 'zzz')).toBe(false))
 })
 
