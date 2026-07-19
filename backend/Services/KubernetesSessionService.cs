@@ -167,7 +167,7 @@ public sealed class KubernetesSessionService : ISessionService
     private static string? SerializeAllowedTools(IReadOnlyList<string> tools) =>
         tools.Count == 0 ? null : JsonSerializer.Serialize(tools);
 
-    private static AgentPolicy EffectivePolicy(AgentPolicy policy, IReadOnlyList<string> allowedTools) =>
+    private static AgentPolicy EffectivePolicy(AgentPolicy? policy, IReadOnlyList<string> allowedTools) =>
         AgentConfiguration.ResolvePolicy(policy, allowedTools);
 
     private static string SerializePolicy(AgentPolicy policy) => JsonSerializer.Serialize(policy);

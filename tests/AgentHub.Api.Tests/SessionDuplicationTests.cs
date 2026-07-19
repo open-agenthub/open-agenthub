@@ -21,6 +21,9 @@ public sealed class SessionDuplicationTests
         Assert.Equal("p2", source.ProjectId);
         Assert.Equal("Run tests", source.Prompt);
         Assert.Equal(["Read"], source.AllowedTools);
+        Assert.Null(source.Policy);
+        Assert.Equal(["Read"],
+            AgentConfiguration.ResolvePolicy(source.Policy, source.AllowedTools).AllowedTools);
         Assert.Null(source.McpConfigJson);
     }
 
@@ -37,6 +40,7 @@ public sealed class SessionDuplicationTests
 
         var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
 
+        Assert.NotNull(copy.Policy);
         Assert.Equal(AgentKind.Codex, copy.Agent);
         Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
         Assert.Equal(["git status"], copy.Policy.AllowedCommands);
@@ -56,6 +60,7 @@ public sealed class SessionDuplicationTests
         var copy = SessionDuplication.CopyableRequest(source,
             new("Copy", null, false, AgentKind.Codex, AgentAuthMode.ApiKey, requestedPolicy));
 
+        Assert.NotNull(copy.Policy);
         Assert.Equal(AgentKind.Codex, copy.Agent);
         Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
         Assert.Equal(["npm test"], copy.Policy.AllowedCommands);
@@ -74,6 +79,7 @@ public sealed class SessionDuplicationTests
 
         var copy = SessionDuplication.CopyableRequest(source,
             new("Copy", null, false, AgentKind.Claude, AgentAuthMode.Subscription, new AgentPolicy()));
+        Assert.NotNull(copy.Policy);
 
         Assert.Empty(copy.Policy.AllowedTools);
         Assert.Empty(copy.AllowedTools);

@@ -56,10 +56,11 @@ public static class AgentConfiguration
     }
 
 
-    public static AgentPolicy ResolvePolicy(AgentPolicy policy, IReadOnlyList<string> legacyAllowedTools) =>
-        IsEmpty(policy) && legacyAllowedTools.Count > 0
-            ? policy with { AllowedTools = legacyAllowedTools.ToArray() }
-            : policy;
+    public static AgentPolicy ResolvePolicy(AgentPolicy? policy, IReadOnlyList<string> legacyAllowedTools) =>
+        policy
+        ?? (legacyAllowedTools.Count > 0
+            ? new AgentPolicy { AllowedTools = legacyAllowedTools.ToArray() }
+            : new AgentPolicy());
 
     private static void ValidateAgent(AgentKind agent)
     {
@@ -72,9 +73,6 @@ public static class AgentConfiguration
         if (authMode is not AgentAuthMode.Subscription and not AgentAuthMode.ApiKey)
             throw new ArgumentException("Authentication mode must be Subscription or ApiKey.");
     }
-
-    private static bool IsEmpty(AgentPolicy policy) =>
-        policy.AllowedTools.Count == 0 && policy.AllowedMcpTools.Count == 0 && policy.AllowedCommands.Count == 0;
 }
 
 /// <summary>A repository to check out into the session workspace.</summary>
@@ -115,8 +113,9 @@ public record CreateSessionRequest
 
     public AgentKind Agent { get; init; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
-    public AgentPolicy Policy { get; init; } = new();
-    /// <summary>Deprecated compatibility input; used only when Policy is empty.</summary>
+    /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
+    public AgentPolicy? Policy { get; init; }
+    /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
     public List<string> AllowedTools { get; init; } = new();
 
     /// <summary>Custom container image (glibc-based, bash+git+curl recommended). Empty = default agent image.</summary>
@@ -177,7 +176,7 @@ public static class SessionDuplication
         McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
         Agent = request.Agent ?? source.Agent,
         AuthMode = request.AuthMode ?? source.AuthMode,
-        Policy = request.Policy ?? Deserialize<AgentPolicy>(source.AgentPolicyJson),
+        Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),
         // An explicit structured policy, including an empty default-deny policy,
         // supersedes legacy AllowedTools instead of rehydrating it later.
         AllowedTools = request.Policy is null ? Deserialize<List<string>>(source.AllowedToolsJson) : new List<string>(),
@@ -192,6 +191,14 @@ public static class SessionDuplication
         if (string.IsNullOrWhiteSpace(json)) return new T();
         try { return System.Text.Json.JsonSerializer.Deserialize<T>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)) ?? new T(); }
         catch (System.Text.Json.JsonException) { return new T(); }
+    }
+
+    private static T? DeserializeOptional<T>(string? json) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<T>(json,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)); }
+        catch (System.Text.Json.JsonException) { return null; }
     }
 }
 
