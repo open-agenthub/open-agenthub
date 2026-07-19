@@ -112,6 +112,26 @@ test('interactive ask and callback failure preserve normal Codex permission flow
   assert.equal(failed.stderr, '');
 });
 
+test('interactive MCP initial policy callback failure fails closed for every hook event', async () => {
+  for (const hook_event_name of ['PreToolUse', 'PermissionRequest']) {
+    const result = await runHook({
+      hook_event_name, tool_name: 'mcp__docs__search', tool_input: { query: 'private-query' }
+    }, { AGENTHUB_CALLBACK_URL: 'http://127.0.0.1:1', AGENTHUB_MODE: 'interactive' });
+    if (hook_event_name === 'PreToolUse') {
+      assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    } else {
+      assert.deepEqual(result.output, {
+        hookSpecificOutput: {
+          hookEventName: 'PermissionRequest',
+          decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+        }
+      });
+    }
+    assert.equal(result.stderr, '');
+    assert.doesNotMatch(result.stdout + result.stderr, /private-query/);
+  }
+});
+
 test('non-interactive callback and malformed-response failures fail closed', async () => {
   const unavailable = await runHook(preTool(), {
     AGENTHUB_CALLBACK_URL: 'http://127.0.0.1:1', AGENTHUB_MODE: 'autonomous'
@@ -155,6 +175,29 @@ test('PermissionRequest checks policy before contacting out-of-band approval', a
   }
 });
 
+test('permission request sends a fixed MCP descriptor without tool input', async () => {
+  const secret = 'mcp-sensitive-fixture';
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"decision":"deny"}' }
+  ]);
+  try {
+    const result = await runHook({
+      hook_event_name: 'PermissionRequest', tool_name: 'mcp__docs__search',
+      tool_input: { query: secret, path: `/private/${secret}` }
+    }, { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive' });
+    const permission = server.requests.find(request => request.path === '/permission');
+    assert.deepEqual(JSON.parse(permission.body), {
+      tool: 'mcp__docs__search', input: 'MCP tool request'
+    });
+    assert.doesNotMatch(permission.body, new RegExp(secret));
+    assert.doesNotMatch(result.stdout + result.stderr, new RegExp(secret));
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
+  } finally {
+    await server.close();
+  }
+});
+
 test('non-interactive PermissionRequest emits allow after policy approval', async () => {
   const server = await startServer([{ body: '{"decision":"allow"}' }]);
   try {
@@ -173,16 +216,18 @@ test('non-interactive PermissionRequest emits allow after policy approval', asyn
   }
 });
 
-test('PermissionRequest polls bounded out-of-band approval and maps allow', async () => {
+test('PermissionRequest polls approval, redacts Bash input, rechecks policy, and maps allow', async () => {
+  const secret = 'bash-sensitive-fixture';
   const server = await startServer([
     { body: '{"decision":"ask"}' },
     { body: '{"id":"request-1"}' },
     { body: '{"decision":"pending"}' },
-    { body: '{"decision":"allow"}' }
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"ask"}' }
   ]);
   try {
     const result = await runHook({
-      hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: 'git push' }
+      hook_event_name: 'PermissionRequest', tool_name: 'Bash', tool_input: { command: `git push ${secret}` }
     }, {
       AGENTHUB_CALLBACK_URL: server.url,
       AGENTHUB_MODE: 'interactive',
@@ -195,7 +240,82 @@ test('PermissionRequest polls bounded out-of-band approval and maps allow', asyn
       }
     });
     assert.deepEqual(server.requests.map(request => request.path), [
-      '/agent-policy', '/permission', '/permission/request-1', '/permission/request-1'
+      '/agent-policy', '/permission', '/permission/request-1', '/permission/request-1', '/agent-policy'
+    ]);
+    const permission = server.requests.find(request => request.path === '/permission');
+    assert.deepEqual(JSON.parse(permission.body), { tool: 'Bash', input: 'Bash command' });
+    assert.doesNotMatch(permission.body, new RegExp(secret));
+    assert.doesNotMatch(result.stdout + result.stderr, new RegExp(secret));
+  } finally {
+    await server.close();
+  }
+});
+
+test('MCP sharing change while approval is pending denies on final policy recheck', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"id":"request-2"}' },
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"deny"}' }
+  ]);
+  try {
+    const result = await runHook({
+      hook_event_name: 'PermissionRequest', tool_name: 'mcp__docs__search',
+      tool_input: { query: 'ordinary' }
+    }, {
+      AGENTHUB_CALLBACK_URL: server.url,
+      AGENTHUB_MODE: 'interactive',
+      AGENTHUB_APPROVAL_POLLS: '1',
+      AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
+    assert.deepEqual(server.requests.map(request => request.path), [
+      '/agent-policy', '/permission', '/permission/request-2', '/agent-policy'
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('MCP policy recheck failure after approval fails closed', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"id":"request-3"}' },
+    { body: '{"decision":"allowAlways"}' },
+    { body: '{"decision":"ALLOW"}' }
+  ]);
+  try {
+    const result = await runHook({
+      hook_event_name: 'PermissionRequest', tool_name: 'mcp__docs__search',
+      tool_input: { query: 'ordinary' }
+    }, {
+      AGENTHUB_CALLBACK_URL: server.url,
+      AGENTHUB_MODE: 'interactive',
+      AGENTHUB_APPROVAL_POLLS: '1',
+      AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
+    assert.equal(server.requests.filter(request => request.path === '/agent-policy').length, 2);
+  } finally {
+    await server.close();
+  }
+});
+
+test('non-MCP policy recheck failure after approval preserves normal flow', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"ALLOW"}' }
+  ]);
+  try {
+    const result = await runHook({
+      hook_event_name: 'PermissionRequest', tool_name: 'Bash',
+      tool_input: { command: 'git status' }
+    }, { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive' });
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+    assert.deepEqual(server.requests.map(request => request.path), [
+      '/agent-policy', '/permission', '/agent-policy'
     ]);
   } finally {
     await server.close();
