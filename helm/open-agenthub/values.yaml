@@ -6,7 +6,8 @@ sessionsNamespace: agenthub-sessions
 createSessionsNamespace: true
 
 image:
-  # Base path; the component images are named {registry}/{backend|frontend|agent-runtime}:{tag}
+  # Base path; component images use {registry}/{component}:{tag}. The agent runtime
+  # names are agent-runtime-claude and agent-runtime-codex unless overridden below.
   registry: ghcr.io/open-agenthub/open-agenthub
   tag: latest
   pullPolicy: IfNotPresent
@@ -44,7 +45,12 @@ frontendOrigin: ""
 agent:
   port: 7681
   gitCloneImage: alpine/git:2.45.2
-  # Pull policy for the agent-runtime image in session pods. Use "Always" when
+  # Optional full image references. Empty values preserve image.registry/image.tag
+  # compatibility and select agent-runtime-claude / agent-runtime-codex respectively.
+  images:
+    claude: ""
+    codex: ""
+  # Pull policy for agent runtime images in session pods. Use "Always" when
   # the image tag moves (e.g. :latest) so nodes don't serve a stale cache.
   pullPolicy: IfNotPresent
   runtimeClassName: ""
@@ -58,6 +64,10 @@ agent:
   # Extra TCP egress ports allowed from session pods (besides 53/80/443/22),
   # e.g. [9000] for a self-hosted S3/MinIO on a non-standard port.
   extraEgressPorts: []
+
+# Kubernetes Secret data is base64-encoded, not automatically encrypted at rest.
+# Production clusters should enable API-server encryption at rest (preferably KMS),
+# restrict RBAC and network access, and rotate credentials regularly.
 
 # OAuth2/OIDC provider. Empty authority = auth disabled (dev mode, all requests as user "dev").
 oidc:

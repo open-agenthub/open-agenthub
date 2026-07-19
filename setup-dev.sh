@@ -45,7 +45,8 @@ fi
 printf 'Building local images...\n'
 docker build --file "$script_dir/backend/Dockerfile" --tag 'open-agenthub-dev/backend:local' "$script_dir"
 docker build --tag 'open-agenthub-dev/frontend:local' "$script_dir/frontend"
-docker build --tag 'open-agenthub-dev/agent-runtime:local' "$script_dir/agent-runtime"
+docker build --file "$script_dir/agent-runtime/claude/Dockerfile" --tag 'open-agenthub-dev/agent-runtime-claude:local' "$script_dir/agent-runtime"
+docker build --file "$script_dir/agent-runtime/codex/Dockerfile" --tag 'open-agenthub-dev/agent-runtime-codex:local' "$script_dir/agent-runtime"
 
 decode_base64() {
   if printf '' | base64 --decode >/dev/null 2>&1; then
