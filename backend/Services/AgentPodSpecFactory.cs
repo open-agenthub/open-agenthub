@@ -108,6 +108,7 @@ public static class AgentPodSpecFactory
         {
             new() { Name = "HOME", Value = home },
             new() { Name = "AGENTHUB_MODE", Value = request.Mode.ToString().ToLowerInvariant() },
+            new() { Name = "AGENTHUB_AUTH_MODE", Value = record.AuthMode.ToString().ToLowerInvariant() },
             new() { Name = "AGENTHUB_SESSION_ID", Value = record.Id },
             new() { Name = "AGENTHUB_CLAUDE_SESSION_ID", Value = record.AgentSessionId },
             new() { Name = "AGENTHUB_PORT", Value = context.Runtime.AgentPort.ToString() },

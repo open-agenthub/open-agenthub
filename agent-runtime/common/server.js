@@ -18,7 +18,12 @@ function createCommonServer(options = {}) {
   const setTimeoutImpl = supplied.setTimeout || setTimeout;
   const now = supplied.now || Date.now;
 
-  driver.prepare(env);
+  const preparation = driver.prepare(env);
+  const childEnv = preparation && preparation.childEnv;
+  if (childEnv !== undefined && (!childEnv || typeof childEnv !== 'object' || Array.isArray(childEnv))) {
+    throw new Error('Agent driver prepare childEnv must be an object');
+  }
+  const agentEnv = childEnv === undefined ? env : { ...env, ...childEnv };
 
   const port = parseInt(env.AGENTHUB_PORT || '7681', 10);
   const mode = (env.AGENTHUB_MODE || 'interactive').toLowerCase();
@@ -100,7 +105,7 @@ function createCommonServer(options = {}) {
     console.log('[agent] driver=' + driver.name + ' mode=' + mode + ' resume=' + attemptedResume +
       ' cwd=' + cwd + ' cmd=' + command.cmd + ' ' + command.args.join(' '));
     term = pty.spawn(command.cmd, command.args, {
-      name: 'xterm-256color', cols: 120, rows: 32, cwd, env
+      name: 'xterm-256color', cols: 120, rows: 32, cwd, env: agentEnv
     });
 
     term.onData(data => {
