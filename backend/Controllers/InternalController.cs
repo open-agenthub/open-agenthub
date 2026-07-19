@@ -1,3 +1,4 @@
+using AgentHub.Api.Models;
 using AgentHub.Api.Notifications;
 using AgentHub.Api.Permissions;
 using AgentHub.Api.Persistence;
@@ -77,22 +78,23 @@ public sealed class InternalController : ControllerBase
         return NoContent();
     }
 
-    /// <summary>
-    /// Persists the session owner's Claude CLI OAuth credentials (subscription login).
-    /// The agent pod uploads the file whenever ~/.claude/.credentials.json changes
-    /// (first login and token refresh); new sessions get it injected again.
-    /// </summary>
-    [HttpPut("claude-credentials")]
-    public async Task<IActionResult> ClaudeCredentials(string id, CancellationToken ct)
+    /// <summary>Persists a subscription credential file uploaded by the matching provider agent.</summary>
+    [HttpPut("{agent}-credentials")]
+    public async Task<IActionResult> ProviderCredentials(string id, string agent, CancellationToken ct)
     {
+        if (!Enum.TryParse<AgentKind>(agent, ignoreCase: true, out var parsedAgent) ||
+            parsedAgent is not AgentKind.Claude and not AgentKind.Codex)
+            return BadRequest();
+
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
+        if (rec.Agent != parsedAgent || rec.AuthMode != AgentAuthMode.Subscription) return Conflict();
 
         using var reader = new StreamReader(Request.Body);
         var json = await reader.ReadToEndAsync(ct);
-        if (string.IsNullOrWhiteSpace(json) || json.Length > 64_000) return BadRequest();
+        if (!ProviderCredentialValidator.Validate(parsedAgent, json)) return BadRequest();
 
-        await _svc.StoreClaudeCredentialsAsync(rec.Owner, json, ct);
+        await _svc.StoreProviderCredentialsAsync(rec.Owner, parsedAgent, json, ct);
         return NoContent();
     }
 

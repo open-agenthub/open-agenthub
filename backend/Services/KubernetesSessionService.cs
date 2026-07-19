@@ -62,9 +62,15 @@ public sealed class KubernetesSessionService : ISessionService
         ["gitlabToken"] = "gitlab_token",
         ["anthropicApiKey"] = "anthropic_api_key",
         ["gitKnownHosts"] = "known_hosts",
+        ["openAiApiKey"] = "openai_api_key",
         ["gitUserName"] = "git_user_name",
         ["gitUserEmail"] = "git_user_email"
     };
+
+    public static string CredentialKey(string propertyName) =>
+        CredentialKeys.TryGetValue(JsonNamingPolicy.CamelCase.ConvertName(propertyName), out var key)
+            ? key
+            : throw new ArgumentException("Unknown credential field.", nameof(propertyName));
 
     public async Task StoreCredentialsAsync(string owner, UserCredentials c, CancellationToken ct = default)
     {
@@ -81,6 +87,7 @@ public sealed class KubernetesSessionService : ISessionService
         Put("gitlab_token", c.GitlabToken);
         Put("anthropic_api_key", c.AnthropicApiKey);
         Put("known_hosts", c.GitKnownHosts);
+        Put("openai_api_key", c.OpenAiApiKey);
         Put("git_user_name", c.GitUserName);
         Put("git_user_email", c.GitUserEmail);
 
@@ -111,29 +118,38 @@ public sealed class KubernetesSessionService : ISessionService
             GitlabToken = keys.Contains("gitlab_token"),
             AnthropicApiKey = keys.Contains("anthropic_api_key"),
             GitKnownHosts = keys.Contains("known_hosts"),
+            OpenAiApiKey = keys.Contains("openai_api_key"),
             GitUserName = keys.Contains("git_user_name"),
             GitUserEmail = keys.Contains("git_user_email")
         };
     }
 
     /// <summary>
-    /// Stores the Claude CLI OAuth credentials (subscription login) in a dedicated secret.
+    /// Stores provider CLI subscription credentials in a dedicated secret.
     /// Separate secret so StoreCredentialsAsync (which fully replaces its secret) does not overwrite it.
-    /// Uploaded by the agent pod whenever ~/.claude/.credentials.json changes.
     /// </summary>
-    public async Task StoreClaudeCredentialsAsync(string owner, string credentialsJson, CancellationToken ct = default)
+    public async Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default)
     {
+        if (!ProviderCredentialValidator.Validate(agent, json))
+            throw new ArgumentException("Invalid provider credential document.", nameof(json));
+
+        var fileName = agent switch
+        {
+            AgentKind.Claude => "credentials.json",
+            AgentKind.Codex => "auth.json",
+            _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
+        };
         await UpsertSecretAsync(new V1Secret
         {
             Metadata = new V1ObjectMeta
             {
-                Name = ClaudeSecretName(owner), NamespaceProperty = _opts.Namespace,
+                Name = ProviderSecretName(owner, agent), NamespaceProperty = _opts.Namespace,
                 Labels = new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner) }
             },
             Type = "Opaque",
-            Data = new Dictionary<string, byte[]> { ["credentials.json"] = Encoding.UTF8.GetBytes(credentialsJson) }
+            Data = new Dictionary<string, byte[]> { [fileName] = Encoding.UTF8.GetBytes(json) }
         }, ct);
-        _log.LogInformation("Saved Claude login for {Owner}", owner);
+        _log.LogInformation("Saved {Agent} login for {Owner}", agent, owner);
     }
 
     // ---------------------------------------------------------------- Create / Resume
@@ -568,7 +584,7 @@ public sealed class KubernetesSessionService : ISessionService
             // (all consumers check file existence; the volume is just empty then).
             new() { Name = "creds", Secret = new V1SecretVolumeSource { SecretName = credsSecret, Optional = true, DefaultMode = 0x1A0 } },
             // Claude subscription login (optional; only exists after the first login)
-            new() { Name = "claude", Secret = new V1SecretVolumeSource { SecretName = ClaudeSecretName(owner), Optional = true, DefaultMode = 0x1A0 } }
+            new() { Name = "claude", Secret = new V1SecretVolumeSource { SecretName = ProviderSecretName(owner, AgentKind.Claude), Optional = true, DefaultMode = 0x1A0 } }
         };
         if (hasMcp)
             volumes.Add(new V1Volume { Name = "mcp", Secret = new V1SecretVolumeSource { SecretName = $"mcp-{rec.Id}", DefaultMode = 0x1A0 } });
@@ -823,7 +839,12 @@ public sealed class KubernetesSessionService : ISessionService
     }
 
     private static string CredsSecretName(string owner) => $"creds-{Sanitize(owner)}";
-    private static string ClaudeSecretName(string owner) => $"claude-{Sanitize(owner)}";
+    public static string ProviderSecretName(string owner, AgentKind agent) => agent switch
+    {
+        AgentKind.Claude => $"claude-{Sanitize(owner)}",
+        AgentKind.Codex => $"codex-{Sanitize(owner)}",
+        _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
+    };
 
     private static string Sanitize(string owner)
     {
