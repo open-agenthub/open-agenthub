@@ -14,9 +14,14 @@ public sealed class SessionRecord
     public string? Schedule { get; set; }
     public string? ProjectId { get; set; }
     public string? Prompt { get; set; }
+    public AgentKind Agent { get; set; } = AgentKind.Claude;
+    public AgentAuthMode AuthMode { get; set; } = AgentAuthMode.Auto;
+    public string? AgentPolicyJson { get; set; }
     public string? AllowedToolsJson { get; set; }
-    /// <summary>Claude Code session ID assigned by us (used for --resume).</summary>
-    public required string ClaudeSessionId { get; init; }
+    /// <summary>Agent session ID assigned by us (used for --resume).</summary>
+    public string AgentSessionId { get; init; } = "";
+    /// <summary>Legacy compatibility input; not used by application mappings.</summary>
+    public string? ClaudeSessionId { get; init; }
     /// <summary>Pending | Running | Succeeded | Failed | Scheduled.</summary>
     public string Status { get; set; } = "Pending";
     public bool QuestionPending { get; set; }
@@ -91,6 +96,13 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS project_id TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS prompt TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS allowed_tools TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent TEXT NOT NULL DEFAULT 'Claude';
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auth_mode TEXT NOT NULL DEFAULT 'Auto';
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_policy JSONB;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_session_id TEXT;
+            UPDATE sessions SET agent_session_id = claude_session_id WHERE agent_session_id IS NULL;
+            ALTER TABLE sessions ALTER COLUMN agent_session_id SET NOT NULL;
+            ALTER TABLE sessions ALTER COLUMN claude_session_id DROP NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(owner, project_id);
             """;
         await using var cmd = _db.CreateCommand(ddl);
@@ -100,15 +112,18 @@ public sealed class PostgresSessionStore : ISessionStore
     public async Task UpsertAsync(SessionRecord r, CancellationToken ct = default)
     {
         const string sql = """
-            INSERT INTO sessions (id, owner, title, mode, repo_url, schedule, claude_session_id,
+            INSERT INTO sessions (id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
                                   mcp_config, repos, project_id, prompt, allowed_tools, created_at, updated_at)
-            VALUES (@id, @owner, @title, @mode, @repo, @sched, @csid, @status, @qp, @tok, @image, @root, @cpu, @memory,
+            VALUES (@id, @owner, @title, @mode, @repo, @sched, @agentSessionId, @agent, @authMode, @policy,
+                    @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @repos, @project, @prompt, @allowedTools, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, mode = EXCLUDED.mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
                 question_pending = EXCLUDED.question_pending,
+                agent_session_id = EXCLUDED.agent_session_id,
+                agent = EXCLUDED.agent, auth_mode = EXCLUDED.auth_mode, agent_policy = EXCLUDED.agent_policy,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
                 mcp_config = EXCLUDED.mcp_config, repos = EXCLUDED.repos,
@@ -177,7 +192,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, claude_session_id, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, prompt, allowed_tools FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, prompt, allowed_tools FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -195,7 +210,10 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("mode", r.Mode.ToString());
         cmd.Parameters.AddWithValue("repo", (object?)r.RepoUrl ?? DBNull.Value);
         cmd.Parameters.AddWithValue("sched", (object?)r.Schedule ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("csid", r.ClaudeSessionId);
+        cmd.Parameters.AddWithValue("agentSessionId", r.AgentSessionId);
+        cmd.Parameters.AddWithValue("agent", r.Agent.ToString());
+        cmd.Parameters.AddWithValue("authMode", r.AuthMode.ToString());
+        cmd.Parameters.AddWithValue("policy", NpgsqlTypes.NpgsqlDbType.Jsonb, (object?)r.AgentPolicyJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("status", r.Status);
         cmd.Parameters.AddWithValue("qp", r.QuestionPending);
         cmd.Parameters.AddWithValue("tok", r.CallbackToken);
@@ -219,20 +237,23 @@ public sealed class PostgresSessionStore : ISessionStore
         Mode = Enum.Parse<SessionMode>(r.GetString(3)),
         RepoUrl = r.IsDBNull(4) ? null : r.GetString(4),
         Schedule = r.IsDBNull(5) ? null : r.GetString(5),
-        ClaudeSessionId = r.GetString(6),
-        Status = r.GetString(7),
-        QuestionPending = r.GetBoolean(8),
-        CallbackToken = r.GetString(9),
-        CreatedAt = r.GetDateTime(10),
-        UpdatedAt = r.GetDateTime(11),
-        Image = r.IsDBNull(12) ? null : r.GetString(12),
-        RunAsRoot = r.GetBoolean(13),
-        Cpu = r.GetString(14),
-        Memory = r.GetString(15),
-        McpConfigJson = r.IsDBNull(16) ? null : r.GetString(16),
-        ReposJson = r.IsDBNull(17) ? null : r.GetString(17),
-        ProjectId = r.IsDBNull(18) ? null : r.GetString(18),
-        Prompt = r.IsDBNull(19) ? null : r.GetString(19),
-        AllowedToolsJson = r.IsDBNull(20) ? null : r.GetString(20)
+        AgentSessionId = r.GetString(6),
+        Agent = Enum.Parse<AgentKind>(r.GetString(7)),
+        AuthMode = Enum.Parse<AgentAuthMode>(r.GetString(8)),
+        AgentPolicyJson = r.IsDBNull(9) ? null : r.GetString(9),
+        Status = r.GetString(10),
+        QuestionPending = r.GetBoolean(11),
+        CallbackToken = r.GetString(12),
+        CreatedAt = r.GetDateTime(13),
+        UpdatedAt = r.GetDateTime(14),
+        Image = r.IsDBNull(15) ? null : r.GetString(15),
+        RunAsRoot = r.GetBoolean(16),
+        Cpu = r.GetString(17),
+        Memory = r.GetString(18),
+        McpConfigJson = r.IsDBNull(19) ? null : r.GetString(19),
+        ReposJson = r.IsDBNull(20) ? null : r.GetString(20),
+        ProjectId = r.IsDBNull(21) ? null : r.GetString(21),
+        Prompt = r.IsDBNull(22) ? null : r.GetString(22),
+        AllowedToolsJson = r.IsDBNull(23) ? null : r.GetString(23)
     };
 }

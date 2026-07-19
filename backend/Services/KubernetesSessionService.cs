@@ -142,6 +142,8 @@ public sealed class KubernetesSessionService : ISessionService
     {
         if (req.Mode is SessionMode.Autonomous or SessionMode.Scheduled && string.IsNullOrWhiteSpace(req.Prompt))
             throw new ArgumentException("A prompt is required for Autonomous/Scheduled sessions.");
+        if (req.AuthMode == AgentAuthMode.Auto)
+            throw new ArgumentException("Auto authentication is only supported for migrated sessions.");
 
         var image = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image.Trim();
         if (image is not null)
@@ -159,6 +161,7 @@ public sealed class KubernetesSessionService : ISessionService
 
         var repos = NormalizeRepos(req);
         var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
+        var policy = EffectivePolicy(req.Policy, req.AllowedTools);
 
         var id = Guid.NewGuid().ToString("n")[..12];
         var rec = new SessionRecord
@@ -167,10 +170,12 @@ public sealed class KubernetesSessionService : ISessionService
             RepoUrl = repos.FirstOrDefault()?.Url, ReposJson = SerializeRepos(repos),
             Schedule = req.Schedule, McpConfigJson = mcp,
             ProjectId = req.ProjectId, Prompt = req.Prompt,
-            AllowedToolsJson = SerializeAllowedTools(req.AllowedTools),
+            Agent = req.Agent, AuthMode = req.AuthMode,
+            AgentPolicyJson = SerializePolicy(policy),
+            AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
             Image = image, RunAsRoot = req.RunAsRoot,
             Cpu = req.Cpu, Memory = req.Memory,
-            ClaudeSessionId = Guid.NewGuid().ToString(),
+            AgentSessionId = Guid.NewGuid().ToString(),
             CallbackToken = RandomToken(),
             Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending"
         };
@@ -204,13 +209,30 @@ public sealed class KubernetesSessionService : ISessionService
     private static string? SerializeRepos(List<RepoRef> repos) =>
         repos.Count == 0 ? null : JsonSerializer.Serialize(repos);
 
-    private static string? SerializeAllowedTools(List<string> tools) =>
+    private static string? SerializeAllowedTools(IReadOnlyList<string> tools) =>
         tools.Count == 0 ? null : JsonSerializer.Serialize(tools);
+
+    private static bool IsEmpty(AgentPolicy policy) =>
+        policy.AllowedTools.Count == 0 && policy.AllowedMcpTools.Count == 0 && policy.AllowedCommands.Count == 0;
+
+    private static AgentPolicy EffectivePolicy(AgentPolicy policy, IReadOnlyList<string> allowedTools) =>
+        IsEmpty(policy) && allowedTools.Count > 0
+            ? policy with { AllowedTools = allowedTools.ToArray() }
+            : policy;
+
+    private static string SerializePolicy(AgentPolicy policy) => JsonSerializer.Serialize(policy);
 
     private static List<RepoRef> ParseRepos(SessionRecord rec) =>
         string.IsNullOrWhiteSpace(rec.ReposJson)
             ? (string.IsNullOrWhiteSpace(rec.RepoUrl) ? new() : new() { new() { Url = rec.RepoUrl! } })
             : JsonSerializer.Deserialize<List<RepoRef>>(rec.ReposJson) ?? new();
+
+    private static AgentPolicy ParsePolicy(SessionRecord rec)
+    {
+        if (!string.IsNullOrWhiteSpace(rec.AgentPolicyJson))
+            return JsonSerializer.Deserialize<AgentPolicy>(rec.AgentPolicyJson, new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? new();
+        return new AgentPolicy { AllowedTools = ParseAllowedTools(rec) };
+    }
 
     private static List<string> ParseAllowedTools(SessionRecord rec) =>
         string.IsNullOrWhiteSpace(rec.AllowedToolsJson)
@@ -265,12 +287,14 @@ public sealed class KubernetesSessionService : ISessionService
         {
             Title = rec.Title, Mode = rec.Mode,
             Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
-            ProjectId = rec.ProjectId, Prompt = rec.Prompt, AllowedTools = ParseAllowedTools(rec),
+            ProjectId = rec.ProjectId, Prompt = rec.Prompt,
+            Agent = rec.Agent, AuthMode = rec.AuthMode, Policy = ParsePolicy(rec),
+            AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot,
             Cpu = rec.Cpu, Memory = rec.Memory
         };
         await SpawnAsync(owner, rec, req, resume: true, ct);
-        _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.ClaudeSessionId);
+        _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.AgentSessionId);
         return ToInfo(rec, phase: "Pending", podIp: null);
     }
 
@@ -360,6 +384,19 @@ public sealed class KubernetesSessionService : ISessionService
         {
             await ValidateProjectAsync(owner, req.ProjectId, ct);
             rec.ProjectId = req.ProjectId;
+        }
+        if (req.Agent is { } agent)
+            rec.Agent = agent;
+        if (req.AuthMode is { } authMode)
+        {
+            if (authMode == AgentAuthMode.Auto)
+                throw new ArgumentException("Auto authentication is only supported for migrated sessions.");
+            rec.AuthMode = authMode;
+        }
+        if (req.Policy is { } policy)
+        {
+            rec.AgentPolicyJson = SerializePolicy(policy);
+            rec.AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools);
         }
 
         await _store.UpsertAsync(rec, ct);
@@ -565,14 +602,14 @@ public sealed class KubernetesSessionService : ISessionService
             new() { Name = "HOME", Value = home },
             new() { Name = "AGENTHUB_MODE", Value = req.Mode.ToString().ToLowerInvariant() },
             new() { Name = "AGENTHUB_SESSION_ID", Value = rec.Id },
-            new() { Name = "AGENTHUB_CLAUDE_SESSION_ID", Value = rec.ClaudeSessionId },
+            new() { Name = "AGENTHUB_CLAUDE_SESSION_ID", Value = rec.AgentSessionId },
             new() { Name = "AGENTHUB_PORT", Value = _opts.AgentPort.ToString() },
             new() { Name = "AGENTHUB_HAS_REPO", Value = hasRepo ? "1" : "0" },
             new() { Name = "AGENTHUB_WORKDIR", Value = repos.Count == 1 ? "/workspace/repo" : "/workspace" },
             new() { Name = "AGENTHUB_HAS_MCP", Value = hasMcp ? "1" : "0" },
             new() { Name = "AGENTHUB_RESUME", Value = resume ? "1" : "0" },
             new() { Name = "AGENTHUB_PROMPT", Value = req.Prompt ?? "" },
-            new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = string.Join(",", req.AllowedTools) },
+            new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = string.Join(",", EffectivePolicy(req.Policy, req.AllowedTools).AllowedTools) },
             new() { Name = "AGENTHUB_CALLBACK_URL", Value = $"{_callbackBaseUrl}/internal/sessions/{rec.Id}" },
             new() { Name = "AGENTHUB_CALLBACK_TOKEN", Value = rec.CallbackToken },
             new() { Name = "AGENTHUB_S3_INSECURE", Value = _s3Insecure ? "1" : "0" },
@@ -743,7 +780,8 @@ public sealed class KubernetesSessionService : ISessionService
         Repos = ParseRepos(r),
         HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson), McpConfigJson = r.McpConfigJson,
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
-        ProjectId = r.ProjectId, Prompt = r.Prompt, AllowedTools = ParseAllowedTools(r),
+        ProjectId = r.ProjectId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
+        Agent = r.Agent, AuthMode = r.AuthMode, Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
         Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory
