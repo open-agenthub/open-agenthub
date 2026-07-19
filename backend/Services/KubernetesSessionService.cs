@@ -55,73 +55,23 @@ public sealed class KubernetesSessionService : ISessionService
 
     // ---------------------------------------------------------------- Credentials
 
-    // Credential form field (camelCase, as used by the frontend) -> secret key.
-    private static readonly IReadOnlyDictionary<string, string> CredentialKeys = new Dictionary<string, string>
-    {
-        ["sshPrivateKey"] = "ssh_key",
-        ["gitlabToken"] = "gitlab_token",
-        ["anthropicApiKey"] = "anthropic_api_key",
-        ["gitKnownHosts"] = "known_hosts",
-        ["openAiApiKey"] = "openai_api_key",
-        ["gitUserName"] = "git_user_name",
-        ["gitUserEmail"] = "git_user_email"
-    };
+    public static string CredentialKey(string propertyName) => CredentialSecretFactory.CredentialKey(propertyName);
 
-    public static string CredentialKey(string propertyName) =>
-        CredentialKeys.TryGetValue(JsonNamingPolicy.CamelCase.ConvertName(propertyName), out var key)
-            ? key
-            : throw new ArgumentException("Unknown credential field.", nameof(propertyName));
 
     public async Task StoreCredentialsAsync(string owner, UserCredentials c, CancellationToken ct = default)
     {
         var name = CredsSecretName(owner);
-
-        // Merge semantics: start from what is already stored, so a form where
-        // untouched fields stay empty never wipes existing values.
-        var data = (await ReadSecretOrNullAsync(name, ct))?.Data is { } existing
-            ? new Dictionary<string, byte[]>(existing)
-            : new Dictionary<string, byte[]>();
-        void Put(string k, string? v) { if (!string.IsNullOrEmpty(v)) data[k] = Encoding.UTF8.GetBytes(v); }
-
-        Put("ssh_key", Normalize(c.SshPrivateKey));
-        Put("gitlab_token", c.GitlabToken);
-        Put("anthropic_api_key", c.AnthropicApiKey);
-        Put("known_hosts", c.GitKnownHosts);
-        Put("openai_api_key", c.OpenAiApiKey);
-        Put("git_user_name", c.GitUserName);
-        Put("git_user_email", c.GitUserEmail);
-
-        foreach (var field in c.Clear)
-            if (CredentialKeys.TryGetValue(field, out var key))
-                data.Remove(key);
-
-        await UpsertSecretAsync(new V1Secret
-        {
-            Metadata = new V1ObjectMeta
-            {
-                Name = name, NamespaceProperty = _opts.Namespace,
-                Labels = new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner) }
-            },
-            Type = "Opaque", Data = data
-        }, ct);
-        _log.LogInformation("Stored credentials for {Owner} ({Keys} keys)", owner, data.Count);
+        var existing = (await ReadSecretOrNullAsync(name, ct))?.Data;
+        var secret = CredentialSecretFactory.CreateGeneralSecret(name, _opts.Namespace, Sanitize(owner), existing, c);
+        await UpsertSecretAsync(secret, ct);
+        _log.LogInformation("Stored credentials for {Owner} ({Keys} keys)", owner, secret.Data.Count);
     }
 
     /// <summary>Which credential fields have a stored value. Values are never returned.</summary>
     public async Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default)
     {
-        var keys = (await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data?.Keys.ToHashSet()
-                   ?? new HashSet<string>();
-        return new CredentialStatus
-        {
-            SshPrivateKey = keys.Contains("ssh_key"),
-            GitlabToken = keys.Contains("gitlab_token"),
-            AnthropicApiKey = keys.Contains("anthropic_api_key"),
-            GitKnownHosts = keys.Contains("known_hosts"),
-            OpenAiApiKey = keys.Contains("openai_api_key"),
-            GitUserName = keys.Contains("git_user_name"),
-            GitUserEmail = keys.Contains("git_user_email")
-        };
+        var data = (await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data ?? new Dictionary<string, byte[]>();
+        return CredentialSecretFactory.CredentialStatus(data);
     }
 
     /// <summary>
@@ -130,25 +80,8 @@ public sealed class KubernetesSessionService : ISessionService
     /// </summary>
     public async Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default)
     {
-        if (!ProviderCredentialValidator.Validate(agent, json))
-            throw new ArgumentException("Invalid provider credential document.", nameof(json));
-
-        var fileName = agent switch
-        {
-            AgentKind.Claude => "credentials.json",
-            AgentKind.Codex => "auth.json",
-            _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
-        };
-        await UpsertSecretAsync(new V1Secret
-        {
-            Metadata = new V1ObjectMeta
-            {
-                Name = ProviderSecretName(owner, agent), NamespaceProperty = _opts.Namespace,
-                Labels = new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner) }
-            },
-            Type = "Opaque",
-            Data = new Dictionary<string, byte[]> { [fileName] = Encoding.UTF8.GetBytes(json) }
-        }, ct);
+        var secret = CredentialSecretFactory.CreateProviderSecret(ProviderSecretName(owner, agent), _opts.Namespace, Sanitize(owner), agent, json);
+        await UpsertSecretAsync(secret, ct);
         _log.LogInformation("Saved {Agent} login for {Owner}", agent, owner);
     }
 

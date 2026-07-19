@@ -1,3 +1,4 @@
+using System.Text;
 using AgentHub.Api.Models;
 using AgentHub.Api.Notifications;
 using AgentHub.Api.Permissions;
@@ -49,6 +50,22 @@ public sealed class InternalController : ControllerBase
         return rec is not null && rec.Id == id ? rec : null;
     }
 
+    private async Task<string?> ReadProviderCredentialBodyAsync(CancellationToken ct)
+    {
+        if (Request.ContentLength is > ProviderCredentialValidator.MaxBytes)
+            return null;
+
+        var buffer = new byte[ProviderCredentialValidator.MaxBytes + 1];
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await Request.Body.ReadAsync(buffer.AsMemory(total, buffer.Length - total), ct);
+            if (read == 0) break;
+            total += read;
+        }
+        return total > ProviderCredentialValidator.MaxBytes ? null : Encoding.UTF8.GetString(buffer, 0, total);
+    }
+
     [HttpPost("status")]
     public async Task<IActionResult> Status(string id, [FromBody] StatusBody body, CancellationToken ct)
     {
@@ -90,9 +107,8 @@ public sealed class InternalController : ControllerBase
         if (rec is null) return Unauthorized();
         if (rec.Agent != parsedAgent || rec.AuthMode != AgentAuthMode.Subscription) return Conflict();
 
-        using var reader = new StreamReader(Request.Body);
-        var json = await reader.ReadToEndAsync(ct);
-        if (!ProviderCredentialValidator.Validate(parsedAgent, json)) return BadRequest();
+        var json = await ReadProviderCredentialBodyAsync(ct);
+        if (json is null || !ProviderCredentialValidator.Validate(parsedAgent, json)) return BadRequest();
 
         await _svc.StoreProviderCredentialsAsync(rec.Owner, parsedAgent, json, ct);
         return NoContent();
