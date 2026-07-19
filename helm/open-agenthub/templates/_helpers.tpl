@@ -14,7 +14,29 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end }}
 
 {{- define "agenthub.agentImage" -}}
-{{ .Values.image.registry }}/agent-runtime:{{ .Values.image.tag }}
+{{ include "agenthub.claudeAgentImage" . }}
+{{- end }}
+
+{{- define "agenthub.claudeAgentImage" -}}
+{{- $override := .Values.agent.images.claude | default "" | trim -}}
+{{- if $override -}}
+{{- $override -}}
+{{- else -}}
+{{- $registry := required "image.registry is required when agent.images.claude is empty" .Values.image.registry | trimSuffix "/" -}}
+{{- $tag := required "image.tag is required when agent.images.claude is empty" .Values.image.tag -}}
+{{- printf "%s/agent-runtime-claude:%s" $registry $tag -}}
+{{- end -}}
+{{- end }}
+
+{{- define "agenthub.codexAgentImage" -}}
+{{- $override := .Values.agent.images.codex | default "" | trim -}}
+{{- if $override -}}
+{{- $override -}}
+{{- else -}}
+{{- $registry := required "image.registry is required when agent.images.codex is empty" .Values.image.registry | trimSuffix "/" -}}
+{{- $tag := required "image.tag is required when agent.images.codex is empty" .Values.image.tag -}}
+{{- printf "%s/agent-runtime-codex:%s" $registry $tag -}}
+{{- end -}}
 {{- end }}
 
 {{- define "agenthub.postgresConnectionString" -}}

@@ -8,7 +8,10 @@ data:
   DevelopmentAuth__Enabled: {{ .Values.backend.developmentAuth.enabled | default false | quote }}
   DevelopmentAuth__HeaderName: {{ .Values.backend.developmentAuth.headerName | default "X-AgentHub-Test-User" | quote }}
   AgentHub__Namespace: {{ .Values.sessionsNamespace | quote }}
+  # Legacy Claude-only option retained for backend/chart rollback compatibility.
   AgentHub__AgentImage: {{ include "agenthub.agentImage" . | quote }}
+  AgentHub__ClaudeAgentImage: {{ include "agenthub.claudeAgentImage" . | quote }}
+  AgentHub__CodexAgentImage: {{ include "agenthub.codexAgentImage" . | quote }}
   AgentHub__AgentPort: {{ .Values.agent.port | quote }}
   AgentHub__GitCloneImage: {{ .Values.agent.gitCloneImage | quote }}
   AgentHub__AgentImagePullPolicy: {{ .Values.agent.pullPolicy | default "IfNotPresent" | quote }}

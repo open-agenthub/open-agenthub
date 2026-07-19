@@ -37,7 +37,8 @@ if (-not (Test-Path -LiteralPath $valuesPath)) {
 Write-Host 'Building local images...'
 docker build --file (Join-Path $repoRoot 'backend/Dockerfile') --tag 'open-agenthub-dev/backend:local' $repoRoot
 docker build --tag 'open-agenthub-dev/frontend:local' (Join-Path $repoRoot 'frontend')
-docker build --tag 'open-agenthub-dev/agent-runtime:local' (Join-Path $repoRoot 'agent-runtime')
+docker build --file (Join-Path $repoRoot 'agent-runtime/claude/Dockerfile') --tag 'open-agenthub-dev/agent-runtime-claude:local' (Join-Path $repoRoot 'agent-runtime')
+docker build --file (Join-Path $repoRoot 'agent-runtime/codex/Dockerfile') --tag 'open-agenthub-dev/agent-runtime-codex:local' (Join-Path $repoRoot 'agent-runtime')
 
 $passwordBytes = $null
 $encodedPassword = kubectl -n $controlNamespace get secret postgres-secret -o "jsonpath={.data.password}" 2>$null

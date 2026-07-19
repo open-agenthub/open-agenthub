@@ -35,6 +35,9 @@ frontend:
 
 agent:
   pullPolicy: IfNotPresent
+  images:
+    claude: open-agenthub-dev/agent-runtime-claude:local
+    codex: open-agenthub-dev/agent-runtime-codex:local
 
 oidc:
   authority: ""

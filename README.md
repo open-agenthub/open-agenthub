@@ -40,8 +40,8 @@ shift.
    Vue 3 + xterm.js            - Auth (OIDC, any provider)              - isolated, unprivileged
                                - Session orchestration                  - git + ssh + claude-code
                                - WS terminal proxy                      - session-agent (PTY+WS)
-                                                                        - init container: git clone
-                                                                        - secrets/MCP mounted
+                                                                        - Claude Code or Codex
+                                                                        - selected secrets/MCP mounted
 ```
 
 ## Features
@@ -49,22 +49,28 @@ shift.
 - **Interactive, autonomous, or scheduled sessions** — watch and answer live, hand off a
   prompt for unattended work, or run recurring jobs as CronJobs. Your agent works the
   night shift.
+- **Claude or Codex per session** — choose the agent and Subscription or API-key billing
+  independently in every mode. Migrated Claude sessions may retain internal legacy
+  `Auto` authentication until explicitly changed; new sessions cannot select it.
 - **Supervise from anywhere** — mobile-first web UI with live terminal streaming
   (xterm.js); reconnect from your phone and the scrollback replays.
 - **Bring your own container image** — run the agent inside your project's toolchain
-  image; the Claude CLI, Node, and the terminal agent are copied in automatically.
+  image; the selected Claude or Codex runtime, Node, and terminal transport are copied
+  in automatically.
 - **Opt-in root mode** to install tools inside the container (apt, npm -g, …) while the
   pod stays unprivileged.
 - **Bring your tools via MCP** — attach any MCP server (issue tracker, database,
   observability) per session and turn the agent into a teammate.
 - **Community Edition projects and session duplication** — organize sessions into personal projects and duplicate reusable settings into an independent session without copying conversation state or credentials.
-- **Subscription login that sticks** — log in once via `/login` inside a session; the
-  OAuth credentials are stored per user and restored into every new session (incl. token
-  refresh). Alternatively, use an `ANTHROPIC_API_KEY`.
+- **Subscription login that sticks** — sign in inside the selected provider container;
+  refreshed Claude or Codex file-based authentication is persisted per user in the
+  background. Codex uses its device-code flow in headless sessions. Host authentication
+  files are never copied into the cluster by the setup scripts.
 - **Push notifications** when your agent has a question (via webhook, e.g. n8n → Slack).
 - **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
 - **Security by default** — unprivileged pods, default-deny network policies, per-user
-  secrets, no API tokens in agent pods. [Details below.](#security)
+  secrets, no Kubernetes service-account token in agent pods, and only the selected
+  provider credential mounted or injected. [Details below.](#security)
 
 ## Quick start
 
@@ -103,10 +109,12 @@ curl -fsSL https://open-agenthub.github.io/install.sh | sh
      --set oidc.audience=<expected-audience>
    ```
 3. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
-   for repo access, and an Anthropic API key — or leave it out and run `/login` inside
-   your first session to use your Claude subscription (persists across sessions).
-4. **Start your first session**: pick a repo, a mode (interactive / autonomous /
-   scheduled), optionally a custom image and MCP config — and watch your agent work.
+   for repo access, plus an Anthropic or OpenAI API key if using API-key billing. These
+   inputs are write-only; status responses expose only stored/not-stored booleans.
+4. **Start your first session**: pick Claude or Codex, Subscription or API key, and a
+   mode (interactive / autonomous / scheduled), plus any repo, custom image, policy, and
+   MCP config. An Interactive Subscription session can complete provider login in its
+   terminal; Codex uses `codex login --device-auth`.
 
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
 [`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3/MinIO
@@ -191,12 +199,16 @@ identity broker (Keycloak's "Identity Providers → Google" works out of the box
 ```bash
 # Build & push images (e.g. from a fork)
 REG=registry.example.com/agenthub TAG=0.1.0
-docker build -t $REG/backend:$TAG       ./backend
-docker build -t $REG/frontend:$TAG      ./frontend
-docker build -t $REG/agent-runtime:$TAG ./agent-runtime
-docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG && docker push $REG/agent-runtime:$TAG
+docker build -f backend/Dockerfile -t $REG/backend:$TAG .
+docker build -t $REG/frontend:$TAG ./frontend
+docker build -f agent-runtime/claude/Dockerfile -t $REG/agent-runtime-claude:$TAG ./agent-runtime
+docker build -f agent-runtime/codex/Dockerfile -t $REG/agent-runtime-codex:$TAG ./agent-runtime
+docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG
+docker push $REG/agent-runtime-claude:$TAG && docker push $REG/agent-runtime-codex:$TAG
 
-# private registry? create the pull secret in BOTH namespaces and set image.pullSecret
+# image.registry/image.tag select all four defaults. Full runtime overrides are
+# agent.images.claude and agent.images.codex. For a private registry, create the
+# pull secret in BOTH namespaces and set image.pullSecret.
 helm upgrade --install agenthub helm/open-agenthub -n agenthub --create-namespace \
   --set image.registry=$REG --set image.tag=$TAG --set postgres.password=<pw>
 ```
@@ -208,8 +220,9 @@ backend, network policies, dev Postgres) — fill in the secrets before applying
 
 ### Docker Desktop Kubernetes development
 
-For a local Kubernetes environment, the setup scripts build the three images locally, deploy
-the agenthub-dev Helm release into the agenthub-dev control namespace, and use
+For a local Kubernetes environment, the setup scripts build backend, frontend, Claude
+runtime, and Codex runtime images locally, deploy the agenthub-dev Helm release into the
+agenthub-dev control namespace, and use
 agenthub-dev-sessions for session pods. They refuse to run unless the active kubectl
 context is docker-desktop.
 
@@ -256,7 +269,7 @@ as user `dev`.
 | Path | Contents |
 |------|----------|
 | `backend/` | ASP.NET Core: REST + WS proxy, K8s orchestration, JWT auth |
-| `agent-runtime/` | Container image: runs Claude Code under a PTY, streams via WS |
+| `agent-runtime/` | Separate Claude and Codex images sharing provider-neutral PTY/WS transport |
 | `frontend/` | Vue 3 + Vite + xterm.js, mobile-first |
 | `helm/open-agenthub/` | Helm chart (recommended deployment) |
 | `k8s/` | Plain manifests (namespaces, RBAC, backend, NetworkPolicies) |
@@ -264,18 +277,44 @@ as user `dev`.
 
 ## How it works
 
-1. **Credentials** (SSH key, GitLab token, Anthropic key, known_hosts) are stored per user
-   in a **dedicated Kubernetes Secret** (write-only through the UI).
-2. **Start a session**: pick a mode, optionally a git repo (cloned into `/workspace/repo`
-   by an init container), optionally an **MCP config** (placed as `.mcp.json` in the project).
-   Optionally a **custom container image** (glibc-based; bash/git/curl recommended — the
-   Claude CLI, Node, and the terminal agent are copied in by an init container) and
-   **root mode** to install tools inside the container. The pod stays unprivileged.
+1. **Credentials** (SSH key, Git token, provider API keys, and provider subscription
+   files) are stored per user in general and provider-specific Kubernetes Secrets. API fields are
+   write-only and credential values cannot be read back through the public API.
+2. **Start a session**: pick agent, billing source, and mode. A repo may be cloned into
+   `/workspace/repo`; optional MCP and structured policy configuration follows the
+   selected provider. A custom glibc image can receive the selected provider runtime by
+   init-container injection; bash, git, and curl are required.
 3. The backend creates a **pod** (interactive/autonomous) or a **CronJob** (scheduled).
-4. The `session-agent` runs `claude` under a **PTY** and serves a WebSocket with
+4. The shared transport runs `claude` or `codex` under a **PTY** and serves a WebSocket with
    **scrollback** — reconnecting from your phone replays the history.
 5. The browser only ever talks to the backend; the **WS proxy** forwards the stream to the
    pod, authenticated. Pods are unreachable from outside thanks to NetworkPolicies.
+
+## Agents, authentication, and policy
+
+Agent and billing choices are independent for Interactive, Autonomous, and Scheduled
+sessions. Subscription mode mounts only the selected provider's writable authentication
+file; a background watcher persists valid login and refresh updates to that user's
+provider-specific Secret. Claude login happens through its normal in-container flow;
+Codex uses device-code authentication. Open AgentHub does not copy a workstation's real
+Claude or Codex authentication files into the cluster.
+
+API-key mode never mounts the subscription Secret. For provider authentication, Claude
+receives `ANTHROPIC_API_KEY`; Codex Autonomous/Scheduled runs scope `CODEX_API_KEY` to `codex exec`
+and its descendants, while Interactive Codex creates an ephemeral file login from the
+key. This selected-only behavior makes the billing source deterministic. Subscription
+avoids API-key billing, but it does not isolate credentials from the running agent.
+Autonomous and Scheduled sessions preflight the selected credential and fail before the
+provider CLI starts when it is unavailable, with a non-secret diagnostic.
+
+
+Automation policies default to deny and separately match built-in tools, MCP tool names,
+and normalized shell command prefixes. Claude uses its native allowed-tools mechanism
+plus AgentHub hooks. Codex uses a managed runtime-owned hook and workspace-write sandbox
+configuration. Interactive sessions retain their normal provider approval flow and the
+existing out-of-band approval path. Hooks are guardrails, not a complete sandbox or a
+secret-isolation boundary; pod, namespace, RBAC, and NetworkPolicy isolation remain
+mandatory.
 
 ## Security
 
@@ -290,16 +329,35 @@ as user `dev`.
 - **NetworkPolicies**: default-deny; agent egress limited to DNS/HTTP(S)/SSH.
 - **Dedicated PSA namespace** for sessions.
 - Optionally harden further: set `RuntimeClassName` to gVisor/Kata (in `appsettings`/ConfigMap).
+- **Kubernetes Secrets are not encryption by themselves**: their data is base64-encoded.
+  Production clusters should enable API-server encryption at rest, preferably with KMS,
+  restrict backend RBAC and namespace/network access, and rotate credentials regularly.
+
+### Trusted-code credential boundary
+
+Provider credentials and authentication files are accessible to code and tools running
+as the same agent user. In particular, Codex API-key process descendants may inherit
+`CODEX_API_KEY`, and subscription sessions can read their selected provider auth file.
+Run only trusted repositories and prompts when credentials are present. Use pod and
+network isolation to limit exposure and blast radius. Writable collaborators can direct
+the selected session's capabilities and are part of the same trust boundary.
+
+Selected-only mounting reduces unnecessary exposure; it does not make provider
+credentials secret from the selected agent or its tools. Root sessions expand the same
+risk further. Policy hooks can reject unmatched actions but cannot provide credential
+isolation. Subscription authentication changes the billing source, not this limitation.
 
 ## Persistence, resume & notifications
 
 No PVCs. Results flow back via `git push` or as artifacts to S3. What is persisted:
 
-- **Postgres** = registry/status (source of truth for the session list). Table `sessions`
-  with `claude_session_id`, `status`, `question_pending`, `callback_token`. The schema is
-  created idempotently at backend startup.
-- **S3/MinIO** = (1) Claude session state `claude-state.tgz` for real `--resume`,
-  (2) `scrollback.log` for the history view of finished sessions, (3) `artifacts/...`.
+- **Postgres** = registry/status (source of truth for the session list), including the
+  selected agent, authentication mode, agent conversation identifier, status, policy,
+  and callback metadata.
+- **S3/MinIO** = provider-separated state (`claude-state.tgz` or `codex-state.tgz`),
+  `scrollback.log`, and `artifacts/...`. State archives exclude provider authentication
+  files; authentication restore happens after state restore so stale state cannot replace
+  the current per-user login.
   Layout: `sessions/{owner-hash}/{sessionId}/...`
 - **No S3 credentials inside the pod**: the backend mints **presigned URLs** (PUT/GET,
   12 h TTL) and injects them as env vars. The agent uploads/downloads via `curl`. For
@@ -307,13 +365,15 @@ No PVCs. Results flow back via `git push` or as artifacts to S3. What is persist
   (token-authenticated). Without S3 configured, sessions still run — resume and history
   are simply disabled.
 
-Resume flow: the backend deletes the old (finished) pod and starts a new one with
-`AGENTHUB_RESUME=1` + a presigned GET for the state; `entrypoint.sh` extracts `~/.claude`,
-the agent runs `claude --resume <claude_session_id>`. Same session ID = continuous history.
+Resume recreates the finished session resource with the same selected provider and
+billing mode, restores only that provider's state, and then restores selected
+authentication. Claude resumes its explicit conversation identifier. Codex resumes the
+restored session-local thread and may fall back once to a fresh thread if state is absent
+or invalid.
 
-Push notifications on questions: a **Claude Code notification hook** (`notify-hook.sh`)
-calls `POST /internal/sessions/{id}/notify`; the backend sets `question_pending=true` and
-fires the webhook (`N8n:WebhookUrl`). The UI shows a blinking "waiting for your reply" dot.
+Provider runtime hooks call the internal notification endpoint when supported; the
+backend sets `question_pending=true` and fires the configured webhook. The UI shows a
+blinking "waiting for your reply" dot.
 
 Internal callback endpoints (`/internal/...`) use a per-session callback token (header
 `X-Agent-Token`), no user auth, and are deliberately not routed through the ingress.
@@ -323,15 +383,13 @@ The NetworkPolicy only allows agent egress to the backend.
 
 - **Auth**: any OIDC provider works. Client `agenthub`, claim `preferred_username` as the
   tenant key.
-- **Claude Code license**: via `ANTHROPIC_API_KEY` (in the user secret) **or subscription
-  login**. With subscription login you log in once inside a session terminal (`/login`);
-  the agent pod automatically backs up `~/.claude/.credentials.json` to the backend
-  (dedicated user secret, incl. token refresh), and every new session restores it.
-- **Autonomous mode** uses `--permission-mode acceptEdits` + a tool allowlist instead of
-  "allow everything".
-- **Claude Code CLI** supports `--session-id <uuid>` (pin the ID) and `--resume <uuid>` as
-  well as the `Notification` hook event. If a flag/hook name ever changes, it's a one-line
-  fix in `server.js` / `entrypoint.sh`.
+- **Provider access**: each user supplies their own Claude or Codex subscription login or
+  API key. Open AgentHub does not issue subscriptions, tokens, or provider organization
+  access.
+- **Automation** uses a structured default-deny policy. Native provider controls and
+  managed hooks supplement Kubernetes isolation; they do not replace it.
+- **Provider CLI contracts** are pinned and tested by the separate runtime images. A
+  provider CLI upgrade may require corresponding driver, hook, and resume changes.
 - **S3 path-style** (MinIO). On real AWS, drop `ForcePathStyle`.
 
 ## Known limitations / next steps
@@ -341,7 +399,7 @@ The NetworkPolicy only allows agent egress to the backend.
 - **Artifact helper in the image**: `artifact-url` + upload exist; a convenient
   `s3put <file>` wrapper script is still missing.
 - **Workspace state**: deliberately only via `git push` / artifacts; no file-level workspace
-  resume (only chat/session resume via Claude state).
+  resume (only provider conversation resume through provider-separated state).
 - **Job status detail view** for finished CronJob runs (`pods/log`).
 - node-pty ABI: builder and runtime image must use the same Node major version (22 here).
 - Custom images must be glibc-based (Debian/Ubuntu/Fedora…); Alpine/musl is not supported.
