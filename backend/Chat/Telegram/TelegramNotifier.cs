@@ -99,7 +99,9 @@ public sealed class TelegramNotifier : INotifier
                      (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"{_frontendOrigin}/s/{s.Id}\n") +
                      (threadId is not null
                          ? "Reply in this topic to answer. !status shows progress."
-                         : $"Reply to a message of this session (or /use {ChatFormatting.Tag(s.Id)}) to answer. !status shows progress.");
+                         : $"Reply to a message of this session (or /use {ChatFormatting.Tag(s.Id)}) to answer. !status shows progress.") +
+                     // Group chats carry chat-level authority (like Slack threads): make that visible.
+                     (user.TelegramForum ? "\nNote: everyone in this group can reply and approve permissions." : "");
 
         var headerId = await _tg.SendMessageAsync(user.TelegramChatId, header, threadId, null, ct);
         if (headerId is null) return null;

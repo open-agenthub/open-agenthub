@@ -9,6 +9,11 @@ namespace AgentHub.Api.Permissions;
 public sealed class PermissionSweepService : BackgroundService
 {
     private static readonly TimeSpan Interval = TimeSpan.FromMinutes(5);
+
+    // Must stay comfortably above the hook's own give-up timeout
+    // (AGENTHUB_PERMISSION_POLL_SECONDS, default 1740s = 29 min): a live hook always
+    // expires its request first via /expire; the sweeper only catches ones whose
+    // hook died before it could.
     private static readonly TimeSpan MaxAge = TimeSpan.FromMinutes(35);
 
     private readonly PermissionStore _store;

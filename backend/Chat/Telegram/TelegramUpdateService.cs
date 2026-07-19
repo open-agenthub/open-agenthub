@@ -58,10 +58,17 @@ public sealed class TelegramUpdateService : BackgroundService
         {
             try
             {
-                // The long poll itself (50s server hold, error paths logged inside the
-                // client) paces this loop — no extra delay needed.
+                var poll = System.Diagnostics.Stopwatch.StartNew();
                 var (next, updates) = await _tg.GetUpdatesAsync(offset, stoppingToken);
                 offset = next;
+
+                // A healthy empty poll takes ~50s (the server holds the request). Coming
+                // back almost instantly with nothing means getUpdates did NOT long-poll:
+                // transport error, immediate ok:false, or Telegram's 409 because a second
+                // consumer is polling the same bot — only ONE backend replica may run
+                // this service. Back off instead of hammering the API in a tight loop.
+                if (updates.Count == 0 && poll.Elapsed < TimeSpan.FromSeconds(5))
+                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
                 foreach (var raw in updates)
                 {
                     var u = TelegramUpdate.Parse(raw);
@@ -74,6 +81,9 @@ public sealed class TelegramUpdateService : BackgroundService
                 if (DateTime.UtcNow - lastPrune > TimeSpan.FromHours(24))
                 {
                     await _bindings.PruneMessagesAsync(stoppingToken);
+                    foreach (var (chat, bucket) in _linkAttempts)
+                        if (DateTime.UtcNow - bucket.WindowStart >= LinkThrottleWindow)
+                            _linkAttempts.TryRemove(new KeyValuePair<string, ThrottleBucket>(chat, bucket));
                     lastPrune = DateTime.UtcNow;
                 }
             }
@@ -167,8 +177,15 @@ public sealed class TelegramUpdateService : BackgroundService
         }
 
         var now = DateTime.UtcNow;
-        var bucket = _linkAttempts.TryGetValue(u.ChatId, out var b) && now - b.WindowStart < LinkThrottleWindow
-            ? b : new ThrottleBucket(0, now, false);
+        // Drop an expired bucket instead of just ignoring it, so the dictionary
+        // doesn't accumulate one entry per chat that ever mistyped a code.
+        _linkAttempts.TryGetValue(u.ChatId, out var existing);
+        if (existing is not null && now - existing.WindowStart >= LinkThrottleWindow)
+        {
+            _linkAttempts.TryRemove(new KeyValuePair<string, ThrottleBucket>(u.ChatId, existing));
+            existing = null;
+        }
+        var bucket = existing ?? new ThrottleBucket(0, now, false);
         if (bucket.Count >= MaxLinkAttempts)
         {
             if (!bucket.Warned)
@@ -196,7 +213,17 @@ public sealed class TelegramUpdateService : BackgroundService
     /// <summary>Lists this chat's sessions with their live phase.</summary>
     private async Task HandleSessionsAsync(TelegramUpdate u, CancellationToken ct)
     {
-        var bindings = await _bindings.ListByChatAsync("telegram", u.ChatId, ct);
+        var linked = await _users.GetByTelegramChatAsync(u.ChatId, ct);
+        if (linked is null)
+        {
+            await ReplyAsync(u, "This chat is not linked.", ct);
+            return;
+        }
+
+        // Bindings left behind by a previous link of this chat (link steal) must not
+        // leak another account's session metadata.
+        var bindings = (await _bindings.ListByChatAsync("telegram", u.ChatId, ct))
+            .Where(b => b.Owner == linked.Owner).ToList();
         if (bindings.Count == 0)
         {
             await ReplyAsync(u, "No sessions in this chat yet.", ct);
@@ -235,8 +262,17 @@ public sealed class TelegramUpdateService : BackgroundService
     /// <summary>Answers with the target session's current state.</summary>
     private async Task HandleStatusAsync(TelegramUpdate u, CancellationToken ct)
     {
+        var linked = await _users.GetByTelegramChatAsync(u.ChatId, ct);
+        if (linked is null)
+        {
+            await ReplyAsync(u, "This chat is not linked.", ct);
+            return;
+        }
+
         var binding = await ResolveBindingAsync(u, ct);
-        if (binding is null)
+        // A binding from a previous link of this chat (link steal) must not leak
+        // another account's session state — treat it as absent.
+        if (binding is null || binding.Owner != linked.Owner)
         {
             await ReplyAsync(u, "No active session in this chat.", ct);
             return;
