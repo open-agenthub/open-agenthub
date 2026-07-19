@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { api, config } from '../api.js'
-import { desktopNotifyEnabled, setDesktopNotify } from '../lib/desktop-notify.js'
+import { desktopNotifyEnabled, desktopNotifySupported, setDesktopNotify } from '../lib/desktop-notify.js'
 
 const emit = defineEmits(['close'])
 // section: 'all' (legacy combined view) or 'notifications' | 'tokens' for a single settings tab.
@@ -14,20 +14,22 @@ const showTokens = computed(() => ['all', 'tokens'].includes(props.section))
 
 // --- Desktop notifications (browser, per-device) ---
 const desktopOn = ref(desktopNotifyEnabled())
-const desktopBlocked = ref(false)
+const desktopMsg = ref('')
 
 async function toggleDesktop(e) {
   const on = e.target.checked
-  desktopBlocked.value = false
+  desktopMsg.value = ''
   const ok = await setDesktopNotify(on)
   if (!ok) {
-    // Permission denied — be honest: untick and explain inline.
+    // Unsupported or permission denied — be honest: untick and explain inline.
     await setDesktopNotify(false)
     desktopOn.value = false
     // Reset the element too: the binding value did not change (false → false),
     // so Vue would not patch the user-flipped checkbox back.
     e.target.checked = false
-    desktopBlocked.value = true
+    desktopMsg.value = desktopNotifySupported()
+      ? 'Notifications are blocked by the browser — allow them in the site settings.'
+      : 'Desktop notifications are not supported by this browser.'
     return
   }
   desktopOn.value = on
@@ -242,7 +244,7 @@ const curlStatus = computed(() =>
           <input type="checkbox" :checked="desktopOn" data-desktop-toggle @change="toggleDesktop" />
           Desktop notifications when a session waits or finishes
         </label>
-        <p v-if="desktopBlocked" class="err" data-desktop-blocked>Notifications are blocked by the browser — allow them in the site settings.</p>
+        <p v-if="desktopMsg" class="err" data-desktop-msg>{{ desktopMsg }}</p>
       </section>
 
       <section v-if="showSlack && slackEnabled" class="slack">

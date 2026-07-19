@@ -52,7 +52,7 @@ describe('desktop notifications toggle', () => {
 
     expect(localStorage.getItem('desktopNotify')).toBe('1')
     expect(wrapper.get('[data-desktop-toggle]').element.checked).toBe(true)
-    expect(wrapper.find('[data-desktop-blocked]').exists()).toBe(false)
+    expect(wrapper.find('[data-desktop-msg]').exists()).toBe(false)
   })
 
   it('unticks and shows the inline note when permission is denied', async () => {
@@ -65,11 +65,26 @@ describe('desktop notifications toggle', () => {
 
     expect(localStorage.getItem('desktopNotify')).toBe('0')
     expect(wrapper.get('[data-desktop-toggle]').element.checked).toBe(false)
-    expect(wrapper.get('[data-desktop-blocked]').text()).toContain('blocked by the browser')
+    expect(wrapper.get('[data-desktop-msg]').text()).toContain('blocked by the browser')
   })
 
-  it('asks for permission when it was not decided yet', async () => {
+  it('shows the unsupported note when the browser has no Notification API', async () => {
+    delete globalThis.Notification
+    const wrapper = mountDialog()
+    await flushPromises()
+
+    await wrapper.get('[data-desktop-toggle]').setValue(true)
+    await flushPromises()
+
+    expect(localStorage.getItem('desktopNotify')).toBe('0')
+    expect(wrapper.get('[data-desktop-toggle]').element.checked).toBe(false)
+    expect(wrapper.get('[data-desktop-msg]').text()).toBe('Desktop notifications are not supported by this browser.')
+  })
+
+  it('asks for permission and honours the resolved value, not the stale static', async () => {
+    // Static permission stays 'default'; only the resolved promise says 'granted'.
     const requestPermission = stubNotification('default')
+    requestPermission.mockResolvedValue('granted')
     const wrapper = mountDialog()
     await flushPromises()
 
@@ -77,6 +92,9 @@ describe('desktop notifications toggle', () => {
     await flushPromises()
 
     expect(requestPermission).toHaveBeenCalled()
+    expect(localStorage.getItem('desktopNotify')).toBe('1')
+    expect(wrapper.get('[data-desktop-toggle]').element.checked).toBe(true)
+    expect(wrapper.find('[data-desktop-msg]').exists()).toBe(false)
   })
 
   it('disables without touching the Notification API', async () => {
@@ -89,6 +107,6 @@ describe('desktop notifications toggle', () => {
 
     expect(localStorage.getItem('desktopNotify')).toBe('0')
     expect(wrapper.get('[data-desktop-toggle]').element.checked).toBe(false)
-    expect(wrapper.find('[data-desktop-blocked]').exists()).toBe(false)
+    expect(wrapper.find('[data-desktop-msg]').exists()).toBe(false)
   })
 })
