@@ -132,17 +132,18 @@ public sealed class SlackSocketModeService : BackgroundService
         var user = p.TryGetProperty("user", out var u) && u.TryGetProperty("username", out var un)
             ? un.GetString() : (u.TryGetProperty("name", out var nm) ? nm.GetString() : null);
 
-        var resolved = await _permissions.ResolveAsync(reqId, decision, ct);
+        // No sessionId here — a Slack click only carries the request id.
+        var resolved = await _permissions.ResolveAsync(reqId, decision, ct: ct);
         if (resolved is null)
         {
             // Already decided or expired (or unknown) — reflect the final state instead
             // of leaving the click apparently dead.
-            var existing = await _permissions.GetAsync(reqId, ct);
+            var existing = await _permissions.GetAsync(reqId, ct: ct);
             if (existing is { Channel: not null, MessageTs: not null })
                 await _slack.UpdateMessageAsync(existing.Channel, existing.MessageTs,
                     existing.Decision == "expired"
-                        ? $":hourglass: *Expired* — *{Escape(existing.Tool)}*. Please answer in the web terminal."
-                        : $":information_source: Already decided ({existing.Decision}) — *{Escape(existing.Tool)}*.", null, ct);
+                        ? SlackPermissionNotifier.ExpiredMessage(existing.Tool)
+                        : $":information_source: Already decided ({DecisionVerb(existing.Decision)}) — *{Escape(existing.Tool)}*.", null, ct);
             return;
         }
 
@@ -158,6 +159,9 @@ public sealed class SlackSocketModeService : BackgroundService
     }
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+    private static string DecisionVerb(string? decision)
+        => decision == "deny" ? "Denied" : "Allowed";
 
     private static async Task<(string text, bool closed)> ReceiveFullAsync(ClientWebSocket ws, byte[] buf, CancellationToken ct)
     {
