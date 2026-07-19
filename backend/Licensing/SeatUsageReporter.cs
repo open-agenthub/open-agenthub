@@ -71,8 +71,20 @@ public sealed class SeatUsageReporter(
 
         if (TryParseRenewedToken(body, out var renewed))
         {
+            // Store-then-verify with rollback: the renewed token must pass the
+            // signature check against the compiled-in service key. A rogue or
+            // broken endpoint behind Ee:License:ServiceUrl can therefore neither
+            // unlock features nor clobber a previously valid stored token.
             await store.SetTokenAsync(renewed, ct);
             await license.ReloadAsync(ct);
+            if (!license.Status.Valid)
+            {
+                log.LogWarning("Renewed license token failed verification ({Reason}) — keeping the previous token.",
+                    license.Status.Reason);
+                await store.SetTokenAsync(token, ct);
+                await license.ReloadAsync(ct);
+                return;
+            }
             await store.SetLastReportAsync(DateTime.UtcNow, ct);
             log.LogInformation("Reported {Seats} seat(s); license token renewed.", seats);
         }
