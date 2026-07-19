@@ -43,6 +43,7 @@ builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
 
 // Community chat integrations (Telegram/Signal): session-to-conversation bindings.
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatBindingStore>();
+builder.Services.AddSingleton<AgentHub.Api.Chat.WorkingIndicator>();
 
 // Enterprise: Slack integration (only active with a valid license + tokens).
 var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee.Slack.SlackOptions>() ?? new();

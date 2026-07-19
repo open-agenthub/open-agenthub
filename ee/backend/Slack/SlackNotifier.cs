@@ -24,13 +24,16 @@ public sealed class SlackNotifier : INotifier
     private readonly SlackClient _slack;
     private readonly SlackThreadStore _threads;
     private readonly ISlackTargetResolver _resolver;
+    private readonly AgentHub.Api.Chat.WorkingIndicator _indicator;
     private readonly string _frontendOrigin;
     private readonly ILogger<SlackNotifier> _log;
 
     public SlackNotifier(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
-        SlackThreadStore threads, ISlackTargetResolver resolver, IConfiguration cfg, ILogger<SlackNotifier> log)
+        SlackThreadStore threads, ISlackTargetResolver resolver, AgentHub.Api.Chat.WorkingIndicator indicator,
+        IConfiguration cfg, ILogger<SlackNotifier> log)
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _resolver = resolver;
+        _indicator = indicator;
         _frontendOrigin = cfg["FrontendOrigin"] ?? "";
         _log = log;
     }
@@ -42,6 +45,15 @@ public sealed class SlackNotifier : INotifier
         try
         {
             var thread = await _threads.GetBySessionAsync(s.Id, ct);
+
+            // The session progressed — stop the "working…" animation and remove the
+            // status message (cross-replica via the persisted ts).
+            _indicator.Stop(s.Id);
+            if (thread?.StatusTs is { } statusTs)
+            {
+                await _slack.DeleteMessageAsync(thread.Channel, statusTs, ct);
+                await _threads.SetStatusTsAsync(s.Id, null, ct);
+            }
 
             if (eventType is "finished" or "failed")
             {
