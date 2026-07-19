@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { api, config } from '../api.js'
+import { desktopNotifyEnabled, setDesktopNotify } from '../lib/desktop-notify.js'
 
 const emit = defineEmits(['close'])
 // section: 'all' (legacy combined view) or 'notifications' | 'tokens' for a single settings tab.
@@ -10,6 +11,27 @@ const props = defineProps({
 })
 const showSlack = computed(() => ['all', 'notifications'].includes(props.section))
 const showTokens = computed(() => ['all', 'tokens'].includes(props.section))
+
+// --- Desktop notifications (browser, per-device) ---
+const desktopOn = ref(desktopNotifyEnabled())
+const desktopBlocked = ref(false)
+
+async function toggleDesktop(e) {
+  const on = e.target.checked
+  desktopBlocked.value = false
+  const ok = await setDesktopNotify(on)
+  if (!ok) {
+    // Permission denied — be honest: untick and explain inline.
+    await setDesktopNotify(false)
+    desktopOn.value = false
+    // Reset the element too: the binding value did not change (false → false),
+    // so Vue would not patch the user-flipped checkbox back.
+    e.target.checked = false
+    desktopBlocked.value = true
+    return
+  }
+  desktopOn.value = on
+}
 
 // --- Slack (per-user) ---
 const slackEnabled = computed(() => config.slackEnabled)
@@ -211,6 +233,18 @@ const curlStatus = computed(() =>
       <h3 v-else-if="section === 'tokens'">API tokens</h3>
       <h3 v-else>Settings</h3>
 
+      <section v-if="showSlack" class="slack" data-section="desktop">
+        <h4>Desktop notifications</h4>
+        <p class="note">
+          Your browser shows a notification when the tab is in the background — no server-side setup needed.
+        </p>
+        <label class="check">
+          <input type="checkbox" :checked="desktopOn" data-desktop-toggle @change="toggleDesktop" />
+          Desktop notifications when a session waits or finishes
+        </label>
+        <p v-if="desktopBlocked" class="err" data-desktop-blocked>Notifications are blocked by the browser — allow them in the site settings.</p>
+      </section>
+
       <section v-if="showSlack && slackEnabled" class="slack">
         <h4>Slack notifications</h4>
         <p class="note">
@@ -293,7 +327,7 @@ const curlStatus = computed(() =>
         <p v-if="verifyMsg" :class="verifyMsgOk ? 'ok-text' : 'err'" data-signal-verify-msg>{{ verifyMsg }}</p>
       </section>
 
-      <p v-if="showSlack && !slackEnabled && !telegramEnabled && !signalEnabled" class="note">No chat integration (Slack, Telegram, Signal) is enabled on this instance — there is nothing to configure here yet.</p>
+      <p v-if="showSlack && !slackEnabled && !telegramEnabled && !signalEnabled" class="note">No chat integration (Slack, Telegram, Signal) is enabled on this instance.</p>
 
       <template v-if="showTokens">
       <h4 v-if="section === 'all'">API tokens</h4>
