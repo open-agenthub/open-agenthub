@@ -38,6 +38,16 @@ public static class AgentConfiguration
         if (authMode is { } selectedAuthMode) ValidateAuthMode(selectedAuthMode);
     }
 
+    public static void ValidateForUpdate(AgentKind currentAgent, AgentAuthMode currentAuthMode,
+        AgentKind? requestedAgent, AgentAuthMode? requestedAuthMode)
+    {
+        // A migrated Claude+Auto record may remain untouched, but Auto is never a
+        // valid result once the public PATCH supplies either agent/auth field.
+        if (requestedAgent is null && requestedAuthMode is null) return;
+        ValidateAgent(requestedAgent ?? currentAgent);
+        ValidateAuthMode(requestedAuthMode ?? currentAuthMode);
+    }
+
     public static void ValidateForDuplicatedSession(AgentKind agent, AgentAuthMode authMode)
     {
         ValidateAgent(agent);

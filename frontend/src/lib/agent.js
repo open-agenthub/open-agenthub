@@ -30,14 +30,11 @@ export function defaultPolicy(agent) {
 }
 
 function populatedPolicy(source, agent) {
-  const policy = source.policy || {}
-  const hasStructuredPolicy = ['allowedTools', 'allowedMcpTools', 'allowedCommands']
-    .some(key => Array.isArray(policy[key]) && policy[key].length > 0)
-  if (hasStructuredPolicy) {
+  if (source.policy && typeof source.policy === 'object') {
     return {
-      allowedTools: policy.allowedTools?.length ? policy.allowedTools : (source.allowedTools || []),
-      allowedMcpTools: policy.allowedMcpTools || [],
-      allowedCommands: policy.allowedCommands || []
+      allowedTools: source.policy.allowedTools || [],
+      allowedMcpTools: source.policy.allowedMcpTools || [],
+      allowedCommands: source.policy.allowedCommands || []
     }
   }
   if (Array.isArray(source.allowedTools) && source.allowedTools.length) {

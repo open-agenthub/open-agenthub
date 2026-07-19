@@ -50,6 +50,28 @@ public sealed class SessionAgentModelTests
     }
 
     [Fact]
+    public void PartialUpdate_AllowsMigratedClaudeAutoOnlyWhenAgentAndAuthAreOmitted()
+    {
+        AgentConfiguration.ValidateForUpdate(AgentKind.Claude, AgentAuthMode.Auto, null, null);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    public void PartialUpdate_RejectsAnyAgentFieldThatLeavesMigratedAutoEffective(AgentKind requestedAgent)
+    {
+        Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForUpdate(
+            AgentKind.Claude, AgentAuthMode.Auto, requestedAgent, null));
+    }
+
+    [Fact]
+    public void PartialUpdate_AcceptsAnExplicitAuthThatMakesTheEffectivePairPublic()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.Claude, AgentAuthMode.Auto, AgentKind.Codex, AgentAuthMode.ApiKey);
+    }
+
+    [Fact]
     public void DuplicatedCodexSession_CannotUseAutoAuthentication()
     {
         Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForDuplicatedSession(AgentKind.Codex, AgentAuthMode.Auto));
@@ -74,5 +96,18 @@ public sealed class SessionAgentModelTests
 
         Assert.Empty(policy.AllowedTools);
         Assert.Equal(["git status"], policy.AllowedCommands);
+    }
+
+    [Fact]
+    public void UpdateRequest_DistinguishesOmittedFromExplicitEmptyPolicy()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var omitted = System.Text.Json.JsonSerializer.Deserialize<UpdateSessionRequest>("{}", options)!;
+        var explicitEmpty = System.Text.Json.JsonSerializer.Deserialize<UpdateSessionRequest>(
+            "{\"policy\":{\"allowedTools\":[],\"allowedMcpTools\":[],\"allowedCommands\":[]}}", options)!;
+
+        Assert.Null(omitted.Policy);
+        Assert.NotNull(explicitEmpty.Policy);
+        Assert.Empty(explicitEmpty.Policy.AllowedTools);
     }
 }
