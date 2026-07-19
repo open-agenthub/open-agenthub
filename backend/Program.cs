@@ -49,6 +49,9 @@ builder.Services.AddSingleton<AgentHub.Api.Chat.WorkingIndicator>();
 var telegramOpts = builder.Configuration.GetSection("Chat:Telegram").Get<AgentHub.Api.Chat.Telegram.TelegramOptions>() ?? new();
 builder.Services.AddSingleton(telegramOpts);
 builder.Services.AddSingleton<AgentHub.Api.Chat.Telegram.TelegramClient>();
+var signalOpts = builder.Configuration.GetSection("Chat:Signal").Get<AgentHub.Api.Chat.Signal.SignalOptions>() ?? new();
+builder.Services.AddSingleton(signalOpts);
+builder.Services.AddSingleton<AgentHub.Api.Chat.Signal.SignalClient>();
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatLinkCodeStore>();
 builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Chat.Telegram.TelegramNotifier>();
 
@@ -196,8 +199,9 @@ app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptio
     gitEnabled = git.AnyConfigured,
     // Lets the UI show the per-user Slack settings section only when Slack is enabled.
     slackEnabled = slack.Enabled,
-    // Same for the community Telegram integration.
-    telegramEnabled = telegramOpts.Enabled
+    // Same for the community Telegram/Signal integrations.
+    telegramEnabled = telegramOpts.Enabled,
+    signalEnabled = signalOpts.Enabled
 })).AllowAnonymous();
 
 var agentPort = builder.Configuration.GetValue("AgentHub:AgentPort", 7681);
