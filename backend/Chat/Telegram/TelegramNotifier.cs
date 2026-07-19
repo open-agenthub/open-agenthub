@@ -36,6 +36,15 @@ public sealed class TelegramNotifier : INotifier
 
             // The session produced an event — the working indicator (if any) is obsolete.
             _indicator.Stop(s.Id);
+
+            // Chats get re-linked and users opt out: the stored binding is only a hint —
+            // the user row decides where (and whether) to send.
+            if (binding is not null && !await IsBindingCurrentAsync(binding, ct))
+            {
+                if (eventType != "question") return; // never send to a stale/opted-out target
+                binding = null; // the create path re-validates and re-binds at the current chat
+            }
+
             if (binding?.StatusRef is { } statusRef)
             {
                 await _tg.DeleteMessageAsync(binding.ChatId, statusRef, ct);
@@ -111,6 +120,14 @@ public sealed class TelegramNotifier : INotifier
         await _bindings.UpsertAsync(binding, ct);
         await _bindings.RecordMessageAsync("telegram", binding.ChatId, headerId, s.Id, ct);
         return binding;
+    }
+
+    /// <summary>True when the binding's target still is the owner's currently linked,
+    /// enabled Telegram chat — a stale target must never receive session content.</summary>
+    private async Task<bool> IsBindingCurrentAsync(ChatBinding binding, CancellationToken ct)
+    {
+        var user = await _users.GetAsync(binding.Owner, ct);
+        return user is { TelegramEnabled: true } && user.TelegramChatId == binding.ChatId;
     }
 
     /// <summary>

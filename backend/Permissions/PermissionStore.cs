@@ -52,6 +52,8 @@ public sealed class PermissionStore
             );
             CREATE INDEX IF NOT EXISTS idx_permreq_created ON permission_requests(created_at);
             ALTER TABLE permission_requests ADD COLUMN IF NOT EXISTS platform TEXT;
+            -- Prompt-message lookup for reaction/quote-based deciders (Signal).
+            CREATE INDEX IF NOT EXISTS idx_permreq_prompt ON permission_requests(platform, channel, message_ts);
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
