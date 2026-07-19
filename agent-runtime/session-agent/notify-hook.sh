@@ -21,7 +21,7 @@ body="$(printf '%s' "$payload" | node -e '
         }
       }
     } catch {}
-    process.stdout.write(JSON.stringify({ message: msg.slice(0, 12000), event: "question" }));
+    process.stdout.write(JSON.stringify({ message: msg.slice(0, 12000).replace(/[\uD800-\uDBFF]$/, ""), event: "question" }));
   });
 ')"
 
