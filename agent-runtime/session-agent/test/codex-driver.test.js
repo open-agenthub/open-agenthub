@@ -32,6 +32,28 @@ test('Codex interactive fresh and restored commands use only explicit resume sha
   }), false), { cmd: 'codex', args: [] });
 });
 
+test('Codex device login runs inside the agent PTY before the interactive CLI', () => {
+  const deviceLogin = path.join(runtimeDir, 'codex', 'device-login.sh');
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_CODEX_DEVICE_AUTH: '1'
+  }), true), { cmd: 'bash', args: [deviceLogin] });
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_CODEX_DEVICE_AUTH: '1',
+    AGENTHUB_RESUME: '1',
+    AGENTHUB_STATE_RESTORED: '1'
+  }), true), { cmd: 'bash', args: [deviceLogin, 'resume', '--last'] });
+  assert.equal(driver.isResumeCommand({
+    cmd: 'bash', args: [deviceLogin, 'resume', '--last']
+  }), true);
+
+  const script = fs.readFileSync(deviceLogin, 'utf8');
+  assert.match(script, /if \[ ! -f "\$CODEX_HOME\/auth\.json" \]; then\s+codex login --device-auth\s+fi/);
+  assert.match(script, /^exec codex "\$@"$/m);
+  const entrypoint = fs.readFileSync(path.join(runtimeDir, 'codex', 'entrypoint.sh'), 'utf8');
+  assert.doesNotMatch(entrypoint, /^\s*codex login --device-auth$/m);
+  assert.match(entrypoint, /export AGENTHUB_CODEX_DEVICE_AUTH=1/);
+});
+
 test('Codex autonomous and scheduled commands use pinned exec flags and valid resume ordering', () => {
   const flags = ['--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust'];
   assert.deepEqual(driver.buildCommand(environment({
@@ -50,6 +72,9 @@ test('Codex resume recognition rejects fresh and merely resume-like commands', (
       '--dangerously-bypass-hook-trust', 'resume', '--last', 'prompt']
   }), true);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['exec', 'resume later'] }), false);
+  assert.equal(driver.isResumeCommand({
+    cmd: 'bash', args: [path.join(runtimeDir, 'codex', 'device-login.sh')]
+  }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['resume', '--last'] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: [] }), false);
 });
@@ -83,7 +108,7 @@ test('Codex entrypoint owns config, auth mode, watcher, and stale-auth ordering'
   assert.match(entrypoint, /chmod 600 "\$CODEX_HOME\/auth\.json"/);
   assert.match(entrypoint, /printf '%s\\n' "\$CODEX_API_KEY" \| codex login --with-api-key/);
   assert.match(entrypoint, /unset CODEX_API_KEY/);
-  assert.match(entrypoint, /codex login --device-auth/);
+  assert.match(entrypoint, /AGENTHUB_CODEX_DEVICE_AUTH/);
   assert.match(entrypoint, /AGENTHUB_AUTH_MODE/);
   assert.match(entrypoint, /subscription\)/);
   assert.match(entrypoint, /apikey\)/);
