@@ -215,7 +215,9 @@ Telegram and Signal are **community features** (free, no license); Slack is part
 [Enterprise edition](ee/README.md). All of them notify you when a session waits for input
 or finishes, and let you reply and approve permission prompts from your phone. Long
 answers are split across several messages; permission prompts expire after ~30 minutes
-(answer in the web terminal then).
+(answer in the web terminal then). Telegram and Signal require a **single backend
+replica** (`backend.replicas=1`) — Telegram `getUpdates` and the Signal receive socket
+allow only one consumer, and the chart refuses to render otherwise.
 
 <details>
 <summary><b>Telegram</b></summary>
@@ -224,7 +226,8 @@ answers are split across several messages; permission prompts expire after ~30 m
 2. Enable it:
    ```bash
    helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
-     --set chat.telegram.enabled=true --set chat.telegram.botToken=<token>
+     --set chat.telegram.enabled=true --set chat.telegram.botToken=<token> \
+     --set backend.replicas=1
    ```
    (Without Helm: env vars `Chat__Telegram__Enabled=true`, `Chat__Telegram__BotToken`.)
 3. Each user links their account under **Settings → Notifications → Telegram**:
@@ -249,7 +252,8 @@ run Telegram long-polling (a second poller conflicts on `getUpdates`).
    persistent volume for the account keys:
    ```bash
    helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
-     --set chat.signal.enabled=true --set-string chat.signal.number=+15551234567
+     --set chat.signal.enabled=true --set-string chat.signal.number=+15551234567 \
+     --set backend.replicas=1
    ```
 2. Register the sender number once via port-forward: `POST /v1/register/<number>` +
    `/v1/register/<number>/verify/<token>` (SMS/voice code), or link it as a secondary
