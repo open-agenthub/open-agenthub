@@ -6,11 +6,11 @@ Kubernetes context: `docker-desktop`
 
 ## Result
 
-Codex support passed the full local regression suite, a four-image Docker Desktop deployment, an isolated API/Kubernetes matrix, pinned-container contracts, and a visible browser checkpoint. Four acceptance or review defects were found with focused failing tests, fixed minimally, rebuilt where applicable, and covered by the final full rerun.
+Codex support passed the full local regression suite, a four-image Docker Desktop deployment, an isolated API/Kubernetes matrix, pinned-container contracts, and a visible browser checkpoint. Four acceptance or review defects were found with focused failing tests, fixed minimally, rebuilt where applicable, and covered by the final acceptance rerun. Later full-branch hardening passed the local and container checks recorded below, but was not redeployed; the Docker Desktop claims remain limited to the acceptance matrix that actually ran.
 
 No real Claude or Codex account data, host credential storage, browser storage, token, or Kubernetes Secret value was read. All provider material used for matrix testing was unmistakably synthetic and intentionally invalid. Real account-bound Codex device authorization remains a user action and was never completed.
 
-## Environment and final clean gates
+## Environment and final local gates
 
 | Tool | Version |
 | --- | --- |
@@ -21,14 +21,18 @@ No real Claude or Codex account data, host credential storage, browser storage, 
 | kubectl client | 1.34.1 |
 | Docker client/server | 28.5.2 / 28.5.2 |
 
-The final post-cleanup rerun produced:
+The final local-only rerun after full-branch hardening produced:
 
-- Backend: 219 passed, 0 failed, 8 skipped PostgreSQL integration tests when no test connection string was supplied.
-- Frontend: 16 files and 119 tests passed; production build transformed 80 modules.
-- Session runtime after the review-driven resume fix: 65 passed, 0 failed.
+- Backend: 236 passed, 0 failed, 8 skipped PostgreSQL integration tests when no test connection string was supplied.
+- Session runtime: 73 passed, 0 failed.
+- Frontend: 16 files and 122 tests passed; the production build transformed 80 modules.
+- `git diff --check` passed.
+
+The following evidence is from the recorded Docker Desktop acceptance and was not rerun after the latest local-only hardening:
+
 - Helm: default, development, fallback, and explicit-override runtime renders passed; deployment parity passed; lint reported 1 chart and 0 failures; representative development template passed.
-- PowerShell parsing and `git diff --check` passed.
-- Focused evidence: 32 policy matcher tests, 17 MCP/common-transport tests, and the Codex pinned-container smoke passed.
+- PowerShell parsing passed.
+- Focused evidence included 32 policy matcher tests, 17 MCP/common-transport tests, and the Codex pinned-container smoke.
 - Disposable PostgreSQL evidence: `dotnet test tests/AgentHub.Api.Tests/AgentHub.Api.Tests.csproj --no-restore --filter 'FullyQualifiedName=AgentHub.Api.Tests.SessionShareStorePostgresTests.OwnerAccess_MapsProviderNeutralSessionId_WhenLegacyClaudeIdIsNull'` passed 1/1 against PostgreSQL 16 bound only to loopback.
 
 ## Images and deployment
@@ -72,7 +76,7 @@ The post-review Codex image was rebuilt locally and passed the pinned-container 
 | 5. Pods receive only selected credentials | The Kubernetes matrix verified selected-only mounts/key references and absence of the unselected provider/auth projection. |
 | 6. Autonomous/Scheduled policies deny unmatched actions | Backend matcher, provider hooks, MCP tests, and the pinned Codex deny smoke passed, including unsafe compound-command and failure-closed cases. |
 | 7. Claude and legacy behavior remain functional | Claude Kubernetes/runtime regressions passed; legacy database/default/backfill compatibility remains tested. The only limitation is the explicit live Claude-Scheduled gap above. |
-| 8. Unit/component/runtime/build/Helm/Docker Desktop acceptance | The recorded full gates, four-image deployment, isolated matrix, browser checkpoint, focused PostgreSQL regression, and post-review 65/65 runtime plus pinned-container rerun passed. |
+| 8. Unit/component/runtime/build/Helm/Docker Desktop acceptance | The recorded four-image deployment, isolated matrix, browser checkpoint, focused PostgreSQL regression, and acceptance-time pinned-container evidence passed. The later local-only full gates passed 236 backend tests with 8 skipped, 73 runtime tests, 122 frontend tests, and the frontend production build. |
 
 Primary synthetic matrix session IDs were retained only during the ephemeral test: Codex `fbc9dfc90f57`, `c1fea83fdb31`, `fe16a60e478a`, `4496e5735f1f`; Claude `296b1b4436a0`, `c8d2ee6c0629`, `4cd702fcfb78`, `5ed7fe1302e0`. Device-login evidence used `31e3949ced70` initially and fresh checkpoint session `90c37fb02525` after the first uncompleted flow timed out naturally.
 
@@ -98,6 +102,18 @@ No browser form was submitted and no billable session was started.
 4. Review found that the wrapped `bash device-login.sh resume --last` command was not recognized as a resume, so the common one-time fresh fallback was skipped. Focused tests failed first; wrapper-aware recognition now triggers exactly one fresh retry, and the wrapper checks for `auth.json` before device login so that retry does not initiate authorization twice.
 
 The focused disposable-PostgreSQL mapping command above is the durable GREEN evidence for defect 2. An exploratory run of the entire existing PostgreSQL sharing class passed 3/8; five older tests exposed unrelated reader-lifetime and JSON-normalization failures and are not represented as green by this change.
+
+## Post-acceptance full-branch hardening
+
+A combined integration and security review after the recorded Docker Desktop acceptance added the following protections:
+
+- Provider state archives now use separate Claude and Codex object keys, while the legacy state-key overload remains Claude-compatible.
+- Provider API keys are environment-only Secret references, scoped to the selected provider child and its descendants; the shared `/shell` and `git-clone` init container receive neither provider API keys nor provider subscription state.
+- Codex managed requirements are projected into a read-only system configuration. Custom images receive the managed runtime through an agent read-only mount; only `copy-runtime` can write it.
+- Claude built-in, MCP, and shell policy categories cross the pod boundary as separate structured JSON arrays. MCP selectors are validated, shell entries become exact native `Bash(...)` rules, and comma/delimiter injection is rejected.
+- The Codex credential watcher establishes a restored-state baseline without re-uploading it, detects creation and refresh races, and retries unchanged valid content after a failed upload without logging credentials.
+
+These latest fixes passed the final local suites and applicable container tests, but were not redeployed after the current Kubernetes context changed externally from `docker-desktop` to `test-gro01`. No context switch or further cluster call was made, so this section does not extend the earlier Docker Desktop deployment claims.
 
 ## Compatibility and security review
 

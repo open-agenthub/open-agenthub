@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
@@ -55,6 +56,59 @@ test('Codex watcher skips restored content and uploads each later valid change o
     ]);
     assert.equal(requests[0].headers['content-type'], 'application/json');
     assert.equal(requests[0].headers['x-agent-token'], 'synthetic-callback-token');
+  });
+});
+
+test('Codex watcher uploads a refresh that happens before its delayed first read', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-watcher-'));
+  const source = path.join(directory, 'auth.json');
+  const restored = fixture('restored-before-watcher');
+  const refreshed = fixture('refreshed-before-first-read');
+  fs.writeFileSync(source, restored);
+  const baselineHash = crypto.createHash('sha256').update(restored).digest('hex');
+  const logs = [];
+  let releaseFirstRead;
+  let markFirstReadStarted;
+  const firstReadStarted = new Promise(resolve => { markFirstReadStarted = resolve; });
+  const firstReadGate = new Promise(resolve => { releaseFirstRead = resolve; });
+  let firstRead = true;
+  const fsImpl = {
+    promises: {
+      async open(...args) {
+        if (firstRead) {
+          firstRead = false;
+          markFirstReadStarted();
+          await firstReadGate;
+        }
+        return fs.promises.open(...args);
+      }
+    }
+  };
+
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source,
+      callbackUrl,
+      callbackToken: 'delayed-read-callback-secret',
+      baselineHash,
+      intervalMs: 60_000,
+      fsImpl,
+      logger: { warn: message => logs.push(String(message)), info: message => logs.push(String(message)) }
+    });
+    try {
+      await firstReadStarted;
+      fs.writeFileSync(source, refreshed);
+      releaseFirstRead();
+      await watcher.ready;
+      await watcher.poll();
+
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].body, refreshed);
+      assert.doesNotMatch(logs.join('\n'),
+        /restored-before-watcher|refreshed-before-first-read|delayed-read-callback-secret/);
+    } finally {
+      watcher.stop();
+    }
   });
 });
 

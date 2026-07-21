@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const { createServer } = require('node:http');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
@@ -375,4 +376,27 @@ test('system requirements own all tool hooks and exclude repository hooks', () =
   assert.match(requirements, /^managed_dir = "\/opt\/session-agent\/codex"/m);
   assert.match(requirements, /\[\[hooks\.PreToolUse\]\][\s\S]*matcher = "\*"/m);
   assert.match(requirements, /\[\[hooks\.PermissionRequest\]\][\s\S]*matcher = "\*"/m);
+});
+
+test('runtime-owned requirements projector emits only approved standard and custom hook paths', () => {
+  const { projectRequirements } = require('../../codex/project-requirements');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-codex-requirements-'));
+  try {
+    for (const runtime of ['/opt/session-agent/codex', '/opt/agenthub/session-agent/codex']) {
+      const destination = path.join(directory, runtime.includes('agenthub') ? 'custom.toml' : 'standard.toml');
+      projectRequirements(requirementsPath, destination, runtime);
+      const projected = fs.readFileSync(destination, 'utf8');
+
+      assert.match(projected, new RegExp(`managed_dir = "${runtime}"`));
+      assert.match(projected, new RegExp(`command = "node ${runtime}/policy-hook\\.js"`));
+      if (runtime.includes('agenthub')) {
+        assert.doesNotMatch(projected, /\/opt\/session-agent\/codex/);
+      }
+    }
+
+    assert.throws(() => projectRequirements(requirementsPath, path.join(directory, 'bad.toml'), '/tmp/codex'),
+      /unsupported Codex managed runtime/i);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
 });

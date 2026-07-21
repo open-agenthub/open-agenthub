@@ -69,6 +69,7 @@ public static class AgentPodSpecFactory
         var asRoot = request.RunAsRoot;
         var uid = asRoot ? 0L : 1000L;
         var home = asRoot ? "/root" : "/home/agent";
+        var policy = AgentConfiguration.ResolvePolicy(request.Policy, request.AllowedTools);
 
         var podSecurity = new V1PodSecurityContext
         {
@@ -104,6 +105,7 @@ public static class AgentPodSpecFactory
             new() { Name = "tmp", MountPath = "/tmp" },
             new() { Name = "creds", MountPath = "/secrets/creds", ReadOnlyProperty = true }
         };
+        var gitCloneMounts = new List<V1VolumeMount>(mounts);
         var env = new List<V1EnvVar>
         {
             new() { Name = "HOME", Value = home },
@@ -117,7 +119,9 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_HAS_MCP", Value = hasMcp ? "1" : "0" },
             new() { Name = "AGENTHUB_RESUME", Value = string.IsNullOrEmpty(context.StateGetUrl) ? "0" : "1" },
             new() { Name = "AGENTHUB_PROMPT", Value = request.Prompt ?? "" },
-            new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = string.Join(",", AgentConfiguration.ResolvePolicy(request.Policy, request.AllowedTools).AllowedTools) },
+            new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedTools) },
+            new() { Name = "AGENTHUB_ALLOWED_MCP_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedMcpTools) },
+            new() { Name = "AGENTHUB_ALLOWED_COMMANDS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedCommands) },
             new() { Name = "AGENTHUB_CALLBACK_URL", Value = context.CallbackUrl },
             new() { Name = "AGENTHUB_CALLBACK_TOKEN", Value = record.CallbackToken },
             new() { Name = "AGENTHUB_S3_INSECURE", Value = context.S3Insecure ? "1" : "0" },
@@ -138,7 +142,6 @@ public static class AgentPodSpecFactory
 
         void AddApiKey(string envName, string secretKey)
         {
-            credentialItems.Add(ProjectCredential(secretKey));
             env.Add(new V1EnvVar
             {
                 Name = envName,
@@ -183,11 +186,18 @@ public static class AgentPodSpecFactory
         {
             volumes.Add(new V1Volume { Name = "gitcreds", Secret = new V1SecretVolumeSource { SecretName = $"gitcreds-{record.Id}", DefaultMode = 0x1A0 } });
             mounts.Add(new V1VolumeMount { Name = "gitcreds", MountPath = "/secrets/gitcreds", ReadOnlyProperty = true });
+            gitCloneMounts.Add(new V1VolumeMount { Name = "gitcreds", MountPath = "/secrets/gitcreds", ReadOnlyProperty = true });
         }
         if (customImage is not null)
         {
             volumes.Add(new V1Volume { Name = "runtime", EmptyDir = new V1EmptyDirVolumeSource() });
-            mounts.Add(new V1VolumeMount { Name = "runtime", MountPath = "/opt/agenthub" });
+            mounts.Add(new V1VolumeMount { Name = "runtime", MountPath = "/opt/agenthub", ReadOnlyProperty = true });
+        }
+
+        if (record.Agent == AgentKind.Codex)
+        {
+            volumes.Add(new V1Volume { Name = "codex-system-config", EmptyDir = new V1EmptyDirVolumeSource() });
+            mounts.Add(new V1VolumeMount { Name = "codex-system-config", MountPath = "/etc/codex", ReadOnlyProperty = true });
         }
 
         if (record.Agent == AgentKind.Claude && context.Runtime.TelemetryEnabled)
@@ -249,6 +259,27 @@ public static class AgentPodSpecFactory
             });
         }
 
+        if (record.Agent == AgentKind.Codex)
+        {
+            var managedRuntime = customImage is null ? "/opt/session-agent/codex" : "/opt/agenthub/session-agent/codex";
+            var requirementsScript = $"""
+                node /opt/session-agent/codex/project-requirements.js \
+                  /etc/codex/requirements.toml /codex-system-config/requirements.toml {managedRuntime}
+                """;
+            initContainers.Add(new V1Container
+            {
+                Name = "prepare-codex-system-config",
+                Image = runtimeImage,
+                ImagePullPolicy = context.RuntimeImages.PullPolicy,
+                Command = new List<string> { "/bin/sh", "-c", requirementsScript },
+                VolumeMounts = new List<V1VolumeMount>
+                {
+                    new() { Name = "codex-system-config", MountPath = "/codex-system-config" }
+                },
+                SecurityContext = ContainerSecurity()
+            });
+        }
+
         if (hasRepo)
         {
             var reposEnv = string.Join("\n", DestFor(repos).Select(x => $"{x.dest}\t{x.repo.Branch}\t{x.repo.Url}"));
@@ -289,7 +320,7 @@ public static class AgentPodSpecFactory
                     new() { Name = "REPOS", Value = reposEnv },
                     new() { Name = "HOME", Value = home }
                 },
-                VolumeMounts = mounts, SecurityContext = ContainerSecurity()
+                VolumeMounts = gitCloneMounts, SecurityContext = ContainerSecurity()
             });
         }
 

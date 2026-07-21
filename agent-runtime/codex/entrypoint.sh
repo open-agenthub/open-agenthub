@@ -34,15 +34,22 @@ apikey)
   ;;
 subscription)
   AUTH_EXPECT_CREATE=1
+  AUTH_BASELINE_SHA256=""
   if [ -f /secrets/codex/auth.json ]; then
     cp /secrets/codex/auth.json "$CODEX_HOME/auth.json"
     chmod 600 "$CODEX_HOME/auth.json"
+    AUTH_BASELINE_SHA256="$(node -e '
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));
+' "$CODEX_HOME/auth.json")"
     AUTH_EXPECT_CREATE=0
     echo "[entrypoint] Codex login restored from secret."
   fi
 
   if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
     AGENTHUB_CODEX_AUTH_EXPECT_CREATE="$AUTH_EXPECT_CREATE" \
+      AGENTHUB_CODEX_AUTH_BASELINE_SHA256="$AUTH_BASELINE_SHA256" \
       node "$RUNTIME/codex/auth-watcher.js" &
   fi
   if [ ! -f "$CODEX_HOME/auth.json" ] && [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then

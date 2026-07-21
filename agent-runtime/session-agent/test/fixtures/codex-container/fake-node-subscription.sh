@@ -1,5 +1,8 @@
 #!/bin/sh
 set -eu
+if [ "$1" = "-e" ]; then
+  exec /usr/local/bin/node "$@"
+fi
 if [ "$1" = "/opt/session-agent/codex/mcp-config.js" ]; then
   exec /usr/local/bin/node "$@"
 fi

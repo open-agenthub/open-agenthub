@@ -520,6 +520,8 @@ public sealed class KubernetesSessionService : ISessionService
 
         var ownerKey = Sanitize(owner);
         var claudeImage = string.IsNullOrWhiteSpace(_opts.ClaudeAgentImage) ? _opts.AgentImage : _opts.ClaudeAgentImage;
+        var artifactUrls = AgentSessionResourceOrchestrator.PresignArtifactUrls(
+            _artifacts, ownerKey, record, resume, PresignTtl);
         return new PodBuildContext
         {
             Owner = owner,
@@ -530,9 +532,9 @@ public sealed class KubernetesSessionService : ISessionService
             HasSelectedSubscriptionCredential = hasSubscription,
             HasGitCredentials = hasGitCredentials,
             CallbackUrl = $"{_callbackBaseUrl}/internal/sessions/{record.Id}",
-            StatePutUrl = _artifacts.PresignPut(IArtifactStore.StateKey(ownerKey, record.Id), PresignTtl),
-            StateGetUrl = resume ? _artifacts.PresignGet(IArtifactStore.StateKey(ownerKey, record.Id), PresignTtl) : "",
-            ScrollbackPutUrl = _artifacts.PresignPut(IArtifactStore.ScrollbackKey(ownerKey, record.Id), PresignTtl),
+            StatePutUrl = artifactUrls.StatePutUrl,
+            StateGetUrl = artifactUrls.StateGetUrl,
+            ScrollbackPutUrl = artifactUrls.ScrollbackPutUrl,
             S3Insecure = _s3Insecure,
             RuntimeImages = new AgentRuntimeImages(claudeImage, _opts.CodexAgentImage, _opts.AgentImagePullPolicy),
             Runtime = new AgentPodRuntimeSettings

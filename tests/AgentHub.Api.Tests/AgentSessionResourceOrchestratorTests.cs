@@ -1,12 +1,57 @@
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
+using AgentHub.Api.Storage;
 using Xunit;
 
 namespace AgentHub.Api.Tests;
 
 public class AgentSessionResourceOrchestratorTests
 {
+    [Theory]
+    [InlineData(AgentKind.Claude, "claude-state.tgz")]
+    [InlineData(AgentKind.Codex, "codex-state.tgz")]
+    public void PresignArtifactUrls_UsesSelectedProviderForPutAndResumeGet(
+        AgentKind agent, string stateFile)
+    {
+        var artifacts = new RecordingArtifactStore();
+        var record = Record(SessionMode.Interactive, agent);
+
+        var urls = AgentSessionResourceOrchestrator.PresignArtifactUrls(
+            artifacts, "alice", record, resume: true, TimeSpan.FromMinutes(5));
+
+        var stateKey = $"sessions/alice/session-id/{stateFile}";
+        Assert.Equal($"PUT:{stateKey}", urls.StatePutUrl);
+        Assert.Equal($"GET:{stateKey}", urls.StateGetUrl);
+        Assert.Equal("PUT:sessions/alice/session-id/scrollback.log", urls.ScrollbackPutUrl);
+        Assert.Equal(new[]
+        {
+            $"PUT:{stateKey}",
+            $"GET:{stateKey}",
+            "PUT:sessions/alice/session-id/scrollback.log"
+        }, artifacts.Presigned);
+    }
+
+    [Fact]
+    public void PresignArtifactUrls_SwitchingAgentCannotLoadOrOverwriteOtherProviderState()
+    {
+        var artifacts = new RecordingArtifactStore();
+
+        var claude = AgentSessionResourceOrchestrator.PresignArtifactUrls(
+            artifacts, "alice", Record(SessionMode.Interactive, AgentKind.Claude),
+            resume: true, TimeSpan.FromMinutes(5));
+        var codex = AgentSessionResourceOrchestrator.PresignArtifactUrls(
+            artifacts, "alice", Record(SessionMode.Interactive, AgentKind.Codex),
+            resume: true, TimeSpan.FromMinutes(5));
+
+        Assert.NotEqual(claude.StatePutUrl, codex.StatePutUrl);
+        Assert.NotEqual(claude.StateGetUrl, codex.StateGetUrl);
+        Assert.Contains("claude-state.tgz", claude.StatePutUrl);
+        Assert.Contains("claude-state.tgz", claude.StateGetUrl);
+        Assert.Contains("codex-state.tgz", codex.StatePutUrl);
+        Assert.Contains("codex-state.tgz", codex.StateGetUrl);
+    }
+
     [Theory]
     [InlineData(SessionMode.Autonomous)]
     [InlineData(SessionMode.Scheduled)]
@@ -54,13 +99,13 @@ public class AgentSessionResourceOrchestratorTests
         Assert.Equal(1, resourceCalls);
     }
 
-    private static SessionRecord Record(SessionMode mode) => new()
+    private static SessionRecord Record(SessionMode mode, AgentKind agent = AgentKind.Codex) => new()
     {
         Id = "session-id",
         Owner = "owner",
         Title = "Session",
         Mode = mode,
-        Agent = AgentKind.Codex,
+        Agent = agent,
         AuthMode = AgentAuthMode.Subscription,
         AgentSessionId = "agent-session-id",
         CallbackToken = "callback-token"
@@ -78,4 +123,26 @@ public class AgentSessionResourceOrchestratorTests
         ScrollbackPutUrl = "http://s3/scroll-put",
         RuntimeImages = new AgentRuntimeImages("runtime-claude", "runtime-codex", "Always")
     };
+
+    private sealed class RecordingArtifactStore : IArtifactStore
+    {
+        public List<string> Presigned { get; } = new();
+
+        public string PresignPut(string key, TimeSpan ttl)
+        {
+            var value = $"PUT:{key}";
+            Presigned.Add(value);
+            return value;
+        }
+
+        public string PresignGet(string key, TimeSpan ttl)
+        {
+            var value = $"GET:{key}";
+            Presigned.Add(value);
+            return value;
+        }
+
+        public Task<string?> GetTextAsync(string key, CancellationToken ct = default) =>
+            Task.FromResult<string?>(null);
+    }
 }

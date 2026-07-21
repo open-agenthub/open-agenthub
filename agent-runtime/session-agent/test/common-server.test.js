@@ -326,10 +326,17 @@ test('common transport scopes a Codex API key to agent child and keeps parent an
   assert.equal(harness.spawns[1].options.env.CODEX_API_KEY, undefined);
 });
 
-test('common transport keeps Claude-style prepare child environment unchanged', () => {
-  const harness = createHarness({ ANTHROPIC_API_KEY: 'synthetic-claude-key' });
-  assert.equal(harness.spawns[0].options.env, harness.runtime.env);
+test('common transport scopes a Claude API key to agent child and keeps parent and shell clean', () => {
+  const claudeDriver = require('../../claude/driver');
+  const harness = createHarness(
+    { ANTHROPIC_API_KEY: 'synthetic-claude-key' },
+    claudeDriver
+  );
+  assert.equal(harness.runtime.env.ANTHROPIC_API_KEY, undefined);
   assert.equal(harness.spawns[0].options.env.ANTHROPIC_API_KEY, 'synthetic-claude-key');
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/shell');
+  assert.equal(harness.spawns[1].options.env.ANTHROPIC_API_KEY, undefined);
 });
 
 test('common transport production archive includes Codex state but excludes auth', () => {

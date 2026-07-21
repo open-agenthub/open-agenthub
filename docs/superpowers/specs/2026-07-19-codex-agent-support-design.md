@@ -1,7 +1,7 @@
 # Codex Agent Support Design
 
-**Date:** 2026-07-19  
-**Status:** Approved design  
+**Date:** 2026-07-19
+**Status:** Approved design
 **Scope:** Open AgentHub backend, frontend, agent runtimes, Helm chart, local Docker Desktop Kubernetes workflow, and documentation
 
 ## Objective
@@ -283,4 +283,3 @@ The feature is complete when:
 6. Autonomous/Scheduled command and tool policies deny unmatched actions.
 7. Claude behavior and legacy sessions remain functional.
 8. Unit, component, runtime, build, Helm, and Docker Desktop Kubernetes acceptance checks pass.
-
