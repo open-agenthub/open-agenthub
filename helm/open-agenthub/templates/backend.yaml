@@ -1,3 +1,6 @@
+{{- if and (or .Values.chat.telegram.enabled .Values.chat.signal.enabled) (gt (int .Values.backend.replicas) 1) }}
+{{- fail "chat.telegram/chat.signal require backend.replicas=1 (Telegram getUpdates and the Signal receive socket allow only one consumer)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

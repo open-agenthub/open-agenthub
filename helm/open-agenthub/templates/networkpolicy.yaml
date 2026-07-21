@@ -52,7 +52,13 @@ spec:
         - { protocol: TCP, port: {{ . }} }
         {{- end }}
 ---
-# Agent -> backend (status/notify/artifact URL callbacks)
+# Agent -> backend (status/notify/artifact URL callbacks).
+# Scoped to the backend PODS (namespaceSelector AND podSelector), not the whole
+# release namespace: that namespace also hosts signal-cli when chat.signal.enabled
+# — an UNAUTHENTICATED REST API on 8080 that controls the Signal account — and
+# session pods run untrusted workloads, so they must not be able to reach it.
+# Defense in depth: signal-cli additionally carries its own ingress policy that
+# only admits the backend (see signal-cli.yaml).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -67,6 +73,8 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace }} }
+          podSelector:
+            matchLabels: { app: agenthub-backend }
       ports:
         - { protocol: TCP, port: 8080 }
         - { protocol: TCP, port: 80 }

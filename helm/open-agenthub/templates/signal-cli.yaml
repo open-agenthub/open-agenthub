@@ -36,12 +36,31 @@ spec:
     metadata:
       labels: { app: agenthub-signal-cli }
     spec:
+      # Hardening, mirroring backend.yaml as far as the image allows. The stock
+      # entrypoint MUST start as root (set -e, then usermod/groupmod/chown and
+      # supervisord before dropping to the signal-api user via setpriv), so
+      # runAsNonRoot/runAsUser are not possible here. It also writes /root/.bashrc,
+      # /etc/default/supervisor and supervisor state at startup, so the root
+      # filesystem stays writable (no readOnlyRootFilesystem).
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
+        # Group-own the PVC for the signal-api user (uid/gid 1000 in the image).
+        fsGroup: 1000
       containers:
         - name: signal-cli
           image: {{ .Values.chat.signal.image | quote }}
           env:
             - { name: MODE, value: json-rpc }
           ports: [{ containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            # Exactly what the entrypoint needs: usermod/groupmod/chown
+            # (CHOWN, DAC_OVERRIDE, FOWNER, AUDIT_WRITE), the setpriv drop to
+            # signal-api (SETUID, SETGID, SETPCAP), and supervisord signalling
+            # its non-root children (KILL). Everything else is dropped.
+            capabilities:
+              drop: ["ALL"]
+              add: [CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SETPCAP, KILL, AUDIT_WRITE]
           volumeMounts:
             - { name: data, mountPath: /home/.local/share/signal-cli }
           resources:
@@ -59,4 +78,29 @@ metadata:
 spec:
   selector: { app: agenthub-signal-cli }
   ports: [{ port: 8080, targetPort: 8080 }]
+---
+# Only the backend may talk to signal-cli: its REST API is UNAUTHENTICATED and
+# controls the Signal account (send as / read messages of the registered number).
+# The release namespace has no default-deny policy, so without this ingress rule
+# any pod in the cluster could reach port 8080 — including agent session pods,
+# which run untrusted workloads and whose egress policy (networkpolicy.yaml,
+# sessions namespace) allows the backend pods in this namespace. This ingress
+# policy is the effective guard on the signal-cli side; the agent egress policy
+# being scoped to the backend podSelector is defense in depth on the other side.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agenthub-signal-cli
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app: agenthub-signal-cli }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        # Same-namespace selector: the backend deployment's pods (backend.yaml).
+        - podSelector:
+            matchLabels: { app: agenthub-backend }
+      ports:
+        - { protocol: TCP, port: 8080 }
 {{- end }}
