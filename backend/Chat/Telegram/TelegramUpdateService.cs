@@ -52,6 +52,10 @@ public sealed class TelegramUpdateService : BackgroundService
             return;
         }
 
+        // Publish the command menu once so clients offer completion (best-effort;
+        // never throws — failures are logged inside the client).
+        await _tg.SetMyCommandsAsync(stoppingToken);
+
         long offset = 0;
         var lastPrune = DateTime.UtcNow;
         while (!stoppingToken.IsCancellationRequested)
@@ -242,21 +246,21 @@ public sealed class TelegramUpdateService : BackgroundService
     /// <summary>Points the chat's plain replies at the session matching the tag.</summary>
     private async Task HandleUseAsync(TelegramUpdate u, string tag, CancellationToken ct)
     {
-        var matches = (await _bindings.ListByChatAsync("telegram", u.ChatId, ct))
-            .Where(b => ChatFormatting.MatchesTag(tag, b.SessionId)).ToList();
-        if (matches.Count == 0)
+        var (match, count) = ChatFormatting.FindByTag(tag,
+            await _bindings.ListByChatAsync("telegram", u.ChatId, ct), b => b.SessionId);
+        if (count == 0)
         {
             await ReplyAsync(u, "No session matches that tag.", ct);
             return;
         }
-        if (matches.Count > 1)
+        if (count > 1)
         {
             await ReplyAsync(u, "Ambiguous — be more specific.", ct);
             return;
         }
 
-        await _bindings.SetActiveAsync("telegram", u.ChatId, matches[0].SessionId, ct);
-        await ReplyAsync(u, $"✅ Plain replies now go to #{ChatFormatting.Tag(matches[0].SessionId)}.", ct);
+        await _bindings.SetActiveAsync("telegram", u.ChatId, match!.SessionId, ct);
+        await ReplyAsync(u, $"✅ Plain replies now go to #{ChatFormatting.Tag(match.SessionId)}.", ct);
     }
 
     /// <summary>Answers with the target session's current state.</summary>

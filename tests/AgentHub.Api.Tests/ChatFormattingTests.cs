@@ -18,6 +18,33 @@ public class ChatFormattingTests
         => Assert.Equal(expected, ChatFormatting.MatchesTag(tag, sessionId));
 
     [Fact]
+    public void FindByTag_UniquePrefix_ReturnsMatch()
+    {
+        var (match, count) = ChatFormatting.FindByTag("a3",
+            new[] { "a3f2941be0c1", "b7c1550d2e9f" }, s => s);
+        Assert.Equal(1, count);
+        Assert.Equal("a3f2941be0c1", match);
+    }
+
+    [Fact]
+    public void FindByTag_AmbiguousPrefix_CountsButNoMatch()
+    {
+        var (match, count) = ChatFormatting.FindByTag("a3f2",
+            new[] { "a3f2941be0c1", "a3f2000d2e9f", "b7c1550d2e9f" }, s => s);
+        Assert.Equal(2, count);
+        Assert.Null(match);
+    }
+
+    [Fact]
+    public void FindByTag_NoMatch_CountZero()
+    {
+        var (match, count) = ChatFormatting.FindByTag("zz",
+            new[] { "a3f2941be0c1" }, s => s);
+        Assert.Equal(0, count);
+        Assert.Null(match);
+    }
+
+    [Fact]
     public void Split_ShortText_SingleChunk()
         => Assert.Equal(new[] { "hi" }, ChatFormatting.Split("hi", 100));
 

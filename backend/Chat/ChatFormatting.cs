@@ -10,6 +10,24 @@ public static class ChatFormatting
     public static bool MatchesTag(string tag, string sessionId)
         => tag.Length > 0 && sessionId.StartsWith(tag, StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Finds the item whose session id matches <paramref name="tag"/> (see MatchesTag).
+    /// Match is only non-null when it is UNIQUE; Count carries the number of matches so
+    /// callers can tell "no such tag" (0) from "ambiguous — be more specific" (&gt;1).
+    /// </summary>
+    public static (T? Match, int Count) FindByTag<T>(string tag, IEnumerable<T> items, Func<T, string> sessionId)
+    {
+        T? match = default;
+        var count = 0;
+        foreach (var item in items)
+        {
+            if (!MatchesTag(tag, sessionId(item))) continue;
+            count++;
+            match = item;
+        }
+        return (count == 1 ? match : default, count);
+    }
+
     public static string Header(string sessionId, string title) => $"🤖 #{Tag(sessionId)} · {title}";
 
     /// <summary>
