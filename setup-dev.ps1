@@ -21,6 +21,12 @@ function Require-Command([string]$Name) {
     }
 }
 
+function Assert-NativeSuccess([string]$Operation) {
+    if ($LASTEXITCODE -ne 0) {
+        throw "$Operation failed with exit code $LASTEXITCODE."
+    }
+}
+
 foreach ($command in @('docker', 'kubectl', 'helm')) {
     Require-Command $command
 }
@@ -36,9 +42,13 @@ if (-not (Test-Path -LiteralPath $valuesPath)) {
 
 Write-Host 'Building local images...'
 docker build --file (Join-Path $repoRoot 'backend/Dockerfile') --tag 'open-agenthub-dev/backend:local' $repoRoot
+Assert-NativeSuccess 'Backend image build'
 docker build --tag 'open-agenthub-dev/frontend:local' (Join-Path $repoRoot 'frontend')
+Assert-NativeSuccess 'Frontend image build'
 docker build --file (Join-Path $repoRoot 'agent-runtime/claude/Dockerfile') --tag 'open-agenthub-dev/agent-runtime-claude:local' (Join-Path $repoRoot 'agent-runtime')
+Assert-NativeSuccess 'Claude image build'
 docker build --file (Join-Path $repoRoot 'agent-runtime/codex/Dockerfile') --tag 'open-agenthub-dev/agent-runtime-codex:local' (Join-Path $repoRoot 'agent-runtime')
+Assert-NativeSuccess 'Codex image build'
 
 $passwordBytes = $null
 $encodedPassword = kubectl -n $controlNamespace get secret postgres-secret -o "jsonpath={.data.password}" 2>$null
@@ -76,11 +86,16 @@ try {
         '--set-string', "postgres.password=$postgresPassword"
     )
     helm @helmArgs
+    Assert-NativeSuccess 'Helm deployment'
 
     kubectl -n $controlNamespace rollout status statefulset/postgres --timeout=180s
+    Assert-NativeSuccess 'Postgres rollout'
     kubectl -n $controlNamespace rollout restart deployment/agenthub-backend deployment/agenthub-frontend
+    Assert-NativeSuccess 'Backend rollout restart'
     kubectl -n $controlNamespace rollout status deployment/agenthub-backend --timeout=180s
+    Assert-NativeSuccess 'Backend rollout'
     kubectl -n $controlNamespace rollout status deployment/agenthub-frontend --timeout=180s
+    Assert-NativeSuccess 'Frontend rollout'
 
     $backendForward = $null
     $frontendForward = $null

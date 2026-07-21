@@ -46,7 +46,7 @@ subscription)
       node "$RUNTIME/codex/auth-watcher.js" &
   fi
   if [ ! -f "$CODEX_HOME/auth.json" ] && [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
-    codex login --device-auth
+    export AGENTHUB_CODEX_DEVICE_AUTH=1
   fi
   ;;
 *)

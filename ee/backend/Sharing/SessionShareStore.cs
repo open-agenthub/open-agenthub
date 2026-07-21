@@ -594,7 +594,7 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
 
     private const string SessionColumns = """
         sessions.id, sessions.owner, sessions.title, sessions.mode, sessions.repo_url,
-        sessions.schedule, sessions.claude_session_id, sessions.status,
+        sessions.schedule, sessions.agent_session_id, sessions.status,
         sessions.question_pending, sessions.callback_token, sessions.created_at,
         sessions.updated_at, sessions.image, sessions.run_as_root, sessions.cpu,
         sessions.memory, sessions.mcp_config, sessions.repos
@@ -608,7 +608,7 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         Mode = Enum.Parse<SessionMode>(reader.GetString(3)),
         RepoUrl = reader.IsDBNull(4) ? null : reader.GetString(4),
         Schedule = reader.IsDBNull(5) ? null : reader.GetString(5),
-        ClaudeSessionId = reader.GetString(6),
+        AgentSessionId = reader.GetString(6),
         Status = reader.GetString(7),
         QuestionPending = reader.GetBoolean(8),
         CallbackToken = reader.GetString(9),

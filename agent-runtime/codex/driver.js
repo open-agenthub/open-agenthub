@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 
 const EXEC_FLAGS = ['--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust'];
 
@@ -21,7 +22,11 @@ function buildCommand(env, allowResume) {
   const restoredResume = allowResume && env.AGENTHUB_RESUME === '1' &&
     env.AGENTHUB_STATE_RESTORED === '1';
   if (mode === 'interactive') {
-    return { cmd: 'codex', args: restoredResume ? ['resume', '--last'] : [] };
+    const args = restoredResume ? ['resume', '--last'] : [];
+    if (env.AGENTHUB_CODEX_DEVICE_AUTH === '1') {
+      return { cmd: 'bash', args: [path.join(__dirname, 'device-login.sh'), ...args] };
+    }
+    return { cmd: 'codex', args };
   }
 
   const args = ['exec', ...EXEC_FLAGS];
@@ -31,8 +36,13 @@ function buildCommand(env, allowResume) {
 }
 
 function isResumeCommand(command) {
-  if (!command || command.cmd !== 'codex' || !Array.isArray(command.args)) return false;
+  if (!command || !Array.isArray(command.args)) return false;
   const args = command.args;
+  if (command.cmd === 'bash') {
+    return args.length === 3 && args[0] === path.join(__dirname, 'device-login.sh') &&
+      args[1] === 'resume' && args[2] === '--last';
+  }
+  if (command.cmd !== 'codex') return false;
   if (args.length === 2) return args[0] === 'resume' && args[1] === '--last';
   return args.length === 8 && args[0] === 'exec' && args[1] === '--sandbox' &&
     args[2] === 'workspace-write' && args[3] === '--json' &&

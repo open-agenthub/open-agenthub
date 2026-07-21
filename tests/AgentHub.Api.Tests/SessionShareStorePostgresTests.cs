@@ -216,6 +216,30 @@ public class SessionShareStorePostgresTests
         Assert.Contains("Claude", agentDefault);
         Assert.Contains("Auto", authDefault);
     }
+
+    [PostgreSqlFact]
+    public async Task OwnerAccess_MapsProviderNeutralSessionId_WhenLegacyClaudeIdIsNull()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var record = new SessionRecord
+        {
+            Id = "codex-owner-session",
+            Owner = "owner-a",
+            Title = "Codex",
+            Mode = SessionMode.Interactive,
+            Agent = AgentKind.Codex,
+            AuthMode = AgentAuthMode.Subscription,
+            AgentSessionId = "codex-thread",
+            CallbackToken = "synthetic-callback"
+        };
+
+        await database.UpsertSessionAsync(record);
+        var access = await database.Shares.FindUserAccessAsync(record.Owner, record.Id);
+
+        Assert.NotNull(access);
+        Assert.Equal("codex-thread", access!.Session.AgentSessionId);
+        Assert.Null(access.Session.ClaudeSessionId);
+    }
 }
 
 [AttributeUsage(AttributeTargets.Method)]

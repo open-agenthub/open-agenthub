@@ -273,6 +273,27 @@ test('common transport retries a missing resume once and then launches fresh', (
   assert.equal(checks.length, 1);
 });
 
+test('Codex device-auth resume retries fresh exactly once without repeating login', () => {
+  const codexDriver = require('../../codex/driver');
+  const harness = createHarness({
+    AGENTHUB_CODEX_DEVICE_AUTH: '1',
+    AGENTHUB_RESUME: '1',
+    AGENTHUB_STATE_RESTORED: '1',
+    CODEX_HOME: '/home/agent/.codex'
+  }, codexDriver);
+
+  const wrapper = path.join(__dirname, '..', '..', 'codex', 'device-login.sh');
+  assert.deepEqual(harness.spawns[0].args, [wrapper, 'resume', '--last']);
+  harness.terminals[0].emitData('No saved session found to resume');
+  harness.terminals[0].emitExit({ exitCode: 1, signal: 0 });
+
+  assert.equal(harness.terminals.length, 2);
+  assert.deepEqual(harness.spawns[1].args, [wrapper]);
+  harness.terminals[1].emitData('No saved session found to resume');
+  harness.terminals[1].emitExit({ exitCode: 1, signal: 0 });
+  assert.equal(harness.terminals.length, 2);
+});
+
 test('common transport does not infer resume merely because the first launch allows it', () => {
   let missingResumeChecks = 0;
   const harness = createHarness({}, {

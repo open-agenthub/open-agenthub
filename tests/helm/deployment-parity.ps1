@@ -41,6 +41,26 @@ if (($bashSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Match
     throw 'setup-dev.sh must build exactly four images.'
 }
 
+$checkedPowerShellBuilds = [regex]::Matches(
+    $powerShellSetup,
+    "(?m)^docker build [^\r\n]+\r?\nAssert-NativeSuccess '[^']+ image build'\s*$"
+)
+if ($checkedPowerShellBuilds.Count -ne 4) {
+    throw 'setup-dev.ps1 must stop immediately when any of its four Docker image builds fails.'
+}
+
+foreach ($requiredOperation in @(
+    'Helm deployment',
+    'Postgres rollout',
+    'Backend rollout restart',
+    'Backend rollout',
+    'Frontend rollout'
+)) {
+    if ($powerShellSetup -notmatch "Assert-NativeSuccess '$([regex]::Escape($requiredOperation))'") {
+        throw "setup-dev.ps1 must stop when the $requiredOperation command fails."
+    }
+}
+
 foreach ($setup in @($powerShellSetup, $bashSetup)) {
     Assert-Matches $setup 'open-agenthub-dev/backend:local' 'Local setup must build the backend image.'
     Assert-Matches $setup 'open-agenthub-dev/frontend:local' 'Local setup must build the frontend image.'
