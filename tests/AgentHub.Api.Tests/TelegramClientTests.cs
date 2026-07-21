@@ -99,6 +99,14 @@ public class TelegramClientTests
     }
 
     [Fact]
+    public async Task SetMyCommands_ApiError_IsSwallowed()
+    {
+        var handler = new StubHandler().Enqueue("""{"ok":false,"description":"Unauthorized"}""");
+        await Client(handler).SetMyCommandsAsync(CancellationToken.None); // must not throw
+        Assert.Equal(1, handler.RequestCount);
+    }
+
+    [Fact]
     public async Task Post_RetriesOnceOnRetryAfter()
     {
         var handler = new StubHandler()

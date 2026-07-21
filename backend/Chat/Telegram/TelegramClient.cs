@@ -140,6 +140,23 @@ public sealed class TelegramClient
         using var _ = (await PostAsync("answerCallbackQuery", body, ct)).Doc;
     }
 
+    /// <summary>Publishes the bot's command menu (setMyCommands) so clients offer completion for the
+    /// supported commands. Best-effort: failures are logged (by PostAsync) and swallowed.</summary>
+    public async Task SetMyCommandsAsync(CancellationToken ct)
+    {
+        var body = new
+        {
+            commands = new[]
+            {
+                new { command = "link", description = "Link this chat to your AgentHub account" },
+                new { command = "sessions", description = "List sessions in this chat" },
+                new { command = "use", description = "Choose the session for plain replies" },
+                new { command = "status", description = "Show session status" }
+            }
+        };
+        using var _ = (await PostAsync("setMyCommands", body, ct)).Doc;
+    }
+
     /// <summary>Long-polls getUpdates (timeout=50s) and returns the raw JSON of each update plus the next
     /// offset (max(update_id)+1; unchanged when empty or on errors — the caller loops with backoff).</summary>
     public async Task<(long nextOffset, IReadOnlyList<string> updates)> GetUpdatesAsync(long offset, CancellationToken ct)

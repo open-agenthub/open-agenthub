@@ -214,21 +214,22 @@ public sealed class SignalReceiveService : BackgroundService
     /// <summary>Points the chat's plain replies at the session matching the tag.</summary>
     private async Task HandleUseAsync(SignalEnvelope e, AppUser user, string tag, CancellationToken ct)
     {
-        var matches = (await _bindings.ListByChatAsync("signal", e.Sender, ct))
-            .Where(b => b.Owner == user.Owner && ChatFormatting.MatchesTag(tag, b.SessionId)).ToList();
-        if (matches.Count == 0)
+        var (match, count) = ChatFormatting.FindByTag(tag,
+            (await _bindings.ListByChatAsync("signal", e.Sender, ct)).Where(b => b.Owner == user.Owner),
+            b => b.SessionId);
+        if (count == 0)
         {
             await _signal.SendAsync(e.Sender, "No session matches that tag.", ct);
             return;
         }
-        if (matches.Count > 1)
+        if (count > 1)
         {
             await _signal.SendAsync(e.Sender, "Ambiguous — be more specific.", ct);
             return;
         }
 
-        await _bindings.SetActiveAsync("signal", e.Sender, matches[0].SessionId, ct);
-        await _signal.SendAsync(e.Sender, $"✅ Plain replies now go to #{ChatFormatting.Tag(matches[0].SessionId)}.", ct);
+        await _bindings.SetActiveAsync("signal", e.Sender, match!.SessionId, ct);
+        await _signal.SendAsync(e.Sender, $"✅ Plain replies now go to #{ChatFormatting.Tag(match.SessionId)}.", ct);
     }
 
     /// <summary>Answers with the target session's current state.</summary>
