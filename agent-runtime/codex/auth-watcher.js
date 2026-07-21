@@ -21,14 +21,15 @@ function watchCredential(options) {
     source, callbackUrl, callbackToken, intervalMs = 30_000,
     fetchImpl = globalThis.fetch, logger = console,
     fsImpl = fs, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval,
-    unrefTimer = true, expectCreate = false
+    unrefTimer = true, expectCreate = false, baselineHash
   } = options || {};
   if (!source || !callbackUrl || !callbackToken || typeof fetchImpl !== 'function') {
     throw new Error('Credential watcher requires source, callback URL, callback token, and fetch');
   }
 
-  let initialized = false;
-  let lastUploadedHash;
+  const hasBaseline = typeof baselineHash === 'string' && /^[a-f0-9]{64}$/.test(baselineHash);
+  let initialized = hasBaseline;
+  let lastUploadedHash = hasBaseline ? baselineHash : undefined;
   let stopped = false;
   let active = Promise.resolve();
 
@@ -111,6 +112,7 @@ if (require.main === module) {
     callbackUrl: process.env.AGENTHUB_CALLBACK_URL,
     callbackToken: process.env.AGENTHUB_CALLBACK_TOKEN,
     expectCreate: process.env.AGENTHUB_CODEX_AUTH_EXPECT_CREATE === '1',
+    baselineHash: process.env.AGENTHUB_CODEX_AUTH_BASELINE_SHA256,
     unrefTimer: false
   });
   for (const signal of ['SIGTERM', 'SIGINT']) {

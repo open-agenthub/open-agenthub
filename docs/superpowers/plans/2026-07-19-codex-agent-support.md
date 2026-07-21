@@ -818,4 +818,3 @@ git commit -m "test: verify Codex support on Docker Desktop Kubernetes"
 - [ ] Inspect rendered Pods to confirm selected-only Secret mounts and env references.
 - [ ] Confirm no real local Codex `auth.json` was read, copied, logged, or committed.
 - [ ] Confirm the main checkout remains untouched and all commits are on `feat/codex-support`.
-

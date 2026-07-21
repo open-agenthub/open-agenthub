@@ -129,7 +129,10 @@ async function submit() {
         </button>
         <div v-if="advOpen" class="adv-body">
           <div v-if="needsPrompt" class="policy-block">
-            <p class="policy-note">Automation is default-deny. Add one exact name, pattern, or command prefix per line; empty fields allow nothing in that category.</p>
+            <p class="policy-note">Automation is default-deny. Add one entry per line; empty fields allow nothing in that category.</p>
+            <p v-if="form.agent === 'Claude'" class="policy-note" data-claude-command-semantics>
+              Claude shell entries become exact native Bash rules; metacharacters, globs, and compound commands are rejected. Deliberate native Bash(...) patterns belong under built-in tools.
+            </p>
             <div class="field">
               <label>Built-in tools and patterns</label>
               <textarea v-model="form.allowedToolsRaw" data-policy="allowedTools" :placeholder="form.agent === 'Codex' ? 'Read\nEdit' : 'Read\nEdit\nBash(git*)'" />
@@ -139,7 +142,7 @@ async function submit() {
               <textarea v-model="form.allowedMcpToolsRaw" data-policy="allowedMcpTools" placeholder="mcp__docs__search\nmcp__git__*" />
             </div>
             <div class="field">
-              <label>Shell command prefixes</label>
+              <label>{{ form.agent === 'Claude' ? 'Exact shell commands' : 'Shell command prefixes' }}</label>
               <textarea v-model="form.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="form.agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'" />
             </div>
           </div>

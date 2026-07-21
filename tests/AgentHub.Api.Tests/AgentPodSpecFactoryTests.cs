@@ -36,9 +36,32 @@ public class AgentPodSpecFactoryTests
         Assert.Contains("gitlab_token", projectedCredentialKeys);
         Assert.Contains("git_user_name", projectedCredentialKeys);
         Assert.Contains("git_user_email", projectedCredentialKeys);
-        Assert.Equal(expectedEnv == "ANTHROPIC_API_KEY", projectedCredentialKeys.Contains("anthropic_api_key"));
-        Assert.Equal(expectedEnv == "CODEX_API_KEY", projectedCredentialKeys.Contains("openai_api_key"));
+        Assert.DoesNotContain("anthropic_api_key", projectedCredentialKeys);
+        Assert.DoesNotContain("openai_api_key", projectedCredentialKeys);
+        if (expectedEnv is not null)
+        {
+            var apiKey = Assert.Single(container.Env, e => e.Name == expectedEnv);
+            Assert.Equal("creds-owner", apiKey.ValueFrom?.SecretKeyRef?.Name);
+            Assert.Equal(expectedEnv == "CODEX_API_KEY" ? "openai_api_key" : "anthropic_api_key",
+                apiKey.ValueFrom?.SecretKeyRef?.Key);
+        }
     }
+
+    [Theory]
+    [InlineData(AgentKind.Claude, AgentAuthMode.Subscription)]
+    [InlineData(AgentKind.Claude, AgentAuthMode.ApiKey)]
+    [InlineData(AgentKind.Codex, AgentAuthMode.Subscription)]
+    [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey)]
+    public void Build_GitCloneMountsOnlyWorkspaceHomeTmpAndGitCredentials(AgentKind agent, AgentAuthMode auth)
+    {
+        var pod = Build(agent, auth, request => request with { RepoUrl = "https://example.test/repo.git" });
+        var clone = Assert.Single(pod.InitContainers, c => c.Name == "git-clone");
+
+        Assert.Equal(new[] { "workspace", "home", "tmp", "creds" }, clone.VolumeMounts.Select(m => m.Name));
+        Assert.DoesNotContain(clone.VolumeMounts, m => m.Name is "claude" or "codex" or "mcp" or "runtime");
+        Assert.DoesNotContain(clone.Env, e => e.ValueFrom?.SecretKeyRef is not null);
+    }
+
 
     [Theory]
     [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "runtime-claude", "claude")]
@@ -55,6 +78,85 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(expectedRuntimeImage, copyRuntime.Image);
         Assert.Contains($"/usr/local/bin/{expectedLauncher}", Assert.Single(copyRuntime.Command, c => c.Contains("target=")));
     }
+
+    [Theory]
+    [InlineData(AgentKind.Claude, null, false)]
+    [InlineData(AgentKind.Claude, "custom/runtime:1", true)]
+    [InlineData(AgentKind.Codex, null, false)]
+    [InlineData(AgentKind.Codex, "custom/runtime:1", true)]
+    public void Build_RuntimeMountIsReadOnlyForCustomAgentAndWritableOnlyForCopyInit(
+        AgentKind agentKind, string? customImage, bool expectsInjectedRuntime)
+    {
+        var pod = Build(agentKind, AgentAuthMode.Subscription, request => request with
+        {
+            Image = customImage
+        });
+        var agent = Assert.Single(pod.Containers);
+
+        if (!expectsInjectedRuntime)
+        {
+            Assert.DoesNotContain(agent.VolumeMounts, mount => mount.Name == "runtime");
+            Assert.DoesNotContain(pod.InitContainers ?? [], container => container.Name == "copy-runtime");
+            return;
+        }
+
+        var agentRuntime = Assert.Single(agent.VolumeMounts, mount => mount.Name == "runtime");
+        var copyRuntime = Assert.Single(pod.InitContainers, container => container.Name == "copy-runtime");
+        var initRuntime = Assert.Single(copyRuntime.VolumeMounts, mount => mount.Name == "runtime");
+        Assert.True(agentRuntime.ReadOnlyProperty);
+        Assert.NotEqual(true, initRuntime.ReadOnlyProperty);
+    }
+
+    [Theory]
+    [InlineData(null, "/opt/session-agent/codex")]
+    [InlineData("custom/runtime:1", "/opt/agenthub/session-agent/codex")]
+    public void Build_CodexAutonomousProjectsRuntimeOwnedSystemRequirementsReadOnly(
+        string? customImage, string expectedManagedRuntime)
+    {
+        var pod = Build(AgentKind.Codex, AgentAuthMode.ApiKey, request => request with
+        {
+            Mode = SessionMode.Autonomous,
+            Prompt = "work",
+            Image = customImage
+        });
+        var agent = Assert.Single(pod.Containers);
+        var requirements = Assert.Single(pod.InitContainers, c => c.Name == "prepare-codex-system-config");
+        var command = Assert.Single(requirements.Command, value => value.Contains("requirements.toml"));
+
+        Assert.NotNull(Assert.Single(pod.Volumes, v => v.Name == "codex-system-config").EmptyDir);
+        var agentMount = Assert.Single(agent.VolumeMounts, m => m.Name == "codex-system-config");
+        Assert.Equal("/etc/codex", agentMount.MountPath);
+        Assert.True(agentMount.ReadOnlyProperty);
+        Assert.Equal("runtime-codex", requirements.Image);
+        Assert.Contains("/etc/codex/requirements.toml", command);
+        Assert.Contains("/opt/session-agent/codex/project-requirements.js", command);
+        Assert.Contains(expectedManagedRuntime, command);
+    }
+
+
+    [Fact]
+    public void Build_ClaudeAutomationPassesEachStructuredPolicyCategoryToTheDriver()
+    {
+        var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription, request => request with
+        {
+            Mode = SessionMode.Autonomous,
+            Prompt = "work",
+            Policy = new AgentPolicy
+            {
+                AllowedTools = ["Read", "Edit"],
+                AllowedMcpTools = ["mcp__docs__search", "mcp__git__*"],
+                AllowedCommands = ["git status", "npm test"]
+            }
+        });
+        var env = Assert.Single(pod.Containers).Env.ToDictionary(item => item.Name);
+
+        Assert.Equal("[\"Read\",\"Edit\"]", env["AGENTHUB_ALLOWED_TOOLS"].Value);
+        Assert.Equal("[\"mcp__docs__search\",\"mcp__git__*\"]",
+            env["AGENTHUB_ALLOWED_MCP_TOOLS"].Value);
+        Assert.Equal("[\"git status\",\"npm test\"]",
+            env["AGENTHUB_ALLOWED_COMMANDS"].Value);
+    }
+
 
     [Fact]
     public void Build_ClaudeAutoPreservesLegacyPodShape()
@@ -74,7 +176,7 @@ public class AgentPodSpecFactoryTests
         var projectedCredentialItems = Assert.Single(pod.Volumes, v => v.Name == "creds").Secret.Items;
         Assert.NotNull(projectedCredentialItems);
         var projectedCredentialKeys = projectedCredentialItems.Select(i => i.Key).ToList();
-        Assert.Contains("anthropic_api_key", projectedCredentialKeys);
+        Assert.DoesNotContain("anthropic_api_key", projectedCredentialKeys);
         Assert.DoesNotContain("openai_api_key", projectedCredentialKeys);
         Assert.DoesNotContain(container.Env, e => e.Name == "CODEX_API_KEY");
         Assert.Empty(pod.InitContainers ?? Array.Empty<V1Container>());

@@ -51,6 +51,67 @@ describe('agent-aware session dialogs', () => {
     expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('allowedTools')
   })
 
+  it('creates Claude automation with native MCP rules and exact shell command semantics', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedCommands"]').element.previousElementSibling.textContent).toContain('Exact shell commands')
+    expect(wrapper.get('[data-claude-command-semantics]').text()).toContain('compound commands are rejected')
+    await wrapper.get('[data-policy="allowedMcpTools"]').setValue('mcp__docs__search\nmcp__git__*')
+    await wrapper.get('[data-policy="allowedCommands"]').setValue('git status')
+    await wrapper.get('[data-submit]').trigger('click')
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'Claude',
+      policy: expect.objectContaining({
+        allowedMcpTools: ['mcp__docs__search', 'mcp__git__*'],
+        allowedCommands: ['git status']
+      })
+    }))
+  })
+
+  it('edits Claude automation with the same exact shell command semantics', async () => {
+    const wrapper = mount(EditSessionDialog, {
+      props: { session: baseSession, projects: [] },
+      ...mountOptions
+    })
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedCommands"]').element.previousElementSibling.textContent).toContain('Exact shell commands')
+    expect(wrapper.get('[data-claude-command-semantics]').text()).toContain('compound commands are rejected')
+    await wrapper.get('[data-policy="allowedMcpTools"]').setValue('mcp__docs__search')
+    await wrapper.get('[data-policy="allowedCommands"]').setValue('npm test')
+    await wrapper.get('[data-submit]').trigger('click')
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      policy: {
+        allowedTools: ['Read'],
+        allowedMcpTools: ['mcp__docs__search'],
+        allowedCommands: ['npm test']
+      }
+    }))
+  })
+
+  it('duplicates Claude automation with the same exact shell command semantics', async () => {
+    const wrapper = mount(DuplicateSessionDialog, {
+      props: { session: baseSession, projects: [] }
+    })
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedCommands"]').element.previousElementSibling.textContent).toContain('Exact shell commands')
+    expect(wrapper.get('[data-claude-command-semantics]').text()).toContain('compound commands are rejected')
+    await wrapper.get('[data-policy="allowedMcpTools"]').setValue('mcp__docs__search')
+    await wrapper.get('[data-policy="allowedCommands"]').setValue('dotnet test')
+    await wrapper.get('[data-submit]').trigger('click')
+
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agent: 'Claude',
+      policy: {
+        allowedTools: ['Read'],
+        allowedMcpTools: ['mcp__docs__search'],
+        allowedCommands: ['dotnet test']
+      }
+    }))
+  })
+
   it('changes untouched New-session policy defaults with the selected provider', async () => {
     const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await wrapper.get('[data-agent-option="Codex"]').trigger('click')

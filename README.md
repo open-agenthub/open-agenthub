@@ -300,21 +300,23 @@ Codex uses device-code authentication. Open AgentHub does not copy a workstation
 Claude or Codex authentication files into the cluster.
 
 API-key mode never mounts the subscription Secret. For provider authentication, Claude
-receives `ANTHROPIC_API_KEY`; Codex Autonomous/Scheduled runs scope `CODEX_API_KEY` to `codex exec`
-and its descendants, while Interactive Codex creates an ephemeral file login from the
-key. This selected-only behavior makes the billing source deterministic. Subscription
-avoids API-key billing, but it does not isolate credentials from the running agent.
+scopes `ANTHROPIC_API_KEY` to the Claude process and its descendants. Codex
+Autonomous/Scheduled runs scope `CODEX_API_KEY` to `codex exec` and its descendants, while
+Interactive Codex creates an ephemeral file login from the key. The shared `/shell`
+receives neither provider API key. This selected-only behavior makes the billing source
+deterministic. Subscription avoids API-key billing, but it does not isolate credentials
+from the running agent.
 Autonomous and Scheduled sessions preflight the selected credential and fail before the
 provider CLI starts when it is unavailable, with a non-secret diagnostic.
 
 
 Automation policies default to deny and separately match built-in tools, MCP tool names,
-and normalized shell command prefixes. Claude uses its native allowed-tools mechanism
-plus AgentHub hooks. Codex uses a managed runtime-owned hook and workspace-write sandbox
-configuration. Interactive sessions retain their normal provider approval flow and the
-existing out-of-band approval path. Hooks are guardrails, not a complete sandbox or a
-secret-isolation boundary; pod, namespace, RBAC, and NetworkPolicy isolation remain
-mandatory.
+and shell commands. Claude enforces exact structured shell commands through its native
+allowed-tools mechanism plus AgentHub hooks; Codex matches normalized command prefixes with
+a managed runtime-owned hook and workspace-write sandbox configuration. Interactive sessions
+retain their normal provider approval flow and the existing out-of-band approval path. Hooks
+are guardrails, not a complete sandbox or a secret-isolation boundary; pod, namespace,
+RBAC, and NetworkPolicy isolation remain mandatory.
 
 ## Security
 
@@ -336,11 +338,12 @@ mandatory.
 ### Trusted-code credential boundary
 
 Provider credentials and authentication files are accessible to code and tools running
-as the same agent user. In particular, Codex API-key process descendants may inherit
-`CODEX_API_KEY`, and subscription sessions can read their selected provider auth file.
-Run only trusted repositories and prompts when credentials are present. Use pod and
-network isolation to limit exposure and blast radius. Writable collaborators can direct
-the selected session's capabilities and are part of the same trust boundary.
+as the same agent user. Claude and Codex provider-process descendants may inherit the
+selected `ANTHROPIC_API_KEY` or `CODEX_API_KEY`, and subscription sessions can read their
+selected provider auth file. Run only trusted repositories and prompts when credentials
+are present. Use pod and network isolation to limit exposure and blast radius. Writable
+collaborators can direct the selected session's capabilities and are part of the same
+trust boundary.
 
 Selected-only mounting reduces unnecessary exposure; it does not make provider
 credentials secret from the selected agent or its tools. Root sessions expand the same

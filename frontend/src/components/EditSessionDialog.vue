@@ -100,7 +100,10 @@ async function save() {
           </button>
           <div v-if="advOpen" class="adv-body">
             <div v-if="automated" class="policy-block">
-              <p class="policy-note">Automation is default-deny. Add one exact name, pattern, or command prefix per line; empty fields allow nothing.</p>
+              <p class="policy-note">Automation is default-deny. Add one entry per line; empty fields allow nothing.</p>
+              <p v-if="f.agent === 'Claude'" class="policy-note" data-claude-command-semantics>
+                Claude shell entries become exact native Bash rules; metacharacters, globs, and compound commands are rejected. Deliberate native Bash(...) patterns belong under built-in tools.
+              </p>
               <div class="field">
                 <label>Built-in tools and patterns</label>
                 <textarea v-model="f.allowedToolsRaw" data-policy="allowedTools" :placeholder="f.agent === 'Codex' ? 'Read\nEdit' : 'Read\nEdit\nBash(git*)'" />
@@ -110,7 +113,7 @@ async function save() {
                 <textarea v-model="f.allowedMcpToolsRaw" data-policy="allowedMcpTools" placeholder="mcp__docs__search\nmcp__git__*" />
               </div>
               <div class="field">
-                <label>Shell command prefixes</label>
+                <label>{{ f.agent === 'Claude' ? 'Exact shell commands' : 'Shell command prefixes' }}</label>
                 <textarea v-model="f.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="f.agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'" />
               </div>
             </div>

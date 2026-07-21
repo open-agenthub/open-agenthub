@@ -115,10 +115,15 @@ test('Codex entrypoint owns config, auth mode, watcher, and stale-auth ordering'
   assert.match(entrypoint, /CODEX_API_KEY is required/);
   assert.match(entrypoint, /auth-watcher\.js/);
   assert.match(entrypoint, /AGENTHUB_CODEX_AUTH_EXPECT_CREATE/);
+  assert.match(entrypoint, /AGENTHUB_CODEX_AUTH_BASELINE_SHA256/);
   assert.match(entrypoint, /mcp-config\.js/);
   assert.match(entrypoint, /AGENTHUB_DRIVER="\$RUNTIME\/codex\/driver\.js"/);
   assert.ok(entrypoint.indexOf('source "$COMMON_ENTRYPOINT"') < entrypoint.indexOf('rm -f "$CODEX_HOME/auth.json"'));
   assert.ok(entrypoint.indexOf('rm -f "$CODEX_HOME/auth.json"') < entrypoint.indexOf('/secrets/codex/auth.json'));
+  assert.ok(entrypoint.indexOf('cp /secrets/codex/auth.json') <
+    entrypoint.indexOf('AUTH_BASELINE_SHA256="$(node -e'));
+  assert.ok(entrypoint.indexOf('AUTH_BASELINE_SHA256="$(node -e') <
+    entrypoint.indexOf('node "$RUNTIME/codex/auth-watcher.js"'));
 });
 
 test('Codex image pins CLI and preserves custom-image injection paths', () => {
