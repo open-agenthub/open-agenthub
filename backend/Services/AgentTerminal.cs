@@ -1,19 +1,13 @@
-// -----------------------------------------------------------------------------
-// Open AgentHub Enterprise Edition — Slack integration.
-// Part of the Enterprise Edition; NOT covered by the AGPL-3.0 license of the
-// open-core. Source-available under the Open AgentHub Enterprise License
-// (see ee/LICENSE); a valid subscription is required for production use.
-// -----------------------------------------------------------------------------
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
-namespace AgentHub.Api.Ee.Slack;
+namespace AgentHub.Api.Services;
 
 /// <summary>
 /// Talks to an agent pod's terminal WebSocket (same endpoint the browser proxy
-/// uses): reads the current scrollback and injects input, so a Slack reply drives
+/// uses): reads the current scrollback and injects input, so a chat reply drives
 /// the session exactly like typing in the web terminal.
 /// </summary>
 public static class AgentTerminal

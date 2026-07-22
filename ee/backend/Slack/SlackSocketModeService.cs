@@ -7,7 +7,9 @@
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
+using AgentHub.Api.Chat;
 using AgentHub.Api.Licensing;
+using AgentHub.Api.Permissions;
 using AgentHub.Api.Services;
 
 namespace AgentHub.Api.Ee.Slack;
@@ -25,16 +27,19 @@ public sealed class SlackSocketModeService : BackgroundService
     private readonly SlackThreadStore _threads;
     private readonly AgentHub.Api.Permissions.PermissionStore _permissions;
     private readonly ISessionService _sessions;
+    private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
+    private readonly string _frontendOrigin;
     private readonly ILogger<SlackSocketModeService> _log;
 
     public SlackSocketModeService(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
         SlackThreadStore threads, AgentHub.Api.Permissions.PermissionStore permissions,
-        ISessionService sessions, IConfiguration cfg, ILogger<SlackSocketModeService> log)
+        ISessionService sessions, WorkingIndicator indicator, IConfiguration cfg, ILogger<SlackSocketModeService> log)
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _permissions = permissions;
-        _sessions = sessions;
+        _sessions = sessions; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
+        _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
     }
 
@@ -92,7 +97,16 @@ public sealed class SlackSocketModeService : BackgroundService
         }
     }
 
+    // A failure while handling one event (Postgres/k8s hiccup, Slack API error) must not
+    // tear down the socket loop — the envelope was already acked, so just log and move on.
     private async Task HandleEventAsync(JsonElement root, CancellationToken ct)
+    {
+        try { await HandleEventCoreAsync(root, ct); }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex) { _log.LogWarning(ex, "Handling a Slack event failed; continuing"); }
+    }
+
+    private async Task HandleEventCoreAsync(JsonElement root, CancellationToken ct)
     {
         if (!root.TryGetProperty("payload", out var payload) ||
             !payload.TryGetProperty("event", out var ev)) return;
@@ -107,6 +121,13 @@ public sealed class SlackSocketModeService : BackgroundService
         var thread = await _threads.GetByThreadTsAsync(threadTs, ct);
         if (thread is null) return;
 
+        // "!status" is answered by the hub itself instead of being typed into the session.
+        if (textReply.Trim().Equals("!status", StringComparison.OrdinalIgnoreCase))
+        {
+            await PostStatusAsync(thread, threadTs, ct);
+            return;
+        }
+
         var info = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
         if (info?.PodIp is not { Length: > 0 } podIp || info.Phase != "Running")
         {
@@ -116,6 +137,30 @@ public sealed class SlackSocketModeService : BackgroundService
 
         await AgentTerminal.SendInputAsync(podIp, _agentPort, textReply, ct);
         _log.LogInformation("Delivered Slack reply to session {Id}", thread.SessionId);
+
+        // A previous status message may still be up (second reply while working) — remove it first.
+        if (thread.StatusTs is { } oldTs) await _slack.DeleteMessageAsync(thread.Channel, oldTs, ct);
+
+        // Show a lightweight "working…" indicator until the session's next event.
+        var statusTs = await _slack.PostMessageAsync(thread.Channel, WorkingIndicator.Frames[0], threadTs, ct);
+        if (statusTs is not null)
+        {
+            await _threads.SetStatusTsAsync(thread.SessionId, statusTs, ct);
+            var channel = thread.Channel;
+            _indicator.Start(thread.SessionId, (text, c) => _slack.UpdateMessageAsync(channel, statusTs, text, null, c));
+        }
+    }
+
+    /// <summary>Answers a "!status" thread reply with the session's current state.</summary>
+    private async Task PostStatusAsync(SlackThread thread, string threadTs, CancellationToken ct)
+    {
+        var live = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
+        var pendingTool = await _permissions.GetPendingBySessionAsync(thread.SessionId, ct);
+        var link = _frontendOrigin.Length == 0 ? null : $"{_frontendOrigin}/s/{thread.SessionId}";
+        var text = AgentHub.Api.Chat.ChatFormatting.StatusText(
+            live?.Phase ?? "Unknown", live?.QuestionPending ?? false,
+            pendingTool is null ? null : Escape(pendingTool), link);
+        await _slack.PostMessageAsync(thread.Channel, text, threadTs, ct);
     }
 
     // Handles a Block Kit button click on a permission prompt (perm:<decision>:<id>).
@@ -131,8 +176,20 @@ public sealed class SlackSocketModeService : BackgroundService
         var user = p.TryGetProperty("user", out var u) && u.TryGetProperty("username", out var un)
             ? un.GetString() : (u.TryGetProperty("name", out var nm) ? nm.GetString() : null);
 
-        var resolved = await _permissions.ResolveAsync(reqId, decision, ct);
-        if (resolved is null) return; // already decided or unknown
+        // No sessionId here — a Slack click only carries the request id.
+        var resolved = await _permissions.ResolveAsync(reqId, decision, ct: ct);
+        if (resolved is null)
+        {
+            // Already decided or expired (or unknown) — reflect the final state instead
+            // of leaving the click apparently dead.
+            var existing = await _permissions.GetAsync(reqId, ct: ct);
+            if (existing is { Channel: not null, MessageTs: not null })
+                await _slack.UpdateMessageAsync(existing.Channel, existing.MessageTs,
+                    existing.Decision == "expired"
+                        ? SlackPermissionNotifier.ExpiredMessage(existing.Tool)
+                        : $":information_source: Already decided ({DecisionVerb(existing.Decision)}) — *{Escape(existing.Tool)}*.", null, ct);
+            return;
+        }
 
         // Update the original message to reflect the decision and drop the buttons.
         var channel = p.TryGetProperty("container", out var cont) && cont.TryGetProperty("channel_id", out var ch)
@@ -142,8 +199,13 @@ public sealed class SlackSocketModeService : BackgroundService
         var suffix = decision == "allowAlways" ? " (won't ask again this run)" : "";
         if (channel is not null && ts is not null)
             await _slack.UpdateMessageAsync(channel, ts,
-                $"{verb} — *{resolved.Tool}*{suffix}" + (user is null ? "" : $" · by {user}"), null, ct);
+                $"{verb} — *{Escape(resolved.Tool)}*{suffix}" + (user is null ? "" : $" · by {user}"), null, ct);
     }
+
+    private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
+
+    private static string DecisionVerb(string? decision)
+        => decision == "deny" ? "Denied" : "Allowed";
 
     private static async Task<(string text, bool closed)> ReceiveFullAsync(ClientWebSocket ws, byte[] buf, CancellationToken ct)
     {

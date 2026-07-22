@@ -1,4 +1,4 @@
-using AgentHub.Api.Ee.Slack;
+using AgentHub.Api.Services;
 using Xunit;
 
 namespace AgentHub.Api.Tests;

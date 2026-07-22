@@ -22,20 +22,24 @@ public sealed class InternalController : ControllerBase
     private readonly IEnumerable<INotifier> _notifiers;
     private readonly ISessionService _svc;
     private readonly PermissionStore _permissions;
-    private readonly IPermissionNotifier _permNotifier;
+    private readonly IEnumerable<IPermissionNotifier> _permNotifiers;
+    private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly SessionShareStore _shares;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
-        PermissionStore permissions, IPermissionNotifier permNotifier, SessionShareStore shares)
+        PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
+        IEnumerable<IPermissionPromptEditor> promptEditors, SessionShareStore shares)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
-        _permissions = permissions; _permNotifier = permNotifier; _shares = shares;
+        _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
     }
 
     private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
     {
-        foreach (var n in _notifiers)
-            await n.NotifyAsync(rec, ev, message, ct);
+        // Fan out in parallel: one slow platform (e.g. Telegram's ~1 msg/s chunk pacing)
+        // must not delay the others or the agent hook's POST. Every notifier catches
+        // its own failures internally, so WhenAll never observes an exception.
+        await Task.WhenAll(_notifiers.Select(n => n.NotifyAsync(rec, ev, message, ct)));
     }
 
     public record StatusBody(string Status);
@@ -135,7 +139,7 @@ public sealed class InternalController : ControllerBase
             Summary = body.Input
         };
         await _permissions.CreateAsync(req, ct);
-        if (!await _permNotifier.PostAsync(req, ct))
+        if (!await PermissionRelay.TryPostAsync(_permNotifiers, req, ct))
         {
             await _permissions.DeleteAsync(req.Id, ct);   // no out-of-band approver → normal flow
             return Ok(new { decision = "ask" });
@@ -143,12 +147,33 @@ public sealed class InternalController : ControllerBase
         return Ok(new { id = req.Id });
     }
 
-    /// <summary>Polled by the hook: returns "allow" | "allowAlways" | "deny" | "pending".</summary>
+    /// <summary>Polled by the hook: returns "allow" | "allowAlways" | "deny" | "expired" | "pending".</summary>
     [HttpGet("permission/{reqId}")]
     public async Task<IActionResult> PermissionStatus(string id, string reqId, CancellationToken ct)
     {
         if (await AuthAsync(id, ct) is null) return Unauthorized();
-        return Ok(new { decision = await _permissions.GetDecisionAsync(reqId, ct) ?? "pending" });
+        return Ok(new { decision = await _permissions.GetDecisionAsync(reqId, id, ct) ?? "pending" });
+    }
+
+    /// <summary>
+    /// The hook gave up waiting: mark the request expired and defuse the chat prompt.
+    /// Returns the final decision — if a click won the race against this expire, the
+    /// hook gets that decision back and can still honor it.
+    /// </summary>
+    [HttpPost("permission/{reqId}/expire")]
+    public async Task<IActionResult> ExpirePermission(string id, string reqId, CancellationToken ct)
+    {
+        if (await AuthAsync(id, ct) is null) return Unauthorized();
+        var resolved = await _permissions.ResolveAsync(reqId, "expired", id, ct);
+        if (resolved is null)
+        {
+            var existing = await _permissions.GetAsync(reqId, id, ct);
+            return Ok(new { decision = existing?.Decision ?? "expired" });
+        }
+        if (resolved.Platform is { } platform)
+            foreach (var e in _promptEditors.Where(e => e.Platform == platform))
+                await e.MarkExpiredAsync(resolved, ct);
+        return Ok(new { decision = "expired" });
     }
 
     /// <summary>Evaluates the live MCP restriction policy for this session.</summary>

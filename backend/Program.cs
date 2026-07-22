@@ -41,6 +41,20 @@ builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
 // Monthly seat heartbeat: reports the licensed-user count and renews the license token.
 builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
 
+// Community chat integrations (Telegram/Signal): session-to-conversation bindings.
+builder.Services.AddSingleton<AgentHub.Api.Chat.ChatBindingStore>();
+builder.Services.AddSingleton<AgentHub.Api.Chat.WorkingIndicator>();
+
+// Community: Telegram/Signal chat integrations (no license required).
+var telegramOpts = builder.Configuration.GetSection("Chat:Telegram").Get<AgentHub.Api.Chat.Telegram.TelegramOptions>() ?? new();
+builder.Services.AddSingleton(telegramOpts);
+builder.Services.AddSingleton<AgentHub.Api.Chat.Telegram.TelegramClient>();
+var signalOpts = builder.Configuration.GetSection("Chat:Signal").Get<AgentHub.Api.Chat.Signal.SignalOptions>() ?? new();
+builder.Services.AddSingleton(signalOpts);
+builder.Services.AddSingleton<AgentHub.Api.Chat.Signal.SignalClient>();
+builder.Services.AddSingleton<AgentHub.Api.Chat.ChatLinkCodeStore>();
+builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Chat.Telegram.TelegramNotifier>();
+
 // Enterprise: Slack integration (only active with a valid license + tokens).
 var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee.Slack.SlackOptions>() ?? new();
 builder.Services.AddSingleton(slackOpts);
@@ -50,8 +64,37 @@ builder.Services.AddSingleton<AgentHub.Api.Persistence.UserDirectory>();
 builder.Services.AddSingleton<AgentHub.Api.Permissions.PermissionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.ISlackTargetResolver, AgentHub.Api.Ee.Slack.SlackTargetResolver>();
 builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Ee.Slack.SlackNotifier>();
-builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier, AgentHub.Api.Ee.Slack.SlackPermissionNotifier>();
+// Slack permission prompts: one instance posts them (IPermissionNotifier) and later
+// defuses expired ones (IPermissionPromptEditor) — register once, alias both interfaces.
+builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackPermissionNotifier>();
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Ee.Slack.SlackPermissionNotifier>());
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionPromptEditor>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Ee.Slack.SlackPermissionNotifier>());
 builder.Services.AddHostedService<AgentHub.Api.Ee.Slack.SlackSocketModeService>();
+
+// Community: Telegram permission prompts + long polling. Registered AFTER the Slack
+// block on purpose — the permission relay tries notifiers in registration order
+// (Slack first, then Telegram).
+builder.Services.AddSingleton<AgentHub.Api.Chat.Telegram.TelegramPermissionNotifier>();
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Chat.Telegram.TelegramPermissionNotifier>());
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionPromptEditor>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Chat.Telegram.TelegramPermissionNotifier>());
+builder.Services.AddHostedService<AgentHub.Api.Chat.Telegram.TelegramUpdateService>();
+
+// Community: Signal notifier + reaction-based permission prompts + receive loop.
+// Registered AFTER Telegram — the permission relay chain is Slack → Telegram → Signal.
+builder.Services.AddSingleton<AgentHub.Api.Chat.Signal.SignalPermissionNotifier>();
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionNotifier>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Chat.Signal.SignalPermissionNotifier>());
+builder.Services.AddSingleton<AgentHub.Api.Permissions.IPermissionPromptEditor>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Chat.Signal.SignalPermissionNotifier>());
+builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Chat.Signal.SignalNotifier>();
+builder.Services.AddHostedService<AgentHub.Api.Chat.Signal.SignalReceiveService>();
+
+// Safety net: expires pending permission prompts whose hook never called /expire.
+builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepService>();
 
 builder.Services.AddHealthChecks();
 
@@ -114,6 +157,8 @@ using (var scope = app.Services.CreateScope())
     await tokenStore.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatLinkCodeStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
     // License token lives in the DB — create its table, then load & verify it.
@@ -164,7 +209,10 @@ app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptio
     // Lets the UI show the "Connect GitHub/GitLab" account section only when configured.
     gitEnabled = git.AnyConfigured,
     // Lets the UI show the per-user Slack settings section only when Slack is enabled.
-    slackEnabled = slack.Enabled
+    slackEnabled = slack.Enabled,
+    // Same for the community Telegram/Signal integrations.
+    telegramEnabled = telegramOpts.Enabled,
+    signalEnabled = signalOpts.Enabled
 })).AllowAnonymous();
 
 var agentPort = builder.Configuration.GetValue("AgentHub:AgentPort", 7681);

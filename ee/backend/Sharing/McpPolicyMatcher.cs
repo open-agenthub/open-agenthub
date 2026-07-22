@@ -1,3 +1,9 @@
+// -----------------------------------------------------------------------------
+// Open AgentHub Enterprise Edition — Session sharing.
+// Part of the Enterprise Edition; NOT covered by the AGPL-3.0 license of the
+// open-core. Source-available under the Open AgentHub Enterprise License
+// (see ee/LICENSE); a valid subscription is required for production use.
+// -----------------------------------------------------------------------------
 namespace AgentHub.Api.Ee.Sharing;
 
 public static class McpPolicyMatcher

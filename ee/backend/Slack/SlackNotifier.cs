@@ -24,14 +24,17 @@ public sealed class SlackNotifier : INotifier
     private readonly SlackClient _slack;
     private readonly SlackThreadStore _threads;
     private readonly ISlackTargetResolver _resolver;
+    private readonly AgentHub.Api.Chat.WorkingIndicator _indicator;
     private readonly string _frontendOrigin;
     private readonly ILogger<SlackNotifier> _log;
 
     public SlackNotifier(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
-        SlackThreadStore threads, ISlackTargetResolver resolver, IConfiguration cfg, ILogger<SlackNotifier> log)
+        SlackThreadStore threads, ISlackTargetResolver resolver, AgentHub.Api.Chat.WorkingIndicator indicator,
+        IConfiguration cfg, ILogger<SlackNotifier> log)
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _resolver = resolver;
-        _frontendOrigin = cfg["FrontendOrigin"] ?? "";
+        _indicator = indicator;
+        _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
     }
 
@@ -42,6 +45,15 @@ public sealed class SlackNotifier : INotifier
         try
         {
             var thread = await _threads.GetBySessionAsync(s.Id, ct);
+
+            // The session progressed — stop the "working…" animation and remove the
+            // status message (cross-replica via the persisted ts).
+            _indicator.Stop(s.Id);
+            if (thread?.StatusTs is { } statusTs)
+            {
+                await _slack.DeleteMessageAsync(thread.Channel, statusTs, ct);
+                await _threads.SetStatusTsAsync(s.Id, null, ct);
+            }
 
             if (eventType is "finished" or "failed")
             {
@@ -67,23 +79,42 @@ public sealed class SlackNotifier : INotifier
                 await _threads.UpsertAsync(thread, ct);
             }
 
-            // Post the question itself as a clean Slack quote. We deliberately do NOT
+            // Post the question itself as a clean Slack quote, split across follow-up
+            // messages if it exceeds Slack's comfortable size. We deliberately do NOT
             // dump the terminal scrollback: Claude's full-screen TUI is a mess of ANSI
             // redraws once stripped. The web terminal (linked in the thread header) has
             // the full context; here we keep it readable and answerable.
-            await _slack.PostMessageAsync(thread.Channel, Quote(message), thread.ThreadTs, ct);
+            var messages = BuildAnswerMessages(message);
+            for (var i = 0; i < messages.Count; i++)
+            {
+                if (i > 0) await Task.Delay(1100, ct); // Slack tolerates ~1 msg/s/channel
+                if (await _slack.PostMessageAsync(thread.Channel, messages[i], thread.ThreadTs, ct) is null)
+                {
+                    _log.LogWarning("Slack chunk {Index}/{Count} failed for session {Id} — stopping to avoid silent gaps", i + 1, messages.Count, s.Id);
+                    break;
+                }
+            }
         }
         catch (Exception ex) { _log.LogWarning(ex, "Slack notify failed for session {Id}", s.Id); }
     }
 
-    private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
-    // A label line, then the message as a Slack blockquote — each line must START with
-    // "> " for Slack to render it as a quote.
-    private static string Quote(string s)
+    /// <summary>
+    /// Builds the labeled, blockquoted Slack messages for one agent answer (pure — exposed
+    /// for tests). Splits the raw text first and escapes each chunk afterwards, so a hard
+    /// split can never cut through an escaped entity and escaping never inflates a chunk
+    /// past the split point. Each line must START with "&gt; " for Slack to render it as
+    /// a blockquote.
+    /// </summary>
+    public static IReadOnlyList<string> BuildAnswerMessages(string message)
     {
-        s = Escape(s.Trim());
-        if (s.Length > 2500) s = s[..2500] + " …";
-        var quoted = string.Join("\n", s.Split('\n').Select(l => "> " + l));
-        return ":speech_balloon: *The agent says:*\n" + quoted;
+        var chunks = AgentHub.Api.Chat.ChatFormatting.Split(message.Trim(), 3800);
+        return chunks.Select((c, i) =>
+        {
+            var quoted = string.Join("\n", Escape(c).Split('\n').Select(l => "> " + l));
+            var label = i == 0 ? ":speech_balloon: *The agent says:*" : $"_… ({i + 1}/{chunks.Count})_";
+            return label + "\n" + quoted;
+        }).ToList();
     }
+
+    private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 }
