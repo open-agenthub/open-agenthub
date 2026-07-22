@@ -8,7 +8,7 @@ using Npgsql;
 
 namespace AgentHub.Api.Ee.Slack;
 
-public sealed record SlackThread(string SessionId, string Owner, string Channel, string ThreadTs, int PostedLen);
+public sealed record SlackThread(string SessionId, string Owner, string Channel, string ThreadTs, int PostedLen, string? StatusTs = null);
 
 /// <summary>Maps a session to its Slack thread and tracks how much transcript was already posted.</summary>
 public sealed class SlackThreadStore
@@ -33,6 +33,7 @@ public sealed class SlackThreadStore
                 posted_len  INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_slack_threads_ts ON slack_threads(thread_ts);
+            ALTER TABLE slack_threads ADD COLUMN IF NOT EXISTS status_ts TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -47,11 +48,12 @@ public sealed class SlackThreadStore
     public async Task UpsertAsync(SlackThread t, CancellationToken ct = default)
     {
         const string sql = """
-            INSERT INTO slack_threads (session_id, owner, channel, thread_ts, posted_len)
-            VALUES (@id, @owner, @channel, @ts, @len)
+            INSERT INTO slack_threads (session_id, owner, channel, thread_ts, posted_len, status_ts)
+            VALUES (@id, @owner, @channel, @ts, @len, @status)
             ON CONFLICT (session_id) DO UPDATE SET
                 owner = EXCLUDED.owner, channel = EXCLUDED.channel,
-                thread_ts = EXCLUDED.thread_ts, posted_len = EXCLUDED.posted_len;
+                thread_ts = EXCLUDED.thread_ts, posted_len = EXCLUDED.posted_len,
+                status_ts = EXCLUDED.status_ts;
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("id", t.SessionId);
@@ -59,6 +61,7 @@ public sealed class SlackThreadStore
         cmd.Parameters.AddWithValue("channel", t.Channel);
         cmd.Parameters.AddWithValue("ts", t.ThreadTs);
         cmd.Parameters.AddWithValue("len", t.PostedLen);
+        cmd.Parameters.AddWithValue("status", (object?)t.StatusTs ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -70,13 +73,23 @@ public sealed class SlackThreadStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>Sets (or clears, with null) the ts of the "working…" status message.</summary>
+    public async Task SetStatusTsAsync(string sessionId, string? ts, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE slack_threads SET status_ts = @ts WHERE session_id = @id");
+        cmd.Parameters.AddWithValue("ts", (object?)ts ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("id", sessionId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     private async Task<SlackThread?> QueryOne(string where, string p, string v, CancellationToken ct)
     {
-        await using var cmd = _db.CreateCommand($"SELECT session_id, owner, channel, thread_ts, posted_len FROM slack_threads {where}");
+        await using var cmd = _db.CreateCommand($"SELECT session_id, owner, channel, thread_ts, posted_len, status_ts FROM slack_threads {where}");
         cmd.Parameters.AddWithValue(p, v);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         return await r.ReadAsync(ct)
-            ? new SlackThread(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetInt32(4))
+            ? new SlackThread(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetInt32(4),
+                await r.IsDBNullAsync(5, ct) ? null : r.GetString(5))
             : null;
     }
 }

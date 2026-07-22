@@ -82,6 +82,23 @@ s3:
 n8n:
   webhookUrl: ""
 
+# Community chat integrations: session updates + replies via Telegram and/or Signal.
+# Docs: see README "Chat integrations". Both default off.
+# NOTE: either integration requires backend.replicas=1 — Telegram getUpdates and the
+# Signal receive socket allow only ONE consumer. The chart refuses to render otherwise.
+chat:
+  telegram:
+    enabled: false
+    botToken: ""      # from @BotFather
+  signal:
+    enabled: false
+    number: ""        # registered sender number, e.g. "+15551234567"
+    # Pinned version on purpose: the Signal account state (registration/keys) lives
+    # on the PVC — check the signal-cli-rest-api release notes for data/API migration
+    # steps before bumping this tag.
+    image: bbernhard/signal-cli-rest-api:0.94
+    storage: 1Gi      # PVC for the number registration/keys
+
 # Token/cost usage dashboard via OpenTelemetry. When enabled, session pods export
 # Claude Code's token/cost metrics (OTLP/HTTP protobuf) to the internal backend service,
 # which aggregates them per session/owner for the "Usage" view. Agent->backend egress is

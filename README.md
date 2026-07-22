@@ -62,6 +62,9 @@ shift.
   OAuth credentials are stored per user and restored into every new session (incl. token
   refresh). Alternatively, use an `ANTHROPIC_API_KEY`.
 - **Push notifications** when your agent has a question (via webhook, e.g. n8n → Slack).
+- **Chat integrations** — session updates, replies, and permission approvals from your
+  phone via **Telegram or Signal** (free, community) — Slack is part of the Enterprise
+  edition — plus browser desktop notifications. [Setup below.](#chat-integrations)
 - **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
 - **Security by default** — unprivileged pods, default-deny network policies, per-user
   secrets, no API tokens in agent pods. [Details below.](#security)
@@ -205,6 +208,68 @@ Plain manifests without Helm are available under [`k8s/`](k8s/) (namespaces, RBA
 backend, network policies, dev Postgres) — fill in the secrets before applying.
 
 </details>
+
+### Chat integrations
+
+Telegram and Signal are **community features** (free, no license); Slack is part of the
+[Enterprise edition](ee/README.md). All of them notify you when a session waits for input
+or finishes, and let you reply and approve permission prompts from your phone. Long
+answers are split across several messages; permission prompts expire after ~30 minutes
+(answer in the web terminal then). Telegram and Signal require a **single backend
+replica** (`backend.replicas=1`) — Telegram `getUpdates` and the Signal receive socket
+allow only one consumer, and the chart refuses to render otherwise.
+
+<details>
+<summary><b>Telegram</b></summary>
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token.
+2. Enable it:
+   ```bash
+   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+     --set chat.telegram.enabled=true --set chat.telegram.botToken=<token> \
+     --set backend.replicas=1
+   ```
+   (Without Helm: env vars `Chat__Telegram__Enabled=true`, `Chat__Telegram__BotToken`.)
+3. Each user links their account under **Settings → Notifications → Telegram**:
+   **Generate link code**, then open the t.me deep link — or send `/link <code>` to the
+   bot directly.
+
+**Per-session forum topics** (optional): create a Telegram group, enable **Topics**, add
+the bot as admin with the **Manage topics** permission, and send `/link <code>` in the
+group — every session then gets its own topic. Note: **everyone in a linked group** can
+reply to sessions and approve permission prompts.
+
+Commands: `/sessions` (list), `/use <tag>` (route plain replies), `!status`. Plain
+messages are typed into the active session's terminal. Only **one backend replica** may
+run Telegram long-polling (a second poller conflicts on `getUpdates`).
+</details>
+
+<details>
+<summary><b>Signal</b></summary>
+
+1. Enable it — this deploys
+   [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) with a
+   persistent volume for the account keys:
+   ```bash
+   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+     --set chat.signal.enabled=true --set-string chat.signal.number=+15551234567 \
+     --set backend.replicas=1
+   ```
+2. Register the sender number once via port-forward: `POST /v1/register/<number>` +
+   `/v1/register/<number>/verify/<token>` (SMS/voice code), or link it as a secondary
+   device via QR code — the exact commands are in the comment block of
+   [`helm/open-agenthub/templates/signal-cli.yaml`](helm/open-agenthub/templates/signal-cli.yaml).
+3. Each user enters their number under **Settings → Notifications → Signal** and confirms
+   the 6-digit verification code sent via Signal.
+
+Reply routing: **quote** a session message to answer that session; plain replies go to
+the newest session (or the one picked with `!use`). React 👍/👎 on a permission prompt to
+allow/deny; quote-reply `always` for allow-always. Commands: `!sessions`, `!use <tag>`,
+`!status`.
+</details>
+
+**Desktop notifications** (browser): a notification when a session waits for input or
+finishes — enable per device under **Settings → Notifications**.
 
 ### Docker Desktop Kubernetes development
 

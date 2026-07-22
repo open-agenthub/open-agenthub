@@ -9,30 +9,16 @@ using AgentHub.Api.Permissions;
 
 namespace AgentHub.Api.Ee.Slack;
 
-/// <summary>Encoding/decoding of the permission button action_id ("perm:&lt;decision&gt;:&lt;id&gt;").</summary>
-public static class PermissionAction
-{
-    public static string Id(string decision, string reqId) => $"perm:{decision}:{reqId}";
-
-    public static bool TryParse(string? actionId, out string decision, out string reqId)
-    {
-        decision = ""; reqId = "";
-        if (string.IsNullOrEmpty(actionId)) return false;
-        var p = actionId.Split(':');
-        if (p.Length != 3 || p[0] != "perm" || p[1].Length == 0 || p[2].Length == 0) return false;
-        decision = p[1]; reqId = p[2];
-        return true;
-    }
-}
-
 /// <summary>
 /// Posts a tool-permission request to the user's Slack conversation as an interactive
 /// message with Allow / Allow-always / Deny buttons. The button click is handled by
 /// <see cref="SlackSocketModeService"/>. Returns false when the user has no Slack
 /// target (or Slack/license is off), so the caller falls back to the normal prompt.
 /// </summary>
-public sealed class SlackPermissionNotifier : IPermissionNotifier
+public sealed class SlackPermissionNotifier : IPermissionNotifier, IPermissionPromptEditor
 {
+    public string Platform => "slack";
+
     private readonly SlackOptions _opts;
     private readonly IEnterpriseLicense _license;
     private readonly SlackClient _slack;
@@ -79,9 +65,20 @@ public sealed class SlackPermissionNotifier : IPermissionNotifier
 
         var ts = await _slack.PostBlocksAsync(channel, $"Permission request: {req.Tool}", blocks, threadTs, ct);
         if (ts is null) return false;
-        await _store.SetSlackMessageAsync(req.Id, channel, ts, ct);
+        await _store.SetPromptMessageAsync(req.Id, "slack", channel, ts, ct);
         return true;
     }
+
+    /// <summary>The hook stopped polling: drop the buttons so the prompt doesn't look alive.</summary>
+    public async Task MarkExpiredAsync(PermissionRequest req, CancellationToken ct = default)
+    {
+        if (req.Channel is null || req.MessageTs is null) return;
+        await _slack.UpdateMessageAsync(req.Channel, req.MessageTs, ExpiredMessage(req.Tool), null, ct);
+    }
+
+    /// <summary>Prompt text once the request can no longer be answered out-of-band.</summary>
+    public static string ExpiredMessage(string tool)
+        => $":hourglass: *Expired* — *{Escape(tool)}*. Please answer in the web terminal.";
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
     private static string Trim(string s, int max) => s.Length <= max ? s : s[..max] + " …";

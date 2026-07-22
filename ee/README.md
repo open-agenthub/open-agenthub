@@ -14,6 +14,8 @@ subscription for production use.
   back to the agent. Uses Socket Mode (no public endpoint). Backend sources under
   [`backend/Slack/`](./backend/Slack); configured via `ee.slack.*` and gated by a
   valid license (`license.token` / `license.publicKey`). See the chart `values.yaml`.
+  (Telegram and Signal chat integrations are available license-free in the Community
+  Edition — see the [top-level README](../README.md#chat-integrations).)
 
 
 

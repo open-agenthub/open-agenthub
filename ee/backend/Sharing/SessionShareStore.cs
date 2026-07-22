@@ -1,3 +1,9 @@
+// -----------------------------------------------------------------------------
+// Open AgentHub Enterprise Edition — Session sharing.
+// Part of the Enterprise Edition; NOT covered by the AGPL-3.0 license of the
+// open-core. Source-available under the Open AgentHub Enterprise License
+// (see ee/LICENSE); a valid subscription is required for production use.
+// -----------------------------------------------------------------------------
 using System.Text.Json;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
@@ -156,17 +162,20 @@ public sealed class SessionShareStore : ISessionAccessStore
                 updated_at = now()
             RETURNING created_at, updated_at
             """;
-        await using var command = new NpgsqlCommand(sql, connection, transaction);
-        command.Parameters.AddWithValue("session", sessionId);
-        command.Parameters.AddWithValue("recipient", recipient);
-        command.Parameters.AddWithValue("role", role.ToString());
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        await reader.ReadAsync(ct);
-        var result = new DirectSessionShare(
-            recipient,
-            role,
-            reader.GetDateTime(0),
-            reader.GetDateTime(1));
+        DirectSessionShare result;
+        await using (var command = new NpgsqlCommand(sql, connection, transaction))
+        {
+            command.Parameters.AddWithValue("session", sessionId);
+            command.Parameters.AddWithValue("recipient", recipient);
+            command.Parameters.AddWithValue("role", role.ToString());
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            await reader.ReadAsync(ct);
+            result = new DirectSessionShare(
+                recipient,
+                role,
+                reader.GetDateTime(0),
+                reader.GetDateTime(1));
+        }
 
         await transaction.CommitAsync(ct);
         return result;
@@ -215,21 +224,24 @@ public sealed class SessionShareStore : ISessionAccessStore
             VALUES (@id, @session, @hash, @role, @expires)
             RETURNING created_at, updated_at
             """;
-        await using var command = new NpgsqlCommand(sql, connection, transaction);
-        command.Parameters.AddWithValue("id", id);
-        command.Parameters.AddWithValue("session", sessionId);
-        command.Parameters.Add("hash", NpgsqlDbType.Bytea).Value = issued.Hash;
-        command.Parameters.AddWithValue("role", role.ToString());
-        command.Parameters.AddWithValue("expires", (object?)expiresAt ?? DBNull.Value);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        await reader.ReadAsync(ct);
-        var link = new SessionShareLink(
-            id,
-            role,
-            expiresAt,
-            reader.GetDateTime(0),
-            reader.GetDateTime(1),
-            null);
+        SessionShareLink link;
+        await using (var command = new NpgsqlCommand(sql, connection, transaction))
+        {
+            command.Parameters.AddWithValue("id", id);
+            command.Parameters.AddWithValue("session", sessionId);
+            command.Parameters.Add("hash", NpgsqlDbType.Bytea).Value = issued.Hash;
+            command.Parameters.AddWithValue("role", role.ToString());
+            command.Parameters.AddWithValue("expires", (object?)expiresAt ?? DBNull.Value);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            await reader.ReadAsync(ct);
+            link = new SessionShareLink(
+                id,
+                role,
+                expiresAt,
+                reader.GetDateTime(0),
+                reader.GetDateTime(1),
+                null);
+        }
 
         await transaction.CommitAsync(ct);
         return new IssuedSessionShareLink(link, issued.Token);
@@ -256,15 +268,18 @@ public sealed class SessionShareStore : ISessionAccessStore
             WHERE id = @id AND session_id = @session
             RETURNING id, role, expires_at, created_at, updated_at, last_used_at
             """;
-        await using var command = new NpgsqlCommand(sql, connection, transaction);
-        command.Parameters.AddWithValue("id", linkId);
-        command.Parameters.AddWithValue("session", sessionId);
-        command.Parameters.AddWithValue("role", role.ToString());
-        command.Parameters.AddWithValue("expires", (object?)expiresAt ?? DBNull.Value);
-        await using var reader = await command.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            throw new KeyNotFoundException();
-        var result = MapLink(reader);
+        SessionShareLink result;
+        await using (var command = new NpgsqlCommand(sql, connection, transaction))
+        {
+            command.Parameters.AddWithValue("id", linkId);
+            command.Parameters.AddWithValue("session", sessionId);
+            command.Parameters.AddWithValue("role", role.ToString());
+            command.Parameters.AddWithValue("expires", (object?)expiresAt ?? DBNull.Value);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                throw new KeyNotFoundException();
+            result = MapLink(reader);
+        }
 
         await transaction.CommitAsync(ct);
         return result;

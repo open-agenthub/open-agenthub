@@ -16,6 +16,7 @@ import SharedSessionView from './components/SharedSessionView.vue'
 import SessionSearch from './components/SessionSearch.vue'
 import { sharedTokenFromPath } from './lib/routes.js'
 import { initials } from './lib/text.js'
+import { detectAlerts, showAlert } from './lib/desktop-notify.js'
 
 const sessions = ref([])
 const projects = ref([])
@@ -45,7 +46,9 @@ function sessionIdFromLocation() {
 
 async function refresh() {
   try {
-    [sessions.value, projects.value] = await Promise.all([api.listSessions(), api.listProjects()])
+    const prevSessions = sessions.value // empty on the first refresh — no alerts on page load
+    ;[sessions.value, projects.value] = await Promise.all([api.listSessions(), api.listProjects()])
+    for (const alert of detectAlerts(prevSessions, sessions.value)) showAlert(alert, selectSession)
   } catch (e) {
     error.value = String(e.message || e)
   }

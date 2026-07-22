@@ -271,7 +271,7 @@ test('MCP policy settings use deterministic MCP and built-in matchers interactiv
       hooks: [{
         type: 'command',
         command: '/opt/session-agent/mcp-policy-hook.sh',
-        timeout: 300
+        timeout: 1900
       }]
     },
     {
@@ -279,7 +279,7 @@ test('MCP policy settings use deterministic MCP and built-in matchers interactiv
       hooks: [{
         type: 'command',
         command: '/opt/session-agent/pretooluse-hook.sh',
-        timeout: 300
+        timeout: 1900
       }]
     }
   ]);

@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { api, config } from '../api.js'
+import { desktopNotifyEnabled, desktopNotifySupported, setDesktopNotify } from '../lib/desktop-notify.js'
 
 const emit = defineEmits(['close'])
 // section: 'all' (legacy combined view) or 'notifications' | 'tokens' for a single settings tab.
@@ -10,6 +11,29 @@ const props = defineProps({
 })
 const showSlack = computed(() => ['all', 'notifications'].includes(props.section))
 const showTokens = computed(() => ['all', 'tokens'].includes(props.section))
+
+// --- Desktop notifications (browser, per-device) ---
+const desktopOn = ref(desktopNotifyEnabled())
+const desktopMsg = ref('')
+
+async function toggleDesktop(e) {
+  const on = e.target.checked
+  desktopMsg.value = ''
+  const ok = await setDesktopNotify(on)
+  if (!ok) {
+    // Unsupported or permission denied — be honest: untick and explain inline.
+    await setDesktopNotify(false)
+    desktopOn.value = false
+    // Reset the element too: the binding value did not change (false → false),
+    // so Vue would not patch the user-flipped checkbox back.
+    e.target.checked = false
+    desktopMsg.value = desktopNotifySupported()
+      ? 'Notifications are blocked by the browser — allow them in the site settings.'
+      : 'Desktop notifications are not supported by this browser.'
+    return
+  }
+  desktopOn.value = on
+}
 
 // --- Slack (per-user) ---
 const slackEnabled = computed(() => config.slackEnabled)
@@ -31,6 +55,117 @@ async function saveSlack() {
   finally { slackBusy.value = false }
 }
 
+// --- Telegram / Signal (per-user) ---
+const telegramEnabled = computed(() => config.telegramEnabled)
+const signalEnabled = computed(() => config.signalEnabled)
+const chat = ref({
+  telegram: { configured: false, linked: false, forum: false, enabled: true },
+  signal: { configured: false, number: null, verified: false, enabled: true }
+})
+
+async function loadChat() {
+  if (!config.telegramEnabled && !config.signalEnabled) return
+  try {
+    chat.value = await api.chatMe()
+    signalNumber.value = chat.value.signal.number || ''
+  } catch { /* leave defaults */ }
+}
+
+// Telegram
+const tgBusy = ref(false)
+const tgSaved = ref(false)
+const tgError = ref('')
+// { code, botUsername, deepLink } — shown until the dialog closes or the user unlinks.
+const tgLink = ref(null)
+
+async function saveTelegram() {
+  tgBusy.value = true; tgSaved.value = false; tgError.value = ''
+  try {
+    await api.setTelegramPrefs({ enabled: chat.value.telegram.enabled })
+    tgSaved.value = true
+  } catch (e) { tgError.value = String(e.message || e) }
+  finally { tgBusy.value = false }
+}
+
+async function generateTelegramCode() {
+  tgBusy.value = true; tgError.value = ''
+  try { tgLink.value = await api.telegramLinkCode() }
+  catch (e) {
+    tgError.value = e.status === 503
+      ? 'Telegram is not configured on this instance.'
+      : String(e.message || e)
+  }
+  finally { tgBusy.value = false }
+}
+
+async function unlinkTelegram() {
+  tgBusy.value = true; tgError.value = ''
+  try { await api.unlinkTelegram(); tgLink.value = null; await loadChat() }
+  catch (e) { tgError.value = String(e.message || e) }
+  finally { tgBusy.value = false }
+}
+
+// Signal
+const signalNumber = ref('')
+const signalBusy = ref(false)
+const signalMsg = ref('')     // inline feedback below the number field
+const signalMsgOk = ref(false)
+const signalPending = ref(false) // a verification code was just sent (202)
+const signalCode = ref('')
+const verifyBusy = ref(false)
+const verifyMsg = ref('')
+const verifyMsgOk = ref(false)
+
+// The verify field appears once a code is on its way, or when a number is
+// saved but not verified yet (e.g. after a reload).
+const showSignalVerify = computed(() =>
+  signalPending.value || (!!chat.value.signal.number && !chat.value.signal.verified))
+
+async function saveSignal() {
+  signalBusy.value = true; signalMsg.value = ''; verifyMsg.value = ''
+  try {
+    const status = await api.setSignalPrefs({
+      enabled: chat.value.signal.enabled,
+      number: signalNumber.value.trim() || null
+    })
+    if (status === 202) {
+      signalPending.value = true
+      signalMsg.value = 'Verification code sent via Signal — enter it below.'
+    } else {
+      signalMsg.value = 'Saved ✓'
+    }
+    signalMsgOk.value = true
+    // Refresh in both branches: after a 202 the status line must show the newly
+    // persisted (unverified) number, not a stale "verified ✓ (+old)".
+    await loadChat()
+  } catch (e) {
+    signalMsgOk.value = false
+    signalMsg.value =
+      e.status === 409 ? 'This number is already linked to another account.'
+      : e.status === 400 ? 'Please enter a valid number in international format.'
+      : e.status === 503 ? 'Signal is not configured on this instance.'
+      : String(e.message || e)
+  } finally { signalBusy.value = false }
+}
+
+async function verifySignalCode() {
+  verifyBusy.value = true; verifyMsg.value = ''
+  try {
+    await api.verifySignal(signalCode.value.trim())
+    signalCode.value = ''
+    signalPending.value = false
+    verifyMsgOk.value = true
+    verifyMsg.value = 'verified ✓'
+    await loadChat()
+  } catch (e) {
+    verifyMsgOk.value = false
+    verifyMsg.value =
+      e.status === 400 ? 'Invalid or expired code.'
+      : e.status === 429 ? 'Too many attempts — try again later.'
+      : String(e.message || e)
+  } finally { verifyBusy.value = false }
+}
+
 const tokens = ref([])
 const loading = ref(true)
 const error = ref('')
@@ -50,7 +185,7 @@ async function load() {
   finally { loading.value = false }
 }
 
-onMounted(() => { load(); loadSlack() })
+onMounted(() => { load(); loadSlack(); loadChat() })
 
 async function create() {
   const name = newName.value.trim()
@@ -100,6 +235,18 @@ const curlStatus = computed(() =>
       <h3 v-else-if="section === 'tokens'">API tokens</h3>
       <h3 v-else>Settings</h3>
 
+      <section v-if="showSlack" class="slack" data-section="desktop">
+        <h4>Desktop notifications</h4>
+        <p class="note">
+          Your browser shows a notification when the tab is in the background — no server-side setup needed.
+        </p>
+        <label class="check">
+          <input type="checkbox" :checked="desktopOn" data-desktop-toggle @change="toggleDesktop" />
+          Desktop notifications when a session waits or finishes
+        </label>
+        <p v-if="desktopMsg" class="err" data-desktop-msg>{{ desktopMsg }}</p>
+      </section>
+
       <section v-if="showSlack && slackEnabled" class="slack">
         <h4>Slack notifications</h4>
         <p class="note">
@@ -121,7 +268,68 @@ const curlStatus = computed(() =>
         </div>
       </section>
 
-      <p v-if="showSlack && !slackEnabled" class="note">Slack is not enabled on this instance — there is nothing to configure here yet.</p>
+      <section v-if="showSlack && telegramEnabled" class="slack" data-section="telegram">
+        <h4>Telegram notifications</h4>
+        <p class="note">
+          Link your Telegram account (or a forum group) to get session updates and reply from Telegram.
+          <span :class="chat.telegram.linked ? 'ok-text' : 'muted'" data-telegram-status>
+            {{ chat.telegram.linked ? (chat.telegram.forum ? 'linked ✓ (forum group)' : 'linked ✓') : 'not linked' }}
+          </span>
+        </p>
+        <label class="check">
+          <input type="checkbox" v-model="chat.telegram.enabled" /> Send me Telegram notifications
+        </label>
+        <div v-if="tgLink" class="field" data-telegram-link>
+          <p class="note">
+            Open the link, or send /link {{ tgLink.code }} to the bot — in a DM or in your forum group.
+            The code expires in 10 minutes.
+          </p>
+          <div>
+            <code data-telegram-code>{{ tgLink.code }}</code>
+            <a v-if="tgLink.deepLink" :href="tgLink.deepLink" target="_blank" rel="noopener">Open in Telegram</a>
+          </div>
+        </div>
+        <p v-if="tgError" class="err">{{ tgError }}</p>
+        <div class="slack-actions">
+          <button v-if="chat.telegram.linked" class="del" :disabled="tgBusy" data-telegram-unlink @click="unlinkTelegram">Unlink</button>
+          <button :disabled="tgBusy" data-telegram-generate @click="generateTelegramCode">Generate link code</button>
+          <button class="primary" :disabled="tgBusy" data-telegram-save @click="saveTelegram">{{ tgSaved ? 'Saved ✓' : tgBusy ? 'Saving…' : 'Save' }}</button>
+        </div>
+      </section>
+
+      <section v-if="showSlack && signalEnabled" class="slack" data-section="signal">
+        <h4>Signal notifications</h4>
+        <p class="note">
+          Get session updates on Signal and reply from your phone. Your number is verified with a one-time code.
+          <span :class="chat.signal.verified ? 'ok-text' : 'muted'" data-signal-status>
+            {{ chat.signal.verified ? `verified ✓ (${chat.signal.number})` : 'not verified' }}
+          </span>
+        </p>
+        <label class="check">
+          <input type="checkbox" v-model="chat.signal.enabled" /> Send me Signal notifications
+        </label>
+        <div class="field">
+          <label>Phone number (international format)</label>
+          <input v-model="signalNumber" placeholder="+15551234567" data-signal-number />
+        </div>
+        <p v-if="signalMsg" :class="signalMsgOk ? 'ok-text' : 'err'" data-signal-msg>{{ signalMsg }}</p>
+        <div class="slack-actions">
+          <button class="primary" :disabled="signalBusy || verifyBusy" data-signal-save @click="saveSignal">{{ signalBusy ? 'Saving…' : 'Save' }}</button>
+        </div>
+        <template v-if="showSignalVerify">
+          <div class="field">
+            <label>Verification code (6 digits)</label>
+            <input v-model="signalCode" placeholder="123456" maxlength="6" inputmode="numeric" data-signal-code />
+          </div>
+          <div class="slack-actions">
+            <button :disabled="signalBusy || verifyBusy || !signalCode.trim()" data-signal-verify @click="verifySignalCode">{{ verifyBusy ? 'Verifying…' : 'Verify' }}</button>
+          </div>
+        </template>
+        <!-- Outside the verify block: "verified ✓" must stay visible after the block collapses. -->
+        <p v-if="verifyMsg" :class="verifyMsgOk ? 'ok-text' : 'err'" data-signal-verify-msg>{{ verifyMsg }}</p>
+      </section>
+
+      <p v-if="showSlack && !slackEnabled && !telegramEnabled && !signalEnabled" class="note">No chat integration (Slack, Telegram, Signal) is enabled on this instance.</p>
 
       <template v-if="showTokens">
       <h4 v-if="section === 'all'">API tokens</h4>
@@ -211,7 +419,8 @@ const curlStatus = computed(() =>
 .slack .field label { font-size: 12px; color: var(--muted); }
 .slack .check { display: flex; align-items: center; gap: 8px; font-size: 13px; }
 .slack .check input { width: auto; }
-.slack-actions { display: flex; justify-content: flex-end; }
+.slack-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.slack code { font-family: var(--mono); font-size: 13px; background: rgba(0,0,0,.25); border: 1px solid var(--border); border-radius: 6px; padding: 2px 8px; margin-right: 10px; }
 .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
 </style>
