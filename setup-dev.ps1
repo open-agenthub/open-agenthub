@@ -49,6 +49,8 @@ docker build --file (Join-Path $repoRoot 'agent-runtime/claude/Dockerfile') --ta
 Assert-NativeSuccess 'Claude image build'
 docker build --file (Join-Path $repoRoot 'agent-runtime/codex/Dockerfile') --tag 'open-agenthub-dev/agent-runtime-codex:local' (Join-Path $repoRoot 'agent-runtime')
 Assert-NativeSuccess 'Codex image build'
+docker build --tag 'open-agenthub-dev/browser:local' (Join-Path $repoRoot 'browser-runtime')
+Assert-NativeSuccess 'Browser image build'
 
 $passwordBytes = $null
 $encodedPassword = kubectl -n $controlNamespace get secret postgres-secret -o "jsonpath={.data.password}" 2>$null

@@ -1,3 +1,4 @@
+{{- $browserScreen := splitList "x" .Values.browser.screen -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -24,6 +25,25 @@ data:
   AgentHub__CallbackBaseUrl: "http://agenthub-backend.{{ .Release.Namespace }}.svc.cluster.local"
   AgentHub__TelemetryEnabled: {{ .Values.telemetry.enabled | default false | quote }}
   AgentHub__TelemetryOtlpEndpoint: {{ .Values.telemetry.otlpEndpoint | default "" | quote }}
+  Browser__Enabled: {{ .Values.browser.enabled | quote }}
+  {{ if .Values.browser.enabled }}
+  Browser__Image: {{ include "agenthub.browserImage" . | quote }}
+  Browser__PullPolicy: {{ .Values.browser.image.pullPolicy | quote }}
+  Browser__ImagePullSecret: {{ .Values.image.pullSecret | quote }}
+  Browser__RuntimeClassName: {{ .Values.agent.runtimeClassName | quote }}
+  Browser__CpuRequest: {{ .Values.browser.resources.requests.cpu | quote }}
+  Browser__MemoryRequest: {{ .Values.browser.resources.requests.memory | quote }}
+  Browser__CpuLimit: {{ .Values.browser.resources.limits.cpu | quote }}
+  Browser__MemoryLimit: {{ .Values.browser.resources.limits.memory | quote }}
+  Browser__ScreenWidth: {{ index $browserScreen 0 | quote }}
+  Browser__ScreenHeight: {{ index $browserScreen 1 | quote }}
+  Browser__StartupTimeoutSeconds: {{ .Values.browser.startupTimeoutSeconds | quote }}
+  Browser__CookieCheckpointSeconds: {{ .Values.browser.cookieCheckpointSeconds | quote }}
+  Browser__CookieStateMaxBytes: {{ .Values.browser.cookieStateMaxBytes | int64 | quote }}
+  {{ range $i, $port := .Values.browser.extraEgressPorts }}
+  Browser__ExtraEgressPorts__{{ $i }}: {{ $port | quote }}
+  {{ end }}
+  {{ end }}
   S3__ServiceUrl: {{ .Values.s3.serviceUrl | quote }}
   S3__Region: {{ .Values.s3.region | quote }}
   S3__Bucket: {{ .Values.s3.bucket | quote }}
