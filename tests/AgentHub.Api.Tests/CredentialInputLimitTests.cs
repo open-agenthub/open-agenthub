@@ -46,7 +46,7 @@ public class CredentialInputLimitTests
             Id = "session-1", Owner = "alice", CallbackToken = "callback-token",
             Agent = AgentKind.Codex, AuthMode = AgentAuthMode.Subscription
         };
-        var controller = new InternalController(new CallbackSessionStore(session), [], service, null!, [], [], null!);
+        var controller = new InternalController(new CallbackSessionStore(session), [], service, null!, [], [], null!, null!);
         controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
         controller.Request.Headers["X-Agent-Token"] = session.CallbackToken;
         controller.Request.ContentLength = contentLength;
