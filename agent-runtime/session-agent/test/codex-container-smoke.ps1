@@ -71,3 +71,6 @@ if ($missingKeyText -notmatch 'CODEX_API_KEY is required' -or
 }
 
 Write-Output "Codex container smoke fixtures passed for $Image"
+# The fail-closed check above leaves a nonzero $LASTEXITCODE on purpose; GitHub
+# Actions' pwsh wrapper would propagate it as the step result — exit clean.
+exit 0
