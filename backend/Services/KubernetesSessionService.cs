@@ -30,6 +30,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
     private readonly bool _s3Insecure;
+    private readonly bool _browserEnabled;
 
     private const string OwnerLabel = "agenthub.dev/owner";
     private const string SessionLabel = "agenthub.dev/session";
@@ -49,6 +50,7 @@ public sealed class KubernetesSessionService : ISessionService
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
         _s3Insecure = cfg.GetValue("S3:InsecureTls", false);
+        _browserEnabled = cfg.GetValue("Browser:Enabled", true);
 
         var config = KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
@@ -552,6 +554,7 @@ public sealed class KubernetesSessionService : ISessionService
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
+                BrowserEnabled = _browserEnabled,
                 GitCloneImage = _opts.GitCloneImage,
                 ImagePullSecret = _opts.ImagePullSecret,
                 RuntimeClassName = _opts.RuntimeClassName,

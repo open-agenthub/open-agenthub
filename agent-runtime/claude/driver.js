@@ -82,7 +82,8 @@ function buildCommand(env, allowResume) {
   const sessionId = env.AGENTHUB_CLAUDE_SESSION_ID || '';
   const args = [];
 
-  if (env.AGENTHUB_HAS_MCP === '1') args.push('--mcp-config', '/secrets/mcp/mcp.json');
+  if (env.AGENTHUB_MCP_CONFIG) args.push('--mcp-config', env.AGENTHUB_MCP_CONFIG);
+  else if (env.AGENTHUB_HAS_MCP === '1') args.push('--mcp-config', '/secrets/mcp/mcp.json');
 
   if (allowResume && env.AGENTHUB_RESUME === '1' && sessionId &&
       env.AGENTHUB_STATE_RESTORED === '1') {

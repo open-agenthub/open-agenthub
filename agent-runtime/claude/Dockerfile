@@ -28,6 +28,7 @@ COPY --from=builder /opt/session-agent/node_modules /opt/session-agent/node_modu
 COPY session-agent/package.json /opt/session-agent/package.json
 COPY session-agent/server.js /opt/session-agent/server.js
 COPY common /opt/session-agent/common
+COPY browser /opt/session-agent/browser
 COPY claude /opt/session-agent/claude
 COPY claude/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \

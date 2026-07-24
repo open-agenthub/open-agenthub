@@ -48,3 +48,14 @@ if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   [ -d "$TARGET" ] || TARGET="/workspace"
   cp /secrets/mcp/mcp.json "$TARGET/.mcp.json" || true
 fi
+
+if [ "${AGENTHUB_BROWSER_ENABLED:-0}" = "1" ]; then
+  MCP_SOURCE=""
+  if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
+    MCP_SOURCE=/secrets/mcp/mcp.json
+  fi
+  node "$RUNTIME/browser/configure-claude.mjs" "$MCP_SOURCE"
+  export AGENTHUB_MCP_CONFIG=/tmp/agenthub-mcp.json
+elif [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
+  export AGENTHUB_MCP_CONFIG=/secrets/mcp/mcp.json
+fi
