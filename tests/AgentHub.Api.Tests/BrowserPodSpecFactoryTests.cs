@@ -36,8 +36,10 @@ public sealed class BrowserPodSpecFactoryTests
         var source = resources.CdpIngress.Spec.Ingress.Single().FromProperty.Single().PodSelector.MatchLabels;
         Assert.Equal("session-1", source["agenthub.dev/session"]);
         Assert.Equal("agent", source["agenthub.dev/component"]);
+        Assert.Equal(BrowserPodIdentity.FromToken("callback"), source["agenthub.dev/browser-identity"]);
 
         Assert.Equal("agent", resources.CdpEgress.Spec.PodSelector.MatchLabels["agenthub.dev/component"]);
+        Assert.Equal(BrowserPodIdentity.FromToken("callback"), resources.CdpEgress.Spec.PodSelector.MatchLabels[BrowserPodIdentity.Label]);
         var destination = resources.CdpEgress.Spec.Egress.Single().To.Single().PodSelector.MatchLabels;
         Assert.Equal("session-1", destination["agenthub.dev/session"]);
         Assert.Equal("browser", destination["agenthub.dev/component"]);
