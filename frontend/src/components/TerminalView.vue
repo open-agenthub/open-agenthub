@@ -6,6 +6,7 @@ import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js
 import { sessionCapabilities } from '../lib/access.js'
 import { api, getSharedTranscript } from '../api.js'
 import { repoShortName } from '../lib/text.js'
+import { authLabel } from '../lib/agent.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
 defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate'])
@@ -41,6 +42,7 @@ async function selectTab(tab) {
           <span class="st" :style="{ color: statusStyle(session).color }">{{ sessionStatus(session) }}</span>
           <span class="mdot" :style="{ background: statusStyle(session).color }"></span>
           <span v-if="session.mode">{{ session.mode }}</span>
+          <span v-if="session.agent">· {{ session.agent }}<template v-if="session.authMode"> / {{ authLabel(session.authMode) }}</template></span>
           <span v-if="repoLabel" class="mono">· {{ repoLabel }}</span>
           <span v-if="session.schedule" class="cron">· ▶ {{ session.schedule }}</span>
           <span v-if="session.sharedBy" class="shared">· shared by {{ session.sharedBy }}</span>

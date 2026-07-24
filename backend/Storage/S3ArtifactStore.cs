@@ -1,5 +1,6 @@
 using Amazon.S3;
 using Amazon.S3.Model;
+using AgentHub.Api.Models;
 
 namespace AgentHub.Api.Storage;
 
@@ -14,7 +15,14 @@ public interface IArtifactStore
     string PresignGet(string key, TimeSpan ttl);
     Task<string?> GetTextAsync(string key, CancellationToken ct = default);
 
-    static string StateKey(string owner, string id)      => $"sessions/{owner}/{id}/claude-state.tgz";
+    static string StateKey(string owner, string id) => StateKey(owner, id, AgentKind.Claude);
+    static string StateKey(string owner, string id, AgentKind agent) =>
+        $"sessions/{owner}/{id}/{agent switch
+        {
+            AgentKind.Claude => "claude-state.tgz",
+            AgentKind.Codex => "codex-state.tgz",
+            _ => throw new ArgumentOutOfRangeException(nameof(agent), agent, "Unknown agent kind.")
+        }}";
     static string ScrollbackKey(string owner, string id) => $"sessions/{owner}/{id}/scrollback.log";
     static string ArtifactKey(string owner, string id, string name)
         => $"sessions/{owner}/{id}/artifacts/{name.TrimStart('/')}";
