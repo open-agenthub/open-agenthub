@@ -10,6 +10,7 @@ public interface IBrowserLeaseStore
     Task<BrowserLease?> GetByLeaseAsync(string leaseId, CancellationToken ct = default);
     Task<IReadOnlyDictionary<string, BrowserLease>> ListBySessionsAsync(
         IReadOnlyCollection<string> sessionIds, CancellationToken ct = default);
+    Task<IReadOnlyCollection<BrowserLease>> ListAsync(CancellationToken ct = default);
     Task SetRunningAsync(string leaseId, string podIp, CancellationToken ct = default);
     Task SetFailedAsync(string leaseId, string failureCode, CancellationToken ct = default);
     Task SetStoppingAsync(string leaseId, CancellationToken ct = default);
@@ -74,6 +75,15 @@ public sealed class PostgresBrowserLeaseStore(IConfiguration configuration) : IB
             var lease = Map(reader);
             result[lease.SessionId] = lease;
         }
+        return result;
+    }
+
+    public async Task<IReadOnlyCollection<BrowserLease>> ListAsync(CancellationToken ct = default)
+    {
+        await using var command = _db.CreateCommand(SelectBase);
+        var result = new List<BrowserLease>();
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct)) result.Add(Map(reader));
         return result;
     }
 
