@@ -19,7 +19,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        component: [backend, frontend, agent-runtime]
+        include:
+          - component: backend
+            context: .
+            dockerfile: ./backend/Dockerfile
+          - component: frontend
+            context: ./frontend
+            dockerfile: ./frontend/Dockerfile
+          - component: agent-runtime-claude
+            context: ./agent-runtime
+            dockerfile: ./agent-runtime/claude/Dockerfile
+          - component: agent-runtime-codex
+            context: ./agent-runtime
+            dockerfile: ./agent-runtime/codex/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -48,10 +60,10 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          # The backend builds from the repo root so the ee/ sources referenced by
-          # its .csproj are in the build context; the others use their own dir.
-          context: ${{ matrix.component == 'backend' && '.' || format('./{0}', matrix.component) }}
-          file: ./${{ matrix.component }}/Dockerfile
+          # The backend needs the repository root for ee/ sources. Both provider
+          # runtimes share agent-runtime as their build context.
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

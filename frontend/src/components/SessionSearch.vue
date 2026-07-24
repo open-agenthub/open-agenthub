@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue'
 import { sessionMatches, repoShortName } from '../lib/text.js'
 import { sessionStatus, statusStyle } from '../lib/status.js'
+import { authLabel } from '../lib/agent.js'
 
 const props = defineProps({
   sessions: { type: Array, default: () => [] },
@@ -62,7 +63,7 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
         @mousedown.prevent="choose(s)" @mousemove="highlight = i">
         <span class="dot" :style="{ background: statusStyle(s).color }"></span>
         <span class="r-title">{{ s.title }}</span>
-        <span class="r-meta"><span :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><template v-if="repoLabel(s)"> · {{ repoLabel(s) }}</template></span>
+        <span class="r-meta"><span :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><template v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></template><template v-if="repoLabel(s)"> · {{ repoLabel(s) }}</template></span>
       </li>
     </ul>
     <div v-else-if="open && modelValue.trim()" class="results empty">No matching sessions.</div>

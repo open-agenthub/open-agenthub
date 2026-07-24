@@ -189,6 +189,57 @@ public class SessionShareStorePostgresTests
             new NpgsqlParameter("session", "session-a"));
         Assert.Equal(0, remaining);
     }
+    [PostgreSqlFact]
+    public async Task SessionStore_MigratesAndRoundTripsAgentConfiguration()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var policy = "{\"allowedTools\":[\"Read\"],\"allowedMcpTools\":[\"mcp__git\"],\"allowedCommands\":[\"git status\"]}";
+        var record = new SessionRecord
+        {
+            Id = "agent-session", Owner = "alice", Title = "Codex", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.Codex, AuthMode = AgentAuthMode.ApiKey, AgentPolicyJson = policy,
+            AgentSessionId = "thread-1", CallbackToken = "callback-1"
+        };
+
+        await database.UpsertSessionAsync(record);
+        var stored = await database.GetSessionAsync("alice", "agent-session");
+        var agentDefault = await database.ScalarAsync<string>(
+            "SELECT column_default FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'agent'");
+        var authDefault = await database.ScalarAsync<string>(
+            "SELECT column_default FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'auth_mode'");
+
+        Assert.NotNull(stored);
+        Assert.Equal(AgentKind.Codex, stored!.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, stored.AuthMode);
+        Assert.Equal("thread-1", stored.AgentSessionId);
+        Assert.Equal(policy, stored.AgentPolicyJson);
+        Assert.Contains("Claude", agentDefault);
+        Assert.Contains("Auto", authDefault);
+    }
+
+    [PostgreSqlFact]
+    public async Task OwnerAccess_MapsProviderNeutralSessionId_WhenLegacyClaudeIdIsNull()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var record = new SessionRecord
+        {
+            Id = "codex-owner-session",
+            Owner = "owner-a",
+            Title = "Codex",
+            Mode = SessionMode.Interactive,
+            Agent = AgentKind.Codex,
+            AuthMode = AgentAuthMode.Subscription,
+            AgentSessionId = "codex-thread",
+            CallbackToken = "synthetic-callback"
+        };
+
+        await database.UpsertSessionAsync(record);
+        var access = await database.Shares.FindUserAccessAsync(record.Owner, record.Id);
+
+        Assert.NotNull(access);
+        Assert.Equal("codex-thread", access!.Session.AgentSessionId);
+        Assert.Null(access.Session.ClaudeSessionId);
+    }
 }
 
 [AttributeUsage(AttributeTargets.Method)]
@@ -299,6 +350,9 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
             CallbackToken = $"callback-{id}"
         });
 
+    public Task UpsertSessionAsync(SessionRecord record) => _sessions.UpsertAsync(record);
+
+    public Task<SessionRecord?> GetSessionAsync(string owner, string id) => _sessions.GetAsync(owner, id);
     public Task AddUserAsync(string owner)
         => _users.RecordLoginAsync(owner, $"{owner}@example.test", owner);
 

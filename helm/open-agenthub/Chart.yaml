@@ -1,6 +1,6 @@
 apiVersion: v2
 name: open-agenthub
-description: Open AgentHub – platform for running and controlling Claude Code agents in Kubernetes
+description: Open AgentHub – platform for running and controlling coding agents in Kubernetes
 type: application
 version: 0.4.0
 appVersion: "0.4.0"

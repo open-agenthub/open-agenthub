@@ -14,6 +14,67 @@ public enum SessionMode
     Scheduled
 }
 
+public enum AgentKind { Claude, Codex }
+public enum AgentAuthMode { Auto, Subscription, ApiKey }
+
+public sealed record AgentPolicy
+{
+    public IReadOnlyList<string> AllowedTools { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> AllowedMcpTools { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<string> AllowedCommands { get; init; } = Array.Empty<string>();
+}
+
+public static class AgentConfiguration
+{
+    public static void ValidateForCreate(AgentKind agent, AgentAuthMode authMode)
+    {
+        ValidateAgent(agent);
+        ValidateAuthMode(authMode);
+    }
+
+    public static void ValidateForUpdate(AgentKind? agent, AgentAuthMode? authMode)
+    {
+        if (agent is { } selectedAgent) ValidateAgent(selectedAgent);
+        if (authMode is { } selectedAuthMode) ValidateAuthMode(selectedAuthMode);
+    }
+
+    public static void ValidateForUpdate(AgentKind currentAgent, AgentAuthMode currentAuthMode,
+        AgentKind? requestedAgent, AgentAuthMode? requestedAuthMode)
+    {
+        // A migrated Claude+Auto record may remain untouched, but Auto is never a
+        // valid result once the public PATCH supplies either agent/auth field.
+        if (requestedAgent is null && requestedAuthMode is null) return;
+        ValidateAgent(requestedAgent ?? currentAgent);
+        ValidateAuthMode(requestedAuthMode ?? currentAuthMode);
+    }
+
+    public static void ValidateForDuplicatedSession(AgentKind agent, AgentAuthMode authMode)
+    {
+        ValidateAgent(agent);
+        if (agent == AgentKind.Claude && authMode == AgentAuthMode.Auto) return;
+        ValidateAuthMode(authMode);
+    }
+
+
+    public static AgentPolicy ResolvePolicy(AgentPolicy? policy, IReadOnlyList<string> legacyAllowedTools) =>
+        policy
+        ?? (legacyAllowedTools.Count > 0
+            ? new AgentPolicy { AllowedTools = legacyAllowedTools.ToArray() }
+            : new AgentPolicy());
+
+    private static void ValidateAgent(AgentKind agent)
+    {
+        if (agent is not AgentKind.Claude and not AgentKind.Codex)
+            throw new ArgumentException("Unsupported agent kind.");
+    }
+
+    private static void ValidateAuthMode(AgentAuthMode authMode)
+    {
+        if (authMode is not AgentAuthMode.Subscription and not AgentAuthMode.ApiKey)
+            throw new ArgumentException("Authentication mode must be Subscription or ApiKey.");
+    }
+}
+
 /// <summary>A repository to check out into the session workspace.</summary>
 public record RepoRef
 {
@@ -50,7 +111,11 @@ public record CreateSessionRequest
     /// <summary>MCP configuration as a JSON string (.mcp.json format), mounted into the container.</summary>
     public string? McpConfigJson { get; init; }
 
-    /// <summary>Allowlist of permitted tools for autonomous mode.</summary>
+    public AgentKind Agent { get; init; } = AgentKind.Claude;
+    public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
+    /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
+    public AgentPolicy? Policy { get; init; }
+    /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
     public List<string> AllowedTools { get; init; } = new();
 
     /// <summary>Custom container image (glibc-based, bash+git+curl recommended). Empty = default agent image.</summary>
@@ -78,6 +143,9 @@ public record UpdateSessionRequest
     public string? Memory { get; init; }
     /// <summary>MCP config (.mcp.json); null = unchanged, empty string = remove all MCP servers.</summary>
     public string? McpConfigJson { get; init; }
+    public AgentKind? Agent { get; init; }
+    public AgentAuthMode? AuthMode { get; init; }
+    public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
     /// <summary>Replacement project assignment; null removes the assignment when supplied.</summary>
@@ -91,7 +159,8 @@ public record UpdateSessionRequest
     }
 }
 
-public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp);
+public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
+    AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null);
 
 public static class SessionDuplication
 {
@@ -105,7 +174,12 @@ public static class SessionDuplication
         Prompt = source.Prompt,
         Schedule = source.Schedule,
         McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
-        AllowedTools = Deserialize<List<string>>(source.AllowedToolsJson),
+        Agent = request.Agent ?? source.Agent,
+        AuthMode = request.AuthMode ?? source.AuthMode,
+        Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),
+        // An explicit structured policy, including an empty default-deny policy,
+        // supersedes legacy AllowedTools instead of rehydrating it later.
+        AllowedTools = request.Policy is null ? Deserialize<List<string>>(source.AllowedToolsJson) : new List<string>(),
         Image = source.Image,
         RunAsRoot = source.RunAsRoot,
         Cpu = source.Cpu,
@@ -115,8 +189,16 @@ public static class SessionDuplication
     private static T Deserialize<T>(string? json) where T : new()
     {
         if (string.IsNullOrWhiteSpace(json)) return new T();
-        try { return System.Text.Json.JsonSerializer.Deserialize<T>(json) ?? new T(); }
+        try { return System.Text.Json.JsonSerializer.Deserialize<T>(json, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)) ?? new T(); }
         catch (System.Text.Json.JsonException) { return new T(); }
+    }
+
+    private static T? DeserializeOptional<T>(string? json) where T : class
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try { return System.Text.Json.JsonSerializer.Deserialize<T>(json,
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web)); }
+        catch (System.Text.Json.JsonException) { return null; }
     }
 }
 
@@ -140,6 +222,9 @@ public record SessionInfo
     public DateTime CreatedAt { get; init; }
     public string? Prompt { get; init; }
     public IReadOnlyList<string> AllowedTools { get; init; } = Array.Empty<string>();
+    public AgentKind Agent { get; init; } = AgentKind.Claude;
+    public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Auto;
+    public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>
@@ -160,6 +245,7 @@ public record UserCredentials
     public string? SshPrivateKey { get; init; }
     public string? GitlabToken { get; init; }
     public string? AnthropicApiKey { get; init; }
+    public string? OpenAiApiKey { get; init; }
     /// <summary>known_hosts entry of the GitLab server (protects against MITM on the first clone).</summary>
     public string? GitKnownHosts { get; init; }
     public string? GitUserName { get; init; }
@@ -176,6 +262,9 @@ public record CredentialStatus
     public bool GitlabToken { get; init; }
     public bool AnthropicApiKey { get; init; }
     public bool GitKnownHosts { get; init; }
+    public bool OpenAiApiKey { get; init; }
     public bool GitUserName { get; init; }
     public bool GitUserEmail { get; init; }
+    public bool ClaudeSubscription { get; init; }
+    public bool CodexSubscription { get; init; }
 }

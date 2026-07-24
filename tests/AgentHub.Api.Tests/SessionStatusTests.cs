@@ -1,4 +1,5 @@
 using AgentHub.Api.Models;
+using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
 using Xunit;
 
@@ -47,4 +48,42 @@ public class SessionStatusTests
         Assert.Equal(SessionStatus.Paused, SessionStatus.ResolvePhase(null, SessionStatus.Paused));
         Assert.Equal(SessionStatus.Paused, SessionStatus.ResolvePhase("", SessionStatus.Paused));
     }
+
+    public static TheoryData<UpdateSessionRequest> ScheduledRuntimeUpdates => new()
+    {
+        new UpdateSessionRequest { Agent = AgentKind.Codex },
+        new UpdateSessionRequest { AuthMode = AgentAuthMode.ApiKey },
+        new UpdateSessionRequest { Policy = new AgentPolicy() },
+        new UpdateSessionRequest { Image = "custom/image" }
+    };
+
+    [Theory]
+    [MemberData(nameof(ScheduledRuntimeUpdates))]
+    public void ScheduledUpdateValidator_RejectsIgnoredRuntimeFields(UpdateSessionRequest request)
+    {
+        var record = Session(SessionMode.Scheduled);
+
+        Assert.Throws<ArgumentException>(() => SessionUpdateValidator.Validate(record, request));
+    }
+
+    [Fact]
+    public void ScheduledUpdateValidator_AllowsTitleAndProjectOnlyUpdate()
+    {
+        SessionUpdateValidator.Validate(Session(SessionMode.Scheduled),
+            new UpdateSessionRequest { Title = "Renamed", ProjectId = "project" });
+    }
+
+    [Fact]
+    public void UpdateValidator_PreservesOrdinaryNonScheduledAgentUpdates()
+    {
+        SessionUpdateValidator.Validate(Session(SessionMode.Autonomous),
+            new UpdateSessionRequest { Agent = AgentKind.Codex });
+    }
+
+    private static SessionRecord Session(SessionMode mode) => new()
+    {
+        Id = "session", Owner = "alice", Title = "Session", Mode = mode,
+        Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+        AgentSessionId = "thread", CallbackToken = "token"
+    };
 }

@@ -56,7 +56,10 @@ metadata:
   namespace: agenthub
 data:
   AgentHub__Namespace: "agenthub-sessions"
-  AgentHub__AgentImage: "registry.example.com/agenthub/agent-runtime:latest"
+  # Legacy Claude-only option retained for compatibility with older backends.
+  AgentHub__AgentImage: "registry.example.com/agenthub/agent-runtime-claude:latest"
+  AgentHub__ClaudeAgentImage: "registry.example.com/agenthub/agent-runtime-claude:latest"
+  AgentHub__CodexAgentImage: "registry.example.com/agenthub/agent-runtime-codex:latest"
   AgentHub__AgentPort: "7681"
   AgentHub__CallbackBaseUrl: "http://agenthub-backend.agenthub.svc.cluster.local"
   S3__ServiceUrl: ""
