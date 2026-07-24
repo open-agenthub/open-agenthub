@@ -117,11 +117,13 @@ async function wsUrl(id, kind) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws'
   const t = await getToken()
   const q = t ? `?access_token=${encodeURIComponent(t)}` : ''
-  return `${proto}://${location.host}/ws/sessions/${id}/${kind}${q}`
+  return `${proto}://${location.host}/ws/sessions/${encodeURIComponent(id)}/${kind}${q}`
 }
 
 // The selected agent's shared terminal.
 export const terminalUrl = (id) => wsUrl(id, 'terminal')
+export const browserUrl = (id) => wsUrl(id, 'browser')
+export const sharedBrowserUrl = (token) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/shared/${encodeURIComponent(token)}/browser`
 export async function getSharedSession(token) {
   const res = await fetch(`/api/shared/${encodeURIComponent(token)}/session`)
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
