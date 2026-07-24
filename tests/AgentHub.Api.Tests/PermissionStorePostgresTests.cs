@@ -128,6 +128,64 @@ public class PermissionStorePostgresTests
         Assert.Equal("allow", await database.Store.GetDecisionAsync("old-decided")); // untouched
     }
 
+    [PostgreSqlFact]
+    public async Task ResolveAllowAlways_PersistsASessionScopedRule()
+    {
+        await using var database = await PostgresPermissionDatabase.CreateAsync();
+        await database.Store.CreateAsync(NewRequest("req-1", "session-a", tool: "Bash"));
+
+        Assert.False(await database.Store.IsAlwaysAllowedAsync("session-a", "Bash"));
+
+        await database.Store.ResolveAsync("req-1", "allowAlways");
+
+        Assert.True(await database.Store.IsAlwaysAllowedAsync("session-a", "Bash"));
+        // Scoped: neither other tools nor other sessions inherit the rule.
+        Assert.False(await database.Store.IsAlwaysAllowedAsync("session-a", "WebFetch"));
+        Assert.False(await database.Store.IsAlwaysAllowedAsync("session-b", "Bash"));
+    }
+
+    [PostgreSqlFact]
+    public async Task ResolveAllowOrDeny_DoesNotCreateARule()
+    {
+        await using var database = await PostgresPermissionDatabase.CreateAsync();
+        await database.Store.CreateAsync(NewRequest("req-1", "session-a"));
+        await database.Store.CreateAsync(NewRequest("req-2", "session-a"));
+
+        await database.Store.ResolveAsync("req-1", "allow");
+        await database.Store.ResolveAsync("req-2", "deny");
+
+        Assert.False(await database.Store.IsAlwaysAllowedAsync("session-a", "Bash"));
+    }
+
+    [PostgreSqlFact]
+    public async Task AddAlwaysAllowRule_IsIdempotent()
+    {
+        await using var database = await PostgresPermissionDatabase.CreateAsync();
+
+        await database.Store.AddAlwaysAllowRuleAsync("session-a", "Bash");
+        await database.Store.AddAlwaysAllowRuleAsync("session-a", "Bash");
+
+        Assert.True(await database.Store.IsAlwaysAllowedAsync("session-a", "Bash"));
+    }
+
+    [PostgreSqlFact]
+    public async Task GetPendingRequests_ListsUndecidedOldestFirst()
+    {
+        await using var database = await PostgresPermissionDatabase.CreateAsync();
+        await database.Store.CreateAsync(NewRequest("req-1", "session-a", tool: "Bash"));
+        await Task.Delay(10);
+        await database.Store.CreateAsync(NewRequest("req-2", "session-a", tool: "WebFetch"));
+        await database.Store.CreateAsync(NewRequest("req-other", "session-b", tool: "Edit"));
+        await database.Store.CreateAsync(NewRequest("req-3", "session-a", tool: "Write"));
+        await database.Store.ResolveAsync("req-3", "deny");
+
+        var pending = await database.Store.GetPendingRequestsAsync("session-a");
+
+        Assert.Equal(["req-1", "req-2"], pending.Select(p => p.Id));
+        Assert.Equal("Bash", pending[0].Tool);
+        Assert.Equal("ls", pending[0].Summary);
+    }
+
     private static PermissionRequest NewRequest(string id, string sessionId, string tool = "Bash") => new()
     {
         Id = id,

@@ -67,6 +67,9 @@ export const api = {
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
+  // Pending tool-permission requests + in-app approval (mirrors the messenger buttons).
+  listPermissions: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/permissions`),
+  decidePermission: (id, reqId, decision) => req('POST', `/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(reqId)}`, { decision }),
   deleteSession: (id) => req('DELETE', `/sessions/${id}`),
   storeCredentials: (data) => req('PUT', '/credentials', data),
   // Which credential fields have a stored value (booleans only, never values).

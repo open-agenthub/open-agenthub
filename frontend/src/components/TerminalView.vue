@@ -1,5 +1,5 @@
 <script setup>
-import { computed, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
@@ -17,6 +17,30 @@ const shellOpened = ref(false)
 const shareOpen = ref(false)
 const transcriptText = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '', transcript: '' })
+
+// In-app approval of tool-permission requests (in addition to the messengers).
+const pendingPermissions = ref([])
+let permissionTimer
+
+async function refreshPermissions() {
+  if (props.sharedToken || !capabilities.value.canManage || !isLive.value) {
+    pendingPermissions.value = []
+    return
+  }
+  try { pendingPermissions.value = await api.listPermissions(props.session.id) } catch {}
+}
+
+async function decidePermission(reqId, decision) {
+  pendingPermissions.value = pendingPermissions.value.filter(p => p.id !== reqId)
+  try { await api.decidePermission(props.session.id, reqId, decision) } catch {}
+}
+
+onMounted(() => {
+  refreshPermissions()
+  permissionTimer = setInterval(refreshPermissions, 4000)
+})
+onBeforeUnmount(() => clearInterval(permissionTimer))
+watch(() => props.session?.id, () => { pendingPermissions.value = []; refreshPermissions() })
 
 const repoLabel = computed(() => repoShortName(props.session?.repoUrl || props.session?.repos?.[0]?.url || ''))
 
@@ -69,6 +93,18 @@ async function selectTab(tab) {
     <div v-if="session.questionPending && capabilities.canWrite" class="asking">
       <span class="ask-dot"></span>THE AGENT IS ASKING — reply in the terminal below.
     </div>
+    <div v-for="p in pendingPermissions" :key="p.id" class="perm">
+      <span class="ask-dot"></span>
+      <div class="perm-text">
+        <strong>The agent wants to use {{ p.tool }}.</strong>
+        <span v-if="p.summary" class="perm-summary">{{ p.summary }}</span>
+      </div>
+      <div class="perm-actions">
+        <button class="bar-btn primary" @click="decidePermission(p.id, 'allow')">Allow</button>
+        <button class="bar-btn" @click="decidePermission(p.id, 'allowAlways')">Allow (don't ask again)</button>
+        <button class="bar-btn danger" @click="decidePermission(p.id, 'deny')">Deny</button>
+      </div>
+    </div>
     <TerminalPane v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
     <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell'" :session="session" kind="shell" :active="activeTab === 'shell'" @status="statuses.shell = $event" />
     <div v-if="activeTab === 'transcript'" class="transcript">
@@ -102,7 +138,12 @@ async function selectTab(tab) {
 .share-pop { position: absolute; top: 100%; right: 16px; margin-top: 8px; width: min(560px, calc(100vw - 48px)); max-height: 70vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border-3); border-radius: var(--radius-lg); box-shadow: 0 16px 48px rgba(0,0,0,0.5); z-index: 50; }
 .share-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px 0; font-family: var(--display); font-weight: 700; color: var(--strong); }
 .asking { display: flex; align-items: center; gap: 8px; padding: 10px 20px; font-weight: 700; color: var(--warn); font-size: 12px; background: #1f1b12; border-bottom: 1px solid #4a3e1e; }
-.ask-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); }
+.ask-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
+.perm { display: flex; align-items: center; gap: 10px; padding: 10px 20px; font-size: 12px; color: var(--warn); background: #1f1b12; border-bottom: 1px solid #4a3e1e; flex-wrap: wrap; }
+.perm-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
+.perm-summary { color: var(--muted-3); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-actions { display: flex; gap: 8px; }
+.perm-actions .danger { color: #e5484d; }
 .transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }
 .transcript-inner { max-width: 760px; margin: 0 auto; padding: 26px 24px; }
 .transcript-inner h3 { font-size: 20px; margin: 0 0 14px; }
