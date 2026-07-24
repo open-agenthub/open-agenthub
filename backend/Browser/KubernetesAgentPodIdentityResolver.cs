@@ -24,6 +24,7 @@ public sealed class KubernetesAgentPodIdentityResolver : IAgentPodIdentityResolv
         var pods = await _kubernetes.CoreV1.ListNamespacedPodAsync(
             _namespace,
             labelSelector: $"agenthub.dev/session={sessionId},agenthub.dev/component=agent",
+            fieldSelector: $"metadata.name=session-{sessionId}",
             cancellationToken: ct);
         return MatchesLivePod(pods.Items, sessionId, sourceIp);
     }
@@ -31,6 +32,7 @@ public sealed class KubernetesAgentPodIdentityResolver : IAgentPodIdentityResolv
     public static bool MatchesLivePod(IEnumerable<V1Pod> pods, string sessionId,
         IPAddress sourceIp) => pods.Any(pod =>
             pod.Metadata?.DeletionTimestamp is null &&
+            string.Equals(pod.Metadata?.Name, $"session-{sessionId}", StringComparison.Ordinal) &&
             string.Equals(pod.Status?.Phase, "Running", StringComparison.Ordinal) &&
             pod.Metadata?.Labels is { } labels &&
             labels.TryGetValue("agenthub.dev/session", out var podSession) &&

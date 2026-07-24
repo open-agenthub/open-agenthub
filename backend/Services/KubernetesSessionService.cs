@@ -430,7 +430,7 @@ public sealed class KubernetesSessionService : ISessionService
                             BackoffLimit = 0, ActiveDeadlineSeconds = 60 * 60 * 6,
                             Template = new V1PodTemplateSpec
                             {
-                                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title),
+                                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title, rec.CallbackToken),
                                 Spec = podSpec
                             }
                         }
@@ -442,7 +442,7 @@ public sealed class KubernetesSessionService : ISessionService
         {
             await _k8s.CoreV1.CreateNamespacedPodAsync(new V1Pod
             {
-                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title),
+                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title, rec.CallbackToken),
                 Spec = podSpec
             }, _opts.Namespace, cancellationToken: ct);
         }
@@ -595,15 +595,24 @@ public sealed class KubernetesSessionService : ISessionService
         Browser = browser ?? BrowserSummary.Stopped
     };
 
-    private V1ObjectMeta Meta(string name, string owner, string id, string component, string? title = null) => new()
+    private V1ObjectMeta Meta(string name, string owner, string id, string component,
+        string? title = null, string? callbackToken = null)
     {
-        Name = name, NamespaceProperty = _opts.Namespace,
-        Labels = new Dictionary<string, string>
+        var labels = new Dictionary<string, string>
         {
             [OwnerLabel] = Sanitize(owner), [SessionLabel] = id, [ComponentLabel] = component
-        },
-        Annotations = title is null ? null : new Dictionary<string, string> { ["agenthub.dev/title"] = title }
-    };
+        };
+        if (callbackToken is not null)
+            labels[BrowserPodIdentity.Label] = BrowserPodIdentity.FromToken(callbackToken);
+        return new V1ObjectMeta
+        {
+            Name = name, NamespaceProperty = _opts.Namespace, Labels = labels,
+            Annotations = title is null ? null : new Dictionary<string, string>
+            {
+                ["agenthub.dev/title"] = title
+            }
+        };
+    }
 
     private async Task<V1Pod?> TryReadPodAsync(string name, CancellationToken ct)
     {

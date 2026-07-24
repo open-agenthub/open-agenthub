@@ -132,12 +132,12 @@ public static class BrowserPodSpecFactory
             [
                 new V1NetworkPolicyIngressRule
                 {
-                    FromProperty = [new V1NetworkPolicyPeer(podSelector: Selector(Labels(session.Id, "agent")))],
+                    FromProperty = [new V1NetworkPolicyPeer(podSelector: Selector(AgentLabels(session)))],
                     Ports = [cdpPort]
                 }
             ]);
         var cdpEgress = Policy(
-            $"{name}-cdp-out", context.Namespace, Labels(session.Id, "agent"), ["Egress"],
+            $"{name}-cdp-out", context.Namespace, AgentLabels(session), ["Egress"],
             egress:
             [
                 new V1NetworkPolicyEgressRule
@@ -227,6 +227,13 @@ public static class BrowserPodSpecFactory
 
     private static V1LabelSelector Selector(Dictionary<string, string> labels) =>
         new(matchLabels: labels);
+
+    private static Dictionary<string, string> AgentLabels(SessionRecord session)
+    {
+        var labels = Labels(session.Id, "agent");
+        labels[BrowserPodIdentity.Label] = BrowserPodIdentity.FromToken(session.CallbackToken);
+        return labels;
+    }
 
     private static Dictionary<string, string> Labels(string sessionId, string component) => new()
     {

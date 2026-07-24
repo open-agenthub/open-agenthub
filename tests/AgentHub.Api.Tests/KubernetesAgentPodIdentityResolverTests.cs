@@ -26,6 +26,15 @@ public sealed class KubernetesAgentPodIdentityResolverTests
     }
 
     [Fact]
+    public void Matches_RejectsForeignPodThatCopiesSessionLabels()
+    {
+        var impostor = Pod("session-1", "agent", "Running", "10.0.0.12", "foreign-pod");
+
+        Assert.False(KubernetesAgentPodIdentityResolver.MatchesLivePod(
+            [impostor], "session-1", IPAddress.Parse("10.0.0.12")));
+    }
+
+    [Fact]
     public void Matches_RejectsPendingOrTerminatingPods()
     {
         var pending = Pod("session-1", "agent", "Pending", "10.0.0.8");
@@ -36,9 +45,9 @@ public sealed class KubernetesAgentPodIdentityResolverTests
             [pending, terminating], "session-1", IPAddress.Parse("10.0.0.8")));
     }
 
-    private static V1Pod Pod(string session, string component, string phase, string ip) => new()
+    private static V1Pod Pod(string session, string component, string phase, string ip, string? name = null) => new()
     {
-        Metadata = new V1ObjectMeta(labels: new Dictionary<string, string>
+        Metadata = new V1ObjectMeta(name: name ?? $"session-{session}", labels: new Dictionary<string, string>
         {
             ["agenthub.dev/session"] = session,
             ["agenthub.dev/component"] = component
