@@ -511,8 +511,12 @@ public sealed class KubernetesSessionService : ISessionService
         var hasSubscription = false;
         if (record.Mode is SessionMode.Autonomous or SessionMode.Scheduled)
         {
-            var apiKey = record.Agent == AgentKind.Codex ? "openai_api_key" : "anthropic_api_key";
-            var providerKey = record.Agent == AgentKind.Codex ? "auth.json" : "credentials.json";
+            var (apiKey, providerKey) = record.Agent switch
+            {
+                AgentKind.Codex => ("openai_api_key", "auth.json"),
+                AgentKind.Cursor => ("cursor_api_key", "cursor-credentials.json"),
+                _ => ("anthropic_api_key", "credentials.json")
+            };
             if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
                 hasApiKey = await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
             if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
@@ -529,6 +533,7 @@ public sealed class KubernetesSessionService : ISessionService
             CredentialsSecretName = CredsSecretName(owner),
             ClaudeCredentialSecretName = ProviderSecretName(owner, AgentKind.Claude),
             CodexCredentialSecretName = ProviderSecretName(owner, AgentKind.Codex),
+            CursorCredentialSecretName = ProviderSecretName(owner, AgentKind.Cursor),
             HasSelectedApiKey = hasApiKey,
             HasSelectedSubscriptionCredential = hasSubscription,
             HasGitCredentials = hasGitCredentials,
@@ -537,7 +542,8 @@ public sealed class KubernetesSessionService : ISessionService
             StateGetUrl = artifactUrls.StateGetUrl,
             ScrollbackPutUrl = artifactUrls.ScrollbackPutUrl,
             S3Insecure = _s3Insecure,
-            RuntimeImages = new AgentRuntimeImages(claudeImage, _opts.CodexAgentImage, _opts.AgentImagePullPolicy),
+            RuntimeImages = new AgentRuntimeImages(
+                claudeImage, _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.AgentImagePullPolicy),
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
@@ -643,6 +649,7 @@ public sealed class AgentHubOptions
     public string AgentImage { get; set; } = "";
     public string ClaudeAgentImage { get; set; } = "";
     public string CodexAgentImage { get; set; } = "";
+    public string CursorAgentImage { get; set; } = "";
     public int AgentPort { get; set; } = 7681;
     public string GitCloneImage { get; set; } = "alpine/git:2.45.2";
     /// <summary>Pull policy for the agent/runtime image. Set "Always" when the agent

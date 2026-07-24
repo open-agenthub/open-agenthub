@@ -5,7 +5,7 @@ using k8s.Models;
 
 namespace AgentHub.Api.Services;
 
-public sealed record AgentRuntimeImages(string ClaudeImage, string CodexImage, string PullPolicy);
+public sealed record AgentRuntimeImages(string ClaudeImage, string CodexImage, string CursorImage, string PullPolicy);
 
 public sealed record AgentPodRuntimeSettings
 {
@@ -26,6 +26,7 @@ public sealed record PodBuildContext
     public required string CredentialsSecretName { get; init; }
     public required string ClaudeCredentialSecretName { get; init; }
     public required string CodexCredentialSecretName { get; init; }
+    public required string CursorCredentialSecretName { get; init; }
     public bool HasSelectedApiKey { get; init; }
     public bool HasSelectedSubscriptionCredential { get; init; }
     public bool HasGitCredentials { get; init; }
@@ -61,7 +62,12 @@ public static class AgentPodSpecFactory
     public static V1PodSpec Build(SessionRecord record, CreateSessionRequest request, PodBuildContext context)
     {
         var images = context.RuntimeImages;
-        var runtimeImage = record.Agent == AgentKind.Codex ? images.CodexImage : images.ClaudeImage;
+        var runtimeImage = record.Agent switch
+        {
+            AgentKind.Codex => images.CodexImage,
+            AgentKind.Cursor => images.CursorImage,
+            _ => images.ClaudeImage
+        };
         var repos = NormalizeRepos(request);
         var hasRepo = repos.Count > 0;
         var hasMcp = !string.IsNullOrWhiteSpace(request.McpConfigJson);
@@ -169,6 +175,12 @@ public static class AgentPodSpecFactory
             case (AgentKind.Codex, AgentAuthMode.ApiKey):
                 AddApiKey("CODEX_API_KEY", "openai_api_key");
                 break;
+            case (AgentKind.Cursor, AgentAuthMode.Subscription):
+                AddSubscriptionVolume("cursor", context.CursorCredentialSecretName);
+                break;
+            case (AgentKind.Cursor, AgentAuthMode.ApiKey):
+                AddApiKey("CURSOR_API_KEY", "cursor_api_key");
+                break;
             case (AgentKind.Claude, AgentAuthMode.Auto):
                 AddSubscriptionVolume("claude", context.ClaudeCredentialSecretName);
                 AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
@@ -220,8 +232,9 @@ public static class AgentPodSpecFactory
         var initContainers = new List<V1Container>();
         if (customImage is not null)
         {
-            var copyScript = record.Agent == AgentKind.Codex
-                ? """
+            var copyScript = record.Agent switch
+            {
+                AgentKind.Codex => """
                     set -e
                     mkdir -p /opt/agenthub/bin /opt/agenthub/lib
                     cp -r /opt/session-agent /opt/agenthub/session-agent
@@ -234,8 +247,26 @@ public static class AgentPodSpecFactory
                     chmod -R a+rX /opt/agenthub
                     chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/codex)"
                     echo "Runtime copied to /opt/agenthub."
-                    """
-                : """
+                    """,
+                AgentKind.Cursor => """
+                    set -e
+                    mkdir -p /opt/agenthub/bin /opt/agenthub/lib
+                    cp -r /opt/session-agent /opt/agenthub/session-agent
+                    cp /usr/local/bin/node /opt/agenthub/bin/node
+                    cp -r /usr/local/lib/node_modules /opt/agenthub/lib/node_modules
+                    cp /usr/local/bin/entrypoint.sh /opt/agenthub/entrypoint.sh
+                    # agent launcher: resolve the symlink target of the global install and link it
+                    target=$(readlink -f /usr/local/bin/agent)
+                    ln -sf "/opt/agenthub/${target#/usr/local/}" /opt/agenthub/bin/agent
+                    if [ -e /usr/local/bin/cursor-agent ]; then
+                      cursor_target=$(readlink -f /usr/local/bin/cursor-agent)
+                      ln -sf "/opt/agenthub/${cursor_target#/usr/local/}" /opt/agenthub/bin/cursor-agent
+                    fi
+                    chmod -R a+rX /opt/agenthub
+                    chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/agent)"
+                    echo "Runtime copied to /opt/agenthub."
+                    """,
+                _ => """
                     set -e
                     mkdir -p /opt/agenthub/bin /opt/agenthub/lib
                     cp -r /opt/session-agent /opt/agenthub/session-agent
@@ -248,7 +279,8 @@ public static class AgentPodSpecFactory
                     chmod -R a+rX /opt/agenthub
                     chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/claude)"
                     echo "Runtime copied to /opt/agenthub."
-                    """;
+                    """
+            };
             initContainers.Add(new V1Container
             {
                 Name = "copy-runtime", Image = runtimeImage,
