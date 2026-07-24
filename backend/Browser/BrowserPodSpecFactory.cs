@@ -206,7 +206,16 @@ public static class BrowserPodSpecFactory
         IList<V1NetworkPolicyIngressRule>? ingress = null,
         IList<V1NetworkPolicyEgressRule>? egress = null) => new()
     {
-        Metadata = new V1ObjectMeta { Name = name, NamespaceProperty = ns },
+        Metadata = new V1ObjectMeta
+        {
+            Name = name,
+            NamespaceProperty = ns,
+            Labels = new Dictionary<string, string>
+            {
+                [SessionLabel] = selector[SessionLabel],
+                ["agenthub.dev/browser-resource"] = "true"
+            }
+        },
         Spec = new V1NetworkPolicySpec
         {
             PodSelector = Selector(selector),

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using AgentHub.Api.Models;
+using AgentHub.Api.Browser;
 using AgentHub.Api.Notifications;
 using AgentHub.Api.Permissions;
 using AgentHub.Api.Persistence;
@@ -28,13 +29,16 @@ public sealed class InternalController : ControllerBase
     private readonly IEnumerable<IPermissionNotifier> _permNotifiers;
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly ISessionMcpPolicyReader _shares;
+    private readonly IBrowserService? _browsers;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
-        IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares)
+        IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares,
+        IBrowserService? browsers = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
+        _browsers = browsers;
     }
 
     private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
@@ -81,6 +85,7 @@ public sealed class InternalController : ControllerBase
         if (body.Status is "Succeeded" or "Failed")
         {
             await _store.SetQuestionPendingAsync(id, false, ct);
+            if (_browsers is not null) await _browsers.StopAsync(id, ct);
             await NotifyAllAsync(rec, body.Status == "Succeeded" ? "finished" : "failed",
                 body.Status == "Succeeded" ? "Task completed." : "Session failed.", ct);
         }
