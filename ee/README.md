@@ -29,6 +29,13 @@ subscription for production use.
   enforced before tool execution.
 - **Owner-only controls** — sharing does not grant shell access, settings, project,
   duplication, lifecycle, or sharing-management permissions.
+- **Library sharing (MCP servers & skills)** — administrators can share saved MCP
+  servers and skills with individual users, user groups, or everyone on the instance;
+  user groups are managed in the admin area. Optionally, admins can allow regular
+  users to publish their own skills to everyone. Backend sources under
+  [`backend/Library/`](./backend/Library). (Saving personal MCP servers and skills
+  for your own reuse is a Community feature and needs no license — only sharing
+  between users is enterprise.)
 ## Subscription
 
 Using the Enterprise Edition in production requires a valid

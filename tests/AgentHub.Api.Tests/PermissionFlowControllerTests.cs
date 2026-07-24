@@ -129,7 +129,7 @@ public class PermissionFlowControllerTests
             Mode = SessionMode.Interactive, Agent = AgentKind.Claude, AuthMode = AgentAuthMode.ApiKey
         };
         var controller = new InternalController(
-            new SingleSessionStore(session), [], null!, store, [], [], null!)
+            new SingleSessionStore(session), [], null!, store, [], [], null!, null!)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

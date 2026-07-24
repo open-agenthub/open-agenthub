@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentHub.Api.Library;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Storage;
@@ -24,6 +25,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IProjectStore _projects;
     private readonly IArtifactStore _artifacts;
     private readonly IGitAuthService _gitAuth;
+    private readonly ILibraryAccess _library;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -35,13 +37,15 @@ public sealed class KubernetesSessionService : ISessionService
     private static readonly TimeSpan PresignTtl = TimeSpan.FromHours(12);
 
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
-        IArtifactStore artifacts, IGitAuthService gitAuth, ILogger<KubernetesSessionService> log)
+        IArtifactStore artifacts, IGitAuthService gitAuth, ILibraryAccess library,
+        ILogger<KubernetesSessionService> log)
     {
         _log = log;
         _store = store;
         _projects = projects;
         _artifacts = artifacts;
         _gitAuth = gitAuth;
+        _library = library;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
@@ -117,6 +121,14 @@ public sealed class KubernetesSessionService : ISessionService
 
         var repos = NormalizeRepos(req);
         var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
+        if (mcp is not null)
+        {
+            try { _ = JsonDocument.Parse(mcp); }
+            catch { throw new ArgumentException("MCP config is not valid JSON."); }
+        }
+        // Strict: creating a session with unknown/inaccessible library servers is an error.
+        var mcpServerIds = (await _library.ResolveMcpServersAsync(owner, req.McpServerIds, strict: true, ct))
+            .Select(s => s.Id).ToList();
         var policy = EffectivePolicy(req.Policy, req.AllowedTools);
 
         var id = Guid.NewGuid().ToString("n")[..12];
@@ -125,6 +137,7 @@ public sealed class KubernetesSessionService : ISessionService
             Id = id, Owner = owner, Title = req.Title, Mode = req.Mode,
             RepoUrl = repos.FirstOrDefault()?.Url, ReposJson = SerializeRepos(repos),
             Schedule = req.Schedule, McpConfigJson = mcp,
+            McpServerIdsJson = mcpServerIds.Count == 0 ? null : JsonSerializer.Serialize(mcpServerIds),
             ProjectId = req.ProjectId, Prompt = req.Prompt,
             Agent = req.Agent, AuthMode = req.AuthMode,
             AgentPolicyJson = SerializePolicy(policy),
@@ -189,6 +202,24 @@ public sealed class KubernetesSessionService : ISessionService
             ? new()
             : JsonSerializer.Deserialize<List<string>>(rec.AllowedToolsJson) ?? new();
 
+    private static List<string> ParseMcpServerIds(SessionRecord rec)
+    {
+        if (string.IsNullOrWhiteSpace(rec.McpServerIdsJson)) return new();
+        try { return JsonSerializer.Deserialize<List<string>>(rec.McpServerIdsJson) ?? new(); }
+        catch (JsonException) { return new(); }
+    }
+
+    /// <summary>Merges the session's saved library servers (lenient: inaccessible ids
+    /// drop out) with its inline config into the effective .mcp.json.</summary>
+    private async Task<string?> BuildEffectiveMcpConfigAsync(string owner, SessionRecord rec, CancellationToken ct)
+    {
+        var ids = ParseMcpServerIds(rec);
+        var servers = ids.Count == 0
+            ? (IReadOnlyList<McpServerRecord>)Array.Empty<McpServerRecord>()
+            : await _library.ResolveMcpServersAsync(owner, ids, strict: false, ct);
+        return McpConfigAssembler.Merge(rec.McpConfigJson, servers);
+    }
+
     private async Task ValidateProjectAsync(string owner, string? projectId, CancellationToken ct)
     {
         if (projectId is not null && await _projects.GetAsync(owner, projectId, ct) is null)
@@ -237,6 +268,7 @@ public sealed class KubernetesSessionService : ISessionService
         {
             Title = rec.Title, Mode = rec.Mode,
             Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
+            McpServerIds = ParseMcpServerIds(rec),
             ProjectId = rec.ProjectId, Prompt = rec.Prompt,
             Agent = rec.Agent, AuthMode = rec.AuthMode, Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
@@ -311,6 +343,7 @@ public sealed class KubernetesSessionService : ISessionService
             rec.ReposJson = SerializeRepos(repos);
             rec.RepoUrl = repos.FirstOrDefault()?.Url;
         }
+        var mcpDirty = false;
         if (req.McpConfigJson is not null)
         {
             // Empty string clears the MCP config; otherwise validate and replace.
@@ -319,13 +352,24 @@ public sealed class KubernetesSessionService : ISessionService
             {
                 try { _ = JsonDocument.Parse(mcp); }
                 catch { throw new ArgumentException("MCP config is not valid JSON."); }
-                await CreateMcpSecretAsync(owner, id, mcp, ct);
-            }
-            else
-            {
-                try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
             }
             rec.McpConfigJson = mcp;
+            mcpDirty = true;
+        }
+        if (req.McpServerIds is not null)
+        {
+            var ids = (await _library.ResolveMcpServersAsync(owner, req.McpServerIds, strict: true, ct))
+                .Select(s => s.Id).ToList();
+            rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
+            mcpDirty = true;
+        }
+        if (mcpDirty)
+        {
+            var effective = await BuildEffectiveMcpConfigAsync(owner, rec, ct);
+            if (effective is not null)
+                await CreateMcpSecretAsync(owner, id, effective, ct);
+            else
+                try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         }
         if (req.ProjectIdSpecified)
         {
@@ -357,6 +401,13 @@ public sealed class KubernetesSessionService : ISessionService
 
     private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct)
     {
+        // Resolved fresh on every (re)start so shared library entries stay live:
+        // an updated shared server lands in the pod on the next resume, and
+        // entries that are no longer accessible (revoked share, lapsed license)
+        // silently drop out. Own entries always survive.
+        var effectiveMcp = await BuildEffectiveMcpConfigAsync(owner, rec, ct);
+        req = req with { McpConfigJson = effectiveMcp };
+
         var context = await BuildPodContextAsync(owner, rec, resume, hasGitCredentials: false, ct);
         var preparation = await AgentSessionResourceOrchestrator.PrepareAsync(
             rec,
@@ -371,8 +422,10 @@ public sealed class KubernetesSessionService : ISessionService
             },
             async resourceCt =>
             {
-                if (!resume && !string.IsNullOrWhiteSpace(rec.McpConfigJson))
-                    await CreateMcpSecretAsync(owner, rec.Id, rec.McpConfigJson, resourceCt);
+                if (effectiveMcp is not null)
+                    await CreateMcpSecretAsync(owner, rec.Id, effectiveMcp, resourceCt);
+                else
+                    try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{rec.Id}", _opts.Namespace, cancellationToken: resourceCt); } catch { }
 
                 // Connected Git-provider credentials are session-scoped and must only be
                 // materialized after credential preflight succeeds.
@@ -570,7 +623,8 @@ public sealed class KubernetesSessionService : ISessionService
     {
         Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, RepoUrl = r.RepoUrl,
         Repos = ParseRepos(r),
-        HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson), McpConfigJson = r.McpConfigJson,
+        HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson) || ParseMcpServerIds(r).Count > 0,
+        McpConfigJson = r.McpConfigJson, McpServerIds = ParseMcpServerIds(r),
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, Policy = ParsePolicy(r),

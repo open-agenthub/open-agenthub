@@ -5,6 +5,9 @@ import AccountDialog from './AccountDialog.vue'
 import CredentialsDialog from './CredentialsDialog.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import AdminView from './AdminView.vue'
+import McpServersPane from './McpServersPane.vue'
+import SkillsPane from './SkillsPane.vue'
+import GroupsPane from './GroupsPane.vue'
 import { initials } from '../lib/text.js'
 
 defineEmits(['close'])
@@ -17,12 +20,15 @@ const personalTabs = computed(() => [
   { key: 'profile', label: 'Profile' },
   { key: 'account', label: 'Connected accounts', show: () => config.gitEnabled },
   { key: 'credentials', label: 'Credentials' },
+  { key: 'mcp', label: 'MCP servers' },
+  { key: 'skills', label: 'Skills' },
   { key: 'notifications', label: 'Notifications' },
   { key: 'tokens', label: 'API tokens' }
 ].filter(t => !t.show || t.show()))
 
 const adminTabs = [
   { key: 'users', label: 'Users & seats' },
+  { key: 'groups', label: 'Groups & sharing' },
   { key: 'billing', label: 'Billing & invoices' },
   { key: 'license', label: 'License' }
 ]
@@ -63,6 +69,9 @@ const active = ref(props.initialTab)
       </div>
       <AccountDialog v-else-if="active === 'account'" embedded />
       <CredentialsDialog v-else-if="active === 'credentials'" embedded @accounts="active = 'account'" />
+      <McpServersPane v-else-if="active === 'mcp'" :is-admin="isAdmin" />
+      <SkillsPane v-else-if="active === 'skills'" :is-admin="isAdmin" />
+      <GroupsPane v-else-if="active === 'groups'" />
       <SettingsDialog v-else-if="active === 'notifications'" embedded section="notifications" />
       <SettingsDialog v-else-if="active === 'tokens'" embedded section="tokens" />
       <AdminView v-else-if="active === 'users'" embedded section="seats" />
