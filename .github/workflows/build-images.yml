@@ -32,6 +32,9 @@ jobs:
           - component: agent-runtime-codex
             context: ./agent-runtime
             dockerfile: ./agent-runtime/codex/Dockerfile
+          - component: browser
+            context: ./browser-runtime
+            dockerfile: ./browser-runtime/Dockerfile
     steps:
       - uses: actions/checkout@v4
 

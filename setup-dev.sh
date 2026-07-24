@@ -47,6 +47,7 @@ docker build --file "$script_dir/backend/Dockerfile" --tag 'open-agenthub-dev/ba
 docker build --tag 'open-agenthub-dev/frontend:local' "$script_dir/frontend"
 docker build --file "$script_dir/agent-runtime/claude/Dockerfile" --tag 'open-agenthub-dev/agent-runtime-claude:local' "$script_dir/agent-runtime"
 docker build --file "$script_dir/agent-runtime/codex/Dockerfile" --tag 'open-agenthub-dev/agent-runtime-codex:local' "$script_dir/agent-runtime"
+docker build --tag 'open-agenthub-dev/browser:local' "$script_dir/browser-runtime"
 
 decode_base64() {
   if printf '' | base64 --decode >/dev/null 2>&1; then
