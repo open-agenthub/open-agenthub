@@ -1,3 +1,6 @@
+using System.Text;
+using System.Text.Json;
+using AgentHub.Api.Models;
 using AgentHub.Api.Notifications;
 using AgentHub.Api.Permissions;
 using AgentHub.Api.Persistence;
@@ -24,11 +27,11 @@ public sealed class InternalController : ControllerBase
     private readonly PermissionStore _permissions;
     private readonly IEnumerable<IPermissionNotifier> _permNotifiers;
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
-    private readonly SessionShareStore _shares;
+    private readonly ISessionMcpPolicyReader _shares;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
-        IEnumerable<IPermissionPromptEditor> promptEditors, SessionShareStore shares)
+        IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
@@ -50,6 +53,22 @@ public sealed class InternalController : ControllerBase
         if (!Request.Headers.TryGetValue("X-Agent-Token", out var tok)) return null;
         var rec = await _store.GetByCallbackTokenAsync(tok!, ct);
         return rec is not null && rec.Id == id ? rec : null;
+    }
+
+    private async Task<string?> ReadProviderCredentialBodyAsync(CancellationToken ct)
+    {
+        if (Request.ContentLength is > ProviderCredentialValidator.MaxBytes)
+            return null;
+
+        var buffer = new byte[ProviderCredentialValidator.MaxBytes + 1];
+        var total = 0;
+        while (total < buffer.Length)
+        {
+            var read = await Request.Body.ReadAsync(buffer.AsMemory(total, buffer.Length - total), ct);
+            if (read == 0) break;
+            total += read;
+        }
+        return total > ProviderCredentialValidator.MaxBytes ? null : Encoding.UTF8.GetString(buffer, 0, total);
     }
 
     [HttpPost("status")]
@@ -81,22 +100,22 @@ public sealed class InternalController : ControllerBase
         return NoContent();
     }
 
-    /// <summary>
-    /// Persists the session owner's Claude CLI OAuth credentials (subscription login).
-    /// The agent pod uploads the file whenever ~/.claude/.credentials.json changes
-    /// (first login and token refresh); new sessions get it injected again.
-    /// </summary>
-    [HttpPut("claude-credentials")]
-    public async Task<IActionResult> ClaudeCredentials(string id, CancellationToken ct)
+    /// <summary>Persists a subscription credential file uploaded by the matching provider agent.</summary>
+    [HttpPut("{agent}-credentials")]
+    public async Task<IActionResult> ProviderCredentials(string id, string agent, CancellationToken ct)
     {
+        if (!Enum.TryParse<AgentKind>(agent, ignoreCase: true, out var parsedAgent) ||
+            parsedAgent is not AgentKind.Claude and not AgentKind.Codex)
+            return BadRequest();
+
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
+        if (rec.Agent != parsedAgent || rec.AuthMode != AgentAuthMode.Subscription) return Conflict();
 
-        using var reader = new StreamReader(Request.Body);
-        var json = await reader.ReadToEndAsync(ct);
-        if (string.IsNullOrWhiteSpace(json) || json.Length > 64_000) return BadRequest();
+        var json = await ReadProviderCredentialBodyAsync(ct);
+        if (json is null || !ProviderCredentialValidator.Validate(parsedAgent, json)) return BadRequest();
 
-        await _svc.StoreClaudeCredentialsAsync(rec.Owner, json, ct);
+        await _svc.StoreProviderCredentialsAsync(rec.Owner, parsedAgent, json, ct);
         return NoContent();
     }
 
@@ -119,6 +138,7 @@ public sealed class InternalController : ControllerBase
     }
 
     public record PermissionBody(string Tool, string? Input);
+    public record AgentPolicyBody(string Tool, JsonElement Input);
 
     /// <summary>
     /// The agent's PreToolUse hook asks whether a tool may run. If the owner has a Slack
@@ -136,7 +156,7 @@ public sealed class InternalController : ControllerBase
             Id = Guid.NewGuid().ToString("n")[..12],
             SessionId = id, Owner = rec.Owner,
             Tool = string.IsNullOrWhiteSpace(body.Tool) ? "a tool" : body.Tool.Trim(),
-            Summary = body.Input
+            Summary = PermissionRequestDescriptor.ForTool(body.Tool)
         };
         await _permissions.CreateAsync(req, ct);
         if (!await PermissionRelay.TryPostAsync(_permNotifiers, req, ct))
@@ -186,6 +206,42 @@ public sealed class InternalController : ControllerBase
             body.Tool ?? string.Empty, policy.BlockedServers, policy.BlockedTools);
         return Ok(new { decision = blocked ? "deny" : "allow" });
     }
+
+    /// <summary>Evaluates persisted Codex policy after the authoritative live sharing policy.</summary>
+    [HttpPost("agent-policy")]
+    public async Task<IActionResult> AgentPolicy(string id, [FromBody] AgentPolicyBody body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        if ((body.Tool ?? string.Empty).StartsWith("mcp__", StringComparison.Ordinal))
+        {
+            var sharing = await _shares.GetMcpPolicyAsync(id, ct);
+            if (sharing is not null && McpPolicyMatcher.IsBlocked(
+                    body.Tool ?? string.Empty, sharing.BlockedServers, sharing.BlockedTools))
+                return Ok(new { decision = "deny", reason = "Blocked by the session MCP sharing policy." });
+        }
+
+        if (rec.Mode == SessionMode.Interactive)
+            return Ok(new { decision = "ask", reason = "Interactive approval required." });
+
+        AgentPolicy policy;
+        try
+        {
+            policy = string.IsNullOrWhiteSpace(rec.AgentPolicyJson)
+                ? new AgentPolicy()
+                : JsonSerializer.Deserialize<AgentPolicy>(rec.AgentPolicyJson,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web)) ?? new AgentPolicy();
+        }
+        catch (JsonException)
+        {
+            policy = new AgentPolicy();
+        }
+
+        var result = AgentPolicyMatcher.Decide(policy, body.Tool ?? string.Empty, body.Input);
+        return Ok(new { decision = result.Decision, reason = result.Reason });
+    }
+
     /// <summary>Mints a presigned PUT URL so the agent can upload an artifact to S3.</summary>
     [HttpPost("artifact-url")]
     public async Task<IActionResult> ArtifactUrl(string id, [FromQuery] string name, CancellationToken ct)
