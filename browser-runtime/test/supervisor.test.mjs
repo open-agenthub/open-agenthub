@@ -81,4 +81,3 @@ function fakeContext(cookies = []) {
 function jsonResponse(value) {
   return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
 }
-
