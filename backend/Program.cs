@@ -276,6 +276,40 @@ async Task ProxyLinkWs(HttpContext ctx, string token, ISessionAccessService acce
 
 app.Map("/ws/shared/{token}/terminal", (HttpContext ctx, string token,
     ISessionAccessService access, ISessionService sessions, ILoggerFactory lf) => ProxyLinkWs(ctx, token, access, sessions, lf));
+async Task ProxyBrowserWs(HttpContext ctx, SessionAccessResult resolved,
+    AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf)
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    await BrowserProxy.HandleAsync(ctx, resolved.Session.Id,
+        SessionAccessRules.CanWriteTerminal(resolved.Level), browsers, lf);
+}
+
+async Task ProxyUserBrowserWs(HttpContext ctx, string id, ISessionAccessService access,
+    AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf)
+{
+    var principal = WsOwner(ctx);
+    if (principal is null) { ctx.Response.StatusCode = 401; return; }
+    var resolved = await access.ResolveUserAsync(principal, id, ctx.RequestAborted);
+    if (resolved is null) { ctx.Response.StatusCode = 404; return; }
+    await ProxyBrowserWs(ctx, resolved, browsers, lf);
+}
+
+async Task ProxyLinkBrowserWs(HttpContext ctx, string token, ISessionAccessService access,
+    AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf)
+{
+    var resolved = await access.ResolveTokenAsync(token, ctx.RequestAborted);
+    if (resolved is null) { ctx.Response.StatusCode = 404; return; }
+    await ProxyBrowserWs(ctx, resolved, browsers, lf);
+}
+
+app.Map("/ws/sessions/{id}/browser", (HttpContext ctx, string id,
+        ISessionAccessService access, AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf) =>
+        ProxyUserBrowserWs(ctx, id, access, browsers, lf))
+    .RequireAuthorization();
+app.Map("/ws/shared/{token}/browser", (HttpContext ctx, string token,
+    ISessionAccessService access, AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf) =>
+    ProxyLinkBrowserWs(ctx, token, access, browsers, lf));
+
 app.Map("/ws/sessions/{id}/shell", (HttpContext ctx, string id,
         ISessionService sessions, ILoggerFactory lf) => ProxyWs(ctx, id, sessions, lf, "/shell"))
     .RequireAuthorization();
