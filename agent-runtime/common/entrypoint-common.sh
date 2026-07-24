@@ -29,6 +29,14 @@ if [ -f /secrets/creds/gitlab_token ]; then
   git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
 fi
 
+"$RUNTIME/common/setup-cli-auth.sh" || echo "[entrypoint] WARN: gh/glab auth setup failed"
+if [ -f /secrets/creds/gitlab_token ] && [ ! -f "$HOME/.config/glab-cli/config.yml" ]; then
+  # Manual PAT without an OAuth GitLab host: glab resolves the host from the
+  # repo remote and picks the token up from the environment.
+  GITLAB_TOKEN="$(cat /secrets/creds/gitlab_token)"
+  export GITLAB_TOKEN
+fi
+
 export AGENTHUB_STATE_RESTORED=0
 if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; then
   echo "[entrypoint] Downloading session state from S3 …"
