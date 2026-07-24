@@ -72,6 +72,22 @@ public sealed class SignalPermissionNotifier : IPermissionNotifier, IPermissionP
         await _signal.SendAsync(req.Channel, ExpiredText(req.Tool), ct);
     }
 
+    /// <summary>The request was decided elsewhere (web app). Signal cannot edit the
+    /// prompt, so a short follow-up message reflects the decision instead.</summary>
+    public async Task MarkDecidedAsync(PermissionRequest req, string decision, CancellationToken ct = default)
+    {
+        if (req.Channel is null) return;
+        await _signal.SendAsync(req.Channel, DecidedText(req.Tool, decision), ct);
+    }
+
+    /// <summary>Follow-up text once the request was decided on another surface.</summary>
+    public static string DecidedText(string tool, string decision)
+    {
+        var verb = decision == "deny" ? "⛔ Denied" : "✅ Allowed";
+        var suffix = decision == "allowAlways" ? " (won't ask again this run)" : "";
+        return $"{verb} — {tool}{suffix} · decided in the web app.";
+    }
+
     /// <summary>Follow-up text once the request can no longer be answered out-of-band.</summary>
     public static string ExpiredText(string tool)
         => $"⏰ The permission request for {tool} expired — please answer in the web terminal.";

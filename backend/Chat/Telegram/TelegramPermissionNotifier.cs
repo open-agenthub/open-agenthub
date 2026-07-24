@@ -78,6 +78,21 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
         await _tg.EditMessageTextAsync(req.Channel, req.MessageTs, ExpiredText(req.Tool), null, ct);
     }
 
+    /// <summary>The request was decided elsewhere (web app): reflect it and drop the buttons.</summary>
+    public async Task MarkDecidedAsync(PermissionRequest req, string decision, CancellationToken ct = default)
+    {
+        if (req.Channel is null || req.MessageTs is null) return;
+        await _tg.EditMessageTextAsync(req.Channel, req.MessageTs, DecidedText(req.Tool, decision), null, ct);
+    }
+
+    /// <summary>Prompt text once the request was decided on another surface.</summary>
+    public static string DecidedText(string tool, string decision)
+    {
+        var verb = decision == "deny" ? "⛔ Denied" : "✅ Allowed";
+        var suffix = decision == "allowAlways" ? " (won't ask again this run)" : "";
+        return $"{verb} — {tool}{suffix} · in the web app";
+    }
+
     /// <summary>Prompt text once the request can no longer be answered out-of-band.</summary>
     public static string ExpiredText(string tool)
         => $"⏰ Expired — {tool}. Please answer in the web terminal.";
