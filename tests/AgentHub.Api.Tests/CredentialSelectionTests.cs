@@ -15,8 +15,10 @@ public class CredentialSelectionTests
     public void CredentialKeysAndProviderSecretsAreProviderSpecific()
     {
         Assert.Equal("openai_api_key", KubernetesSessionService.CredentialKey(nameof(UserCredentials.OpenAiApiKey)));
+        Assert.Equal("cursor_api_key", KubernetesSessionService.CredentialKey(nameof(UserCredentials.CursorApiKey)));
         Assert.Equal("claude-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.Claude));
         Assert.Equal("codex-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.Codex));
+        Assert.Equal("cursor-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.Cursor));
     }
 
     [Fact]
@@ -37,18 +39,44 @@ public class CredentialSelectionTests
         Assert.Equal(1, service.StoreCalls);
     }
 
+    [Fact]
+    public async Task ProviderCredentials_AcceptsAuthenticatedMatchingCursorSubscription()
+    {
+        var service = new RecordingSessionService();
+        // PLACEHOLDER: replace cursorAuth marker after file-store discovery in Task 5.
+        var controller = Controller(new SessionRecord
+        {
+            Id = "session-1", Owner = "alice", CallbackToken = "callback-token",
+            Agent = AgentKind.Cursor, AuthMode = AgentAuthMode.Subscription
+        }, service, "{\"cursorAuth\":{\"accessToken\":\"synthetic-test-token-not-real\"}}");
+
+        var result = await controller.ProviderCredentials("session-1", "cursor", CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.Equal("alice", service.Owner);
+        Assert.Equal(AgentKind.Cursor, service.Agent);
+        Assert.Equal(1, service.StoreCalls);
+    }
+
     [Theory]
     [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "codex")]
     [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey, "codex")]
+    [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "cursor")]
+    [InlineData(AgentKind.Codex, AgentAuthMode.Subscription, "cursor")]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey, "cursor")]
     public async Task ProviderCredentials_RejectsProviderMismatchOrApiKeySessions(
         AgentKind sessionAgent, AgentAuthMode authMode, string routeAgent)
     {
         var service = new RecordingSessionService();
+        // PLACEHOLDER: replace cursorAuth marker after file-store discovery in Task 5.
+        var body = routeAgent == "cursor"
+            ? "{\"cursorAuth\":{}}"
+            : "{\"tokens\":{}}";
         var controller = Controller(new SessionRecord
         {
             Id = "session-1", Owner = "alice", CallbackToken = "callback-token",
             Agent = sessionAgent, AuthMode = authMode
-        }, service, "{\"tokens\":{}}" );
+        }, service, body);
 
         var result = await controller.ProviderCredentials("session-1", routeAgent, CancellationToken.None);
 
@@ -67,6 +95,22 @@ public class CredentialSelectionTests
         }, service, "not-json");
 
         var result = await controller.ProviderCredentials("session-1", "codex", CancellationToken.None);
+
+        Assert.IsType<BadRequestResult>(result);
+        Assert.Equal(0, service.StoreCalls);
+    }
+
+    [Fact]
+    public async Task ProviderCredentials_RejectsInvalidCursorJsonWithoutStoringIt()
+    {
+        var service = new RecordingSessionService();
+        var controller = Controller(new SessionRecord
+        {
+            Id = "session-1", Owner = "alice", CallbackToken = "callback-token",
+            Agent = AgentKind.Cursor, AuthMode = AgentAuthMode.Subscription
+        }, service, "not-json");
+
+        var result = await controller.ProviderCredentials("session-1", "cursor", CancellationToken.None);
 
         Assert.IsType<BadRequestResult>(result);
         Assert.Equal(0, service.StoreCalls);

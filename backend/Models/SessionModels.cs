@@ -246,6 +246,7 @@ public record UserCredentials
     public string? GitlabToken { get; init; }
     public string? AnthropicApiKey { get; init; }
     public string? OpenAiApiKey { get; init; }
+    public string? CursorApiKey { get; init; }
     /// <summary>known_hosts entry of the GitLab server (protects against MITM on the first clone).</summary>
     public string? GitKnownHosts { get; init; }
     public string? GitUserName { get; init; }
@@ -263,8 +264,10 @@ public record CredentialStatus
     public bool AnthropicApiKey { get; init; }
     public bool GitKnownHosts { get; init; }
     public bool OpenAiApiKey { get; init; }
+    public bool CursorApiKey { get; init; }
     public bool GitUserName { get; init; }
     public bool GitUserEmail { get; init; }
     public bool ClaudeSubscription { get; init; }
     public bool CodexSubscription { get; init; }
+    public bool CursorSubscription { get; init; }
 }
