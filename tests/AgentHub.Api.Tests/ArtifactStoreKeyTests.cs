@@ -29,6 +29,17 @@ public class ArtifactStoreKeyTests
     }
 
     [Fact]
+    public void StateKey_CursorUsesSeparateProviderKey()
+    {
+        Assert.Equal(
+            "sessions/alice/session-id/cursor-state.tgz",
+            IArtifactStore.StateKey("alice", "session-id", AgentKind.Cursor));
+        Assert.NotEqual(
+            IArtifactStore.StateKey("alice", "session-id", AgentKind.Codex),
+            IArtifactStore.StateKey("alice", "session-id", AgentKind.Cursor));
+    }
+
+    [Fact]
     public void ProviderStateKeys_DoNotChangeOtherArtifactKeys()
     {
         Assert.Equal("sessions/alice/session-id/scrollback.log",
