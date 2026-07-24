@@ -29,17 +29,18 @@ try {
     $health = Invoke-WebRequest http://127.0.0.1:16081/healthz -UseBasicParsing
     if ($health.StatusCode -ne 200) { throw "Health endpoint failed" }
 
-    $client = [Net.Sockets.TcpClient]::new("127.0.0.1", 16080)
+    $socket = [Net.WebSockets.ClientWebSocket]::new()
+    $socket.Options.AddSubProtocol("binary")
+    $socketTimeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(10))
     try {
-        $stream = $client.GetStream()
-        $request = "GET / HTTP/1.1`r`nHost: localhost`r`nUpgrade: websocket`r`nConnection: Upgrade`r`nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==`r`nSec-WebSocket-Version: 13`r`n`r`n"
-        $bytes = [Text.Encoding]::ASCII.GetBytes($request)
-        $stream.Write($bytes, 0, $bytes.Length)
-        $buffer = New-Object byte[] 1024
-        $count = $stream.Read($buffer, 0, $buffer.Length)
-        $response = [Text.Encoding]::ASCII.GetString($buffer, 0, $count)
-        if ($response -notmatch "101 Switching Protocols") { throw "RFB WebSocket upgrade failed" }
-    } finally { $client.Dispose() }
+        [void]$socket.ConnectAsync([Uri]"ws://127.0.0.1:16080/", $socketTimeout.Token).GetAwaiter().GetResult()
+        if ($socket.State -ne [Net.WebSockets.WebSocketState]::Open) { throw "RFB WebSocket upgrade failed" }
+        [void]$socket.CloseAsync([Net.WebSockets.WebSocketCloseStatus]::NormalClosure,
+            "smoke complete", [Threading.CancellationToken]::None).GetAwaiter().GetResult()
+    } finally {
+        $socketTimeout.Dispose()
+        $socket.Dispose()
+    }
 
     $uid = docker exec $container id -u
     if ($uid.Trim() -ne "1000") { throw "Container is not running as UID 1000" }
