@@ -25,6 +25,8 @@ public static class ProviderCredentialValidator
             {
                 AgentKind.Claude => root.TryGetProperty("claudeAiOauth", out var oauth) && oauth.ValueKind == JsonValueKind.Object,
                 AgentKind.Codex => root.TryGetProperty("tokens", out var tokens) && tokens.ValueKind == JsonValueKind.Object,
+                // PLACEHOLDER: replace cursorAuth marker after file-store discovery in Task 5.
+                AgentKind.Cursor => root.TryGetProperty("cursorAuth", out var cursor) && cursor.ValueKind == JsonValueKind.Object,
                 _ => false
             };
         }
