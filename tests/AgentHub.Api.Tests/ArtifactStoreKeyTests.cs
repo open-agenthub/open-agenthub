@@ -35,5 +35,7 @@ public class ArtifactStoreKeyTests
             IArtifactStore.ScrollbackKey("alice", "session-id"));
         Assert.Equal("sessions/alice/session-id/artifacts/report.txt",
             IArtifactStore.ArtifactKey("alice", "session-id", "/report.txt"));
+        Assert.Equal("sessions/alice/session-id/browser-cookies.json",
+            IArtifactStore.BrowserCookiesKey("alice", "session-id"));
     }
 }
