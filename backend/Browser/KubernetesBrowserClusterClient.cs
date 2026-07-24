@@ -91,7 +91,12 @@ public sealed class KubernetesBrowserClusterClient : IBrowserClusterClient
     {
         var name = $"browser-{sessionId}";
         await IgnoreNotFoundAsync(() => _k8s.CoreV1.DeleteNamespacedPodAsync(
-            name, namespaceName, gracePeriodSeconds: 10, cancellationToken: ct));
+            name, namespaceName, gracePeriodSeconds: 15, cancellationToken: ct));
+        // Keep callback egress and the lease alive while SIGTERM triggers the final cookie checkpoint.
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (DateTime.UtcNow < deadline &&
+               await GetAsync(namespaceName, sessionId, ct) is not null)
+            await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
         foreach (var suffix in new[] { "cdp-in", "cdp-out", "egress", "vnc-in" })
             await IgnoreNotFoundAsync(() => _k8s.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(
                 $"{name}-{suffix}", namespaceName, cancellationToken: ct));
