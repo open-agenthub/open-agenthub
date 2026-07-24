@@ -1122,4 +1122,3 @@ approved browser summary.
 git add README.md docs tests/browser-smoke.ps1
 git commit -m "docs(browser): document operation and security boundaries"
 ```
-
