@@ -14,7 +14,7 @@ public enum SessionMode
     Scheduled
 }
 
-public enum AgentKind { Claude, Codex }
+public enum AgentKind { Claude, Codex, Cursor }
 public enum AgentAuthMode { Auto, Subscription, ApiKey }
 
 public sealed record AgentPolicy
@@ -64,7 +64,7 @@ public static class AgentConfiguration
 
     private static void ValidateAgent(AgentKind agent)
     {
-        if (agent is not AgentKind.Claude and not AgentKind.Codex)
+        if (agent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor)
             throw new ArgumentException("Unsupported agent kind.");
     }
 
