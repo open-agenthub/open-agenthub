@@ -21,7 +21,68 @@ public sealed class SessionDuplicationTests
         Assert.Equal("p2", source.ProjectId);
         Assert.Equal("Run tests", source.Prompt);
         Assert.Equal(["Read"], source.AllowedTools);
+        Assert.Null(source.Policy);
+        Assert.Equal(["Read"],
+            AgentConfiguration.ResolvePolicy(source.Policy, source.AllowedTools).AllowedTools);
         Assert.Null(source.McpConfigJson);
+    }
+
+    [Fact]
+    public void DuplicateRequest_CopiesAgentAuthAndPolicy()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "Codex", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.Codex, AuthMode = AgentAuthMode.ApiKey,
+            AgentSessionId = "thread", CallbackToken = "token", Status = "Succeeded",
+            AgentPolicyJson = "{\"allowedTools\":[\"Read\"],\"allowedMcpTools\":[],\"allowedCommands\":[\"git status\"]}"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
+
+        Assert.NotNull(copy.Policy);
+        Assert.Equal(AgentKind.Codex, copy.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
+        Assert.Equal(["git status"], copy.Policy.AllowedCommands);
+    }
+
+    [Fact]
+    public void DuplicateRequest_AppliesExplicitAgentAuthAndPolicyOverrides()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "Claude", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+            AgentSessionId = "thread", CallbackToken = "token"
+        };
+        var requestedPolicy = new AgentPolicy { AllowedCommands = ["npm test"] };
+
+        var copy = SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, AgentKind.Codex, AgentAuthMode.ApiKey, requestedPolicy));
+
+        Assert.NotNull(copy.Policy);
+        Assert.Equal(AgentKind.Codex, copy.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
+        Assert.Equal(["npm test"], copy.Policy.AllowedCommands);
+    }
+
+    [Fact]
+    public void DuplicateRequest_ExplicitEmptyPolicyDoesNotRestoreLegacyAllowedTools()
+    {
+        var source = new SessionRecord
+        {
+            Id = "legacy", Owner = "alice", Title = "Legacy", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Auto,
+            AgentSessionId = "thread", CallbackToken = "token",
+            AllowedToolsJson = "[\"Read\"]"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, AgentKind.Claude, AgentAuthMode.Subscription, new AgentPolicy()));
+        Assert.NotNull(copy.Policy);
+
+        Assert.Empty(copy.Policy.AllowedTools);
+        Assert.Empty(copy.AllowedTools);
     }
 
     [Fact]
@@ -35,4 +96,20 @@ public sealed class SessionDuplicationTests
         Assert.True(removed!.ProjectIdSpecified);
         Assert.Null(removed.ProjectId);
     }
-}
+
+    [Fact]
+    public void DuplicateRequest_PreservesMigratedClaudeAutoAuthentication()
+    {
+        var source = new SessionRecord
+        {
+            Id = "legacy", Owner = "alice", Title = "Legacy", Mode = SessionMode.Interactive,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Auto,
+            AgentSessionId = "legacy-thread", CallbackToken = "token"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
+
+        Assert.Equal(AgentKind.Claude, copy.Agent);
+        Assert.Equal(AgentAuthMode.Auto, copy.AuthMode);
+        AgentConfiguration.ValidateForDuplicatedSession(copy.Agent, copy.AuthMode);
+    }}

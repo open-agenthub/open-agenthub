@@ -26,5 +26,41 @@ jobs:
       - working-directory: frontend
         run: npm ci
       - working-directory: frontend
-        # Runs vitest when tests exist; a no-op script must exit 0.
-        run: npm test --if-present
+        run: npm test
+      - working-directory: frontend
+        run: npm run build
+
+  runtimes:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - working-directory: agent-runtime/session-agent
+        run: npm ci
+      - working-directory: agent-runtime/session-agent
+        run: npm test
+      - name: Build Claude runtime
+        run: docker build --file agent-runtime/claude/Dockerfile --tag open-agenthub-dev/agent-runtime-claude:test agent-runtime
+      - name: Smoke Claude CLI
+        run: docker run --rm --entrypoint claude open-agenthub-dev/agent-runtime-claude:test --version
+      - name: Build Codex runtime
+        run: docker build --file agent-runtime/codex/Dockerfile --tag open-agenthub-dev/agent-runtime-codex:test agent-runtime
+      - name: Smoke Codex runtime
+        shell: pwsh
+        run: ./agent-runtime/session-agent/test/codex-container-smoke.ps1 -Image open-agenthub-dev/agent-runtime-codex:test
+
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - name: Lint development chart
+        run: helm lint helm/open-agenthub --values helm/open-agenthub/values-dev.yaml --set-string postgres.password=test-only
+      - name: Verify rendered runtime images
+        shell: pwsh
+        run: ./tests/helm/codex-runtime-values.ps1
+      - name: Verify deployment parity
+        shell: pwsh
+        run: ./tests/helm/deployment-parity.ps1

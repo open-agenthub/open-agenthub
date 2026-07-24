@@ -17,6 +17,7 @@ builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.A
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
 builder.Services.AddSingleton<SessionShareStore>();
 builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.

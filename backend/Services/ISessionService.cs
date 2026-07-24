@@ -7,9 +7,9 @@ public interface ISessionService
     Task StoreCredentialsAsync(string owner, UserCredentials creds, CancellationToken ct = default);
     /// <summary>Which credential fields have a stored value (never the values themselves).</summary>
     Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default);
-    /// <summary>Persists a user's Claude CLI OAuth credentials (subscription login),
-    /// so new sessions start without requiring another login.</summary>
-    Task StoreClaudeCredentialsAsync(string owner, string credentialsJson, CancellationToken ct = default);
+    /// <summary>Persists a user's provider CLI subscription credentials so new sessions
+    /// can start without another login.</summary>
+    Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default);
     Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default);
     Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);
     Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default);
