@@ -54,6 +54,14 @@ public sealed class PermissionStore
             ALTER TABLE permission_requests ADD COLUMN IF NOT EXISTS platform TEXT;
             -- Prompt-message lookup for reaction/quote-based deciders (Signal).
             CREATE INDEX IF NOT EXISTS idx_permreq_prompt ON permission_requests(platform, channel, message_ts);
+            -- "Allow (don't ask again)" rules: once a tool is always-allowed for a
+            -- session, later requests for it are answered without prompting anyone.
+            CREATE TABLE IF NOT EXISTS permission_rules (
+                session_id  TEXT NOT NULL,
+                tool        TEXT NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (session_id, tool)
+            );
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -138,9 +146,52 @@ public sealed class PermissionStore
         cmd.Parameters.AddWithValue("d", decision);
         cmd.Parameters.AddWithValue("id", id);
         AddSessionParam(cmd, sessionId);
+        PermissionRequest? resolved;
+        await using (var r = await cmd.ExecuteReaderAsync(ct))
+        {
+            if (!await r.ReadAsync(ct)) return null;
+            resolved = Map(r);
+        }
+        // "Don't ask again" persists as a session-scoped rule, no matter which
+        // surface (Slack, Telegram, Signal, web app) resolved the request.
+        if (decision == "allowAlways")
+            await AddAlwaysAllowRuleAsync(resolved.SessionId, resolved.Tool, ct);
+        return resolved;
+    }
+
+    /// <summary>Always-allow the tool for the rest of the session's lifetime.</summary>
+    public async Task AddAlwaysAllowRuleAsync(string sessionId, string tool, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand(
+            "INSERT INTO permission_rules (session_id, tool) VALUES (@s,@t) ON CONFLICT DO NOTHING");
+        cmd.Parameters.AddWithValue("s", sessionId);
+        cmd.Parameters.AddWithValue("t", tool);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>True when an "allow always" rule exists for this session + tool.</summary>
+    public async Task<bool> IsAlwaysAllowedAsync(string sessionId, string tool, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand(
+            "SELECT 1 FROM permission_rules WHERE session_id=@s AND tool=@t");
+        cmd.Parameters.AddWithValue("s", sessionId);
+        cmd.Parameters.AddWithValue("t", tool);
+        return await cmd.ExecuteScalarAsync(ct) is not null;
+    }
+
+    /// <summary>All still-undecided requests of a session, oldest first — the in-app
+    /// approval UI polls this.</summary>
+    public async Task<IReadOnlyList<PermissionRequest>> GetPendingRequestsAsync(string sessionId, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("""
+            SELECT id, session_id, owner, tool, summary, decision, channel, message_ts, platform
+            FROM permission_requests WHERE session_id=@s AND decision IS NULL ORDER BY created_at
+            """);
+        cmd.Parameters.AddWithValue("s", sessionId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        if (!await r.ReadAsync(ct)) return null;
-        return Map(r);
+        var list = new List<PermissionRequest>();
+        while (await r.ReadAsync(ct)) list.Add(Map(r));
+        return list;
     }
 
     /// <summary>Tool name of the newest still-undecided request of a session, or null.</summary>

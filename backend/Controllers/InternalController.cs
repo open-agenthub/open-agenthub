@@ -141,9 +141,10 @@ public sealed class InternalController : ControllerBase
     public record AgentPolicyBody(string Tool, JsonElement Input);
 
     /// <summary>
-    /// The agent's PreToolUse hook asks whether a tool may run. If the owner has a Slack
-    /// target, we post an interactive prompt and return an id to poll; otherwise we tell
-    /// the hook to fall back to the normal permission flow ("ask").
+    /// The agent's PreToolUse hook asks whether a tool may run. An earlier
+    /// "allow (don't ask again)" answers immediately; otherwise the request is
+    /// created and relayed to the messengers (best effort) — it stays pending
+    /// either way so the web app can answer it, and the hook polls by id.
     /// </summary>
     [HttpPost("permission")]
     public async Task<IActionResult> RequestPermission(string id, [FromBody] PermissionBody body, CancellationToken ct)
@@ -151,19 +152,19 @@ public sealed class InternalController : ControllerBase
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
 
+        var tool = string.IsNullOrWhiteSpace(body.Tool) ? "a tool" : body.Tool.Trim();
+        if (await _permissions.IsAlwaysAllowedAsync(id, tool, ct))
+            return Ok(new { decision = "allow" });
+
         var req = new PermissionRequest
         {
             Id = Guid.NewGuid().ToString("n")[..12],
             SessionId = id, Owner = rec.Owner,
-            Tool = string.IsNullOrWhiteSpace(body.Tool) ? "a tool" : body.Tool.Trim(),
+            Tool = tool,
             Summary = PermissionRequestDescriptor.ForTool(body.Tool)
         };
         await _permissions.CreateAsync(req, ct);
-        if (!await PermissionRelay.TryPostAsync(_permNotifiers, req, ct))
-        {
-            await _permissions.DeleteAsync(req.Id, ct);   // no out-of-band approver → normal flow
-            return Ok(new { decision = "ask" });
-        }
+        await PermissionRelay.TryPostAsync(_permNotifiers, req, ct);
         return Ok(new { id = req.Id });
     }
 

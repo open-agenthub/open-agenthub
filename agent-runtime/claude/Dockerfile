@@ -32,6 +32,7 @@ COPY claude /opt/session-agent/claude
 COPY claude/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \
     /opt/session-agent/common/entrypoint-common.sh \
+    /opt/session-agent/common/setup-cli-auth.sh \
     /opt/session-agent/claude/entrypoint.sh \
     /opt/session-agent/claude/hooks/notify-hook.sh \
     /opt/session-agent/claude/hooks/pretooluse-hook.sh \

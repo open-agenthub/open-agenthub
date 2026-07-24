@@ -76,6 +76,21 @@ public sealed class SlackPermissionNotifier : IPermissionNotifier, IPermissionPr
         await _slack.UpdateMessageAsync(req.Channel, req.MessageTs, ExpiredMessage(req.Tool), null, ct);
     }
 
+    /// <summary>The request was decided elsewhere (web app): reflect it and drop the buttons.</summary>
+    public async Task MarkDecidedAsync(PermissionRequest req, string decision, CancellationToken ct = default)
+    {
+        if (req.Channel is null || req.MessageTs is null) return;
+        await _slack.UpdateMessageAsync(req.Channel, req.MessageTs, DecidedMessage(req.Tool, decision), null, ct);
+    }
+
+    /// <summary>Prompt text once the request was decided on another surface.</summary>
+    public static string DecidedMessage(string tool, string decision)
+    {
+        var verb = decision == "deny" ? ":no_entry: *Denied*" : ":white_check_mark: *Allowed*";
+        var suffix = decision == "allowAlways" ? " (won't ask again this run)" : "";
+        return $"{verb} — *{Escape(tool)}*{suffix} · decided in the web app.";
+    }
+
     /// <summary>Prompt text once the request can no longer be answered out-of-band.</summary>
     public static string ExpiredMessage(string tool)
         => $":hourglass: *Expired* — *{Escape(tool)}*. Please answer in the web terminal.";
