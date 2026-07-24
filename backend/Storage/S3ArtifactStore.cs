@@ -14,6 +14,7 @@ public interface IArtifactStore
     string PresignPut(string key, TimeSpan ttl);
     string PresignGet(string key, TimeSpan ttl);
     Task<string?> GetTextAsync(string key, CancellationToken ct = default);
+    Task DeleteAsync(string key, CancellationToken ct = default) => Task.CompletedTask;
 
     static string StateKey(string owner, string id) => StateKey(owner, id, AgentKind.Claude);
     static string StateKey(string owner, string id, AgentKind agent) =>
@@ -24,6 +25,8 @@ public interface IArtifactStore
             _ => throw new ArgumentOutOfRangeException(nameof(agent), agent, "Unknown agent kind.")
         }}";
     static string ScrollbackKey(string owner, string id) => $"sessions/{owner}/{id}/scrollback.log";
+    static string BrowserCookiesKey(string owner, string id) =>
+        $"sessions/{owner}/{id}/browser-cookies.json";
     static string ArtifactKey(string owner, string id, string name)
         => $"sessions/{owner}/{id}/artifacts/{name.TrimStart('/')}";
 }
@@ -78,6 +81,11 @@ public sealed class S3ArtifactStore : IArtifactStore
             Verb = verb,
             Expires = DateTime.UtcNow.Add(ttl)
         });
+
+    public async Task DeleteAsync(string key, CancellationToken ct = default)
+    {
+        await _s3.DeleteObjectAsync(_bucket, key, ct);
+    }
 
     public async Task<string?> GetTextAsync(string key, CancellationToken ct = default)
     {
