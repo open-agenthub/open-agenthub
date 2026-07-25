@@ -30,6 +30,23 @@ test('Cursor interactive starts TUI without resume flags', () => {
   }), false), { cmd: 'agent', args: [] });
 });
 
+test('Cursor subscription login runs inside the agent PTY via driver flag', () => {
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_CURSOR_LOGIN: '1'
+  }), true), { cmd: 'agent', args: ['login'] });
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_CURSOR_LOGIN: '1',
+    AGENTHUB_RESUME: '1',
+    AGENTHUB_STATE_RESTORED: '1',
+    AGENTHUB_CLAUDE_SESSION_ID: 'chat-1'
+  }), true), { cmd: 'agent', args: ['login'] });
+  assert.equal(driver.isResumeCommand({ cmd: 'agent', args: ['login'] }), false);
+
+  const entrypoint = fs.readFileSync(path.join(runtimeDir, 'cursor', 'entrypoint.sh'), 'utf8');
+  assert.match(entrypoint, /export AGENTHUB_CURSOR_LOGIN=1/);
+  assert.doesNotMatch(entrypoint, /^\s*agent login\s*$/m);
+});
+
 test('Cursor resume uses --resume with Claude session id env when chat id present', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1',
@@ -106,7 +123,7 @@ test('Cursor entrypoint owns config, auth mode, watcher, and stale-auth ordering
   assert.match(entrypoint, /auth-watcher\.js/);
   assert.match(entrypoint, /AGENTHUB_CURSOR_AUTH_EXPECT_CREATE/);
   assert.match(entrypoint, /AGENTHUB_CURSOR_AUTH_BASELINE_SHA256/);
-  assert.match(entrypoint, /agent login/);
+  assert.match(entrypoint, /AGENTHUB_CURSOR_LOGIN/);
   assert.match(entrypoint, /CURSOR_API_KEY/);
   assert.match(entrypoint, /subscription\)/);
   assert.match(entrypoint, /apikey\)/);
@@ -123,6 +140,9 @@ test('Cursor image installs agent CLI and preserves custom-image injection paths
   assert.match(dockerfile, /COPY cursor\s+\/opt\/session-agent\/cursor/);
   assert.match(dockerfile, /COPY cursor\/entrypoint\.sh\s+\/usr\/local\/bin\/entrypoint\.sh/);
   assert.match(dockerfile, /cursor\.com\/install/);
+  assert.match(dockerfile, /ARG CURSOR_AGENT_VERSION=/);
+  assert.match(dockerfile, /test "\$AGENT_VER" = "\$CURSOR_AGENT_VERSION"/);
+  assert.match(dockerfile, /agent --version 2>&1 \| grep -Fq "\$CURSOR_AGENT_VERSION"/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/node/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/agent/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai|@openai\/codex|COPY claude|COPY codex/);

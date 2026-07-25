@@ -27,6 +27,10 @@ function buildCommand(env, allowResume) {
     env.AGENTHUB_STATE_RESTORED === '1' && chatId;
 
   if (mode === 'interactive') {
+    // Subscription login must run in the session PTY (entrypoint only sets the flag).
+    if (env.AGENTHUB_CURSOR_LOGIN === '1') {
+      return { cmd: 'agent', args: ['login'] };
+    }
     if (restoredResume) return { cmd: 'agent', args: ['--resume', chatId] };
     return { cmd: 'agent', args: [] };
   }

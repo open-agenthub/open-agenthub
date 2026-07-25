@@ -53,11 +53,8 @@ apikey)
     echo "[entrypoint] ERROR: CURSOR_API_KEY is required for API-key authentication." >&2
     exit 1
   fi
-  # Interactive login may persist the key; autonomous keeps CURSOR_API_KEY for driver.prepare.
-  if [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
-    # API-key auth is env-driven; no subscription file is required.
-    :
-  fi
+  # API-key auth is env-driven (CURSOR_API_KEY); driver.prepare scopes it to the agent child.
+  # No interactive `agent login` or subscription auth.json is required.
   ;;
 subscription)
   AUTH_EXPECT_CREATE=1
@@ -79,8 +76,9 @@ process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.
       AGENTHUB_CURSOR_AUTH_BASELINE_SHA256="$AUTH_BASELINE_SHA256" \
       node "$RUNTIME/cursor/auth-watcher.js" &
   fi
+  # Interactive subscription login runs in the session PTY via driver (not here).
   if [ ! -f "$CURSOR_AUTH_FILE" ] && [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
-    agent login
+    export AGENTHUB_CURSOR_LOGIN=1
   fi
   ;;
 *)

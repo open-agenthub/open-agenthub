@@ -250,12 +250,13 @@ public static class AgentPodSpecFactory
                     """,
                 AgentKind.Cursor => """
                     set -e
-                    mkdir -p /opt/agenthub/bin /opt/agenthub/lib
+                    mkdir -p /opt/agenthub/bin /opt/agenthub/lib /opt/agenthub/share
                     cp -r /opt/session-agent /opt/agenthub/session-agent
                     cp /usr/local/bin/node /opt/agenthub/bin/node
                     cp -r /usr/local/lib/node_modules /opt/agenthub/lib/node_modules
                     cp /usr/local/bin/entrypoint.sh /opt/agenthub/entrypoint.sh
-                    # agent launcher: resolve the symlink target of the global install and link it
+                    # agent lives under /usr/local/share/cursor-agent; copy the tree so /opt/agenthub symlinks resolve
+                    cp -a /usr/local/share/cursor-agent /opt/agenthub/share/cursor-agent
                     target=$(readlink -f /usr/local/bin/agent)
                     ln -sf "/opt/agenthub/${target#/usr/local/}" /opt/agenthub/bin/agent
                     if [ -e /usr/local/bin/cursor-agent ]; then

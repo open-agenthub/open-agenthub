@@ -25,6 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && ln -sfn "/usr/local/share/cursor-agent/versions/${AGENT_VER}/cursor-agent" /usr/local/bin/agent \
  && ln -sfn "/usr/local/share/cursor-agent/versions/${AGENT_VER}/cursor-agent" /usr/local/bin/cursor-agent \
  && echo "$AGENT_VER" > /usr/local/share/cursor-agent/INSTALLED_VERSION \
+ && test "$AGENT_VER" = "$CURSOR_AGENT_VERSION" \
+ && agent --version 2>&1 | grep -Fq "$CURSOR_AGENT_VERSION" \
  && mkdir -p /tmp/gh /tmp/glab \
  && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp/gh \
  && install -m0755 "$(find /tmp/gh -type f -name gh | head -1)" /usr/local/bin/gh \
