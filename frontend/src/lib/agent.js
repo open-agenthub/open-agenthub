@@ -68,12 +68,19 @@ function lines(value) {
   return [...new Set(String(value || '').split(/\r?\n/).map(item => item.trim()).filter(Boolean))]
 }
 
-export function policyPayload(form) {
+/** Parse form policy fields without agent-specific submit transforms (e.g. Cursor force-empty commands). */
+export function policyFromForm(form) {
   return {
     allowedTools: lines(form.allowedToolsRaw),
     allowedMcpTools: lines(form.allowedMcpToolsRaw),
-    allowedCommands: form.agent === 'Cursor' ? [] : lines(form.allowedCommandsRaw)
+    allowedCommands: lines(form.allowedCommandsRaw)
   }
+}
+
+export function policyPayload(form) {
+  const policy = policyFromForm(form)
+  if (form.agent === 'Cursor') policy.allowedCommands = []
+  return policy
 }
 
 export function toolsPlaceholder(agent) {
