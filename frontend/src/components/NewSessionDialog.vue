@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
-import { defaultAgentForm, defaultPolicy, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import { defaultAgentForm, defaultPolicy, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
@@ -41,8 +41,10 @@ onMounted(async () => {
 })
 
 watch(() => form.value.agent, (agent, previousAgent) => {
+  // Use policyFromForm (not policyPayload) so Cursor's empty-commands submit rule
+  // does not treat prior-agent defaults as user-edited.
   const previousDefaults = defaultPolicy(previousAgent)
-  const current = policyPayload(form.value)
+  const current = policyFromForm(form.value)
   if (JSON.stringify(current) !== JSON.stringify(previousDefaults)) return
   const next = defaultPolicy(agent)
   form.value.allowedToolsRaw = next.allowedTools.join('\n')

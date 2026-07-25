@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentOptions, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy, policyPayload } from './agent.js'
+import { agentOptions, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy, policyFromForm, policyPayload } from './agent.js'
 
 describe('agent session helpers', () => {
   it('defaults new sessions to Claude subscription', () => {
@@ -46,6 +46,25 @@ describe('agent session helpers', () => {
       allowedTools: ['Read', 'Edit'],
       allowedMcpTools: ['mcp__docs__search', 'mcp__docs__*'],
       allowedCommands: ['git status', 'npm test']
+    })
+  })
+
+  it('parses form policy without Cursor force-empty commands for untouched checks', () => {
+    const form = {
+      agent: 'Cursor',
+      allowedToolsRaw: 'Read\nEdit',
+      allowedMcpToolsRaw: '',
+      allowedCommandsRaw: 'git status\nnpm test\ndotnet test'
+    }
+    expect(policyFromForm(form)).toEqual({
+      allowedTools: ['Read', 'Edit'],
+      allowedMcpTools: [],
+      allowedCommands: ['git status', 'npm test', 'dotnet test']
+    })
+    expect(policyPayload(form)).toEqual({
+      allowedTools: ['Read', 'Edit'],
+      allowedMcpTools: [],
+      allowedCommands: []
     })
   })
 

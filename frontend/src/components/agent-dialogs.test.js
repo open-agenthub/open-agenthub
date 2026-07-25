@@ -157,6 +157,22 @@ describe('agent-aware session dialogs', () => {
     expect(wrapper.get('[data-policy="allowedCommands"]').element.value).toContain('git status')
   })
 
+  it('resets untouched policy to Cursor defaults when switching from Codex', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="Codex"]').trigger('click')
+    await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Read')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Edit')
+
+    await wrapper.get('[data-agent-option="Cursor"]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Shell(')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Read(**)')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Write(**)')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).not.toContain('Edit')
+    expect(wrapper.find('[data-policy="allowedCommands"]').exists()).toBe(false)
+  })
+
   it('hides automation policy in Interactive but retains it across mode toggles', async () => {
     const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
