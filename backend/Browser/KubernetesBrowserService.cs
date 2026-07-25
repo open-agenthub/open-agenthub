@@ -1,3 +1,4 @@
+using System.Net;
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
@@ -37,7 +38,7 @@ public sealed class KubernetesBrowserService : IBrowserService
     }
 
     public async Task<BrowserConnection> EnsureAsync(
-        SessionRecord session, CancellationToken ct = default)
+        SessionRecord session, IPAddress agentPodIp, CancellationToken ct = default)
     {
         if (!_options.Enabled)
             throw new InvalidOperationException("Integrated browsers are disabled.");
@@ -71,6 +72,7 @@ public sealed class KubernetesBrowserService : IBrowserService
                         ControlNamespace = _controlNamespace,
                         CallbackUrl = $"{_callbackBaseUrl}/internal/browser-leases/{lease.LeaseId}/state",
                         LeaseToken = rawToken,
+                        AgentPodIp = agentPodIp,
                         Options = _options
                     });
                     try

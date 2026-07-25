@@ -430,7 +430,7 @@ public sealed class KubernetesSessionService : ISessionService
                             BackoffLimit = 0, ActiveDeadlineSeconds = 60 * 60 * 6,
                             Template = new V1PodTemplateSpec
                             {
-                                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title, rec.CallbackToken),
+                                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title),
                                 Spec = podSpec
                             }
                         }
@@ -442,7 +442,7 @@ public sealed class KubernetesSessionService : ISessionService
         {
             await _k8s.CoreV1.CreateNamespacedPodAsync(new V1Pod
             {
-                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title, rec.CallbackToken),
+                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title),
                 Spec = podSpec
             }, _opts.Namespace, cancellationToken: ct);
         }
@@ -596,14 +596,12 @@ public sealed class KubernetesSessionService : ISessionService
     };
 
     private V1ObjectMeta Meta(string name, string owner, string id, string component,
-        string? title = null, string? callbackToken = null)
+        string? title = null)
     {
         var labels = new Dictionary<string, string>
         {
             [OwnerLabel] = Sanitize(owner), [SessionLabel] = id, [ComponentLabel] = component
         };
-        if (callbackToken is not null)
-            labels[BrowserPodIdentity.Label] = BrowserPodIdentity.FromToken(callbackToken);
         return new V1ObjectMeta
         {
             Name = name, NamespaceProperty = _opts.Namespace, Labels = labels,

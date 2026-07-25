@@ -408,7 +408,7 @@ RBAC, and NetworkPolicy isolation remain mandatory.
 - **NetworkPolicies**: default-deny; agent egress limited to DNS/HTTP(S)/SSH.
 - **Per-session browser boundary**: lifecycle calls require the callback token and the
   source IP of the exact Running session pod. Dynamic NetworkPolicies bind CDP to that
-  pod's opaque identity; browser VNC is reachable only through the backend proxy.
+  exact pod IP; browser VNC is reachable only through the backend proxy.
 - **Dedicated PSA namespace** for sessions.
 - Optionally harden further: set `RuntimeClassName` to gVisor/Kata (in `appsettings`/ConfigMap).
 - **Kubernetes Secrets are not encryption by themselves**: their data is base64-encoded.

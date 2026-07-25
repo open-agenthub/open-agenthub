@@ -285,9 +285,9 @@ redacted from structured logs, exception messages, traces, and metrics.
 
 ## Network Isolation
 
-Browser and agent pods carry the session label. CDP policies additionally select an
-opaque browser identity derived from the session callback credential, so copying the
-public session/component labels does not grant another pod CDP access.
+Browser and agent pods carry the session label. CDP ingress is additionally restricted to
+the exact source IP of the authorized Running session pod, so copying labels or stealing
+the callback token does not grant another pod CDP access.
 
 Per active browser, dynamic policies allow:
 

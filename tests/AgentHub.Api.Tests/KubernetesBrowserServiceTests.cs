@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using AgentHub.Api.Browser;
@@ -20,7 +21,7 @@ public sealed class KubernetesBrowserServiceTests
         var service = Service(leases, cluster, new RecordingArtifacts());
 
         var connections = await Task.WhenAll(
-            service.EnsureAsync(Session()), service.EnsureAsync(Session()));
+            service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8")), service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8")));
 
         Assert.Equal(1, cluster.CreateCalls);
         Assert.Single(leases.Items);

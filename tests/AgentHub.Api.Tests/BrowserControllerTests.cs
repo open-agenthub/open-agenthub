@@ -32,6 +32,7 @@ public sealed class BrowserControllerTests
 
         Assert.Same(browser.Connection, result.Value);
         Assert.Equal(1, browser.EnsureCalls);
+        Assert.Equal(IPAddress.Parse("10.0.0.8"), browser.AgentPodIp);
     }
 
     [Fact]
@@ -147,10 +148,11 @@ public sealed class BrowserControllerTests
         public BrowserConnection Connection { get; } = connection;
         public int EnsureCalls { get; private set; }
         public int StopCalls { get; private set; }
+        public IPAddress? AgentPodIp { get; private set; }
         public int MintCalls { get; private set; }
         public BrowserStateUrls? StateUrls { get; init; }
-        public Task<BrowserConnection> EnsureAsync(SessionRecord session, CancellationToken ct = default)
-        { EnsureCalls++; return Task.FromResult(Connection); }
+        public Task<BrowserConnection> EnsureAsync(SessionRecord session, IPAddress agentPodIp, CancellationToken ct = default)
+        { EnsureCalls++; AgentPodIp = agentPodIp; return Task.FromResult(Connection); }
         public Task<BrowserSummary> GetSummaryAsync(string sessionId, CancellationToken ct = default) =>
             Task.FromResult(Connection.Browser);
         public Task<IReadOnlyDictionary<string, BrowserSummary>> GetSummariesAsync(
