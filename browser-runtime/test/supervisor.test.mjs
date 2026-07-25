@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 
 import {
   BrowserSupervisor,
@@ -84,6 +85,10 @@ test('checkpoint calls are serialized so the final cookie state wins', async () 
   releaseFirst();
   await Promise.all([periodic, final]);
   assert.deepEqual(uploads, ['old', 'new']);
+});
+test('entrypoint keeps Chromium alive for the full final-checkpoint budget', async () => {
+  const entrypoint = await readFile(new URL('../entrypoint.sh', import.meta.url), 'utf8');
+  assert.match(entrypoint, /attempts" -lt 47/);
 });
 test('shutdown stops periodic work, checkpoints once, disconnects, and is idempotent', async () => {
   const events = [];

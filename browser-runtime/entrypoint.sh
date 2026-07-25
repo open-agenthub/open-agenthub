@@ -20,7 +20,7 @@ stop_children() {
   if [ -n "$SUPERVISOR_PID" ] && kill -0 "$SUPERVISOR_PID" 2>/dev/null; then
     kill -TERM "$SUPERVISOR_PID" 2>/dev/null || true
     attempts=0
-    while kill -0 "$SUPERVISOR_PID" 2>/dev/null && [ "$attempts" -lt 12 ]; do
+    while kill -0 "$SUPERVISOR_PID" 2>/dev/null && [ "$attempts" -lt 47 ]; do
       sleep 1
       attempts=$((attempts + 1))
     done
