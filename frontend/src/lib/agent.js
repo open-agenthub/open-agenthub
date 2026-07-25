@@ -1,6 +1,7 @@
 export const agentOptions = [
   { value: 'Claude', label: 'Claude', hint: 'Anthropic agent runtime' },
-  { value: 'Codex', label: 'Codex', hint: 'OpenAI agent runtime' }
+  { value: 'Codex', label: 'Codex', hint: 'OpenAI agent runtime' },
+  { value: 'Cursor', label: 'Cursor', hint: 'Cursor agent runtime' }
 ]
 
 const PUBLIC_AUTH_OPTIONS = [
@@ -16,17 +17,25 @@ export function authOptions(agent, legacyMode) {
 }
 
 export function defaultPolicy(agent) {
-  return agent === 'Codex'
-    ? {
-        allowedTools: ['Read', 'Edit'],
-        allowedMcpTools: [],
-        allowedCommands: ['git status', 'npm test', 'dotnet test']
-      }
-    : {
-        allowedTools: ['Edit', 'Bash(git*)', 'Read'],
-        allowedMcpTools: [],
-        allowedCommands: []
-      }
+  if (agent === 'Codex') {
+    return {
+      allowedTools: ['Read', 'Edit'],
+      allowedMcpTools: [],
+      allowedCommands: ['git status', 'npm test', 'dotnet test']
+    }
+  }
+  if (agent === 'Cursor') {
+    return {
+      allowedTools: ['Shell(git status)', 'Read(**)', 'Write(**)'],
+      allowedMcpTools: [],
+      allowedCommands: []
+    }
+  }
+  return {
+    allowedTools: ['Edit', 'Bash(git*)', 'Read'],
+    allowedMcpTools: [],
+    allowedCommands: []
+  }
 }
 
 function populatedPolicy(source, agent) {
@@ -63,8 +72,18 @@ export function policyPayload(form) {
   return {
     allowedTools: lines(form.allowedToolsRaw),
     allowedMcpTools: lines(form.allowedMcpToolsRaw),
-    allowedCommands: lines(form.allowedCommandsRaw)
+    allowedCommands: form.agent === 'Cursor' ? [] : lines(form.allowedCommandsRaw)
   }
+}
+
+export function toolsPlaceholder(agent) {
+  if (agent === 'Cursor') return 'Shell(git status)\nRead(**)\nWrite(**)'
+  if (agent === 'Codex') return 'Read\nEdit'
+  return 'Read\nEdit\nBash(git*)'
+}
+
+export function commandsPlaceholder(agent) {
+  return agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'
 }
 
 export function authLabel(authMode) {
@@ -74,13 +93,21 @@ export function authLabel(authMode) {
 export function credentialReadiness(agent, authMode, mode, status = {}) {
   if (authMode === 'Auto') return { ready: true, text: 'Legacy automatic credential selection is preserved until you choose a billing source.' }
   if (authMode === 'Subscription') {
-    const ready = !!status[agent === 'Codex' ? 'codexSubscription' : 'claudeSubscription']
+    const ready = !!status[
+      agent === 'Codex' ? 'codexSubscription'
+        : agent === 'Cursor' ? 'cursorSubscription'
+          : 'claudeSubscription'
+    ]
     if (ready) return { ready, text: `${agent} subscription login is stored.` }
     if (mode === 'Interactive') return { ready, text: `No stored ${agent} subscription login. You can start now and sign in inside the session.` }
     return { ready, text: `No ${agent} subscription login is stored. Sign in during an Interactive session before starting this automation.` }
   }
-  const provider = agent === 'Codex' ? 'OpenAI' : 'Anthropic'
-  const ready = !!status[agent === 'Codex' ? 'openAiApiKey' : 'anthropicApiKey']
+  const provider = agent === 'Codex' ? 'OpenAI' : agent === 'Cursor' ? 'Cursor' : 'Anthropic'
+  const ready = !!status[
+    agent === 'Codex' ? 'openAiApiKey'
+      : agent === 'Cursor' ? 'cursorApiKey'
+        : 'anthropicApiKey'
+  ]
   return ready
     ? { ready, text: `${provider} API key is stored for API billing.` }
     : { ready, text: `No ${provider} API key is stored. Add it in Credentials before starting this session.` }
