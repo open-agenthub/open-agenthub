@@ -3,9 +3,15 @@ set -eu
 
 export DISPLAY=:99
 SCREEN="${AGENTHUB_BROWSER_SCREEN:-1440x900}"
+X11_SOCKET_DIR="${AGENTHUB_BROWSER_X11_SOCKET_DIR:-/tmp/.X11-unix}"
+X11_READY_ATTEMPTS="${AGENTHUB_BROWSER_X11_READY_ATTEMPTS:-100}"
 PIDS=""
 SUPERVISOR_PID=""
 STOPPING=0
+
+case "$X11_READY_ATTEMPTS" in
+  ''|*[!0-9]*|0) X11_READY_ATTEMPTS=100 ;;
+esac
 
 start_child() {
   "$@" &
@@ -35,9 +41,25 @@ stop_children() {
 trap 'stop_children; exit 0' TERM INT
 trap 'stop_children' EXIT
 
-mkdir -p /data/chromium /data/home /tmp/runtime
+mkdir -p /data/chromium /data/home /tmp/runtime "$X11_SOCKET_DIR"
 
 start_child Xvfb :99 -screen 0 "${SCREEN}x24" -nolisten tcp
+XVFB_PID=$CHILD_PID
+attempt=0
+while [ ! -e "$X11_SOCKET_DIR/X99" ]; do
+  if ! kill -0 "$XVFB_PID" 2>/dev/null; then
+    wait "$XVFB_PID" || status=$?
+    echo "[browser-runtime] Xvfb exited before display :99 became ready: status=${status:-0}" >&2
+    exit "${status:-1}"
+  fi
+  if [ "$attempt" -ge "$X11_READY_ATTEMPTS" ]; then
+    echo "[browser-runtime] display :99 did not become ready" >&2
+    exit 1
+  fi
+  attempt=$((attempt + 1))
+  sleep 0.1
+done
+
 start_child chromium \
   --display=:99 \
   --remote-debugging-address=127.0.0.1 \
