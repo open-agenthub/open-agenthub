@@ -37,6 +37,22 @@ public class LibrarySessionIntegrationTests
     }
 
     [Fact]
+    public void Duplication_ExplicitServerList_OverridesTheCopy()
+    {
+        var withMcp = SessionDuplication.CopyableRequest(
+            Source("[\"a\",\"b\"]"),
+            new DuplicateSessionRequest("Copy", null, IncludeMcp: true, McpServerIds: ["b", "c"]));
+        Assert.Equal(["b", "c"], withMcp.McpServerIds);
+
+        // The explicit picker choice also applies when the inline config is excluded.
+        var withoutMcp = SessionDuplication.CopyableRequest(
+            Source("[\"a\"]", "{\"mcpServers\":{}}"),
+            new DuplicateSessionRequest("Copy", null, IncludeMcp: false, McpServerIds: ["a"]));
+        Assert.Equal(["a"], withoutMcp.McpServerIds);
+        Assert.Null(withoutMcp.McpConfigJson);
+    }
+
+    [Fact]
     public void UpdateValidator_TreatsLibraryServersAsRuntimeField()
     {
         var scheduled = Source(null);

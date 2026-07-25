@@ -12,6 +12,10 @@ const includeMcp = ref(true)
 const agentForm = ref({})
 const advOpen = ref(false)
 const credentialStatus = ref({})
+// Saved MCP servers from the personal library; the selection overrides the
+// copied list independently of the inline-JSON includeMcp checkbox.
+const savedMcpServers = ref([])
+const selectedMcpIds = ref([])
 const busy = ref(false); const error = ref('')
 const automated = computed(() => props.session.mode !== 'Interactive')
 function reset(session) {
@@ -19,6 +23,7 @@ function reset(session) {
   projectId.value = session.projectId || ''
   includeMcp.value = true
   agentForm.value = defaultAgentForm(session)
+  selectedMcpIds.value = [...(session.mcpServerIds || [])]
   advOpen.value = false
   busy.value = false
   error.value = ''
@@ -27,6 +32,7 @@ reset(props.session)
 watch(() => props.session.id, () => reset(props.session))
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
+  try { savedMcpServers.value = await api.mcpServers() } catch { /* library is optional */ }
 })
 async function submit() {
   busy.value = true; error.value = ''
@@ -34,7 +40,8 @@ async function submit() {
     emit('duplicated', await api.duplicateSession(props.session.id, {
       title: title.value.trim() || `Copy of ${props.session.title}`,
       projectId: projectId.value || null,
-      includeMcp: includeMcp.value,
+      includeMcp: includeMcp.value,   // inline JSON config copy only
+      mcpServerIds: selectedMcpIds.value,
       agent: agentForm.value.agent,
       authMode: agentForm.value.authMode,
       policy: policyPayload(agentForm.value)
@@ -50,7 +57,14 @@ async function submit() {
     <div class="card sect">
       <div class="field"><label>Title</label><input v-model="title" /></div>
       <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
-      <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration</span></label>
+      <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration <span class="dim">— inline JSON config</span></span></label>
+      <div v-if="savedMcpServers.length" class="field mcp-field" data-mcp-picker>
+        <label>Saved MCP servers <span class="dim">— from your library</span></label>
+        <label v-for="s in savedMcpServers" :key="s.id" class="check mcp-pick">
+          <input type="checkbox" :value="s.id" v-model="selectedMcpIds" data-mcp-option />
+          <span>{{ s.name }}<span v-if="!s.mine" class="dim"> — shared by {{ s.owner }}</span></span>
+        </label>
+      </div>
     </div>
     <AgentDecisionCard v-model:agent="agentForm.agent" v-model:auth-mode="agentForm.authMode" :mode="session.mode"
       :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" />
@@ -87,6 +101,9 @@ async function submit() {
 .policy-note { margin: 0 0 12px; color: var(--muted-2); font-size: 12px; line-height: 1.5; }
 .check { display: flex; gap: 10px; align-items: center; font-size: 13px; color: var(--text); cursor: pointer; margin: 0; }
 .check input { width: auto; }
+.dim { color: var(--faint); font-weight: 400; }
+.mcp-field { margin: 14px 0 0; }
+.mcp-pick { margin: 0 0 6px; }
 .row { display: flex; gap: 10px; }
 .err { color: var(--danger); font: 12px var(--mono); }
 @media (max-width: 600px) { .row { flex-wrap: wrap; } }

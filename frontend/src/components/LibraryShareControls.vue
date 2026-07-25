@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
+import UserMultiSelect from './UserMultiSelect.vue'
 
 // Inline sharing editor for a library item (admin owners). Loads the current
 // share state and the group list lazily when the expander opens; a 402 from
@@ -18,9 +19,12 @@ const saved = ref(false)
 const busy = ref(false)
 
 const all = ref(false)
-const users = ref('') // comma-separated usernames
+const selectedUsers = ref([]) // owner strings (multi-select mode)
+const usersText = ref('')     // comma-separated fallback when the user list is unavailable
 const groupIds = ref([])
 const groups = ref([])
+const knownUsers = ref([])
+const usersLoaded = ref(false)
 
 onMounted(async () => {
   try {
@@ -29,13 +33,23 @@ onMounted(async () => {
       api.libraryGroups()
     ])
     all.value = !!shares.all
-    users.value = (shares.users || []).join(', ')
+    selectedUsers.value = [...(shares.users || [])]
+    usersText.value = (shares.users || []).join(', ')
     groupIds.value = [...(shares.groups || [])]
     groups.value = groupList
   } catch (e) {
     if (e.status === 402) locked.value = true
     else error.value = String(e.message || e)
-  } finally { loading.value = false }
+    loading.value = false
+    return
+  }
+  // The known-users list only powers the picker — fall back to a plain
+  // comma-separated input when it is unavailable so nothing breaks.
+  try {
+    knownUsers.value = await api.libraryUsers()
+    usersLoaded.value = true
+  } catch { usersLoaded.value = false }
+  loading.value = false
 })
 
 async function save() {
@@ -43,7 +57,9 @@ async function save() {
   try {
     await api.setLibraryShares(props.kind, props.itemId, {
       all: all.value,
-      users: users.value.split(',').map(u => u.trim()).filter(Boolean),
+      users: usersLoaded.value
+        ? selectedUsers.value
+        : usersText.value.split(',').map(u => u.trim()).filter(Boolean),
       groups: groupIds.value
     })
     saved.value = true
@@ -63,9 +79,10 @@ async function save() {
         <input type="checkbox" v-model="all" data-share-all />
         <span>Share with everyone</span>
       </label>
-      <div class="field">
-        <label>Users <span class="dim">— comma-separated usernames</span></label>
-        <input v-model="users" data-share-users placeholder="alice, bob" />
+      <div class="field" data-share-users>
+        <label>Users</label>
+        <UserMultiSelect v-if="usersLoaded" v-model="selectedUsers" :users="knownUsers" />
+        <input v-else v-model="usersText" data-share-users-fallback placeholder="alice, bob" />
       </div>
       <div v-if="groups.length" class="field">
         <label>Groups</label>
@@ -88,7 +105,6 @@ async function save() {
 .check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text); margin-bottom: 8px; cursor: pointer; }
 .check input { width: auto; }
 .field { margin-bottom: 12px; }
-.dim { color: var(--faint); font-weight: 400; }
 .row { display: flex; align-items: center; justify-content: flex-end; gap: 12px; }
 .ok-text { color: var(--ok); font-size: 12px; }
 .muted { color: var(--muted); font-size: 12px; margin: 0; }
