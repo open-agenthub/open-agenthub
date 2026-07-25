@@ -55,7 +55,7 @@ public sealed class KubernetesBrowserService : IBrowserService
             var existing = await _leases.GetBySessionAsync(session.Id, ct);
             if (existing is { Phase: BrowserPhase.Running, PodIp: not null })
                 return Connection(existing);
-            if (existing?.Phase == BrowserPhase.Failed)
+            if (existing?.Phase is BrowserPhase.Failed or BrowserPhase.Stopping)
             {
                 await _cluster.DeleteAsync(_namespace, session.Id, ct);
                 await _leases.DeleteAsync(existing.LeaseId, ct);
@@ -82,9 +82,14 @@ public sealed class KubernetesBrowserService : IBrowserService
                     {
                         await _cluster.CreateAsync(resources, ct);
                     }
+                    catch (OperationCanceledException)
+                    {
+                        await CleanupCancelledAsync(lease);
+                        throw;
+                    }
                     catch
                     {
-                        await FailAndCleanAsync(lease, "startup_timeout", ct);
+                        await FailAndCleanAsync(lease, "startup_timeout", CancellationToken.None);
                         throw;
                     }
                 }
@@ -108,8 +113,13 @@ public sealed class KubernetesBrowserService : IBrowserService
                     var pod = await _cluster.GetAsync(_namespace, session.Id, ct);
                     if (pod?.FailureCode is { } failure)
                     {
-                        await FailAndCleanAsync(lease, failure, ct);
+                        await FailAndCleanAsync(lease, failure, CancellationToken.None);
                         throw new InvalidOperationException($"Browser startup failed: {failure}.");
+                    }
+                    if (pod is not null && !string.Equals(pod.LeaseId, lease.LeaseId, StringComparison.Ordinal))
+                    {
+                        await FailAndCleanAsync(lease, "lease_conflict", CancellationToken.None);
+                        throw new InvalidOperationException("Browser pod belongs to a different lease generation.");
                     }
                     if (pod is { Ready: true, PodIp: not null })
                     {
@@ -124,8 +134,7 @@ public sealed class KubernetesBrowserService : IBrowserService
             }
             catch (OperationCanceledException)
             {
-                try { await _cluster.DeleteAsync(_namespace, lease.SessionId, CancellationToken.None); }
-                finally { await _leases.DeleteAsync(lease.LeaseId, CancellationToken.None); }
+                await CleanupCancelledAsync(lease);
                 throw;
             }
         }
@@ -204,10 +213,18 @@ public sealed class KubernetesBrowserService : IBrowserService
         _artifacts.DeleteAsync(IArtifactStore.BrowserCookiesKey(
             SanitizeOwner(session.Owner), session.Id), ct);
 
+    private async Task CleanupCancelledAsync(BrowserLease lease)
+    {
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        try { await _cluster.DeleteAsync(_namespace, lease.SessionId, cleanup.Token); }
+        finally { await _leases.DeleteAsync(lease.LeaseId, CancellationToken.None); }
+    }
     private async Task FailAndCleanAsync(BrowserLease lease, string failure, CancellationToken ct)
     {
-        try { await _cluster.DeleteAsync(_namespace, lease.SessionId, ct); }
-        finally { await _leases.SetFailedAsync(lease.LeaseId, failure, ct); }
+        using var cleanup = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        cleanup.CancelAfter(TimeSpan.FromSeconds(60));
+        try { await _cluster.DeleteAsync(_namespace, lease.SessionId, cleanup.Token); }
+        finally { await _leases.SetFailedAsync(lease.LeaseId, failure, CancellationToken.None); }
         _log.LogWarning("Browser startup for session {SessionId} failed with {Failure}",
             lease.SessionId, failure);
     }

@@ -85,7 +85,7 @@ function syncConnection() {
 
 onMounted(syncConnection)
 watch(() => [props.session.id, phase.value, props.sharedToken], syncConnection)
-watch(() => props.canWrite, writable => { if (rfb) rfb.viewOnly = !writable })
+watch(() => props.canWrite, syncConnection)
 onBeforeUnmount(() => { disposed = true; closeRfb() })
 </script>
 

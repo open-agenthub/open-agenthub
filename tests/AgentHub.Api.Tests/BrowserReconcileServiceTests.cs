@@ -16,7 +16,7 @@ public sealed class BrowserReconcileServiceTests
     {
         var lease = BrowserLease.Pending("s1", "l1", [1]);
         var leases = new ReconcileLeaseStore(lease);
-        var cluster = new ReconcileCluster { Snapshot = new("10.0.0.9", true, null) };
+        var cluster = new ReconcileCluster { Snapshot = new("10.0.0.9", true, null, "l1") };
         var service = Service(leases, cluster, Session(SessionStatus.Running));
 
         await service.ReconcileAsync(CancellationToken.None);
@@ -25,6 +25,20 @@ public sealed class BrowserReconcileServiceTests
         Assert.Equal("10.0.0.9", leases.Item?.PodIp);
     }
 
+    [Fact]
+    public async Task PodFromAnotherGeneration_IsCleanedInsteadOfPromoted()
+    {
+        var leases = new ReconcileLeaseStore(BrowserLease.Pending("s1", "l1", [1]));
+        var cluster = new ReconcileCluster
+        { Snapshot = new("10.0.0.9", true, null, "old-generation") };
+        var service = Service(leases, cluster, Session(SessionStatus.Running));
+
+        await service.ReconcileAsync(CancellationToken.None);
+
+        Assert.Equal(1, cluster.DeleteCalls);
+        Assert.Equal(BrowserPhase.Failed, leases.Item?.Phase);
+        Assert.Equal("lease_conflict", leases.Item?.FailureCode);
+    }
     [Fact]
     public async Task MissingPendingPod_CleansPoliciesAndMarksLeaseFailed()
     {
@@ -45,7 +59,7 @@ public sealed class BrowserReconcileServiceTests
     {
         var pending = BrowserLease.Pending("s1", "l1", [1]);
         var leases = new ReconcileLeaseStore(pending with { Phase = phase });
-        var cluster = new ReconcileCluster { Snapshot = new("10.0.0.9", true, null) };
+        var cluster = new ReconcileCluster { Snapshot = new("10.0.0.9", true, null, "l1") };
         var browser = new ReconcileBrowser(leases, cluster);
         var service = Service(leases, cluster, Session(sessionStatus), browser);
 

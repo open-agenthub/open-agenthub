@@ -4,7 +4,7 @@ using k8s.Models;
 
 namespace AgentHub.Api.Browser;
 
-public sealed record BrowserPodSnapshot(string? PodIp, bool Ready, string? FailureCode);
+public sealed record BrowserPodSnapshot(string? PodIp, bool Ready, string? FailureCode, string? LeaseId = null);
 
 public interface IBrowserClusterClient
 {
@@ -70,10 +70,10 @@ public sealed class KubernetesBrowserClusterClient : IBrowserClusterClient
             .Where(reason => reason is not null)
             .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
         if (waitingReasons.Contains("ErrImagePull") || waitingReasons.Contains("ImagePullBackOff"))
-            return new BrowserPodSnapshot(pod.Status?.PodIP, false, "image_pull");
+            return Snapshot(pod, false, "image_pull");
         if (pod.Status?.Conditions?.Any(condition => condition.Type == "PodScheduled" &&
                 condition.Status == "False" && condition.Reason == "Unschedulable") == true)
-            return new BrowserPodSnapshot(pod.Status?.PodIP, false, "unschedulable");
+            return Snapshot(pod, false, "unschedulable");
 
         var terminationDetails = pod.Status?.ContainerStatuses?
             .SelectMany(status => new[]
@@ -86,21 +86,27 @@ public sealed class KubernetesBrowserClusterClient : IBrowserClusterClient
         foreach (var failure in new[] { "cdp_unavailable", "vnc_unavailable" })
         {
             if (terminationDetails.Any(detail => detail!.Contains(failure, StringComparison.OrdinalIgnoreCase)))
-                return new BrowserPodSnapshot(pod.Status?.PodIP, false, failure);
+                return Snapshot(pod, false, failure);
         }
 
         var ready = pod.Status?.Phase == "Running" &&
             pod.Status.Conditions?.Any(condition => condition.Type == "Ready" && condition.Status == "True") == true;
-        return new BrowserPodSnapshot(pod.Status?.PodIP, ready, null);
+        return Snapshot(pod, ready, null);
     }
 
+    private static BrowserPodSnapshot Snapshot(V1Pod pod, bool ready, string? failureCode)
+    {
+        string? leaseId = null;
+        pod.Metadata?.Labels?.TryGetValue(BrowserPodSpecFactory.LeaseLabel, out leaseId);
+        return new BrowserPodSnapshot(pod.Status?.PodIP, ready, failureCode, leaseId);
+    }
     public async Task DeleteAsync(string namespaceName, string sessionId, CancellationToken ct = default)
     {
         var name = $"browser-{sessionId}";
         await IgnoreNotFoundAsync(() => _k8s.CoreV1.DeleteNamespacedPodAsync(
-            name, namespaceName, gracePeriodSeconds: 15, cancellationToken: ct));
+            name, namespaceName, gracePeriodSeconds: 50, cancellationToken: ct));
         // Keep callback egress and the lease alive while SIGTERM triggers the final cookie checkpoint.
-        var deadline = DateTime.UtcNow.AddSeconds(20);
+        var deadline = DateTime.UtcNow.AddSeconds(55);
         while (DateTime.UtcNow < deadline &&
                await GetAsync(namespaceName, sessionId, ct) is not null)
             await Task.Delay(TimeSpan.FromMilliseconds(250), ct);

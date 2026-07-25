@@ -9,18 +9,23 @@ const error = ref('')
 
 let refreshTimer
 let refreshing = false
+let active = false
 async function refresh() {
-  if (refreshing) return
+  if (refreshing || !active) return
   refreshing = true
-  try { session.value = await getSharedSession(props.token); error.value = '' }
-  catch (e) { error.value = String(e.message || e) }
-  finally { refreshing = false }
+  try {
+    const next = await getSharedSession(props.token)
+    if (active) { session.value = next; error.value = '' }
+  } catch (e) {
+    if (active) { session.value = null; error.value = String(e.message || e) }
+  } finally { refreshing = false }
 }
 onMounted(async () => {
+  active = true
   await refresh()
-  refreshTimer = setInterval(refresh, 2000)
+  if (active) refreshTimer = setInterval(refresh, 2000)
 })
-onUnmounted(() => clearInterval(refreshTimer))
+onUnmounted(() => { active = false; clearInterval(refreshTimer) })
 </script>
 
 <template>
