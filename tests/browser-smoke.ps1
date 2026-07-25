@@ -169,6 +169,8 @@ spec:
   restartPolicy: Never
   securityContext:
     runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 102
     seccompProfile: { type: RuntimeDefault }
   containers:
     - name: probe
