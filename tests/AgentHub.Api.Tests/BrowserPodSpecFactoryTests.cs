@@ -1,3 +1,4 @@
+using System.Net;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
@@ -33,13 +34,13 @@ public sealed class BrowserPodSpecFactoryTests
         var resources = BrowserPodSpecFactory.Build(Session("session-1"), Lease(), Context());
 
         Assert.Equal("session-1", resources.CdpIngress.Spec.PodSelector.MatchLabels["agenthub.dev/session"]);
-        var source = resources.CdpIngress.Spec.Ingress.Single().FromProperty.Single().PodSelector.MatchLabels;
-        Assert.Equal("session-1", source["agenthub.dev/session"]);
-        Assert.Equal("agent", source["agenthub.dev/component"]);
-        Assert.Equal(BrowserPodIdentity.FromToken("callback"), source["agenthub.dev/browser-identity"]);
+        var source = resources.CdpIngress.Spec.Ingress.Single().FromProperty.Single();
+        Assert.Null(source.PodSelector);
+        Assert.Equal("10.0.0.8/32", source.IpBlock.Cidr);
 
         Assert.Equal("agent", resources.CdpEgress.Spec.PodSelector.MatchLabels["agenthub.dev/component"]);
-        Assert.Equal(BrowserPodIdentity.FromToken("callback"), resources.CdpEgress.Spec.PodSelector.MatchLabels[BrowserPodIdentity.Label]);
+        Assert.Equal("session-1", resources.CdpEgress.Spec.PodSelector.MatchLabels["agenthub.dev/session"]);
+        Assert.DoesNotContain("agenthub.dev/browser-identity", resources.CdpEgress.Spec.PodSelector.MatchLabels);
         var destination = resources.CdpEgress.Spec.Egress.Single().To.Single().PodSelector.MatchLabels;
         Assert.Equal("session-1", destination["agenthub.dev/session"]);
         Assert.Equal("browser", destination["agenthub.dev/component"]);
@@ -105,6 +106,7 @@ public sealed class BrowserPodSpecFactoryTests
         ControlNamespace = "control-ns",
         CallbackUrl = "http://backend/internal/browser-leases/lease-1",
         LeaseToken = leaseToken,
+        AgentPodIp = IPAddress.Parse("10.0.0.8"),
         Options = new BrowserOptions { ExtraEgressPorts = [8443] }
     };
 }

@@ -1,3 +1,4 @@
+using System.Net;
 using AgentHub.Api.Persistence;
 using k8s;
 using k8s.Models;
@@ -17,6 +18,7 @@ public sealed record BrowserPodContext
     public required string ControlNamespace { get; init; }
     public required string CallbackUrl { get; init; }
     public required string LeaseToken { get; init; }
+    public required IPAddress AgentPodIp { get; init; }
     public required BrowserOptions Options { get; init; }
 }
 
@@ -132,12 +134,15 @@ public static class BrowserPodSpecFactory
             [
                 new V1NetworkPolicyIngressRule
                 {
-                    FromProperty = [new V1NetworkPolicyPeer(podSelector: Selector(AgentLabels(session)))],
+                    FromProperty = [new V1NetworkPolicyPeer(ipBlock: new V1IPBlock
+                    {
+                        Cidr = $"{context.AgentPodIp}/{(context.AgentPodIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128)}"
+                    })],
                     Ports = [cdpPort]
                 }
             ]);
         var cdpEgress = Policy(
-            $"{name}-cdp-out", context.Namespace, AgentLabels(session), ["Egress"],
+            $"{name}-cdp-out", context.Namespace, Labels(session.Id, "agent"), ["Egress"],
             egress:
             [
                 new V1NetworkPolicyEgressRule
@@ -228,12 +233,6 @@ public static class BrowserPodSpecFactory
     private static V1LabelSelector Selector(Dictionary<string, string> labels) =>
         new(matchLabels: labels);
 
-    private static Dictionary<string, string> AgentLabels(SessionRecord session)
-    {
-        var labels = Labels(session.Id, "agent");
-        labels[BrowserPodIdentity.Label] = BrowserPodIdentity.FromToken(session.CallbackToken);
-        return labels;
-    }
 
     private static Dictionary<string, string> Labels(string sessionId, string component) => new()
     {

@@ -24,7 +24,7 @@ public sealed class BrowserController(
     public async Task<IActionResult> Start(string id, CancellationToken ct)
     {
         var session = await AuthorizedAsync(id, ct);
-        return session is null ? Unauthorized() : Ok(await browsers.EnsureAsync(session, ct));
+        return session is null ? Unauthorized() : Ok(await browsers.EnsureAsync(session, HttpContext.Connection.RemoteIpAddress!, ct));
     }
 
     [HttpGet]

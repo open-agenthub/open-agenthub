@@ -33,8 +33,8 @@ even if it obtains the callback token.
 When a lease is created, the backend creates dynamic NetworkPolicies for the exact
 agent/browser pair:
 
-- CDP on TCP 9222 is allowed only from the bound agent pod, selected by an opaque identity
-  derived from its callback credential.
+- CDP on TCP 9222 is allowed only from the exact source IP of the bound Running
+  agent pod; copied labels and a stolen callback token do not grant CDP access.
 - websockify/RFB is allowed only from the Open AgentHub backend. Users connect through the
   authenticated session or shared-session WebSocket proxy; the browser pod is never
   exposed by an ingress or public Service.
