@@ -9,12 +9,14 @@ public class ProviderCredentialValidatorTests
     [Theory]
     [InlineData(AgentKind.Claude, "{\"claudeAiOauth\":{\"accessToken\":\"x\"}}", true)]
     [InlineData(AgentKind.Codex, "{\"tokens\":{\"access_token\":\"x\"}}", true)]
-    // PLACEHOLDER: replace cursorAuth marker after file-store discovery in Task 5.
-    [InlineData(AgentKind.Cursor, "{\"cursorAuth\":{\"accessToken\":\"synthetic-test-token-not-real\"}}", true)]
+    // Pinned from Cursor Agent CLI file store (auth.json): non-empty accessToken string.
+    [InlineData(AgentKind.Cursor, "{\"accessToken\":\"synthetic-test-token-not-real\",\"refreshToken\":\"synthetic-refresh\"}", true)]
     [InlineData(AgentKind.Claude, "{\"tokens\":{}}", false)]
     [InlineData(AgentKind.Codex, "{\"claudeAiOauth\":{}}", false)]
-    [InlineData(AgentKind.Claude, "{\"cursorAuth\":{}}", false)]
+    [InlineData(AgentKind.Claude, "{\"accessToken\":\"x\"}", false)]
     [InlineData(AgentKind.Cursor, "{\"tokens\":{}}", false)]
+    [InlineData(AgentKind.Cursor, "{\"accessToken\":\"\"}", false)]
+    [InlineData(AgentKind.Cursor, "{\"cursorAuth\":{\"accessToken\":\"x\"}}", false)]
     [InlineData(AgentKind.Cursor, "{}", false)]
     [InlineData(AgentKind.Cursor, "not-json", false)]
     [InlineData(AgentKind.Codex, "{}", false)]
@@ -34,8 +36,7 @@ public class ProviderCredentialValidatorTests
     [Fact]
     public void Validate_RejectsCursorPayloadLargerThan64KiB()
     {
-        // PLACEHOLDER: replace cursorAuth marker after file-store discovery in Task 5.
-        var json = "{\"cursorAuth\":{\"accessToken\":\"" + new string('x', ProviderCredentialValidator.MaxBytes) + "\"}}";
+        var json = "{\"accessToken\":\"" + new string('x', ProviderCredentialValidator.MaxBytes) + "\",\"refreshToken\":\"r\"}";
 
         Assert.False(ProviderCredentialValidator.Validate(AgentKind.Cursor, json));
     }

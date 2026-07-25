@@ -62,8 +62,8 @@ public static class CredentialSecretFactory
         GitUserEmail = data.ContainsKey("git_user_email"),
         ClaudeSubscription = claudeSubscription?.ContainsKey("credentials.json") == true,
         CodexSubscription = codexSubscription?.ContainsKey("auth.json") == true,
-        // PLACEHOLDER: replace cursor-credentials.json after file-store discovery in Task 5.
-        CursorSubscription = cursorSubscription?.ContainsKey("cursor-credentials.json") == true
+        // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
+        CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true
     };
 
     public static V1Secret CreateProviderSecret(string name, string @namespace, string ownerLabelValue,
@@ -76,8 +76,8 @@ public static class CredentialSecretFactory
         {
             AgentKind.Claude => "credentials.json",
             AgentKind.Codex => "auth.json",
-            // PLACEHOLDER: replace cursor-credentials.json after file-store discovery in Task 5.
-            AgentKind.Cursor => "cursor-credentials.json",
+            // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
+            AgentKind.Cursor => "auth.json",
             _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
         };
         return Secret(name, @namespace, ownerLabelValue, new Dictionary<string, byte[]>

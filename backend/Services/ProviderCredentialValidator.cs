@@ -25,8 +25,11 @@ public static class ProviderCredentialValidator
             {
                 AgentKind.Claude => root.TryGetProperty("claudeAiOauth", out var oauth) && oauth.ValueKind == JsonValueKind.Object,
                 AgentKind.Codex => root.TryGetProperty("tokens", out var tokens) && tokens.ValueKind == JsonValueKind.Object,
-                // PLACEHOLDER: replace cursorAuth marker after file-store discovery in Task 5.
-                AgentKind.Cursor => root.TryGetProperty("cursorAuth", out var cursor) && cursor.ValueKind == JsonValueKind.Object,
+                // Pinned from Cursor Agent CLI file store (2026.07.23-e383d2b): auth.json
+                // shape is { accessToken, refreshToken, apiKey?, bedrockCredentials? }.
+                AgentKind.Cursor => root.TryGetProperty("accessToken", out var token) &&
+                    token.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrEmpty(token.GetString()),
                 _ => false
             };
         }

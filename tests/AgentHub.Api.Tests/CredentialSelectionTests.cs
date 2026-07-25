@@ -43,12 +43,11 @@ public class CredentialSelectionTests
     public async Task ProviderCredentials_AcceptsAuthenticatedMatchingCursorSubscription()
     {
         var service = new RecordingSessionService();
-        // PLACEHOLDER: replace cursorAuth marker after file-store discovery in Task 5.
         var controller = Controller(new SessionRecord
         {
             Id = "session-1", Owner = "alice", CallbackToken = "callback-token",
             Agent = AgentKind.Cursor, AuthMode = AgentAuthMode.Subscription
-        }, service, "{\"cursorAuth\":{\"accessToken\":\"synthetic-test-token-not-real\"}}");
+        }, service, "{\"accessToken\":\"synthetic-test-token-not-real\",\"refreshToken\":\"synthetic-refresh\"}");
 
         var result = await controller.ProviderCredentials("session-1", "cursor", CancellationToken.None);
 
@@ -68,9 +67,8 @@ public class CredentialSelectionTests
         AgentKind sessionAgent, AgentAuthMode authMode, string routeAgent)
     {
         var service = new RecordingSessionService();
-        // PLACEHOLDER: replace cursorAuth marker after file-store discovery in Task 5.
         var body = routeAgent == "cursor"
-            ? "{\"cursorAuth\":{}}"
+            ? "{\"accessToken\":\"x\",\"refreshToken\":\"y\"}"
             : "{\"tokens\":{}}";
         var controller = Controller(new SessionRecord
         {
