@@ -166,7 +166,8 @@ public record UpdateSessionRequest
 }
 
 public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
-    AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null);
+    AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null,
+    List<string>? McpServerIds = null);
 
 public static class SessionDuplication
 {
@@ -180,7 +181,10 @@ public static class SessionDuplication
         Prompt = source.Prompt,
         Schedule = source.Schedule,
         McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
-        McpServerIds = request.IncludeMcp ? Deserialize<List<string>>(source.McpServerIdsJson) : new List<string>(),
+        // An explicit list (from the duplicate dialog's picker) wins; otherwise the
+        // library servers follow the IncludeMcp choice like the inline config does.
+        McpServerIds = request.McpServerIds
+            ?? (request.IncludeMcp ? Deserialize<List<string>>(source.McpServerIdsJson) : new List<string>()),
         Agent = request.Agent ?? source.Agent,
         AuthMode = request.AuthMode ?? source.AuthMode,
         Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),

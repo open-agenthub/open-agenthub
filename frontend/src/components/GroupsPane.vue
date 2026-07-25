@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
+import UserMultiSelect from './UserMultiSelect.vue'
 
 // Admin pane: user groups for library sharing plus the instance-wide
 // "users may publish skills to everyone" switch. Everything here is
@@ -17,9 +18,14 @@ const newName = ref('')
 const creating = ref(false)
 const createError = ref('')
 
-const membersDraft = ref({}) // group id -> comma-separated usernames
+const membersSel = ref({})  // group id -> [owner, …] (multi-select mode)
+const membersText = ref({}) // group id -> comma-separated fallback
 const memberBusy = ref({})
 const memberMsg = ref({})   // group id -> { ok, text }
+
+// Known users for the member picker — a failure falls back to plain text input.
+const knownUsers = ref([])
+const usersLoaded = ref(false)
 
 async function load() {
   loading.value = true; error.value = ''
@@ -27,13 +33,24 @@ async function load() {
     const [groupList, settings] = await Promise.all([api.libraryGroups(), api.librarySettings()])
     groups.value = groupList
     publishing.value = !!settings.userSkillPublishing
-    const draft = {}
-    for (const g of groupList) draft[g.id] = (g.members || []).join(', ')
-    membersDraft.value = draft
+    const sel = {}; const text = {}
+    for (const g of groupList) {
+      sel[g.id] = [...(g.members || [])]
+      text[g.id] = (g.members || []).join(', ')
+    }
+    membersSel.value = sel
+    membersText.value = text
   } catch (e) {
     if (e.status === 402) locked.value = true
     else error.value = String(e.message || e)
-  } finally { loading.value = false }
+    loading.value = false
+    return
+  }
+  try {
+    knownUsers.value = await api.libraryUsers()
+    usersLoaded.value = true
+  } catch { usersLoaded.value = false }
+  loading.value = false
 }
 onMounted(load)
 
@@ -55,10 +72,13 @@ async function saveMembers(g) {
   memberBusy.value[g.id] = true
   memberMsg.value[g.id] = null
   try {
-    const members = (membersDraft.value[g.id] || '').split(',').map(m => m.trim()).filter(Boolean)
+    const members = usersLoaded.value
+      ? membersSel.value[g.id] || []
+      : (membersText.value[g.id] || '').split(',').map(m => m.trim()).filter(Boolean)
     const updated = await api.setLibraryGroupMembers(g.id, { members })
     groups.value = groups.value.map(x => x.id === g.id ? updated : x)
-    membersDraft.value[g.id] = (updated.members || []).join(', ')
+    membersSel.value[g.id] = [...(updated.members || [])]
+    membersText.value[g.id] = (updated.members || []).join(', ')
     memberMsg.value[g.id] = { ok: true, text: 'Saved ✓' }
   } catch (e) {
     memberMsg.value[g.id] = { ok: false, text: String(e.message || e) } // 400 = unknown users
@@ -122,7 +142,7 @@ async function togglePublishing(e) {
 
         <section class="card sect">
           <div class="card-head"><h4>User groups</h4></div>
-          <p class="note">Groups make sharing library items with many users easy — add usernames as a comma-separated list.</p>
+          <p class="note">Groups make sharing library items with many users easy — pick the members per group below.</p>
           <div class="create">
             <input v-model="newName" data-group-name placeholder="Group name (e.g. platform-team)" :disabled="creating" @keyup.enter="create" />
             <button class="primary" data-group-create :disabled="creating || !newName.trim()" @click="create">{{ creating ? 'Creating…' : 'Create group' }}</button>
@@ -136,9 +156,10 @@ async function togglePublishing(e) {
               <span class="muted mono">{{ (g.members || []).length }} member{{ (g.members || []).length === 1 ? '' : 's' }}</span>
               <button class="danger" data-group-delete @click="remove(g)">Delete</button>
             </div>
-            <div class="field">
-              <label>Members <span class="dim">— comma-separated usernames</span></label>
-              <input v-model="membersDraft[g.id]" data-group-members placeholder="alice, bob" />
+            <div class="field" data-group-members>
+              <label>Members</label>
+              <UserMultiSelect v-if="usersLoaded" v-model="membersSel[g.id]" :users="knownUsers" />
+              <input v-else v-model="membersText[g.id]" data-group-members-fallback placeholder="alice, bob" />
             </div>
             <div class="row">
               <span v-if="memberMsg[g.id]" :class="memberMsg[g.id].ok ? 'ok-text' : 'err'" data-group-members-msg>{{ memberMsg[g.id].text }}</span>

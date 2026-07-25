@@ -6,7 +6,8 @@ import GroupsPane from './GroupsPane.vue'
 const mocks = vi.hoisted(() => ({
   api: {
     libraryGroups: vi.fn(), createLibraryGroup: vi.fn(), deleteLibraryGroup: vi.fn(),
-    setLibraryGroupMembers: vi.fn(), librarySettings: vi.fn(), setLibrarySettings: vi.fn()
+    setLibraryGroupMembers: vi.fn(), librarySettings: vi.fn(), setLibrarySettings: vi.fn(),
+    libraryUsers: vi.fn()
   }
 }))
 vi.mock('../api.js', () => ({ api: mocks.api }))
@@ -26,16 +27,22 @@ describe('GroupsPane', () => {
     mocks.api.createLibraryGroup.mockResolvedValue({ id: 'g3', name: 'new', members: [] })
     mocks.api.setLibraryGroupMembers.mockResolvedValue({ id: 'g1', name: 'platform-team', members: ['alice', 'bob', 'carol'] })
     mocks.api.setLibrarySettings.mockResolvedValue({ userSkillPublishing: true })
+    mocks.api.libraryUsers.mockResolvedValue([
+      { owner: 'alice', displayName: '', email: '' },
+      { owner: 'bob', displayName: '', email: '' },
+      { owner: 'carol', displayName: '', email: '' }
+    ])
   })
 
-  it('renders groups with member counts and prefilled member lists', async () => {
+  it('renders groups with member counts and prefilled member chips', async () => {
     const wrapper = mount(GroupsPane)
     await flushPromises()
     const rows = wrapper.findAll('[data-group-row]')
     expect(rows).toHaveLength(2)
     expect(rows[0].text()).toContain('platform-team')
     expect(rows[0].text()).toContain('2 members')
-    expect(rows[0].get('[data-group-members]').element.value).toBe('alice, bob')
+    const chips = rows[0].findAll('[data-group-members] [data-user-chip]')
+    expect(chips.map(c => c.text().replace('✕', '').trim())).toEqual(['alice', 'bob'])
   })
 
   it('creates a group by name', async () => {
@@ -58,23 +65,37 @@ describe('GroupsPane', () => {
     expect(wrapper.get('[data-group-create-error]').text()).toContain('group exists')
   })
 
-  it('saves the member list and shows inline confirmation', async () => {
+  it('saves the member list picked via the multi-select and shows inline confirmation', async () => {
     const wrapper = mount(GroupsPane)
     await flushPromises()
     const row = wrapper.findAll('[data-group-row]')[0]
-    await row.get('[data-group-members]').setValue('alice, bob, carol')
+    await row.get('[data-group-members] input').setValue('carol')
+    await row.get('[data-user-suggestion]').trigger('click')
     await row.get('[data-group-save-members]').trigger('click')
     await flushPromises()
     expect(mocks.api.setLibraryGroupMembers).toHaveBeenCalledWith('g1', { members: ['alice', 'bob', 'carol'] })
     expect(wrapper.get('[data-group-members-msg]').text()).toContain('Saved ✓')
   })
 
+  it('falls back to a plain member input when the user list is unavailable', async () => {
+    mocks.api.libraryUsers.mockRejectedValue(err(500, '500 unavailable'))
+    const wrapper = mount(GroupsPane)
+    await flushPromises()
+    const row = wrapper.findAll('[data-group-row]')[0]
+    expect(row.get('[data-group-members-fallback]').element.value).toBe('alice, bob')
+    await row.get('[data-group-members-fallback]').setValue('alice, bob, carol')
+    await row.get('[data-group-save-members]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.setLibraryGroupMembers).toHaveBeenCalledWith('g1', { members: ['alice', 'bob', 'carol'] })
+  })
+
   it('shows unknown-user errors (400) inline on the group row', async () => {
+    mocks.api.libraryUsers.mockRejectedValue(err(500, '500 unavailable'))
     mocks.api.setLibraryGroupMembers.mockRejectedValue(err(400, '400 unknown user: zed'))
     const wrapper = mount(GroupsPane)
     await flushPromises()
     const row = wrapper.findAll('[data-group-row]')[0]
-    await row.get('[data-group-members]').setValue('zed')
+    await row.get('[data-group-members-fallback]').setValue('zed')
     await row.get('[data-group-save-members]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-group-members-msg]').text()).toContain('unknown user')

@@ -3,10 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import NewSessionDialog from './NewSessionDialog.vue'
 import EditSessionDialog from './EditSessionDialog.vue'
+import DuplicateSessionDialog from './DuplicateSessionDialog.vue'
 
 const mocks = vi.hoisted(() => ({
   api: {
-    createSession: vi.fn(), updateSession: vi.fn(),
+    createSession: vi.fn(), updateSession: vi.fn(), duplicateSession: vi.fn(),
     getCredentialStatus: vi.fn(), mcpServers: vi.fn()
   },
   config: { gitEnabled: false }
@@ -33,6 +34,7 @@ describe('saved MCP server picker', () => {
     mocks.api.mcpServers.mockResolvedValue(servers)
     mocks.api.createSession.mockResolvedValue({ id: 'new' })
     mocks.api.updateSession.mockResolvedValue({ id: 's1' })
+    mocks.api.duplicateSession.mockResolvedValue({ id: 'copy' })
   })
 
   it('sends the selected ids from the New session dialog', async () => {
@@ -90,6 +92,47 @@ describe('saved MCP server picker', () => {
     await wrapper.get('[data-submit]').trigger('click')
     const payload = mocks.api.updateSession.mock.calls[0][1]
     expect([...payload.mcpServerIds].sort()).toEqual(['m1', 'm2'])
+  })
+
+  it('prefills the duplicate dialog from the source session and sends adjusted ids', async () => {
+    const wrapper = mount(DuplicateSessionDialog, {
+      props: { session: { ...baseSession, mcpServerIds: ['m2'] }, projects: [] },
+      ...mountOptions
+    })
+    await flushPromises()
+    const options = wrapper.findAll('[data-mcp-option]')
+    expect(options).toHaveLength(2)
+    expect(options.find(o => o.element.value === 'm2').element.checked).toBe(true)
+    expect(options.find(o => o.element.value === 'm1').element.checked).toBe(false)
+    await options.find(o => o.element.value === 'm1').setValue(true)
+    await options.find(o => o.element.value === 'm2').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      mcpServerIds: ['m1']
+    }))
+  })
+
+  it('keeps the duplicate picker independent from the includeMcp checkbox', async () => {
+    const wrapper = mount(DuplicateSessionDialog, {
+      props: { session: { ...baseSession, mcpServerIds: ['m1'] }, projects: [] },
+      ...mountOptions
+    })
+    await flushPromises()
+    await wrapper.get('.check input[type="checkbox"]').setValue(false) // includeMcp off
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      includeMcp: false,
+      mcpServerIds: ['m1'] // picker selection still sent
+    }))
+  })
+
+  it('renders no duplicate picker when the library is empty', async () => {
+    mocks.api.mcpServers.mockResolvedValue([])
+    const wrapper = mount(DuplicateSessionDialog, {
+      props: { session: baseSession, projects: [] }, ...mountOptions
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-mcp-picker]').exists()).toBe(false)
   })
 
   it('sends an empty list when the last saved server is unchecked on edit', async () => {

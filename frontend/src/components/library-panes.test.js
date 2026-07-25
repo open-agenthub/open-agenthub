@@ -8,7 +8,8 @@ const mocks = vi.hoisted(() => ({
   api: {
     mcpServers: vi.fn(), createMcpServer: vi.fn(), updateMcpServer: vi.fn(), deleteMcpServer: vi.fn(),
     skills: vi.fn(), skill: vi.fn(), createSkill: vi.fn(), updateSkill: vi.fn(), deleteSkill: vi.fn(),
-    libraryGroups: vi.fn(), librarySettings: vi.fn(), libraryShares: vi.fn(), setLibraryShares: vi.fn()
+    libraryGroups: vi.fn(), librarySettings: vi.fn(), libraryShares: vi.fn(), setLibraryShares: vi.fn(),
+    libraryUsers: vi.fn()
   }
 }))
 vi.mock('../api.js', () => ({ api: mocks.api }))
@@ -28,6 +29,10 @@ describe('McpServersPane', () => {
     mocks.api.libraryGroups.mockResolvedValue([])
     mocks.api.libraryShares.mockResolvedValue({ all: false, users: [], groups: [] })
     mocks.api.setLibraryShares.mockResolvedValue({ all: true, users: [], groups: [] })
+    mocks.api.libraryUsers.mockResolvedValue([
+      { owner: 'bob', displayName: 'Bob B', email: 'bob@example.dev' },
+      { owner: 'carol', displayName: 'Carol C', email: 'carol@example.dev' }
+    ])
   })
 
   it('lists own entries as editable and shared entries read-only with owner pill', async () => {
@@ -91,11 +96,31 @@ describe('McpServersPane', () => {
     const controls = wrapper.get('[data-mcp-share-controls]')
     expect(mocks.api.libraryShares).toHaveBeenCalledWith('mcp-servers', 'm1')
     await controls.get('[data-share-all]').setValue(true)
-    await controls.get('[data-share-users]').setValue('bob, carol')
+    // Pick users through the multi-select suggestions.
+    const userInput = controls.get('[data-share-users] input')
+    await userInput.setValue('bob')
+    await controls.get('[data-user-suggestion]').trigger('click')
+    await userInput.setValue('carol')
+    await controls.get('[data-user-suggestion]').trigger('click')
     await controls.get('[data-share-save]').trigger('click')
     await flushPromises()
     expect(mocks.api.setLibraryShares).toHaveBeenCalledWith('mcp-servers', 'm1', {
       all: true, users: ['bob', 'carol'], groups: []
+    })
+  })
+
+  it('falls back to a plain user input when the user list is unavailable', async () => {
+    mocks.api.libraryUsers.mockRejectedValue(new Error('403 admin only'))
+    const wrapper = mount(McpServersPane, { props: { isAdmin: true } })
+    await flushPromises()
+    await wrapper.get('[data-mcp-share-toggle]').trigger('click')
+    await flushPromises()
+    const controls = wrapper.get('[data-mcp-share-controls]')
+    await controls.get('[data-share-users-fallback]').setValue('bob, carol')
+    await controls.get('[data-share-save]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.setLibraryShares).toHaveBeenCalledWith('mcp-servers', 'm1', {
+      all: false, users: ['bob', 'carol'], groups: []
     })
   })
 
@@ -131,6 +156,7 @@ describe('SkillsPane', () => {
     mocks.api.libraryShares.mockResolvedValue({ all: false, users: [], groups: [] })
     mocks.api.setLibraryShares.mockResolvedValue({ all: true, users: [], groups: [] })
     mocks.api.libraryGroups.mockResolvedValue([])
+    mocks.api.libraryUsers.mockResolvedValue([])
     mocks.api.createSkill.mockResolvedValue({ id: 'new' })
   })
 

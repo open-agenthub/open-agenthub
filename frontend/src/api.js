@@ -117,6 +117,8 @@ export const api = {
   createLibraryGroup: (data) => req('POST', '/ee/library/groups', data),
   deleteLibraryGroup: (id) => req('DELETE', `/ee/library/groups/${encodeURIComponent(id)}`),
   setLibraryGroupMembers: (id, data) => req('PUT', `/ee/library/groups/${encodeURIComponent(id)}/members`, data),
+  // Known users for the sharing / group member pickers (admin-only).
+  libraryUsers: () => req('GET', '/ee/library/users'),
   librarySettings: () => req('GET', '/ee/library/settings'),
   setLibrarySettings: (data) => req('PUT', '/ee/library/settings', data),
   // kind: 'mcp-servers' | 'skills'

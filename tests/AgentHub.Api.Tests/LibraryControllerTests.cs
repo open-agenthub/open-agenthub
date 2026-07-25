@@ -28,6 +28,7 @@ public class LibraryControllerTests
             shares ?? new InMemoryLibraryShareStore(),
             mcp ?? new InMemoryMcpServerStore(),
             skills ?? new InMemorySkillStore(),
+            null!, // UserDirectory — only reached by ListUsers after passing the gate
             Admins(),
             new FakeEnterpriseLicense(licensed));
         controller.ControllerContext = new ControllerContext
@@ -46,6 +47,7 @@ public class LibraryControllerTests
     {
         var controller = Controller("admin", licensed: false);
         Assert.Equal(402, ((ObjectResult)await controller.ListGroups(default)).StatusCode);
+        Assert.Equal(402, ((ObjectResult)await controller.ListUsers(default)).StatusCode);
         Assert.Equal(402, ((ObjectResult)await controller.GetSettings(default)).StatusCode);
         Assert.Equal(402, ((ObjectResult)await controller.SetShares(
             "skills", "skill-1", new UpdateSharesRequest(true, null, null), default)).StatusCode);
@@ -56,6 +58,7 @@ public class LibraryControllerTests
     {
         var controller = Controller("carol", licensed: true);
         Assert.Equal(403, ((ObjectResult)await controller.ListGroups(default)).StatusCode);
+        Assert.Equal(403, ((ObjectResult)await controller.ListUsers(default)).StatusCode);
         Assert.Equal(403, ((ObjectResult)await controller.CreateGroup(new CreateGroupRequest("devs"), default)).StatusCode);
         Assert.Equal(403, ((ObjectResult)await controller.SetSettings(
             new UpdateLibrarySettingsRequest(true), default)).StatusCode);

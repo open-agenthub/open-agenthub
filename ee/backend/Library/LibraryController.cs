@@ -8,6 +8,7 @@ using System.Security.Claims;
 using AgentHub.Api.Admin;
 using AgentHub.Api.Library;
 using AgentHub.Api.Licensing;
+using AgentHub.Api.Persistence;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -25,6 +26,7 @@ public sealed class LibraryController(
     ILibraryShareStore store,
     IMcpServerStore mcpServers,
     ISkillStore skills,
+    UserDirectory directory,
     AdminAccess admins,
     IEnterpriseLicense license) : ControllerBase
 {
@@ -90,6 +92,19 @@ public sealed class LibraryController(
         {
             return BadRequest(new { error = exception.Message });
         }
+    }
+
+    // ---------------------------------------------------------------- Users
+
+    /// <summary>Known users for the sharing/group pickers (admin only).</summary>
+    [HttpGet("users")]
+    public async Task<IActionResult> ListUsers(CancellationToken ct)
+    {
+        if (Gate(adminOnly: true) is { } failure) return failure;
+        var users = await directory.ListAsync(ct);
+        return Ok(users
+            .Select(u => new { owner = u.Owner, displayName = u.DisplayName, email = u.Email })
+            .OrderBy(u => u.owner, StringComparer.OrdinalIgnoreCase));
     }
 
     // ---------------------------------------------------------------- Settings
