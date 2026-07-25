@@ -514,7 +514,7 @@ public sealed class KubernetesSessionService : ISessionService
             var (apiKey, providerKey) = record.Agent switch
             {
                 AgentKind.Codex => ("openai_api_key", "auth.json"),
-                AgentKind.Cursor => ("cursor_api_key", "cursor-credentials.json"),
+                AgentKind.Cursor => ("cursor_api_key", "auth.json"),
                 _ => ("anthropic_api_key", "credentials.json")
             };
             if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
