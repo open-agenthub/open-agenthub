@@ -6,18 +6,35 @@ describe('agent session helpers', () => {
     expect(defaultAgentForm()).toMatchObject({ agent: 'Claude', authMode: 'Subscription' })
   })
 
+  it('includes Cursor in agent options', () => {
+    expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor'])
+  })
+
   it('offers both public agents and auth modes without Auto', () => {
-    expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex'])
+    expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor'])
     expect(authOptions('Codex').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
+    expect(authOptions('Cursor').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
   })
 
   it('offers Auto only for an existing migrated Claude Auto session', () => {
     expect(authOptions('Claude', 'Auto').map(option => option.value)).toEqual(['Auto', 'Subscription', 'ApiKey'])
     expect(authOptions('Codex', 'Auto').map(option => option.value)).not.toContain('Auto')
+    expect(authOptions('Cursor', 'Auto').map(option => option.value)).not.toContain('Auto')
   })
 
   it('uses provider-aware Codex command defaults', () => {
     expect(defaultPolicy('Codex').allowedCommands).toEqual(expect.arrayContaining(['git status', 'npm test', 'dotnet test']))
+  })
+
+  it('uses Cursor permission token defaults and empty commands', () => {
+    expect(defaultPolicy('Cursor')).toMatchObject({
+      allowedTools: expect.arrayContaining(['Read(**)']),
+      allowedMcpTools: [],
+      allowedCommands: []
+    })
+    expect(defaultPolicy('Cursor').allowedTools).toEqual(
+      expect.arrayContaining([expect.stringMatching(/^Shell\(/), expect.stringMatching(/^Write\(/)])
+    )
   })
 
   it('parses newline-oriented policy, trims entries, and removes duplicates', () => {
@@ -65,8 +82,12 @@ describe('agent session helpers', () => {
     ['Claude', 'Subscription', 'Interactive', {}, false, 'start now and sign in'],
     ['Claude', 'Subscription', 'Autonomous', { claudeSubscription: true }, true, 'subscription login is stored'],
     ['Codex', 'Subscription', 'Scheduled', {}, false, 'Interactive session'],
+    ['Cursor', 'Subscription', 'Interactive', {}, false, 'start now and sign in'],
+    ['Cursor', 'Subscription', 'Autonomous', { cursorSubscription: true }, true, 'subscription login is stored'],
     ['Claude', 'ApiKey', 'Autonomous', { anthropicApiKey: true }, true, 'Anthropic API key is stored'],
-    ['Codex', 'ApiKey', 'Interactive', {}, false, 'Add it in Credentials']
+    ['Codex', 'ApiKey', 'Interactive', {}, false, 'Add it in Credentials'],
+    ['Cursor', 'ApiKey', 'Autonomous', { cursorApiKey: true }, true, 'Cursor API key is stored'],
+    ['Cursor', 'ApiKey', 'Interactive', {}, false, 'Add it in Credentials']
   ])('reports credential readiness for %s %s %s', (agent, authMode, mode, status, ready, text) => {
     expect(credentialReadiness(agent, authMode, mode, status)).toMatchObject({ ready })
     expect(credentialReadiness(agent, authMode, mode, status).text).toContain(text)

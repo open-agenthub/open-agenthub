@@ -21,6 +21,9 @@ describe('sessionMatches', () => {
   it('matches by mode', () => expect(sessionMatches(s, 'autonomous')).toBe(true))
   it('matches by agent', () => expect(sessionMatches(s, 'codex')).toBe(true))
   it('matches by authentication label', () => expect(sessionMatches(s, 'api key')).toBe(true))
+  it('matches Cursor agent', () => {
+    expect(sessionMatches({ ...s, agent: 'Cursor', authMode: 'Subscription' }, 'cursor')).toBe(true)
+  })
   it('no match', () => expect(sessionMatches(s, 'zzz')).toBe(false))
 })
 

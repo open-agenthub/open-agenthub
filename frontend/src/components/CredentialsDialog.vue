@@ -5,7 +5,7 @@ import { api, config } from '../api.js'
 const emit = defineEmits(['close', 'accounts'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
 const c = ref({
-  sshPrivateKey: '', gitlabToken: '', anthropicApiKey: '', openAiApiKey: '',
+  sshPrivateKey: '', gitlabToken: '', anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
 })
 // Which fields already have a stored value (values are never sent back).
@@ -96,6 +96,20 @@ async function save() {
         <input v-model="c.openAiApiKey" data-credential="openAiApiKey" type="password" autocomplete="off"
           :placeholder="placeholderFor('openAiApiKey', 'sk-…')" />
         <small>Used only when a Codex session selects API key billing. The key remains write-only.</small>
+      </div>
+      <div class="field">
+        <label>Cursor API key
+          <button v-if="stored.cursorApiKey" type="button" class="chip" :class="{ del: clear.has('cursorApiKey') }"
+            data-clear="cursorApiKey" data-credential-status="cursorApiKey"
+            :aria-label="clear.has('cursorApiKey') ? 'Keep stored Cursor API key' : 'Remove stored Cursor API key'"
+            @click="toggleClear('cursorApiKey')">{{ clear.has('cursorApiKey') ? 'remove ✕' : 'stored ✓' }}</button>
+        </label>
+        <input v-model="c.cursorApiKey" data-credential="cursorApiKey" type="password" autocomplete="off"
+          :placeholder="placeholderFor('cursorApiKey', 'key_…')" />
+        <small>Used only when a Cursor session selects API key billing. The key remains write-only.</small>
+        <small v-if="stored.cursorSubscription" data-credential-status="cursorSubscription">
+          Cursor subscription login is stored (sign-in happens in an Interactive session).
+        </small>
       </div>
       <div class="grid">
         <div class="field">

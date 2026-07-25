@@ -14,7 +14,8 @@ const sessions = [
   { id: 's1', title: 'Fix checkout', phase: 'Running', mode: 'Autonomous', agent: 'Codex', authMode: 'ApiKey', projectId: 'p1', repoUrl: 'https://x/shop/web.git' },
   { id: 's2', title: 'Nightly deps', phase: 'Running', mode: 'Interactive', questionPending: true, projectId: 'p1' },
   { id: 's3', title: 'Docs pass', phase: 'Paused', mode: 'Interactive', canResume: true },
-  { id: 's4', title: 'From a friend', phase: 'Running', mode: 'Interactive', accessRole: 'Viewer', sharedBy: 'jonas' }
+  { id: 's4', title: 'From a friend', phase: 'Running', mode: 'Interactive', accessRole: 'Viewer', sharedBy: 'jonas' },
+  { id: 's5', title: 'Cursor refactor', phase: 'Running', mode: 'Autonomous', agent: 'Cursor', authMode: 'Subscription', projectId: 'p1' }
 ]
 const projects = [{ id: 'p1', name: 'Checkout revamp', sortOrder: 0 }]
 
@@ -64,6 +65,9 @@ describe('SessionsView', () => {
     const row = wrapper.findAll('.row').find(item => item.text().includes('Fix checkout'))
     expect(row.text()).toContain('Codex')
     expect(row.text()).toContain('API key')
+    const cursorRow = wrapper.findAll('.row').find(item => item.text().includes('Cursor refactor'))
+    expect(cursorRow.text()).toContain('Cursor')
+    expect(cursorRow.text()).toContain('Subscription')
   })
 })
 
@@ -148,6 +152,15 @@ describe('TerminalView session identity', () => {
     })
     expect(wrapper.find('.meta').text()).toContain('Codex')
     expect(wrapper.find('.meta').text()).toContain('API key')
+  })
+
+  it('labels Cursor agent and billing in session detail', () => {
+    const wrapper = mount(TerminalView, {
+      props: { session: sessions[4] },
+      global: { stubs: { TerminalPane: true, ShareSessionDialog: true } }
+    })
+    expect(wrapper.find('.meta').text()).toContain('Cursor')
+    expect(wrapper.find('.meta').text()).toContain('Subscription')
   })
 })
 

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { defaultAgentForm, policyPayload } from '../lib/agent.js'
+import { defaultAgentForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
@@ -63,9 +63,9 @@ async function submit() {
         <p v-if="agentForm.agent === 'Claude'" class="policy-note" data-claude-command-semantics>
           Claude shell entries become exact native Bash rules; metacharacters, globs, and compound commands are rejected. Deliberate native Bash(...) patterns belong under built-in tools.
         </p>
-        <div class="field"><label>Built-in tools and patterns</label><textarea v-model="agentForm.allowedToolsRaw" data-policy="allowedTools" /></div>
+        <div class="field"><label>Built-in tools and patterns</label><textarea v-model="agentForm.allowedToolsRaw" data-policy="allowedTools" :placeholder="toolsPlaceholder(agentForm.agent)" /></div>
         <div class="field"><label>Full MCP tool names and patterns</label><textarea v-model="agentForm.allowedMcpToolsRaw" data-policy="allowedMcpTools" placeholder="mcp__docs__search\nmcp__git__*" /></div>
-        <div class="field"><label>{{ agentForm.agent === 'Claude' ? 'Exact shell commands' : 'Shell command prefixes' }}</label><textarea v-model="agentForm.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="agentForm.agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'" /></div>
+        <div class="field" v-if="agentForm.agent !== 'Cursor'"><label>{{ agentForm.agent === 'Claude' ? 'Exact shell commands' : 'Shell command prefixes' }}</label><textarea v-model="agentForm.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="commandsPlaceholder(agentForm.agent)" /></div>
       </div>
     </div>
     <p v-if="error" class="err">{{ error }}</p>
