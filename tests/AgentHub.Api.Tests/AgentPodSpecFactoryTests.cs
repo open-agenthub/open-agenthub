@@ -91,6 +91,11 @@ public class AgentPodSpecFactoryTests
         Assert.Equal("custom/runtime:1", Assert.Single(pod.Containers).Image);
         Assert.Equal(expectedRuntimeImage, copyRuntime.Image);
         Assert.Contains($"/usr/local/bin/{expectedLauncher}", Assert.Single(copyRuntime.Command, c => c.Contains("target=")));
+        if (agent == AgentKind.Cursor)
+        {
+            var script = Assert.Single(copyRuntime.Command, c => c.Contains("share/cursor-agent"));
+            Assert.Contains("cp -a /usr/local/share/cursor-agent /opt/agenthub/share/cursor-agent", script);
+        }
     }
 
     [Theory]
