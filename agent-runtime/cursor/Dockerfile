@@ -47,7 +47,8 @@ COPY cursor/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \
     /opt/session-agent/common/entrypoint-common.sh \
     /opt/session-agent/common/setup-cli-auth.sh \
-    /opt/session-agent/cursor/entrypoint.sh
+    /opt/session-agent/cursor/entrypoint.sh \
+    /opt/session-agent/cursor/login.sh
 
 USER 1000:1000
 ENV HOME=/home/agent
