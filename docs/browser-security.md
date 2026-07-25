@@ -37,9 +37,15 @@ agent/browser pair:
   agent pod; copied labels and a stolen callback token do not grant CDP access.
 - websockify/RFB is allowed only from the Open AgentHub backend. Users connect through the
   authenticated session or shared-session WebSocket proxy; the browser pod is never
-  exposed by an ingress or public Service.
+  exposed by an ingress or public Service. Viewer traffic uses a dedicated server-enforced
+  view-only RFB endpoint. Active browser sockets are reauthorized every two seconds so a
+  revoked link or downgraded collaborator loses the existing channel.
 - Browser egress is limited to DNS, HTTP, HTTPS, the backend cookie-checkpoint endpoint,
   and explicitly configured extra ports.
+
+Browser resources carry a random lease-generation label, and lifecycle operations are
+serialized across backend replicas with a PostgreSQL advisory lock. Conflicting or stale
+generations are rejected and cleaned.
 
 Both the agent and browser pods disable service-account token mounting. The browser runs
 as non-root with privilege escalation disabled, all Linux capabilities dropped, a
