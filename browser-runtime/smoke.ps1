@@ -26,7 +26,11 @@ try {
     } until ($version.webSocketDebuggerUrl -or (Get-Date) -gt $deadline)
     if (-not $version.webSocketDebuggerUrl) { throw "CDP did not become ready" }
 
-    $health = Invoke-WebRequest http://127.0.0.1:16081/healthz -UseBasicParsing
+    $healthDeadline = (Get-Date).AddSeconds(30)
+    do {
+        try { $health = Invoke-WebRequest http://127.0.0.1:16081/healthz -UseBasicParsing -TimeoutSec 2 } catch { $health = $null }
+        if ($health.StatusCode -ne 200) { Start-Sleep -Milliseconds 250 }
+    } until ($health.StatusCode -eq 200 -or (Get-Date) -gt $healthDeadline)
     if ($health.StatusCode -ne 200) { throw "Health endpoint failed" }
 
     foreach ($rfbPort in @(16080, 16082)) {
