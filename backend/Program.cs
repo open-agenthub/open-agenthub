@@ -310,7 +310,7 @@ async Task ProxyLinkBrowserWs(HttpContext ctx, string token, ISessionAccessServi
     var initialWrite = SessionAccessRules.CanWriteTerminal(resolved.Level);
     await ProxyBrowserWs(ctx, resolved, browsers, lf, async ct =>
     {
-        var current = await access.ResolveTokenAsync(token, ct);
+        var current = await access.ResolveTokenReadOnlyAsync(token, ct);
         return current?.Session.Id == resolved.Session.Id &&
             SessionAccessRules.CanWriteTerminal(current.Level) == initialWrite;
     });

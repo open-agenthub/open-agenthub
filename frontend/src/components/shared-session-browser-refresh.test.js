@@ -46,7 +46,7 @@ describe('shared browser phase refresh', () => {
   it('clears stale session UI when authorization refresh fails', async () => {
     getSharedSession
       .mockResolvedValueOnce({ id: 's1', accessRole: 'Viewer', browser: { phase: 'Running' } })
-      .mockRejectedValueOnce(new Error('share revoked'))
+      .mockRejectedValueOnce(Object.assign(new Error('share revoked'), { status: 404 }))
     const wrapper = mount(SharedSessionView, {
       props: { token: 'share-token' },
       global: { stubs: { TerminalView: { template: '<div data-terminal>terminal</div>' } } }
@@ -59,5 +59,22 @@ describe('shared browser phase refresh', () => {
 
     expect(wrapper.find('[data-terminal]').exists()).toBe(false)
     expect(wrapper.text()).toContain('share revoked')
+    wrapper.unmount()
+  })
+  it('retains the live session during a transient refresh failure', async () => {
+    getSharedSession
+      .mockResolvedValueOnce({ id: 's1', accessRole: 'Viewer', browser: { phase: 'Running' } })
+      .mockRejectedValueOnce(Object.assign(new Error('backend unavailable'), { status: 503 }))
+    const wrapper = mount(SharedSessionView, {
+      props: { token: 'share-token' },
+      global: { stubs: { TerminalView: { template: '<div data-terminal>terminal</div>' } } }
+    })
+    await flushPromises()
+
+    await vi.advanceTimersByTimeAsync(2000)
+    await flushPromises()
+
+    expect(wrapper.find('[data-terminal]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('Viewer')
     wrapper.unmount()
   })})

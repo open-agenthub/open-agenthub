@@ -126,10 +126,13 @@ export const browserUrl = (id) => wsUrl(id, 'browser')
 export const sharedBrowserUrl = (token) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/shared/${encodeURIComponent(token)}/browser`
 export async function getSharedSession(token) {
   const res = await fetch(`/api/shared/${encodeURIComponent(token)}/session`)
-  if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)
+  if (!res.ok) {
+    const error = new Error(`${res.status} ${await res.text()}`)
+    error.status = res.status
+    throw error
+  }
   return res.json()
 }
-
 export async function getSharedTranscript(token) {
   const res = await fetch(`/api/shared/${encodeURIComponent(token)}/transcript`)
   if (!res.ok) throw new Error(`${res.status} ${await res.text()}`)

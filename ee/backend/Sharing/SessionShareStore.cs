@@ -412,9 +412,16 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         return new StoredSessionAccess(MapSession(reader), role);
     }
 
-    public async Task<StoredSessionAccess?> FindTokenAccessAsync(
-        string token,
-        CancellationToken ct = default)
+    public Task<StoredSessionAccess?> FindTokenAccessAsync(
+        string token, CancellationToken ct = default) =>
+        FindTokenAccessCoreAsync(token, updateLastUsed: true, ct);
+
+    public Task<StoredSessionAccess?> FindTokenAccessReadOnlyAsync(
+        string token, CancellationToken ct = default) =>
+        FindTokenAccessCoreAsync(token, updateLastUsed: false, ct);
+
+    private async Task<StoredSessionAccess?> FindTokenAccessCoreAsync(
+        string token, bool updateLastUsed, CancellationToken ct)
     {
         if (!ShareTokens.TryHash(token, out var tokenHash))
             return null;
@@ -448,20 +455,23 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         if (!ShareTokens.Matches(token, storedHash))
             return null;
 
-        try
+        if (updateLastUsed)
         {
-            await using var update = new NpgsqlCommand(
-                "UPDATE session_share_links SET last_used_at = now() WHERE id = @id",
-                connection);
-            update.Parameters.AddWithValue("id", linkId);
-            await update.ExecuteNonQueryAsync(ct);
-        }
-        catch (Exception exception)
-        {
-            _logger.LogWarning(
-                exception,
-                "Could not update last-used timestamp for share link {LinkId}.",
-                linkId);
+            try
+            {
+                await using var update = new NpgsqlCommand(
+                    "UPDATE session_share_links SET last_used_at = now() WHERE id = @id",
+                    connection);
+                update.Parameters.AddWithValue("id", linkId);
+                await update.ExecuteNonQueryAsync(ct);
+            }
+            catch (Exception exception)
+            {
+                _logger.LogWarning(
+                    exception,
+                    "Could not update last-used timestamp for share link {LinkId}.",
+                    linkId);
+            }
         }
 
         return new StoredSessionAccess(session, role);

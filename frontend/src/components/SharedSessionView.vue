@@ -17,7 +17,10 @@ async function refresh() {
     const next = await getSharedSession(props.token)
     if (active) { session.value = next; error.value = '' }
   } catch (e) {
-    if (active) { session.value = null; error.value = String(e.message || e) }
+    if (active) {
+      if ([401, 403, 404].includes(e.status)) session.value = null
+      error.value = String(e.message || e)
+    }
   } finally { refreshing = false }
 }
 onMounted(async () => {
