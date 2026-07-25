@@ -30,7 +30,7 @@ public static class BrowserProxy
         try
         {
             await upstream.ConnectAsync(
-                new Uri($"ws://{connection.PodIp}:6080/"), context.RequestAborted);
+                new Uri($"ws://{connection.PodIp}:{UpstreamPort(canWrite)}/"), context.RequestAborted);
         }
         catch (Exception error)
         {
@@ -44,15 +44,11 @@ public static class BrowserProxy
         await RelayAsync(client, upstream, canWrite, context.RequestAborted);
     }
 
+    public static int UpstreamPort(bool canWrite) => canWrite ? 6080 : 6082;
+
     public static async Task RelayAsync(WebSocket client, WebSocket upstream, bool canWrite,
         CancellationToken ct)
     {
-        if (!canWrite)
-        {
-            await PumpAsync(upstream, client, ct);
-            return;
-        }
-
         using var relayCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var toClient = PumpAsync(upstream, client, relayCts.Token);
         var toUpstream = PumpAsync(client, upstream, relayCts.Token);

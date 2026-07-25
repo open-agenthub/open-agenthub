@@ -40,7 +40,14 @@ public sealed class KubernetesBrowserClusterClient : IBrowserClusterClient
                 resources.Pod.Metadata.NamespaceProperty, cancellationToken: ct);
         }
         catch (k8s.Autorest.HttpOperationException error)
-            when (error.Response.StatusCode == HttpStatusCode.Conflict) { }
+            when (error.Response.StatusCode == HttpStatusCode.Conflict)
+        {
+            var existing = await _k8s.CoreV1.ReadNamespacedPodAsync(
+                resources.Pod.Metadata.Name, resources.Pod.Metadata.NamespaceProperty,
+                cancellationToken: ct);
+            RequireExpectedLease(existing.Metadata,
+                resources.Pod.Metadata.Labels[BrowserPodSpecFactory.LeaseLabel], "pod");
+        }
     }
 
     public async Task<BrowserPodSnapshot?> GetAsync(string namespaceName, string sessionId,
@@ -126,9 +133,27 @@ public sealed class KubernetesBrowserClusterClient : IBrowserClusterClient
                 policy, policy.Metadata.NamespaceProperty, cancellationToken: ct);
         }
         catch (k8s.Autorest.HttpOperationException error)
-            when (error.Response.StatusCode == HttpStatusCode.Conflict) { }
+            when (error.Response.StatusCode == HttpStatusCode.Conflict)
+        {
+            var existing = await _k8s.NetworkingV1.ReadNamespacedNetworkPolicyAsync(
+                policy.Metadata.Name, policy.Metadata.NamespaceProperty, cancellationToken: ct);
+            RequireExpectedLease(existing.Metadata,
+                policy.Metadata.Labels[BrowserPodSpecFactory.LeaseLabel], "network policy");
+        }
     }
 
+    public static bool HasExpectedLease(V1ObjectMeta? metadata, string expectedLease) =>
+        metadata?.Labels is { } labels &&
+        labels.TryGetValue(BrowserPodSpecFactory.LeaseLabel, out var actualLease) &&
+        string.Equals(actualLease, expectedLease, StringComparison.Ordinal);
+
+    private static void RequireExpectedLease(V1ObjectMeta? metadata, string expectedLease,
+        string resourceKind)
+    {
+        if (!HasExpectedLease(metadata, expectedLease))
+            throw new InvalidOperationException(
+                $"Existing browser {resourceKind} belongs to a different lease generation.");
+    }
     private static async Task IgnoreNotFoundAsync(Func<Task> action)
     {
         try { await action(); }

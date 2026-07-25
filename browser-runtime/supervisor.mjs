@@ -50,6 +50,7 @@ export class BrowserSupervisor {
     this.timer = null;
     this.healthServer = null;
     this.shuttingDown = false;
+    this.checkpointTail = Promise.resolve();
   }
 
   async start() {
@@ -97,7 +98,13 @@ export class BrowserSupervisor {
     } catch (error) { diagnostic('cookie restore ignored', error); return false; }
   }
 
-  async checkpoint() {
+  checkpoint() {
+    const operation = this.checkpointTail.then(() => this.checkpointOnce());
+    this.checkpointTail = operation.catch(() => false);
+    return operation;
+  }
+
+  async checkpointOnce() {
     if (!this.context) return false;
     try {
       const urls = await this.stateUrls();

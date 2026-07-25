@@ -35,7 +35,9 @@ export async function accessibilitySnapshot(page, refs) {
   for (let index = 0; index < count; index += 1) {
     const locator = candidates.nth(index);
     if (!await locator.isVisible().catch(() => false)) continue;
-    const ref = refs.remember(locator);
+    const handle = await locator.elementHandle();
+    if (!handle) continue;
+    const ref = refs.remember(handle);
     const role = await locator.getAttribute('role') || await locator.evaluate(element =>
       element.tagName.toLowerCase());
     const name = (await locator.getAttribute('aria-label')) ||

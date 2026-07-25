@@ -15,6 +15,7 @@ public sealed class KubernetesBrowserService : IBrowserService
     private readonly IArtifactStore _artifacts;
     private readonly IBrowserClusterClient _cluster;
     private readonly ILogger<KubernetesBrowserService> _log;
+    private readonly IBrowserSessionLock _sessionLock;
     private readonly BrowserOptions _options;
     private readonly string _namespace;
     private readonly string _controlNamespace;
@@ -23,13 +24,14 @@ public sealed class KubernetesBrowserService : IBrowserService
 
     public KubernetesBrowserService(IConfiguration configuration, IBrowserLeaseStore leases,
         ISessionStore sessions, IArtifactStore artifacts, IBrowserClusterClient cluster,
-        ILogger<KubernetesBrowserService> log)
+        IBrowserSessionLock sessionLock, ILogger<KubernetesBrowserService> log)
     {
         _leases = leases;
         _sessions = sessions;
         _artifacts = artifacts;
         _cluster = cluster;
         _log = log;
+        _sessionLock = sessionLock;
         _options = configuration.GetSection("Browser").Get<BrowserOptions>() ?? new BrowserOptions();
         _namespace = configuration["AgentHub:Namespace"] ?? "agenthub-sessions";
         _controlNamespace = configuration["AgentHub:ControlNamespace"] ?? "agenthub";
@@ -49,6 +51,7 @@ public sealed class KubernetesBrowserService : IBrowserService
         await gate.WaitAsync(ct);
         try
         {
+            await using var distributedLock = await _sessionLock.AcquireAsync(session.Id, ct);
             var existing = await _leases.GetBySessionAsync(session.Id, ct);
             if (existing is { Phase: BrowserPhase.Running, PodIp: not null })
                 return Connection(existing);
@@ -96,26 +99,35 @@ public sealed class KubernetesBrowserService : IBrowserService
                 lease = existing;
             }
 
-            var deadline = DateTime.UtcNow.AddSeconds(_options.StartupTimeoutSeconds);
-            while (DateTime.UtcNow < deadline)
+            try
             {
-                ct.ThrowIfCancellationRequested();
-                var pod = await _cluster.GetAsync(_namespace, session.Id, ct);
-                if (pod?.FailureCode is { } failure)
+                var deadline = DateTime.UtcNow.AddSeconds(_options.StartupTimeoutSeconds);
+                while (DateTime.UtcNow < deadline)
                 {
-                    await FailAndCleanAsync(lease, failure, ct);
-                    throw new InvalidOperationException($"Browser startup failed: {failure}.");
+                    ct.ThrowIfCancellationRequested();
+                    var pod = await _cluster.GetAsync(_namespace, session.Id, ct);
+                    if (pod?.FailureCode is { } failure)
+                    {
+                        await FailAndCleanAsync(lease, failure, ct);
+                        throw new InvalidOperationException($"Browser startup failed: {failure}.");
+                    }
+                    if (pod is { Ready: true, PodIp: not null })
+                    {
+                        await _leases.SetRunningAsync(lease.LeaseId, pod.PodIp, ct);
+                        return Connection(lease with { Phase = BrowserPhase.Running, PodIp = pod.PodIp });
+                    }
+                    await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
                 }
-                if (pod is { Ready: true, PodIp: not null })
-                {
-                    await _leases.SetRunningAsync(lease.LeaseId, pod.PodIp, ct);
-                    return Connection(lease with { Phase = BrowserPhase.Running, PodIp = pod.PodIp });
-                }
-                await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
-            }
 
-            await FailAndCleanAsync(lease, "startup_timeout", ct);
-            throw new TimeoutException("Browser did not become ready before the startup timeout.");
+                await FailAndCleanAsync(lease, "startup_timeout", ct);
+                throw new TimeoutException("Browser did not become ready before the startup timeout.");
+            }
+            catch (OperationCanceledException)
+            {
+                try { await _cluster.DeleteAsync(_namespace, lease.SessionId, CancellationToken.None); }
+                finally { await _leases.DeleteAsync(lease.LeaseId, CancellationToken.None); }
+                throw;
+            }
         }
         finally
         {
@@ -157,6 +169,7 @@ public sealed class KubernetesBrowserService : IBrowserService
         await gate.WaitAsync(ct);
         try
         {
+            await using var distributedLock = await _sessionLock.AcquireAsync(sessionId, ct);
             var lease = await _leases.GetBySessionAsync(sessionId, ct);
             if (lease is not null) await _leases.SetStoppingAsync(lease.LeaseId, ct);
             await _cluster.DeleteAsync(_namespace, sessionId, ct);

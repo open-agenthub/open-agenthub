@@ -2,6 +2,7 @@ using System.Net;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
+using k8s.Models;
 using Xunit;
 
 namespace AgentHub.Api.Tests;
@@ -47,6 +48,28 @@ public sealed class BrowserPodSpecFactoryTests
     }
 
     [Fact]
+    public void Build_LabelsEveryResourceWithLeaseGeneration()
+    {
+        var resources = BrowserPodSpecFactory.Build(Session(), Lease(), Context());
+        const string label = "agenthub.dev/browser-lease";
+
+        Assert.Equal("lease-1", resources.Pod.Metadata.Labels[label]);
+        Assert.All(new[] { resources.CdpIngress, resources.CdpEgress, resources.BrowserEgress, resources.VncIngress },
+            policy => Assert.Equal("lease-1", policy.Metadata.Labels[label]));
+    }
+    [Fact]
+    public void ConflictValidation_RequiresTheExactLeaseGeneration()
+    {
+        var metadata = new V1ObjectMeta(labels: new Dictionary<string, string>
+        {
+            [BrowserPodSpecFactory.LeaseLabel] = "lease-1"
+        });
+
+        Assert.True(KubernetesBrowserClusterClient.HasExpectedLease(metadata, "lease-1"));
+        Assert.False(KubernetesBrowserClusterClient.HasExpectedLease(metadata, "lease-2"));
+        Assert.False(KubernetesBrowserClusterClient.HasExpectedLease(new V1ObjectMeta(), "lease-1"));
+    }
+    [Fact]
     public void Build_BrowserEgressAllowsDnsWebAndBackendCallbacks()
     {
         var policy = BrowserPodSpecFactory.Build(Session(), Lease(), Context()).BrowserEgress;
@@ -78,6 +101,9 @@ public sealed class BrowserPodSpecFactoryTests
 
         Assert.Equal("control-ns", source.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]);
         Assert.Equal("agenthub-backend", source.PodSelector.MatchLabels["app"]);
+        Assert.Equal(
+            ["6080", "6082"],
+            policy.Spec.Ingress.Single().Ports.Select(port => port.Port.Value).ToArray());
     }
 
     [Fact]

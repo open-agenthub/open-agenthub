@@ -60,6 +60,31 @@ test('checkpoint places lease token only on callback and uploads no credentials'
   assert.deepEqual(JSON.parse(requests[1].options.body), { version: COOKIE_STATE_VERSION, cookies: [validCookie] });
 });
 
+test('checkpoint calls are serialized so the final cookie state wins', async () => {
+  let cookieRead = 0;
+  let releaseFirst;
+  const firstPut = new Promise(resolve => { releaseFirst = resolve; });
+  const uploads = [];
+  const context = { async cookies() {
+    cookieRead += 1;
+    return [{ ...validCookie, value: cookieRead === 1 ? 'old' : 'new' }];
+  } };
+  const supervisor = makeSupervisor({ context, fetch: async (url, options = {}) => {
+    if (url.endsWith('/state-urls')) return jsonResponse({ getUrl: '', putUrl: 'https://store.test/put' });
+    uploads.push(JSON.parse(options.body).cookies[0].value);
+    if (uploads.length === 1) await firstPut;
+    return new Response(null, { status: 200 });
+  } });
+
+  const periodic = supervisor.checkpoint();
+  await new Promise(resolve => setImmediate(resolve));
+  const final = supervisor.checkpoint();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(uploads, ['old']);
+  releaseFirst();
+  await Promise.all([periodic, final]);
+  assert.deepEqual(uploads, ['old', 'new']);
+});
 test('shutdown stops periodic work, checkpoints once, disconnects, and is idempotent', async () => {
   const events = [];
   const supervisor = makeSupervisor({ context: fakeContext(), fetch: async () => new Response(null, { status: 404 }) });

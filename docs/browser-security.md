@@ -18,7 +18,7 @@ The managed MCP registration cannot be replaced by user MCP JSON. It exposes:
 - `browser_navigate`, `browser_snapshot`, `browser_click`, and `browser_type`
 - `browser_screenshot` and `browser_tabs`
 
-Scheduled and autonomous policies must explicitly allow
+Autonomous policies must explicitly allow
 `mcp__agenthub_browser__*` or the required exact tool names.
 
 ## Authentication and network boundaries

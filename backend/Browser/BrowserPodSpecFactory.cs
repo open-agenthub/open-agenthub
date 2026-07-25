@@ -26,6 +26,7 @@ public static class BrowserPodSpecFactory
 {
     private const string SessionLabel = "agenthub.dev/session";
     private const string ComponentLabel = "agenthub.dev/component";
+    public const string LeaseLabel = "agenthub.dev/browser-lease";
 
     public static BrowserPodResources Build(
         SessionRecord session, BrowserLease lease, BrowserPodContext context)
@@ -33,6 +34,7 @@ public static class BrowserPodSpecFactory
         var options = context.Options;
         var name = $"browser-{session.Id}";
         var labels = Labels(session.Id, "browser");
+        labels[LeaseLabel] = lease.LeaseId;
         var security = new V1SecurityContext
         {
             AllowPrivilegeEscalation = false,
@@ -68,6 +70,7 @@ public static class BrowserPodSpecFactory
             [
                 new() { Name = "cdp", ContainerPort = 9222 },
                 new() { Name = "rfb-ws", ContainerPort = 6080 },
+                new() { Name = "rfb-view", ContainerPort = 6082 },
                 new() { Name = "health", ContainerPort = 6081 }
             ],
             VolumeMounts = mounts,
@@ -129,7 +132,7 @@ public static class BrowserPodSpecFactory
 
         var cdpPort = new V1NetworkPolicyPort(protocol: "TCP", port: 9222);
         var cdpIngress = Policy(
-            $"{name}-cdp-in", context.Namespace, Labels(session.Id, "browser"), ["Ingress"],
+            $"{name}-cdp-in", context.Namespace, Labels(session.Id, "browser"), ["Ingress"], lease.LeaseId,
             ingress:
             [
                 new V1NetworkPolicyIngressRule
@@ -142,7 +145,7 @@ public static class BrowserPodSpecFactory
                 }
             ]);
         var cdpEgress = Policy(
-            $"{name}-cdp-out", context.Namespace, Labels(session.Id, "agent"), ["Egress"],
+            $"{name}-cdp-out", context.Namespace, Labels(session.Id, "agent"), ["Egress"], lease.LeaseId,
             egress:
             [
                 new V1NetworkPolicyEgressRule
@@ -168,7 +171,7 @@ public static class BrowserPodSpecFactory
             .Select(port => new V1NetworkPolicyPort(protocol: "TCP", port: port))
             .ToList();
         var browserEgress = Policy(
-            $"{name}-egress", context.Namespace, Labels(session.Id, "browser"), ["Egress"],
+            $"{name}-egress", context.Namespace, Labels(session.Id, "browser"), ["Egress"], lease.LeaseId,
             egress:
             [
                 new V1NetworkPolicyEgressRule
@@ -193,13 +196,17 @@ public static class BrowserPodSpecFactory
             ]);
 
         var vncIngress = Policy(
-            $"{name}-vnc-in", context.Namespace, Labels(session.Id, "browser"), ["Ingress"],
+            $"{name}-vnc-in", context.Namespace, Labels(session.Id, "browser"), ["Ingress"], lease.LeaseId,
             ingress:
             [
                 new V1NetworkPolicyIngressRule
                 {
                     FromProperty = [backendPeer],
-                    Ports = [new V1NetworkPolicyPort(protocol: "TCP", port: 6080)]
+                    Ports =
+                    [
+                        new V1NetworkPolicyPort(protocol: "TCP", port: 6080),
+                        new V1NetworkPolicyPort(protocol: "TCP", port: 6082)
+                    ]
                 }
             ]);
 
@@ -207,7 +214,7 @@ public static class BrowserPodSpecFactory
     }
 
     private static V1NetworkPolicy Policy(string name, string ns,
-        Dictionary<string, string> selector, IList<string> policyTypes,
+        Dictionary<string, string> selector, IList<string> policyTypes, string leaseId,
         IList<V1NetworkPolicyIngressRule>? ingress = null,
         IList<V1NetworkPolicyEgressRule>? egress = null) => new()
     {
@@ -218,7 +225,8 @@ public static class BrowserPodSpecFactory
             Labels = new Dictionary<string, string>
             {
                 [SessionLabel] = selector[SessionLabel],
-                ["agenthub.dev/browser-resource"] = "true"
+                ["agenthub.dev/browser-resource"] = "true",
+                [LeaseLabel] = leaseId
             }
         },
         Spec = new V1NetworkPolicySpec
