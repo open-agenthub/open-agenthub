@@ -32,6 +32,9 @@ jobs:
           - component: agent-runtime-codex
             context: ./agent-runtime
             dockerfile: ./agent-runtime/codex/Dockerfile
+          - component: agent-runtime-cursor
+            context: ./agent-runtime
+            dockerfile: ./agent-runtime/cursor/Dockerfile
     steps:
       - uses: actions/checkout@v4
 
@@ -60,7 +63,7 @@ jobs:
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
-          # The backend needs the repository root for ee/ sources. Both provider
+          # The backend needs the repository root for ee/ sources. Agent provider
           # runtimes share agent-runtime as their build context.
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
