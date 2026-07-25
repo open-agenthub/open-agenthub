@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 
 function prepare(env) {
   if (env.AGENTHUB_STATE_RESTORED === undefined) {
@@ -27,12 +28,13 @@ function buildCommand(env, allowResume) {
     env.AGENTHUB_STATE_RESTORED === '1' && chatId;
 
   if (mode === 'interactive') {
-    // Subscription login must run in the session PTY (entrypoint only sets the flag).
+    const args = restoredResume ? ['--resume', chatId] : [];
+    // Subscription login must run in the session PTY, then exec into the TUI
+    // (entrypoint only sets the flag; mirrors Codex device-login.sh).
     if (env.AGENTHUB_CURSOR_LOGIN === '1') {
-      return { cmd: 'agent', args: ['login'] };
+      return { cmd: 'bash', args: [path.join(__dirname, 'login.sh'), ...args] };
     }
-    if (restoredResume) return { cmd: 'agent', args: ['--resume', chatId] };
-    return { cmd: 'agent', args: [] };
+    return { cmd: 'agent', args };
   }
 
   const args = ['-p', '--force', '--trust'];
@@ -43,10 +45,16 @@ function buildCommand(env, allowResume) {
 }
 
 function isResumeCommand(command) {
-  if (!command || command.cmd !== 'agent' || !Array.isArray(command.args)) return false;
-  const index = command.args.indexOf('--resume');
-  return index >= 0 && typeof command.args[index + 1] === 'string' &&
-    command.args[index + 1].length > 0;
+  if (!command || !Array.isArray(command.args)) return false;
+  const args = command.args;
+  if (command.cmd === 'bash') {
+    return args.length === 3 && args[0] === path.join(__dirname, 'login.sh') &&
+      args[1] === '--resume' && typeof args[2] === 'string' && args[2].length > 0;
+  }
+  if (command.cmd !== 'agent') return false;
+  const index = args.indexOf('--resume');
+  return index >= 0 && typeof args[index + 1] === 'string' &&
+    args[index + 1].length > 0;
 }
 
 function isMissingResume(output, exitCode) {

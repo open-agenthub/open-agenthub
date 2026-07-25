@@ -30,18 +30,25 @@ test('Cursor interactive starts TUI without resume flags', () => {
   }), false), { cmd: 'agent', args: [] });
 });
 
-test('Cursor subscription login runs inside the agent PTY via driver flag', () => {
+test('Cursor subscription login runs inside the agent PTY before the interactive TUI', () => {
+  const loginSh = path.join(runtimeDir, 'cursor', 'login.sh');
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CURSOR_LOGIN: '1'
-  }), true), { cmd: 'agent', args: ['login'] });
+  }), true), { cmd: 'bash', args: [loginSh] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CURSOR_LOGIN: '1',
     AGENTHUB_RESUME: '1',
     AGENTHUB_STATE_RESTORED: '1',
     AGENTHUB_CLAUDE_SESSION_ID: 'chat-1'
-  }), true), { cmd: 'agent', args: ['login'] });
-  assert.equal(driver.isResumeCommand({ cmd: 'agent', args: ['login'] }), false);
+  }), true), { cmd: 'bash', args: [loginSh, '--resume', 'chat-1'] });
+  assert.equal(driver.isResumeCommand({
+    cmd: 'bash', args: [loginSh, '--resume', 'chat-1']
+  }), true);
+  assert.equal(driver.isResumeCommand({ cmd: 'bash', args: [loginSh] }), false);
 
+  const script = fs.readFileSync(loginSh, 'utf8');
+  assert.match(script, /if \[ ! -f "\$\{CURSOR_AUTH_FILE:-\}" \]; then\s+agent login\s+fi/);
+  assert.match(script, /^exec agent "\$@"$/m);
   const entrypoint = fs.readFileSync(path.join(runtimeDir, 'cursor', 'entrypoint.sh'), 'utf8');
   assert.match(entrypoint, /export AGENTHUB_CURSOR_LOGIN=1/);
   assert.doesNotMatch(entrypoint, /^\s*agent login\s*$/m);
@@ -82,10 +89,15 @@ test('Cursor autonomous resume keeps print flags before --resume', () => {
 });
 
 test('Cursor resume recognition rejects fresh and merely resume-like commands', () => {
+  const loginSh = path.join(runtimeDir, 'cursor', 'login.sh');
   assert.equal(driver.isResumeCommand({ cmd: 'agent', args: ['--resume', 'chat-1'] }), true);
   assert.equal(driver.isResumeCommand({
     cmd: 'agent', args: ['-p', '--force', '--trust', '--resume', 'chat-1', 'prompt']
   }), true);
+  assert.equal(driver.isResumeCommand({
+    cmd: 'bash', args: [loginSh, '--resume', 'chat-1']
+  }), true);
+  assert.equal(driver.isResumeCommand({ cmd: 'bash', args: [loginSh] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'agent', args: [] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'agent', args: ['--resume'] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['--resume', 'x'] }), false);
@@ -139,6 +151,7 @@ test('Cursor image installs agent CLI and preserves custom-image injection paths
   assert.match(dockerfile, /COPY common\s+\/opt\/session-agent\/common/);
   assert.match(dockerfile, /COPY cursor\s+\/opt\/session-agent\/cursor/);
   assert.match(dockerfile, /COPY cursor\/entrypoint\.sh\s+\/usr\/local\/bin\/entrypoint\.sh/);
+  assert.match(dockerfile, /\/opt\/session-agent\/cursor\/login\.sh/);
   assert.match(dockerfile, /cursor\.com\/install/);
   assert.match(dockerfile, /ARG CURSOR_AGENT_VERSION=/);
   assert.match(dockerfile, /test "\$AGENT_VER" = "\$CURSOR_AGENT_VERSION"/);
