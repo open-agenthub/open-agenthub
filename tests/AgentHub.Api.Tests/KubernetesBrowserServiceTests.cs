@@ -48,6 +48,58 @@ public sealed class KubernetesBrowserServiceTests
         Assert.Empty(leases.Items);
     }
     [Fact]
+    public async Task CancelledCreate_CleansPartialResourcesAndLease()
+    {
+        var leases = new MemoryLeaseStore();
+        var cluster = new RecordingBrowserCluster
+        {
+            Create = _ => throw new OperationCanceledException()
+        };
+        var service = Service(leases, cluster, new RecordingArtifacts());
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8")));
+
+        Assert.Equal(1, cluster.DeleteCalls);
+        Assert.Empty(leases.Items);
+    }
+
+    [Fact]
+    public async Task StoppingLease_IsDeletedBeforeANewGenerationStarts()
+    {
+        var leases = new MemoryLeaseStore();
+        await leases.TryCreateAsync(BrowserLease.Pending("session-1", "old-lease", [1]) with
+        { Phase = BrowserPhase.Stopping });
+        var cluster = new RecordingBrowserCluster();
+        var service = Service(leases, cluster, new RecordingArtifacts());
+
+        var connection = await service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8"));
+
+        Assert.Equal(1, cluster.DeleteCalls);
+        Assert.Equal(1, cluster.CreateCalls);
+        Assert.Equal(BrowserPhase.Running, connection.Browser.Phase);
+        Assert.DoesNotContain(leases.Items.Values, lease => lease.LeaseId == "old-lease");
+    }
+
+    [Fact]
+    public async Task ReadyPodFromAnotherGeneration_IsRejectedAndCleaned()
+    {
+        var leases = new MemoryLeaseStore();
+        var cluster = new RecordingBrowserCluster
+        {
+            Get = _ => Task.FromResult<BrowserPodSnapshot?>(
+                new("10.0.0.9", true, null, "foreign-lease"))
+        };
+        var service = Service(leases, cluster, new RecordingArtifacts());
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8")));
+
+        Assert.Equal(1, cluster.DeleteCalls);
+        Assert.Equal(BrowserPhase.Failed, leases.Items.Values.Single().Phase);
+        Assert.Equal("lease_conflict", leases.Items.Values.Single().FailureCode);
+    }
+    [Fact]
     public async Task MintStateUrls_RequiresExactBrowserToken()
     {
         var leases = new MemoryLeaseStore();
@@ -141,12 +193,18 @@ public sealed class KubernetesBrowserServiceTests
     {
         public int CreateCalls;
         public int DeleteCalls;
-        public Func<CancellationToken, Task<BrowserPodSnapshot?>> Get { get; init; } = _ =>
-            Task.FromResult<BrowserPodSnapshot?>(new("10.0.0.9", true, null));
+        public string? CreatedLeaseId;
+        public Func<CancellationToken, Task>? Create { get; init; }
+        public Func<CancellationToken, Task<BrowserPodSnapshot?>>? Get { get; init; }
         public Task CreateAsync(BrowserPodResources resources, CancellationToken ct = default)
-        { Interlocked.Increment(ref CreateCalls); return Task.CompletedTask; }
+        {
+            Interlocked.Increment(ref CreateCalls);
+            CreatedLeaseId = resources.Pod.Metadata.Labels[BrowserPodSpecFactory.LeaseLabel];
+            return Create?.Invoke(ct) ?? Task.CompletedTask;
+        }
         public Task<BrowserPodSnapshot?> GetAsync(string namespaceName, string sessionId,
-            CancellationToken ct = default) => Get(ct);
+            CancellationToken ct = default) => Get?.Invoke(ct) ??
+                Task.FromResult<BrowserPodSnapshot?>(new("10.0.0.9", true, null, CreatedLeaseId));
         public Task DeleteAsync(string namespaceName, string sessionId, CancellationToken ct = default)
         { Interlocked.Increment(ref DeleteCalls); return Task.CompletedTask; }
         public Task<IReadOnlyCollection<string>> ListSessionIdsAsync(string namespaceName,

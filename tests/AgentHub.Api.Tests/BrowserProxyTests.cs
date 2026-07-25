@@ -38,6 +38,19 @@ public sealed class BrowserProxyTests
         Assert.Equal(["screen"], client.SentFrames);
     }
 
+    [Fact]
+    public async Task AuthorizationMonitor_FailsClosedWhenAccessIsRevoked()
+    {
+        var calls = 0;
+        var authorized = await BrowserProxy.MonitorAuthorizationAsync(_ =>
+        {
+            calls++;
+            return Task.FromResult(calls < 2);
+        }, CancellationToken.None, TimeSpan.Zero);
+
+        Assert.False(authorized);
+        Assert.Equal(2, calls);
+    }
     private sealed class MemoryWebSocket(params string[] incoming) : WebSocket
     {
         private readonly Queue<byte[]> _incoming = new(incoming.Select(Encoding.UTF8.GetBytes));

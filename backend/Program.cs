@@ -278,11 +278,12 @@ async Task ProxyLinkWs(HttpContext ctx, string token, ISessionAccessService acce
 app.Map("/ws/shared/{token}/terminal", (HttpContext ctx, string token,
     ISessionAccessService access, ISessionService sessions, ILoggerFactory lf) => ProxyLinkWs(ctx, token, access, sessions, lf));
 async Task ProxyBrowserWs(HttpContext ctx, SessionAccessResult resolved,
-    AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf)
+    AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf,
+    Func<CancellationToken, Task<bool>> remainsAuthorized)
 {
     if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
     await BrowserProxy.HandleAsync(ctx, resolved.Session.Id,
-        SessionAccessRules.CanWriteTerminal(resolved.Level), browsers, lf);
+        SessionAccessRules.CanWriteTerminal(resolved.Level), browsers, lf, remainsAuthorized);
 }
 
 async Task ProxyUserBrowserWs(HttpContext ctx, string id, ISessionAccessService access,
@@ -292,7 +293,13 @@ async Task ProxyUserBrowserWs(HttpContext ctx, string id, ISessionAccessService 
     if (principal is null) { ctx.Response.StatusCode = 401; return; }
     var resolved = await access.ResolveUserAsync(principal, id, ctx.RequestAborted);
     if (resolved is null) { ctx.Response.StatusCode = 404; return; }
-    await ProxyBrowserWs(ctx, resolved, browsers, lf);
+    var initialWrite = SessionAccessRules.CanWriteTerminal(resolved.Level);
+    await ProxyBrowserWs(ctx, resolved, browsers, lf, async ct =>
+    {
+        var current = await access.ResolveUserAsync(principal, id, ct);
+        return current?.Session.Id == resolved.Session.Id &&
+            SessionAccessRules.CanWriteTerminal(current.Level) == initialWrite;
+    });
 }
 
 async Task ProxyLinkBrowserWs(HttpContext ctx, string token, ISessionAccessService access,
@@ -300,9 +307,14 @@ async Task ProxyLinkBrowserWs(HttpContext ctx, string token, ISessionAccessServi
 {
     var resolved = await access.ResolveTokenAsync(token, ctx.RequestAborted);
     if (resolved is null) { ctx.Response.StatusCode = 404; return; }
-    await ProxyBrowserWs(ctx, resolved, browsers, lf);
+    var initialWrite = SessionAccessRules.CanWriteTerminal(resolved.Level);
+    await ProxyBrowserWs(ctx, resolved, browsers, lf, async ct =>
+    {
+        var current = await access.ResolveTokenAsync(token, ct);
+        return current?.Session.Id == resolved.Session.Id &&
+            SessionAccessRules.CanWriteTerminal(current.Level) == initialWrite;
+    });
 }
-
 app.Map("/ws/sessions/{id}/browser", (HttpContext ctx, string id,
         ISessionAccessService access, AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf) =>
         ProxyUserBrowserWs(ctx, id, access, browsers, lf))

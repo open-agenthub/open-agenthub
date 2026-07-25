@@ -44,6 +44,12 @@ public sealed class BrowserReconcileService(
             if (currentLease?.LeaseId != lease.LeaseId) continue;
 
             var pod = await cluster.GetAsync(_namespace, lease.SessionId, ct);
+            if (pod is not null && !string.Equals(pod.LeaseId, lease.LeaseId, StringComparison.Ordinal))
+            {
+                await cluster.DeleteAsync(_namespace, lease.SessionId, ct);
+                await leases.SetFailedAsync(lease.LeaseId, "lease_conflict", ct);
+                continue;
+            }
             if (lease.Phase == BrowserPhase.Failed)
             {
                 await cluster.DeleteAsync(_namespace, lease.SessionId, ct);

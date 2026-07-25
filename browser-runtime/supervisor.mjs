@@ -5,6 +5,7 @@ import { chromium } from 'playwright-core';
 export const COOKIE_STATE_VERSION = 1;
 const DEFAULT_MAX_BYTES = 1_048_576;
 const REQUEST_TIMEOUT_MS = 10_000;
+const SHUTDOWN_TIMEOUT_MS = 45_000;
 const ALLOWED_SAME_SITE = new Set(['Strict', 'Lax', 'None']);
 
 export function decodeCookieState(input, maxBytes = DEFAULT_MAX_BYTES) {
@@ -122,7 +123,7 @@ export class BrowserSupervisor {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
     if (this.timer) this.clearInterval(this.timer);
-    await Promise.race([this.checkpoint(), new Promise(resolve => { const timer = setTimeout(resolve, REQUEST_TIMEOUT_MS); timer.unref?.(); })]);
+    await Promise.race([this.checkpoint(), new Promise(resolve => { const timer = setTimeout(resolve, SHUTDOWN_TIMEOUT_MS); timer.unref?.(); })]);
     if (this.healthServer) await new Promise(resolve => this.healthServer.close(resolve));
     await this.browser?.close().catch(error => diagnostic('browser disconnect failed', error));
   }

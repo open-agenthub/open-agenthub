@@ -6,7 +6,8 @@ namespace AgentHub.Api.WebSockets;
 public static class BrowserProxy
 {
     public static async Task HandleAsync(HttpContext context, string sessionId, bool canWrite,
-        IBrowserService browsers, ILoggerFactory loggerFactory)
+        IBrowserService browsers, ILoggerFactory loggerFactory,
+        Func<CancellationToken, Task<bool>>? remainsAuthorized = null)
     {
         var log = loggerFactory.CreateLogger("BrowserProxy");
         var connection = await browsers.GetConnectionAsync(sessionId, context.RequestAborted);
@@ -41,21 +42,52 @@ public static class BrowserProxy
             return;
         }
 
-        await RelayAsync(client, upstream, canWrite, context.RequestAborted);
+        await RelayAsync(client, upstream, canWrite, context.RequestAborted, remainsAuthorized);
     }
 
     public static int UpstreamPort(bool canWrite) => canWrite ? 6080 : 6082;
 
     public static async Task RelayAsync(WebSocket client, WebSocket upstream, bool canWrite,
-        CancellationToken ct)
+        CancellationToken ct, Func<CancellationToken, Task<bool>>? remainsAuthorized = null,
+        TimeSpan? authorizationInterval = null)
     {
         using var relayCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var toClient = PumpAsync(upstream, client, relayCts.Token);
         var toUpstream = PumpAsync(client, upstream, relayCts.Token);
-        await Task.WhenAny(toClient, toUpstream);
+        var authorization = remainsAuthorized is null ? null :
+            MonitorAuthorizationAsync(remainsAuthorized, relayCts.Token, authorizationInterval);
+        var completed = await Task.WhenAny(
+            authorization is null ? [toClient, toUpstream] : [toClient, toUpstream, authorization]);
+        var revoked = authorization is not null && ReferenceEquals(completed, authorization) &&
+            !await authorization;
         relayCts.Cancel();
-        try { await Task.WhenAll(toClient, toUpstream); }
+        try
+        {
+            await Task.WhenAll(authorization is null
+                ? [toClient, toUpstream]
+                : [toClient, toUpstream, authorization]);
+        }
         catch (OperationCanceledException) { }
+        if (revoked && client.State == WebSocketState.Open)
+            await client.CloseAsync(WebSocketCloseStatus.PolicyViolation,
+                "browser access changed", CancellationToken.None);
+    }
+
+    public static async Task<bool> MonitorAuthorizationAsync(
+        Func<CancellationToken, Task<bool>> remainsAuthorized, CancellationToken ct,
+        TimeSpan? interval = null)
+    {
+        try
+        {
+            while (!ct.IsCancellationRequested)
+            {
+                await Task.Delay(interval ?? TimeSpan.FromSeconds(2), ct);
+                if (!await remainsAuthorized(ct)) return false;
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
+        catch { return false; }
+        return true;
     }
 
     private static async Task PumpAsync(WebSocket source, WebSocket destination, CancellationToken ct)

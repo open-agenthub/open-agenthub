@@ -20,6 +20,7 @@ public sealed class BrowserPodSpecFactoryTests
         Assert.Equal(1000, pod.SecurityContext.RunAsUser);
         Assert.Equal("RuntimeDefault", pod.SecurityContext.SeccompProfile.Type);
         Assert.Null(pod.HostNetwork);
+        Assert.Equal(50, pod.TerminationGracePeriodSeconds);
         var browser = Assert.Single(pod.Containers);
         Assert.False(browser.SecurityContext.AllowPrivilegeEscalation);
         Assert.True(browser.SecurityContext.ReadOnlyRootFilesystem);

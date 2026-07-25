@@ -108,6 +108,7 @@ public static class BrowserPodSpecFactory
                 ServiceAccountName = "agenthub-agent",
                 EnableServiceLinks = false,
                 RestartPolicy = "Never",
+                TerminationGracePeriodSeconds = 50,
                 RuntimeClassName = string.IsNullOrWhiteSpace(options.RuntimeClassName)
                     ? null : options.RuntimeClassName,
                 SecurityContext = new V1PodSecurityContext
