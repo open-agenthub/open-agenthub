@@ -94,9 +94,10 @@ The MCP receives the session ID, internal backend URL, and callback token throug
 same runtime-owned environment boundary used by existing hooks. User-supplied MCP JSON
 cannot replace, rename, or change the built-in server.
 
-Interactive sessions use the provider's normal tool approval flow. Autonomous and
-scheduled sessions must explicitly allow `mcp__agenthub_browser__*` or selected exact
-browser tool names in their structured MCP policy.
+Interactive sessions use the provider's normal tool approval flow. Autonomous
+sessions must explicitly allow `mcp__agenthub_browser__*` or selected exact
+browser tool names in their structured MCP policy. Scheduled jobs do not register the
+browser MCP because they have no stable live session pod or interactive browser view.
 
 ### Browser control plane
 

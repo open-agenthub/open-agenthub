@@ -25,6 +25,6 @@ RUN chmod 0555 /opt/browser/entrypoint.sh \
     && chown -R 1000:1000 /data /opt/browser
 
 ENV HOME=/data/home
-EXPOSE 6080 6081 9222
+EXPOSE 6080 6081 6082 9222
 USER 1000:1000
 ENTRYPOINT ["/opt/browser/entrypoint.sh"]

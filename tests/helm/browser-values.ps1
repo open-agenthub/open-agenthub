@@ -20,6 +20,7 @@ function Assert-NotContains([string]$Text, [string]$Expected) {
 
 $enabled = Render
 foreach ($expected in @(
+    'AgentHub__ControlNamespace: "agenthub-test"',
     'Browser__Enabled: "true"',
     'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:0.4.0"',
     'Browser__PullPolicy: "IfNotPresent"',

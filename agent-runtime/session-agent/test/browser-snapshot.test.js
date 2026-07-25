@@ -21,3 +21,11 @@ test('snapshot refs are opaque and scoped to their revision', async () => {
   assert.match(ref, /^e\d+-\d+$/);
   assert.deepEqual(refs.resolve(ref), { selector: '#email' });
 });
+test('snapshot refs retain the captured element identity instead of a lazy index', async () => {
+  const { SnapshotRefs } = await import('../../browser/snapshot.mjs');
+  const refs = new SnapshotRefs();
+  const capturedHandle = { id: 'original-node' };
+  const ref = refs.remember(capturedHandle);
+
+  assert.equal(refs.resolve(ref), capturedHandle);
+});

@@ -51,7 +51,9 @@ start_child chromium \
   --disable-sync \
   about:blank
 start_child x11vnc -display :99 -localhost -forever -shared -nopw -rfbport 5900
+start_child x11vnc -display :99 -localhost -forever -shared -viewonly -nopw -rfbport 5901
 start_child websockify 0.0.0.0:6080 127.0.0.1:5900
+start_child websockify 0.0.0.0:6082 127.0.0.1:5901
 start_child socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9223
 start_child node /opt/browser/supervisor.mjs
 SUPERVISOR_PID=$CHILD_PID

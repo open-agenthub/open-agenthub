@@ -8,15 +8,22 @@ namespace AgentHub.Api.Tests;
 public sealed class BrowserProxyTests
 {
     [Fact]
-    public async Task Viewer_DoesNotPumpClientInputUpstream()
+    public async Task Viewer_PumpsProtocolToDedicatedViewOnlyUpstream()
     {
         var client = new MemoryWebSocket("key");
         var upstream = new MemoryWebSocket("screen");
 
         await BrowserProxy.RelayAsync(client, upstream, canWrite: false, CancellationToken.None);
 
-        Assert.Empty(upstream.SentFrames);
+        Assert.Equal(["key"], upstream.SentFrames);
         Assert.Equal(["screen"], client.SentFrames);
+    }
+
+    [Fact]
+    public void Viewer_UsesDedicatedViewOnlyPort()
+    {
+        Assert.Equal(6082, BrowserProxy.UpstreamPort(canWrite: false));
+        Assert.Equal(6080, BrowserProxy.UpstreamPort(canWrite: true));
     }
 
     [Fact]

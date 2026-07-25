@@ -21,7 +21,7 @@ export class BrowserBackendClient {
     const response = await this.fetchImpl(this.url, {
       method,
       headers: { 'X-Agent-Token': this.token, Accept: 'application/json' },
-      signal: AbortSignal.timeout(95_000)
+      signal: AbortSignal.timeout(300_000)
     });
     const bytes = await readBounded(response, MAX_RESPONSE_BYTES);
     if (!response.ok) throw new Error(`browser_backend_http_${response.status}`);

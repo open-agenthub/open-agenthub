@@ -18,16 +18,35 @@ public sealed class KubernetesBrowserServiceTests
     {
         var leases = new MemoryLeaseStore();
         var cluster = new RecordingBrowserCluster();
-        var service = Service(leases, cluster, new RecordingArtifacts());
+        var distributedLock = new RecordingBrowserSessionLock();
+        var service = Service(leases, cluster, new RecordingArtifacts(), distributedLock);
 
         var connections = await Task.WhenAll(
             service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8")), service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8")));
 
         Assert.Equal(1, cluster.CreateCalls);
         Assert.Single(leases.Items);
+        Assert.Equal(2, distributedLock.AcquireCalls);
+        Assert.Equal(1, distributedLock.MaxConcurrent);
         Assert.All(connections, c => Assert.Equal("10.0.0.9", c.PodIp));
     }
 
+    [Fact]
+    public async Task CancelledStartup_CleansPodPoliciesAndLease()
+    {
+        var leases = new MemoryLeaseStore();
+        var cluster = new RecordingBrowserCluster
+        {
+            Get = _ => throw new OperationCanceledException()
+        };
+        var service = Service(leases, cluster, new RecordingArtifacts());
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8")));
+
+        Assert.Equal(1, cluster.DeleteCalls);
+        Assert.Empty(leases.Items);
+    }
     [Fact]
     public async Task MintStateUrls_RequiresExactBrowserToken()
     {
@@ -61,7 +80,8 @@ public sealed class KubernetesBrowserServiceTests
     }
 
     private static KubernetesBrowserService Service(
-        IBrowserLeaseStore leases, IBrowserClusterClient cluster, IArtifactStore artifacts)
+        IBrowserLeaseStore leases, IBrowserClusterClient cluster, IArtifactStore artifacts,
+        IBrowserSessionLock? sessionLock = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -70,7 +90,7 @@ public sealed class KubernetesBrowserServiceTests
             ["Browser:StartupTimeoutSeconds"] = "2"
         }).Build();
         return new KubernetesBrowserService(config, leases, new FixedSessionStore(Session()), artifacts, cluster,
-            NullLogger<KubernetesBrowserService>.Instance);
+            sessionLock ?? new RecordingBrowserSessionLock(), NullLogger<KubernetesBrowserService>.Instance);
     }
 
     private static SessionRecord Session() => new()
@@ -98,15 +118,35 @@ public sealed class KubernetesBrowserServiceTests
         public Task DeleteAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
     }
 
+    private sealed class RecordingBrowserSessionLock : IBrowserSessionLock
+    {
+        private readonly SemaphoreSlim gate = new(1, 1);
+        private int concurrent;
+        public int AcquireCalls;
+        public int MaxConcurrent;
+        public async Task<IAsyncDisposable> AcquireAsync(string sessionId, CancellationToken ct = default)
+        {
+            Interlocked.Increment(ref AcquireCalls);
+            await gate.WaitAsync(ct);
+            var current = Interlocked.Increment(ref concurrent);
+            MaxConcurrent = Math.Max(MaxConcurrent, current);
+            return new Release(() => { Interlocked.Decrement(ref concurrent); gate.Release(); });
+        }
+        private sealed class Release(Action release) : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync() { release(); return ValueTask.CompletedTask; }
+        }
+    }
     private sealed class RecordingBrowserCluster : IBrowserClusterClient
     {
         public int CreateCalls;
         public int DeleteCalls;
+        public Func<CancellationToken, Task<BrowserPodSnapshot?>> Get { get; init; } = _ =>
+            Task.FromResult<BrowserPodSnapshot?>(new("10.0.0.9", true, null));
         public Task CreateAsync(BrowserPodResources resources, CancellationToken ct = default)
         { Interlocked.Increment(ref CreateCalls); return Task.CompletedTask; }
         public Task<BrowserPodSnapshot?> GetAsync(string namespaceName, string sessionId,
-            CancellationToken ct = default) => Task.FromResult<BrowserPodSnapshot?>(
-                new("10.0.0.9", true, null));
+            CancellationToken ct = default) => Get(ct);
         public Task DeleteAsync(string namespaceName, string sessionId, CancellationToken ct = default)
         { Interlocked.Increment(ref DeleteCalls); return Task.CompletedTask; }
         public Task<IReadOnlyCollection<string>> ListSessionIdsAsync(string namespaceName,

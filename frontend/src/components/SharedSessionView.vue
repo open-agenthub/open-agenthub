@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { getSharedSession } from '../api.js'
 import TerminalView from './TerminalView.vue'
 
@@ -7,10 +7,20 @@ const props = defineProps({ token: { type: String, required: true } })
 const session = ref(null)
 const error = ref('')
 
-onMounted(async () => {
-  try { session.value = await getSharedSession(props.token) }
+let refreshTimer
+let refreshing = false
+async function refresh() {
+  if (refreshing) return
+  refreshing = true
+  try { session.value = await getSharedSession(props.token); error.value = '' }
   catch (e) { error.value = String(e.message || e) }
+  finally { refreshing = false }
+}
+onMounted(async () => {
+  await refresh()
+  refreshTimer = setInterval(refresh, 2000)
 })
+onUnmounted(() => clearInterval(refreshTimer))
 </script>
 
 <template>
