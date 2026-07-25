@@ -49,6 +49,20 @@ public sealed class BrowserPodSpecFactoryTests
     }
 
     [Fact]
+    public void Build_NormalizesIpv4MappedIpv6ForCdpIngress()
+    {
+        var context = Context() with
+        {
+            AgentPodIp = IPAddress.Parse("::ffff:10.0.0.8")
+        };
+
+        var resources = BrowserPodSpecFactory.Build(Session(), Lease(), context);
+
+        var source = resources.CdpIngress.Spec.Ingress.Single().FromProperty.Single();
+        Assert.Equal("10.0.0.8/32", source.IpBlock.Cidr);
+    }
+
+    [Fact]
     public void Build_LabelsEveryResourceWithLeaseGeneration()
     {
         var resources = BrowserPodSpecFactory.Build(Session(), Lease(), Context());

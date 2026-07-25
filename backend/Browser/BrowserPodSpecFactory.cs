@@ -131,6 +131,8 @@ public static class BrowserPodSpecFactory
             }
         };
 
+        var agentPodIp = context.AgentPodIp.IsIPv4MappedToIPv6
+            ? context.AgentPodIp.MapToIPv4() : context.AgentPodIp;
         var cdpPort = new V1NetworkPolicyPort(protocol: "TCP", port: 9222);
         var cdpIngress = Policy(
             $"{name}-cdp-in", context.Namespace, Labels(session.Id, "browser"), ["Ingress"], lease.LeaseId,
@@ -140,7 +142,7 @@ public static class BrowserPodSpecFactory
                 {
                     FromProperty = [new V1NetworkPolicyPeer(ipBlock: new V1IPBlock
                     {
-                        Cidr = $"{context.AgentPodIp}/{(context.AgentPodIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128)}"
+                        Cidr = $"{agentPodIp}/{(agentPodIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128)}"
                     })],
                     Ports = [cdpPort]
                 }
