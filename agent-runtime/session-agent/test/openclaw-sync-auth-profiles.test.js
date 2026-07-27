@@ -75,3 +75,24 @@ test('OpenClaw sync writeStoreToSqlite round-trips store_json', () => {
   assert.deepEqual(readStoreFromSqlite(sqlitePath).profiles['anthropic:default'].key,
     'synthetic-key-direct');
 });
+
+test('OpenClaw sync export after import leaves a stable auth-file hash', () => {
+  const crypto = require('node:crypto');
+  const env = tempEnv();
+  // Compact Secret payload differs from export's pretty-printed canonical form.
+  fs.writeFileSync(env.OPENCLAW_AUTH_FILE, JSON.stringify(store('baseline-stable')));
+  const compactHash = crypto.createHash('sha256')
+    .update(fs.readFileSync(env.OPENCLAW_AUTH_FILE)).digest('hex');
+
+  assert.equal(importToSqlite(env), true);
+  assert.equal(exportFromSqlite(env), true);
+  const normalized = fs.readFileSync(env.OPENCLAW_AUTH_FILE);
+  const baselineHash = crypto.createHash('sha256').update(normalized).digest('hex');
+  assert.notEqual(baselineHash, compactHash);
+
+  assert.equal(exportFromSqlite(env), false);
+  assert.equal(
+    crypto.createHash('sha256').update(fs.readFileSync(env.OPENCLAW_AUTH_FILE)).digest('hex'),
+    baselineHash
+  );
+});

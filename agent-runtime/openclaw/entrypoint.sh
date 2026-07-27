@@ -48,6 +48,9 @@ subscription)
     cp /secrets/openclaw/auth-profiles.json "$OPENCLAW_AUTH_FILE"
     chmod 600 "$OPENCLAW_AUTH_FILE"
     node "$RUNTIME/openclaw/sync-auth-profiles.js" import
+    # Normalize to export's pretty-printed form before hashing so the watcher's
+    # first poll (which re-exports) does not spuriously re-upload.
+    node "$RUNTIME/openclaw/sync-auth-profiles.js" export
     AUTH_BASELINE_SHA256="$(node -e '
 const crypto = require("node:crypto");
 const fs = require("node:fs");
