@@ -106,6 +106,9 @@ public record CreateSessionRequest
     /// <summary>Optional personal project that owns the session grouping.</summary>
     public string? ProjectId { get; init; }
 
+    /// <summary>Optional parent session for orchestration (child sessions).</summary>
+    public string? ParentSessionId { get; init; }
+
     /// <summary>Cron expression, only for Scheduled (e.g. "0 6 * * 1-5").</summary>
     public string? Schedule { get; init; }
 
@@ -210,6 +213,8 @@ public record SessionInfo
     public required string Title { get; init; }
     public required string Owner { get; init; }
     public string? ProjectId { get; init; }
+    /// <summary>Optional parent session for orchestration (null = root session).</summary>
+    public string? ParentSessionId { get; init; }
     public required SessionMode Mode { get; init; }
     /// <summary>First repo URL (backward-compatible display field).</summary>
     public string? RepoUrl { get; init; }
