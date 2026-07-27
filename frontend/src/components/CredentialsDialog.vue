@@ -111,6 +111,14 @@ async function save() {
           Cursor subscription login is stored (sign-in happens in an Interactive session).
         </small>
       </div>
+      <div class="field" data-openclaw-credentials>
+        <small v-if="stored.openclawSubscription" data-credential-status="openclawSubscription">
+          OpenClaw subscription login is stored (sign-in happens in an Interactive session).
+        </small>
+        <small v-else data-credential-status="openclawSubscription">
+          No OpenClaw subscription login is stored yet. Sign in during an Interactive OpenClaw session.
+        </small>
+      </div>
       <div class="grid">
         <div class="field">
           <label>Git name

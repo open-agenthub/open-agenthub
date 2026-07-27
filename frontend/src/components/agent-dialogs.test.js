@@ -69,6 +69,60 @@ describe('agent-aware session dialogs', () => {
     }))
   })
 
+  it('creates an OpenClaw API-key session with a selected key source', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="OpenClaw"]').trigger('click')
+    await wrapper.get('[data-auth-option="ApiKey"]').trigger('click')
+    expect(wrapper.find('[data-auth-option="Auto"]').exists()).toBe(false)
+    expect(wrapper.find('[data-openclaw-source]').exists()).toBe(true)
+    await wrapper.get('[data-openclaw-source-option="OpenAI"]').trigger('click')
+    await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
+    await wrapper.get('[data-submit]').trigger('click')
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'OpenClaw', authMode: 'ApiKey', openClawApiKeySource: 'OpenAI'
+    }))
+  })
+
+  it('omits openClawApiKeySource for OpenClaw subscription and other agents', async () => {
+    const openClaw = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await openClaw.get('[data-agent-option="OpenClaw"]').trigger('click')
+    expect(openClaw.find('[data-openclaw-source]').exists()).toBe(false)
+    await openClaw.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('openClawApiKeySource')
+
+    mocks.api.createSession.mockClear()
+    const claude = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await claude.get('[data-auth-option="ApiKey"]').trigger('click')
+    expect(claude.find('[data-openclaw-source]').exists()).toBe(false)
+    await claude.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('openClawApiKeySource')
+  })
+
+  it('edits and duplicates OpenClaw ApiKey source selections', async () => {
+    const session = {
+      ...baseSession,
+      agent: 'OpenClaw',
+      authMode: 'ApiKey',
+      openClawApiKeySource: 'Anthropic'
+    }
+    const edit = mount(EditSessionDialog, { props: { session, projects: [] }, ...mountOptions })
+    expect(edit.find('[data-openclaw-source]').exists()).toBe(true)
+    await edit.get('[data-openclaw-source-option="Cursor"]').trigger('click')
+    await edit.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agent: 'OpenClaw', authMode: 'ApiKey', openClawApiKeySource: 'Cursor'
+    }))
+
+    const duplicate = mount(DuplicateSessionDialog, { props: { session, projects: [] } })
+    expect(duplicate.find('[data-openclaw-source-option="Anthropic"]').classes()).toContain('on')
+    await duplicate.get('[data-openclaw-source-option="OpenAI"]').trigger('click')
+    await duplicate.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agent: 'OpenClaw', authMode: 'ApiKey', openClawApiKeySource: 'OpenAI'
+    }))
+  })
+
   it('hides shell command prefixes when editing or duplicating a Cursor session', async () => {
     const cursorSession = {
       ...baseSession,
@@ -323,5 +377,22 @@ describe('Cursor credentials', () => {
     await wrapper.get('[data-clear="cursorApiKey"]').trigger('click')
     await wrapper.get('[data-save-credentials]').trigger('click')
     expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['cursorApiKey'] })
+  })
+})
+
+describe('OpenClaw credentials', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.getCredentialStatus.mockResolvedValue({ openclawSubscription: true })
+    mocks.api.storeCredentials.mockResolvedValue(null)
+  })
+
+  it('shows OpenClaw subscription status without a dedicated API key field', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    expect(wrapper.find('[data-credential-status="openclawSubscription"]').exists()).toBe(true)
+    expect(wrapper.find('[data-credential-status="openclawSubscription"]').text()).toContain('OpenClaw subscription')
+    expect(wrapper.find('[data-credential="openclawApiKey"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toMatch(/OpenClaw API key/i)
   })
 })

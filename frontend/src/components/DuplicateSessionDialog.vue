@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { defaultAgentForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import { agentPayload, defaultAgentForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
@@ -35,8 +35,7 @@ async function submit() {
       title: title.value.trim() || `Copy of ${props.session.title}`,
       projectId: projectId.value || null,
       includeMcp: includeMcp.value,
-      agent: agentForm.value.agent,
-      authMode: agentForm.value.authMode,
+      ...agentPayload(agentForm.value),
       policy: policyPayload(agentForm.value)
     }))
   }
@@ -52,7 +51,8 @@ async function submit() {
       <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
       <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration</span></label>
     </div>
-    <AgentDecisionCard v-model:agent="agentForm.agent" v-model:auth-mode="agentForm.authMode" :mode="session.mode"
+    <AgentDecisionCard v-model:agent="agentForm.agent" v-model:auth-mode="agentForm.authMode"
+      v-model:open-claw-api-key-source="agentForm.openClawApiKeySource" :mode="session.mode"
       :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" />
     <div v-if="automated" class="card adv">
       <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">
