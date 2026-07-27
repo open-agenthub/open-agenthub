@@ -14,6 +14,7 @@ let reconnectTimer
 let reconnectAttempt = 0
 let generation = 0
 let disposed = false
+let resizeObserver
 
 const phase = computed(() => props.session?.browser?.phase || 'Stopped')
 const statusLabel = computed(() => {
@@ -25,6 +26,19 @@ const statusLabel = computed(() => {
   if (connectionState.value === 'failed') return 'Browser connection unavailable.'
   return 'Connecting browser…'
 })
+
+function applyCoverScale(connection = rfb) {
+  const display = connection?._display
+  const element = host.value
+  if (!display || !element ||
+      display.width <= 0 || display.height <= 0 ||
+      element.clientWidth <= 0 || element.clientHeight <= 0) return
+
+  display.scale = Math.max(
+    element.clientWidth / display.width,
+    element.clientHeight / display.height
+  )
+}
 
 function clearReconnect() {
   if (reconnectTimer) clearTimeout(reconnectTimer)
@@ -55,13 +69,14 @@ async function connect() {
     if (disposed || currentGeneration !== generation || sessionId !== props.session.id) return
     const connection = new RFB(host.value, url)
     rfb = connection
-    connection.scaleViewport = true
+    connection.scaleViewport = false
     connection.resizeSession = false
     connection.viewOnly = !props.canWrite
     connection.addEventListener('connect', () => {
       if (rfb !== connection) return
       reconnectAttempt = 0
       connectionState.value = 'connected'
+      applyCoverScale(connection)
     })
     connection.addEventListener('disconnect', event => {
       if (rfb !== connection) return
@@ -83,10 +98,24 @@ function syncConnection() {
   if (phase.value === 'Running') void connect()
 }
 
-onMounted(syncConnection)
-watch(() => [props.session.id, phase.value, props.sharedToken], syncConnection)
-watch(() => props.canWrite, syncConnection)
-onBeforeUnmount(() => { disposed = true; closeRfb() })
+onMounted(() => {
+  resizeObserver = new ResizeObserver(() => applyCoverScale())
+  resizeObserver.observe(host.value)
+  syncConnection()
+})
+watch([
+  () => props.session.id,
+  phase,
+  () => props.sharedToken
+], syncConnection)
+watch(() => props.canWrite, canWrite => {
+  if (rfb) rfb.viewOnly = !canWrite
+})
+onBeforeUnmount(() => {
+  disposed = true
+  resizeObserver?.disconnect()
+  closeRfb()
+})
 </script>
 
 <template>
@@ -111,7 +140,12 @@ onBeforeUnmount(() => { disposed = true; closeRfb() })
 .browser-mark i { width: 7px; height: 7px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 3px rgba(90,169,245,.12); }
 .browser-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-canvas { flex: 1; min-height: 0; overflow: hidden; background: #0b0f15; }
-.browser-canvas :deep(canvas) { outline: none; }
+.browser-canvas :deep(> div) {
+  align-items: center;
+  justify-content: center;
+  overflow: hidden !important;
+}
+.browser-canvas :deep(canvas) { flex: none; margin: 0 !important; outline: none; }
 .browser-overlay { position: absolute; inset: 34px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; color: #dce5f1; background: radial-gradient(circle at 50% 42%, rgba(90,169,245,.09), transparent 34%), #10151c; }
 .browser-overlay strong { font: 600 13px var(--ui); }
 .browser-overlay small { max-width: 330px; color: #7f8a9a; font: 11px/1.55 var(--ui); }
