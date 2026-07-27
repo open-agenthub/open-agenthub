@@ -117,6 +117,20 @@ public sealed class SessionAgentModelTests
     }
 
     [Fact]
+    public void PartialUpdate_RejectsSourceOnlyWhenEffectivePairIsNotOpenClawApiKey()
+    {
+        Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForUpdate(
+            AgentKind.Claude, AgentAuthMode.Subscription, null, null, OpenClawApiKeySource.OpenAI));
+    }
+
+    [Fact]
+    public void PartialUpdate_AcceptsSourceOnlyWhenEffectivePairIsOpenClawApiKey()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.ApiKey, null, null, OpenClawApiKeySource.Anthropic);
+    }
+
+    [Fact]
     public void DuplicatedCodexSession_CannotUseAutoAuthentication()
     {
         Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForDuplicatedSession(AgentKind.Codex, AgentAuthMode.Auto));
