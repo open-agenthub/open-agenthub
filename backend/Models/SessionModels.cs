@@ -76,6 +76,25 @@ public static class AgentConfiguration
     }
 }
 
+/// <summary>How the frontend renders a session: terminal (PTY) or chat (stream-json).</summary>
+public static class SessionUiMode
+{
+    public const string Terminal = "terminal";
+    public const string Chat = "chat";
+
+    /// <summary>Normalizes the requested UI mode (case-insensitive, empty = terminal) and
+    /// rejects unsupported values or agent/mode combinations.</summary>
+    public static string NormalizeForCreate(string? uiMode, AgentKind agent, SessionMode mode)
+    {
+        var normalized = string.IsNullOrWhiteSpace(uiMode) ? Terminal : uiMode.Trim().ToLowerInvariant();
+        if (normalized is not (Terminal or Chat))
+            throw new ArgumentException("UI mode must be 'terminal' or 'chat'.");
+        if (normalized == Chat && (agent != AgentKind.Claude || mode != SessionMode.Interactive))
+            throw new ArgumentException("Chat UI mode is only supported for interactive Claude sessions.");
+        return normalized;
+    }
+}
+
 /// <summary>A repository to check out into the session workspace.</summary>
 public record RepoRef
 {
@@ -92,6 +111,9 @@ public record CreateSessionRequest
 {
     public string Title { get; init; } = "Untitled";
     public SessionMode Mode { get; init; } = SessionMode.Interactive;
+
+    /// <summary>UI rendering mode: "terminal" (default) or "chat" (interactive Claude only).</summary>
+    public string UiMode { get; init; } = SessionUiMode.Terminal;
 
     /// <summary>Repositories cloned at startup (each into /workspace/&lt;name&gt;).</summary>
     public List<RepoRef> Repos { get; init; } = new();
@@ -170,6 +192,7 @@ public static class SessionDuplication
         Title = request.Title,
         ProjectId = request.ProjectId,
         Mode = source.Mode,
+        UiMode = source.UiMode,
         Repos = Deserialize<List<RepoRef>>(source.ReposJson),
         RepoUrl = source.RepoUrl,
         Prompt = source.Prompt,
@@ -211,6 +234,8 @@ public record SessionInfo
     public required string Owner { get; init; }
     public string? ProjectId { get; init; }
     public required SessionMode Mode { get; init; }
+    /// <summary>UI rendering mode: "terminal" or "chat".</summary>
+    public string UiMode { get; init; } = SessionUiMode.Terminal;
     /// <summary>First repo URL (backward-compatible display field).</summary>
     public string? RepoUrl { get; init; }
     public List<RepoRef> Repos { get; init; } = new();

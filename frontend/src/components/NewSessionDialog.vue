@@ -16,9 +16,14 @@ const MODES = [
 const repos = ref([])
 const advOpen = ref(false)
 const credentialStatus = ref({})
+const UI_MODES = [
+  { key: 'terminal', label: 'Terminal', hint: 'the agent’s own console UI' },
+  { key: 'chat', label: 'Chat', hint: 'a chat view like Claude Desktop (Claude only)' }
+]
 const form = ref({
   title: '',
   mode: 'Interactive',
+  uiMode: 'terminal',
   prompt: '',
   schedule: '0 6 * * 1-5',
   projectId: '',
@@ -35,6 +40,11 @@ const error = ref('')
 const needsPrompt = computed(() => form.value.mode !== 'Interactive')
 const needsSchedule = computed(() => form.value.mode === 'Scheduled')
 const modeHint = computed(() => MODES.find(m => m.key === form.value.mode)?.hint)
+// Chat runs Claude in stream-json mode; other agents and automation stay terminal.
+const canChooseUi = computed(() => form.value.mode === 'Interactive' && form.value.agent === 'Claude')
+const isChatUi = computed(() => canChooseUi.value && form.value.uiMode === 'chat')
+const uiHint = computed(() => UI_MODES.find(u => u.key === form.value.uiMode)?.hint)
+watch(canChooseUi, allowed => { if (!allowed) form.value.uiMode = 'terminal' })
 
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* readiness stays advisory */ }
@@ -63,6 +73,7 @@ async function submit() {
     const session = await api.createSession({
       title: form.value.title || 'Session',
       mode: form.value.mode,
+      uiMode: form.value.uiMode,
       agent: form.value.agent,
       authMode: form.value.authMode,
       repos: repos.value,
@@ -105,12 +116,20 @@ async function submit() {
         </div>
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
           :mode="form.mode" :credential-status="credentialStatus" />
+        <div class="field" v-if="canChooseUi">
+          <label>Interface</label>
+          <div class="chips-box">
+            <button v-for="u in UI_MODES" :key="u.key" type="button" class="chip" :class="{ on: form.uiMode === u.key }"
+              :aria-pressed="form.uiMode === u.key" data-ui-mode-option @click="form.uiMode = u.key">{{ u.label }}</button>
+          </div>
+          <small class="hint">{{ uiHint }}</small>
+        </div>
         <div class="field" v-if="needsSchedule">
           <label>Schedule <span class="dim">— cron, UTC</span></label>
           <input v-model="form.schedule" class="mono short" placeholder="0 6 * * 1-5" />
         </div>
-        <div class="field" v-if="needsPrompt">
-          <label>Task <span class="dim">— what should the agent do?</span></label>
+        <div class="field" v-if="needsPrompt || isChatUi">
+          <label>Task <span class="dim">— {{ isChatUi ? 'optional first message' : 'what should the agent do?' }}</span></label>
           <textarea v-model="form.prompt" class="task" placeholder="Describe the task in plain language — the agent figures out the rest."></textarea>
         </div>
         <div class="field last">
