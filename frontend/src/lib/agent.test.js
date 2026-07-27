@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentOptions, agentPayload, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy,
-  needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload
+  filterAgentOptions, needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload
 } from './agent.js'
 
 describe('agent session helpers', () => {
@@ -11,6 +11,21 @@ describe('agent session helpers', () => {
 
   it('includes OpenClaw in agent options', () => {
     expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor', 'OpenClaw'])
+  })
+
+  it('filterAgentOptions keeps every agent when the allowlist is empty or missing', () => {
+    expect(filterAgentOptions([])).toEqual(agentOptions)
+    expect(filterAgentOptions(null)).toEqual(agentOptions)
+    expect(filterAgentOptions(undefined)).toEqual(agentOptions)
+  })
+
+  it('filterAgentOptions keeps only allowlisted agents in catalog order', () => {
+    expect(filterAgentOptions(['OpenClaw', 'Claude']).map(option => option.value)).toEqual(['Claude', 'OpenClaw'])
+  })
+
+  it('filterAgentOptions can keep a current agent that is no longer allowlisted', () => {
+    expect(filterAgentOptions(['Claude'], { include: 'OpenClaw' }).map(option => option.value))
+      .toEqual(['Claude', 'OpenClaw'])
   })
 
   it('offers both public agents and auth modes without Auto', () => {

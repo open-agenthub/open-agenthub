@@ -10,9 +10,11 @@ const props = defineProps({
   openClawApiKeySource: { type: String, default: 'Anthropic' },
   mode: { type: String, required: true },
   legacyAuthMode: { type: String, default: null },
-  credentialStatus: { type: Object, default: () => ({}) }
+  credentialStatus: { type: Object, default: () => ({}) },
+  options: { type: Array, default: null }
 })
 const emit = defineEmits(['update:agent', 'update:authMode', 'update:openClawApiKeySource'])
+const visibleAgents = computed(() => props.options || agentOptions)
 const billingOptions = computed(() => authOptions(props.agent, props.legacyAuthMode))
 const showOpenClawSource = computed(() => needsOpenClawApiKeySource(props.agent, props.authMode))
 const readiness = computed(() =>
@@ -29,11 +31,11 @@ function chooseAgent(agent) {
     <div class="decision-group">
       <div class="decision-label">Agent</div>
       <div class="chips-box" role="group" aria-label="Agent">
-        <button v-for="option in agentOptions" :key="option.value" type="button" class="chip"
+        <button v-for="option in visibleAgents" :key="option.value" type="button" class="chip"
           :class="{ on: agent === option.value }" :aria-pressed="agent === option.value"
           :data-agent-option="option.value" @click="chooseAgent(option.value)">{{ option.label }}</button>
       </div>
-      <small>{{ agentOptions.find(option => option.value === agent)?.hint }}</small>
+      <small>{{ visibleAgents.find(option => option.value === agent)?.hint }}</small>
     </div>
     <div class="decision-group">
       <div class="decision-label">Billing</div>

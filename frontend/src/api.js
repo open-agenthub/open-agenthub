@@ -91,6 +91,11 @@ export const api = {
   eeDeleteLimit: (scope, target) => req('DELETE', `/ee/admin/limits/${encodeURIComponent(scope)}${target ? `?target=${encodeURIComponent(target)}` : ''}`),
   eeListGroups: () => req('GET', '/ee/admin/groups'),
   eeSetGroupRole: (group, role) => req('PUT', `/ee/admin/groups/${encodeURIComponent(group)}/role`, { role }),
+  // Effective allowlist for session selectors (empty store expands to all agents server-side).
+  getAllowedAgents: () => req('GET', '/agents/allowed'),
+  // Enterprise admin: raw allowlist (empty = unrestricted). 402 without license; 403 if not admin.
+  adminGetAllowedAgents: () => req('GET', '/admin/allowed-agents'),
+  adminSetAllowedAgents: (agents) => req('PUT', '/admin/allowed-agents', { agents }),
   // Per-user Slack preferences.
   slackMe: () => req('GET', '/slack/me'),
   setSlackPrefs: (data) => req('PUT', '/slack/me', data),

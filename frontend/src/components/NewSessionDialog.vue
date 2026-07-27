@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
-import { agentPayload, defaultAgentForm, defaultPolicy, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import { agentPayload, defaultAgentForm, defaultPolicy, filterAgentOptions, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
@@ -16,6 +16,7 @@ const MODES = [
 const repos = ref([])
 const advOpen = ref(false)
 const credentialStatus = ref({})
+const agentChoices = ref(filterAgentOptions([]))
 const form = ref({
   title: '',
   mode: 'Interactive',
@@ -38,6 +39,13 @@ const modeHint = computed(() => MODES.find(m => m.key === form.value.mode)?.hint
 
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* readiness stays advisory */ }
+  try {
+    const allowed = await api.getAllowedAgents()
+    agentChoices.value = filterAgentOptions(allowed?.agents)
+    if (!agentChoices.value.some(option => option.value === form.value.agent) && agentChoices.value[0]) {
+      form.value.agent = agentChoices.value[0].value
+    }
+  } catch { /* keep full catalog if the allowlist endpoint is unavailable */ }
 })
 
 watch(() => form.value.agent, (agent, previousAgent) => {
@@ -104,7 +112,7 @@ async function submit() {
         </div>
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
           v-model:open-claw-api-key-source="form.openClawApiKeySource"
-          :mode="form.mode" :credential-status="credentialStatus" />
+          :mode="form.mode" :credential-status="credentialStatus" :options="agentChoices" />
         <div class="field" v-if="needsSchedule">
           <label>Schedule <span class="dim">— cron, UTC</span></label>
           <input v-model="form.schedule" class="mono short" placeholder="0 6 * * 1-5" />

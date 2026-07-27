@@ -9,7 +9,8 @@ import CredentialsDialog from './CredentialsDialog.vue'
 const mocks = vi.hoisted(() => ({
   api: {
     createSession: vi.fn(), updateSession: vi.fn(), duplicateSession: vi.fn(),
-    getCredentialStatus: vi.fn(), storeCredentials: vi.fn()
+    getCredentialStatus: vi.fn(), storeCredentials: vi.fn(),
+    getAllowedAgents: vi.fn()
   },
   config: { gitEnabled: false }
 }))
@@ -31,6 +32,29 @@ describe('agent-aware session dialogs', () => {
     mocks.api.updateSession.mockResolvedValue({ id: 's1' })
     mocks.api.duplicateSession.mockResolvedValue({ id: 'copy' })
     mocks.api.storeCredentials.mockResolvedValue(null)
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex', 'Cursor', 'OpenClaw'] })
+  })
+
+  it('hides disallowed agents in New Session', async () => {
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex'] })
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.find('[data-agent-option="Claude"]').exists()).toBe(true)
+    expect(wrapper.find('[data-agent-option="Codex"]').exists()).toBe(true)
+    expect(wrapper.find('[data-agent-option="Cursor"]').exists()).toBe(false)
+    expect(wrapper.find('[data-agent-option="OpenClaw"]').exists()).toBe(false)
+  })
+
+  it('shows the API 403 message when creating with a disallowed agent', async () => {
+    const err = new Error("403 Agent 'OpenClaw' is not allowed on this instance. Ask an administrator to enable it, or choose a different agent.")
+    err.status = 403
+    mocks.api.createSession.mockRejectedValue(err)
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    await wrapper.get('[data-agent-option="OpenClaw"]').trigger('click')
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.err').text()).toContain("Agent 'OpenClaw' is not allowed")
   })
 
   it('creates a Codex API-key autonomous session with an exact structured policy', async () => {

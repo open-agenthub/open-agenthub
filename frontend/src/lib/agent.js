@@ -5,6 +5,19 @@ export const agentOptions = [
   { value: 'OpenClaw', label: 'OpenClaw', hint: 'OpenClaw agent runtime' }
 ]
 
+/** Filter the agent catalog by an allowlist. Empty/missing = unrestricted. */
+export function filterAgentOptions(allowed, { include } = {}) {
+  const list = Array.isArray(allowed) ? allowed : []
+  const filtered = !list.length
+    ? agentOptions.map(option => ({ ...option }))
+    : agentOptions.filter(option => list.includes(option.value))
+  if (include && !filtered.some(option => option.value === include)) {
+    const extra = agentOptions.find(option => option.value === include)
+    if (extra) filtered.push({ ...extra })
+  }
+  return filtered
+}
+
 export const openClawApiKeySourceOptions = [
   { value: 'Anthropic', label: 'Anthropic', hint: 'Use stored Anthropic API key' },
   { value: 'OpenAI', label: 'OpenAI', hint: 'Use stored OpenAI API key' },

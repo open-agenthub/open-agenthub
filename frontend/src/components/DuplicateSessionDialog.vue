@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { agentPayload, defaultAgentForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import { agentPayload, defaultAgentForm, filterAgentOptions, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
@@ -12,6 +12,8 @@ const includeMcp = ref(true)
 const agentForm = ref({})
 const advOpen = ref(false)
 const credentialStatus = ref({})
+const allowedAgents = ref([])
+const agentChoices = computed(() => filterAgentOptions(allowedAgents.value, { include: props.session?.agent }))
 const busy = ref(false); const error = ref('')
 const automated = computed(() => props.session.mode !== 'Interactive')
 function reset(session) {
@@ -27,6 +29,10 @@ reset(props.session)
 watch(() => props.session.id, () => reset(props.session))
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
+  try {
+    const allowed = await api.getAllowedAgents()
+    allowedAgents.value = allowed?.agents || []
+  } catch { /* keep unrestricted catalog */ }
 })
 async function submit() {
   busy.value = true; error.value = ''
@@ -53,7 +59,7 @@ async function submit() {
     </div>
     <AgentDecisionCard v-model:agent="agentForm.agent" v-model:auth-mode="agentForm.authMode"
       v-model:open-claw-api-key-source="agentForm.openClawApiKeySource" :mode="session.mode"
-      :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" />
+      :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
     <div v-if="automated" class="card adv">
       <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">
         <span><b>Advanced</b><span class="adv-sub">automation policy</span></span><span>{{ advOpen ? '▾' : '▸' }}</span>
