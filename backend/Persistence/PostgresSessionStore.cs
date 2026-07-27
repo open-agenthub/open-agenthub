@@ -13,6 +13,8 @@ public sealed class SessionRecord
     public string? RepoUrl { get; set; }
     public string? Schedule { get; set; }
     public string? ProjectId { get; set; }
+    /// <summary>Optional parent session id for orchestration; null = root. No FK cascade.</summary>
+    public string? ParentSessionId { get; set; }
     public string? Prompt { get; set; }
     public AgentKind Agent { get; set; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; set; } = AgentAuthMode.Auto;
@@ -105,6 +107,8 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ALTER COLUMN agent_session_id SET NOT NULL;
             ALTER TABLE sessions ALTER COLUMN claude_session_id DROP NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(owner, project_id);
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
+            CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(owner, parent_session_id);
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -115,10 +119,10 @@ public sealed class PostgresSessionStore : ISessionStore
         const string sql = """
             INSERT INTO sessions (id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
-                                  mcp_config, repos, project_id, prompt, allowed_tools, created_at, updated_at)
+                                  mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, created_at, updated_at)
             VALUES (@id, @owner, @title, @mode, @repo, @sched, @agentSessionId, @agent, @authMode, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
-                    @mcp, @repos, @project, @prompt, @allowedTools, @created, now())
+                    @mcp, @repos, @project, @parent, @prompt, @allowedTools, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, mode = EXCLUDED.mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
@@ -128,7 +132,8 @@ public sealed class PostgresSessionStore : ISessionStore
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
                 mcp_config = EXCLUDED.mcp_config, repos = EXCLUDED.repos,
-                project_id = EXCLUDED.project_id, prompt = EXCLUDED.prompt,
+                project_id = EXCLUDED.project_id, parent_session_id = EXCLUDED.parent_session_id,
+                prompt = EXCLUDED.prompt,
                 allowed_tools = EXCLUDED.allowed_tools, updated_at = now();
             """;
         await using var cmd = _db.CreateCommand(sql);
@@ -196,7 +201,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, prompt, allowed_tools FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -228,6 +233,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("mcp", (object?)r.McpConfigJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("repos", (object?)r.ReposJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("project", (object?)r.ProjectId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("parent", (object?)r.ParentSessionId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("prompt", (object?)r.Prompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("allowedTools", (object?)r.AllowedToolsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
@@ -257,7 +263,8 @@ public sealed class PostgresSessionStore : ISessionStore
         McpConfigJson = r.IsDBNull(19) ? null : r.GetString(19),
         ReposJson = r.IsDBNull(20) ? null : r.GetString(20),
         ProjectId = r.IsDBNull(21) ? null : r.GetString(21),
-        Prompt = r.IsDBNull(22) ? null : r.GetString(22),
-        AllowedToolsJson = r.IsDBNull(23) ? null : r.GetString(23)
+        ParentSessionId = r.IsDBNull(22) ? null : r.GetString(22),
+        Prompt = r.IsDBNull(23) ? null : r.GetString(23),
+        AllowedToolsJson = r.IsDBNull(24) ? null : r.GetString(24)
     };
 }
