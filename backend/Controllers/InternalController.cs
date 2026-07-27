@@ -105,7 +105,7 @@ public sealed class InternalController : ControllerBase
     public async Task<IActionResult> ProviderCredentials(string id, string agent, CancellationToken ct)
     {
         if (!Enum.TryParse<AgentKind>(agent, ignoreCase: true, out var parsedAgent) ||
-            parsedAgent is not AgentKind.Claude and not AgentKind.Codex)
+            parsedAgent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor)
             return BadRequest();
 
         var rec = await AuthAsync(id, ct);

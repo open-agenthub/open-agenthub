@@ -39,6 +39,17 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end -}}
 {{- end }}
 
+{{- define "agenthub.cursorAgentImage" -}}
+{{- $override := .Values.agent.images.cursor | default "" | trim -}}
+{{- if $override -}}
+{{- $override -}}
+{{- else -}}
+{{- $registry := required "image.registry is required when agent.images.cursor is empty" .Values.image.registry | trimSuffix "/" -}}
+{{- $tag := required "image.tag is required when agent.images.cursor is empty" .Values.image.tag -}}
+{{- printf "%s/agent-runtime-cursor:%s" $registry $tag -}}
+{{- end -}}
+{{- end }}
+
 {{- define "agenthub.postgresConnectionString" -}}
 {{- if .Values.postgres.enabled -}}
 Host=postgres.{{ .Release.Namespace }}.svc.cluster.local;Database=agenthub;Username=agenthub;Password={{ required "postgres.password is required when postgres.enabled=true" .Values.postgres.password }}

@@ -38,7 +38,22 @@ public sealed class SessionAgentModelTests
     [InlineData((AgentKind)(-1))]
     public void CreateConfiguration_RejectsUnknownAgentKinds(AgentKind agent)
     {
+        // Ordinals 0–2 are Claude/Codex/Cursor; keep probing only out-of-range values.
         Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForCreate(agent, AgentAuthMode.Subscription));
+    }
+
+    [Fact]
+    public void CreateConfiguration_AcceptsCursorSubscriptionAndApiKey()
+    {
+        AgentConfiguration.ValidateForCreate(AgentKind.Cursor, AgentAuthMode.Subscription);
+        AgentConfiguration.ValidateForCreate(AgentKind.Cursor, AgentAuthMode.ApiKey);
+    }
+
+    [Fact]
+    public void CreateConfiguration_RejectsCursorAuto()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            AgentConfiguration.ValidateForCreate(AgentKind.Cursor, AgentAuthMode.Auto));
     }
 
     [Theory]

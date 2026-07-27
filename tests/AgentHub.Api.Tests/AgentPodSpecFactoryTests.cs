@@ -13,6 +13,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Claude, AgentAuthMode.ApiKey, "apikey", "runtime-claude", null, "ANTHROPIC_API_KEY")]
     [InlineData(AgentKind.Codex, AgentAuthMode.Subscription, "subscription", "runtime-codex", "codex", null)]
     [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey, "apikey", "runtime-codex", null, "CODEX_API_KEY")]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.Subscription, "subscription", "runtime-cursor", "cursor", null)]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey, "apikey", "runtime-cursor", null, "CURSOR_API_KEY")]
     public void Build_CredentialSelection_MountsOnlySelectedCredential(
         AgentKind agent, AgentAuthMode auth, string expectedAuthMode, string expectedImage, string? expectedVolume, string? expectedEnv)
     {
@@ -29,8 +31,10 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(expectedEnv is not null, container.Env.Any(e => e.Name == expectedEnv));
         Assert.Equal(expectedVolume == "claude", pod.Volumes.Any(v => v.Name == "claude"));
         Assert.Equal(expectedVolume == "codex", pod.Volumes.Any(v => v.Name == "codex"));
+        Assert.Equal(expectedVolume == "cursor", pod.Volumes.Any(v => v.Name == "cursor"));
         Assert.Equal(expectedEnv == "ANTHROPIC_API_KEY", container.Env.Any(e => e.Name == "ANTHROPIC_API_KEY"));
         Assert.Equal(expectedEnv == "CODEX_API_KEY", container.Env.Any(e => e.Name == "CODEX_API_KEY"));
+        Assert.Equal(expectedEnv == "CURSOR_API_KEY", container.Env.Any(e => e.Name == "CURSOR_API_KEY"));
         Assert.Contains("ssh_key", projectedCredentialKeys);
         Assert.Contains("known_hosts", projectedCredentialKeys);
         Assert.Contains("gitlab_token", projectedCredentialKeys);
@@ -38,12 +42,18 @@ public class AgentPodSpecFactoryTests
         Assert.Contains("git_user_email", projectedCredentialKeys);
         Assert.DoesNotContain("anthropic_api_key", projectedCredentialKeys);
         Assert.DoesNotContain("openai_api_key", projectedCredentialKeys);
+        Assert.DoesNotContain("cursor_api_key", projectedCredentialKeys);
         if (expectedEnv is not null)
         {
             var apiKey = Assert.Single(container.Env, e => e.Name == expectedEnv);
             Assert.Equal("creds-owner", apiKey.ValueFrom?.SecretKeyRef?.Name);
-            Assert.Equal(expectedEnv == "CODEX_API_KEY" ? "openai_api_key" : "anthropic_api_key",
-                apiKey.ValueFrom?.SecretKeyRef?.Key);
+            var expectedSecretKey = expectedEnv switch
+            {
+                "CODEX_API_KEY" => "openai_api_key",
+                "CURSOR_API_KEY" => "cursor_api_key",
+                _ => "anthropic_api_key"
+            };
+            Assert.Equal(expectedSecretKey, apiKey.ValueFrom?.SecretKeyRef?.Key);
         }
     }
 
@@ -52,13 +62,15 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Claude, AgentAuthMode.ApiKey)]
     [InlineData(AgentKind.Codex, AgentAuthMode.Subscription)]
     [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey)]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.Subscription)]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey)]
     public void Build_GitCloneMountsOnlyWorkspaceHomeTmpAndGitCredentials(AgentKind agent, AgentAuthMode auth)
     {
         var pod = Build(agent, auth, request => request with { RepoUrl = "https://example.test/repo.git" });
         var clone = Assert.Single(pod.InitContainers, c => c.Name == "git-clone");
 
         Assert.Equal(new[] { "workspace", "home", "tmp", "creds" }, clone.VolumeMounts.Select(m => m.Name));
-        Assert.DoesNotContain(clone.VolumeMounts, m => m.Name is "claude" or "codex" or "mcp" or "runtime");
+        Assert.DoesNotContain(clone.VolumeMounts, m => m.Name is "claude" or "codex" or "cursor" or "mcp" or "runtime");
         Assert.DoesNotContain(clone.Env, e => e.ValueFrom?.SecretKeyRef is not null);
     }
 
@@ -68,6 +80,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Claude, AgentAuthMode.ApiKey, "runtime-claude", "claude")]
     [InlineData(AgentKind.Codex, AgentAuthMode.Subscription, "runtime-codex", "codex")]
     [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey, "runtime-codex", "codex")]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.Subscription, "runtime-cursor", "agent")]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey, "runtime-cursor", "agent")]
     public void Build_CustomImageCopyInitUsesSelectedRuntimeImage(
         AgentKind agent, AgentAuthMode auth, string expectedRuntimeImage, string expectedLauncher)
     {
@@ -77,6 +91,11 @@ public class AgentPodSpecFactoryTests
         Assert.Equal("custom/runtime:1", Assert.Single(pod.Containers).Image);
         Assert.Equal(expectedRuntimeImage, copyRuntime.Image);
         Assert.Contains($"/usr/local/bin/{expectedLauncher}", Assert.Single(copyRuntime.Command, c => c.Contains("target=")));
+        if (agent == AgentKind.Cursor)
+        {
+            var script = Assert.Single(copyRuntime.Command, c => c.Contains("share/cursor-agent"));
+            Assert.Contains("cp -a /usr/local/share/cursor-agent /opt/agenthub/share/cursor-agent", script);
+        }
     }
 
     [Theory]
@@ -84,6 +103,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Claude, "custom/runtime:1", true)]
     [InlineData(AgentKind.Codex, null, false)]
     [InlineData(AgentKind.Codex, "custom/runtime:1", true)]
+    [InlineData(AgentKind.Cursor, null, false)]
+    [InlineData(AgentKind.Cursor, "custom/runtime:1", true)]
     public void Build_RuntimeMountIsReadOnlyForCustomAgentAndWritableOnlyForCopyInit(
         AgentKind agentKind, string? customImage, bool expectsInjectedRuntime)
     {
@@ -197,10 +218,13 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(10, container.ReadinessProbe.PeriodSeconds);
     }
 
-    [Fact]
-    public void Build_CronJobTemplateReusesExactPodSpec()
+    [Theory]
+    [InlineData(AgentKind.Codex, AgentAuthMode.Subscription)]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.Subscription)]
+    [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey)]
+    public void Build_CronJobTemplateReusesExactPodSpec(AgentKind agent, AgentAuthMode auth)
     {
-        var pod = Build(AgentKind.Codex, AgentAuthMode.Subscription);
+        var pod = Build(agent, auth);
         var template = new V1PodTemplateSpec { Spec = pod };
 
         Assert.Same(pod, template.Spec);
@@ -214,6 +238,12 @@ public class AgentPodSpecFactoryTests
         "[agent] Cannot start Claude Scheduled session: ApiKey credential is not stored.")]
     [InlineData(SessionMode.Autonomous, AgentKind.Codex, AgentAuthMode.ApiKey, true, false, null)]
     [InlineData(SessionMode.Autonomous, AgentKind.Claude, AgentAuthMode.Subscription, false, true, null)]
+    [InlineData(SessionMode.Autonomous, AgentKind.Cursor, AgentAuthMode.Subscription, false, false,
+        "[agent] Cannot start Cursor Autonomous session: Subscription credential is not stored.")]
+    [InlineData(SessionMode.Scheduled, AgentKind.Cursor, AgentAuthMode.ApiKey, false, false,
+        "[agent] Cannot start Cursor Scheduled session: ApiKey credential is not stored.")]
+    [InlineData(SessionMode.Autonomous, AgentKind.Cursor, AgentAuthMode.ApiKey, true, false, null)]
+    [InlineData(SessionMode.Autonomous, AgentKind.Cursor, AgentAuthMode.Subscription, false, true, null)]
     public void CredentialSelection_MissingCredentialDiagnostic(
         SessionMode mode, AgentKind agent, AgentAuthMode auth, bool hasApiKey, bool hasSubscription, string? expected)
     {
@@ -254,11 +284,12 @@ public class AgentPodSpecFactoryTests
         CredentialsSecretName = "creds-owner",
         ClaudeCredentialSecretName = "claude-owner",
         CodexCredentialSecretName = "codex-owner",
+        CursorCredentialSecretName = "cursor-owner",
         CallbackUrl = "http://callback/internal/sessions/session-id",
         StatePutUrl = "http://s3/state-put",
         StateGetUrl = "",
         ScrollbackPutUrl = "http://s3/scroll-put",
-        RuntimeImages = new AgentRuntimeImages("runtime-claude", "runtime-codex", "Always"),
+        RuntimeImages = new AgentRuntimeImages("runtime-claude", "runtime-codex", "runtime-cursor", "Always"),
         Runtime = new AgentPodRuntimeSettings
         {
             AgentPort = 7681,

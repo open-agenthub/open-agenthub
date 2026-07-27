@@ -16,6 +16,7 @@ public static class CredentialSecretFactory
         ["gitlabToken"] = "gitlab_token",
         ["anthropicApiKey"] = "anthropic_api_key",
         ["openAiApiKey"] = "openai_api_key",
+        ["cursorApiKey"] = "cursor_api_key",
         ["gitKnownHosts"] = "known_hosts",
         ["gitUserName"] = "git_user_name",
         ["gitUserEmail"] = "git_user_email"
@@ -34,6 +35,7 @@ public static class CredentialSecretFactory
         Put(data, "gitlab_token", credentials.GitlabToken);
         Put(data, "anthropic_api_key", credentials.AnthropicApiKey);
         Put(data, "openai_api_key", credentials.OpenAiApiKey);
+        Put(data, "cursor_api_key", credentials.CursorApiKey);
         Put(data, "known_hosts", credentials.GitKnownHosts);
         Put(data, "git_user_name", credentials.GitUserName);
         Put(data, "git_user_email", credentials.GitUserEmail);
@@ -47,17 +49,21 @@ public static class CredentialSecretFactory
 
     public static CredentialStatus CredentialStatus(IDictionary<string, byte[]> data,
         IDictionary<string, byte[]>? claudeSubscription = null,
-        IDictionary<string, byte[]>? codexSubscription = null) => new()
+        IDictionary<string, byte[]>? codexSubscription = null,
+        IDictionary<string, byte[]>? cursorSubscription = null) => new()
     {
         SshPrivateKey = data.ContainsKey("ssh_key"),
         GitlabToken = data.ContainsKey("gitlab_token"),
         AnthropicApiKey = data.ContainsKey("anthropic_api_key"),
         OpenAiApiKey = data.ContainsKey("openai_api_key"),
+        CursorApiKey = data.ContainsKey("cursor_api_key"),
         GitKnownHosts = data.ContainsKey("known_hosts"),
         GitUserName = data.ContainsKey("git_user_name"),
         GitUserEmail = data.ContainsKey("git_user_email"),
         ClaudeSubscription = claudeSubscription?.ContainsKey("credentials.json") == true,
-        CodexSubscription = codexSubscription?.ContainsKey("auth.json") == true
+        CodexSubscription = codexSubscription?.ContainsKey("auth.json") == true,
+        // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
+        CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true
     };
 
     public static V1Secret CreateProviderSecret(string name, string @namespace, string ownerLabelValue,
@@ -70,6 +76,8 @@ public static class CredentialSecretFactory
         {
             AgentKind.Claude => "credentials.json",
             AgentKind.Codex => "auth.json",
+            // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
+            AgentKind.Cursor => "auth.json",
             _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
         };
         return Secret(name, @namespace, ownerLabelValue, new Dictionary<string, byte[]>
