@@ -27,6 +27,7 @@ data:
   AgentHub__CallbackBaseUrl: "http://agenthub-backend.{{ .Release.Namespace }}.svc.cluster.local"
   AgentHub__TelemetryEnabled: {{ .Values.telemetry.enabled | default false | quote }}
   AgentHub__TelemetryOtlpEndpoint: {{ .Values.telemetry.otlpEndpoint | default "" | quote }}
+  AgentHub__MaxRunningSessionsPerOwner: {{ .Values.maxRunningSessionsPerOwner | default 20 | quote }}
   Browser__Enabled: {{ .Values.browser.enabled | quote }}
   {{ if .Values.browser.enabled }}
   Browser__Image: {{ include "agenthub.browserImage" . | quote }}

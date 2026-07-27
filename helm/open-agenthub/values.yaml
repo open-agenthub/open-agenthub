@@ -5,6 +5,10 @@ sessionsNamespace: agenthub-sessions
 # Set to false if the namespace is managed outside of Helm.
 createSessionsNamespace: true
 
+# Soft limit on concurrent non-terminal sessions per owner
+# (Pending | Running | Paused | Scheduled). Exceeding returns 429 on create.
+maxRunningSessionsPerOwner: 20
+
 image:
   # Base path; component images use {registry}/{component}:{tag}. The agent runtime
   # names are agent-runtime-claude, agent-runtime-codex, and agent-runtime-cursor
