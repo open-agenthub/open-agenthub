@@ -543,6 +543,7 @@ public sealed class KubernetesSessionService : ISessionService
             {
                 AgentKind.Codex => ("openai_api_key", "auth.json"),
                 AgentKind.Cursor => ("cursor_api_key", "auth.json"),
+                AgentKind.OpenClaw => (OpenClawSelectedApiKeySecretKey(record.OpenClawApiKeySource), "auth.json"),
                 _ => ("anthropic_api_key", "credentials.json")
             };
             if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
@@ -562,6 +563,7 @@ public sealed class KubernetesSessionService : ISessionService
             ClaudeCredentialSecretName = ProviderSecretName(owner, AgentKind.Claude),
             CodexCredentialSecretName = ProviderSecretName(owner, AgentKind.Codex),
             CursorCredentialSecretName = ProviderSecretName(owner, AgentKind.Cursor),
+            OpenClawCredentialSecretName = ProviderSecretName(owner, AgentKind.OpenClaw),
             HasSelectedApiKey = hasApiKey,
             HasSelectedSubscriptionCredential = hasSubscription,
             HasGitCredentials = hasGitCredentials,
@@ -571,7 +573,8 @@ public sealed class KubernetesSessionService : ISessionService
             ScrollbackPutUrl = artifactUrls.ScrollbackPutUrl,
             S3Insecure = _s3Insecure,
             RuntimeImages = new AgentRuntimeImages(
-                claudeImage, _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.AgentImagePullPolicy),
+                claudeImage, _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.OpenClawAgentImage,
+                _opts.AgentImagePullPolicy),
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
@@ -661,6 +664,14 @@ public sealed class KubernetesSessionService : ISessionService
         _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
     };
 
+    private static string OpenClawSelectedApiKeySecretKey(OpenClawApiKeySource? source) => source switch
+    {
+        OpenClawApiKeySource.OpenAI => "openai_api_key",
+        OpenClawApiKeySource.Cursor => "cursor_api_key",
+        OpenClawApiKeySource.Anthropic => "anthropic_api_key",
+        _ => "anthropic_api_key"
+    };
+
     private static string Sanitize(string owner)
     {
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(owner)))[..16].ToLowerInvariant();
@@ -680,6 +691,7 @@ public sealed class AgentHubOptions
     public string ClaudeAgentImage { get; set; } = "";
     public string CodexAgentImage { get; set; } = "";
     public string CursorAgentImage { get; set; } = "";
+    public string OpenClawAgentImage { get; set; } = "";
     public int AgentPort { get; set; } = 7681;
     public string GitCloneImage { get; set; } = "alpine/git:2.45.2";
     /// <summary>Pull policy for the agent/runtime image. Set "Always" when the agent
