@@ -10,6 +10,8 @@ public sealed class SessionRecord
     public required string Owner { get; init; }
     public string Title { get; set; } = "";
     public SessionMode Mode { get; set; }
+    /// <summary>UI rendering mode: "terminal" or "chat".</summary>
+    public string UiMode { get; set; } = SessionUiMode.Terminal;
     public string? RepoUrl { get; set; }
     public string? Schedule { get; set; }
     public string? ProjectId { get; set; }
@@ -100,6 +102,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auth_mode TEXT NOT NULL DEFAULT 'Auto';
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_policy JSONB;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_session_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ui_mode TEXT NOT NULL DEFAULT 'terminal';
             UPDATE sessions SET agent_session_id = claude_session_id WHERE agent_session_id IS NULL;
             ALTER TABLE sessions ALTER COLUMN agent_session_id SET NOT NULL;
             ALTER TABLE sessions ALTER COLUMN claude_session_id DROP NOT NULL;
@@ -112,14 +115,14 @@ public sealed class PostgresSessionStore : ISessionStore
     public async Task UpsertAsync(SessionRecord r, CancellationToken ct = default)
     {
         const string sql = """
-            INSERT INTO sessions (id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy,
+            INSERT INTO sessions (id, owner, title, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
                                   mcp_config, repos, project_id, prompt, allowed_tools, created_at, updated_at)
-            VALUES (@id, @owner, @title, @mode, @repo, @sched, @agentSessionId, @agent, @authMode, @policy,
+            VALUES (@id, @owner, @title, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @repos, @project, @prompt, @allowedTools, @created, now())
             ON CONFLICT (id) DO UPDATE SET
-                title = EXCLUDED.title, mode = EXCLUDED.mode, repo_url = EXCLUDED.repo_url,
+                title = EXCLUDED.title, mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
                 question_pending = EXCLUDED.question_pending,
                 agent_session_id = EXCLUDED.agent_session_id,
@@ -192,7 +195,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, prompt, allowed_tools FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, prompt, allowed_tools, ui_mode FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -208,6 +211,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("owner", r.Owner);
         cmd.Parameters.AddWithValue("title", r.Title);
         cmd.Parameters.AddWithValue("mode", r.Mode.ToString());
+        cmd.Parameters.AddWithValue("uiMode", r.UiMode);
         cmd.Parameters.AddWithValue("repo", (object?)r.RepoUrl ?? DBNull.Value);
         cmd.Parameters.AddWithValue("sched", (object?)r.Schedule ?? DBNull.Value);
         cmd.Parameters.AddWithValue("agentSessionId", r.AgentSessionId);
@@ -254,6 +258,7 @@ public sealed class PostgresSessionStore : ISessionStore
         ReposJson = r.IsDBNull(20) ? null : r.GetString(20),
         ProjectId = r.IsDBNull(21) ? null : r.GetString(21),
         Prompt = r.IsDBNull(22) ? null : r.GetString(22),
-        AllowedToolsJson = r.IsDBNull(23) ? null : r.GetString(23)
+        AllowedToolsJson = r.IsDBNull(23) ? null : r.GetString(23),
+        UiMode = r.GetString(24)
     };
 }

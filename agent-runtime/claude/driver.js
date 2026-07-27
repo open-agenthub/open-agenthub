@@ -78,6 +78,7 @@ function nativeAllowedTools(env) {
 
 function buildCommand(env, allowResume) {
   const mode = (env.AGENTHUB_MODE || 'interactive').toLowerCase();
+  const uiMode = (env.AGENTHUB_UI_MODE || 'terminal').toLowerCase();
   const prompt = env.AGENTHUB_PROMPT || '';
   const sessionId = env.AGENTHUB_CLAUDE_SESSION_ID || '';
   const args = [];
@@ -89,6 +90,14 @@ function buildCommand(env, allowResume) {
     args.push('--resume', sessionId);
   } else if (sessionId) {
     args.push('--session-id', sessionId);
+  }
+
+  if (mode === 'interactive' && uiMode === 'chat') {
+    // Print mode with streaming JSON on both ends keeps the process alive for
+    // multiple turns; --verbose is required for stream-json output with -p.
+    args.push('-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
+      '--include-partial-messages', '--verbose');
+    return { cmd: 'claude', args, pipe: true };
   }
 
   if (mode !== 'interactive') {

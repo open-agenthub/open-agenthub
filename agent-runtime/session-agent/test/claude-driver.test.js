@@ -74,6 +74,45 @@ test('Claude resume falls back for the same output and quick-exit conditions', (
   assert.equal(driver.isMissingResume('No conversation found for session', 0, 1), false);
 });
 
+test('Claude chat command streams JSON on both ends through a pipe', () => {
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_UI_MODE: 'chat',
+    AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true), {
+    cmd: 'claude',
+    args: ['--session-id', 'fixed-session', '-p', '--input-format', 'stream-json',
+      '--output-format', 'stream-json', '--include-partial-messages', '--verbose'],
+    pipe: true
+  });
+});
+
+test('Claude chat command keeps resume and MCP config handling', () => {
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_UI_MODE: 'chat',
+    AGENTHUB_RESUME: '1',
+    AGENTHUB_STATE_RESTORED: '1',
+    AGENTHUB_HAS_MCP: '1',
+    AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true), {
+    cmd: 'claude',
+    args: ['--mcp-config', '/secrets/mcp/mcp.json', '--resume', 'fixed-session',
+      '-p', '--input-format', 'stream-json', '--output-format', 'stream-json',
+      '--include-partial-messages', '--verbose'],
+    pipe: true
+  });
+});
+
+test('Claude chat ui mode only applies to interactive sessions', () => {
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_UI_MODE: 'chat',
+    AGENTHUB_MODE: 'autonomous',
+    AGENTHUB_PROMPT: 'fix it'
+  }), true), {
+    cmd: 'claude',
+    args: ['-p', 'fix it', '--permission-mode', 'acceptEdits']
+  });
+});
+
 test('Claude autonomous command retains prompt permission mode and allowlist', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_MODE: 'autonomous',

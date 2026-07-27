@@ -104,6 +104,7 @@ public sealed class KubernetesSessionService : ISessionService
             AgentConfiguration.ValidateForDuplicatedSession(req.Agent, req.AuthMode);
         else
             AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode);
+        var uiMode = SessionUiMode.NormalizeForCreate(req.UiMode, req.Agent, req.Mode);
 
         var image = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image.Trim();
         if (image is not null)
@@ -127,7 +128,7 @@ public sealed class KubernetesSessionService : ISessionService
         var id = Guid.NewGuid().ToString("n")[..12];
         var rec = new SessionRecord
         {
-            Id = id, Owner = owner, Title = req.Title, Mode = req.Mode,
+            Id = id, Owner = owner, Title = req.Title, Mode = req.Mode, UiMode = uiMode,
             RepoUrl = repos.FirstOrDefault()?.Url, ReposJson = SerializeRepos(repos),
             Schedule = req.Schedule, McpConfigJson = mcp,
             ProjectId = req.ProjectId, Prompt = req.Prompt,
@@ -250,7 +251,7 @@ public sealed class KubernetesSessionService : ISessionService
 
         var req = new CreateSessionRequest
         {
-            Title = rec.Title, Mode = rec.Mode,
+            Title = rec.Title, Mode = rec.Mode, UiMode = rec.UiMode,
             Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
             ProjectId = rec.ProjectId, Prompt = rec.Prompt,
             Agent = rec.Agent, AuthMode = rec.AuthMode, Policy = ParsePolicy(rec),
@@ -589,7 +590,7 @@ public sealed class KubernetesSessionService : ISessionService
 
     private static SessionInfo ToInfo(SessionRecord r, string phase, string? podIp) => new()
     {
-        Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, RepoUrl = r.RepoUrl,
+        Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, UiMode = r.UiMode, RepoUrl = r.RepoUrl,
         Repos = ParseRepos(r),
         HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson), McpConfigJson = r.McpConfigJson,
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,

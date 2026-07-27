@@ -104,6 +104,33 @@ public sealed class SessionDuplicationTests
     }
 
     [Fact]
+    public void DuplicateRequest_CopiesUiMode()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "Chat", Mode = SessionMode.Interactive,
+            UiMode = SessionUiMode.Chat, Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+            AgentSessionId = "thread", CallbackToken = "token", Status = "Succeeded"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
+
+        Assert.Equal(SessionUiMode.Chat, copy.UiMode);
+    }
+
+    [Fact]
+    public void UpdateRequest_HasNoUiModeFieldSoUpdatesIgnoreIt()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var request = System.Text.Json.JsonSerializer.Deserialize<UpdateSessionRequest>(
+            "{\"title\":\"Renamed\",\"uiMode\":\"chat\"}", options);
+
+        Assert.NotNull(request);
+        Assert.Equal("Renamed", request!.Title);
+        Assert.Null(typeof(UpdateSessionRequest).GetProperty("UiMode"));
+    }
+
+    [Fact]
     public void UpdateRequest_DistinguishesOmittedProjectFromExplicitRemoval()
     {
         var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
