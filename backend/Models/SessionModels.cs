@@ -48,14 +48,16 @@ public static class AgentConfiguration
 
     public static void ValidateForUpdate(AgentKind currentAgent, AgentAuthMode currentAuthMode,
         AgentKind? requestedAgent, AgentAuthMode? requestedAuthMode,
-        OpenClawApiKeySource? openClawApiKeySource = null)
+        OpenClawApiKeySource? currentOpenClawApiKeySource = null,
+        OpenClawApiKeySource? requestedOpenClawApiKeySource = null)
     {
         // A migrated Claude+Auto record may remain untouched, but Auto is never a
         // valid result once the public PATCH supplies either agent/auth/source field.
-        if (requestedAgent is null && requestedAuthMode is null && openClawApiKeySource is null) return;
+        if (requestedAgent is null && requestedAuthMode is null && requestedOpenClawApiKeySource is null) return;
 
         var agent = requestedAgent ?? currentAgent;
         var authMode = requestedAuthMode ?? currentAuthMode;
+        var openClawApiKeySource = requestedOpenClawApiKeySource ?? currentOpenClawApiKeySource;
 
         // Source-only updates keep the current agent/auth pair (including migrated Auto).
         if (requestedAgent is not null || requestedAuthMode is not null)
@@ -205,28 +207,35 @@ public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bo
 
 public static class SessionDuplication
 {
-    public static CreateSessionRequest CopyableRequest(SessionRecord source, DuplicateSessionRequest request) => new()
+    public static CreateSessionRequest CopyableRequest(SessionRecord source, DuplicateSessionRequest request)
     {
-        Title = request.Title,
-        ProjectId = request.ProjectId,
-        Mode = source.Mode,
-        Repos = Deserialize<List<RepoRef>>(source.ReposJson),
-        RepoUrl = source.RepoUrl,
-        Prompt = source.Prompt,
-        Schedule = source.Schedule,
-        McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
-        Agent = request.Agent ?? source.Agent,
-        AuthMode = request.AuthMode ?? source.AuthMode,
-        OpenClawApiKeySource = source.OpenClawApiKeySource,
-        Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),
-        // An explicit structured policy, including an empty default-deny policy,
-        // supersedes legacy AllowedTools instead of rehydrating it later.
-        AllowedTools = request.Policy is null ? Deserialize<List<string>>(source.AllowedToolsJson) : new List<string>(),
-        Image = source.Image,
-        RunAsRoot = source.RunAsRoot,
-        Cpu = source.Cpu,
-        Memory = source.Memory
-    };
+        var agent = request.Agent ?? source.Agent;
+        var authMode = request.AuthMode ?? source.AuthMode;
+        return new()
+        {
+            Title = request.Title,
+            ProjectId = request.ProjectId,
+            Mode = source.Mode,
+            Repos = Deserialize<List<RepoRef>>(source.ReposJson),
+            RepoUrl = source.RepoUrl,
+            Prompt = source.Prompt,
+            Schedule = source.Schedule,
+            McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
+            Agent = agent,
+            AuthMode = authMode,
+            OpenClawApiKeySource = agent == AgentKind.OpenClaw && authMode == AgentAuthMode.ApiKey
+                ? source.OpenClawApiKeySource
+                : null,
+            Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),
+            // An explicit structured policy, including an empty default-deny policy,
+            // supersedes legacy AllowedTools instead of rehydrating it later.
+            AllowedTools = request.Policy is null ? Deserialize<List<string>>(source.AllowedToolsJson) : new List<string>(),
+            Image = source.Image,
+            RunAsRoot = source.RunAsRoot,
+            Cpu = source.Cpu,
+            Memory = source.Memory
+        };
+    }
 
     private static T Deserialize<T>(string? json) where T : new()
     {

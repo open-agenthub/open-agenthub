@@ -120,14 +120,33 @@ public sealed class SessionAgentModelTests
     public void PartialUpdate_RejectsSourceOnlyWhenEffectivePairIsNotOpenClawApiKey()
     {
         Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForUpdate(
-            AgentKind.Claude, AgentAuthMode.Subscription, null, null, OpenClawApiKeySource.OpenAI));
+            AgentKind.Claude, AgentAuthMode.Subscription, null, null,
+            currentOpenClawApiKeySource: null, requestedOpenClawApiKeySource: OpenClawApiKeySource.OpenAI));
     }
 
     [Fact]
     public void PartialUpdate_AcceptsSourceOnlyWhenEffectivePairIsOpenClawApiKey()
     {
         AgentConfiguration.ValidateForUpdate(
-            AgentKind.OpenClaw, AgentAuthMode.ApiKey, null, null, OpenClawApiKeySource.Anthropic);
+            AgentKind.OpenClaw, AgentAuthMode.ApiKey, null, null,
+            currentOpenClawApiKeySource: null, requestedOpenClawApiKeySource: OpenClawApiKeySource.Anthropic);
+    }
+
+    [Fact]
+    public void PartialUpdate_KeepsCurrentOpenClawApiKeySourceWhenRequestOmitsIt()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.Subscription, null, AgentAuthMode.ApiKey,
+            currentOpenClawApiKeySource: OpenClawApiKeySource.Anthropic,
+            requestedOpenClawApiKeySource: null);
+    }
+
+    [Fact]
+    public void PartialUpdate_RequiresSourceWhenEffectiveOpenClawApiKeyHasNone()
+    {
+        Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.Subscription, null, AgentAuthMode.ApiKey,
+            currentOpenClawApiKeySource: null, requestedOpenClawApiKeySource: null));
     }
 
     [Fact]
