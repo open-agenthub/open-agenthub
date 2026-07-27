@@ -1,3 +1,4 @@
+using AgentHub.Api.Browser;
 using System.Text.Json.Serialization;
 using AgentHub.Api.Persistence;
 
@@ -234,6 +235,7 @@ public record SessionInfo
     public bool RunAsRoot { get; init; }
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
+    public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
 }
 
 /// <summary>

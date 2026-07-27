@@ -35,6 +35,9 @@ jobs:
           - component: agent-runtime-cursor
             context: ./agent-runtime
             dockerfile: ./agent-runtime/cursor/Dockerfile
+          - component: browser
+            context: ./browser-runtime
+            dockerfile: ./browser-runtime/Dockerfile
     steps:
       - uses: actions/checkout@v4
 

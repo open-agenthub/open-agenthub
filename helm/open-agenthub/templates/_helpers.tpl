@@ -50,6 +50,11 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- end -}}
 {{- end }}
 
+{{- define "agenthub.browserImage" -}}
+{{- $repository := required "browser.image.repository is required" .Values.browser.image.repository | trimSuffix "/" -}}
+{{- $tag := .Values.browser.image.tag | default .Chart.AppVersion -}}
+{{- printf "%s:%s" $repository $tag -}}
+{{- end }}
 {{- define "agenthub.postgresConnectionString" -}}
 {{- if .Values.postgres.enabled -}}
 Host=postgres.{{ .Release.Namespace }}.svc.cluster.local;Database=agenthub;Username=agenthub;Password={{ required "postgres.password is required when postgres.enabled=true" .Values.postgres.password }}

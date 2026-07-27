@@ -1,0 +1,7 @@
+{
+  "name": "open-agenthub-browser-runtime",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test" },
+  "dependencies": { "playwright-core": "1.61.1" }
+}
