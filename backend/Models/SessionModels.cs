@@ -205,7 +205,8 @@ public record UpdateSessionRequest
 }
 
 public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
-    AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null);
+    AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null,
+    OpenClawApiKeySource? OpenClawApiKeySource = null);
 
 public static class SessionDuplication
 {
@@ -226,7 +227,7 @@ public static class SessionDuplication
             Agent = agent,
             AuthMode = authMode,
             OpenClawApiKeySource = agent == AgentKind.OpenClaw && authMode == AgentAuthMode.ApiKey
-                ? source.OpenClawApiKeySource
+                ? request.OpenClawApiKeySource ?? source.OpenClawApiKeySource
                 : null,
             Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),
             // An explicit structured policy, including an empty default-deny policy,
