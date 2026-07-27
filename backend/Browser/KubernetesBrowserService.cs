@@ -14,6 +14,7 @@ public sealed class KubernetesBrowserService : IBrowserService
     private readonly ISessionStore _sessions;
     private readonly IArtifactStore _artifacts;
     private readonly IBrowserClusterClient _cluster;
+    private readonly IBrowserRuntimeClient _runtime;
     private readonly ILogger<KubernetesBrowserService> _log;
     private readonly IBrowserSessionLock _sessionLock;
     private readonly BrowserOptions _options;
@@ -24,12 +25,13 @@ public sealed class KubernetesBrowserService : IBrowserService
 
     public KubernetesBrowserService(IConfiguration configuration, IBrowserLeaseStore leases,
         ISessionStore sessions, IArtifactStore artifacts, IBrowserClusterClient cluster,
-        IBrowserSessionLock sessionLock, ILogger<KubernetesBrowserService> log)
+        IBrowserRuntimeClient runtime, IBrowserSessionLock sessionLock, ILogger<KubernetesBrowserService> log)
     {
         _leases = leases;
         _sessions = sessions;
         _artifacts = artifacts;
         _cluster = cluster;
+        _runtime = runtime;
         _log = log;
         _sessionLock = sessionLock;
         _options = configuration.GetSection("Browser").Get<BrowserOptions>() ?? new BrowserOptions();
@@ -170,6 +172,15 @@ public sealed class KubernetesBrowserService : IBrowserService
         var lease = await _leases.GetBySessionAsync(sessionId, ct);
         return lease is { Phase: BrowserPhase.Running, PodIp: not null }
             ? Connection(lease) : null;
+    }
+
+    public async Task ResizeAsync(
+        string sessionId, BrowserViewport viewport, CancellationToken ct = default)
+    {
+        var lease = await _leases.GetBySessionAsync(sessionId, ct);
+        if (lease is not { Phase: BrowserPhase.Running, PodIp: not null })
+            throw new InvalidOperationException("Browser is not running.");
+        await _runtime.ResizeAsync(lease.PodIp, viewport, ct);
     }
 
     public async Task StopAsync(string sessionId, CancellationToken ct = default)

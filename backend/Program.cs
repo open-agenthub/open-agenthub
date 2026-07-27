@@ -19,6 +19,7 @@ builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserSessionLock, AgentHub
 builder.Services.AddSingleton<AgentHub.Api.Browser.IAgentPodIdentityResolver, AgentHub.Api.Browser.KubernetesAgentPodIdentityResolver>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserRequestAuthorizer, AgentHub.Api.Browser.BrowserRequestAuthorizer>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserClusterClient, AgentHub.Api.Browser.KubernetesBrowserClusterClient>();
+builder.Services.AddHttpClient<AgentHub.Api.Browser.IBrowserRuntimeClient, AgentHub.Api.Browser.BrowserRuntimeClient>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserService, AgentHub.Api.Browser.KubernetesBrowserService>();
 builder.Services.AddHostedService<AgentHub.Api.Browser.BrowserReconcileService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();

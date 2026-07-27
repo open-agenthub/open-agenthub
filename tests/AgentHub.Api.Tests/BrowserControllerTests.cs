@@ -160,6 +160,7 @@ public sealed class BrowserControllerTests
             Task.FromResult<IReadOnlyDictionary<string, BrowserSummary>>(new Dictionary<string, BrowserSummary>());
         public Task<BrowserConnection?> GetConnectionAsync(string sessionId, CancellationToken ct = default) =>
             Task.FromResult<BrowserConnection?>(Connection);
+        public Task ResizeAsync(string sessionId, BrowserViewport viewport, CancellationToken ct = default) => Task.CompletedTask;
         public Task StopAsync(string sessionId, CancellationToken ct = default)
         { StopCalls++; return Task.CompletedTask; }
         public Task<BrowserStateUrls?> MintStateUrlsAsync(string leaseId, string token,

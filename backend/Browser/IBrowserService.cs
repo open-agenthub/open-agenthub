@@ -10,6 +10,7 @@ public interface IBrowserService
     Task<IReadOnlyDictionary<string, BrowserSummary>> GetSummariesAsync(
         IReadOnlyCollection<string> sessionIds, CancellationToken ct = default);
     Task<BrowserConnection?> GetConnectionAsync(string sessionId, CancellationToken ct = default);
+    Task ResizeAsync(string sessionId, BrowserViewport viewport, CancellationToken ct = default);
     Task StopAsync(string sessionId, CancellationToken ct = default);
     Task<BrowserStateUrls?> MintStateUrlsAsync(
         string leaseId, string token, CancellationToken ct = default);
