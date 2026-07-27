@@ -47,6 +47,24 @@ public sealed class SessionDuplicationTests
     }
 
     [Fact]
+    public void DuplicateRequest_CopiesCursorAgentAuthAndPolicy()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "Cursor", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.Cursor, AuthMode = AgentAuthMode.ApiKey,
+            AgentSessionId = "chat", CallbackToken = "token", Status = "Succeeded",
+            AgentPolicyJson = "{\"allowedTools\":[\"Shell(git status)\"],\"allowedMcpTools\":[],\"allowedCommands\":[]}"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
+
+        Assert.Equal(AgentKind.Cursor, copy.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
+        Assert.Equal(["Shell(git status)"], copy.Policy!.AllowedTools);
+    }
+
+    [Fact]
     public void DuplicateRequest_AppliesExplicitAgentAuthAndPolicyOverrides()
     {
         var source = new SessionRecord

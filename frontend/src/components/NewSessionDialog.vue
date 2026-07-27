@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
-import { defaultAgentForm, defaultPolicy, policyPayload } from '../lib/agent.js'
+import { defaultAgentForm, defaultPolicy, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
@@ -41,8 +41,10 @@ onMounted(async () => {
 })
 
 watch(() => form.value.agent, (agent, previousAgent) => {
+  // Use policyFromForm (not policyPayload) so Cursor's empty-commands submit rule
+  // does not treat prior-agent defaults as user-edited.
   const previousDefaults = defaultPolicy(previousAgent)
-  const current = policyPayload(form.value)
+  const current = policyFromForm(form.value)
   if (JSON.stringify(current) !== JSON.stringify(previousDefaults)) return
   const next = defaultPolicy(agent)
   form.value.allowedToolsRaw = next.allowedTools.join('\n')
@@ -135,15 +137,15 @@ async function submit() {
             </p>
             <div class="field">
               <label>Built-in tools and patterns</label>
-              <textarea v-model="form.allowedToolsRaw" data-policy="allowedTools" :placeholder="form.agent === 'Codex' ? 'Read\nEdit' : 'Read\nEdit\nBash(git*)'" />
+              <textarea v-model="form.allowedToolsRaw" data-policy="allowedTools" :placeholder="toolsPlaceholder(form.agent)" />
             </div>
             <div class="field">
               <label>Full MCP tool names and patterns</label>
               <textarea v-model="form.allowedMcpToolsRaw" data-policy="allowedMcpTools" placeholder="mcp__docs__search\nmcp__git__*" />
             </div>
-            <div class="field">
+            <div class="field" v-if="form.agent !== 'Cursor'">
               <label>{{ form.agent === 'Claude' ? 'Exact shell commands' : 'Shell command prefixes' }}</label>
-              <textarea v-model="form.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="form.agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'" />
+              <textarea v-model="form.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="commandsPlaceholder(form.agent)" />
             </div>
           </div>
           <div class="field">
