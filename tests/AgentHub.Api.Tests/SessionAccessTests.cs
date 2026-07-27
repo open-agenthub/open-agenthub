@@ -152,6 +152,21 @@ public class SessionAccessTests
     }
 
     [Fact]
+    public async Task ResolveTokenReadOnlyAsync_UsesNonMutatingStoreLookup()
+    {
+        var source = new FakeAccessStore
+        {
+            TokenAccess = new StoredSessionAccess(Session(), ShareRole.Viewer)
+        };
+        var service = new SessionAccessService(source, new FakeLicense(enabled: true));
+
+        var result = await service.ResolveTokenReadOnlyAsync("valid-token", CancellationToken.None);
+
+        Assert.NotNull(result);
+        Assert.Equal(0, source.TokenLookupCount);
+        Assert.Equal(1, source.ReadOnlyTokenLookupCount);
+    }
+    [Fact]
     public async Task ResolveUserAsync_DeniesDirectGrantWhenEnterpriseLicenseIsDisabled()
     {
         var source = new FakeAccessStore
@@ -241,6 +256,7 @@ public class SessionAccessTests
         public StoredSessionAccess? UserAccess { get; set; }
         public StoredSessionAccess? TokenAccess { get; set; }
         public int TokenLookupCount { get; private set; }
+        public int ReadOnlyTokenLookupCount { get; private set; }
 
         public Task<StoredSessionAccess?> FindUserAccessAsync(
             string principal, string sessionId, CancellationToken ct = default)
@@ -250,6 +266,13 @@ public class SessionAccessTests
             string token, CancellationToken ct = default)
         {
             TokenLookupCount++;
+            return Task.FromResult(TokenAccess);
+        }
+
+        public Task<StoredSessionAccess?> FindTokenAccessReadOnlyAsync(
+            string token, CancellationToken ct = default)
+        {
+            ReadOnlyTokenLookupCount++;
             return Task.FromResult(TokenAccess);
         }
     }

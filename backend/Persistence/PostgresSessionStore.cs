@@ -46,6 +46,7 @@ public interface ISessionStore
     Task InitializeAsync(CancellationToken ct = default);
     Task UpsertAsync(SessionRecord r, CancellationToken ct = default);
     Task<SessionRecord?> GetAsync(string owner, string id, CancellationToken ct = default);
+    Task<SessionRecord?> GetByIdAsync(string id, CancellationToken ct = default) => Task.FromResult<SessionRecord?>(null);
     Task<SessionRecord?> GetByCallbackTokenAsync(string token, CancellationToken ct = default);
     Task<IReadOnlyList<SessionRecord>> ListAsync(string owner, CancellationToken ct = default);
     Task UpdateStatusAsync(string id, string status, CancellationToken ct = default);
@@ -137,6 +138,9 @@ public sealed class PostgresSessionStore : ISessionStore
 
     public async Task<SessionRecord?> GetAsync(string owner, string id, CancellationToken ct = default)
         => await QuerySingle("WHERE id = @p1 AND owner = @p2", ct, id, owner);
+
+    public Task<SessionRecord?> GetByIdAsync(string id, CancellationToken ct = default)
+        => QuerySingle("WHERE id = @p1", ct, id);
 
     public async Task<SessionRecord?> GetByCallbackTokenAsync(string token, CancellationToken ct = default)
         => await QuerySingle("WHERE callback_token = @p1", ct, token);

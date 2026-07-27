@@ -27,6 +27,7 @@ spec:
       ports:
         - { protocol: TCP, port: {{ .Values.agent.port }} }
 ---
+# Browser CDP access is granted only by dynamic per-session policies.
 # Agent egress: DNS, HTTP(S) (Anthropic/MCP/GitLab/package mirrors), and SSH (git)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
