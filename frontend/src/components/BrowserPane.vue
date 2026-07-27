@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { browserUrl, sharedBrowserUrl } from '../api.js'
+import { browserUrl, resizeBrowserViewport, sharedBrowserUrl } from '../api.js'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -9,12 +9,19 @@ const props = defineProps({
 })
 const host = ref(null)
 const connectionState = ref('waiting')
+const MIN_VIEWPORT = { width: 480, height: 320 }
+const MAX_VIEWPORT = { width: 2560, height: 1600 }
+const RESIZE_DELAY = 250
 let rfb
 let reconnectTimer
 let reconnectAttempt = 0
 let generation = 0
 let disposed = false
 let resizeObserver
+let resizeTimer
+let latestViewport
+let lastSubmittedViewport
+let inFlightViewport
 
 const phase = computed(() => props.session?.browser?.phase || 'Stopped')
 const statusLabel = computed(() => {
@@ -27,17 +34,52 @@ const statusLabel = computed(() => {
   return 'Connecting browser…'
 })
 
-function applyCoverScale(connection = rfb) {
-  const display = connection?._display
+function viewportKey(viewport) {
+  return `${viewport.sessionId}:${viewport.width}x${viewport.height}`
+}
+function validViewport(viewport) {
+  return viewport.width >= MIN_VIEWPORT.width &&
+    viewport.height >= MIN_VIEWPORT.height &&
+    viewport.width <= MAX_VIEWPORT.width &&
+    viewport.height <= MAX_VIEWPORT.height
+}
+function mayResizeViewport() {
+  return !disposed && phase.value === 'Running' && props.canWrite && !props.sharedToken
+}
+function clearViewportTimer() {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = undefined
+}
+function queueViewportResize() {
   const element = host.value
-  if (!display || !element ||
-      display.width <= 0 || display.height <= 0 ||
-      element.clientWidth <= 0 || element.clientHeight <= 0) return
+  if (!element) return
+  latestViewport = {
+    sessionId: props.session.id,
+    width: Math.round(element.clientWidth),
+    height: Math.round(element.clientHeight)
+  }
+  clearViewportTimer()
+  if (!mayResizeViewport() || !validViewport(latestViewport)) return
+  const key = viewportKey(latestViewport)
+  if (key === lastSubmittedViewport || key === inFlightViewport) return
 
-  display.scale = Math.max(
-    element.clientWidth / display.width,
-    element.clientHeight / display.height
-  )
+  resizeTimer = setTimeout(async () => {
+    resizeTimer = undefined
+    const viewport = latestViewport
+    if (!viewport || !mayResizeViewport() || !validViewport(viewport) ||
+        viewport.sessionId !== props.session.id) return
+    const currentKey = viewportKey(viewport)
+    if (currentKey === lastSubmittedViewport || currentKey === inFlightViewport) return
+    inFlightViewport = currentKey
+    try {
+      await resizeBrowserViewport(viewport.sessionId, viewport.width, viewport.height)
+      lastSubmittedViewport = currentKey
+    } catch {
+      // A later ResizeObserver event retries without disturbing the VNC session.
+    } finally {
+      if (inFlightViewport === currentKey) inFlightViewport = undefined
+    }
+  }, RESIZE_DELAY)
 }
 
 function clearReconnect() {
@@ -69,14 +111,14 @@ async function connect() {
     if (disposed || currentGeneration !== generation || sessionId !== props.session.id) return
     const connection = new RFB(host.value, url)
     rfb = connection
-    connection.scaleViewport = false
+    connection.scaleViewport = true
     connection.resizeSession = false
     connection.viewOnly = !props.canWrite
     connection.addEventListener('connect', () => {
       if (rfb !== connection) return
       reconnectAttempt = 0
       connectionState.value = 'connected'
-      applyCoverScale(connection)
+      queueViewportResize()
     })
     connection.addEventListener('disconnect', event => {
       if (rfb !== connection) return
@@ -92,6 +134,10 @@ async function connect() {
   }
 }
 function syncConnection() {
+  clearViewportTimer()
+  latestViewport = undefined
+  lastSubmittedViewport = undefined
+  inFlightViewport = undefined
   closeRfb()
   reconnectAttempt = 0
   connectionState.value = 'waiting'
@@ -99,7 +145,7 @@ function syncConnection() {
 }
 
 onMounted(() => {
-  resizeObserver = new ResizeObserver(() => applyCoverScale())
+  resizeObserver = new ResizeObserver(queueViewportResize)
   resizeObserver.observe(host.value)
   syncConnection()
 })
@@ -110,9 +156,12 @@ watch([
 ], syncConnection)
 watch(() => props.canWrite, canWrite => {
   if (rfb) rfb.viewOnly = !canWrite
+  if (canWrite) queueViewportResize()
+  else clearViewportTimer()
 })
 onBeforeUnmount(() => {
   disposed = true
+  clearViewportTimer()
   resizeObserver?.disconnect()
   closeRfb()
 })
@@ -140,12 +189,7 @@ onBeforeUnmount(() => {
 .browser-mark i { width: 7px; height: 7px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 3px rgba(90,169,245,.12); }
 .browser-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .browser-canvas { flex: 1; min-height: 0; overflow: hidden; background: #0b0f15; }
-.browser-canvas :deep(> div) {
-  align-items: center;
-  justify-content: center;
-  overflow: hidden !important;
-}
-.browser-canvas :deep(canvas) { flex: none; margin: 0 !important; outline: none; }
+.browser-canvas :deep(canvas) { outline: none; }
 .browser-overlay { position: absolute; inset: 34px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; color: #dce5f1; background: radial-gradient(circle at 50% 42%, rgba(90,169,245,.09), transparent 34%), #10151c; }
 .browser-overlay strong { font: 600 13px var(--ui); }
 .browser-overlay small { max-width: 330px; color: #7f8a9a; font: 11px/1.55 var(--ui); }
