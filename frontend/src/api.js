@@ -122,6 +122,7 @@ async function wsUrl(id, kind) {
 
 // The selected agent's shared terminal.
 export const terminalUrl = (id) => wsUrl(id, 'terminal')
+export const resizeBrowserViewport = (id, width, height) => req('PUT', `/sessions/${encodeURIComponent(id)}/browser/viewport`, { width, height })
 export const browserUrl = (id) => wsUrl(id, 'browser')
 export const sharedBrowserUrl = (token) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/shared/${encodeURIComponent(token)}/browser`
 export async function getSharedSession(token) {
