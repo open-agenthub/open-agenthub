@@ -32,6 +32,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly string _callbackBaseUrl;
     private readonly bool _s3Insecure;
     private readonly bool _browserEnabled;
+    private readonly int _maxRunningSessionsPerOwner;
 
     private const string OwnerLabel = "agenthub.dev/owner";
     private const string SessionLabel = "agenthub.dev/session";
@@ -54,6 +55,8 @@ public sealed class KubernetesSessionService : ISessionService
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
         _s3Insecure = cfg.GetValue("S3:InsecureTls", false);
         _browserEnabled = cfg.GetValue("Browser:Enabled", true);
+        _maxRunningSessionsPerOwner = SessionSoftLimit.NormalizeMax(
+            cfg.GetValue("AgentHub:MaxRunningSessionsPerOwner", SessionSoftLimit.DefaultMax));
 
         var config = KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
@@ -124,6 +127,7 @@ public sealed class KubernetesSessionService : ISessionService
         ValidateQuantity(req.Memory, "memory");
         await ValidateProjectAsync(owner, req.ProjectId, ct);
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
+        await SessionSoftLimit.EnsureCanCreateAsync(_store, owner, _maxRunningSessionsPerOwner, ct);
 
         var repos = NormalizeRepos(req);
         var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
@@ -711,4 +715,7 @@ public sealed class AgentHubOptions
     /// <summary>Optional OTLP endpoint base override. Empty = derive from CallbackBaseUrl
     /// (the internal backend service); the OTEL SDK appends "/v1/metrics".</summary>
     public string TelemetryOtlpEndpoint { get; set; } = "";
+    /// <summary>Max concurrent non-terminal sessions per owner (Pending|Running|Paused|Scheduled).
+    /// Values &lt;= 0 are treated as the default (20).</summary>
+    public int MaxRunningSessionsPerOwner { get; set; } = SessionSoftLimit.DefaultMax;
 }
