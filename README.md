@@ -68,6 +68,10 @@ shift.
   background. Codex uses its device-code flow in headless sessions; Cursor uses
   `agent login` with a file-backed credential store. Host authentication files are never
   copied into the cluster by the setup scripts.
+- **Usage & cost dashboard** — token/cost telemetry per session, split into real
+  **API cost** and the estimated **“would have cost”** of subscription-covered sessions;
+  set yourself a monthly API budget (admins can enforce org-wide limits in the
+  Enterprise Edition).
 - **Push notifications** when your agent has a question (via webhook, e.g. n8n → Slack).
 - **Chat integrations** — session updates, replies, and permission approvals from your
   phone via **Telegram or Signal** (free, community) — Slack is part of the Enterprise

@@ -38,6 +38,23 @@ export function percent(part, total) {
   return Math.round(((Number(part) || 0) / t) * 100)
 }
 
+/**
+ * The cost to show for a usage row. API-billed sessions show the real reported cost;
+ * subscription sessions show the estimated API-equivalent, marked approximate.
+ * Rows from before the split (no estimate) fall back to the reported cost.
+ */
+export function sessionCost(row) {
+  if (!row) return { usd: 0, approx: false }
+  const apiBilled = row.apiBilled ?? ((Number(row.costUsd) || 0) > 0)
+  if (apiBilled) return { usd: Number(row.costUsd) || 0, approx: false }
+  return { usd: Number(row.estimatedCostUsd) || 0, approx: true }
+}
+
+/** "~$1.23" — an estimated (subscription-covered) amount. */
+export function formatApproxCost(usd) {
+  return '~' + formatCost(usd)
+}
+
 function trim(x) {
   // One decimal, but drop a trailing ".0" (e.g. 2.0K -> 2K).
   return (Math.round(x * 10) / 10).toString()

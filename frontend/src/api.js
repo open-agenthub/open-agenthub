@@ -82,6 +82,15 @@ export const api = {
   // Token/cost usage dashboard (fed by the agents' OpenTelemetry exporter).
   usageSummary: () => req('GET', '/usage/summary'),
   usageSessions: () => req('GET', '/usage/sessions'),
+  // Personal monthly API budget (community feature).
+  usageLimit: () => req('GET', '/usage/limit'),
+  setUsageLimit: (limitUsd) => req('PUT', '/usage/limit', { limitUsd }),
+  // Enterprise admin: usage limits (global/group/user) + group→role mapping. 402 without license.
+  eeListLimits: () => req('GET', '/ee/admin/limits'),
+  eeSetLimit: (data) => req('PUT', '/ee/admin/limits', data),
+  eeDeleteLimit: (scope, target) => req('DELETE', `/ee/admin/limits/${encodeURIComponent(scope)}${target ? `?target=${encodeURIComponent(target)}` : ''}`),
+  eeListGroups: () => req('GET', '/ee/admin/groups'),
+  eeSetGroupRole: (group, role) => req('PUT', `/ee/admin/groups/${encodeURIComponent(group)}/role`, { role }),
   // Per-user Slack preferences.
   slackMe: () => req('GET', '/slack/me'),
   setSlackPrefs: (data) => req('PUT', '/slack/me', data),

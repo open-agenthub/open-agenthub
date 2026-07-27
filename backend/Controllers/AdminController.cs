@@ -29,11 +29,11 @@ public sealed class AdminController : ControllerBase
 
     private string Owner =>
         User.FindFirstValue("preferred_username") ?? User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "dev";
-    private bool IsAdmin => _access.IsAdmin(Owner);
+    private Task<bool> IsAdminAsync(CancellationToken ct) => _access.IsAdminAsync(Owner, ct);
 
     /// <summary>Whether the current user may see the admin area (drives the nav item).</summary>
     [HttpGet("access")]
-    public object Access() => new { isAdmin = IsAdmin };
+    public async Task<object> Access(CancellationToken ct) => new { isAdmin = await IsAdminAsync(ct) };
 
     public sealed record SeatInfo(int Used, int Included);
     public sealed record Overview(
@@ -43,7 +43,7 @@ public sealed class AdminController : ControllerBase
     [HttpGet("overview")]
     public async Task<IActionResult> GetOverview(CancellationToken ct)
     {
-        if (!IsAdmin) return Forbid();
+        if (!await IsAdminAsync(ct)) return Forbid();
         var status = _license.Status;
         var used = await _dir.CountLicensedAsync(ct);
         var users = await _dir.ListAsync(ct);
@@ -63,7 +63,7 @@ public sealed class AdminController : ControllerBase
     public async Task<IActionResult> StartCheckout([FromBody] CheckoutReq req,
         [FromServices] IHttpClientFactory httpFactory, CancellationToken ct)
     {
-        if (!IsAdmin) return Forbid();
+        if (!await IsAdminAsync(ct)) return Forbid();
         var serviceUrl = _cfg["Ee:License:ServiceUrl"]?.TrimEnd('/');
         if (string.IsNullOrWhiteSpace(serviceUrl))
             return StatusCode(StatusCodes.Status501NotImplemented,
@@ -96,7 +96,7 @@ public sealed class AdminController : ControllerBase
     [HttpPost("license")]
     public async Task<IActionResult> Activate([FromBody] ActivateReq req, CancellationToken ct)
     {
-        if (!IsAdmin) return Forbid();
+        if (!await IsAdminAsync(ct)) return Forbid();
         if (string.IsNullOrWhiteSpace(req.Token)) return BadRequest(new { error = "Token is required." });
 
         // Store then verify: ReloadAsync reads back from the store and validates the
@@ -117,7 +117,7 @@ public sealed class AdminController : ControllerBase
     [HttpDelete("license")]
     public async Task<IActionResult> Deactivate(CancellationToken ct)
     {
-        if (!IsAdmin) return Forbid();
+        if (!await IsAdminAsync(ct)) return Forbid();
         await _store.SetTokenAsync(null, ct);
         await _license.ReloadAsync(ct);
         return NoContent();
@@ -128,7 +128,7 @@ public sealed class AdminController : ControllerBase
     [HttpPut("users/{owner}/license")]
     public async Task<IActionResult> SetSeat(string owner, [FromBody] SeatReq req, CancellationToken ct)
     {
-        if (!IsAdmin) return Forbid();
+        if (!await IsAdminAsync(ct)) return Forbid();
         var ok = await _dir.SetLicensedAsync(owner, req.Licensed, ct);
         return ok ? NoContent() : NotFound();
     }

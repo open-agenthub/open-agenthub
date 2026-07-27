@@ -22,6 +22,10 @@ builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
+// Monthly API budgets: personal limit (community) + admin limits (enterprise provider below).
+builder.Services.AddSingleton<AgentHub.Api.Usage.IPersonalUsageLimitSource>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>());
+builder.Services.AddSingleton<AgentHub.Api.Usage.UsageLimitService>();
 // S3 is optional: without an access key the platform runs without state/artifact persistence (no resume).
 if (!string.IsNullOrWhiteSpace(builder.Configuration["S3:AccessKey"]))
     builder.Services.AddSingleton<AgentHub.Api.Storage.IArtifactStore, AgentHub.Api.Storage.S3ArtifactStore>();
@@ -39,6 +43,12 @@ builder.Services.AddSingleton<AgentHub.Api.Licensing.ILicenseStore>(sp =>
     sp.GetRequiredService<AgentHub.Api.Licensing.LicenseStore>());
 builder.Services.AddSingleton<AgentHub.Api.Licensing.IEnterpriseLicense, AgentHub.Api.Licensing.EnterpriseLicense>();
 builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
+// Enterprise: user groups from OAuth token claims, group→role mapping and admin usage limits.
+// Registered unconditionally — every provider self-gates on the license at call time.
+builder.Services.AddSingleton<AgentHub.Api.Ee.Identity.UserGroupStore>();
+builder.Services.AddSingleton<AgentHub.Api.Ee.Usage.UsageLimitStore>();
+builder.Services.AddSingleton<AgentHub.Api.Usage.IAdminUsageLimitProvider, AgentHub.Api.Ee.Usage.EeUsageLimitProvider>();
+builder.Services.AddSingleton<AgentHub.Api.Admin.IAdminRoleProvider, AgentHub.Api.Ee.Usage.GroupRoleAdminProvider>();
 // Monthly seat heartbeat: reports the licensed-user count and renews the license token.
 builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
 
@@ -162,6 +172,8 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatLinkCodeStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Usage.UsageLimitStore>().InitializeAsync();
     // License token lives in the DB — create its table, then load & verify it.
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.ILicenseStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();
@@ -172,23 +184,37 @@ app.UseWebSockets();
 app.UseAuthentication();
 app.UseAuthorization();
 
-// Capture the signed-in identity (owner + email + name) once per process per user,
-// so background notifiers (Slack) can resolve a user's email without a request context.
+// Capture the signed-in identity (owner + email + name) per user — refreshed every few
+// minutes rather than once per process, so group-claim changes in the IdP propagate
+// without a backend restart. Background notifiers (Slack) resolve the email from here.
 {
-    var seen = new System.Collections.Concurrent.ConcurrentDictionary<string, byte>();
+    var seen = new System.Collections.Concurrent.ConcurrentDictionary<string, DateTime>();
+    var refreshEvery = TimeSpan.FromMinutes(5);
+    var groupsClaim = builder.Configuration["Ee:Groups:Claim"] ?? AgentHub.Api.Ee.Identity.GroupClaims.DefaultClaim;
     app.Use(async (ctx, next) =>
     {
         if (ctx.User.Identity?.IsAuthenticated == true)
         {
             var owner = ctx.User.FindFirstValue("preferred_username") ?? ctx.User.FindFirstValue(ClaimTypes.NameIdentifier);
-            if (owner is not null && seen.TryAdd(owner, 0))
+            var now = DateTime.UtcNow;
+            if (owner is not null && (!seen.TryGetValue(owner, out var last) || now - last >= refreshEvery))
             {
+                seen[owner] = now; // benign race: a concurrent request only repeats the upsert
                 var email = ctx.User.FindFirstValue(ClaimTypes.Email) ?? ctx.User.FindFirstValue("email");
                 var name = ctx.User.FindFirstValue("name") ?? ctx.User.FindFirstValue(ClaimTypes.Name);
                 try
                 {
                     await ctx.RequestServices.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>()
                         .RecordLoginAsync(owner, email, name, ctx.RequestAborted);
+                    // Enterprise: mirror the token's group memberships (no-op without license —
+                    // groups drive role mapping and limits, both of which self-gate).
+                    var license = ctx.RequestServices.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>();
+                    if (license.Enabled)
+                    {
+                        var groups = AgentHub.Api.Ee.Identity.GroupClaims.Extract(ctx.User, groupsClaim);
+                        await ctx.RequestServices.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>()
+                            .ReplaceGroupsAsync(owner, groups, ctx.RequestAborted);
+                    }
                 }
                 catch { seen.TryRemove(owner, out _); } // retry on the next request
             }
