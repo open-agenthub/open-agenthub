@@ -6,13 +6,14 @@ RUN set -eux; \
     chromium_version="$(apt-cache policy chromium | awk '/Candidate:/ {print $2}')"; \
     xvfb_version="$(apt-cache policy xvfb | awk '/Candidate:/ {print $2}')"; \
     x11vnc_version="$(apt-cache policy x11vnc | awk '/Candidate:/ {print $2}')"; \
+    xrandr_version="$(apt-cache policy x11-xserver-utils | awk '/Candidate:/ {print $2}')"; \
     websockify_version="$(apt-cache policy websockify | awk '/Candidate:/ {print $2}')"; \
     socat_version="$(apt-cache policy socat | awk '/Candidate:/ {print $2}')"; \
     curl_version="$(apt-cache policy curl | awk '/Candidate:/ {print $2}')"; \
     ca_version="$(apt-cache policy ca-certificates | awk '/Candidate:/ {print $2}')"; \
     apt-get install -y --no-install-recommends \
       "chromium=${chromium_version}" "xvfb=${xvfb_version}" \
-      "x11vnc=${x11vnc_version}" "websockify=${websockify_version}" \
+      "x11vnc=${x11vnc_version}" "x11-xserver-utils=${xrandr_version}" "websockify=${websockify_version}" \
       "socat=${socat_version}" "curl=${curl_version}" "ca-certificates=${ca_version}"; \
     rm -rf /var/lib/apt/lists/*
 

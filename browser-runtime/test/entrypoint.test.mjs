@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const runtimeDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-test('entrypoint waits for Xvfb before starting display consumers', async t => {
+test('entrypoint waits for Xvfb and enables xrandr resize for both VNC servers', async t => {
   try {
     await access('/bin/sh');
   } catch {
@@ -43,6 +43,7 @@ if [ ! -e "$AGENTHUB_BROWSER_X11_SOCKET_DIR/X99" ]; then
   exit 42
 fi
 echo "$name" >> "$AGENTHUB_TEST_EVENTS"
+if [ "$name" = "x11vnc" ]; then echo "x11vnc-args:$*" >> "$AGENTHUB_TEST_EVENTS"; fi
 trap 'exit 0' TERM INT
 while :; do sleep 1; done
 `;
@@ -75,6 +76,11 @@ while :; do sleep 1; done
     const events = await readEvents(eventsFile);
     assert.ok(events.includes('Xvfb-ready'), `Xvfb never became ready: ${events.join(', ')}`);
     assert.ok(!events.some(event => event.endsWith('-early')), `display consumer started early: ${events.join(', ')}`);
+
+    const vncArguments = events.filter(event => event.startsWith('x11vnc-args:'));
+    assert.equal(vncArguments.length, 2, `Expected writable and view-only x11vnc processes: ${events.join(', ')}`);
+    assert.ok(vncArguments.every(event => event.includes('-xrandr resize')),
+      `x11vnc processes do not track XRandR resizes: ${vncArguments.join(', ')}`);
 
     const readyIndex = events.indexOf('Xvfb-ready');
     for (const name of ['chromium', 'x11vnc', 'websockify', 'socat', 'node']) {
