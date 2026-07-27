@@ -101,9 +101,9 @@ public sealed class KubernetesSessionService : ISessionService
         if (req.Mode is SessionMode.Autonomous or SessionMode.Scheduled && string.IsNullOrWhiteSpace(req.Prompt))
             throw new ArgumentException("A prompt is required for Autonomous/Scheduled sessions.");
         if (allowMigratedClaudeAuto)
-            AgentConfiguration.ValidateForDuplicatedSession(req.Agent, req.AuthMode);
+            AgentConfiguration.ValidateForDuplicatedSession(req.Agent, req.AuthMode, req.OpenClawApiKeySource);
         else
-            AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode);
+            AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode, req.OpenClawApiKeySource);
 
         var image = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image.Trim();
         if (image is not null)
@@ -132,6 +132,9 @@ public sealed class KubernetesSessionService : ISessionService
             Schedule = req.Schedule, McpConfigJson = mcp,
             ProjectId = req.ProjectId, Prompt = req.Prompt,
             Agent = req.Agent, AuthMode = req.AuthMode,
+            OpenClawApiKeySource = req.Agent == AgentKind.OpenClaw && req.AuthMode == AgentAuthMode.ApiKey
+                ? req.OpenClawApiKeySource
+                : null,
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
             Image = image, RunAsRoot = req.RunAsRoot,
@@ -253,7 +256,8 @@ public sealed class KubernetesSessionService : ISessionService
             Title = rec.Title, Mode = rec.Mode,
             Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
             ProjectId = rec.ProjectId, Prompt = rec.Prompt,
-            Agent = rec.Agent, AuthMode = rec.AuthMode, Policy = ParsePolicy(rec),
+            Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
+            Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot,
             Cpu = rec.Cpu, Memory = rec.Memory
@@ -351,6 +355,15 @@ public sealed class KubernetesSessionService : ISessionService
             rec.Agent = agent;
         if (req.AuthMode is { } authMode)
             rec.AuthMode = authMode;
+        if (rec.Agent == AgentKind.OpenClaw && rec.AuthMode == AgentAuthMode.ApiKey)
+        {
+            if (req.OpenClawApiKeySource is { } source)
+                rec.OpenClawApiKeySource = source;
+        }
+        else if (req.Agent is not null || req.AuthMode is not null)
+        {
+            rec.OpenClawApiKeySource = null;
+        }
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
@@ -594,7 +607,8 @@ public sealed class KubernetesSessionService : ISessionService
         HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson), McpConfigJson = r.McpConfigJson,
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
-        Agent = r.Agent, AuthMode = r.AuthMode, Policy = ParsePolicy(r),
+        Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
+        Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
         Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory
