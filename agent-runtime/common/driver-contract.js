@@ -5,10 +5,17 @@ const path = require('node:path');
 const REQUIRED = ['name', 'stateDir', 'authFilename', 'buildCommand', 'isResumeCommand',
   'isMissingResume', 'prepare'];
 const SAFE_RELATIVE_NAME = /^(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*$/;
+// Optional tar --exclude paths under HOME: relative, no .., may include * globs.
+const SAFE_STATE_EXCLUDE = /^(?!\/)(?!.*(?:^|\/)\.\.(?:\/|$))[A-Za-z0-9._*][A-Za-z0-9._*/-]*$/;
 
 // prepare(env) may scrub values from the long-lived parent environment and return
 // { childEnv: { ... } } with values merged only into the provider agent PTY. The
 // common shell terminal always receives the scrubbed parent environment.
+
+function isSafeStateExclude(value) {
+  return typeof value === 'string' && SAFE_STATE_EXCLUDE.test(value) &&
+    !value.includes('\\') && !/(^|\/)\.\.?(\/|$)/.test(value);
+}
 
 function validateDriver(driver) {
   if (!driver || typeof driver !== 'object') throw new Error('Agent driver must export an object');
@@ -26,6 +33,16 @@ function validateDriver(driver) {
       throw new Error('Agent driver ' + key + ' must be a safe single relative name');
     }
   }
+  if (driver.stateExcludes !== undefined) {
+    if (!Array.isArray(driver.stateExcludes)) {
+      throw new Error('Agent driver stateExcludes must be an array of safe relative paths');
+    }
+    for (const entry of driver.stateExcludes) {
+      if (!isSafeStateExclude(entry)) {
+        throw new Error('Agent driver stateExcludes entries must be safe relative paths');
+      }
+    }
+  }
   return driver;
 }
 
@@ -35,4 +52,4 @@ function loadDriver(driverPath) {
   return validateDriver(require(resolved));
 }
 
-module.exports = { loadDriver, validateDriver };
+module.exports = { loadDriver, validateDriver, isSafeStateExclude };

@@ -63,9 +63,13 @@ function createCommonServer(options = {}) {
   function persistState(done) {
     if (!statePut) return done && done();
     const archive = driver.stateDir;
-    const excludedAuth = driver.stateDir + '/' + driver.authFilename;
+    const excludes = [driver.stateDir + '/' + driver.authFilename];
+    if (Array.isArray(driver.stateExcludes)) {
+      for (const entry of driver.stateExcludes) excludes.push(entry);
+    }
+    const excludeArgs = excludes.map(entry => '--exclude="' + entry + '"').join(' ');
     execFile('/bin/sh', ['-c',
-      'tar czf /tmp/state.tgz -C "' + home + '" --exclude="' + excludedAuth + '" "' + archive +
+      'tar czf /tmp/state.tgz -C "' + home + '" ' + excludeArgs + ' "' + archive +
       '" 2>/dev/null && curl -fsS ' + curlOption + '-T /tmp/state.tgz "' + statePut + '"'
     ], () => done && done());
   }

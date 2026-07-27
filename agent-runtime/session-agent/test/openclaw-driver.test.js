@@ -20,6 +20,16 @@ test('OpenClaw driver exposes the provider state contract', () => {
   assert.equal(driver.stateDir, '.openclaw');
   // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
   assert.equal(driver.authFilename, 'auth-profiles.json');
+  assert.deepEqual(driver.stateExcludes, [
+    '.openclaw/agents/main/agent/auth-profiles.json',
+    '.openclaw/agents/main/agent/openclaw-agent.sqlite',
+    '.openclaw/agents/main/agent/openclaw-agent.sqlite-wal',
+    '.openclaw/agents/main/agent/openclaw-agent.sqlite-shm',
+    '.openclaw/agents/*/agent/auth-profiles.json',
+    '.openclaw/agents/*/agent/openclaw-agent.sqlite',
+    '.openclaw/agents/*/agent/openclaw-agent.sqlite-wal',
+    '.openclaw/agents/*/agent/openclaw-agent.sqlite-shm'
+  ]);
   assert.equal(typeof driver.prepare, 'function');
 });
 
@@ -184,6 +194,8 @@ test('OpenClaw entrypoint owns state dir, auth mode, watcher, and stale-auth ord
   assert.match(entrypoint, /OPENCLAW_AGENT_DIR=.*agents\/.*\/agent/);
   assert.match(entrypoint, /OPENCLAW_AUTH_FILE=.*auth-profiles\.json/);
   assert.match(entrypoint, /rm -f "\$OPENCLAW_AUTH_FILE"/);
+  assert.match(entrypoint, /agents\/\*\/agent\/auth-profiles\.json/);
+  assert.match(entrypoint, /agents\/\*\/agent\/openclaw-agent\.sqlite/);
   assert.match(entrypoint, /\/secrets\/openclaw\/auth-profiles\.json/);
   assert.match(entrypoint, /sync-auth-profiles\.js" import/);
   assert.match(entrypoint, /auth-watcher\.js/);

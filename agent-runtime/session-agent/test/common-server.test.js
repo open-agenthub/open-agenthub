@@ -176,6 +176,42 @@ test('common transport accepts only safe single relative archive names', () => {
   }
 });
 
+test('common transport accepts optional safe stateExcludes paths and globs', () => {
+  const valid = {
+    name: 'Example', stateDir: '.openclaw', authFilename: 'auth-profiles.json',
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
+  };
+
+  assert.doesNotThrow(() => validateDriver({
+    ...valid,
+    stateExcludes: [
+      '.openclaw/agents/main/agent/auth-profiles.json',
+      '.openclaw/agents/*/agent/openclaw-agent.sqlite'
+    ]
+  }));
+  assert.doesNotThrow(() => validateDriver({ ...valid, stateExcludes: [] }));
+  assert.doesNotThrow(() => validateDriver(valid));
+
+  for (const value of [
+    null,
+    '.openclaw/agents/../escape/auth.json',
+    '/absolute/path',
+    'nested\\windows',
+    'bad;name',
+    'bad name',
+    '$HOME/secret',
+    'path with spaces',
+    ['ok', '../bad']
+  ]) {
+    assert.throws(() => validateDriver({
+      ...valid,
+      stateExcludes: Array.isArray(value) ? value : [value]
+    }), /stateExcludes/i);
+  }
+  assert.throws(() => validateDriver({ ...valid, stateExcludes: 'not-an-array' }),
+    /stateExcludes/i);
+});
+
 test('common transport is free of provider-specific command and state knowledge', () => {
   const source = fs.readFileSync(path.join(commonDir, 'server.js'), 'utf8');
   assert.doesNotMatch(source, /claude|codex|--resume|No conversation found|\.credentials\.json/i);
@@ -229,6 +265,24 @@ test('common transport archives driver state without its subscription credential
   assert.match(harness.commands[1].args[1], /"\.test-agent"/);
   assert.match(harness.commands[1].args[1], /--exclude="\.test-agent\/auth\.json"/);
   assert.doesNotMatch(harness.commands[1].args[1], /cat |credentials\.json/);
+});
+
+test('common transport applies optional stateExcludes as extra tar excludes', () => {
+  const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' }, {
+    name: 'OpenClaw',
+    stateDir: '.openclaw',
+    authFilename: 'auth-profiles.json',
+    stateExcludes: [
+      '.openclaw/agents/main/agent/auth-profiles.json',
+      '.openclaw/agents/*/agent/openclaw-agent.sqlite'
+    ]
+  });
+  harness.intervals[0].callback();
+  assert.equal(harness.commands.length, 1);
+  const command = harness.commands[0].args[1];
+  assert.match(command, /--exclude="\.openclaw\/auth-profiles\.json"/);
+  assert.match(command, /--exclude="\.openclaw\/agents\/main\/agent\/auth-profiles\.json"/);
+  assert.match(command, /--exclude="\.openclaw\/agents\/\*\/agent\/openclaw-agent\.sqlite"/);
 });
 
 test('common transport backs up scrollback and posts Running and terminal status', async () => {
