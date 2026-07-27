@@ -24,4 +24,33 @@ public class SlackAnsiTests
     {
         Assert.Equal("hello [world] 42", AgentTerminal.StripAnsi("hello [world] 42"));
     }
+
+    [Fact]
+    public void StripsClaudeTrustScreenTerminalControls()
+    {
+        var esc = ((char)27).ToString();
+        var input = $"{esc}7{esc}[r{esc}8{esc}[?25h{esc}[?25l{esc}[?2004h{esc}[?1004h{esc}[?2031h"
+            + $"{esc}[38;5;220m────{esc}[39m\n"
+            + $"{esc}[2G{esc}[1mAccessing workspace:{esc}[22m{esc}[39m";
+
+        Assert.Equal("────\nAccessing workspace:", AgentTerminal.StripAnsi(input));
+    }
+
+    [Fact]
+    public void CleanTranscript_PreservesMissingTranscriptAndSanitizesStoredText()
+    {
+        var esc = ((char)27).ToString();
+
+        Assert.Null(AgentTerminal.CleanTranscript(null));
+        Assert.Equal("stored text", AgentTerminal.CleanTranscript($"{esc}[31mstored text{esc}[0m"));
+    }
+    [Theory]
+    [InlineData("\u001b[>4;2mtext", "text")]
+    [InlineData("\u009b31mred\u009b0m", "red")]
+    [InlineData("\u009d0;title\u0007text", "text")]
+    [InlineData("\u009d0;title\u009ctext", "text")]
+    public void StripsSevenAndEightBitTerminalControlSequences(string input, string expected)
+    {
+        Assert.Equal(expected, AgentTerminal.StripAnsi(input));
+    }
 }
