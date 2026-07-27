@@ -19,7 +19,7 @@ public sealed record AdminUser(
 /// email (for Slack lookup) and per-user Slack routing preferences. Populated from
 /// the OIDC claims on authenticated requests.
 /// </summary>
-public sealed class UserDirectory
+public sealed class UserDirectory : AgentHub.Api.Usage.IPersonalUsageLimitSource
 {
     private readonly NpgsqlDataSource _db;
 
@@ -55,6 +55,8 @@ public sealed class UserDirectory
             -- A Telegram chat / Signal number can only ever be bound to one user.
             CREATE UNIQUE INDEX IF NOT EXISTS app_users_telegram_chat_key ON app_users (telegram_chat_id) WHERE telegram_chat_id IS NOT NULL;
             CREATE UNIQUE INDEX IF NOT EXISTS app_users_signal_number_key ON app_users (signal_number) WHERE signal_number IS NOT NULL;
+            -- Self-set monthly API budget in USD (community feature); NULL = no limit.
+            ALTER TABLE app_users ADD COLUMN IF NOT EXISTS usage_limit_usd DOUBLE PRECISION;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -97,6 +99,30 @@ public sealed class UserDirectory
         await using var cmd = _db.CreateCommand("SELECT licensed FROM app_users WHERE owner = @o");
         cmd.Parameters.AddWithValue("o", owner);
         return await cmd.ExecuteScalarAsync(ct) is bool b && b;
+    }
+
+    /// <summary>The user's self-set monthly API budget in USD; null = no limit or unknown user.</summary>
+    public async Task<double?> GetUsageLimitAsync(string owner, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("SELECT usage_limit_usd FROM app_users WHERE owner = @o");
+        cmd.Parameters.AddWithValue("o", owner);
+        return await cmd.ExecuteScalarAsync(ct) is double d ? d : null;
+    }
+
+    /// <summary>Sets (or clears, with null) the user's own monthly API budget.</summary>
+    public async Task SetUsageLimitAsync(string owner, double? limitUsd, CancellationToken ct = default)
+    {
+        const string sql = """
+            INSERT INTO app_users (owner, usage_limit_usd)
+            VALUES (@o, @l)
+            ON CONFLICT (owner) DO UPDATE SET
+                usage_limit_usd = EXCLUDED.usage_limit_usd,
+                updated_at = now();
+            """;
+        await using var cmd = _db.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("o", owner);
+        cmd.Parameters.AddWithValue("l", (object?)limitUsd ?? DBNull.Value);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     /// <summary>Upsert the identity seen at login. Keeps existing Slack prefs.</summary>

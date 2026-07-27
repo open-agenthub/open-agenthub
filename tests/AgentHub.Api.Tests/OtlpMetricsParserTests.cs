@@ -101,6 +101,27 @@ public class OtlpMetricsParserTests
     public void EmptyPayload_ReturnsEmpty()
         => Assert.Empty(OtlpMetricsParser.Parse(ReadOnlySpan<byte>.Empty));
 
+    [Fact]
+    public void GroupsTokens_ByModelAttribute()
+    {
+        var payload = new OtlpBuilder()
+            .Resource(("session.id", "sess-m"))
+            .TokenPoint("input", 100, ("model", "claude-opus-4-8"))
+            .TokenPoint("output", 40, ("model", "claude-opus-4-8"))
+            .TokenPoint("input", 10, ("model", "claude-haiku-4-5"))
+            .TokenPoint("cacheRead", 5) // no model attribute -> "" bucket
+            .Build();
+
+        var d = Assert.Single(OtlpMetricsParser.Parse(payload));
+        Assert.Equal(110, d.InputTokens);
+        Assert.Equal(40, d.OutputTokens);
+        Assert.Equal(5, d.CacheReadTokens);
+        Assert.Equal(100, d.ModelTokens["claude-opus-4-8"].InputTokens);
+        Assert.Equal(40, d.ModelTokens["claude-opus-4-8"].OutputTokens);
+        Assert.Equal(10, d.ModelTokens["claude-haiku-4-5"].InputTokens);
+        Assert.Equal(5, d.ModelTokens[""].CacheReadTokens);
+    }
+
     // ----------------------------------------------------------------- test-only OTLP encoder
 
     /// <summary>Independent protobuf/OTLP encoder for building test payloads.</summary>
