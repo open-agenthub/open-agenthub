@@ -47,4 +47,3 @@ cluster, followed by the full `tests/browser-smoke.ps1` acceptance test. That
 test must cover the authorized lifecycle request, rejection of foreign callers,
 CDP isolation, viewer WebSocket access, cleanup, and cookie restoration when S3
 is configured.
-

@@ -74,4 +74,3 @@ Frontend component tests cover:
 The full frontend test suite and production build must pass. The updated
 frontend image is then deployed to the local Kubernetes release for visual
 verification at multiple split widths.
-
