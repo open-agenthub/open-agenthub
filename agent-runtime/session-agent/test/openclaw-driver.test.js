@@ -198,6 +198,7 @@ test('OpenClaw entrypoint owns state dir, auth mode, watcher, and stale-auth ord
   assert.match(entrypoint, /agents\/\*\/agent\/openclaw-agent\.sqlite/);
   assert.match(entrypoint, /\/secrets\/openclaw\/auth-profiles\.json/);
   assert.match(entrypoint, /sync-auth-profiles\.js" import/);
+  assert.match(entrypoint, /sync-auth-profiles\.js" export/);
   assert.match(entrypoint, /auth-watcher\.js/);
   assert.match(entrypoint, /AGENTHUB_OPENCLAW_AUTH_EXPECT_CREATE/);
   assert.match(entrypoint, /AGENTHUB_OPENCLAW_AUTH_BASELINE_SHA256/);
@@ -210,6 +211,10 @@ test('OpenClaw entrypoint owns state dir, auth mode, watcher, and stale-auth ord
     entrypoint.indexOf('rm -f "$OPENCLAW_AUTH_FILE"'));
   assert.ok(entrypoint.indexOf('rm -f "$OPENCLAW_AUTH_FILE"') <
     entrypoint.indexOf('/secrets/openclaw/auth-profiles.json'));
+  assert.ok(entrypoint.indexOf('sync-auth-profiles.js" import') <
+    entrypoint.indexOf('sync-auth-profiles.js" export'));
+  assert.ok(entrypoint.indexOf('sync-auth-profiles.js" export') <
+    entrypoint.indexOf('AUTH_BASELINE_SHA256="$(node -e'));
 });
 
 test('OpenClaw image installs CLI and preserves custom-image injection paths', () => {
@@ -217,7 +222,8 @@ test('OpenClaw image installs CLI and preserves custom-image injection paths', (
   assert.match(dockerfile, /COPY common\s+\/opt\/session-agent\/common/);
   assert.match(dockerfile, /COPY openclaw\s+\/opt\/session-agent\/openclaw/);
   assert.match(dockerfile, /COPY openclaw\/entrypoint\.sh\s+\/usr\/local\/bin\/entrypoint\.sh/);
-  assert.match(dockerfile, /npm install -g openclaw@2026\.7\.1-2/);
+  assert.match(dockerfile, /ARG OPENCLAW_VERSION=2026\.7\.1-2/);
+  assert.match(dockerfile, /npm install -g openclaw@\$\{OPENCLAW_VERSION\}/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/node/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/openclaw/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai|@openai\/codex|COPY claude|COPY codex|COPY cursor/);

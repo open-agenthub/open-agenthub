@@ -21,7 +21,7 @@ ARG GLAB_VERSION=1.48.0
 ENV OPENCLAW_VERSION=${OPENCLAW_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates bash curl tar \
- && npm install -g openclaw@2026.7.1-2 \
+ && npm install -g openclaw@${OPENCLAW_VERSION} \
  && mkdir -p /tmp/gh /tmp/glab \
  && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp/gh \
  && install -m0755 "$(find /tmp/gh -type f -name gh | head -1)" /usr/local/bin/gh \
