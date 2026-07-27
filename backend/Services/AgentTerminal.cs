@@ -59,7 +59,7 @@ public static class AgentTerminal
     private static readonly Regex OtherEsc = new(Esc + "(?:[78]|[ -/]*[@-~])", RegexOptions.Compiled);
     private static readonly Regex C1 = new("[\u0080-\u009f]", RegexOptions.Compiled);
 
-    /// <summary>Strips ANSI escape sequences and carriage returns for readable Slack text.</summary>
+    /// <summary>Strips terminal escape sequences and carriage returns for readable plain text.</summary>
     public static string StripAnsi(string s)
     {
         s = Osc.Replace(s, "");
@@ -68,4 +68,7 @@ public static class AgentTerminal
         s = C1.Replace(s, "");
         return s.Replace("\r\n", "\n").Replace('\r', '\n');
     }
+
+    /// <summary>Preserves a missing transcript and converts stored terminal output to plain text.</summary>
+    public static string? CleanTranscript(string? s) => s is null ? null : StripAnsi(s);
 }

@@ -493,7 +493,8 @@ public sealed class KubernetesSessionService : ISessionService
         // Prefer S3 (survives DB trimming); fall back to the Postgres-stored
         // scrollback so transcripts work on instances without S3.
         var fromS3 = await _artifacts.GetTextAsync(IArtifactStore.ScrollbackKey(Sanitize(owner), id), ct);
-        return !string.IsNullOrEmpty(fromS3) ? fromS3 : await _store.GetScrollbackAsync(id, ct);
+        var raw = !string.IsNullOrEmpty(fromS3) ? fromS3 : await _store.GetScrollbackAsync(id, ct);
+        return AgentTerminal.CleanTranscript(raw);
     }
 
     public async Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default)
