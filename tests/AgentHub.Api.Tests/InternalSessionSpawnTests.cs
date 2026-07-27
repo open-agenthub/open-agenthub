@@ -94,6 +94,24 @@ public class InternalSessionSpawnTests
     }
 
     [Fact]
+    public async Task Spawn_WhenCreateValidationFails_ReturnsBadRequest()
+    {
+        var svc = new RecordingSessionService
+        {
+            CreateException = new ArgumentException("A prompt is required for Autonomous/Scheduled sessions.")
+        };
+        var controller = Controller(Parent(), svc);
+
+        var result = await controller.Spawn(ParentId,
+            new CreateSessionRequest { Title = "x", Mode = SessionMode.Autonomous },
+            CancellationToken.None);
+
+        var bad = Assert.IsType<BadRequestObjectResult>(result);
+        Assert.Equal(svc.CreateException.Message, bad.Value);
+        Assert.Equal(0, svc.CreateCalls);
+    }
+
+    [Fact]
     public async Task Spawn_WhenSpawnMcpDisabled_ReturnsNotFound()
     {
         var svc = new RecordingSessionService();

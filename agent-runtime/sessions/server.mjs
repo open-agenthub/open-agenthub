@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { SessionsBackendClient } from './client.mjs';
+import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
 
 const text = value => ({
@@ -43,17 +44,17 @@ const createSchema = z.object({
 register('session_create', {
   description: 'Create and start a child session under this agent session. Default mode is Autonomous.',
   inputSchema: createSchema
-}, async (body) => text(await client.create(body)));
+}, async (body) => text(sanitizeSession(await client.create(body))));
 
 register('session_get', {
   description: 'Get a descendant session by id.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
-}, async ({ id }) => text(await client.get(id)));
+}, async ({ id }) => text(sanitizeSession(await client.get(id))));
 
 register('session_list', {
   description: 'List direct child sessions of this agent session.',
   inputSchema: z.object({})
-}, async () => text(await client.listChildren()));
+}, async () => text(sanitizeSession(await client.listChildren())));
 
 register('session_wait', {
   description: 'Poll a descendant session until Succeeded or Failed, or until timeout.',
@@ -68,7 +69,7 @@ register('session_wait', {
 register('session_delete', {
   description: 'Delete a descendant session (pod and record). Does not cascade to its children.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
-}, async ({ id }) => text(await client.delete(id)));
+}, async ({ id }) => text(sanitizeSession(await client.delete(id))));
 
 function safeError(error) {
   const message = error instanceof Error ? error.message : '';
