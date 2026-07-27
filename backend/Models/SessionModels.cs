@@ -51,12 +51,19 @@ public static class AgentConfiguration
         OpenClawApiKeySource? openClawApiKeySource = null)
     {
         // A migrated Claude+Auto record may remain untouched, but Auto is never a
-        // valid result once the public PATCH supplies either agent/auth field.
-        if (requestedAgent is null && requestedAuthMode is null) return;
+        // valid result once the public PATCH supplies either agent/auth/source field.
+        if (requestedAgent is null && requestedAuthMode is null && openClawApiKeySource is null) return;
+
         var agent = requestedAgent ?? currentAgent;
         var authMode = requestedAuthMode ?? currentAuthMode;
-        ValidateAgent(agent);
-        ValidateAuthMode(authMode);
+
+        // Source-only updates keep the current agent/auth pair (including migrated Auto).
+        if (requestedAgent is not null || requestedAuthMode is not null)
+        {
+            ValidateAgent(agent);
+            ValidateAuthMode(authMode);
+        }
+
         ValidateOpenClawApiKeySource(agent, authMode, openClawApiKeySource);
     }
 
