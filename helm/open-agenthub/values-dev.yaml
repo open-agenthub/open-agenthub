@@ -39,6 +39,7 @@ agent:
     claude: open-agenthub-dev/agent-runtime-claude:local
     codex: open-agenthub-dev/agent-runtime-codex:local
     cursor: open-agenthub-dev/agent-runtime-cursor:local
+    openclaw: open-agenthub-dev/agent-runtime-openclaw:local
 
 oidc:
   authority: ""
