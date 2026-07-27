@@ -1,12 +1,19 @@
+import { execFile as execFileCallback } from 'node:child_process';
 import http from 'node:http';
+import { promisify } from 'node:util';
 import { pathToFileURL } from 'node:url';
 import { chromium } from 'playwright-core';
 
+const execFile = promisify(execFileCallback);
+
 export const COOKIE_STATE_VERSION = 1;
+export const MIN_VIEWPORT = { width: 480, height: 320 };
+export const MAX_VIEWPORT = { width: 2560, height: 1600 };
 const DEFAULT_MAX_BYTES = 1_048_576;
 const REQUEST_TIMEOUT_MS = 10_000;
 const SHUTDOWN_TIMEOUT_MS = 45_000;
 const ALLOWED_SAME_SITE = new Set(['Strict', 'Lax', 'None']);
+class ViewportRequestError extends Error {}
 
 export function decodeCookieState(input, maxBytes = DEFAULT_MAX_BYTES) {
   try {
@@ -23,6 +30,17 @@ export function encodeCookieState(cookies, maxBytes = DEFAULT_MAX_BYTES) {
   const body = JSON.stringify({ version: COOKIE_STATE_VERSION, cookies: safe });
   if (Buffer.byteLength(body) > maxBytes) throw new Error('Cookie state exceeds configured size limit');
   return body;
+}
+
+export function validateViewport(value) {
+  const width = value?.width;
+  const height = value?.height;
+  if (!Number.isInteger(width) || !Number.isInteger(height) ||
+      width < MIN_VIEWPORT.width || height < MIN_VIEWPORT.height ||
+      width > MAX_VIEWPORT.width || height > MAX_VIEWPORT.height) {
+    throw new ViewportRequestError('Viewport dimensions are invalid');
+  }
+  return { width, height };
 }
 
 function normalizeCookie(cookie) {
@@ -46,12 +64,58 @@ export class BrowserSupervisor {
     this.connect = options.connect ?? (url => chromium.connectOverCDP(url));
     this.setInterval = options.setInterval ?? globalThis.setInterval;
     this.clearInterval = options.clearInterval ?? globalThis.clearInterval;
+    this.execFile = options.execFile ?? execFile;
+    this.resizeTail = Promise.resolve();
     this.context = options.context;
     this.browser = options.browser;
     this.timer = null;
     this.healthServer = null;
     this.shuttingDown = false;
     this.checkpointTail = Promise.resolve();
+  }
+
+  resizeViewport(width, height) {
+    const viewport = validateViewport({ width, height });
+    const operation = this.resizeTail.then(() => this.resizeViewportOnce(viewport));
+    this.resizeTail = operation.catch(() => undefined);
+    return operation;
+  }
+
+  async resizeViewportOnce({ width, height }) {
+    await this.execFile('xrandr', ['--display', ':99', '--fb', `${width}x${height}`]);
+    const page = this.context?.pages?.()[0];
+    if (!page) throw new Error('Chromium did not expose a page for viewport resize');
+    const session = await this.context.newCDPSession(page);
+    try {
+      const { windowId } = await session.send('Browser.getWindowForTarget');
+      await session.send('Browser.setWindowBounds', {
+        windowId,
+        bounds: { left: 0, top: 0, width, height, windowState: 'normal' },
+      });
+    } finally {
+      await session.detach();
+    }
+  }
+
+  async handleRequest(request, response) {
+    if (request.method === 'GET' && request.url === '/healthz') {
+      response.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
+      response.end('ok');
+      return;
+    }
+    if (request.method !== 'PUT' || request.url !== '/viewport') {
+      response.writeHead(404);
+      response.end();
+      return;
+    }
+    try {
+      const viewport = validateViewport(await readJsonRequestBounded(request, 1024));
+      await this.resizeViewport(viewport.width, viewport.height);
+      response.writeHead(204);
+    } catch (error) {
+      response.writeHead(error instanceof SyntaxError || error instanceof ViewportRequestError ? 400 : 500);
+    }
+    response.end();
   }
 
   async start() {
@@ -63,10 +127,7 @@ export class BrowserSupervisor {
     this.timer = this.setInterval(() => void this.checkpoint(), this.checkpointSeconds * 1000);
     this.timer.unref?.();
     this.healthServer = http.createServer((request, response) => {
-      if (request.url === '/healthz') {
-        response.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
-        response.end('ok');
-      } else { response.writeHead(404); response.end(); }
+      void this.handleRequest(request, response);
     });
     await new Promise((resolve, reject) => {
       this.healthServer.once('error', reject);
@@ -127,6 +188,17 @@ export class BrowserSupervisor {
     if (this.healthServer) await new Promise(resolve => this.healthServer.close(resolve));
     await this.browser?.close().catch(error => diagnostic('browser disconnect failed', error));
   }
+}
+
+async function readJsonRequestBounded(request, maxBytes) {
+  const chunks = [];
+  let total = 0;
+  for await (const chunk of request) {
+    total += chunk.byteLength;
+    if (total > maxBytes) throw new ViewportRequestError('Viewport request exceeds size limit');
+    chunks.push(Buffer.from(chunk));
+  }
+  return JSON.parse(Buffer.concat(chunks, total).toString('utf8'));
 }
 
 async function waitForCdp(url, fetchImpl) {
