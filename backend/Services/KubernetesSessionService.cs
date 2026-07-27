@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentHub.Api.Agents;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Storage;
@@ -25,6 +26,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IArtifactStore _artifacts;
     private readonly IGitAuthService _gitAuth;
     private readonly Usage.UsageLimitService _usageLimits;
+    private readonly IAllowedAgentsProvider _allowedAgents;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -37,7 +39,7 @@ public sealed class KubernetesSessionService : ISessionService
 
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
         IArtifactStore artifacts, IGitAuthService gitAuth, Usage.UsageLimitService usageLimits,
-        ILogger<KubernetesSessionService> log)
+        IAllowedAgentsProvider allowedAgents, ILogger<KubernetesSessionService> log)
     {
         _log = log;
         _store = store;
@@ -45,6 +47,7 @@ public sealed class KubernetesSessionService : ISessionService
         _artifacts = artifacts;
         _gitAuth = gitAuth;
         _usageLimits = usageLimits;
+        _allowedAgents = allowedAgents;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
@@ -119,6 +122,7 @@ public sealed class KubernetesSessionService : ISessionService
         ValidateQuantity(req.Cpu, "cpu");
         ValidateQuantity(req.Memory, "memory");
         await ValidateProjectAsync(owner, req.ProjectId, ct);
+        await EnsureAgentAllowedAsync(req.Agent, ct);
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
 
         var repos = NormalizeRepos(req);
@@ -204,6 +208,9 @@ public sealed class KubernetesSessionService : ISessionService
             throw new ArgumentException("Project not found.");
     }
 
+    private Task EnsureAgentAllowedAsync(AgentKind agent, CancellationToken ct)
+        => AllowedAgentsGuard.EnsureAgentAllowedAsync(_allowedAgents, agent, ct);
+
     // Monthly API-budget gate. Auto-mode sessions only bill the API when no Claude
     // subscription login is stored, so the stored-login check decides whether Auto counts.
     private async Task EnforceUsageLimitAsync(string owner, AgentKind agent, AgentAuthMode authMode, CancellationToken ct)
@@ -244,6 +251,7 @@ public sealed class KubernetesSessionService : ISessionService
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Scheduled sessions are not resumed; they run on their schedule.");
+        await EnsureAgentAllowedAsync(rec.Agent, ct);
         await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, ct);
 
         await TryDeletePodAsync($"session-{id}", ct);
@@ -301,6 +309,8 @@ public sealed class KubernetesSessionService : ISessionService
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         SessionUpdateValidator.Validate(rec, req);
+        if (req.Agent is { } requestedAgent)
+            await EnsureAgentAllowedAsync(requestedAgent, ct);
 
         if (!string.IsNullOrWhiteSpace(req.Title))
             rec.Title = req.Title.Trim();
