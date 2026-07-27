@@ -19,6 +19,7 @@ public class CredentialSelectionTests
         Assert.Equal("claude-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.Claude));
         Assert.Equal("codex-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.Codex));
         Assert.Equal("cursor-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.Cursor));
+        Assert.Equal("openclaw-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.OpenClaw));
     }
 
     [Fact]
@@ -57,19 +58,42 @@ public class CredentialSelectionTests
         Assert.Equal(1, service.StoreCalls);
     }
 
+    [Fact]
+    public async Task ProviderCredentials_AcceptsAuthenticatedMatchingOpenClawSubscription()
+    {
+        var service = new RecordingSessionService();
+        var controller = Controller(new SessionRecord
+        {
+            Id = "session-1", Owner = "alice", CallbackToken = "callback-token",
+            Agent = AgentKind.OpenClaw, AuthMode = AgentAuthMode.Subscription
+        }, service, "{\"openclawAuth\":{\"accessToken\":\"synthetic-test-token-not-real\"}}");
+
+        var result = await controller.ProviderCredentials("session-1", "openclaw", CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        Assert.Equal("alice", service.Owner);
+        Assert.Equal(AgentKind.OpenClaw, service.Agent);
+        Assert.Equal(1, service.StoreCalls);
+    }
+
     [Theory]
     [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "codex")]
     [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey, "codex")]
     [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "cursor")]
     [InlineData(AgentKind.Codex, AgentAuthMode.Subscription, "cursor")]
     [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey, "cursor")]
+    [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "openclaw")]
+    [InlineData(AgentKind.OpenClaw, AgentAuthMode.ApiKey, "openclaw")]
     public async Task ProviderCredentials_RejectsProviderMismatchOrApiKeySessions(
         AgentKind sessionAgent, AgentAuthMode authMode, string routeAgent)
     {
         var service = new RecordingSessionService();
-        var body = routeAgent == "cursor"
-            ? "{\"accessToken\":\"x\",\"refreshToken\":\"y\"}"
-            : "{\"tokens\":{}}";
+        var body = routeAgent switch
+        {
+            "cursor" => "{\"accessToken\":\"x\",\"refreshToken\":\"y\"}",
+            "openclaw" => "{\"openclawAuth\":{\"accessToken\":\"x\"}}",
+            _ => "{\"tokens\":{}}"
+        };
         var controller = Controller(new SessionRecord
         {
             Id = "session-1", Owner = "alice", CallbackToken = "callback-token",

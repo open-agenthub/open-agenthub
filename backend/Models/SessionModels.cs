@@ -325,4 +325,5 @@ public record CredentialStatus
     public bool ClaudeSubscription { get; init; }
     public bool CodexSubscription { get; init; }
     public bool CursorSubscription { get; init; }
+    public bool OpenclawSubscription { get; init; }
 }

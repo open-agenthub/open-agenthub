@@ -11,6 +11,8 @@ public class ProviderCredentialValidatorTests
     [InlineData(AgentKind.Codex, "{\"tokens\":{\"access_token\":\"x\"}}", true)]
     // Pinned from Cursor Agent CLI file store (auth.json): non-empty accessToken string.
     [InlineData(AgentKind.Cursor, "{\"accessToken\":\"synthetic-test-token-not-real\",\"refreshToken\":\"synthetic-refresh\"}", true)]
+    // PLACEHOLDER: replace openclawAuth marker after file-store discovery in Task 5.
+    [InlineData(AgentKind.OpenClaw, "{\"openclawAuth\":{\"accessToken\":\"x\"}}", true)]
     [InlineData(AgentKind.Claude, "{\"tokens\":{}}", false)]
     [InlineData(AgentKind.Codex, "{\"claudeAiOauth\":{}}", false)]
     [InlineData(AgentKind.Claude, "{\"accessToken\":\"x\"}", false)]
@@ -19,6 +21,8 @@ public class ProviderCredentialValidatorTests
     [InlineData(AgentKind.Cursor, "{\"cursorAuth\":{\"accessToken\":\"x\"}}", false)]
     [InlineData(AgentKind.Cursor, "{}", false)]
     [InlineData(AgentKind.Cursor, "not-json", false)]
+    [InlineData(AgentKind.OpenClaw, "{\"tokens\":{}}", false)]
+    [InlineData(AgentKind.OpenClaw, "{}", false)]
     [InlineData(AgentKind.Codex, "{}", false)]
     [InlineData(AgentKind.Codex, "not-json", false)]
     [InlineData(AgentKind.Codex, "[]", false)]

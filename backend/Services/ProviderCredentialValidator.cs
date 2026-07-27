@@ -30,6 +30,8 @@ public static class ProviderCredentialValidator
                 AgentKind.Cursor => root.TryGetProperty("accessToken", out var token) &&
                     token.ValueKind == JsonValueKind.String &&
                     !string.IsNullOrEmpty(token.GetString()),
+                // PLACEHOLDER until Task 5 runtime discovery of the real OpenClaw auth file shape.
+                AgentKind.OpenClaw => root.TryGetProperty("openclawAuth", out var auth) && auth.ValueKind == JsonValueKind.Object,
                 _ => false
             };
         }
