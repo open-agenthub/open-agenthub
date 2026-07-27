@@ -543,11 +543,11 @@ public sealed class KubernetesSessionService : ISessionService
             {
                 AgentKind.Codex => ("openai_api_key", "auth.json"),
                 AgentKind.Cursor => ("cursor_api_key", "auth.json"),
-                AgentKind.OpenClaw => (OpenClawSelectedApiKeySecretKey(record.OpenClawApiKeySource), "auth.json"),
+                AgentKind.OpenClaw => (AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource), "auth.json"),
                 _ => ("anthropic_api_key", "credentials.json")
             };
             if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
-                hasApiKey = await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
+                hasApiKey = apiKey is not null && await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
             if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
                 hasSubscription = await HasSecretKeyAsync(ProviderSecretName(owner, record.Agent), providerKey, ct);
         }
@@ -662,14 +662,6 @@ public sealed class KubernetesSessionService : ISessionService
         AgentKind.Cursor => $"cursor-{Sanitize(owner)}",
         AgentKind.OpenClaw => $"openclaw-{Sanitize(owner)}",
         _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
-    };
-
-    private static string OpenClawSelectedApiKeySecretKey(OpenClawApiKeySource? source) => source switch
-    {
-        OpenClawApiKeySource.OpenAI => "openai_api_key",
-        OpenClawApiKeySource.Cursor => "cursor_api_key",
-        OpenClawApiKeySource.Anthropic => "anthropic_api_key",
-        _ => "anthropic_api_key"
     };
 
     private static string Sanitize(string owner)

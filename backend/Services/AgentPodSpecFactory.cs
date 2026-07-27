@@ -44,6 +44,33 @@ public sealed record PodBuildContext
 /// <summary>Pure construction of provider- and authentication-specific pod specs.</summary>
 public static class AgentPodSpecFactory
 {
+    public readonly record struct OpenClawApiKeyEnvBinding(string EnvName, string SecretKey);
+
+    /// <summary>Maps a selected OpenClaw API key source to the shared creds secret key, or null when unset.</summary>
+    public static string? TryOpenClawApiKeySecretKey(OpenClawApiKeySource? source) => source switch
+    {
+        OpenClawApiKeySource.Anthropic => "anthropic_api_key",
+        OpenClawApiKeySource.OpenAI => "openai_api_key",
+        OpenClawApiKeySource.Cursor => "cursor_api_key",
+        null => null,
+        _ => throw new ArgumentOutOfRangeException(nameof(source), source, "Unknown OpenClaw API key source.")
+    };
+
+    /// <summary>Env + secret key for an OpenClaw ApiKey session. Throws when source is missing.</summary>
+    public static OpenClawApiKeyEnvBinding OpenClawApiKeyBinding(OpenClawApiKeySource? source)
+    {
+        var secretKey = TryOpenClawApiKeySecretKey(source)
+            ?? throw new ArgumentException("OpenClaw API key source is required for OpenClaw ApiKey authentication.");
+        var envName = source switch
+        {
+            OpenClawApiKeySource.OpenAI => "OPENAI_API_KEY",
+            OpenClawApiKeySource.Cursor => "CURSOR_API_KEY",
+            OpenClawApiKeySource.Anthropic => "ANTHROPIC_API_KEY",
+            _ => throw new ArgumentOutOfRangeException(nameof(source), source, "Unknown OpenClaw API key source.")
+        };
+        return new OpenClawApiKeyEnvBinding(envName, secretKey);
+    }
+
     public static string? MissingCredentialDiagnostic(SessionRecord record, PodBuildContext context)
     {
         if (record.Mode == SessionMode.Interactive) return null;
@@ -188,21 +215,11 @@ public static class AgentPodSpecFactory
                 AddSubscriptionVolume("openclaw", context.OpenClawCredentialSecretName);
                 break;
             case (AgentKind.OpenClaw, AgentAuthMode.ApiKey):
-                switch (record.OpenClawApiKeySource)
-                {
-                    case OpenClawApiKeySource.OpenAI:
-                        AddApiKey("OPENAI_API_KEY", "openai_api_key");
-                        break;
-                    case OpenClawApiKeySource.Cursor:
-                        AddApiKey("CURSOR_API_KEY", "cursor_api_key");
-                        break;
-                    case OpenClawApiKeySource.Anthropic:
-                        AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
-                        break;
-                    default:
-                        throw new ArgumentException("OpenClaw API key source is required for OpenClaw ApiKey authentication.");
-                }
+            {
+                var binding = OpenClawApiKeyBinding(record.OpenClawApiKeySource);
+                AddApiKey(binding.EnvName, binding.SecretKey);
                 break;
+            }
             case (AgentKind.Claude, AgentAuthMode.Auto):
                 AddSubscriptionVolume("claude", context.ClaudeCredentialSecretName);
                 AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
