@@ -1,3 +1,4 @@
+using AgentHub.Api.Agents;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
@@ -44,6 +45,7 @@ public sealed class RemoteController : ControllerBase
         var owner = await ResolveOwnerAsync(ct);
         if (owner is null) return Unauthorized();
         try { return Ok(await _svc.CreateSessionAsync(owner, req, ct)); }
+        catch (AgentNotAllowedException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Message); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
     }
 
