@@ -150,6 +150,24 @@ public sealed class SessionAgentModelTests
     }
 
     [Fact]
+    public void PartialUpdate_OmitsCurrentSourceWhenLeavingOpenClawApiKey()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.ApiKey, AgentKind.Claude, AgentAuthMode.Subscription,
+            currentOpenClawApiKeySource: OpenClawApiKeySource.Anthropic,
+            requestedOpenClawApiKeySource: null);
+    }
+
+    [Fact]
+    public void PartialUpdate_OmitsCurrentSourceWhenSwitchingOpenClawApiKeyToSubscription()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.ApiKey, null, AgentAuthMode.Subscription,
+            currentOpenClawApiKeySource: OpenClawApiKeySource.OpenAI,
+            requestedOpenClawApiKeySource: null);
+    }
+
+    [Fact]
     public void DuplicatedCodexSession_CannotUseAutoAuthentication()
     {
         Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForDuplicatedSession(AgentKind.Codex, AgentAuthMode.Auto));
