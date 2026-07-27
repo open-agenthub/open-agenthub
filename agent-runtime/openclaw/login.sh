@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# OPENCLAW_AUTH_FILE is set by entrypoint (AgentHub-managed auth.json under ~/.openclaw).
-# Interactive login writes OpenClaw's real store (auth-profiles / sqlite); the AgentHub
-# Secret sync still uses the PLACEHOLDER auth.json shape until export is wired.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# OPENCLAW_AUTH_FILE is the AgentHub-managed auth-profiles.json under ~/.openclaw.
+# Interactive login writes OpenClaw's SQLite store; export syncs store_json into that JSON.
 if [ ! -f "${OPENCLAW_AUTH_FILE:-}" ]; then
   openclaw models auth add
+  node "$SCRIPT_DIR/sync-auth-profiles.js" export
 fi
 exec openclaw "$@"

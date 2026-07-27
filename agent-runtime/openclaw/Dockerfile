@@ -9,13 +9,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 # ---- runtime (non-root) ----
 FROM node:22-bookworm-slim
 # Pin discovered from npm registry (stable non-beta) at Task 5 authoring time.
-# Auth discovery notes (re-check on bump):
-#   npm pack openclaw@<ver> && tar xf ...
-#   docs/concepts/oauth.md — auth-profiles.json + openclaw-agent.sqlite paths
-#   dist/runtime-snapshots-*.js — AUTH_PROFILE_FILENAME = "auth-profiles.json"
+# Auth store (OpenClaw 2026.7.1-2):
+#   ~/.openclaw/agents/<agentId>/agent/auth-profiles.json  (logical JSON name)
+#   ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite (canonical; store_json)
 #   Store shape: { version: 1, profiles: {...}, order?: {...} }
-# AgentHub still uses PLACEHOLDER Secret key auth.json + openclawAuth until
-# export/import between that marker and the real store is implemented.
+# AgentHub Secret key + watched file: ~/.openclaw/auth-profiles.json
+# sync-auth-profiles.js imports Secret → agent SQLite and exports SQLite → Secret JSON.
 ARG OPENCLAW_VERSION=2026.7.1-2
 ARG GH_VERSION=2.63.2
 ARG GLAB_VERSION=1.48.0

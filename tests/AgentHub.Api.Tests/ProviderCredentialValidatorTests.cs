@@ -11,8 +11,8 @@ public class ProviderCredentialValidatorTests
     [InlineData(AgentKind.Codex, "{\"tokens\":{\"access_token\":\"x\"}}", true)]
     // Pinned from Cursor Agent CLI file store (auth.json): non-empty accessToken string.
     [InlineData(AgentKind.Cursor, "{\"accessToken\":\"synthetic-test-token-not-real\",\"refreshToken\":\"synthetic-refresh\"}", true)]
-    // PLACEHOLDER: replace openclawAuth marker after file-store discovery in Task 5.
-    [InlineData(AgentKind.OpenClaw, "{\"openclawAuth\":{\"accessToken\":\"x\"}}", true)]
+    // Pinned from OpenClaw 2026.7.1-2 auth-profiles store: { version?, profiles, order? }.
+    [InlineData(AgentKind.OpenClaw, "{\"version\":1,\"profiles\":{\"anthropic:default\":{\"type\":\"api_key\",\"provider\":\"anthropic\",\"key\":\"x\"}}}", true)]
     [InlineData(AgentKind.Claude, "{\"tokens\":{}}", false)]
     [InlineData(AgentKind.Codex, "{\"claudeAiOauth\":{}}", false)]
     [InlineData(AgentKind.Claude, "{\"accessToken\":\"x\"}", false)]
@@ -21,7 +21,9 @@ public class ProviderCredentialValidatorTests
     [InlineData(AgentKind.Cursor, "{\"cursorAuth\":{\"accessToken\":\"x\"}}", false)]
     [InlineData(AgentKind.Cursor, "{}", false)]
     [InlineData(AgentKind.Cursor, "not-json", false)]
+    [InlineData(AgentKind.OpenClaw, "{\"openclawAuth\":{\"accessToken\":\"x\"}}", false)]
     [InlineData(AgentKind.OpenClaw, "{\"tokens\":{}}", false)]
+    [InlineData(AgentKind.OpenClaw, "{\"version\":1,\"profiles\":{}}", false)]
     [InlineData(AgentKind.OpenClaw, "{}", false)]
     [InlineData(AgentKind.Codex, "{}", false)]
     [InlineData(AgentKind.Codex, "not-json", false)]
@@ -43,6 +45,15 @@ public class ProviderCredentialValidatorTests
         var json = "{\"accessToken\":\"" + new string('x', ProviderCredentialValidator.MaxBytes) + "\",\"refreshToken\":\"r\"}";
 
         Assert.False(ProviderCredentialValidator.Validate(AgentKind.Cursor, json));
+    }
+
+    [Fact]
+    public void Validate_RejectsOpenClawPayloadLargerThan64KiB()
+    {
+        var json = "{\"version\":1,\"profiles\":{\"anthropic:default\":{\"type\":\"api_key\",\"provider\":\"anthropic\",\"key\":\"" +
+            new string('x', ProviderCredentialValidator.MaxBytes) + "\"}}}";
+
+        Assert.False(ProviderCredentialValidator.Validate(AgentKind.OpenClaw, json));
     }
 
     [Fact]

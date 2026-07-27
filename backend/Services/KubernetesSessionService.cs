@@ -543,7 +543,7 @@ public sealed class KubernetesSessionService : ISessionService
             {
                 AgentKind.Codex => ("openai_api_key", "auth.json"),
                 AgentKind.Cursor => ("cursor_api_key", "auth.json"),
-                AgentKind.OpenClaw => (AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource), "auth.json"),
+                AgentKind.OpenClaw => (AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource), "auth-profiles.json"),
                 _ => ("anthropic_api_key", "credentials.json")
             };
             if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
