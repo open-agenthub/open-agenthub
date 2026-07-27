@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentHub.Api.Models;
+using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Storage;
 using k8s;
@@ -23,12 +24,14 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly ISessionStore _store;
     private readonly IProjectStore _projects;
     private readonly IArtifactStore _artifacts;
+    private readonly IBrowserService _browsers;
     private readonly IGitAuthService _gitAuth;
     private readonly Usage.UsageLimitService _usageLimits;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
     private readonly bool _s3Insecure;
+    private readonly bool _browserEnabled;
 
     private const string OwnerLabel = "agenthub.dev/owner";
     private const string SessionLabel = "agenthub.dev/session";
@@ -36,19 +39,21 @@ public sealed class KubernetesSessionService : ISessionService
     private static readonly TimeSpan PresignTtl = TimeSpan.FromHours(12);
 
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
-        IArtifactStore artifacts, IGitAuthService gitAuth, Usage.UsageLimitService usageLimits,
-        ILogger<KubernetesSessionService> log)
+        IArtifactStore artifacts, IBrowserService browsers, IGitAuthService gitAuth,
+        Usage.UsageLimitService usageLimits, ILogger<KubernetesSessionService> log)
     {
         _log = log;
         _store = store;
         _projects = projects;
         _artifacts = artifacts;
+        _browsers = browsers;
         _gitAuth = gitAuth;
         _usageLimits = usageLimits;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
         _s3Insecure = cfg.GetValue("S3:InsecureTls", false);
+        _browserEnabled = cfg.GetValue("Browser:Enabled", true);
 
         var config = KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
@@ -242,6 +247,7 @@ public sealed class KubernetesSessionService : ISessionService
             throw new ArgumentException("Scheduled sessions are not resumed; they run on their schedule.");
         await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, ct);
 
+        await _browsers.StopAsync(id, ct);
         await TryDeletePodAsync($"session-{id}", ct);
 
         rec.Status = "Pending";
@@ -274,6 +280,8 @@ public sealed class KubernetesSessionService : ISessionService
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Scheduled sessions cannot be paused; they run on their schedule.");
+
+        await _browsers.StopAsync(id, ct);
 
         // Longer grace than a plain delete so the graceful state upload can finish
         // before the container is killed (the k8s default of 30s is plenty; the
@@ -361,7 +369,8 @@ public sealed class KubernetesSessionService : ISessionService
         _log.LogInformation("Updated session {Id} settings", id);
 
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP);
+        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
+            await _browsers.GetSummaryAsync(id, ct));
     }
 
     private static void ValidateQuantity(string value, string what)
@@ -466,10 +475,12 @@ public sealed class KubernetesSessionService : ISessionService
             if (p.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var sid))
                 byId[sid] = p;
 
+        var browserSummaries = await _browsers.GetSummariesAsync(
+            records.Select(record => record.Id).ToArray(), ct);
         return records.Select(r =>
         {
             byId.TryGetValue(r.Id, out var pod);
-            return ToInfo(r, pod?.Status?.Phase ?? r.Status, pod?.Status?.PodIP);
+            return ToInfo(r, pod?.Status?.Phase ?? r.Status, pod?.Status?.PodIP, browserSummaries[r.Id]);
         }).ToList();
     }
 
@@ -478,7 +489,8 @@ public sealed class KubernetesSessionService : ISessionService
         var rec = await _store.GetAsync(owner, id, ct);
         if (rec is null) return null;
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP);
+        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
+            await _browsers.GetSummaryAsync(id, ct));
     }
 
     public async Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default)
@@ -492,8 +504,11 @@ public sealed class KubernetesSessionService : ISessionService
         if (await _store.GetAsync(owner, id, ct) is null) return null;
         // Prefer S3 (survives DB trimming); fall back to the Postgres-stored
         // scrollback so transcripts work on instances without S3.
-        var fromS3 = await _artifacts.GetTextAsync(IArtifactStore.ScrollbackKey(Sanitize(owner), id), ct);
-        return !string.IsNullOrEmpty(fromS3) ? fromS3 : await _store.GetScrollbackAsync(id, ct);
+        var key = IArtifactStore.ScrollbackKey(Sanitize(owner), id);
+        return await TranscriptReader.ReadAsync(
+            token => _artifacts.GetTextAsync(key, token),
+            token => _store.GetScrollbackAsync(id, token),
+            ct);
     }
 
     public async Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default)
@@ -506,8 +521,10 @@ public sealed class KubernetesSessionService : ISessionService
 
     public async Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default)
     {
-        if (await _store.GetAsync(owner, id, ct) is null)
-            throw new KeyNotFoundException($"Session {id} not found.");
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        await _browsers.StopAsync(id, ct);
+        await _browsers.DeleteStateAsync(rec, ct);
         await TryDeletePodAsync($"session-{id}", ct);
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
@@ -561,6 +578,7 @@ public sealed class KubernetesSessionService : ISessionService
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
+                BrowserEnabled = _browserEnabled,
                 GitCloneImage = _opts.GitCloneImage,
                 ImagePullSecret = _opts.ImagePullSecret,
                 RuntimeClassName = _opts.RuntimeClassName,
@@ -587,7 +605,7 @@ public sealed class KubernetesSessionService : ISessionService
             Type = "Opaque", Data = new Dictionary<string, byte[]> { ["mcp.json"] = Encoding.UTF8.GetBytes(json) }
         }, ct);
 
-    private static SessionInfo ToInfo(SessionRecord r, string phase, string? podIp) => new()
+    private static SessionInfo ToInfo(SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null) => new()
     {
         Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, RepoUrl = r.RepoUrl,
         Repos = ParseRepos(r),
@@ -597,18 +615,26 @@ public sealed class KubernetesSessionService : ISessionService
         Agent = r.Agent, AuthMode = r.AuthMode, Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
-        Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory
+        Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory,
+        Browser = browser ?? BrowserSummary.Stopped
     };
 
-    private V1ObjectMeta Meta(string name, string owner, string id, string component, string? title = null) => new()
+    private V1ObjectMeta Meta(string name, string owner, string id, string component,
+        string? title = null)
     {
-        Name = name, NamespaceProperty = _opts.Namespace,
-        Labels = new Dictionary<string, string>
+        var labels = new Dictionary<string, string>
         {
             [OwnerLabel] = Sanitize(owner), [SessionLabel] = id, [ComponentLabel] = component
-        },
-        Annotations = title is null ? null : new Dictionary<string, string> { ["agenthub.dev/title"] = title }
-    };
+        };
+        return new V1ObjectMeta
+        {
+            Name = name, NamespaceProperty = _opts.Namespace, Labels = labels,
+            Annotations = title is null ? null : new Dictionary<string, string>
+            {
+                ["agenthub.dev/title"] = title
+            }
+        };
+    }
 
     private async Task<V1Pod?> TryReadPodAsync(string name, CancellationToken ct)
     {

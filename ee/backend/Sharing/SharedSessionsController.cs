@@ -5,6 +5,7 @@
 // (see ee/LICENSE); a valid subscription is required for production use.
 // -----------------------------------------------------------------------------
 using AgentHub.Api.Services;
+using AgentHub.Api.Browser;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,7 +14,7 @@ namespace AgentHub.Api.Ee.Sharing;
 [ApiController]
 [AllowAnonymous]
 [Route("api/shared/{token}")]
-public sealed class SharedSessionsController(ISessionAccessService access) : ControllerBase
+public sealed class SharedSessionsController(ISessionAccessService access, IBrowserService? browsers = null) : ControllerBase
 {
     [HttpGet("session")]
     public async Task<ActionResult<SharedSessionInfo>> GetSession(
@@ -21,9 +22,11 @@ public sealed class SharedSessionsController(ISessionAccessService access) : Con
         CancellationToken ct)
     {
         var resolved = await access.ResolveTokenAsync(token, ct);
-        return resolved is null
-            ? NotFound()
-            : Ok(SharedSessionSanitizer.Sanitize(resolved));
+        if (resolved is null) return NotFound();
+        var browser = browsers is null
+            ? BrowserSummary.Stopped
+            : await browsers.GetSummaryAsync(resolved.Session.Id, ct);
+        return Ok(SharedSessionSanitizer.Sanitize(resolved, browser));
     }
 
     [HttpGet("transcript")]

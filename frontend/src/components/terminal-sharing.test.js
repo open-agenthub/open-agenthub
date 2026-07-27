@@ -19,6 +19,8 @@ vi.mock('../api.js', () => ({
   terminalUrl: vi.fn().mockResolvedValue('ws://terminal'),
   shellUrl: vi.fn().mockResolvedValue('ws://shell'),
   sharedTerminalUrl: vi.fn().mockReturnValue('ws://shared'),
+  browserUrl: vi.fn().mockResolvedValue('ws://browser'),
+  sharedBrowserUrl: vi.fn().mockReturnValue('ws://shared-browser'),
   getSharedTranscript: vi.fn().mockResolvedValue('')
 }))
 

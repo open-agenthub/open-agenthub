@@ -62,6 +62,9 @@ shift.
   pod stays unprivileged.
 - **Bring your tools via MCP** — attach any MCP server (issue tracker, database,
   observability) per session and turn the agent into a teammate.
+- **Visible browser on demand** — the built-in `agenthub_browser` MCP starts one isolated
+  Chromium only when the agent needs it. The same desktop appears beside the chat through
+  noVNC, while idle sessions consume no browser CPU or memory.
 - **Community Edition projects and session duplication** — organize sessions into personal projects and duplicate reusable settings into an independent session without copying conversation state or credentials.
 - **Subscription login that sticks** — sign in inside the selected provider container;
   refreshed Claude, Codex, or Cursor file-based authentication is persisted per user in the
@@ -214,15 +217,20 @@ docker build -t $REG/frontend:$TAG ./frontend
 docker build -f agent-runtime/claude/Dockerfile -t $REG/agent-runtime-claude:$TAG ./agent-runtime
 docker build -f agent-runtime/codex/Dockerfile -t $REG/agent-runtime-codex:$TAG ./agent-runtime
 docker build -f agent-runtime/cursor/Dockerfile -t $REG/agent-runtime-cursor:$TAG ./agent-runtime
+docker build -t $REG/browser:$TAG ./browser-runtime
 docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG
 docker push $REG/agent-runtime-claude:$TAG && docker push $REG/agent-runtime-codex:$TAG
 docker push $REG/agent-runtime-cursor:$TAG
+docker push $REG/browser:$TAG
 
 # image.registry/image.tag select all five defaults. Full runtime overrides are
-# agent.images.claude, agent.images.codex, and agent.images.cursor. For a private
-# registry, create the pull secret in BOTH namespaces and set image.pullSecret.
+# agent.images.claude, agent.images.codex, and agent.images.cursor. Browser uses its
+# explicit repository override. For a private registry, create the pull secret in BOTH
+# namespaces and set image.pullSecret.
 helm upgrade --install agenthub helm/open-agenthub -n agenthub --create-namespace \
-  --set image.registry=$REG --set image.tag=$TAG --set postgres.password=<pw>
+  --set image.registry=$REG --set image.tag=$TAG \
+  --set browser.image.repository=$REG/browser --set browser.image.tag=$TAG \
+  --set postgres.password=<pw>
 ```
 
 Plain manifests without Helm are available under [`k8s/`](k8s/) (namespaces, RBAC,
@@ -295,9 +303,10 @@ finishes — enable per device under **Settings → Notifications**.
 ### Docker Desktop Kubernetes development
 
 For a local Kubernetes environment, the setup scripts build backend, frontend, Claude
-runtime, Codex runtime, and Cursor runtime images locally, deploy the agenthub-dev Helm
-release into the agenthub-dev control namespace, and use agenthub-dev-sessions for session
-pods. They refuse to run unless the active kubectl context is docker-desktop.
+runtime, Codex runtime, Cursor runtime, and browser images locally, deploy the
+agenthub-dev Helm release into the agenthub-dev control namespace, and use
+agenthub-dev-sessions for session pods. They refuse to run unless the active kubectl
+context is docker-desktop.
 
 On Windows PowerShell:
 
@@ -343,6 +352,7 @@ as user `dev`.
 |------|----------|
 | `backend/` | ASP.NET Core: REST + WS proxy, K8s orchestration, JWT auth |
 | `agent-runtime/` | Separate Claude, Codex, and Cursor images sharing provider-neutral PTY/WS transport |
+| `browser-runtime/` | Hardened Chromium, Xvfb, VNC, websockify, and cookie checkpoint supervisor |
 | `frontend/` | Vue 3 + Vite + xterm.js, mobile-first |
 | `helm/open-agenthub/` | Helm chart (recommended deployment) |
 | `k8s/` | Plain manifests (namespaces, RBAC, backend, NetworkPolicies) |
@@ -360,8 +370,11 @@ as user `dev`.
 3. The backend creates a **pod** (interactive/autonomous) or a **CronJob** (scheduled).
 4. The shared transport runs `claude`, `codex`, or Cursor's `agent` under a **PTY** and
    serves a WebSocket with **scrollback** — reconnecting from your phone replays the history.
-5. The browser only ever talks to the backend; the **WS proxy** forwards the stream to the
-   pod, authenticated. Pods are unreachable from outside thanks to NetworkPolicies.
+5. The built-in browser MCP is registered automatically. Its first `browser_start` creates
+   one browser pod for that live session; no browser resources exist before the request.
+6. The agent controls Chromium over session-scoped CDP. The authenticated **WS proxy**
+   forwards the same noVNC desktop to the UI, where it appears left of the agent terminal.
+   The UI intentionally has no manual browser start or stop controls.
 
 ## Agents, authentication, and policy
 
@@ -406,6 +419,9 @@ NetworkPolicy isolation remain mandatory.
 - **Least-privilege RBAC**: the backend may only manage exactly the required objects in the
   session namespace; agent pods get **no** API token (`automountServiceAccountToken: false`).
 - **NetworkPolicies**: default-deny; agent egress limited to DNS/HTTP(S)/SSH.
+- **Per-session browser boundary**: lifecycle calls require the callback token and the
+  source IP of the exact Running session pod. Dynamic NetworkPolicies bind CDP to that
+  exact pod IP; browser VNC is reachable only through the backend proxy.
 - **Dedicated PSA namespace** for sessions.
 - Optionally harden further: set `RuntimeClassName` to gVisor/Kata (in `appsettings`/ConfigMap).
 - **Kubernetes Secrets are not encryption by themselves**: their data is base64-encoded.
@@ -435,10 +451,13 @@ No PVCs. Results flow back via `git push` or as artifacts to S3. What is persist
   selected agent, authentication mode, agent conversation identifier, status, policy,
   and callback metadata.
 - **S3/MinIO** = provider-separated state (`claude-state.tgz`, `codex-state.tgz`, or
-  `cursor-state.tgz`), `scrollback.log`, and `artifacts/...`. State archives exclude
-  provider authentication files; authentication restore happens after state restore so
-  stale state cannot replace the current per-user login.
+  `cursor-state.tgz`), `scrollback.log`, `browser-cookies.json`, and `artifacts/...`.
+  State archives exclude provider authentication files; authentication restore happens
+  after state restore so stale state cannot replace the current per-user login.
   Layout: `sessions/{owner-hash}/{sessionId}/...`
+- Browser persistence contains cookies only, not history, downloads, local storage, or a
+  full profile. Treat the object as a credential: enable S3 encryption at rest and strict
+  bucket access. It is removed when the session is deleted and is not copied on duplicate.
 - **No S3 credentials inside the pod**: the backend mints **presigned URLs** (PUT/GET,
   12 h TTL) and injects them as env vars. The agent uploads/downloads via `curl`. For
   arbitrary artifacts the agent calls `POST /internal/sessions/{id}/artifact-url?name=...`
@@ -459,6 +478,9 @@ blinking "waiting for your reply" dot.
 Internal callback endpoints (`/internal/...`) use a per-session callback token (header
 `X-Agent-Token`), no user auth, and are deliberately not routed through the ingress.
 The NetworkPolicy only allows agent egress to the backend.
+
+Browser configuration, trust boundaries, cookie handling, and diagnostics are documented
+in [Browser operation and security](docs/browser-security.md).
 
 ## Assumptions
 

@@ -21,6 +21,10 @@ public interface ISessionAccessStore
     Task<StoredSessionAccess?> FindTokenAccessAsync(
         string token,
         CancellationToken ct = default);
+
+    Task<StoredSessionAccess?> FindTokenAccessReadOnlyAsync(
+        string token,
+        CancellationToken ct = default) => FindTokenAccessAsync(token, ct);
 }
 
 public interface ISessionAccessService
@@ -33,6 +37,10 @@ public interface ISessionAccessService
     Task<SessionAccessResult?> ResolveTokenAsync(
         string token,
         CancellationToken ct = default);
+
+    Task<SessionAccessResult?> ResolveTokenReadOnlyAsync(
+        string token,
+        CancellationToken ct = default) => ResolveTokenAsync(token, ct);
 }
 
 public sealed class SessionAccessService(ISessionAccessStore store, IEnterpriseLicense license)
@@ -73,6 +81,21 @@ public sealed class SessionAccessService(ISessionAccessStore store, IEnterpriseL
         if (stored is null)
             return null;
 
+        var level = SessionAccessRules.Resolve(false, stored.Role);
+        return level == SessionAccessLevel.None
+            ? null
+            : new SessionAccessResult(stored.Session, level, stored.Session.Owner);
+    }
+
+    public async Task<SessionAccessResult?> ResolveTokenReadOnlyAsync(
+        string token,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(token) || !license.Enabled)
+            return null;
+        var stored = await store.FindTokenAccessReadOnlyAsync(token, ct);
+        if (stored is null)
+            return null;
         var level = SessionAccessRules.Resolve(false, stored.Role);
         return level == SessionAccessLevel.None
             ? null

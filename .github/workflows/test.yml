@@ -41,6 +41,10 @@ jobs:
         run: npm ci
       - working-directory: agent-runtime/session-agent
         run: npm test
+      - working-directory: browser-runtime
+        run: npm ci
+      - working-directory: browser-runtime
+        run: npm test
       - name: Build Claude runtime
         run: docker build --file agent-runtime/claude/Dockerfile --tag open-agenthub-dev/agent-runtime-claude:test agent-runtime
       - name: Smoke Claude CLI
@@ -68,6 +72,9 @@ jobs:
       - name: Verify Cursor runtime images
         shell: pwsh
         run: ./tests/helm/cursor-runtime-values.ps1
+      - name: Verify browser values and RBAC
+        shell: pwsh
+        run: ./tests/helm/browser-values.ps1
       - name: Verify deployment parity
         shell: pwsh
         run: ./tests/helm/deployment-parity.ps1
