@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { defaultAgentForm, policyPayload } from '../lib/agent.js'
+import { defaultAgentForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
@@ -106,15 +106,15 @@ async function save() {
               </p>
               <div class="field">
                 <label>Built-in tools and patterns</label>
-                <textarea v-model="f.allowedToolsRaw" data-policy="allowedTools" :placeholder="f.agent === 'Codex' ? 'Read\nEdit' : 'Read\nEdit\nBash(git*)'" />
+                <textarea v-model="f.allowedToolsRaw" data-policy="allowedTools" :placeholder="toolsPlaceholder(f.agent)" />
               </div>
               <div class="field">
                 <label>Full MCP tool names and patterns</label>
                 <textarea v-model="f.allowedMcpToolsRaw" data-policy="allowedMcpTools" placeholder="mcp__docs__search\nmcp__git__*" />
               </div>
-              <div class="field">
+              <div class="field" v-if="f.agent !== 'Cursor'">
                 <label>{{ f.agent === 'Claude' ? 'Exact shell commands' : 'Shell command prefixes' }}</label>
-                <textarea v-model="f.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="f.agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'" />
+                <textarea v-model="f.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="commandsPlaceholder(f.agent)" />
               </div>
             </div>
             <div class="field">

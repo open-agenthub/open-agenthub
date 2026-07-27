@@ -40,7 +40,7 @@ shift.
    Vue 3 + xterm.js            - Auth (OIDC, any provider)              - isolated, unprivileged
                                - Session orchestration                  - git + ssh + selected CLI
                                - WS terminal proxy                      - session-agent (PTY+WS)
-                                                                        - Claude Code or Codex
+                                                                        - Claude Code, Codex, or Cursor
                                                                         - selected secrets/MCP mounted
 ```
 
@@ -49,23 +49,25 @@ shift.
 - **Interactive, autonomous, or scheduled sessions** — watch and answer live, hand off a
   prompt for unattended work, or run recurring jobs as CronJobs. Your agent works the
   night shift.
-- **Claude or Codex per session** — choose the agent and Subscription or API-key billing
-  independently in every mode. Migrated Claude sessions may retain internal legacy
-  `Auto` authentication until explicitly changed; new sessions cannot select it.
+- **Claude, Codex, or Cursor per session** — choose the agent and Subscription or API-key
+  billing independently in every mode. Cursor is a peer agent with the same session
+  modes; it does not use Claude's legacy `Auto` authentication. Migrated Claude sessions
+  may retain internal legacy `Auto` until explicitly changed; new sessions cannot select it.
 - **Supervise from anywhere** — mobile-first web UI with live terminal streaming
   (xterm.js); reconnect from your phone and the scrollback replays.
 - **Bring your own container image** — run the agent inside your project's toolchain
-  image; the selected Claude or Codex runtime, Node, and terminal transport are copied
-  in automatically.
+  image; the selected Claude, Codex, or Cursor runtime, Node, and terminal transport are
+  copied in automatically.
 - **Opt-in root mode** to install tools inside the container (apt, npm -g, …) while the
   pod stays unprivileged.
 - **Bring your tools via MCP** — attach any MCP server (issue tracker, database,
   observability) per session and turn the agent into a teammate.
 - **Community Edition projects and session duplication** — organize sessions into personal projects and duplicate reusable settings into an independent session without copying conversation state or credentials.
 - **Subscription login that sticks** — sign in inside the selected provider container;
-  refreshed Claude or Codex file-based authentication is persisted per user in the
-  background. Codex uses its device-code flow in headless sessions. Host authentication
-  files are never copied into the cluster by the setup scripts.
+  refreshed Claude, Codex, or Cursor file-based authentication is persisted per user in the
+  background. Codex uses its device-code flow in headless sessions; Cursor uses
+  `agent login` with a file-backed credential store. Host authentication files are never
+  copied into the cluster by the setup scripts.
 - **Push notifications** when your agent has a question (via webhook, e.g. n8n → Slack).
 - **Chat integrations** — session updates, replies, and permission approvals from your
   phone via **Telegram or Signal** (free, community) — Slack is part of the Enterprise
@@ -112,12 +114,13 @@ curl -fsSL https://open-agenthub.github.io/install.sh | sh
      --set oidc.audience=<expected-audience>
    ```
 3. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
-   for repo access, plus an Anthropic or OpenAI API key if using API-key billing. These
-   inputs are write-only; status responses expose only stored/not-stored booleans.
-4. **Start your first session**: pick Claude or Codex, Subscription or API key, and a
-   mode (interactive / autonomous / scheduled), plus any repo, custom image, policy, and
-   MCP config. An Interactive Subscription session can complete provider login in its
-   terminal; Codex uses `codex login --device-auth`.
+   for repo access, plus an Anthropic, OpenAI, or Cursor API key if using API-key billing.
+   These inputs are write-only; status responses expose only stored/not-stored booleans.
+4. **Start your first session**: pick Claude, Codex, or Cursor, Subscription or API key,
+   and a mode (interactive / autonomous / scheduled), plus any repo, custom image,
+   policy, and MCP config. An Interactive Subscription session can complete provider
+   login in its terminal; Codex uses `codex login --device-auth`, and Cursor uses
+   `agent login`.
 
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
 [`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3/MinIO
@@ -206,12 +209,14 @@ docker build -f backend/Dockerfile -t $REG/backend:$TAG .
 docker build -t $REG/frontend:$TAG ./frontend
 docker build -f agent-runtime/claude/Dockerfile -t $REG/agent-runtime-claude:$TAG ./agent-runtime
 docker build -f agent-runtime/codex/Dockerfile -t $REG/agent-runtime-codex:$TAG ./agent-runtime
+docker build -f agent-runtime/cursor/Dockerfile -t $REG/agent-runtime-cursor:$TAG ./agent-runtime
 docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG
 docker push $REG/agent-runtime-claude:$TAG && docker push $REG/agent-runtime-codex:$TAG
+docker push $REG/agent-runtime-cursor:$TAG
 
-# image.registry/image.tag select all four defaults. Full runtime overrides are
-# agent.images.claude and agent.images.codex. For a private registry, create the
-# pull secret in BOTH namespaces and set image.pullSecret.
+# image.registry/image.tag select all five defaults. Full runtime overrides are
+# agent.images.claude, agent.images.codex, and agent.images.cursor. For a private
+# registry, create the pull secret in BOTH namespaces and set image.pullSecret.
 helm upgrade --install agenthub helm/open-agenthub -n agenthub --create-namespace \
   --set image.registry=$REG --set image.tag=$TAG --set postgres.password=<pw>
 ```
@@ -286,10 +291,9 @@ finishes — enable per device under **Settings → Notifications**.
 ### Docker Desktop Kubernetes development
 
 For a local Kubernetes environment, the setup scripts build backend, frontend, Claude
-runtime, and Codex runtime images locally, deploy the agenthub-dev Helm release into the
-agenthub-dev control namespace, and use
-agenthub-dev-sessions for session pods. They refuse to run unless the active kubectl
-context is docker-desktop.
+runtime, Codex runtime, and Cursor runtime images locally, deploy the agenthub-dev Helm
+release into the agenthub-dev control namespace, and use agenthub-dev-sessions for session
+pods. They refuse to run unless the active kubectl context is docker-desktop.
 
 On Windows PowerShell:
 
@@ -334,7 +338,7 @@ as user `dev`.
 | Path | Contents |
 |------|----------|
 | `backend/` | ASP.NET Core: REST + WS proxy, K8s orchestration, JWT auth |
-| `agent-runtime/` | Separate Claude and Codex images sharing provider-neutral PTY/WS transport |
+| `agent-runtime/` | Separate Claude, Codex, and Cursor images sharing provider-neutral PTY/WS transport |
 | `frontend/` | Vue 3 + Vite + xterm.js, mobile-first |
 | `helm/open-agenthub/` | Helm chart (recommended deployment) |
 | `k8s/` | Plain manifests (namespaces, RBAC, backend, NetworkPolicies) |
@@ -350,8 +354,8 @@ as user `dev`.
    selected provider. A custom glibc image can receive the selected provider runtime by
    init-container injection; bash, git, and curl are required.
 3. The backend creates a **pod** (interactive/autonomous) or a **CronJob** (scheduled).
-4. The shared transport runs `claude` or `codex` under a **PTY** and serves a WebSocket with
-   **scrollback** — reconnecting from your phone replays the history.
+4. The shared transport runs `claude`, `codex`, or Cursor's `agent` under a **PTY** and
+   serves a WebSocket with **scrollback** — reconnecting from your phone replays the history.
 5. The browser only ever talks to the backend; the **WS proxy** forwards the stream to the
    pod, authenticated. Pods are unreachable from outside thanks to NetworkPolicies.
 
@@ -361,13 +365,15 @@ Agent and billing choices are independent for Interactive, Autonomous, and Sched
 sessions. Subscription mode mounts only the selected provider's writable authentication
 file; a background watcher persists valid login and refresh updates to that user's
 provider-specific Secret. Claude login happens through its normal in-container flow;
-Codex uses device-code authentication. Open AgentHub does not copy a workstation's real
-Claude or Codex authentication files into the cluster.
+Codex uses device-code authentication; Cursor uses `agent login` with
+`AGENT_CLI_CREDENTIAL_STORE=file`. Open AgentHub does not copy a workstation's real
+Claude, Codex, or Cursor authentication files into the cluster.
 
 API-key mode never mounts the subscription Secret. For provider authentication, Claude
 scopes `ANTHROPIC_API_KEY` to the Claude process and its descendants. Codex
 Autonomous/Scheduled runs scope `CODEX_API_KEY` to `codex exec` and its descendants, while
-Interactive Codex creates an ephemeral file login from the key. The shared `/shell`
+Interactive Codex creates an ephemeral file login from the key. Cursor scopes
+`CURSOR_API_KEY` to the Cursor agent process and its descendants. The shared `/shell`
 receives neither provider API key. This selected-only behavior makes the billing source
 deterministic. Subscription avoids API-key billing, but it does not isolate credentials
 from the running agent.
@@ -378,10 +384,12 @@ provider CLI starts when it is unavailable, with a non-secret diagnostic.
 Automation policies default to deny and separately match built-in tools, MCP tool names,
 and shell commands. Claude enforces exact structured shell commands through its native
 allowed-tools mechanism plus AgentHub hooks; Codex matches normalized command prefixes with
-a managed runtime-owned hook and workspace-write sandbox configuration. Interactive sessions
-retain their normal provider approval flow and the existing out-of-band approval path. Hooks
-are guardrails, not a complete sandbox or a secret-isolation boundary; pod, namespace,
-RBAC, and NetworkPolicy isolation remain mandatory.
+a managed runtime-owned hook and workspace-write sandbox configuration; Cursor maps
+structured policy into `~/.cursor/cli-config.json` permission allowlists for Autonomous and
+Scheduled runs. Interactive sessions retain their normal provider approval flow and the
+existing out-of-band approval path. Provider allowlists and hooks are guardrails, not a
+complete container sandbox or a secret-isolation boundary; pod, namespace, RBAC, and
+NetworkPolicy isolation remain mandatory.
 
 ## Security
 
@@ -403,12 +411,12 @@ RBAC, and NetworkPolicy isolation remain mandatory.
 ### Trusted-code credential boundary
 
 Provider credentials and authentication files are accessible to code and tools running
-as the same agent user. Claude and Codex provider-process descendants may inherit the
-selected `ANTHROPIC_API_KEY` or `CODEX_API_KEY`, and subscription sessions can read their
-selected provider auth file. Run only trusted repositories and prompts when credentials
-are present. Use pod and network isolation to limit exposure and blast radius. Writable
-collaborators can direct the selected session's capabilities and are part of the same
-trust boundary.
+as the same agent user. Claude, Codex, and Cursor provider-process descendants may inherit
+the selected `ANTHROPIC_API_KEY`, `CODEX_API_KEY`, or `CURSOR_API_KEY`, and subscription
+sessions can read their selected provider auth file. Run only trusted repositories and
+prompts when credentials are present. Use pod and network isolation to limit exposure and
+blast radius. Writable collaborators can direct the selected session's capabilities and
+are part of the same trust boundary.
 
 Selected-only mounting reduces unnecessary exposure; it does not make provider
 credentials secret from the selected agent or its tools. Root sessions expand the same
@@ -422,10 +430,10 @@ No PVCs. Results flow back via `git push` or as artifacts to S3. What is persist
 - **Postgres** = registry/status (source of truth for the session list), including the
   selected agent, authentication mode, agent conversation identifier, status, policy,
   and callback metadata.
-- **S3/MinIO** = provider-separated state (`claude-state.tgz` or `codex-state.tgz`),
-  `scrollback.log`, and `artifacts/...`. State archives exclude provider authentication
-  files; authentication restore happens after state restore so stale state cannot replace
-  the current per-user login.
+- **S3/MinIO** = provider-separated state (`claude-state.tgz`, `codex-state.tgz`, or
+  `cursor-state.tgz`), `scrollback.log`, and `artifacts/...`. State archives exclude
+  provider authentication files; authentication restore happens after state restore so
+  stale state cannot replace the current per-user login.
   Layout: `sessions/{owner-hash}/{sessionId}/...`
 - **No S3 credentials inside the pod**: the backend mints **presigned URLs** (PUT/GET,
   12 h TTL) and injects them as env vars. The agent uploads/downloads via `curl`. For
@@ -437,7 +445,8 @@ Resume recreates the finished session resource with the same selected provider a
 billing mode, restores only that provider's state, and then restores selected
 authentication. Claude resumes its explicit conversation identifier. Codex resumes the
 restored session-local thread and may fall back once to a fresh thread if state is absent
-or invalid.
+or invalid. Cursor resumes with `--resume` when a chat id is present and may fall back
+once to a fresh launch if that chat is missing.
 
 Provider runtime hooks call the internal notification endpoint when supported; the
 backend sets `question_pending=true` and fires the configured webhook. The UI shows a
@@ -451,11 +460,12 @@ The NetworkPolicy only allows agent egress to the backend.
 
 - **Auth**: any OIDC provider works. Client `agenthub`, claim `preferred_username` as the
   tenant key.
-- **Provider access**: each user supplies their own Claude or Codex subscription login or
-  API key. Open AgentHub does not issue subscriptions, tokens, or provider organization
-  access.
-- **Automation** uses a structured default-deny policy. Native provider controls and
-  managed hooks supplement Kubernetes isolation; they do not replace it.
+- **Provider access**: each user supplies their own Claude, Codex, or Cursor subscription
+  login or API key. Open AgentHub does not issue subscriptions, tokens, or provider
+  organization access.
+- **Automation** uses a structured default-deny policy. Native provider controls,
+  managed hooks, and Cursor `cli-config.json` allowlists supplement Kubernetes isolation;
+  they do not replace it.
 - **Provider CLI contracts** are pinned and tested by the separate runtime images. A
   provider CLI upgrade may require corresponding driver, hook, and resume changes.
 - **S3 path-style** (MinIO). On real AWS, drop `ForcePathStyle`.

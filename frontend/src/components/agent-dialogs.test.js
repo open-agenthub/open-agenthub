@@ -51,6 +51,42 @@ describe('agent-aware session dialogs', () => {
     expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('allowedTools')
   })
 
+  it('creates a Cursor API-key autonomous session', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="Cursor"]').trigger('click')
+    await wrapper.get('[data-auth-option="ApiKey"]').trigger('click')
+    expect(wrapper.find('[data-auth-option="Auto"]').exists()).toBe(false)
+    await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').attributes('placeholder')).toContain('Shell(')
+    expect(wrapper.get('[data-policy="allowedTools"]').attributes('placeholder')).toContain('Read(**)')
+    expect(wrapper.find('[data-policy="allowedCommands"]').exists()).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'Cursor', authMode: 'ApiKey',
+      policy: expect.objectContaining({ allowedCommands: [] })
+    }))
+  })
+
+  it('hides shell command prefixes when editing or duplicating a Cursor session', async () => {
+    const cursorSession = {
+      ...baseSession,
+      agent: 'Cursor',
+      authMode: 'ApiKey',
+      policy: { allowedTools: ['Read(**)'], allowedMcpTools: [], allowedCommands: [] }
+    }
+    const edit = mount(EditSessionDialog, { props: { session: cursorSession, projects: [] }, ...mountOptions })
+    await edit.get('[data-advanced]').trigger('click')
+    expect(edit.get('[data-policy="allowedTools"]').attributes('placeholder')).toContain('Write(')
+    expect(edit.find('[data-policy="allowedCommands"]').exists()).toBe(false)
+
+    const duplicate = mount(DuplicateSessionDialog, { props: { session: cursorSession, projects: [] } })
+    await duplicate.get('[data-advanced]').trigger('click')
+    expect(duplicate.find('[data-policy="allowedCommands"]').exists()).toBe(false)
+    expect(duplicate.find('[data-auth-option="Auto"]').exists()).toBe(false)
+  })
+
   it('creates Claude automation with native MCP rules and exact shell command semantics', async () => {
     const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
@@ -119,6 +155,22 @@ describe('agent-aware session dialogs', () => {
     await wrapper.get('[data-advanced]').trigger('click')
     expect(wrapper.get('[data-policy="allowedTools"]').element.value).not.toContain('Bash(git*)')
     expect(wrapper.get('[data-policy="allowedCommands"]').element.value).toContain('git status')
+  })
+
+  it('resets untouched policy to Cursor defaults when switching from Codex', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="Codex"]').trigger('click')
+    await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Read')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Edit')
+
+    await wrapper.get('[data-agent-option="Cursor"]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Shell(')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Read(**)')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).toContain('Write(**)')
+    expect(wrapper.get('[data-policy="allowedTools"]').element.value).not.toContain('Edit')
+    expect(wrapper.find('[data-policy="allowedCommands"]').exists()).toBe(false)
   })
 
   it('hides automation policy in Interactive but retains it across mode toggles', async () => {
@@ -250,5 +302,26 @@ describe('OpenAI credentials', () => {
     await wrapper.get('[data-clear="openAiApiKey"]').trigger('click')
     await wrapper.get('[data-save-credentials]').trigger('click')
     expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['openAiApiKey'] })
+  })
+})
+
+describe('Cursor credentials', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.getCredentialStatus.mockResolvedValue({ cursorApiKey: true, cursorSubscription: true })
+    mocks.api.storeCredentials.mockResolvedValue(null)
+  })
+
+  it('clears Cursor API key without reading it back', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    const input = wrapper.get('[data-credential="cursorApiKey"]')
+    expect(input.attributes('type')).toBe('password')
+    expect(input.element.value).toBe('')
+    expect(wrapper.find('[data-credential-status="cursorApiKey"]').exists()).toBe(true)
+    expect(wrapper.find('[data-credential-status="cursorSubscription"]').exists()).toBe(true)
+    await wrapper.get('[data-clear="cursorApiKey"]').trigger('click')
+    await wrapper.get('[data-save-credentials]').trigger('click')
+    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['cursorApiKey'] })
   })
 })
