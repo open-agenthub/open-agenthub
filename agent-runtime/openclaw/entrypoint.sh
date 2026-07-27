@@ -14,18 +14,24 @@ mkdir -p "$OPENCLAW_STATE_DIR"
 chmod 700 "$OPENCLAW_STATE_DIR"
 umask 077
 
-# PLACEHOLDER AgentHub credential file (auth.json + openclawAuth).
-# Discovered OpenClaw 2026.7.1-2 model-auth locations (do not invent fields beyond these):
-#   ~/.openclaw/agents/<agentId>/agent/auth-profiles.json  (logical JSON name)
-#   ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite (canonical store)
-# Store object shape: { version: 1, profiles: { ... }, order?: { ... } }.
-# To re-discover after a CLI bump: npm pack openclaw@<ver> && inspect docs/concepts/oauth.md
-# and dist/runtime-snapshots-*.js (AUTH_PROFILE_FILENAME) / dist/openclaw-agent-db.paths-*.js.
-export OPENCLAW_AUTH_FILE="$OPENCLAW_STATE_DIR/auth.json"
+# Default local agent id used by `openclaw tui --local` / `openclaw agent --local --agent main`.
+OPENCLAW_AGENT_ID="${AGENTHUB_OPENCLAW_AGENT_ID:-main}"
+export OPENCLAW_AGENT_DIR="${OPENCLAW_AGENT_DIR:-$OPENCLAW_STATE_DIR/agents/$OPENCLAW_AGENT_ID/agent}"
+mkdir -p "$OPENCLAW_AGENT_DIR"
+chmod 700 "$OPENCLAW_AGENT_DIR"
+
+# AgentHub-managed Secret/watch file (also excluded from state tar via authFilename).
+# OpenClaw runtime loads credentials from OPENCLAW_AGENT_DIR (SQLite store_json);
+# sync-auth-profiles.js bridges that store and this JSON file.
+export OPENCLAW_AUTH_FILE="$OPENCLAW_STATE_DIR/auth-profiles.json"
 export NO_OPEN_BROWSER=1
 
 # State restore always precedes authentication, and archived credentials are never trusted.
-rm -f "$OPENCLAW_AUTH_FILE"
+rm -f "$OPENCLAW_AUTH_FILE" \
+  "$OPENCLAW_AGENT_DIR/auth-profiles.json" \
+  "$OPENCLAW_AGENT_DIR/openclaw-agent.sqlite" \
+  "$OPENCLAW_AGENT_DIR/openclaw-agent.sqlite-wal" \
+  "$OPENCLAW_AGENT_DIR/openclaw-agent.sqlite-shm"
 case "${AGENTHUB_AUTH_MODE:-}" in
 apikey)
   if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${CURSOR_API_KEY:-}" ]; then
@@ -37,16 +43,17 @@ apikey)
 subscription)
   AUTH_EXPECT_CREATE=1
   AUTH_BASELINE_SHA256=""
-  if [ -f /secrets/openclaw/auth.json ]; then
-    cp /secrets/openclaw/auth.json "$OPENCLAW_AUTH_FILE"
+  if [ -f /secrets/openclaw/auth-profiles.json ]; then
+    cp /secrets/openclaw/auth-profiles.json "$OPENCLAW_AUTH_FILE"
     chmod 600 "$OPENCLAW_AUTH_FILE"
+    node "$RUNTIME/openclaw/sync-auth-profiles.js" import
     AUTH_BASELINE_SHA256="$(node -e '
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));
 ' "$OPENCLAW_AUTH_FILE")"
     AUTH_EXPECT_CREATE=0
-    echo "[entrypoint] OpenClaw login restored from secret."
+    echo "[entrypoint] OpenClaw login restored from secret into agents/${OPENCLAW_AGENT_ID}/agent."
   fi
 
   if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then

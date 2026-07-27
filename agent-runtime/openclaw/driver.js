@@ -81,12 +81,9 @@ function isMissingResume(output, exitCode) {
 }
 
 module.exports = {
-  // authFilename: PLACEHOLDER AgentHub Secret key (auth.json + openclawAuth).
-  // OpenClaw 2026.7.1-2 persists model auth under:
-  //   ~/.openclaw/agents/<agentId>/agent/auth-profiles.json (logical JSON name)
-  //   ~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite (canonical store)
-  // Store shape: { version: 1, profiles: { ... }, order?: { ... } }.
-  // Revisit Secret key + ProviderCredentialValidator once export/import is wired.
-  name: 'OpenClaw', stateDir: '.openclaw', authFilename: 'auth.json',
+  // authFilename: AgentHub Secret key + state-tar exclusion under ~/.openclaw/.
+  // Runtime restore also imports into agents/main/agent/ (SQLite + logical JSON)
+  // via sync-auth-profiles.js — see entrypoint.sh.
+  name: 'OpenClaw', stateDir: '.openclaw', authFilename: 'auth-profiles.json',
   buildCommand, isResumeCommand, isMissingResume, prepare
 };

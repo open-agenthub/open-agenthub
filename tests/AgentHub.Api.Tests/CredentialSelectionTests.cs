@@ -66,7 +66,7 @@ public class CredentialSelectionTests
         {
             Id = "session-1", Owner = "alice", CallbackToken = "callback-token",
             Agent = AgentKind.OpenClaw, AuthMode = AgentAuthMode.Subscription
-        }, service, "{\"openclawAuth\":{\"accessToken\":\"synthetic-test-token-not-real\"}}");
+        }, service, "{\"version\":1,\"profiles\":{\"anthropic:default\":{\"type\":\"api_key\",\"provider\":\"anthropic\",\"key\":\"synthetic-key-not-real\"}}}");
 
         var result = await controller.ProviderCredentials("session-1", "openclaw", CancellationToken.None);
 
@@ -91,7 +91,7 @@ public class CredentialSelectionTests
         var body = routeAgent switch
         {
             "cursor" => "{\"accessToken\":\"x\",\"refreshToken\":\"y\"}",
-            "openclaw" => "{\"openclawAuth\":{\"accessToken\":\"x\"}}",
+            "openclaw" => "{\"version\":1,\"profiles\":{\"anthropic:default\":{\"type\":\"api_key\",\"provider\":\"anthropic\",\"key\":\"x\"}}}",
             _ => "{\"tokens\":{}}"
         };
         var controller = Controller(new SessionRecord

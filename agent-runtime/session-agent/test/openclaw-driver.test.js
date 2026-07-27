@@ -18,9 +18,8 @@ function environment(overrides = {}) {
 test('OpenClaw driver exposes the provider state contract', () => {
   assert.equal(driver.name, 'OpenClaw');
   assert.equal(driver.stateDir, '.openclaw');
-  // PLACEHOLDER: AgentHub Secret key remains auth.json until SQLite/auth-profiles sync lands.
-  // Discovered OpenClaw store: agents/<id>/agent/auth-profiles.json (logical) / openclaw-agent.sqlite.
-  assert.equal(driver.authFilename, 'auth.json');
+  // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
+  assert.equal(driver.authFilename, 'auth-profiles.json');
   assert.equal(typeof driver.prepare, 'function');
 });
 
@@ -55,7 +54,8 @@ test('OpenClaw subscription login runs inside the agent PTY before the interacti
   }), false);
 
   const script = fs.readFileSync(loginSh, 'utf8');
-  assert.match(script, /if \[ ! -f "\$\{OPENCLAW_AUTH_FILE:-\}" \]; then\s+openclaw models auth add\s+fi/);
+  assert.match(script, /if \[ ! -f "\$\{OPENCLAW_AUTH_FILE:-\}" \]; then\s+openclaw models auth add\s+node "\$SCRIPT_DIR\/sync-auth-profiles\.js" export\s+fi/);
+  assert.match(script, /sync-auth-profiles\.js" export/);
   assert.match(script, /^exec openclaw "\$@"$/m);
   const entrypoint = fs.readFileSync(path.join(runtimeDir, 'openclaw', 'entrypoint.sh'), 'utf8');
   assert.match(entrypoint, /export AGENTHUB_OPENCLAW_LOGIN=1/);
@@ -181,8 +181,11 @@ test('OpenClaw entrypoint owns state dir, auth mode, watcher, and stale-auth ord
   assert.match(entrypoint, /export AGENTHUB_STATE_DIR=\.openclaw/);
   assert.match(entrypoint, /source "\$COMMON_ENTRYPOINT"/);
   assert.match(entrypoint, /OPENCLAW_STATE_DIR=|HOME\/\.openclaw/);
+  assert.match(entrypoint, /OPENCLAW_AGENT_DIR=.*agents\/.*\/agent/);
+  assert.match(entrypoint, /OPENCLAW_AUTH_FILE=.*auth-profiles\.json/);
   assert.match(entrypoint, /rm -f "\$OPENCLAW_AUTH_FILE"/);
-  assert.match(entrypoint, /\/secrets\/openclaw\/auth\.json/);
+  assert.match(entrypoint, /\/secrets\/openclaw\/auth-profiles\.json/);
+  assert.match(entrypoint, /sync-auth-profiles\.js" import/);
   assert.match(entrypoint, /auth-watcher\.js/);
   assert.match(entrypoint, /AGENTHUB_OPENCLAW_AUTH_EXPECT_CREATE/);
   assert.match(entrypoint, /AGENTHUB_OPENCLAW_AUTH_BASELINE_SHA256/);
@@ -194,7 +197,7 @@ test('OpenClaw entrypoint owns state dir, auth mode, watcher, and stale-auth ord
   assert.ok(entrypoint.indexOf('source "$COMMON_ENTRYPOINT"') <
     entrypoint.indexOf('rm -f "$OPENCLAW_AUTH_FILE"'));
   assert.ok(entrypoint.indexOf('rm -f "$OPENCLAW_AUTH_FILE"') <
-    entrypoint.indexOf('/secrets/openclaw/auth.json'));
+    entrypoint.indexOf('/secrets/openclaw/auth-profiles.json'));
 });
 
 test('OpenClaw image installs CLI and preserves custom-image injection paths', () => {

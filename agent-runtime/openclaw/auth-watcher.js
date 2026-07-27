@@ -2,20 +2,16 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const { exportFromSqlite, validStore } = require('./sync-auth-profiles');
 
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
 
-// PLACEHOLDER: AgentHub Secret shape { openclawAuth: { accessToken } } until
-// OpenClaw auth-profiles.json / openclaw-agent.sqlite export is wired.
+// Pinned from OpenClaw 2026.7.1-2 auth-profiles store (logical JSON / SQLite store_json):
+// { version?: number, profiles: { [id]: credential }, order?: { [provider]: string[] } }
 function validCredential(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > MAX_CREDENTIAL_BYTES) return false;
   try {
-    const value = JSON.parse(buffer.toString('utf8'));
-    return value !== null && !Array.isArray(value) && typeof value === 'object' &&
-      value.openclawAuth !== null && !Array.isArray(value.openclawAuth) &&
-      typeof value.openclawAuth === 'object' &&
-      typeof value.openclawAuth.accessToken === 'string' &&
-      value.openclawAuth.accessToken.length > 0;
+    return validStore(JSON.parse(buffer.toString('utf8')));
   } catch {
     return false;
   }
@@ -26,7 +22,8 @@ function watchCredential(options) {
     source, callbackUrl, callbackToken, intervalMs = 30_000,
     fetchImpl = globalThis.fetch, logger = console,
     fsImpl = fs, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval,
-    unrefTimer = true, expectCreate = false, baselineHash
+    unrefTimer = true, expectCreate = false, baselineHash,
+    exportImpl = exportFromSqlite
   } = options || {};
   if (!source || !callbackUrl || !callbackToken || typeof fetchImpl !== 'function') {
     throw new Error('Credential watcher requires source, callback URL, callback token, and fetch');
@@ -53,6 +50,11 @@ function watchCredential(options) {
 
   async function runPoll() {
     if (stopped) return;
+    // OpenClaw persists to SQLite; export store_json into the watched JSON before each poll.
+    try {
+      if (typeof exportImpl === 'function') exportImpl();
+    } catch { /* best-effort sidecar sync */ }
+
     let body;
     try {
       body = await readBounded();

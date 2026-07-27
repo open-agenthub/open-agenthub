@@ -31,18 +31,23 @@ async function withServer(statuses, run) {
   }
 }
 
-// PLACEHOLDER AgentHub Secret shape until OpenClaw SQLite/auth-profiles sync lands.
-// Discovered CLI store is agents/<id>/agent/auth-profiles.json / openclaw-agent.sqlite
-// with { version, profiles, order? } — not this marker.
+// OpenClaw 2026.7.1-2 auth-profiles store shape (logical JSON / SQLite store_json).
 function fixture(value) {
   return JSON.stringify({
-    openclawAuth: { accessToken: value }
+    version: 1,
+    profiles: {
+      'anthropic:default': {
+        type: 'api_key',
+        provider: 'anthropic',
+        key: 'synthetic-key-' + value
+      }
+    }
   });
 }
 
 test('OpenClaw watcher skips restored content and uploads each later valid change once', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
-  const source = path.join(directory, 'auth.json');
+  const source = path.join(directory, 'auth-profiles.json');
   fs.writeFileSync(source, fixture('restored-token'));
   await withServer([], async (callbackUrl, requests) => {
     const watcher = watchCredential({
@@ -69,7 +74,7 @@ test('OpenClaw watcher skips restored content and uploads each later valid chang
 
 test('OpenClaw watcher uploads a refresh that happens before its delayed first read', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
-  const source = path.join(directory, 'auth.json');
+  const source = path.join(directory, 'auth-profiles.json');
   const restored = fixture('restored-before-watcher');
   const refreshed = fixture('refreshed-before-first-read');
   fs.writeFileSync(source, restored);
@@ -122,7 +127,7 @@ test('OpenClaw watcher uploads a refresh that happens before its delayed first r
 
 test('OpenClaw watcher uploads creation and retries unchanged content after failure', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
-  const source = path.join(directory, 'auth.json');
+  const source = path.join(directory, 'auth-profiles.json');
   const logs = [];
   await withServer([500, 204], async (callbackUrl, requests) => {
     const watcher = watchCredential({
@@ -142,7 +147,7 @@ test('OpenClaw watcher uploads creation and retries unchanged content after fail
 
 test('OpenClaw watcher uploads login created before its first poll when creation was expected', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
-  const source = path.join(directory, 'auth.json');
+  const source = path.join(directory, 'auth-profiles.json');
   await withServer([], async (callbackUrl, requests) => {
     const watcher = watchCredential({
       source,
@@ -165,19 +170,19 @@ test('OpenClaw watcher uploads login created before its first poll when creation
 
 test('OpenClaw watcher rejects invalid shape and content over backend 64 KiB limit', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
-  const source = path.join(directory, 'auth.json');
+  const source = path.join(directory, 'auth-profiles.json');
   await withServer([], async (callbackUrl, requests) => {
     const watcher = watchCredential({
       source, callbackUrl, callbackToken: 'synthetic-callback-token', intervalMs: 60_000
     });
     await watcher.ready;
-    fs.writeFileSync(source, '{"openclawAuth":');
+    fs.writeFileSync(source, '{"profiles":');
     await watcher.poll();
-    fs.writeFileSync(source, JSON.stringify({ unrelated: {} }));
+    fs.writeFileSync(source, JSON.stringify({ openclawAuth: { accessToken: 'x' } }));
     await watcher.poll();
-    fs.writeFileSync(source, JSON.stringify({ openclawAuth: {} }));
+    fs.writeFileSync(source, JSON.stringify({ version: 1, profiles: {} }));
     await watcher.poll();
-    fs.writeFileSync(source, JSON.stringify({ openclawAuth: { accessToken: '' } }));
+    fs.writeFileSync(source, JSON.stringify({ version: 1, profiles: [] }));
     await watcher.poll();
     fs.writeFileSync(source, Buffer.alloc(MAX_CREDENTIAL_BYTES + 1, 0x20));
     await watcher.poll();
