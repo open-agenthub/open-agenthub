@@ -50,6 +50,10 @@ jobs:
       - name: Smoke Codex runtime
         shell: pwsh
         run: ./agent-runtime/session-agent/test/codex-container-smoke.ps1 -Image open-agenthub-dev/agent-runtime-codex:test
+      - name: Build Cursor runtime
+        run: docker build --file agent-runtime/cursor/Dockerfile --tag open-agenthub-dev/agent-runtime-cursor:test agent-runtime
+      - name: Smoke Cursor CLI
+        run: docker run --rm --entrypoint agent open-agenthub-dev/agent-runtime-cursor:test --version
 
   helm:
     runs-on: ubuntu-latest
@@ -61,6 +65,9 @@ jobs:
       - name: Verify rendered runtime images
         shell: pwsh
         run: ./tests/helm/codex-runtime-values.ps1
+      - name: Verify Cursor runtime images
+        shell: pwsh
+        run: ./tests/helm/cursor-runtime-values.ps1
       - name: Verify deployment parity
         shell: pwsh
         run: ./tests/helm/deployment-parity.ps1

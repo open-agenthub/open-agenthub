@@ -29,9 +29,16 @@ public class CredentialSecretFactoryTests
     [Theory]
     [InlineData(AgentKind.Claude, "credentials.json", "auth.json")]
     [InlineData(AgentKind.Codex, "auth.json", "credentials.json")]
+    // Pinned from Cursor Agent CLI file store: auth.json (distinct Secret from Codex).
+    [InlineData(AgentKind.Cursor, "auth.json", "credentials.json")]
     public void ProviderCredentials_WriteOnlyTheMatchingProviderFile(AgentKind agent, string expectedKey, string otherKey)
     {
-        var json = agent == AgentKind.Claude ? "{\"claudeAiOauth\":{}}" : "{\"tokens\":{}}";
+        var json = agent switch
+        {
+            AgentKind.Claude => "{\"claudeAiOauth\":{}}",
+            AgentKind.Codex => "{\"tokens\":{}}",
+            _ => "{\"accessToken\":\"synthetic-test-token-not-real\",\"refreshToken\":\"synthetic-refresh\"}"
+        };
 
         var secret = CredentialSecretFactory.CreateProviderSecret($"{agent}-owner", "sessions", "owner", agent, json);
 
@@ -47,9 +54,24 @@ public class CredentialSecretFactoryTests
         var status = CredentialSecretFactory.CredentialStatus(
             new Dictionary<string, byte[]>(),
             new Dictionary<string, byte[]> { ["credentials.json"] = Encoding.UTF8.GetBytes("secret") },
-            new Dictionary<string, byte[]>());
+            new Dictionary<string, byte[]>(),
+            new Dictionary<string, byte[]> { ["auth.json"] = Encoding.UTF8.GetBytes("secret") });
 
         Assert.True(status.ClaudeSubscription);
         Assert.False(status.CodexSubscription);
+        Assert.True(status.CursorSubscription);
+    }
+
+    [Fact]
+    public void GeneralCredentials_MergeClearAndReportCursorApiKey()
+    {
+        var secret = CredentialSecretFactory.CreateGeneralSecret("creds-owner", "sessions", "owner", null, new UserCredentials
+        {
+            CursorApiKey = "synthetic-cursor-api-key-not-real"
+        });
+
+        Assert.True(secret.Data.ContainsKey("cursor_api_key"));
+        Assert.True(CredentialSecretFactory.CredentialStatus(secret.Data).CursorApiKey);
+        Assert.Equal("cursor_api_key", CredentialSecretFactory.CredentialKey(nameof(UserCredentials.CursorApiKey)));
     }
 }

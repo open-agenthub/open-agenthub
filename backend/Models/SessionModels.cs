@@ -14,7 +14,7 @@ public enum SessionMode
     Scheduled
 }
 
-public enum AgentKind { Claude, Codex }
+public enum AgentKind { Claude, Codex, Cursor }
 public enum AgentAuthMode { Auto, Subscription, ApiKey }
 
 public sealed record AgentPolicy
@@ -64,7 +64,7 @@ public static class AgentConfiguration
 
     private static void ValidateAgent(AgentKind agent)
     {
-        if (agent is not AgentKind.Claude and not AgentKind.Codex)
+        if (agent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor)
             throw new ArgumentException("Unsupported agent kind.");
     }
 
@@ -246,6 +246,7 @@ public record UserCredentials
     public string? GitlabToken { get; init; }
     public string? AnthropicApiKey { get; init; }
     public string? OpenAiApiKey { get; init; }
+    public string? CursorApiKey { get; init; }
     /// <summary>known_hosts entry of the GitLab server (protects against MITM on the first clone).</summary>
     public string? GitKnownHosts { get; init; }
     public string? GitUserName { get; init; }
@@ -263,8 +264,10 @@ public record CredentialStatus
     public bool AnthropicApiKey { get; init; }
     public bool GitKnownHosts { get; init; }
     public bool OpenAiApiKey { get; init; }
+    public bool CursorApiKey { get; init; }
     public bool GitUserName { get; init; }
     public bool GitUserEmail { get; init; }
     public bool ClaudeSubscription { get; init; }
     public bool CodexSubscription { get; init; }
+    public bool CursorSubscription { get; init; }
 }
