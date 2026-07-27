@@ -279,6 +279,10 @@ public sealed class InternalController : ControllerBase
         {
             return Ok(await _svc.CreateSessionAsync(rec.Owner, forced, ct));
         }
+        catch (ArgumentException e)
+        {
+            return BadRequest(e.Message);
+        }
         catch (SessionLimitExceededException e)
         {
             return StatusCode(StatusCodes.Status429TooManyRequests, e.Message);

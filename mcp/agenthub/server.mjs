@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AgentHubClient } from './client.mjs';
+import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
 
 const text = value => ({
@@ -44,12 +45,12 @@ const createSchema = z.object({
 register('session_create', {
   description: 'Create and start an AgentHub session. Default mode is Autonomous.',
   inputSchema: createSchema
-}, async (body) => text(await client.create(body)));
+}, async (body) => text(sanitizeSession(await client.create(body))));
 
 register('session_get', {
   description: 'Get a session by id.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
-}, async ({ id }) => text(await client.get(id)));
+}, async ({ id }) => text(sanitizeSession(await client.get(id))));
 
 register('session_list', {
   description: 'List sessions for the token owner. Optional filters: parentSessionId, phase.',
@@ -57,7 +58,7 @@ register('session_list', {
     parentSessionId: z.string().max(128).optional(),
     phase: z.string().max(64).optional()
   })
-}, async (filters) => text(await client.list(filters)));
+}, async (filters) => text(sanitizeSession(await client.list(filters))));
 
 register('session_wait', {
   description: 'Poll a session until Succeeded or Failed, or until timeout.',
@@ -72,7 +73,7 @@ register('session_wait', {
 register('session_delete', {
   description: 'Delete a session (pod and record). Does not cascade to its children.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
-}, async ({ id }) => text(await client.delete(id)));
+}, async ({ id }) => text(sanitizeSession(await client.delete(id))));
 
 function safeError(error) {
   const message = error instanceof Error ? error.message : '';

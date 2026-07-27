@@ -16,4 +16,5 @@ test('agenthub MCP registers create/get/list/wait/delete tools', () => {
   }
   assert.match(server, /AGENTHUB_URL|AgentHubClient/);
   assert.match(server, /mode:\s*body\.mode\s*\?\?\s*'Autonomous'|mode:\s*z\.[\s\S]*?\.default\('Autonomous'\)/);
+  assert.match(server, /sanitizeSession/);
 });

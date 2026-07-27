@@ -35,3 +35,20 @@ test('waitForSession times out with last phase', async () => {
   assert.equal(result.phase, 'Running');
   assert.equal(result.id, 'c3');
 });
+
+test('waitForSession success omits mcpConfigJson secrets', async () => {
+  const { waitForSession } = await import('../../sessions/wait.mjs');
+  const get = async id => ({
+    id,
+    phase: 'Succeeded',
+    title: 'done',
+    mcpConfigJson: '{"env":{"TOKEN":"leak"}}',
+    podIp: '10.0.0.9'
+  });
+  const result = await waitForSession(get, 'c4', { intervalMs: 1, timeoutMs: 50 });
+  assert.equal(result.timedOut, false);
+  assert.equal(result.phase, 'Succeeded');
+  assert.equal(result.title, 'done');
+  assert.equal(result.mcpConfigJson, undefined);
+  assert.equal(result.podIp, undefined);
+});

@@ -1,0 +1,59 @@
+'use strict';
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+
+test('sanitizeSession omits mcpConfigJson and other secrets', async () => {
+  const { sanitizeSession } = await import('../../sessions/sanitize.mjs');
+  const raw = {
+    id: 's1',
+    title: 'child',
+    owner: 'alice',
+    mode: 'Autonomous',
+    agent: 'Claude',
+    authMode: 'Subscription',
+    phase: 'Running',
+    parentSessionId: 'parent',
+    projectId: 'p1',
+    prompt: 'do work',
+    schedule: null,
+    questionPending: false,
+    createdAt: '2026-07-28T00:00:00Z',
+    hasMcp: true,
+    mcpConfigJson: '{"mcpServers":{"x":{"env":{"TOKEN":"secret"}}}}',
+    podIp: '10.0.0.1',
+    policy: { allow: ['*'] },
+    image: 'custom:latest',
+    cpu: '2',
+    memory: '4Gi',
+    runAsRoot: true,
+    browser: { state: 'running', vncPassword: 'nope' },
+    repos: [{ url: 'https://example.com/r.git', branch: 'main', extra: 'drop' }],
+    callbackToken: 'tok'
+  };
+
+  const safe = sanitizeSession(raw);
+  assert.equal(safe.id, 's1');
+  assert.equal(safe.prompt, 'do work');
+  assert.equal(safe.hasMcp, true);
+  assert.deepEqual(safe.repos, [{ url: 'https://example.com/r.git', branch: 'main' }]);
+  assert.equal(safe.mcpConfigJson, undefined);
+  assert.equal(safe.podIp, undefined);
+  assert.equal(safe.policy, undefined);
+  assert.equal(safe.image, undefined);
+  assert.equal(safe.callbackToken, undefined);
+  assert.equal(safe.browser, undefined);
+  assert.equal(safe.cpu, undefined);
+});
+
+test('sanitizeSession maps lists and delete results', async () => {
+  const { sanitizeSession } = await import('../../sessions/sanitize.mjs');
+  assert.deepEqual(sanitizeSession({ deleted: true }), { deleted: true });
+  const list = sanitizeSession([
+    { id: 'a', phase: 'Running', mcpConfigJson: 'secret' },
+    { id: 'b', phase: 'Failed', mcpConfigJson: 'secret' }
+  ]);
+  assert.equal(list.length, 2);
+  assert.equal(list[0].mcpConfigJson, undefined);
+  assert.equal(list[1].id, 'b');
+});
