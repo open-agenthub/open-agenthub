@@ -17,12 +17,17 @@ namespace AgentHub.Api.Controllers;
 [Route("api/remote")]
 public sealed class RemoteController : ControllerBase
 {
-    private readonly ApiTokenStore _tokens;
+    private readonly Func<string, CancellationToken, Task<string?>> _findOwner;
     private readonly ISessionService _svc;
 
     public RemoteController(ApiTokenStore tokens, ISessionService svc)
+        : this(tokens.FindOwnerByTokenAsync, svc) { }
+
+    /// <summary>Test seam: resolve owner from a plaintext token without Postgres.</summary>
+    public RemoteController(Func<string, CancellationToken, Task<string?>> findOwnerByToken, ISessionService svc)
     {
-        _tokens = tokens; _svc = svc;
+        _findOwner = findOwnerByToken;
+        _svc = svc;
     }
 
     /// <summary>Resolves the bearer token to its owner, or null if missing/invalid.</summary>
@@ -35,7 +40,7 @@ public sealed class RemoteController : ControllerBase
         var token = header[scheme.Length..].Trim();
         if (string.IsNullOrEmpty(token) || !token.StartsWith("oah_", StringComparison.Ordinal)) return null;
 
-        return await _tokens.FindOwnerByTokenAsync(token, ct);
+        return await _findOwner(token, ct);
     }
 
     [HttpPost("sessions")]
@@ -45,6 +50,7 @@ public sealed class RemoteController : ControllerBase
         if (owner is null) return Unauthorized();
         try { return Ok(await _svc.CreateSessionAsync(owner, req, ct)); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
     }
 
     [HttpGet("sessions/{id}")]
@@ -61,5 +67,18 @@ public sealed class RemoteController : ControllerBase
         var owner = await ResolveOwnerAsync(ct);
         if (owner is null) return Unauthorized();
         return Ok(await _svc.ListSessionsAsync(owner, ct));
+    }
+
+    [HttpDelete("sessions/{id}")]
+    public async Task<IActionResult> Delete(string id, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        try
+        {
+            await _svc.DeleteSessionAsync(owner, id, ct);
+            return NoContent();
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
     }
 }
