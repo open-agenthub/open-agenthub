@@ -1,0 +1,87 @@
+#!/usr/bin/env node
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { z } from 'zod';
+import { AgentHubClient } from './client.mjs';
+import { waitForSession } from './wait.mjs';
+
+const text = value => ({
+  content: [{ type: 'text', text: JSON.stringify(value) }]
+});
+
+const client = new AgentHubClient();
+const server = new McpServer({ name: 'agenthub', version: '1.0.0' });
+
+const register = (name, config, handler) => server.registerTool(name, config, async input => {
+  try { return await handler(input ?? {}); }
+  catch (error) {
+    const code = safeError(error);
+    return { content: [{ type: 'text', text: JSON.stringify({ error: code }) }], isError: true };
+  }
+});
+
+const createSchema = z.object({
+  title: z.string().max(256).optional(),
+  prompt: z.string().max(100_000).optional(),
+  mode: z.enum(['Interactive', 'Autonomous', 'Scheduled']).optional().default('Autonomous'),
+  agent: z.enum(['Claude', 'Codex', 'Cursor']).optional(),
+  authMode: z.enum(['Auto', 'Subscription', 'ApiKey']).optional(),
+  repos: z.array(z.object({
+    url: z.string().max(2048),
+    branch: z.string().max(256).optional()
+  })).max(32).optional(),
+  projectId: z.string().max(128).optional(),
+  parentSessionId: z.string().max(128).optional(),
+  schedule: z.string().max(128).optional(),
+  mcpConfigJson: z.string().max(512_000).optional(),
+  policy: z.record(z.string(), z.unknown()).optional(),
+  image: z.string().max(512).optional(),
+  runAsRoot: z.boolean().optional(),
+  cpu: z.string().max(32).optional(),
+  memory: z.string().max(32).optional()
+});
+
+register('session_create', {
+  description: 'Create and start an AgentHub session. Default mode is Autonomous.',
+  inputSchema: createSchema
+}, async (body) => text(await client.create(body)));
+
+register('session_get', {
+  description: 'Get a session by id.',
+  inputSchema: z.object({ id: z.string().min(1).max(128) })
+}, async ({ id }) => text(await client.get(id)));
+
+register('session_list', {
+  description: 'List sessions for the token owner. Optional filters: parentSessionId, phase.',
+  inputSchema: z.object({
+    parentSessionId: z.string().max(128).optional(),
+    phase: z.string().max(64).optional()
+  })
+}, async (filters) => text(await client.list(filters)));
+
+register('session_wait', {
+  description: 'Poll a session until Succeeded or Failed, or until timeout.',
+  inputSchema: z.object({
+    id: z.string().min(1).max(128),
+    timeoutMs: z.number().int().min(1).max(86_400_000).optional(),
+    intervalMs: z.number().int().min(1).max(60_000).optional()
+  })
+}, async ({ id, timeoutMs, intervalMs }) =>
+  text(await waitForSession(sessionId => client.get(sessionId), id, { timeoutMs, intervalMs })));
+
+register('session_delete', {
+  description: 'Delete a session (pod and record). Does not cascade to its children.',
+  inputSchema: z.object({ id: z.string().min(1).max(128) })
+}, async ({ id }) => text(await client.delete(id)));
+
+function safeError(error) {
+  const message = error instanceof Error ? error.message : '';
+  const stable = [
+    'agenthub_not_configured', 'agenthub_invalid_url',
+    'agenthub_response_too_large', 'agenthub_invalid_json'
+  ];
+  return stable.find(code => message.includes(code)) ??
+    (/agenthub_http_\d{3}/.exec(message)?.[0]) ?? 'agenthub_operation_failed';
+}
+
+await server.connect(new StdioServerTransport());

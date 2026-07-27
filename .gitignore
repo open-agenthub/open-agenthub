@@ -6,6 +6,7 @@ backend/obj/
 frontend/node_modules/
 frontend/dist/
 agent-runtime/session-agent/node_modules/
+mcp/agenthub/node_modules/
 
 # Local environment-specific deployment values (registries, hosts, secrets)
 deploy/
