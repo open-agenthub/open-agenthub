@@ -57,7 +57,9 @@ public static class AgentConfiguration
 
         var agent = requestedAgent ?? currentAgent;
         var authMode = requestedAuthMode ?? currentAuthMode;
-        var openClawApiKeySource = requestedOpenClawApiKeySource ?? currentOpenClawApiKeySource;
+        var openClawApiKeySource = agent == AgentKind.OpenClaw && authMode == AgentAuthMode.ApiKey
+            ? requestedOpenClawApiKeySource ?? currentOpenClawApiKeySource
+            : requestedOpenClawApiKeySource;
 
         // Source-only updates keep the current agent/auth pair (including migrated Auto).
         if (requestedAgent is not null || requestedAuthMode is not null)
