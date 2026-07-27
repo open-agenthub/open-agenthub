@@ -8,6 +8,8 @@ createSessionsNamespace: true
 # Soft limit on concurrent non-terminal sessions per owner
 # (Pending | Running | Paused | Scheduled). Exceeding returns 429 on create.
 maxRunningSessionsPerOwner: 20
+# Inject in-pod agenthub_sessions MCP and enable internal spawn endpoints.
+spawnMcpEnabled: true
 
 image:
   # Base path; component images use {registry}/{component}:{tag}. The agent runtime

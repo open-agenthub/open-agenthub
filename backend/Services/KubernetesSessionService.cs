@@ -32,6 +32,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly string _callbackBaseUrl;
     private readonly bool _s3Insecure;
     private readonly bool _browserEnabled;
+    private readonly bool _spawnMcpEnabled;
     private readonly int _maxRunningSessionsPerOwner;
 
     private const string OwnerLabel = "agenthub.dev/owner";
@@ -55,6 +56,7 @@ public sealed class KubernetesSessionService : ISessionService
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
         _s3Insecure = cfg.GetValue("S3:InsecureTls", false);
         _browserEnabled = cfg.GetValue("Browser:Enabled", true);
+        _spawnMcpEnabled = cfg.GetValue("AgentHub:SpawnMcpEnabled", true);
         _maxRunningSessionsPerOwner = SessionSoftLimit.NormalizeMax(
             cfg.GetValue("AgentHub:MaxRunningSessionsPerOwner", SessionSoftLimit.DefaultMax));
 
@@ -583,6 +585,7 @@ public sealed class KubernetesSessionService : ISessionService
             {
                 AgentPort = _opts.AgentPort,
                 BrowserEnabled = _browserEnabled,
+                SpawnMcpEnabled = _spawnMcpEnabled,
                 GitCloneImage = _opts.GitCloneImage,
                 ImagePullSecret = _opts.ImagePullSecret,
                 RuntimeClassName = _opts.RuntimeClassName,
@@ -718,4 +721,6 @@ public sealed class AgentHubOptions
     /// <summary>Max concurrent non-terminal sessions per owner (Pending|Running|Paused|Scheduled).
     /// Values &lt;= 0 are treated as the default (20).</summary>
     public int MaxRunningSessionsPerOwner { get; set; } = SessionSoftLimit.DefaultMax;
+    /// <summary>Inject the in-pod agenthub_sessions MCP and allow internal spawn.</summary>
+    public bool SpawnMcpEnabled { get; set; } = true;
 }

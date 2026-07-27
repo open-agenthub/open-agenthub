@@ -291,6 +291,44 @@ public class AgentPodSpecFactoryTests
         Assert.Contains(Assert.Single(pod.Containers).Env,
             env => env.Name == "AGENTHUB_BROWSER_ENABLED" && env.Value == "0");
     }
+
+    [Fact]
+    public void Build_InjectsSpawnMcpFlagFromRuntimeSettings()
+    {
+        var context = Context() with { Runtime = Context().Runtime with { SpawnMcpEnabled = true } };
+        var request = new CreateSessionRequest
+        {
+            Agent = AgentKind.Claude,
+            AuthMode = AgentAuthMode.Subscription,
+            Mode = SessionMode.Interactive
+        };
+
+        var pod = AgentPodSpecFactory.Build(
+            Record(request.Agent, request.AuthMode, request.Mode), request, context);
+
+        Assert.Contains(Assert.Single(pod.Containers).Env,
+            env => env.Name == "AGENTHUB_SPAWN_MCP_ENABLED" && env.Value == "1");
+    }
+
+    [Fact]
+    public void Build_DisablesSpawnMcpForScheduledJobs()
+    {
+        var context = Context() with { Runtime = Context().Runtime with { SpawnMcpEnabled = true } };
+        var request = new CreateSessionRequest
+        {
+            Agent = AgentKind.Claude,
+            AuthMode = AgentAuthMode.Subscription,
+            Mode = SessionMode.Scheduled,
+            Prompt = "test",
+            Schedule = "0 6 * * *"
+        };
+
+        var pod = AgentPodSpecFactory.Build(
+            Record(request.Agent, request.AuthMode, request.Mode), request, context);
+
+        Assert.Contains(Assert.Single(pod.Containers).Env,
+            env => env.Name == "AGENTHUB_SPAWN_MCP_ENABLED" && env.Value == "0");
+    }
     private static V1PodSpec Build(AgentKind agent, AgentAuthMode auth,
         Func<CreateSessionRequest, CreateSessionRequest>? customize = null)
     {

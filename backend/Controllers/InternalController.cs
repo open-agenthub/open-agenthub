@@ -30,15 +30,19 @@ public sealed class InternalController : ControllerBase
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly ISessionMcpPolicyReader _shares;
     private readonly IBrowserService? _browsers;
+    private readonly bool _spawnMcpEnabled;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares,
-        IBrowserService? browsers = null)
+        IBrowserService? browsers = null, bool? spawnMcpEnabled = null, IConfiguration? configuration = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
         _browsers = browsers;
+        _spawnMcpEnabled = spawnMcpEnabled
+            ?? configuration?.GetValue("AgentHub:SpawnMcpEnabled", true)
+            ?? true;
     }
 
     private async Task NotifyAllAsync(SessionRecord rec, string ev, string message, CancellationToken ct)
@@ -265,6 +269,8 @@ public sealed class InternalController : ControllerBase
     [HttpPost("spawn")]
     public async Task<IActionResult> Spawn(string id, [FromBody] CreateSessionRequest req, CancellationToken ct)
     {
+        if (!_spawnMcpEnabled) return NotFound();
+
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
 
