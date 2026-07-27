@@ -27,11 +27,12 @@ export OPENCLAW_AUTH_FILE="$OPENCLAW_STATE_DIR/auth-profiles.json"
 export NO_OPEN_BROWSER=1
 
 # State restore always precedes authentication, and archived credentials are never trusted.
+# Scrub AgentHub root auth file and every nested agent-store credential path.
 rm -f "$OPENCLAW_AUTH_FILE" \
-  "$OPENCLAW_AGENT_DIR/auth-profiles.json" \
-  "$OPENCLAW_AGENT_DIR/openclaw-agent.sqlite" \
-  "$OPENCLAW_AGENT_DIR/openclaw-agent.sqlite-wal" \
-  "$OPENCLAW_AGENT_DIR/openclaw-agent.sqlite-shm"
+  "$OPENCLAW_STATE_DIR"/agents/*/agent/auth-profiles.json \
+  "$OPENCLAW_STATE_DIR"/agents/*/agent/openclaw-agent.sqlite \
+  "$OPENCLAW_STATE_DIR"/agents/*/agent/openclaw-agent.sqlite-wal \
+  "$OPENCLAW_STATE_DIR"/agents/*/agent/openclaw-agent.sqlite-shm
 case "${AGENTHUB_AUTH_MODE:-}" in
 apikey)
   if [ -z "${ANTHROPIC_API_KEY:-}" ] && [ -z "${OPENAI_API_KEY:-}" ] && [ -z "${CURSOR_API_KEY:-}" ]; then
