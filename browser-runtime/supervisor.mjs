@@ -12,6 +12,8 @@ export const MAX_VIEWPORT = { width: 2560, height: 1600 };
 const DEFAULT_MAX_BYTES = 1_048_576;
 const REQUEST_TIMEOUT_MS = 10_000;
 const SHUTDOWN_TIMEOUT_MS = 45_000;
+const VIEWPORT_WINDOW_RETRY_ATTEMPTS = 40;
+const VIEWPORT_WINDOW_RETRY_DELAY_MS = 100;
 const ALLOWED_SAME_SITE = new Set(['Strict', 'Lax', 'None']);
 class ViewportRequestError extends Error {}
 
@@ -65,6 +67,7 @@ export class BrowserSupervisor {
     this.setInterval = options.setInterval ?? globalThis.setInterval;
     this.clearInterval = options.clearInterval ?? globalThis.clearInterval;
     this.execFile = options.execFile ?? execFile;
+    this.sleep = options.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
     this.resizeTail = Promise.resolve();
     this.context = options.context;
     this.browser = options.browser;
@@ -82,18 +85,37 @@ export class BrowserSupervisor {
   }
 
   async resizeViewportOnce({ width, height }) {
-    await this.execFile('xrandr', ['--display', ':99', '--fb', `${width}x${height}`]);
+    try {
+      await this.execFile('xrandr', ['--display', ':99', '--fb', `${width}x${height}`]);
+    } catch (error) {
+      let stdout = '';
+      try {
+        ({ stdout = '' } = await this.execFile('xrandr', ['--display', ':99', '--current']));
+      } catch {
+        throw error;
+      }
+      const current = /\bcurrent\s+(\d+)\s+x\s+(\d+)\b/.exec(stdout);
+      if (!current || Number(current[1]) !== width || Number(current[2]) !== height)
+        throw error;
+    }
     const page = this.context?.pages?.()[0];
     if (!page) throw new Error('Chromium did not expose a page for viewport resize');
-    const session = await this.context.newCDPSession(page);
-    try {
-      const { windowId } = await session.send('Browser.getWindowForTarget');
-      await session.send('Browser.setWindowBounds', {
-        windowId,
-        bounds: { left: 0, top: 0, width, height, windowState: 'normal' },
-      });
-    } finally {
-      await session.detach();
+    for (let attempt = 0; ; attempt += 1) {
+      let session;
+      try {
+        session = await this.context.newCDPSession(page);
+        const { windowId } = await session.send('Browser.getWindowForTarget');
+        await session.send('Browser.setWindowBounds', {
+          windowId,
+          bounds: { left: 0, top: 0, width, height, windowState: 'normal' },
+        });
+        return;
+      } catch (error) {
+        if (attempt >= VIEWPORT_WINDOW_RETRY_ATTEMPTS - 1) throw error;
+      } finally {
+        await session?.detach().catch(() => undefined);
+      }
+      await this.sleep(VIEWPORT_WINDOW_RETRY_DELAY_MS);
     }
   }
 
@@ -113,6 +135,8 @@ export class BrowserSupervisor {
       await this.resizeViewport(viewport.width, viewport.height);
       response.writeHead(204);
     } catch (error) {
+      if (!(error instanceof SyntaxError) && !(error instanceof ViewportRequestError))
+        diagnostic('viewport resize failed', error);
       response.writeHead(error instanceof SyntaxError || error instanceof ViewportRequestError ? 400 : 500);
     }
     response.end();
