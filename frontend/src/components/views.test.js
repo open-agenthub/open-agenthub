@@ -162,6 +162,59 @@ describe('TerminalView session identity', () => {
     expect(wrapper.find('.meta').text()).toContain('Cursor')
     expect(wrapper.find('.meta').text()).toContain('Subscription')
   })
+
+  it('renders the chat pane instead of the terminal for chat sessions and drops the Transcript tab', () => {
+    const stubs = { TerminalPane: true, ChatPane: true, ShareSessionDialog: true }
+    const chat = mount(TerminalView, {
+      props: { session: { id: 'c1', title: 'Chat', phase: 'Running', mode: 'Interactive', agent: 'Claude', uiMode: 'chat' } },
+      global: { stubs }
+    })
+    expect(chat.findComponent({ name: 'ChatPane' }).exists()).toBe(true)
+    expect(chat.findComponent({ name: 'TerminalPane' }).exists()).toBe(false)
+    expect(chat.findAll('.tabs button').map(b => b.text())).not.toContain('Transcript')
+
+    const terminal = mount(TerminalView, { props: { session: sessions[0] }, global: { stubs } })
+    expect(terminal.findComponent({ name: 'TerminalPane' }).exists()).toBe(true)
+    expect(terminal.findComponent({ name: 'ChatPane' }).exists()).toBe(false)
+    expect(terminal.findAll('.tabs button').map(b => b.text())).toContain('Transcript')
+  })
+})
+
+import NewSessionDialog from './NewSessionDialog.vue'
+
+describe('NewSessionDialog interface choice', () => {
+  const mountDialog = () => mount(NewSessionDialog, {
+    props: { embedded: true },
+    global: { stubs: { RepoPicker: true, AgentDecisionCard: true } }
+  })
+
+  it('offers Terminal/Chat only for interactive Claude sessions', async () => {
+    const wrapper = mountDialog()
+    expect(wrapper.findAll('[data-ui-mode-option]').map(b => b.text())).toEqual(['Terminal', 'Chat'])
+
+    const autonomous = wrapper.findAll('[data-mode-option]').find(b => b.text() === 'Autonomous')
+    await autonomous.trigger('click')
+    expect(wrapper.findAll('[data-ui-mode-option]')).toHaveLength(0)
+  })
+
+  it('submits the chosen uiMode and resets it when chat becomes unavailable', async () => {
+    mocks.api.createSession = vi.fn().mockResolvedValue({ id: 'new' })
+    const wrapper = mountDialog()
+    const chatChip = wrapper.findAll('[data-ui-mode-option]').find(b => b.text() === 'Chat')
+    await chatChip.trigger('click')
+    await wrapper.find('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.createSession.mock.calls[0][0].uiMode).toBe('chat')
+
+    await chatChip.trigger('click')
+    const autonomous = wrapper.findAll('[data-mode-option]').find(b => b.text() === 'Autonomous')
+    await autonomous.trigger('click')
+    const interactive = wrapper.findAll('[data-mode-option]').find(b => b.text() === 'Interactive')
+    await interactive.trigger('click')
+    await wrapper.find('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.createSession.mock.calls[1][0].uiMode).toBe('terminal')
+  })
 })
 
 import CredentialsDialog from './CredentialsDialog.vue'
