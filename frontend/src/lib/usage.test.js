@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatTokens, formatTokensExact, formatCost, totalTokens, percent } from './usage.js'
+import { formatApproxCost, formatTokens, formatTokensExact, formatCost, sessionCost, totalTokens, percent } from './usage.js'
 
 describe('formatTokens', () => {
   it('keeps small numbers exact', () => {
@@ -44,6 +44,30 @@ describe('totalTokens', () => {
   it('handles missing fields and null', () => {
     expect(totalTokens({ inputTokens: 10 })).toBe(10)
     expect(totalTokens(null)).toBe(0)
+  })
+})
+
+describe('sessionCost', () => {
+  it('shows the real reported cost for API-billed rows', () => {
+    expect(sessionCost({ apiBilled: true, costUsd: 1.25, estimatedCostUsd: 2 }))
+      .toEqual({ usd: 1.25, approx: false })
+  })
+  it('shows the estimate, marked approximate, for subscription rows', () => {
+    expect(sessionCost({ apiBilled: false, costUsd: 0, estimatedCostUsd: 3.5 }))
+      .toEqual({ usd: 3.5, approx: true })
+  })
+  it('falls back to costUsd>0 when the apiBilled flag is missing (old rows)', () => {
+    expect(sessionCost({ costUsd: 0.4 })).toEqual({ usd: 0.4, approx: false })
+    expect(sessionCost({ costUsd: 0, estimatedCostUsd: 1 })).toEqual({ usd: 1, approx: true })
+  })
+  it('handles null rows', () => {
+    expect(sessionCost(null)).toEqual({ usd: 0, approx: false })
+  })
+})
+
+describe('formatApproxCost', () => {
+  it('prefixes the cost with a tilde', () => {
+    expect(formatApproxCost(1.5)).toBe('~$1.50')
   })
 })
 

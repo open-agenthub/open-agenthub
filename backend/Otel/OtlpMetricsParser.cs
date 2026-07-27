@@ -1,5 +1,14 @@
 namespace AgentHub.Api.Otel;
 
+/// <summary>Token counts for one model within a session's OTLP export.</summary>
+public sealed class ModelTokenUsage
+{
+    public long InputTokens { get; set; }
+    public long OutputTokens { get; set; }
+    public long CacheReadTokens { get; set; }
+    public long CacheCreationTokens { get; set; }
+}
+
 /// <summary>Token/cost usage extracted for a single session from one OTLP export.</summary>
 public sealed class SessionUsageDelta
 {
@@ -11,6 +20,13 @@ public sealed class SessionUsageDelta
     public long CacheReadTokens { get; set; }
     public long CacheCreationTokens { get; set; }
     public double CostUsd { get; set; }
+
+    /// <summary>
+    /// Token counts grouped by the <c>model</c> data-point attribute. Tokens without a model
+    /// attribute are keyed under "". Used to estimate what the tokens WOULD have cost on the
+    /// API (Claude Code reports cost 0 for subscription sessions).
+    /// </summary>
+    public Dictionary<string, ModelTokenUsage> ModelTokens { get; } = new(StringComparer.Ordinal);
 
     public bool HasData =>
         InputTokens != 0 || OutputTokens != 0 || CacheReadTokens != 0 ||
@@ -47,6 +63,7 @@ public static class OtlpMetricsParser
     private static readonly string[] SessionIdKeys = { "agenthub.session_id", "session.id" };
     private static readonly string[] UserIdKeys = { "agenthub.owner", "user.id" };
     private const string TypeKey = "type";
+    private const string ModelKey = "model";
 
     private static string? Pick(Dictionary<string, string> attrs, string[] keys)
     {
@@ -189,12 +206,15 @@ public static class OtlpMetricsParser
 
         // token metric: value is (usually) an integer count; route by the `type` attribute.
         long tokens = asInt ?? (long)Math.Round(asDouble ?? 0);
+        var model = attrs.GetValueOrDefault(ModelKey, "");
+        if (!delta.ModelTokens.TryGetValue(model, out var perModel))
+            delta.ModelTokens[model] = perModel = new ModelTokenUsage();
         switch (attrs.GetValueOrDefault(TypeKey))
         {
-            case "input": delta.InputTokens += tokens; break;
-            case "output": delta.OutputTokens += tokens; break;
-            case "cacheRead": delta.CacheReadTokens += tokens; break;
-            case "cacheCreation": delta.CacheCreationTokens += tokens; break;
+            case "input": delta.InputTokens += tokens; perModel.InputTokens += tokens; break;
+            case "output": delta.OutputTokens += tokens; perModel.OutputTokens += tokens; break;
+            case "cacheRead": delta.CacheReadTokens += tokens; perModel.CacheReadTokens += tokens; break;
+            case "cacheCreation": delta.CacheCreationTokens += tokens; perModel.CacheCreationTokens += tokens; break;
             // Unknown/absent type: ignore rather than mis-bucket.
         }
     }

@@ -24,6 +24,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IProjectStore _projects;
     private readonly IArtifactStore _artifacts;
     private readonly IGitAuthService _gitAuth;
+    private readonly Usage.UsageLimitService _usageLimits;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -35,13 +36,15 @@ public sealed class KubernetesSessionService : ISessionService
     private static readonly TimeSpan PresignTtl = TimeSpan.FromHours(12);
 
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
-        IArtifactStore artifacts, IGitAuthService gitAuth, ILogger<KubernetesSessionService> log)
+        IArtifactStore artifacts, IGitAuthService gitAuth, Usage.UsageLimitService usageLimits,
+        ILogger<KubernetesSessionService> log)
     {
         _log = log;
         _store = store;
         _projects = projects;
         _artifacts = artifacts;
         _gitAuth = gitAuth;
+        _usageLimits = usageLimits;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
@@ -114,6 +117,7 @@ public sealed class KubernetesSessionService : ISessionService
         ValidateQuantity(req.Cpu, "cpu");
         ValidateQuantity(req.Memory, "memory");
         await ValidateProjectAsync(owner, req.ProjectId, ct);
+        await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
 
         var repos = NormalizeRepos(req);
         var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
@@ -195,6 +199,15 @@ public sealed class KubernetesSessionService : ISessionService
             throw new ArgumentException("Project not found.");
     }
 
+    // Monthly API-budget gate. Auto-mode sessions only bill the API when no Claude
+    // subscription login is stored, so the stored-login check decides whether Auto counts.
+    private async Task EnforceUsageLimitAsync(string owner, AgentKind agent, AgentAuthMode authMode, CancellationToken ct)
+    {
+        var hasSubscription = agent == AgentKind.Claude &&
+            await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Claude), ct) is not null;
+        await _usageLimits.EnsureCanStartAsync(owner, agent, authMode, hasSubscription, ct);
+    }
+
     // Assigns each repo a workspace subdirectory. A single repo keeps the legacy
     // "/workspace/repo" path; multiple repos use their sanitized names (deduped).
     private static IEnumerable<(RepoRef repo, string dest)> DestFor(List<RepoRef> repos)
@@ -226,6 +239,7 @@ public sealed class KubernetesSessionService : ISessionService
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Scheduled sessions are not resumed; they run on their schedule.");
+        await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, ct);
 
         await TryDeletePodAsync($"session-{id}", ct);
 

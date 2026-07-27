@@ -5,6 +5,7 @@ import AccountDialog from './AccountDialog.vue'
 import CredentialsDialog from './CredentialsDialog.vue'
 import SettingsDialog from './SettingsDialog.vue'
 import AdminView from './AdminView.vue'
+import AdminLimitsView from './AdminLimitsView.vue'
 import { initials } from '../lib/text.js'
 
 defineEmits(['close'])
@@ -23,6 +24,7 @@ const personalTabs = computed(() => [
 
 const adminTabs = [
   { key: 'users', label: 'Users & seats' },
+  { key: 'limits', label: 'Usage limits & groups' },
   { key: 'billing', label: 'Billing & invoices' },
   { key: 'license', label: 'License' }
 ]
@@ -66,6 +68,7 @@ const active = ref(props.initialTab)
       <SettingsDialog v-else-if="active === 'notifications'" embedded section="notifications" />
       <SettingsDialog v-else-if="active === 'tokens'" embedded section="tokens" />
       <AdminView v-else-if="active === 'users'" embedded section="seats" />
+      <AdminLimitsView v-else-if="active === 'limits'" embedded />
       <AdminView v-else-if="active === 'billing'" embedded section="billing" />
       <AdminView v-else-if="active === 'license'" embedded section="license" />
     </div>

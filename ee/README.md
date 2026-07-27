@@ -29,6 +29,14 @@ subscription for production use.
   enforced before tool execution.
 - **Owner-only controls** — sharing does not grant shell access, settings, project,
   duplication, lifecycle, or sharing-management permissions.
+- **Org-wide usage limits** ✅ — admins set monthly API budgets globally, per user
+  group, or per user (the strictest limit wins; personal limits from the Community
+  Edition still apply on top). Sources under [`backend/Usage/`](./backend/Usage);
+  managed in *Settings → Usage limits & groups*.
+- **Groups & roles from OAuth** ✅ — user groups are read from the OIDC token's
+  groups claim (configurable via `Ee:Groups:Claim`) and can be mapped to roles:
+  members of an **admin** group get admin access without listing each username in
+  `Ee:Admins`. Sources under [`backend/Identity/`](./backend/Identity).
 ## Subscription
 
 Using the Enterprise Edition in production requires a valid

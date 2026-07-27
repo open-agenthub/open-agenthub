@@ -32,7 +32,11 @@ const subline = computed(() => {
   const parts = []
   parts.push(`${running.value.length} running`)
   if (paused.value.length) parts.push(`${paused.value.length} paused`)
-  if (summary.value) parts.push(`${formatCost(summary.value.costUsd)} spent so far`)
+  if (summary.value) {
+    parts.push(`${formatCost(summary.value.apiCostUsd ?? summary.value.costUsd)} API spend so far`)
+    if (summary.value.subscriptionEstimatedCostUsd > 0)
+      parts.push(`~${formatCost(summary.value.subscriptionEstimatedCostUsd)} covered by subscription`)
+  }
   return parts.join(' · ')
 })
 const topSpend = computed(() => {
@@ -65,7 +69,7 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
       <div class="stats-col">
         <div class="stat-row">
           <div class="stat card"><div class="stat-label">Running now</div><div class="stat-value">{{ running.length }}</div></div>
-          <div class="stat card click" @click="$emit('usage')"><div class="stat-label">Total cost</div><div class="stat-value">{{ summary ? formatCost(summary.costUsd) : '—' }}</div></div>
+          <div class="stat card click" @click="$emit('usage')"><div class="stat-label">API cost</div><div class="stat-value">{{ summary ? formatCost(summary.apiCostUsd ?? summary.costUsd) : '—' }}</div><div v-if="summary && summary.subscriptionEstimatedCostUsd > 0" class="stat-note">+ ~{{ formatCost(summary.subscriptionEstimatedCostUsd) }} subscription value</div></div>
         </div>
         <div class="card spend click" @click="$emit('usage')">
           <div class="spend-head"><span>Top spend by session</span><span class="more">Usage →</span></div>
@@ -114,6 +118,7 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
 .stat { padding: 15px 17px; }
 .stat-label { font-size: 12px; color: var(--muted-2); }
 .stat-value { font-family: var(--display); font-size: 30px; font-weight: 700; margin-top: 5px; color: var(--strong); }
+.stat-note { font-size: 11px; color: var(--muted-3); margin-top: 3px; }
 .click { cursor: pointer; }
 .click:hover { border-color: var(--border-3); }
 .spend { padding: 15px 17px; flex: 1; }
