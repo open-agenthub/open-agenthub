@@ -256,4 +256,77 @@ public sealed class InternalController : ControllerBase
         var url = await _svc.MintArtifactUploadUrlAsync(id, tok!, name, ct);
         return url is null ? Unauthorized() : Ok(new { url });
     }
+
+    /// <summary>
+    /// Spawns a child session owned by the parent session's owner. Always sets
+    /// <see cref="CreateSessionRequest.ParentSessionId"/> to this session id
+    /// (client overrides that escape the parent are ignored).
+    /// </summary>
+    [HttpPost("spawn")]
+    public async Task<IActionResult> Spawn(string id, [FromBody] CreateSessionRequest req, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        var forced = req with { ParentSessionId = id };
+        try
+        {
+            return Ok(await _svc.CreateSessionAsync(rec.Owner, forced, ct));
+        }
+        catch (SessionLimitExceededException e)
+        {
+            return StatusCode(StatusCodes.Status429TooManyRequests, e.Message);
+        }
+    }
+
+    /// <summary>Lists direct children of this session (same owner, ParentSessionId == id).</summary>
+    [HttpGet("children")]
+    public async Task<ActionResult<IReadOnlyList<SessionInfo>>> Children(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        var all = await _svc.ListSessionsAsync(rec.Owner, ct);
+        return Ok(all.Where(s => s.ParentSessionId == id).ToList());
+    }
+
+    /// <summary>Gets a peer session if it is a descendant of this session (same owner).</summary>
+    [HttpGet("peer/{childId}")]
+    public async Task<IActionResult> GetPeer(string id, string childId, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (!await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
+
+        var info = await _svc.GetSessionAsync(rec.Owner, childId, ct);
+        return info is null ? NotFound() : Ok(info);
+    }
+
+    /// <summary>Deletes a peer session if it is a descendant of this session (same owner).</summary>
+    [HttpDelete("peer/{childId}")]
+    public async Task<IActionResult> DeletePeer(string id, string childId, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (!await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
+
+        try
+        {
+            await _svc.DeleteSessionAsync(rec.Owner, childId, ct);
+            return NoContent();
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
+    }
+
+    private async Task<bool> IsDescendantPeerAsync(SessionRecord parent, string childId, CancellationToken ct)
+    {
+        var all = await _svc.ListSessionsAsync(parent.Owner, ct);
+        var byId = all.ToDictionary(s => s.Id, s => s.ParentSessionId);
+        // Ensure the authenticated parent itself is present for chain walks.
+        byId.TryAdd(parent.Id, parent.ParentSessionId);
+        return SessionDescent.IsDescendant(childId, parent.Id, id => byId.GetValueOrDefault(id));
+    }
 }
