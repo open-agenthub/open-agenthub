@@ -16,6 +16,8 @@ public sealed class SessionRecord
     public string? Prompt { get; set; }
     public AgentKind Agent { get; set; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; set; } = AgentAuthMode.Auto;
+    /// <summary>Which existing API key OpenClaw should use; set only for OpenClaw + ApiKey.</summary>
+    public OpenClawApiKeySource? OpenClawApiKeySource { get; set; }
     public string? AgentPolicyJson { get; set; }
     public string? AllowedToolsJson { get; set; }
     /// <summary>Agent session ID assigned by us (used for --resume).</summary>

@@ -65,6 +65,24 @@ public sealed class SessionDuplicationTests
     }
 
     [Fact]
+    public void DuplicateRequest_CopiesOpenClawApiKeySource()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "OpenClaw", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.OpenClaw, AuthMode = AgentAuthMode.ApiKey,
+            OpenClawApiKeySource = OpenClawApiKeySource.Anthropic,
+            AgentSessionId = "thread", CallbackToken = "token", Status = "Succeeded"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
+
+        Assert.Equal(AgentKind.OpenClaw, copy.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
+        Assert.Equal(OpenClawApiKeySource.Anthropic, copy.OpenClawApiKeySource);
+    }
+
+    [Fact]
     public void DuplicateRequest_AppliesExplicitAgentAuthAndPolicyOverrides()
     {
         var source = new SessionRecord
