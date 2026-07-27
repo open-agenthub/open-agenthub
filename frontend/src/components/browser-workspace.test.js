@@ -28,7 +28,7 @@ describe('browser workspace', () => {
     mount(BrowserPane, { props: { session: { id: 's1', browser: { phase: 'Running' } }, canWrite: false } })
     await flushPromises()
     expect(novnc.instances[0].viewOnly).toBe(true)
-    expect(novnc.instances[0].scaleViewport).toBe(true)
+    expect(novnc.instances[0].scaleViewport).toBe(false)
     expect(novnc.instances[0].resizeSession).toBe(false)
   })
   it('uses authenticated and shared browser websocket routes', async () => {
