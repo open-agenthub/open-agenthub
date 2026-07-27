@@ -182,4 +182,3 @@ git push origin feat/integrated-browser
 ```
 
 Expected: `origin/feat/integrated-browser` advances to the tested fix commit.
-

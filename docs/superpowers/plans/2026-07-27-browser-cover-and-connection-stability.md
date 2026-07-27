@@ -250,4 +250,3 @@ git push origin feat/integrated-browser
 
 Expected: the remote branch advances through the cover-scaling fix and all
 previously verified browser hardening commits.
-
