@@ -94,6 +94,20 @@ public class InternalSessionSpawnTests
     }
 
     [Fact]
+    public async Task Spawn_WhenSpawnMcpDisabled_ReturnsNotFound()
+    {
+        var svc = new RecordingSessionService();
+        var controller = Controller(Parent(), svc, spawnMcpEnabled: false);
+
+        var result = await controller.Spawn(ParentId,
+            new CreateSessionRequest { Title = "x", Mode = SessionMode.Autonomous, Prompt = "p" },
+            CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Equal(0, svc.CreateCalls);
+    }
+
+    [Fact]
     public async Task Children_ListsDirectChildrenOnly()
     {
         var svc = new RecordingSessionService
@@ -250,10 +264,12 @@ public class InternalSessionSpawnTests
     private static InternalController Controller(
         SessionRecord session,
         RecordingSessionService svc,
-        string token = ParentToken)
+        string token = ParentToken,
+        bool spawnMcpEnabled = true)
     {
         var controller = new InternalController(
-            new CallbackSessionStore(session), [], svc, null!, [], [], null!)
+            new CallbackSessionStore(session), [], svc, null!, [], [], null!,
+            browsers: null, spawnMcpEnabled: spawnMcpEnabled)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

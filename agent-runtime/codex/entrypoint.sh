@@ -13,14 +13,21 @@ mkdir -p "$CODEX_HOME"
 chmod 700 "$CODEX_HOME"
 umask 077
 printf '%s\n' 'cli_auth_credentials_store = "file"' > "$CODEX_HOME/config.toml"
+# Always omit runtime-owned server names from user MCP so they cannot be spoofed.
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
-  node "$RUNTIME/codex/mcp-config.js" /secrets/mcp/mcp.json agenthub_browser >> "$CODEX_HOME/config.toml"
+  node "$RUNTIME/codex/mcp-config.js" /secrets/mcp/mcp.json agenthub_browser agenthub_sessions >> "$CODEX_HOME/config.toml"
 fi
 if [ "${AGENTHUB_BROWSER_ENABLED:-0}" = "1" ]; then
   printf '%s\n' \
     '[mcp_servers.agenthub_browser]' \
     'command = "node"' \
     "args = [\"$RUNTIME/browser/server.mjs\"]" >> "$CODEX_HOME/config.toml"
+fi
+if [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ]; then
+  printf '%s\n' \
+    '[mcp_servers.agenthub_sessions]' \
+    'command = "node"' \
+    "args = [\"$RUNTIME/sessions/server.mjs\"]" >> "$CODEX_HOME/config.toml"
 fi
 chmod 600 "$CODEX_HOME/config.toml"
 

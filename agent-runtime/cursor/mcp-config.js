@@ -135,7 +135,7 @@ function convertServer(name, input) {
   return out;
 }
 
-function convertMcp(agentHubJson) {
+function convertMcp(agentHubJson, reservedServers = []) {
   let parsed = agentHubJson;
   if (typeof agentHubJson === 'string') {
     try { parsed = JSON.parse(agentHubJson); } catch { throw new Error('MCP configuration must be valid JSON'); }
@@ -144,8 +144,10 @@ function convertMcp(agentHubJson) {
   const keys = Object.keys(root);
   if (keys.some(key => key !== 'mcpServers')) throw new Error('Unsupported top-level security configuration');
   const servers = record(root.mcpServers, 'mcpServers');
+  const reserved = new Set(reservedServers);
   const mcpServers = {};
   for (const name of Object.keys(servers).sort()) {
+    if (reserved.has(name)) continue;
     mcpServers[name] = convertServer(name, servers[name]);
   }
   return JSON.stringify({ mcpServers }, null, 2) + '\n';
@@ -153,7 +155,7 @@ function convertMcp(agentHubJson) {
 
 if (require.main === module) {
   try {
-    process.stdout.write(convertMcp(fs.readFileSync(process.argv[2], 'utf8')));
+    process.stdout.write(convertMcp(fs.readFileSync(process.argv[2], 'utf8'), process.argv.slice(3)));
   } catch (error) {
     console.error('[cursor-mcp] MCP configuration rejected: ' + error.message);
     process.exit(1);
