@@ -13,6 +13,7 @@ data:
   AgentHub__ClaudeAgentImage: {{ include "agenthub.claudeAgentImage" . | quote }}
   AgentHub__CodexAgentImage: {{ include "agenthub.codexAgentImage" . | quote }}
   AgentHub__CursorAgentImage: {{ include "agenthub.cursorAgentImage" . | quote }}
+  AgentHub__OpenClawAgentImage: {{ include "agenthub.openclawAgentImage" . | quote }}
   AgentHub__AgentPort: {{ .Values.agent.port | quote }}
   AgentHub__GitCloneImage: {{ .Values.agent.gitCloneImage | quote }}
   AgentHub__AgentImagePullPolicy: {{ .Values.agent.pullPolicy | default "IfNotPresent" | quote }}
