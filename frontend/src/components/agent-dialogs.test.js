@@ -395,4 +395,14 @@ describe('OpenClaw credentials', () => {
     expect(wrapper.find('[data-credential="openclawApiKey"]').exists()).toBe(false)
     expect(wrapper.text()).not.toMatch(/OpenClaw API key/i)
   })
+
+  it('notes that Anthropic, OpenAI, and Cursor keys can be reused by OpenClaw', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    expect(wrapper.get('[data-credential-hint="anthropicApiKey"]').text()).toContain('OpenClaw')
+    expect(wrapper.get('[data-credential-hint="openAiApiKey"]').text()).toContain('OpenClaw')
+    expect(wrapper.get('[data-credential-hint="cursorApiKey"]').text()).toContain('OpenClaw')
+    expect(wrapper.get('[data-credential-hint="openAiApiKey"]').text()).not.toMatch(/only when a Codex/i)
+    expect(wrapper.get('[data-credential-hint="cursorApiKey"]').text()).not.toMatch(/only when a Cursor/i)
+  })
 })
