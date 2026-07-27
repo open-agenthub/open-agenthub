@@ -138,6 +138,7 @@ public sealed class BrowserReconcileServiceTests
         public Task<BrowserSummary> GetSummaryAsync(string id, CancellationToken ct = default) => Task.FromResult(BrowserSummary.Stopped);
         public Task<IReadOnlyDictionary<string, BrowserSummary>> GetSummariesAsync(IReadOnlyCollection<string> ids, CancellationToken ct = default) => Task.FromResult<IReadOnlyDictionary<string, BrowserSummary>>(new Dictionary<string, BrowserSummary>());
         public Task<BrowserConnection?> GetConnectionAsync(string id, CancellationToken ct = default) => Task.FromResult<BrowserConnection?>(null);
+        public Task ResizeAsync(string sessionId, BrowserViewport viewport, CancellationToken ct = default) => Task.CompletedTask;
         public async Task StopAsync(string id, CancellationToken ct = default) { StopCalls++; await cluster.DeleteAsync("sessions", id, ct); if (leases.Item is { } lease) await leases.DeleteAsync(lease.LeaseId, ct); }
         public Task<BrowserStateUrls?> MintStateUrlsAsync(string id, string token, CancellationToken ct = default) => Task.FromResult<BrowserStateUrls?>(null);
         public Task DeleteStateAsync(SessionRecord session, CancellationToken ct = default) => Task.CompletedTask;

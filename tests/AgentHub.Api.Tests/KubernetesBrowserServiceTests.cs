@@ -118,6 +118,51 @@ public sealed class KubernetesBrowserServiceTests
     }
 
     [Fact]
+    public async Task Resize_RunningLeaseTargetsItsRecordedPodWithoutMutatingTheLease()
+    {
+        var leases = new MemoryLeaseStore();
+        await leases.TryCreateAsync(BrowserLease.Pending("session-1", "lease-1", [1]));
+        await leases.SetRunningAsync("lease-1", "10.0.0.9");
+        var runtime = new RecordingBrowserRuntime();
+        var service = Service(leases, new RecordingBrowserCluster(), new RecordingArtifacts(), runtime: runtime);
+
+        await service.ResizeAsync("session-1", new BrowserViewport(800, 600));
+
+        Assert.Equal("10.0.0.9", runtime.PodIp);
+        Assert.Equal(new BrowserViewport(800, 600), runtime.Viewport);
+        Assert.Equal(BrowserPhase.Running, leases.Items["session-1"].Phase);
+    }
+
+    [Fact]
+    public async Task Resize_RejectsBrowserWithoutARunningPod()
+    {
+        var leases = new MemoryLeaseStore();
+        await leases.TryCreateAsync(BrowserLease.Pending("session-1", "lease-1", [1]));
+        var runtime = new RecordingBrowserRuntime();
+        var service = Service(leases, new RecordingBrowserCluster(), new RecordingArtifacts(), runtime: runtime);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            service.ResizeAsync("session-1", new BrowserViewport(800, 600)));
+
+        Assert.Null(runtime.PodIp);
+    }
+
+    [Fact]
+    public async Task Resize_RuntimeFailureDoesNotStopOrMutateTheLease()
+    {
+        var leases = new MemoryLeaseStore();
+        await leases.TryCreateAsync(BrowserLease.Pending("session-1", "lease-1", [1]));
+        await leases.SetRunningAsync("lease-1", "10.0.0.9");
+        var runtime = new RecordingBrowserRuntime { Error = new HttpRequestException("runtime failed") };
+        var service = Service(leases, new RecordingBrowserCluster(), new RecordingArtifacts(), runtime: runtime);
+
+        await Assert.ThrowsAsync<HttpRequestException>(() =>
+            service.ResizeAsync("session-1", new BrowserViewport(800, 600)));
+
+        Assert.Equal(BrowserPhase.Running, leases.Items["session-1"].Phase);
+    }
+
+    [Fact]
     public async Task Stop_RemovesClusterResourcesAndLease()
     {
         var leases = new MemoryLeaseStore();
@@ -133,7 +178,7 @@ public sealed class KubernetesBrowserServiceTests
 
     private static KubernetesBrowserService Service(
         IBrowserLeaseStore leases, IBrowserClusterClient cluster, IArtifactStore artifacts,
-        IBrowserSessionLock? sessionLock = null)
+        IBrowserSessionLock? sessionLock = null, IBrowserRuntimeClient? runtime = null)
     {
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
@@ -142,7 +187,7 @@ public sealed class KubernetesBrowserServiceTests
             ["Browser:StartupTimeoutSeconds"] = "2"
         }).Build();
         return new KubernetesBrowserService(config, leases, new FixedSessionStore(Session()), artifacts, cluster,
-            sessionLock ?? new RecordingBrowserSessionLock(), NullLogger<KubernetesBrowserService>.Instance);
+            runtime ?? new RecordingBrowserRuntime(), sessionLock ?? new RecordingBrowserSessionLock(), NullLogger<KubernetesBrowserService>.Instance);
     }
 
     private static SessionRecord Session() => new()
@@ -189,6 +234,19 @@ public sealed class KubernetesBrowserServiceTests
             public ValueTask DisposeAsync() { release(); return ValueTask.CompletedTask; }
         }
     }
+    private sealed class RecordingBrowserRuntime : IBrowserRuntimeClient
+    {
+        public string? PodIp { get; private set; }
+        public BrowserViewport? Viewport { get; private set; }
+        public Exception? Error { get; init; }
+        public Task ResizeAsync(string podIp, BrowserViewport viewport, CancellationToken ct = default)
+        {
+            PodIp = podIp;
+            Viewport = viewport;
+            return Error is null ? Task.CompletedTask : Task.FromException(Error);
+        }
+    }
+
     private sealed class RecordingBrowserCluster : IBrowserClusterClient
     {
         public int CreateCalls;
