@@ -55,6 +55,7 @@ public sealed class SessionsController : ControllerBase
         try { return Ok(await _svc.DuplicateSessionAsync(Owner, id, request, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
     [HttpPost("{id}/resume")]
@@ -63,6 +64,7 @@ public sealed class SessionsController : ControllerBase
         try { return Ok(await _svc.ResumeSessionAsync(Owner, id, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
     [HttpPost("{id}/pause")]
