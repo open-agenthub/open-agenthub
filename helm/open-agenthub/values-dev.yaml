@@ -40,6 +40,12 @@ agent:
     codex: open-agenthub-dev/agent-runtime-codex:local
     cursor: open-agenthub-dev/agent-runtime-cursor:local
 
+browser:
+  image:
+    repository: open-agenthub-dev/browser
+    tag: local
+    pullPolicy: IfNotPresent
+
 oidc:
   authority: ""
 

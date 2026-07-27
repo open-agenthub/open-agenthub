@@ -14,6 +14,14 @@ builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
+builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserLeaseStore, AgentHub.Api.Browser.PostgresBrowserLeaseStore>();
+builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserSessionLock, AgentHub.Api.Browser.PostgresBrowserSessionLock>();
+builder.Services.AddSingleton<AgentHub.Api.Browser.IAgentPodIdentityResolver, AgentHub.Api.Browser.KubernetesAgentPodIdentityResolver>();
+builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserRequestAuthorizer, AgentHub.Api.Browser.BrowserRequestAuthorizer>();
+builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserClusterClient, AgentHub.Api.Browser.KubernetesBrowserClusterClient>();
+builder.Services.AddHttpClient<AgentHub.Api.Browser.IBrowserRuntimeClient, AgentHub.Api.Browser.BrowserRuntimeClient>();
+builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserService, AgentHub.Api.Browser.KubernetesBrowserService>();
+builder.Services.AddHostedService<AgentHub.Api.Browser.BrowserReconcileService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
 builder.Services.AddSingleton<SessionShareStore>();
 builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
@@ -162,6 +170,7 @@ using (var scope = app.Services.CreateScope())
 {
     var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
     await store.InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
     var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
@@ -295,6 +304,52 @@ async Task ProxyLinkWs(HttpContext ctx, string token, ISessionAccessService acce
 
 app.Map("/ws/shared/{token}/terminal", (HttpContext ctx, string token,
     ISessionAccessService access, ISessionService sessions, ILoggerFactory lf) => ProxyLinkWs(ctx, token, access, sessions, lf));
+async Task ProxyBrowserWs(HttpContext ctx, SessionAccessResult resolved,
+    AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf,
+    Func<CancellationToken, Task<bool>> remainsAuthorized)
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    await BrowserProxy.HandleAsync(ctx, resolved.Session.Id,
+        SessionAccessRules.CanWriteTerminal(resolved.Level), browsers, lf, remainsAuthorized);
+}
+
+async Task ProxyUserBrowserWs(HttpContext ctx, string id, ISessionAccessService access,
+    AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf)
+{
+    var principal = WsOwner(ctx);
+    if (principal is null) { ctx.Response.StatusCode = 401; return; }
+    var resolved = await access.ResolveUserAsync(principal, id, ctx.RequestAborted);
+    if (resolved is null) { ctx.Response.StatusCode = 404; return; }
+    var initialWrite = SessionAccessRules.CanWriteTerminal(resolved.Level);
+    await ProxyBrowserWs(ctx, resolved, browsers, lf, async ct =>
+    {
+        var current = await access.ResolveUserAsync(principal, id, ct);
+        return current?.Session.Id == resolved.Session.Id &&
+            SessionAccessRules.CanWriteTerminal(current.Level) == initialWrite;
+    });
+}
+
+async Task ProxyLinkBrowserWs(HttpContext ctx, string token, ISessionAccessService access,
+    AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf)
+{
+    var resolved = await access.ResolveTokenAsync(token, ctx.RequestAborted);
+    if (resolved is null) { ctx.Response.StatusCode = 404; return; }
+    var initialWrite = SessionAccessRules.CanWriteTerminal(resolved.Level);
+    await ProxyBrowserWs(ctx, resolved, browsers, lf, async ct =>
+    {
+        var current = await access.ResolveTokenReadOnlyAsync(token, ct);
+        return current?.Session.Id == resolved.Session.Id &&
+            SessionAccessRules.CanWriteTerminal(current.Level) == initialWrite;
+    });
+}
+app.Map("/ws/sessions/{id}/browser", (HttpContext ctx, string id,
+        ISessionAccessService access, AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf) =>
+        ProxyUserBrowserWs(ctx, id, access, browsers, lf))
+    .RequireAuthorization();
+app.Map("/ws/shared/{token}/browser", (HttpContext ctx, string token,
+    ISessionAccessService access, AgentHub.Api.Browser.IBrowserService browsers, ILoggerFactory lf) =>
+    ProxyLinkBrowserWs(ctx, token, access, browsers, lf));
+
 app.Map("/ws/sessions/{id}/shell", (HttpContext ctx, string id,
         ISessionService sessions, ILoggerFactory lf) => ProxyWs(ctx, id, sessions, lf, "/shell"))
     .RequireAuthorization();

@@ -9,6 +9,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentHub.Api.Models;
+using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
 
 namespace AgentHub.Api.Ee.Sharing;
@@ -192,11 +193,12 @@ public sealed record SharedSessionInfo
     public bool CanManage { get; init; }
     public bool CanShell { get; init; }
     public string? McpConfigJson { get; init; }
+    public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
 }
 
 public static class SharedSessionSanitizer
 {
-    public static SharedSessionInfo Sanitize(SessionAccessResult access)
+    public static SharedSessionInfo Sanitize(SessionAccessResult access, BrowserSummary? browser = null)
     {
         var session = access.Session;
         return new SharedSessionInfo
@@ -215,7 +217,8 @@ public static class SharedSessionSanitizer
             CanWrite = SessionAccessRules.CanWriteTerminal(access.Level),
             CanManage = access.Level == SessionAccessLevel.Owner,
             CanShell = access.Level == SessionAccessLevel.Owner,
-            McpConfigJson = null
+            McpConfigJson = null,
+            Browser = browser ?? BrowserSummary.Stopped
         };
     }
 

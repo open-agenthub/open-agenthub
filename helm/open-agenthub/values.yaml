@@ -68,6 +68,21 @@ agent:
   # e.g. [9000] for a self-hosted S3/MinIO on a non-standard port.
   extraEgressPorts: []
 
+browser:
+  enabled: true
+  image:
+    repository: ghcr.io/open-agenthub/open-agenthub/browser
+    tag: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits: { cpu: "1", memory: 2Gi }
+  screen: 2560x1600
+  startupTimeoutSeconds: 90
+  cookieCheckpointSeconds: 60
+  cookieStateMaxBytes: 1048576
+  extraEgressPorts: []
+
 # Kubernetes Secret data is base64-encoded, not automatically encrypted at rest.
 # Production clusters should enable API-server encryption at rest (preferably KMS),
 # restrict RBAC and network access, and rotate credentials regularly.

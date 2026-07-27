@@ -253,6 +253,44 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(expected, AgentPodSpecFactory.MissingCredentialDiagnostic(record, context));
     }
 
+    [Fact]
+    public void Build_InjectsBuiltInBrowserMcpFlagFromRuntimeSettings()
+    {
+        var context = Context();
+        context = context with { Runtime = context.Runtime with { BrowserEnabled = true } };
+        var request = new CreateSessionRequest
+        {
+            Agent = AgentKind.Claude,
+            AuthMode = AgentAuthMode.Subscription,
+            Mode = SessionMode.Interactive
+        };
+
+        var pod = AgentPodSpecFactory.Build(
+            Record(request.Agent, request.AuthMode, request.Mode), request, context);
+
+        Assert.Contains(Assert.Single(pod.Containers).Env,
+            env => env.Name == "AGENTHUB_BROWSER_ENABLED" && env.Value == "1");
+    }
+
+    [Fact]
+    public void Build_DisablesBrowserMcpForScheduledJobs()
+    {
+        var context = Context() with { Runtime = Context().Runtime with { BrowserEnabled = true } };
+        var request = new CreateSessionRequest
+        {
+            Agent = AgentKind.Claude,
+            AuthMode = AgentAuthMode.Subscription,
+            Mode = SessionMode.Scheduled,
+            Prompt = "test",
+            Schedule = "0 6 * * *"
+        };
+
+        var pod = AgentPodSpecFactory.Build(
+            Record(request.Agent, request.AuthMode, request.Mode), request, context);
+
+        Assert.Contains(Assert.Single(pod.Containers).Env,
+            env => env.Name == "AGENTHUB_BROWSER_ENABLED" && env.Value == "0");
+    }
     private static V1PodSpec Build(AgentKind agent, AgentAuthMode auth,
         Func<CreateSessionRequest, CreateSessionRequest>? customize = null)
     {

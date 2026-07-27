@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
+import SessionWorkspace from './SessionWorkspace.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
@@ -105,14 +106,18 @@ async function selectTab(tab) {
         <button class="bar-btn danger" @click="decidePermission(p.id, 'deny')">Deny</button>
       </div>
     </div>
-    <TerminalPane v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
-    <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell'" :session="session" kind="shell" :active="activeTab === 'shell'" @status="statuses.shell = $event" />
-    <div v-if="activeTab === 'transcript'" class="transcript">
-      <div class="transcript-inner">
-        <h3>What happened so far</h3>
-        <pre>{{ transcriptText === null ? 'Loading…' : (transcriptText || '[no saved transcript]') }}</pre>
+    <SessionWorkspace :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
+      <div class="terminal-stack">
+        <TerminalPane v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
+        <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell'" :session="session" kind="shell" :active="activeTab === 'shell'" @status="statuses.shell = $event" />
+        <div v-if="activeTab === 'transcript'" class="transcript">
+          <div class="transcript-inner">
+            <h3>What happened so far</h3>
+            <pre>{{ transcriptText === null ? 'Loading…' : (transcriptText || '[no saved transcript]') }}</pre>
+          </div>
+        </div>
       </div>
-    </div>
+    </SessionWorkspace>
   </div>
 </template>
 <style scoped>
@@ -144,6 +149,7 @@ async function selectTab(tab) {
 .perm-summary { color: var(--muted-3); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .perm-actions { display: flex; gap: 8px; }
 .perm-actions .danger { color: #e5484d; }
+.terminal-stack { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }
 .transcript-inner { max-width: 760px; margin: 0 auto; padding: 26px 24px; }
 .transcript-inner h3 { font-size: 20px; margin: 0 0 14px; }
