@@ -218,6 +218,37 @@ public class SessionShareStorePostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task SessionStore_RoundTripsOpenClawApiKeySource()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var openClaw = new SessionRecord
+        {
+            Id = "openclaw-session", Owner = "alice", Title = "OpenClaw", Mode = SessionMode.Interactive,
+            Agent = AgentKind.OpenClaw, AuthMode = AgentAuthMode.ApiKey,
+            OpenClawApiKeySource = OpenClawApiKeySource.OpenAI,
+            AgentSessionId = "oc-thread", CallbackToken = "callback-oc"
+        };
+        var claude = new SessionRecord
+        {
+            Id = "claude-session", Owner = "alice", Title = "Claude", Mode = SessionMode.Interactive,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+            OpenClawApiKeySource = null,
+            AgentSessionId = "claude-thread", CallbackToken = "callback-claude"
+        };
+
+        await database.UpsertSessionAsync(openClaw);
+        await database.UpsertSessionAsync(claude);
+
+        var storedOpenClaw = await database.GetSessionAsync("alice", "openclaw-session");
+        var storedClaude = await database.GetSessionAsync("alice", "claude-session");
+
+        Assert.NotNull(storedOpenClaw);
+        Assert.Equal(OpenClawApiKeySource.OpenAI, storedOpenClaw!.OpenClawApiKeySource);
+        Assert.NotNull(storedClaude);
+        Assert.Null(storedClaude!.OpenClawApiKeySource);
+    }
+
+    [PostgreSqlFact]
     public async Task OwnerAccess_MapsProviderNeutralSessionId_WhenLegacyClaudeIdIsNull()
     {
         await using var database = await PostgresSharingDatabase.CreateAsync();

@@ -277,6 +277,8 @@ public record SessionInfo
     public IReadOnlyList<string> AllowedTools { get; init; } = Array.Empty<string>();
     public AgentKind Agent { get; init; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Auto;
+    /// <summary>Which existing API key OpenClaw uses; set only for OpenClaw + ApiKey.</summary>
+    public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
