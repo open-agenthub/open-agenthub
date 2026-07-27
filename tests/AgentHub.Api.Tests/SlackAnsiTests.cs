@@ -24,4 +24,14 @@ public class SlackAnsiTests
     {
         Assert.Equal("hello [world] 42", AgentTerminal.StripAnsi("hello [world] 42"));
     }
+    [Fact]
+    public void StripsClaudeTrustScreenTerminalControls()
+    {
+        var esc = ((char)27).ToString();
+        var input = $"{esc}7{esc}[r{esc}8{esc}[?25h{esc}[?25l{esc}[?2004h{esc}[?1004h{esc}[?2031h"
+            + $"{esc}[38;5;220m────{esc}[39m\n"
+            + $"{esc}[2G{esc}[1mAccessing workspace:{esc}[22m{esc}[39m";
+
+        Assert.Equal("────\nAccessing workspace:", AgentTerminal.StripAnsi(input));
+    }
 }

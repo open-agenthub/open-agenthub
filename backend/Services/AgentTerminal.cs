@@ -56,7 +56,8 @@ public static class AgentTerminal
     private static readonly string Bel = ((char)7).ToString();
     private static readonly Regex Osc = new(Esc + "\\].*?(?:" + Bel + "|" + Esc + "\\\\)", RegexOptions.Singleline | RegexOptions.Compiled);
     private static readonly Regex Csi = new(Esc + "\\[[0-9;?]*[ -/]*[@-~]", RegexOptions.Compiled);
-    private static readonly Regex OtherEsc = new(Esc + "[@-Z\\\\-_]", RegexOptions.Compiled);
+    private static readonly Regex OtherEsc = new(Esc + "(?:[78]|[ -/]*[@-~])", RegexOptions.Compiled);
+    private static readonly Regex C1 = new("[\u0080-\u009f]", RegexOptions.Compiled);
 
     /// <summary>Strips ANSI escape sequences and carriage returns for readable Slack text.</summary>
     public static string StripAnsi(string s)
@@ -64,6 +65,7 @@ public static class AgentTerminal
         s = Osc.Replace(s, "");
         s = Csi.Replace(s, "");
         s = OtherEsc.Replace(s, "");
+        s = C1.Replace(s, "");
         return s.Replace("\r\n", "\n").Replace('\r', '\n');
     }
 }
