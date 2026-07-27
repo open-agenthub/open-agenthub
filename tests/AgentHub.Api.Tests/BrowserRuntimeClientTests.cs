@@ -22,6 +22,15 @@ public sealed class BrowserRuntimeClientTests
     }
 
     [Fact]
+    public void BrowserDefaultsProvisionTheLargestAcceptedViewport()
+    {
+        var options = new BrowserOptions();
+
+        Assert.Equal(BrowserViewport.MaxWidth, options.ScreenWidth);
+        Assert.Equal(BrowserViewport.MaxHeight, options.ScreenHeight);
+    }
+
+    [Fact]
     public async Task Resize_SendsExactViewportToTheSelectedPodControlPort()
     {
         var handler = new RecordingHandler();

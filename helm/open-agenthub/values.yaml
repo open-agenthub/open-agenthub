@@ -74,7 +74,7 @@ browser:
   resources:
     requests: { cpu: 250m, memory: 512Mi }
     limits: { cpu: "1", memory: 2Gi }
-  screen: 1440x900
+  screen: 2560x1600
   startupTimeoutSeconds: 90
   cookieCheckpointSeconds: 60
   cookieStateMaxBytes: 1048576

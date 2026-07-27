@@ -11,8 +11,8 @@ public sealed class BrowserOptions
     public string MemoryRequest { get; set; } = "512Mi";
     public string CpuLimit { get; set; } = "1";
     public string MemoryLimit { get; set; } = "2Gi";
-    public int ScreenWidth { get; set; } = 1440;
-    public int ScreenHeight { get; set; } = 900;
+    public int ScreenWidth { get; set; } = 2560;
+    public int ScreenHeight { get; set; } = 1600;
     public int StartupTimeoutSeconds { get; set; } = 90;
     public int CookieCheckpointSeconds { get; set; } = 60;
     public int CookieStateMaxBytes { get; set; } = 1_048_576;

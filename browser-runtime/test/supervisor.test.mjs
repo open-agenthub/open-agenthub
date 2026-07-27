@@ -74,6 +74,65 @@ test('viewport resize changes X display before matching the Chromium window', as
   ]);
 });
 
+test('viewport resize accepts an XRandR error only when the framebuffer already matches', async () => {
+  const calls = [];
+  const context = {
+    pages: () => [{}],
+    async newCDPSession() {
+      return {
+        async send(method) {
+          calls.push(method);
+          return method === 'Browser.getWindowForTarget' ? { windowId: 4 } : {};
+        },
+        async detach() {},
+      };
+    },
+  };
+  const supervisor = makeSupervisor({
+    context,
+    execFile: async (command, args) => {
+      if (args.includes('--fb')) throw new Error('output mode is larger than framebuffer');
+      assert.deepEqual(args, ['--display', ':99', '--current']);
+      return { stdout: 'Screen 0: minimum 1 x 1, current 800 x 700, maximum 1440 x 900' };
+    },
+  });
+
+  await supervisor.resizeViewport(800, 700);
+
+  assert.deepEqual(calls, ['Browser.getWindowForTarget', 'Browser.setWindowBounds']);
+});
+
+test('viewport resize retries Chromium while it processes the XRandR change', async () => {
+  const sleeps = [];
+  let boundsAttempts = 0;
+  let sessionCreates = 0;
+  const context = {
+    pages: () => [{}],
+    async newCDPSession() {
+      sessionCreates += 1;
+      if (sessionCreates <= 6) throw new Error('X server resize is still settling');
+      return {
+        async send(method) {
+          if (method === 'Browser.getWindowForTarget') return { windowId: sessionCreates };
+          boundsAttempts += 1;
+          return {};
+        },
+        async detach() {},
+      };
+    },
+  };
+  const supervisor = makeSupervisor({
+    context,
+    execFile: async () => {},
+    sleep: async milliseconds => { sleeps.push(milliseconds); },
+  });
+
+  await supervisor.resizeViewport(800, 600);
+
+  assert.equal(boundsAttempts, 1);
+  assert.equal(sessionCreates, 7);
+  assert.deepEqual(sleeps, [100, 100, 100, 100, 100, 100]);
+});
 test('failed X resize skips CDP and does not poison a later viewport resize', async () => {
   const events = [];
   let attempt = 0;
@@ -185,6 +244,11 @@ test('checkpoint calls are serialized so the final cookie state wins', async () 
   await Promise.all([periodic, final]);
   assert.deepEqual(uploads, ['old', 'new']);
 });
+test('entrypoint provisions the largest accepted viewport as Xvfb maximum', async () => {
+  const entrypoint = await readFile(new URL('../entrypoint.sh', import.meta.url), 'utf8');
+  assert.match(entrypoint, /AGENTHUB_BROWSER_SCREEN:-2560x1600/);
+});
+
 test('entrypoint keeps Chromium alive for the full final-checkpoint budget', async () => {
   const entrypoint = await readFile(new URL('../entrypoint.sh', import.meta.url), 'utf8');
   assert.match(entrypoint, /attempts" -lt 47/);
