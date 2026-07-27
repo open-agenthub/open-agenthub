@@ -14,8 +14,9 @@ public enum SessionMode
     Scheduled
 }
 
-public enum AgentKind { Claude, Codex, Cursor }
+public enum AgentKind { Claude, Codex, Cursor, OpenClaw }
 public enum AgentAuthMode { Auto, Subscription, ApiKey }
+public enum OpenClawApiKeySource { Anthropic, OpenAI, Cursor }
 
 public sealed record AgentPolicy
 {
@@ -26,33 +27,46 @@ public sealed record AgentPolicy
 
 public static class AgentConfiguration
 {
-    public static void ValidateForCreate(AgentKind agent, AgentAuthMode authMode)
+    public static void ValidateForCreate(AgentKind agent, AgentAuthMode authMode,
+        OpenClawApiKeySource? openClawApiKeySource = null)
     {
         ValidateAgent(agent);
         ValidateAuthMode(authMode);
+        ValidateOpenClawApiKeySource(agent, authMode, openClawApiKeySource);
     }
 
-    public static void ValidateForUpdate(AgentKind? agent, AgentAuthMode? authMode)
+    public static void ValidateForUpdate(AgentKind? agent, AgentAuthMode? authMode,
+        OpenClawApiKeySource? openClawApiKeySource = null)
     {
         if (agent is { } selectedAgent) ValidateAgent(selectedAgent);
         if (authMode is { } selectedAuthMode) ValidateAuthMode(selectedAuthMode);
+        if (agent is { } a && authMode is { } m)
+            ValidateOpenClawApiKeySource(a, m, openClawApiKeySource);
+        else if (openClawApiKeySource is not null)
+            throw new ArgumentException("OpenClaw API key source is only valid for OpenClaw with ApiKey authentication.");
     }
 
     public static void ValidateForUpdate(AgentKind currentAgent, AgentAuthMode currentAuthMode,
-        AgentKind? requestedAgent, AgentAuthMode? requestedAuthMode)
+        AgentKind? requestedAgent, AgentAuthMode? requestedAuthMode,
+        OpenClawApiKeySource? openClawApiKeySource = null)
     {
         // A migrated Claude+Auto record may remain untouched, but Auto is never a
         // valid result once the public PATCH supplies either agent/auth field.
         if (requestedAgent is null && requestedAuthMode is null) return;
-        ValidateAgent(requestedAgent ?? currentAgent);
-        ValidateAuthMode(requestedAuthMode ?? currentAuthMode);
+        var agent = requestedAgent ?? currentAgent;
+        var authMode = requestedAuthMode ?? currentAuthMode;
+        ValidateAgent(agent);
+        ValidateAuthMode(authMode);
+        ValidateOpenClawApiKeySource(agent, authMode, openClawApiKeySource);
     }
 
-    public static void ValidateForDuplicatedSession(AgentKind agent, AgentAuthMode authMode)
+    public static void ValidateForDuplicatedSession(AgentKind agent, AgentAuthMode authMode,
+        OpenClawApiKeySource? openClawApiKeySource = null)
     {
         ValidateAgent(agent);
         if (agent == AgentKind.Claude && authMode == AgentAuthMode.Auto) return;
         ValidateAuthMode(authMode);
+        ValidateOpenClawApiKeySource(agent, authMode, openClawApiKeySource);
     }
 
 
@@ -64,7 +78,8 @@ public static class AgentConfiguration
 
     private static void ValidateAgent(AgentKind agent)
     {
-        if (agent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor)
+        if (agent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor
+            and not AgentKind.OpenClaw)
             throw new ArgumentException("Unsupported agent kind.");
     }
 
@@ -72,6 +87,21 @@ public static class AgentConfiguration
     {
         if (authMode is not AgentAuthMode.Subscription and not AgentAuthMode.ApiKey)
             throw new ArgumentException("Authentication mode must be Subscription or ApiKey.");
+    }
+
+    private static void ValidateOpenClawApiKeySource(AgentKind agent, AgentAuthMode authMode,
+        OpenClawApiKeySource? openClawApiKeySource)
+    {
+        var openClawApiKey = agent == AgentKind.OpenClaw && authMode == AgentAuthMode.ApiKey;
+        if (openClawApiKey)
+        {
+            if (openClawApiKeySource is null || !Enum.IsDefined(openClawApiKeySource.Value))
+                throw new ArgumentException("OpenClaw API key source is required for OpenClaw ApiKey authentication.");
+            return;
+        }
+
+        if (openClawApiKeySource is not null)
+            throw new ArgumentException("OpenClaw API key source is only valid for OpenClaw with ApiKey authentication.");
     }
 }
 
@@ -113,6 +143,8 @@ public record CreateSessionRequest
 
     public AgentKind Agent { get; init; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
+    /// <summary>Which existing API key OpenClaw should use; required only for OpenClaw + ApiKey.</summary>
+    public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
     /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
     public AgentPolicy? Policy { get; init; }
     /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
@@ -145,6 +177,8 @@ public record UpdateSessionRequest
     public string? McpConfigJson { get; init; }
     public AgentKind? Agent { get; init; }
     public AgentAuthMode? AuthMode { get; init; }
+    /// <summary>Which existing API key OpenClaw should use; only for OpenClaw + ApiKey.</summary>
+    public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
     public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
@@ -176,6 +210,7 @@ public static class SessionDuplication
         McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
         Agent = request.Agent ?? source.Agent,
         AuthMode = request.AuthMode ?? source.AuthMode,
+        OpenClawApiKeySource = source.OpenClawApiKeySource,
         Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),
         // An explicit structured policy, including an empty default-deny policy,
         // supersedes legacy AllowedTools instead of rehydrating it later.

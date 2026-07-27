@@ -38,7 +38,7 @@ public sealed class SessionAgentModelTests
     [InlineData((AgentKind)(-1))]
     public void CreateConfiguration_RejectsUnknownAgentKinds(AgentKind agent)
     {
-        // Ordinals 0–2 are Claude/Codex/Cursor; keep probing only out-of-range values.
+        // Ordinals 0–3 are Claude/Codex/Cursor/OpenClaw; keep probing only out-of-range values.
         Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForCreate(agent, AgentAuthMode.Subscription));
     }
 
@@ -54,6 +54,36 @@ public sealed class SessionAgentModelTests
     {
         Assert.Throws<ArgumentException>(() =>
             AgentConfiguration.ValidateForCreate(AgentKind.Cursor, AgentAuthMode.Auto));
+    }
+
+    [Fact]
+    public void CreateConfiguration_AcceptsOpenClawSubscriptionAndApiKey()
+    {
+        AgentConfiguration.ValidateForCreate(AgentKind.OpenClaw, AgentAuthMode.Subscription);
+        AgentConfiguration.ValidateForCreate(AgentKind.OpenClaw, AgentAuthMode.ApiKey,
+            OpenClawApiKeySource.Anthropic);
+    }
+
+    [Fact]
+    public void CreateConfiguration_RejectsOpenClawAuto()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            AgentConfiguration.ValidateForCreate(AgentKind.OpenClaw, AgentAuthMode.Auto));
+    }
+
+    [Fact]
+    public void CreateConfiguration_RequiresApiKeySourceForOpenClawApiKey()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            AgentConfiguration.ValidateForCreate(AgentKind.OpenClaw, AgentAuthMode.ApiKey, null));
+    }
+
+    [Fact]
+    public void CreateConfiguration_RejectsApiKeySourceUnlessOpenClawApiKey()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            AgentConfiguration.ValidateForCreate(AgentKind.Claude, AgentAuthMode.ApiKey,
+                OpenClawApiKeySource.OpenAI));
     }
 
     [Theory]
