@@ -31,12 +31,15 @@ public class CredentialSecretFactoryTests
     [InlineData(AgentKind.Codex, "auth.json", "credentials.json")]
     // Pinned from Cursor Agent CLI file store: auth.json (distinct Secret from Codex).
     [InlineData(AgentKind.Cursor, "auth.json", "credentials.json")]
+    // PLACEHOLDER: OpenClaw auth.json until Task 5 runtime discovery.
+    [InlineData(AgentKind.OpenClaw, "auth.json", "credentials.json")]
     public void ProviderCredentials_WriteOnlyTheMatchingProviderFile(AgentKind agent, string expectedKey, string otherKey)
     {
         var json = agent switch
         {
             AgentKind.Claude => "{\"claudeAiOauth\":{}}",
             AgentKind.Codex => "{\"tokens\":{}}",
+            AgentKind.OpenClaw => "{\"openclawAuth\":{\"accessToken\":\"synthetic-test-token-not-real\"}}",
             _ => "{\"accessToken\":\"synthetic-test-token-not-real\",\"refreshToken\":\"synthetic-refresh\"}"
         };
 
@@ -55,11 +58,13 @@ public class CredentialSecretFactoryTests
             new Dictionary<string, byte[]>(),
             new Dictionary<string, byte[]> { ["credentials.json"] = Encoding.UTF8.GetBytes("secret") },
             new Dictionary<string, byte[]>(),
+            new Dictionary<string, byte[]> { ["auth.json"] = Encoding.UTF8.GetBytes("secret") },
             new Dictionary<string, byte[]> { ["auth.json"] = Encoding.UTF8.GetBytes("secret") });
 
         Assert.True(status.ClaudeSubscription);
         Assert.False(status.CodexSubscription);
         Assert.True(status.CursorSubscription);
+        Assert.True(status.OpenclawSubscription);
     }
 
     [Fact]

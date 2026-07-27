@@ -50,7 +50,8 @@ public static class CredentialSecretFactory
     public static CredentialStatus CredentialStatus(IDictionary<string, byte[]> data,
         IDictionary<string, byte[]>? claudeSubscription = null,
         IDictionary<string, byte[]>? codexSubscription = null,
-        IDictionary<string, byte[]>? cursorSubscription = null) => new()
+        IDictionary<string, byte[]>? cursorSubscription = null,
+        IDictionary<string, byte[]>? openclawSubscription = null) => new()
     {
         SshPrivateKey = data.ContainsKey("ssh_key"),
         GitlabToken = data.ContainsKey("gitlab_token"),
@@ -63,7 +64,9 @@ public static class CredentialSecretFactory
         ClaudeSubscription = claudeSubscription?.ContainsKey("credentials.json") == true,
         CodexSubscription = codexSubscription?.ContainsKey("auth.json") == true,
         // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
-        CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true
+        CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true,
+        // PLACEHOLDER: OpenClaw auth.json until Task 5 runtime discovery.
+        OpenclawSubscription = openclawSubscription?.ContainsKey("auth.json") == true
     };
 
     public static V1Secret CreateProviderSecret(string name, string @namespace, string ownerLabelValue,
@@ -78,6 +81,8 @@ public static class CredentialSecretFactory
             AgentKind.Codex => "auth.json",
             // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
             AgentKind.Cursor => "auth.json",
+            // PLACEHOLDER: OpenClaw auth.json until Task 5 runtime discovery.
+            AgentKind.OpenClaw => "auth.json",
             _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
         };
         return Secret(name, @namespace, ownerLabelValue, new Dictionary<string, byte[]>

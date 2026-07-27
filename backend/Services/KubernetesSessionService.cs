@@ -77,7 +77,8 @@ public sealed class KubernetesSessionService : ISessionService
         var claude = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Claude), ct))?.Data;
         var codex = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Codex), ct))?.Data;
         var cursor = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Cursor), ct))?.Data;
-        return CredentialSecretFactory.CredentialStatus(data, claude, codex, cursor);
+        var openclaw = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.OpenClaw), ct))?.Data;
+        return CredentialSecretFactory.CredentialStatus(data, claude, codex, cursor, openclaw);
     }
 
     /// <summary>
@@ -656,6 +657,7 @@ public sealed class KubernetesSessionService : ISessionService
         AgentKind.Claude => $"claude-{Sanitize(owner)}",
         AgentKind.Codex => $"codex-{Sanitize(owner)}",
         AgentKind.Cursor => $"cursor-{Sanitize(owner)}",
+        AgentKind.OpenClaw => $"openclaw-{Sanitize(owner)}",
         _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
     };
 
