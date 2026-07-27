@@ -117,7 +117,7 @@ public sealed class BrowserPodSpecFactoryTests
         Assert.Equal("control-ns", source.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"]);
         Assert.Equal("agenthub-backend", source.PodSelector.MatchLabels["app"]);
         Assert.Equal(
-            ["6080", "6082"],
+            ["6080", "6081", "6082"],
             policy.Spec.Ingress.Single().Ports.Select(port => port.Port.Value).ToArray());
     }
 

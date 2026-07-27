@@ -208,6 +208,7 @@ public static class BrowserPodSpecFactory
                     Ports =
                     [
                         new V1NetworkPolicyPort(protocol: "TCP", port: 6080),
+                        new V1NetworkPolicyPort(protocol: "TCP", port: 6081),
                         new V1NetworkPolicyPort(protocol: "TCP", port: 6082)
                     ]
                 }
