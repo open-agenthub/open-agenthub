@@ -54,8 +54,8 @@ public static class AgentTerminal
     // codes so the source contains only plain ASCII (no hidden control bytes).
     private static readonly string Esc = ((char)27).ToString();
     private static readonly string Bel = ((char)7).ToString();
-    private static readonly Regex Osc = new(Esc + "\\].*?(?:" + Bel + "|" + Esc + "\\\\)", RegexOptions.Singleline | RegexOptions.Compiled);
-    private static readonly Regex Csi = new(Esc + "\\[[0-9;?]*[ -/]*[@-~]", RegexOptions.Compiled);
+    private static readonly Regex Osc = new("(?:" + Esc + "\\]|\u009d).*?(?:" + Bel + "|\u009c|" + Esc + "\\\\)", RegexOptions.Singleline | RegexOptions.Compiled);
+    private static readonly Regex Csi = new("(?:" + Esc + "\\[|\u009b)[0-?]*[ -/]*[@-~]", RegexOptions.Compiled);
     private static readonly Regex OtherEsc = new(Esc + "(?:[78]|[ -/]*[@-~])", RegexOptions.Compiled);
     private static readonly Regex C1 = new("[\u0080-\u009f]", RegexOptions.Compiled);
 

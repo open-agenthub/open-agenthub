@@ -44,4 +44,13 @@ public class SlackAnsiTests
         Assert.Null(AgentTerminal.CleanTranscript(null));
         Assert.Equal("stored text", AgentTerminal.CleanTranscript($"{esc}[31mstored text{esc}[0m"));
     }
+    [Theory]
+    [InlineData("\u001b[>4;2mtext", "text")]
+    [InlineData("\u009b31mred\u009b0m", "red")]
+    [InlineData("\u009d0;title\u0007text", "text")]
+    [InlineData("\u009d0;title\u009ctext", "text")]
+    public void StripsSevenAndEightBitTerminalControlSequences(string input, string expected)
+    {
+        Assert.Equal(expected, AgentTerminal.StripAnsi(input));
+    }
 }
