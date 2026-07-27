@@ -5,7 +5,8 @@ using k8s.Models;
 
 namespace AgentHub.Api.Services;
 
-public sealed record AgentRuntimeImages(string ClaudeImage, string CodexImage, string CursorImage, string PullPolicy);
+public sealed record AgentRuntimeImages(
+    string ClaudeImage, string CodexImage, string CursorImage, string OpenClawImage, string PullPolicy);
 
 public sealed record AgentPodRuntimeSettings
 {
@@ -27,6 +28,7 @@ public sealed record PodBuildContext
     public required string ClaudeCredentialSecretName { get; init; }
     public required string CodexCredentialSecretName { get; init; }
     public required string CursorCredentialSecretName { get; init; }
+    public required string OpenClawCredentialSecretName { get; init; }
     public bool HasSelectedApiKey { get; init; }
     public bool HasSelectedSubscriptionCredential { get; init; }
     public bool HasGitCredentials { get; init; }
@@ -66,6 +68,7 @@ public static class AgentPodSpecFactory
         {
             AgentKind.Codex => images.CodexImage,
             AgentKind.Cursor => images.CursorImage,
+            AgentKind.OpenClaw => images.OpenClawImage,
             _ => images.ClaudeImage
         };
         var repos = NormalizeRepos(request);
@@ -181,6 +184,25 @@ public static class AgentPodSpecFactory
             case (AgentKind.Cursor, AgentAuthMode.ApiKey):
                 AddApiKey("CURSOR_API_KEY", "cursor_api_key");
                 break;
+            case (AgentKind.OpenClaw, AgentAuthMode.Subscription):
+                AddSubscriptionVolume("openclaw", context.OpenClawCredentialSecretName);
+                break;
+            case (AgentKind.OpenClaw, AgentAuthMode.ApiKey):
+                switch (record.OpenClawApiKeySource)
+                {
+                    case OpenClawApiKeySource.OpenAI:
+                        AddApiKey("OPENAI_API_KEY", "openai_api_key");
+                        break;
+                    case OpenClawApiKeySource.Cursor:
+                        AddApiKey("CURSOR_API_KEY", "cursor_api_key");
+                        break;
+                    case OpenClawApiKeySource.Anthropic:
+                        AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
+                        break;
+                    default:
+                        throw new ArgumentException("OpenClaw API key source is required for OpenClaw ApiKey authentication.");
+                }
+                break;
             case (AgentKind.Claude, AgentAuthMode.Auto):
                 AddSubscriptionVolume("claude", context.ClaudeCredentialSecretName);
                 AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
@@ -265,6 +287,20 @@ public static class AgentPodSpecFactory
                     fi
                     chmod -R a+rX /opt/agenthub
                     chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/agent)"
+                    echo "Runtime copied to /opt/agenthub."
+                    """,
+                AgentKind.OpenClaw => """
+                    set -e
+                    mkdir -p /opt/agenthub/bin /opt/agenthub/lib
+                    cp -r /opt/session-agent /opt/agenthub/session-agent
+                    cp /usr/local/bin/node /opt/agenthub/bin/node
+                    cp -r /usr/local/lib/node_modules /opt/agenthub/lib/node_modules
+                    cp /usr/local/bin/entrypoint.sh /opt/agenthub/entrypoint.sh
+                    # openclaw launcher: resolve the symlink target of the global npm install and link it
+                    target=$(readlink -f /usr/local/bin/openclaw)
+                    ln -sf "/opt/agenthub/${target#/usr/local/}" /opt/agenthub/bin/openclaw
+                    chmod -R a+rX /opt/agenthub
+                    chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/openclaw)"
                     echo "Runtime copied to /opt/agenthub."
                     """,
                 _ => """
