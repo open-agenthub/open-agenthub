@@ -218,6 +218,32 @@ public class SessionShareStorePostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task SessionStore_RoundTripsUiModeAndDefaultsLegacyRowsToTerminal()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var record = new SessionRecord
+        {
+            Id = "chat-session", Owner = "alice", Title = "Chat", Mode = SessionMode.Interactive,
+            UiMode = SessionUiMode.Chat, AgentSessionId = "thread-chat", CallbackToken = "callback-chat"
+        };
+
+        await database.UpsertSessionAsync(record);
+        await database.ExecuteAsync(
+            """
+            INSERT INTO sessions (id, owner, title, mode, agent_session_id, callback_token)
+            VALUES ('legacy-session', 'alice', 'Legacy', 'Interactive', 'thread-legacy', 'callback-legacy')
+            """);
+
+        var stored = await database.GetSessionAsync("alice", "chat-session");
+        var legacy = await database.GetSessionAsync("alice", "legacy-session");
+
+        Assert.NotNull(stored);
+        Assert.Equal(SessionUiMode.Chat, stored!.UiMode);
+        Assert.NotNull(legacy);
+        Assert.Equal(SessionUiMode.Terminal, legacy!.UiMode);
+    }
+
+    [PostgreSqlFact]
     public async Task OwnerAccess_MapsProviderNeutralSessionId_WhenLegacyClaudeIdIsNull()
     {
         await using var database = await PostgresSharingDatabase.CreateAsync();

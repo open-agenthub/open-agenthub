@@ -218,6 +218,33 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(10, container.ReadinessProbe.PeriodSeconds);
     }
 
+    [Fact]
+    public void Build_ChatSessionSetsUiModeEnvToChat()
+    {
+        var record = Record(AgentKind.Claude, AgentAuthMode.Subscription, SessionMode.Interactive);
+        record.UiMode = SessionUiMode.Chat;
+        var request = new CreateSessionRequest
+        {
+            Agent = AgentKind.Claude,
+            AuthMode = AgentAuthMode.Subscription,
+            UiMode = SessionUiMode.Chat
+        };
+
+        var pod = AgentPodSpecFactory.Build(record, request, Context());
+
+        Assert.Contains(Assert.Single(pod.Containers).Env,
+            e => e.Name == "AGENTHUB_UI_MODE" && e.Value == "chat" && e.ValueFrom is null);
+    }
+
+    [Fact]
+    public void Build_DefaultsUiModeEnvToTerminal()
+    {
+        var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription);
+
+        Assert.Contains(Assert.Single(pod.Containers).Env,
+            e => e.Name == "AGENTHUB_UI_MODE" && e.Value == "terminal" && e.ValueFrom is null);
+    }
+
     [Theory]
     [InlineData(AgentKind.Codex, AgentAuthMode.Subscription)]
     [InlineData(AgentKind.Cursor, AgentAuthMode.Subscription)]
