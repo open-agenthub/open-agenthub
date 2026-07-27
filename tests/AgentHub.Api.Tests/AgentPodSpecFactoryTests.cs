@@ -74,6 +74,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey)]
     [InlineData(AgentKind.Cursor, AgentAuthMode.Subscription)]
     [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey)]
+    [InlineData(AgentKind.OpenClaw, AgentAuthMode.Subscription)]
+    [InlineData(AgentKind.OpenClaw, AgentAuthMode.ApiKey)]
     public void Build_GitCloneMountsOnlyWorkspaceHomeTmpAndGitCredentials(AgentKind agent, AgentAuthMode auth)
     {
         var pod = Build(agent, auth, request => request with { RepoUrl = "https://example.test/repo.git" });
@@ -92,6 +94,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Codex, AgentAuthMode.ApiKey, "runtime-codex", "codex")]
     [InlineData(AgentKind.Cursor, AgentAuthMode.Subscription, "runtime-cursor", "agent")]
     [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey, "runtime-cursor", "agent")]
+    [InlineData(AgentKind.OpenClaw, AgentAuthMode.Subscription, "runtime-openclaw", "openclaw")]
+    [InlineData(AgentKind.OpenClaw, AgentAuthMode.ApiKey, "runtime-openclaw", "openclaw")]
     public void Build_CustomImageCopyInitUsesSelectedRuntimeImage(
         AgentKind agent, AgentAuthMode auth, string expectedRuntimeImage, string expectedLauncher)
     {
@@ -115,6 +119,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Codex, "custom/runtime:1", true)]
     [InlineData(AgentKind.Cursor, null, false)]
     [InlineData(AgentKind.Cursor, "custom/runtime:1", true)]
+    [InlineData(AgentKind.OpenClaw, null, false)]
+    [InlineData(AgentKind.OpenClaw, "custom/runtime:1", true)]
     public void Build_RuntimeMountIsReadOnlyForCustomAgentAndWritableOnlyForCopyInit(
         AgentKind agentKind, string? customImage, bool expectsInjectedRuntime)
     {
@@ -272,10 +278,49 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(expected, AgentPodSpecFactory.MissingCredentialDiagnostic(record, context));
     }
 
+    [Fact]
+    public void Build_OpenClawApiKeyWithoutSource_Throws()
+    {
+        var request = new CreateSessionRequest
+        {
+            Agent = AgentKind.OpenClaw,
+            AuthMode = AgentAuthMode.ApiKey,
+            Mode = SessionMode.Interactive,
+            OpenClawApiKeySource = null
+        };
+        var record = Record(AgentKind.OpenClaw, AgentAuthMode.ApiKey, SessionMode.Interactive);
+
+        var ex = Assert.Throws<ArgumentException>(() =>
+            AgentPodSpecFactory.Build(record, request, Context()));
+        Assert.Contains("OpenClaw API key source", ex.Message);
+    }
+
+    [Theory]
+    [InlineData(OpenClawApiKeySource.Anthropic, "anthropic_api_key", "ANTHROPIC_API_KEY")]
+    [InlineData(OpenClawApiKeySource.OpenAI, "openai_api_key", "OPENAI_API_KEY")]
+    [InlineData(OpenClawApiKeySource.Cursor, "cursor_api_key", "CURSOR_API_KEY")]
+    public void OpenClawApiKeyBinding_MapsSourceToEnvAndSecretKey(
+        OpenClawApiKeySource source, string expectedSecretKey, string expectedEnv)
+    {
+        var binding = AgentPodSpecFactory.OpenClawApiKeyBinding(source);
+        Assert.Equal(expectedSecretKey, binding.SecretKey);
+        Assert.Equal(expectedEnv, binding.EnvName);
+        Assert.Equal(expectedSecretKey, AgentPodSpecFactory.TryOpenClawApiKeySecretKey(source));
+    }
+
+    [Fact]
+    public void TryOpenClawApiKeySecretKey_NullSource_ReturnsNull()
+    {
+        Assert.Null(AgentPodSpecFactory.TryOpenClawApiKeySecretKey(null));
+    }
+
     private static V1PodSpec Build(AgentKind agent, AgentAuthMode auth,
         Func<CreateSessionRequest, CreateSessionRequest>? customize = null,
         OpenClawApiKeySource? openClawApiKeySource = null)
     {
+        openClawApiKeySource ??= agent == AgentKind.OpenClaw && auth == AgentAuthMode.ApiKey
+            ? OpenClawApiKeySource.Anthropic
+            : null;
         var request = new CreateSessionRequest
         {
             Agent = agent,
