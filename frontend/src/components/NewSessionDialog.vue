@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
-import { defaultAgentForm, defaultPolicy, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import { agentPayload, defaultAgentForm, defaultPolicy, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
@@ -63,8 +63,7 @@ async function submit() {
     const session = await api.createSession({
       title: form.value.title || 'Session',
       mode: form.value.mode,
-      agent: form.value.agent,
-      authMode: form.value.authMode,
+      ...agentPayload(form.value),
       repos: repos.value,
       prompt: form.value.prompt || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
@@ -104,6 +103,7 @@ async function submit() {
           <small class="hint">{{ modeHint }}</small>
         </div>
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
+          v-model:open-claw-api-key-source="form.openClawApiKeySource"
           :mode="form.mode" :credential-status="credentialStatus" />
         <div class="field" v-if="needsSchedule">
           <label>Schedule <span class="dim">— cron, UTC</span></label>
