@@ -226,6 +226,21 @@ const curlCreate = computed(() =>
 const curlStatus = computed(() =>
   `curl ${origin}/api/remote/sessions/<id> \\\n`
   + `  -H "Authorization: Bearer <token>"`)
+
+// Cursor / Claude Desktop MCP — local path until the package is published to npm.
+const mcpSnippet = computed(() =>
+  JSON.stringify({
+    mcpServers: {
+      agenthub: {
+        command: 'node',
+        args: ['<path-to-repo>/mcp/agenthub/server.mjs'],
+        env: {
+          AGENTHUB_URL: origin,
+          AGENTHUB_TOKEN: '<token>'
+        }
+      }
+    }
+  }, null, 2))
 </script>
 
 <template>
@@ -373,9 +388,11 @@ const curlStatus = computed(() =>
       <details class="help">
         <summary>Using a token from the command line</summary>
         <p class="muted">Start a session:</p>
-        <pre>{{ curlCreate }}</pre>
+        <pre data-curl-create>{{ curlCreate }}</pre>
         <p class="muted">Check its status (use the <code>id</code> from the response):</p>
-        <pre>{{ curlStatus }}</pre>
+        <pre data-curl-status>{{ curlStatus }}</pre>
+        <p class="muted">Or connect Cursor / Claude Desktop via MCP (stdio). Until the package is on npm, point at the repo checkout:</p>
+        <pre data-mcp-snippet>{{ mcpSnippet }}</pre>
       </details>
       </template>
 

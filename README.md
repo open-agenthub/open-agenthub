@@ -62,6 +62,9 @@ shift.
   pod stays unprivileged.
 - **Bring your tools via MCP** — attach any MCP server (issue tracker, database,
   observability) per session and turn the agent into a teammate.
+- **Remote MCP session orchestration** — external AIs (Cursor, Claude Desktop, …) create,
+  list, wait on, and delete sessions via the `mcp/agenthub` stdio server and a personal
+  API token; when enabled, in-session agents also get the built-in `agenthub_sessions` MCP.
 - **Visible browser on demand** — the built-in `agenthub_browser` MCP starts one isolated
   Chromium only when the agent needs it. The same desktop appears beside the chat through
   noVNC, while idle sessions consume no browser CPU or memory.
@@ -375,6 +378,19 @@ as user `dev`.
 6. The agent controls Chromium over session-scoped CDP. The authenticated **WS proxy**
    forwards the same noVNC desktop to the UI, where it appears left of the agent terminal.
    The UI intentionally has no manual browser start or stop controls.
+
+### Remote MCP session orchestration
+
+External clients (Cursor Desktop, Claude Desktop, and similar) can orchestrate sessions
+through the stdio MCP under `mcp/agenthub/`: create, get, list, wait, and delete, authenticated
+with a personal API token from **Settings → API tokens**. Configure `AGENTHUB_URL` (your
+hub origin) and `AGENTHUB_TOKEN`, and until the package is published to npm run
+`node <path-to-repo>/mcp/agenthub/server.mjs`. The Settings dialog shows a ready-to-paste
+`mcpServers` snippet next to the remote `curl` examples.
+
+When `spawnMcpEnabled` is true (Helm / `AgentHub:SpawnMcpEnabled`, default on), live agent
+pods also receive the runtime-owned `agenthub_sessions` MCP so an in-session agent can spawn
+and manage descendant sessions without mounting personal API tokens.
 
 ## Agents, authentication, and policy
 
