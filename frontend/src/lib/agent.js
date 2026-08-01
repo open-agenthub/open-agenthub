@@ -1,13 +1,37 @@
 export const agentOptions = [
   { value: 'Claude', label: 'Claude', hint: 'Anthropic agent runtime' },
   { value: 'Codex', label: 'Codex', hint: 'OpenAI agent runtime' },
-  { value: 'Cursor', label: 'Cursor', hint: 'Cursor agent runtime' }
+  { value: 'Cursor', label: 'Cursor', hint: 'Cursor agent runtime' },
+  { value: 'OpenClaw', label: 'OpenClaw', hint: 'OpenClaw agent runtime' }
+]
+
+/** Filter the agent catalog by an allowlist. Empty/missing = unrestricted. */
+export function filterAgentOptions(allowed, { include } = {}) {
+  const list = Array.isArray(allowed) ? allowed : []
+  const filtered = !list.length
+    ? agentOptions.map(option => ({ ...option }))
+    : agentOptions.filter(option => list.includes(option.value))
+  if (include && !filtered.some(option => option.value === include)) {
+    const extra = agentOptions.find(option => option.value === include)
+    if (extra) filtered.push({ ...extra })
+  }
+  return filtered
+}
+
+export const openClawApiKeySourceOptions = [
+  { value: 'Anthropic', label: 'Anthropic', hint: 'Use stored Anthropic API key' },
+  { value: 'OpenAI', label: 'OpenAI', hint: 'Use stored OpenAI API key' },
+  { value: 'Cursor', label: 'Cursor', hint: 'Use stored Cursor API key' }
 ]
 
 const PUBLIC_AUTH_OPTIONS = [
   { value: 'Subscription', label: 'Subscription', hint: 'Use your provider plan login' },
   { value: 'ApiKey', label: 'API key', hint: 'Use provider API billing' }
 ]
+
+export function needsOpenClawApiKeySource(agent, authMode) {
+  return agent === 'OpenClaw' && authMode === 'ApiKey'
+}
 
 export function authOptions(agent, legacyMode) {
   const options = PUBLIC_AUTH_OPTIONS.map(option => ({ ...option }))
@@ -58,10 +82,22 @@ export function defaultAgentForm(source = {}) {
   return {
     agent,
     authMode: source.authMode || 'Subscription',
+    openClawApiKeySource: source.openClawApiKeySource || 'Anthropic',
     allowedToolsRaw: policy.allowedTools.join('\n'),
     allowedMcpToolsRaw: policy.allowedMcpTools.join('\n'),
     allowedCommandsRaw: policy.allowedCommands.join('\n')
   }
+}
+
+export function agentPayload(form) {
+  const payload = {
+    agent: form.agent,
+    authMode: form.authMode
+  }
+  if (needsOpenClawApiKeySource(form.agent, form.authMode)) {
+    payload.openClawApiKeySource = form.openClawApiKeySource || 'Anthropic'
+  }
+  return payload
 }
 
 function lines(value) {
@@ -97,25 +133,33 @@ export function authLabel(authMode) {
   return authMode === 'ApiKey' ? 'API key' : authMode === 'Auto' ? 'Auto (legacy)' : authMode || ''
 }
 
-export function credentialReadiness(agent, authMode, mode, status = {}) {
+function apiKeyReadiness(provider, statusKey, status) {
+  const ready = !!status[statusKey]
+  return ready
+    ? { ready, text: `${provider} API key is stored for API billing.` }
+    : { ready, text: `No ${provider} API key is stored. Add it in Credentials before starting this session.` }
+}
+
+export function credentialReadiness(agent, authMode, mode, status = {}, openClawApiKeySource = null) {
   if (authMode === 'Auto') return { ready: true, text: 'Legacy automatic credential selection is preserved until you choose a billing source.' }
   if (authMode === 'Subscription') {
     const ready = !!status[
       agent === 'Codex' ? 'codexSubscription'
         : agent === 'Cursor' ? 'cursorSubscription'
-          : 'claudeSubscription'
+          : agent === 'OpenClaw' ? 'openclawSubscription'
+            : 'claudeSubscription'
     ]
     if (ready) return { ready, text: `${agent} subscription login is stored.` }
     if (mode === 'Interactive') return { ready, text: `No stored ${agent} subscription login. You can start now and sign in inside the session.` }
     return { ready, text: `No ${agent} subscription login is stored. Sign in during an Interactive session before starting this automation.` }
   }
+  if (agent === 'OpenClaw') {
+    const source = openClawApiKeySource || 'Anthropic'
+    if (source === 'OpenAI') return apiKeyReadiness('OpenAI', 'openAiApiKey', status)
+    if (source === 'Cursor') return apiKeyReadiness('Cursor', 'cursorApiKey', status)
+    return apiKeyReadiness('Anthropic', 'anthropicApiKey', status)
+  }
   const provider = agent === 'Codex' ? 'OpenAI' : agent === 'Cursor' ? 'Cursor' : 'Anthropic'
-  const ready = !!status[
-    agent === 'Codex' ? 'openAiApiKey'
-      : agent === 'Cursor' ? 'cursorApiKey'
-        : 'anthropicApiKey'
-  ]
-  return ready
-    ? { ready, text: `${provider} API key is stored for API billing.` }
-    : { ready, text: `No ${provider} API key is stored. Add it in Credentials before starting this session.` }
+  const statusKey = agent === 'Codex' ? 'openAiApiKey' : agent === 'Cursor' ? 'cursorApiKey' : 'anthropicApiKey'
+  return apiKeyReadiness(provider, statusKey, status)
 }

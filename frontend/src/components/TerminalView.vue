@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
+import ChatPane from './ChatPane.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
@@ -13,7 +14,11 @@ const props = defineProps({ session: Object, sharedToken: { type: String, defaul
 defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
+// Chat sessions render the structured stream; their agent pane already replays
+// history, so the raw Transcript tab stays terminal-only.
+const isChat = computed(() => props.session?.uiMode === 'chat')
 const activeTab = ref('agent')
+watch(isChat, chat => { if (chat && activeTab.value === 'transcript') activeTab.value = 'agent' })
 const shellOpened = ref(false)
 const shareOpen = ref(false)
 const transcriptText = ref(null)
@@ -76,7 +81,7 @@ async function selectTab(tab) {
       <nav class="tabs">
         <button :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">{{ tabLabel('agent') }}</button>
         <button v-if="isLive && capabilities.canShell" :class="{ on: activeTab === 'shell' }" @click="selectTab('shell')">{{ tabLabel('shell') }}</button>
-        <button :class="{ on: activeTab === 'transcript' }" @click="selectTab('transcript')">Transcript</button>
+        <button v-if="!isChat" :class="{ on: activeTab === 'transcript' }" @click="selectTab('transcript')">Transcript</button>
       </nav>
       <span v-if="!capabilities.canWrite" class="readonly">Read-only</span>
       <template v-if="capabilities.canManage">
@@ -92,7 +97,7 @@ async function selectTab(tab) {
       </div>
     </div>
     <div v-if="session.questionPending && capabilities.canWrite" class="asking">
-      <span class="ask-dot"></span>THE AGENT IS ASKING — reply in the terminal below.
+      <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ isChat ? 'below' : 'in the terminal below' }}.
     </div>
     <div v-for="p in pendingPermissions" :key="p.id" class="perm">
       <span class="ask-dot"></span>
@@ -108,7 +113,8 @@ async function selectTab(tab) {
     </div>
     <SessionWorkspace :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
       <div class="terminal-stack">
-        <TerminalPane v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
+        <ChatPane v-if="isChat" v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
+        <TerminalPane v-else v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
         <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell'" :session="session" kind="shell" :active="activeTab === 'shell'" @status="statuses.shell = $event" />
         <div v-if="activeTab === 'transcript'" class="transcript">
           <div class="transcript-inner">

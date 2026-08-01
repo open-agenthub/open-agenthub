@@ -31,12 +31,15 @@ public class CredentialSecretFactoryTests
     [InlineData(AgentKind.Codex, "auth.json", "credentials.json")]
     // Pinned from Cursor Agent CLI file store: auth.json (distinct Secret from Codex).
     [InlineData(AgentKind.Cursor, "auth.json", "credentials.json")]
+    // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
+    [InlineData(AgentKind.OpenClaw, "auth-profiles.json", "auth.json")]
     public void ProviderCredentials_WriteOnlyTheMatchingProviderFile(AgentKind agent, string expectedKey, string otherKey)
     {
         var json = agent switch
         {
             AgentKind.Claude => "{\"claudeAiOauth\":{}}",
             AgentKind.Codex => "{\"tokens\":{}}",
+            AgentKind.OpenClaw => "{\"version\":1,\"profiles\":{\"anthropic:default\":{\"type\":\"api_key\",\"provider\":\"anthropic\",\"key\":\"synthetic-key-not-real\"}}}",
             _ => "{\"accessToken\":\"synthetic-test-token-not-real\",\"refreshToken\":\"synthetic-refresh\"}"
         };
 
@@ -55,11 +58,13 @@ public class CredentialSecretFactoryTests
             new Dictionary<string, byte[]>(),
             new Dictionary<string, byte[]> { ["credentials.json"] = Encoding.UTF8.GetBytes("secret") },
             new Dictionary<string, byte[]>(),
-            new Dictionary<string, byte[]> { ["auth.json"] = Encoding.UTF8.GetBytes("secret") });
+            new Dictionary<string, byte[]> { ["auth.json"] = Encoding.UTF8.GetBytes("secret") },
+            new Dictionary<string, byte[]> { ["auth-profiles.json"] = Encoding.UTF8.GetBytes("secret") });
 
         Assert.True(status.ClaudeSubscription);
         Assert.False(status.CodexSubscription);
         Assert.True(status.CursorSubscription);
+        Assert.True(status.OpenclawSubscription);
     }
 
     [Fact]

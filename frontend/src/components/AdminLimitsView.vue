@@ -1,6 +1,7 @@
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api.js'
+import { agentOptions } from '../lib/agent.js'
 import { formatCost } from '../lib/usage.js'
 
 defineProps({ embedded: { type: Boolean, default: false } })
@@ -10,11 +11,18 @@ const groups = ref([])
 const loading = ref(true)
 const error = ref('')
 const needsLicense = ref(false)
+const allowedChecked = reactive(Object.fromEntries(agentOptions.map(o => [o.value, false])))
 
 async function load() {
   loading.value = true; error.value = ''; needsLicense.value = false
   try {
-    [limits.value, groups.value] = await Promise.all([api.eeListLimits(), api.eeListGroups()])
+    const [limitRows, groupRows, allowed] = await Promise.all([
+      api.eeListLimits(), api.eeListGroups(), api.adminGetAllowedAgents()
+    ])
+    limits.value = limitRows
+    groups.value = groupRows
+    const listed = new Set(allowed?.agents || [])
+    for (const option of agentOptions) allowedChecked[option.value] = listed.has(option.value)
   } catch (e) {
     if (e.status === 402) needsLicense.value = true
     else error.value = String(e.message || e)
@@ -70,6 +78,18 @@ async function setRole(group, role) {
   catch (e) { error.value = String(e.message || e) }
   finally { busy.value = false }
 }
+
+async function saveAllowedAgents() {
+  busy.value = true; error.value = ''
+  try {
+    const agents = agentOptions.filter(o => allowedChecked[o.value]).map(o => o.value)
+    const result = await api.adminSetAllowedAgents(agents)
+    const listed = new Set(result?.agents || [])
+    for (const option of agentOptions) allowedChecked[option.value] = listed.has(option.value)
+  } catch (e) {
+    error.value = String(e.message || e)
+  } finally { busy.value = false }
+}
 </script>
 <template>
   <div class="pane" :class="{ embed: embedded }">
@@ -123,6 +143,20 @@ async function setRole(group, role) {
         </div>
         <p v-if="!groups.length" class="muted">No groups seen yet — they appear after users sign in with a token that carries a groups claim.</p>
       </div>
+
+      <div class="card block" data-allowed-agents>
+        <div class="block-head">Allowed agents</div>
+        <p class="muted intro">Optionally restrict which agent kinds may be used for new sessions. Leave every box unchecked for no restriction (all agents allowed).</p>
+        <div class="rowline agents">
+          <label v-for="option in agentOptions" :key="option.value" class="agent-check" :data-allowed-agent="option.value">
+            <input type="checkbox" v-model="allowedChecked[option.value]" :disabled="busy" />
+            <span>{{ option.label }}</span>
+          </label>
+        </div>
+        <div class="rowline">
+          <button class="sm" :disabled="busy" data-save-allowed-agents @click="saveAllowedAgents">Save agents</button>
+        </div>
+      </div>
     </template>
   </div>
 </template>
@@ -135,6 +169,7 @@ async function setRole(group, role) {
 .rowline { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .rowline.bordered { border-top: 1px solid var(--border); padding-top: 10px; }
 .rowline.add { border-top: 1px solid var(--border); padding-top: 12px; }
+.rowline.agents { gap: 14px; }
 .grow { flex: 1; min-width: 120px; }
 .mono { font-family: var(--mono); font-size: 12px; }
 input, select { max-width: 140px; }
@@ -146,6 +181,8 @@ input.grow { max-width: none; }
 .pill.group { color: var(--sched); background: rgba(201, 184, 249, 0.12); }
 .members { font-size: 12px; color: var(--muted-3); }
 .intro { margin: 0; font-size: 12px; }
+.agent-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
+.agent-check input { width: auto; max-width: none; }
 .locked { padding: 16px 18px; font-size: 13px; color: var(--muted); }
 .muted { color: var(--muted); font-size: 13px; margin: 0; }
 .err { color: var(--danger); font: 12px var(--mono); }

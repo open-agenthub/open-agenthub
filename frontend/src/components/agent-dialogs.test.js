@@ -9,7 +9,8 @@ import CredentialsDialog from './CredentialsDialog.vue'
 const mocks = vi.hoisted(() => ({
   api: {
     createSession: vi.fn(), updateSession: vi.fn(), duplicateSession: vi.fn(),
-    getCredentialStatus: vi.fn(), storeCredentials: vi.fn()
+    getCredentialStatus: vi.fn(), storeCredentials: vi.fn(),
+    getAllowedAgents: vi.fn()
   },
   config: { gitEnabled: false }
 }))
@@ -31,6 +32,29 @@ describe('agent-aware session dialogs', () => {
     mocks.api.updateSession.mockResolvedValue({ id: 's1' })
     mocks.api.duplicateSession.mockResolvedValue({ id: 'copy' })
     mocks.api.storeCredentials.mockResolvedValue(null)
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex', 'Cursor', 'OpenClaw'] })
+  })
+
+  it('hides disallowed agents in New Session', async () => {
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex'] })
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.find('[data-agent-option="Claude"]').exists()).toBe(true)
+    expect(wrapper.find('[data-agent-option="Codex"]').exists()).toBe(true)
+    expect(wrapper.find('[data-agent-option="Cursor"]').exists()).toBe(false)
+    expect(wrapper.find('[data-agent-option="OpenClaw"]').exists()).toBe(false)
+  })
+
+  it('shows the API 403 message when creating with a disallowed agent', async () => {
+    const err = new Error("403 Agent 'OpenClaw' is not allowed on this instance. Ask an administrator to enable it, or choose a different agent.")
+    err.status = 403
+    mocks.api.createSession.mockRejectedValue(err)
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    await wrapper.get('[data-agent-option="OpenClaw"]').trigger('click')
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.err').text()).toContain("Agent 'OpenClaw' is not allowed")
   })
 
   it('creates a Codex API-key autonomous session with an exact structured policy', async () => {
@@ -66,6 +90,60 @@ describe('agent-aware session dialogs', () => {
     expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
       agent: 'Cursor', authMode: 'ApiKey',
       policy: expect.objectContaining({ allowedCommands: [] })
+    }))
+  })
+
+  it('creates an OpenClaw API-key session with a selected key source', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="OpenClaw"]').trigger('click')
+    await wrapper.get('[data-auth-option="ApiKey"]').trigger('click')
+    expect(wrapper.find('[data-auth-option="Auto"]').exists()).toBe(false)
+    expect(wrapper.find('[data-openclaw-source]').exists()).toBe(true)
+    await wrapper.get('[data-openclaw-source-option="OpenAI"]').trigger('click')
+    await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
+    await wrapper.get('[data-submit]').trigger('click')
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'OpenClaw', authMode: 'ApiKey', openClawApiKeySource: 'OpenAI'
+    }))
+  })
+
+  it('omits openClawApiKeySource for OpenClaw subscription and other agents', async () => {
+    const openClaw = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await openClaw.get('[data-agent-option="OpenClaw"]').trigger('click')
+    expect(openClaw.find('[data-openclaw-source]').exists()).toBe(false)
+    await openClaw.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('openClawApiKeySource')
+
+    mocks.api.createSession.mockClear()
+    const claude = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await claude.get('[data-auth-option="ApiKey"]').trigger('click')
+    expect(claude.find('[data-openclaw-source]').exists()).toBe(false)
+    await claude.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('openClawApiKeySource')
+  })
+
+  it('edits and duplicates OpenClaw ApiKey source selections', async () => {
+    const session = {
+      ...baseSession,
+      agent: 'OpenClaw',
+      authMode: 'ApiKey',
+      openClawApiKeySource: 'Anthropic'
+    }
+    const edit = mount(EditSessionDialog, { props: { session, projects: [] }, ...mountOptions })
+    expect(edit.find('[data-openclaw-source]').exists()).toBe(true)
+    await edit.get('[data-openclaw-source-option="Cursor"]').trigger('click')
+    await edit.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agent: 'OpenClaw', authMode: 'ApiKey', openClawApiKeySource: 'Cursor'
+    }))
+
+    const duplicate = mount(DuplicateSessionDialog, { props: { session, projects: [] } })
+    expect(duplicate.find('[data-openclaw-source-option="Anthropic"]').classes()).toContain('on')
+    await duplicate.get('[data-openclaw-source-option="OpenAI"]').trigger('click')
+    await duplicate.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      agent: 'OpenClaw', authMode: 'ApiKey', openClawApiKeySource: 'OpenAI'
     }))
   })
 
@@ -323,5 +401,32 @@ describe('Cursor credentials', () => {
     await wrapper.get('[data-clear="cursorApiKey"]').trigger('click')
     await wrapper.get('[data-save-credentials]').trigger('click')
     expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['cursorApiKey'] })
+  })
+})
+
+describe('OpenClaw credentials', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.getCredentialStatus.mockResolvedValue({ openclawSubscription: true })
+    mocks.api.storeCredentials.mockResolvedValue(null)
+  })
+
+  it('shows OpenClaw subscription status without a dedicated API key field', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    expect(wrapper.find('[data-credential-status="openclawSubscription"]').exists()).toBe(true)
+    expect(wrapper.find('[data-credential-status="openclawSubscription"]').text()).toContain('OpenClaw subscription')
+    expect(wrapper.find('[data-credential="openclawApiKey"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toMatch(/OpenClaw API key/i)
+  })
+
+  it('notes that Anthropic, OpenAI, and Cursor keys can be reused by OpenClaw', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    expect(wrapper.get('[data-credential-hint="anthropicApiKey"]').text()).toContain('OpenClaw')
+    expect(wrapper.get('[data-credential-hint="openAiApiKey"]').text()).toContain('OpenClaw')
+    expect(wrapper.get('[data-credential-hint="cursorApiKey"]').text()).toContain('OpenClaw')
+    expect(wrapper.get('[data-credential-hint="openAiApiKey"]').text()).not.toMatch(/only when a Codex/i)
+    expect(wrapper.get('[data-credential-hint="cursorApiKey"]').text()).not.toMatch(/only when a Cursor/i)
   })
 })

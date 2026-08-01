@@ -218,6 +218,63 @@ public class SessionShareStorePostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task SessionStore_RoundTripsUiModeAndDefaultsLegacyRowsToTerminal()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var record = new SessionRecord
+        {
+            Id = "chat-session", Owner = "alice", Title = "Chat", Mode = SessionMode.Interactive,
+            UiMode = SessionUiMode.Chat, AgentSessionId = "thread-chat", CallbackToken = "callback-chat"
+        };
+
+        await database.UpsertSessionAsync(record);
+        await database.ExecuteAsync(
+            """
+            INSERT INTO sessions (id, owner, title, mode, agent_session_id, callback_token)
+            VALUES ('legacy-session', 'alice', 'Legacy', 'Interactive', 'thread-legacy', 'callback-legacy')
+            """);
+
+        var stored = await database.GetSessionAsync("alice", "chat-session");
+        var legacy = await database.GetSessionAsync("alice", "legacy-session");
+
+        Assert.NotNull(stored);
+        Assert.Equal(SessionUiMode.Chat, stored!.UiMode);
+        Assert.NotNull(legacy);
+        Assert.Equal(SessionUiMode.Terminal, legacy!.UiMode);
+    }
+
+    [PostgreSqlFact]
+    public async Task SessionStore_RoundTripsOpenClawApiKeySource()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var openClaw = new SessionRecord
+        {
+            Id = "openclaw-session", Owner = "alice", Title = "OpenClaw", Mode = SessionMode.Interactive,
+            Agent = AgentKind.OpenClaw, AuthMode = AgentAuthMode.ApiKey,
+            OpenClawApiKeySource = OpenClawApiKeySource.OpenAI,
+            AgentSessionId = "oc-thread", CallbackToken = "callback-oc"
+        };
+        var claude = new SessionRecord
+        {
+            Id = "claude-session", Owner = "alice", Title = "Claude", Mode = SessionMode.Interactive,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+            OpenClawApiKeySource = null,
+            AgentSessionId = "claude-thread", CallbackToken = "callback-claude"
+        };
+
+        await database.UpsertSessionAsync(openClaw);
+        await database.UpsertSessionAsync(claude);
+
+        var storedOpenClaw = await database.GetSessionAsync("alice", "openclaw-session");
+        var storedClaude = await database.GetSessionAsync("alice", "claude-session");
+
+        Assert.NotNull(storedOpenClaw);
+        Assert.Equal(OpenClawApiKeySource.OpenAI, storedOpenClaw!.OpenClawApiKeySource);
+        Assert.NotNull(storedClaude);
+        Assert.Null(storedClaude!.OpenClawApiKeySource);
+    }
+
+    [PostgreSqlFact]
     public async Task OwnerAccess_MapsProviderNeutralSessionId_WhenLegacyClaudeIdIsNull()
     {
         await using var database = await PostgresSharingDatabase.CreateAsync();

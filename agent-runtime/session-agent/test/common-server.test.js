@@ -27,6 +27,25 @@ class FakeTerminal {
   emitExit(event) { for (const handler of this.exitHandlers) handler(event); }
 }
 
+class FakeChildProcess {
+  constructor() {
+    this.stdinWrites = [];
+    this.stdoutHandlers = [];
+    this.stderrHandlers = [];
+    this.handlers = {};
+    this.killed = false;
+    this.stdin = { write: data => this.stdinWrites.push(data) };
+    this.stdout = { on: (event, handler) => { if (event === 'data') this.stdoutHandlers.push(handler); } };
+    this.stderr = { on: (event, handler) => { if (event === 'data') this.stderrHandlers.push(handler); } };
+  }
+
+  on(event, handler) { this.handlers[event] = handler; }
+  kill() { this.killed = true; }
+  emitStdout(text) { for (const handler of this.stdoutHandlers) handler(Buffer.from(text)); }
+  emitStderr(text) { for (const handler of this.stderrHandlers) handler(Buffer.from(text)); }
+  emitExit(code, signal) { if (this.handlers.exit) this.handlers.exit(code, signal); }
+}
+
 class FakeSocket {
   constructor() {
     this.OPEN = 1;
@@ -49,6 +68,8 @@ function tick() {
 function createHarness(environment = {}, driverOverrides = {}) {
   const terminals = [];
   const spawns = [];
+  const children = [];
+  const pipeSpawns = [];
   const requests = [];
   const commands = [];
   const writes = [];
@@ -99,6 +120,12 @@ function createHarness(environment = {}, driverOverrides = {}) {
           return terminal;
         }
       },
+      spawn(cmd, args, options) {
+        const child = new FakeChildProcess();
+        children.push(child);
+        pipeSpawns.push({ cmd, args, options });
+        return child;
+      },
       WebSocketServer: FakeWebSocketServer,
       execFile(file, args, callback) {
         commands.push({ file, args });
@@ -119,7 +146,15 @@ function createHarness(environment = {}, driverOverrides = {}) {
     }
   });
 
-  return { runtime, driver, terminals, spawns, requests, commands, writes, intervals, exits };
+  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits };
+}
+
+function createChatHarness(environment = {}, driverOverrides = {}) {
+  return createHarness(environment, {
+    buildCommand: (_env, allowResume) =>
+      ({ cmd: 'test-agent', args: allowResume ? ['resume'] : ['fresh'], pipe: true }),
+    ...driverOverrides
+  });
 }
 
 test('common transport validates every required driver export', () => {
@@ -176,6 +211,42 @@ test('common transport accepts only safe single relative archive names', () => {
   }
 });
 
+test('common transport accepts optional safe stateExcludes paths and globs', () => {
+  const valid = {
+    name: 'Example', stateDir: '.openclaw', authFilename: 'auth-profiles.json',
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
+  };
+
+  assert.doesNotThrow(() => validateDriver({
+    ...valid,
+    stateExcludes: [
+      '.openclaw/agents/main/agent/auth-profiles.json',
+      '.openclaw/agents/*/agent/openclaw-agent.sqlite'
+    ]
+  }));
+  assert.doesNotThrow(() => validateDriver({ ...valid, stateExcludes: [] }));
+  assert.doesNotThrow(() => validateDriver(valid));
+
+  for (const value of [
+    null,
+    '.openclaw/agents/../escape/auth.json',
+    '/absolute/path',
+    'nested\\windows',
+    'bad;name',
+    'bad name',
+    '$HOME/secret',
+    'path with spaces',
+    ['ok', '../bad']
+  ]) {
+    assert.throws(() => validateDriver({
+      ...valid,
+      stateExcludes: Array.isArray(value) ? value : [value]
+    }), /stateExcludes/i);
+  }
+  assert.throws(() => validateDriver({ ...valid, stateExcludes: 'not-an-array' }),
+    /stateExcludes/i);
+});
+
 test('common transport is free of provider-specific command and state knowledge', () => {
   const source = fs.readFileSync(path.join(commonDir, 'server.js'), 'utf8');
   assert.doesNotMatch(source, /claude|codex|--resume|No conversation found|\.credentials\.json/i);
@@ -229,6 +300,24 @@ test('common transport archives driver state without its subscription credential
   assert.match(harness.commands[1].args[1], /"\.test-agent"/);
   assert.match(harness.commands[1].args[1], /--exclude="\.test-agent\/auth\.json"/);
   assert.doesNotMatch(harness.commands[1].args[1], /cat |credentials\.json/);
+});
+
+test('common transport applies optional stateExcludes as extra tar excludes', () => {
+  const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' }, {
+    name: 'OpenClaw',
+    stateDir: '.openclaw',
+    authFilename: 'auth-profiles.json',
+    stateExcludes: [
+      '.openclaw/agents/main/agent/auth-profiles.json',
+      '.openclaw/agents/*/agent/openclaw-agent.sqlite'
+    ]
+  });
+  harness.intervals[0].callback();
+  assert.equal(harness.commands.length, 1);
+  const command = harness.commands[0].args[1];
+  assert.match(command, /--exclude="\.openclaw\/auth-profiles\.json"/);
+  assert.match(command, /--exclude="\.openclaw\/agents\/main\/agent\/auth-profiles\.json"/);
+  assert.match(command, /--exclude="\.openclaw\/agents\/\*\/agent\/openclaw-agent\.sqlite"/);
 });
 
 test('common transport backs up scrollback and posts Running and terminal status', async () => {
@@ -337,6 +426,129 @@ test('common transport scopes a Claude API key to agent child and keeps parent a
   const socket = new FakeSocket();
   harness.runtime.webSocketServer.connect(socket, '/shell');
   assert.equal(harness.spawns[1].options.env.ANTHROPIC_API_KEY, undefined);
+});
+
+test('chat transport spawns a pipe instead of a PTY and replays only durable events', () => {
+  const harness = createChatHarness();
+  assert.equal(harness.terminals.length, 0);
+  assert.equal(harness.pipeSpawns.length, 1);
+  assert.deepEqual(harness.pipeSpawns[0].options.stdio, ['pipe', 'pipe', 'pipe']);
+  assert.equal(harness.pipeSpawns[0].options.cwd, '/workspace/repo');
+
+  const live = new FakeSocket();
+  harness.runtime.webSocketServer.connect(live, '/');
+
+  const child = harness.children[0];
+  child.emitStdout('{"type":"stream_event","event":{"type":"content_block_delta"}}\n');
+  child.emitStdout('{"type":"assistant","message":{"role":"assistant"}}\npartial');
+  child.emitStdout(' tail{"garbage"\n');
+
+  assert.deepEqual(live.sent, [
+    '{"type":"stream_event","event":{"type":"content_block_delta"}}\n',
+    '{"type":"assistant","message":{"role":"assistant"}}\n',
+    'partial tail{"garbage"\n'
+  ]);
+
+  const replay = new FakeSocket();
+  harness.runtime.webSocketServer.connect(replay, '/');
+  assert.deepEqual(replay.sent, [
+    '{"type":"assistant","message":{"role":"assistant"}}\n' +
+    'partial tail{"garbage"\n'
+  ]);
+});
+
+test('chat transport forwards user input as stream-json and echoes it durably', () => {
+  const harness = createChatHarness();
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'chat', text: 'hello agent' })));
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'chat', text: '   ' })));
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'input', data: 'raw keys' })));
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'resize', cols: 90, rows: 20 })));
+
+  const child = harness.children[0];
+  assert.deepEqual(child.stdinWrites, [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'hello agent' }] } }) + '\n'
+  ]);
+  const echo = JSON.stringify({
+    type: 'user',
+    message: { role: 'user', content: [{ type: 'text', text: 'hello agent' }] },
+    agenthub_echo: true
+  }) + '\n';
+  assert.deepEqual(socket.sent, [echo]);
+
+  const replay = new FakeSocket();
+  harness.runtime.webSocketServer.connect(replay, '/');
+  assert.deepEqual(replay.sent, [echo]);
+});
+
+test('chat transport sends an interrupt control request on demand', () => {
+  const harness = createChatHarness();
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'interrupt' })));
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'interrupt' })));
+
+  assert.deepEqual(harness.children[0].stdinWrites, [
+    JSON.stringify({ type: 'control_request', request_id: 'agenthub-1', request: { subtype: 'interrupt' } }) + '\n',
+    JSON.stringify({ type: 'control_request', request_id: 'agenthub-2', request: { subtype: 'interrupt' } }) + '\n'
+  ]);
+});
+
+test('chat transport sends the initial prompt once on fresh starts only', () => {
+  const fresh = createChatHarness({ AGENTHUB_PROMPT: 'do the task' }, {
+    buildCommand: () => ({ cmd: 'test-agent', args: ['fresh'], pipe: true })
+  });
+  assert.deepEqual(fresh.children[0].stdinWrites, [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'do the task' }] } }) + '\n'
+  ]);
+
+  const resumed = createChatHarness({ AGENTHUB_PROMPT: 'do the task' }, {
+    isResumeCommand: () => true
+  });
+  assert.deepEqual(resumed.children[0].stdinWrites, []);
+});
+
+test('chat transport wraps stderr and exit as durable agenthub events', async () => {
+  const harness = createChatHarness({
+    AGENTHUB_CALLBACK_URL: 'https://backend.invalid/internal/session',
+    AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback-token'
+  });
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  const child = harness.children[0];
+  child.emitStderr('boom');
+  child.emitExit(1, null);
+  await tick();
+  await tick();
+
+  assert.deepEqual(socket.sent, [
+    JSON.stringify({ type: 'agenthub', subtype: 'stderr', text: 'boom' }) + '\n',
+    JSON.stringify({ type: 'agenthub', subtype: 'exit', code: 1, signal: null }) + '\n'
+  ]);
+  assert.deepEqual(socket.closed, [1000]);
+  assert.equal(harness.requests.at(-1).options.body, JSON.stringify({ status: 'Failed' }));
+  assert.deepEqual(harness.exits, [1]);
+});
+
+test('chat transport retries a missing resume once with a durable info event', () => {
+  const harness = createChatHarness({}, {
+    isMissingResume: (output, exitCode) => exitCode === 1 && output.includes('missing')
+  });
+  harness.children[0].emitStderr('missing state');
+  harness.children[0].emitExit(1, null);
+
+  assert.equal(harness.children.length, 2);
+  assert.deepEqual(harness.pipeSpawns.map(spawn => spawn.args), [['resume'], ['fresh']]);
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  assert.equal(socket.sent[0].split('\n')[0],
+    JSON.stringify({ type: 'agenthub', subtype: 'stderr', text: 'missing state' }));
+  assert.match(socket.sent[0],
+    /"subtype":"info","text":"No saved conversation to resume — starting fresh\."/);
 });
 
 test('common transport production archive includes Codex state but excludes auth', () => {

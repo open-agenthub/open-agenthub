@@ -40,7 +40,7 @@ shift.
    Vue 3 + xterm.js            - Auth (OIDC, any provider)              - isolated, unprivileged
                                - Session orchestration                  - git + ssh + selected CLI
                                - WS terminal proxy                      - session-agent (PTY+WS)
-                                                                        - Claude Code, Codex, or Cursor
+                                                                        - Claude Code, Codex, Cursor, or OpenClaw
                                                                         - selected secrets/MCP mounted
 ```
 
@@ -49,14 +49,14 @@ shift.
 - **Interactive, autonomous, or scheduled sessions** — watch and answer live, hand off a
   prompt for unattended work, or run recurring jobs as CronJobs. Your agent works the
   night shift.
-- **Claude, Codex, or Cursor per session** — choose the agent and Subscription or API-key
-  billing independently in every mode. Cursor is a peer agent with the same session
-  modes; it does not use Claude's legacy `Auto` authentication. Migrated Claude sessions
+- **Claude, Codex, Cursor, or OpenClaw per session** — choose the agent and Subscription or API-key
+  billing independently in every mode. Cursor and OpenClaw are peer agents with the same session
+  modes; they do not use Claude's legacy `Auto` authentication. Migrated Claude sessions
   may retain internal legacy `Auto` until explicitly changed; new sessions cannot select it.
 - **Supervise from anywhere** — mobile-first web UI with live terminal streaming
   (xterm.js); reconnect from your phone and the scrollback replays.
 - **Bring your own container image** — run the agent inside your project's toolchain
-  image; the selected Claude, Codex, or Cursor runtime, Node, and terminal transport are
+  image; the selected Claude, Codex, Cursor, or OpenClaw runtime, Node, and terminal transport are
   copied in automatically.
 - **Opt-in root mode** to install tools inside the container (apt, npm -g, …) while the
   pod stays unprivileged.
@@ -70,9 +70,10 @@ shift.
   noVNC, while idle sessions consume no browser CPU or memory.
 - **Community Edition projects and session duplication** — organize sessions into personal projects and duplicate reusable settings into an independent session without copying conversation state or credentials.
 - **Subscription login that sticks** — sign in inside the selected provider container;
-  refreshed Claude, Codex, or Cursor file-based authentication is persisted per user in the
+  refreshed Claude, Codex, Cursor, or OpenClaw file-based authentication is persisted per user in the
   background. Codex uses its device-code flow in headless sessions; Cursor uses
-  `agent login` with a file-backed credential store. Host authentication files are never
+  `agent login` with a file-backed credential store; OpenClaw uses interactive auth under
+  `~/.openclaw`. Host authentication files are never
   copied into the cluster by the setup scripts.
 - **Usage & cost dashboard** — token/cost telemetry per session, split into real
   **API cost** and the estimated **“would have cost”** of subscription-covered sessions;
@@ -125,12 +126,13 @@ curl -fsSL https://open-agenthub.github.io/install.sh | sh
    ```
 3. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
    for repo access, plus an Anthropic, OpenAI, or Cursor API key if using API-key billing.
-   These inputs are write-only; status responses expose only stored/not-stored booleans.
-4. **Start your first session**: pick Claude, Codex, or Cursor, Subscription or API key,
+   OpenClaw ApiKey mode reuses those existing keys (pick Anthropic, OpenAI, or Cursor as the
+   source). These inputs are write-only; status responses expose only stored/not-stored booleans.
+4. **Start your first session**: pick Claude, Codex, Cursor, or OpenClaw, Subscription or API key,
    and a mode (interactive / autonomous / scheduled), plus any repo, custom image,
    policy, and MCP config. An Interactive Subscription session can complete provider
-   login in its terminal; Codex uses `codex login --device-auth`, and Cursor uses
-   `agent login`.
+   login in its terminal; Codex uses `codex login --device-auth`, Cursor uses
+   `agent login`, and OpenClaw uses `openclaw models auth add`.
 
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
 [`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3/MinIO
@@ -220,14 +222,15 @@ docker build -t $REG/frontend:$TAG ./frontend
 docker build -f agent-runtime/claude/Dockerfile -t $REG/agent-runtime-claude:$TAG ./agent-runtime
 docker build -f agent-runtime/codex/Dockerfile -t $REG/agent-runtime-codex:$TAG ./agent-runtime
 docker build -f agent-runtime/cursor/Dockerfile -t $REG/agent-runtime-cursor:$TAG ./agent-runtime
+docker build -f agent-runtime/openclaw/Dockerfile -t $REG/agent-runtime-openclaw:$TAG ./agent-runtime
 docker build -t $REG/browser:$TAG ./browser-runtime
 docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG
 docker push $REG/agent-runtime-claude:$TAG && docker push $REG/agent-runtime-codex:$TAG
-docker push $REG/agent-runtime-cursor:$TAG
+docker push $REG/agent-runtime-cursor:$TAG && docker push $REG/agent-runtime-openclaw:$TAG
 docker push $REG/browser:$TAG
 
-# image.registry/image.tag select all five defaults. Full runtime overrides are
-# agent.images.claude, agent.images.codex, and agent.images.cursor. Browser uses its
+# image.registry/image.tag select all six defaults. Full runtime overrides are
+# agent.images.claude, agent.images.codex, agent.images.cursor, and agent.images.openclaw. Browser uses its
 # explicit repository override. For a private registry, create the pull secret in BOTH
 # namespaces and set image.pullSecret.
 helm upgrade --install agenthub helm/open-agenthub -n agenthub --create-namespace \
@@ -306,7 +309,7 @@ finishes — enable per device under **Settings → Notifications**.
 ### Docker Desktop Kubernetes development
 
 For a local Kubernetes environment, the setup scripts build backend, frontend, Claude
-runtime, Codex runtime, Cursor runtime, and browser images locally, deploy the
+runtime, Codex runtime, Cursor runtime, OpenClaw runtime, and browser images locally, deploy the
 agenthub-dev Helm release into the agenthub-dev control namespace, and use
 agenthub-dev-sessions for session pods. They refuse to run unless the active kubectl
 context is docker-desktop.
@@ -354,7 +357,7 @@ as user `dev`.
 | Path | Contents |
 |------|----------|
 | `backend/` | ASP.NET Core: REST + WS proxy, K8s orchestration, JWT auth |
-| `agent-runtime/` | Separate Claude, Codex, and Cursor images sharing provider-neutral PTY/WS transport |
+| `agent-runtime/` | Separate Claude, Codex, Cursor, and OpenClaw images sharing provider-neutral PTY/WS transport |
 | `browser-runtime/` | Hardened Chromium, Xvfb, VNC, websockify, and cookie checkpoint supervisor |
 | `frontend/` | Vue 3 + Vite + xterm.js, mobile-first |
 | `helm/open-agenthub/` | Helm chart (recommended deployment) |
@@ -371,7 +374,7 @@ as user `dev`.
    selected provider. A custom glibc image can receive the selected provider runtime by
    init-container injection; bash, git, and curl are required.
 3. The backend creates a **pod** (interactive/autonomous) or a **CronJob** (scheduled).
-4. The shared transport runs `claude`, `codex`, or Cursor's `agent` under a **PTY** and
+4. The shared transport runs `claude`, `codex`, Cursor's `agent`, or `openclaw` under a **PTY** and
    serves a WebSocket with **scrollback** — reconnecting from your phone replays the history.
 5. The built-in browser MCP is registered automatically. Its first `browser_start` creates
    one browser pod for that live session; no browser resources exist before the request.
@@ -399,14 +402,17 @@ sessions. Subscription mode mounts only the selected provider's writable authent
 file; a background watcher persists valid login and refresh updates to that user's
 provider-specific Secret. Claude login happens through its normal in-container flow;
 Codex uses device-code authentication; Cursor uses `agent login` with
-`AGENT_CLI_CREDENTIAL_STORE=file`. Open AgentHub does not copy a workstation's real
-Claude, Codex, or Cursor authentication files into the cluster.
+`AGENT_CLI_CREDENTIAL_STORE=file`; OpenClaw uses interactive auth under `~/.openclaw`.
+Open AgentHub does not copy a workstation's real Claude, Codex, Cursor, or OpenClaw
+authentication files into the cluster.
 
 API-key mode never mounts the subscription Secret. For provider authentication, Claude
 scopes `ANTHROPIC_API_KEY` to the Claude process and its descendants. Codex
 Autonomous/Scheduled runs scope `CODEX_API_KEY` to `codex exec` and its descendants, while
 Interactive Codex creates an ephemeral file login from the key. Cursor scopes
-`CURSOR_API_KEY` to the Cursor agent process and its descendants. The shared `/shell`
+`CURSOR_API_KEY` to the Cursor agent process and its descendants. OpenClaw ApiKey mode
+injects only the selected existing key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
+`CURSOR_API_KEY`). The shared `/shell`
 receives neither provider API key. This selected-only behavior makes the billing source
 deterministic. Subscription avoids API-key billing, but it does not isolate credentials
 from the running agent.
@@ -447,8 +453,8 @@ NetworkPolicy isolation remain mandatory.
 ### Trusted-code credential boundary
 
 Provider credentials and authentication files are accessible to code and tools running
-as the same agent user. Claude, Codex, and Cursor provider-process descendants may inherit
-the selected `ANTHROPIC_API_KEY`, `CODEX_API_KEY`, or `CURSOR_API_KEY`, and subscription
+as the same agent user. Claude, Codex, Cursor, and OpenClaw provider-process descendants may inherit
+the selected `ANTHROPIC_API_KEY`, `CODEX_API_KEY`, `CURSOR_API_KEY`, or `OPENAI_API_KEY`, and subscription
 sessions can read their selected provider auth file. Run only trusted repositories and
 prompts when credentials are present. Use pod and network isolation to limit exposure and
 blast radius. Writable collaborators can direct the selected session's capabilities and
@@ -466,10 +472,10 @@ No PVCs. Results flow back via `git push` or as artifacts to S3. What is persist
 - **Postgres** = registry/status (source of truth for the session list), including the
   selected agent, authentication mode, agent conversation identifier, status, policy,
   and callback metadata.
-- **S3/MinIO** = provider-separated state (`claude-state.tgz`, `codex-state.tgz`, or
-  `cursor-state.tgz`), `scrollback.log`, `browser-cookies.json`, and `artifacts/...`.
-  State archives exclude provider authentication files; authentication restore happens
-  after state restore so stale state cannot replace the current per-user login.
+- **S3/MinIO** = provider-separated state (`claude-state.tgz`, `codex-state.tgz`,
+  `cursor-state.tgz`, or `openclaw-state.tgz`), `scrollback.log`, `browser-cookies.json`, and
+  `artifacts/...`. State archives exclude provider authentication files; authentication restore
+  happens after state restore so stale state cannot replace the current per-user login.
   Layout: `sessions/{owner-hash}/{sessionId}/...`
 - Browser persistence contains cookies only, not history, downloads, local storage, or a
   full profile. Treat the object as a credential: enable S3 encryption at rest and strict
@@ -485,7 +491,9 @@ billing mode, restores only that provider's state, and then restores selected
 authentication. Claude resumes its explicit conversation identifier. Codex resumes the
 restored session-local thread and may fall back once to a fresh thread if state is absent
 or invalid. Cursor resumes with `--resume` when a chat id is present and may fall back
-once to a fresh launch if that chat is missing.
+once to a fresh launch if that chat is missing. OpenClaw resumes from restored
+`~/.openclaw` state and/or an explicit session id when the CLI accepts one, with one
+fresh-session fallback when state is absent.
 
 Provider runtime hooks call the internal notification endpoint when supported; the
 backend sets `question_pending=true` and fires the configured webhook. The UI shows a
@@ -502,8 +510,9 @@ in [Browser operation and security](docs/browser-security.md).
 
 - **Auth**: any OIDC provider works. Client `agenthub`, claim `preferred_username` as the
   tenant key.
-- **Provider access**: each user supplies their own Claude, Codex, or Cursor subscription
-  login or API key. Open AgentHub does not issue subscriptions, tokens, or provider
+- **Provider access**: each user supplies their own Claude, Codex, Cursor, or OpenClaw subscription
+  login or API key. OpenClaw ApiKey billing reuses Anthropic, OpenAI, or Cursor keys.
+  Open AgentHub does not issue subscriptions, tokens, or provider
   organization access.
 - **Automation** uses a structured default-deny policy. Native provider controls,
   managed hooks, and Cursor `cli-config.json` allowlists supplement Kubernetes isolation;

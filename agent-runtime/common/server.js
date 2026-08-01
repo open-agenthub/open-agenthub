@@ -3,12 +3,15 @@
 const { loadDriver, validateDriver } = require('./driver-contract');
 
 const MAX_BUFFER = 1_000_000;
+// Protocol chatter that the chat UI only needs live, never on replay.
+const TRANSIENT_CHAT_EVENTS = new Set(['stream_event', 'control_response', 'control_request']);
 
 function createCommonServer(options = {}) {
   const env = options.env || process.env;
   const driver = validateDriver(options.driver);
   const supplied = options.dependencies || {};
   const pty = supplied.pty || require('node-pty');
+  const spawnProcess = supplied.spawn || require('node:child_process').spawn;
   const WebSocketServer = supplied.WebSocketServer || require('ws').WebSocketServer;
   const execFile = supplied.execFile || require('node:child_process').execFile;
   const fs = supplied.fs || require('node:fs');
@@ -44,10 +47,14 @@ function createCommonServer(options = {}) {
   const clients = new Set();
   let exited = false;
   let term;
+  let chat;
   let retriedFresh = false;
   let attemptedResume = false;
   let attemptOutput = '';
   let launchedAt = 0;
+  let chatMode = false;
+  let controlCounter = 0;
+  let promptSent = false;
 
   function remember(chunk) {
     scrollback += chunk;
@@ -60,12 +67,20 @@ function createCommonServer(options = {}) {
     }
   }
 
+  function broadcast(data) {
+    for (const socket of clients) safeSend(socket, data);
+  }
+
   function persistState(done) {
     if (!statePut) return done && done();
     const archive = driver.stateDir;
-    const excludedAuth = driver.stateDir + '/' + driver.authFilename;
+    const excludes = [driver.stateDir + '/' + driver.authFilename];
+    if (Array.isArray(driver.stateExcludes)) {
+      for (const entry of driver.stateExcludes) excludes.push(entry);
+    }
+    const excludeArgs = excludes.map(entry => '--exclude="' + entry + '"').join(' ');
     execFile('/bin/sh', ['-c',
-      'tar czf /tmp/state.tgz -C "' + home + '" --exclude="' + excludedAuth + '" "' + archive +
+      'tar czf /tmp/state.tgz -C "' + home + '" ' + excludeArgs + ' "' + archive +
       '" 2>/dev/null && curl -fsS ' + curlOption + '-T /tmp/state.tgz "' + statePut + '"'
     ], () => done && done());
   }
@@ -100,13 +115,131 @@ function createCommonServer(options = {}) {
     }).catch(() => {}).finally(() => done && done());
   }
 
+  function agenthubEvent(subtype, fields) {
+    return JSON.stringify({ type: 'agenthub', subtype, ...fields }) + '\n';
+  }
+
+  function retryMessage() {
+    if (chatMode) return agenthubEvent('info', { text: 'No saved conversation to resume — starting fresh.' });
+    return '\r\n[agent] No saved conversation to resume — starting fresh.\r\n';
+  }
+
+  function endMessage(exitCode, signal) {
+    if (chatMode) return agenthubEvent('exit', { code: exitCode, signal: signal || null });
+    return '\r\n[agent] Session ended (code ' + exitCode +
+      (signal ? ', signal ' + signal : '') + ').\r\n';
+  }
+
+  function handleAgentExit(exitCode, signal) {
+    const elapsedMs = now() - launchedAt;
+    if (attemptedResume && !retriedFresh &&
+        driver.isMissingResume(attemptOutput, exitCode, elapsedMs)) {
+      retriedFresh = true;
+      remember(retryMessage());
+      startAgent(false);
+      return;
+    }
+
+    exited = true;
+    const message = endMessage(exitCode, signal);
+    remember(message);
+    for (const socket of clients) {
+      safeSend(socket, message);
+      try { socket.close(1000); } catch {}
+    }
+    persistAll(() => {
+      postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
+        setTimeoutImpl(() => processLike.exit(exitCode || 0), mode === 'interactive' ? 1500 : 200));
+    });
+  }
+
+  function chatEventType(line) {
+    try {
+      const event = JSON.parse(line);
+      return event && typeof event.type === 'string' ? event.type : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  function deliverChatLine(line) {
+    const payload = line + '\n';
+    if (!TRANSIENT_CHAT_EVENTS.has(chatEventType(line))) remember(payload);
+    broadcast(payload);
+  }
+
+  function startPiped(command) {
+    const child = spawnProcess(command.cmd, command.args, {
+      cwd, env: agentEnv, stdio: ['pipe', 'pipe', 'pipe']
+    });
+
+    let pendingLine = '';
+    child.stdout.on('data', chunk => {
+      const text = chunk.toString();
+      attemptOutput += text;
+      pendingLine += text;
+      let newline;
+      while ((newline = pendingLine.indexOf('\n')) !== -1) {
+        const line = pendingLine.slice(0, newline);
+        pendingLine = pendingLine.slice(newline + 1);
+        if (line.trim()) deliverChatLine(line);
+      }
+    });
+
+    child.stderr.on('data', chunk => {
+      const text = chunk.toString();
+      attemptOutput += text;
+      const payload = agenthubEvent('stderr', { text });
+      remember(payload);
+      broadcast(payload);
+    });
+
+    child.on('exit', (code, signal) =>
+      handleAgentExit(code == null ? 1 : code, signal || undefined));
+
+    chat = {
+      sendUser(text) {
+        const event = { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } };
+        try { child.stdin.write(JSON.stringify(event) + '\n'); } catch { return; }
+        // The CLI never echoes user input on stdout, so replays need our copy.
+        const echo = JSON.stringify({ ...event, agenthub_echo: true }) + '\n';
+        remember(echo);
+        broadcast(echo);
+      },
+      interrupt() {
+        controlCounter += 1;
+        const request = {
+          type: 'control_request',
+          request_id: 'agenthub-' + controlCounter,
+          request: { subtype: 'interrupt' }
+        };
+        try { child.stdin.write(JSON.stringify(request) + '\n'); } catch {}
+      },
+      kill() { try { child.kill(); } catch {} }
+    };
+    term = { write() {}, resize() {}, kill: chat.kill };
+
+    if (!attemptedResume && !promptSent && env.AGENTHUB_PROMPT) {
+      promptSent = true;
+      chat.sendUser(env.AGENTHUB_PROMPT);
+    }
+  }
+
   function startAgent(allowResume) {
     const command = driver.buildCommand(env, allowResume);
     attemptedResume = driver.isResumeCommand(command);
     attemptOutput = '';
     launchedAt = now();
+    chatMode = command.pipe === true;
     console.log('[agent] driver=' + driver.name + ' mode=' + mode + ' resume=' + attemptedResume +
+      (chatMode ? ' ui=chat' : '') +
       ' cwd=' + cwd + ' cmd=' + command.cmd + ' ' + command.args.join(' '));
+
+    if (chatMode) {
+      startPiped(command);
+      return;
+    }
+
     term = pty.spawn(command.cmd, command.args, {
       name: 'xterm-256color', cols: 120, rows: 32, cwd, env: agentEnv
     });
@@ -114,32 +247,10 @@ function createCommonServer(options = {}) {
     term.onData(data => {
       attemptOutput += data;
       remember(data);
-      for (const socket of clients) safeSend(socket, data);
+      broadcast(data);
     });
 
-    term.onExit(({ exitCode, signal }) => {
-      const elapsedMs = now() - launchedAt;
-      if (attemptedResume && !retriedFresh &&
-          driver.isMissingResume(attemptOutput, exitCode, elapsedMs)) {
-        retriedFresh = true;
-        remember('\r\n[agent] No saved conversation to resume — starting fresh.\r\n');
-        startAgent(false);
-        return;
-      }
-
-      exited = true;
-      const message = '\r\n[agent] Session ended (code ' + exitCode +
-        (signal ? ', signal ' + signal : '') + ').\r\n';
-      remember(message);
-      for (const socket of clients) {
-        safeSend(socket, message);
-        try { socket.close(1000); } catch {}
-      }
-      persistAll(() => {
-        postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
-          setTimeoutImpl(() => processLike.exit(exitCode || 0), mode === 'interactive' ? 1500 : 200));
-      });
-    });
+    term.onExit(({ exitCode, signal }) => handleAgentExit(exitCode, signal));
   }
 
   function handleAgent(socket) {
@@ -148,9 +259,18 @@ function createCommonServer(options = {}) {
     socket.on('message', raw => {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
-      if (message.type === 'input' && typeof message.data === 'string' && !exited) {
+      if (exited) return;
+      if (chatMode) {
+        if (message.type === 'chat' && typeof message.text === 'string' && message.text.trim() && chat) {
+          chat.sendUser(message.text);
+        } else if (message.type === 'interrupt' && chat) {
+          chat.interrupt();
+        }
+        return;
+      }
+      if (message.type === 'input' && typeof message.data === 'string') {
         term.write(message.data);
-      } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0 && !exited) {
+      } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
         try { term.resize(message.cols, message.rows); } catch {}
       }
     });

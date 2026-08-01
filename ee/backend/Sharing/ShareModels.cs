@@ -182,6 +182,7 @@ public sealed record SharedSessionInfo
     public required string Title { get; init; }
     public required string Owner { get; init; }
     public required SessionMode Mode { get; init; }
+    public string UiMode { get; init; } = SessionUiMode.Terminal;
     public required string Phase { get; init; }
     public DateTime CreatedAt { get; init; }
     public string? Schedule { get; init; }
@@ -207,6 +208,7 @@ public static class SharedSessionSanitizer
             Title = session.Title,
             Owner = session.Owner,
             Mode = session.Mode,
+            UiMode = session.UiMode,
             Phase = session.Status,
             CreatedAt = session.CreatedAt,
             Schedule = session.Schedule,
