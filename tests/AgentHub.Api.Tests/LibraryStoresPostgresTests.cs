@@ -1,4 +1,7 @@
+using AgentHub.Api.Ee.Identity;
+using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Library;
+using AgentHub.Api.Persistence;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Xunit;
@@ -203,6 +206,75 @@ public class LibraryStoresPostgresTests
             db.McpServers.UpdateAsync("alice", beta.Id, RawRequest("ALPHA")));
         Assert.Contains("already exists", error.Message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [PostgreSqlFact]
+    public async Task LibraryShareStore_SetGet_AndAccessibleViaAllUserGroup()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync();
+        await db.EnsureUserAsync("alice");
+        await db.EnsureUserAsync("bob");
+        await db.Groups.ReplaceGroupsAsync("alice", ["devs"]);
+
+        var viaAll = await db.McpServers.CreateAsync("bob", RawRequest("via-all"));
+        var viaUser = await db.McpServers.CreateAsync("bob", RawRequest("via-user"));
+        var viaGroup = await db.McpServers.CreateAsync("bob", RawRequest("via-group"));
+        var hidden = await db.McpServers.CreateAsync("bob", RawRequest("hidden"));
+
+        await db.Shares.SetSharesAsync(LibraryItemTypes.Mcp, viaAll.Id, all: true, null, null, "bob");
+        await db.Shares.SetSharesAsync(LibraryItemTypes.Mcp, viaUser.Id, all: false, ["alice"], null, "bob");
+        await db.Shares.SetSharesAsync(LibraryItemTypes.Mcp, viaGroup.Id, all: false, null, ["devs"], "bob");
+
+        var allState = await db.Shares.GetSharesAsync(LibraryItemTypes.Mcp, viaAll.Id);
+        Assert.True(allState.All);
+        Assert.Empty(allState.Users);
+        Assert.Empty(allState.Groups);
+
+        var userState = await db.Shares.GetSharesAsync(LibraryItemTypes.Mcp, viaUser.Id);
+        Assert.False(userState.All);
+        Assert.Equal(["alice"], userState.Users);
+
+        var groupState = await db.Shares.GetSharesAsync(LibraryItemTypes.Mcp, viaGroup.Id);
+        Assert.Equal(["devs"], groupState.Groups);
+
+        var accessible = (await db.Shares.ListAccessibleItemIdsAsync(LibraryItemTypes.Mcp, "alice"))
+            .OrderBy(id => id).ToList();
+        Assert.Equal(
+            new[] { viaAll.Id, viaUser.Id, viaGroup.Id }.OrderBy(id => id),
+            accessible);
+        Assert.DoesNotContain(hidden.Id, accessible);
+    }
+
+    [PostgreSqlFact]
+    public async Task LibraryShareStore_RejectsUnknownUserAndGroup()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync();
+        var server = await db.McpServers.CreateAsync("bob", RawRequest("docs"));
+
+        var unknownUser = await Assert.ThrowsAsync<ArgumentException>(() =>
+            db.Shares.SetSharesAsync(LibraryItemTypes.Mcp, server.Id, false, ["ghost"], null, "bob"));
+        Assert.Contains("ghost", unknownUser.Message);
+
+        var unknownGroup = await Assert.ThrowsAsync<ArgumentException>(() =>
+            db.Shares.SetSharesAsync(LibraryItemTypes.Mcp, server.Id, false, null, ["nope"], "bob"));
+        Assert.Contains("nope", unknownGroup.Message);
+    }
+
+    [PostgreSqlFact]
+    public async Task LibraryShareStore_DeleteForItem_ClearsShares()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync();
+        await db.EnsureUserAsync("alice");
+        var server = await db.McpServers.CreateAsync("bob", RawRequest("docs"));
+        await db.Shares.SetSharesAsync(LibraryItemTypes.Mcp, server.Id, all: true, null, null, "bob");
+        Assert.Contains(server.Id, await db.Shares.ListAccessibleItemIdsAsync(LibraryItemTypes.Mcp, "alice"));
+
+        await db.Shares.DeleteForItemAsync(LibraryItemTypes.Mcp, server.Id);
+        Assert.Empty(await db.Shares.ListAccessibleItemIdsAsync(LibraryItemTypes.Mcp, "alice"));
+        var state = await db.Shares.GetSharesAsync(LibraryItemTypes.Mcp, server.Id);
+        Assert.False(state.All);
+        Assert.Empty(state.Users);
+        Assert.Empty(state.Groups);
+    }
 }
 
 internal sealed class PostgresLibraryDatabase : IAsyncDisposable
@@ -212,14 +284,26 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
     private readonly string _connectionString;
 
     public McpServerStore McpServers { get; }
+    public LibraryShareStore Shares { get; }
+    public UserGroupStore Groups { get; }
+    public UserDirectory Users { get; }
 
     private PostgresLibraryDatabase(
-        string baseConnectionString, string schema, string connectionString, McpServerStore mcpServers)
+        string baseConnectionString,
+        string schema,
+        string connectionString,
+        McpServerStore mcpServers,
+        LibraryShareStore shares,
+        UserGroupStore groups,
+        UserDirectory users)
     {
         _baseConnectionString = baseConnectionString;
         _schema = schema;
         _connectionString = connectionString;
         McpServers = mcpServers;
+        Shares = shares;
+        Groups = groups;
+        Users = users;
     }
 
     public static async Task<PostgresLibraryDatabase> CreateAsync()
@@ -253,11 +337,17 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
             .Build();
 
         var mcpServers = new McpServerStore(configuration);
+        var shares = new LibraryShareStore(configuration);
+        var groups = new UserGroupStore(configuration);
+        var users = new UserDirectory(configuration);
         try
         {
             await mcpServers.InitializeAsync();
+            await shares.InitializeAsync();
+            await groups.InitializeAsync();
+            await users.InitializeAsync();
             return new PostgresLibraryDatabase(
-                baseConnectionString, schema, connectionString, mcpServers);
+                baseConnectionString, schema, connectionString, mcpServers, shares, groups, users);
         }
         catch
         {
@@ -265,6 +355,9 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
             throw;
         }
     }
+
+    public Task EnsureUserAsync(string owner)
+        => Users.RecordLoginAsync(owner, $"{owner}@example.test", owner);
 
     public async Task<T?> ScalarAsync<T>(string sql, params NpgsqlParameter[] parameters)
     {

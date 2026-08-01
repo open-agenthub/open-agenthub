@@ -1,3 +1,4 @@
+using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Library;
 using Xunit;
 
@@ -10,6 +11,15 @@ public class LibraryAccessServiceTests
     {
         var mcp = new InMemoryMcpServerStore();
         shares ??= new FakeLibraryShareReader();
+        var access = new LibraryAccessService(mcp, shares, new FakeEnterpriseLicense(licensed));
+        return (access, mcp, shares);
+    }
+
+    private static (LibraryAccessService Access, InMemoryMcpServerStore Mcp, InMemoryLibraryShareStore Shares)
+        BuildWithShareStore(bool licensed)
+    {
+        var mcp = new InMemoryMcpServerStore();
+        var shares = new InMemoryLibraryShareStore();
         var access = new LibraryAccessService(mcp, shares, new FakeEnterpriseLicense(licensed));
         return (access, mcp, shares);
     }
@@ -105,5 +115,39 @@ public class LibraryAccessServiceTests
         Assert.Equal(
             new[] { own.Id, foreign.Id, org.Id }.OrderBy(id => id),
             resolved.Select(r => r.Id).OrderBy(id => id));
+    }
+
+    [Fact]
+    public async Task WithLicense_SharedItemsAppear_ViaUserGroupAndAll()
+    {
+        var (access, mcp, shares) = BuildWithShareStore(licensed: true);
+        shares.KnownUsers.Add("alice");
+        shares.AddMembership("alice", "devs");
+        var viaAll = mcp.Add("bob", "via-all");
+        var viaUser = mcp.Add("bob", "via-user");
+        var viaGroup = mcp.Add("bob", "via-group");
+        var notShared = mcp.Add("bob", "not-shared");
+
+        await shares.SetSharesAsync(LibraryItemTypes.Mcp, viaAll.Id, all: true, null, null, "bob");
+        await shares.SetSharesAsync(LibraryItemTypes.Mcp, viaUser.Id, all: false, ["alice"], null, "bob");
+        await shares.SetSharesAsync(LibraryItemTypes.Mcp, viaGroup.Id, all: false, null, ["devs"], "bob");
+
+        var names = (await access.ListMcpServersAsync("alice")).Select(s => s.Name).ToList();
+        Assert.Equal(["via-all", "via-group", "via-user"], names);
+        Assert.DoesNotContain(notShared.Name, names);
+    }
+
+    [Fact]
+    public async Task WithoutLicense_ShareMatrixIsIgnored()
+    {
+        var (access, mcp, shares) = BuildWithShareStore(licensed: false);
+        shares.KnownUsers.Add("alice");
+        var foreign = mcp.Add("bob", "shared-server");
+        var org = mcp.Add(McpServerRecord.OrgOwner, "org-server");
+        await shares.SetSharesAsync(LibraryItemTypes.Mcp, foreign.Id, all: true, null, null, "bob");
+
+        var names = (await access.ListMcpServersAsync("alice")).Select(s => s.Name).ToList();
+        Assert.Equal(["org-server"], names);
+        Assert.DoesNotContain(foreign.Name, names);
     }
 }
