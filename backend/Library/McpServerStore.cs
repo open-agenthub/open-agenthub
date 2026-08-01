@@ -105,14 +105,22 @@ public sealed class McpServerStore : IMcpServerStore
         var name = LibraryValidation.ValidateMcpServerName(request.Name);
         var description = LibraryValidation.ValidateDescription(request.Description);
         var config = LibraryValidation.ValidateMcpServerConfig(request.ConfigJson, kind);
-        var secret = request.SecretJson;
+        // null = leave unchanged; "" = clear; otherwise replace.
+        var clearSecret = request.SecretJson is not null && request.SecretJson.Length == 0;
+        var setSecret = request.SecretJson is not null && request.SecretJson.Length > 0;
 
         const string sql = """
             UPDATE mcp_servers
             SET name = @name, description = @description, kind = @kind,
-                config_json = @config_json, secret_json = @secret_json, updated_at = now()
+                config_json = @config_json,
+                secret_json = CASE
+                    WHEN @clear_secret THEN NULL
+                    WHEN @set_secret THEN @secret_json
+                    ELSE secret_json
+                END,
+                updated_at = now()
             WHERE id = @id AND owner = @owner
-            RETURNING created_at, updated_at
+            RETURNING created_at, updated_at, secret_json
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("id", id);
@@ -121,7 +129,9 @@ public sealed class McpServerStore : IMcpServerStore
         cmd.Parameters.AddWithValue("description", description);
         cmd.Parameters.AddWithValue("kind", kind);
         cmd.Parameters.AddWithValue("config_json", config);
-        cmd.Parameters.AddWithValue("secret_json", (object?)secret ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("clear_secret", clearSecret);
+        cmd.Parameters.AddWithValue("set_secret", setSecret);
+        cmd.Parameters.AddWithValue("secret_json", setSecret ? request.SecretJson! : (object)DBNull.Value);
         try
         {
             await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -135,7 +145,7 @@ public sealed class McpServerStore : IMcpServerStore
                 Description = description,
                 Kind = kind,
                 ConfigJson = config,
-                SecretJson = secret,
+                SecretJson = reader.IsDBNull(2) ? null : reader.GetString(2),
                 CreatedAt = reader.GetDateTime(0),
                 UpdatedAt = reader.GetDateTime(1)
             };
