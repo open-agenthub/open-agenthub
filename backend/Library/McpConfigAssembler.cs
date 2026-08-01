@@ -3,6 +3,16 @@ using System.Text.Json.Nodes;
 
 namespace AgentHub.Api.Library;
 
+/// <summary>Options for emitting HTTP MCP gateway URLs for catalog <c>kind=api</c> entries.</summary>
+public sealed class McpGatewayAssembleOptions
+{
+    /// <summary>Base URL agents use to reach the gateway (no trailing slash), e.g. in-cluster service URL.</summary>
+    public required string BaseUrl { get; init; }
+
+    /// <summary>Issues a session-bound token for a catalog MCP server id. When null, no auth header is emitted.</summary>
+    public Func<string, string>? IssueToken { get; init; }
+}
+
 /// <summary>
 /// Builds the effective .mcp.json for a session from catalog server entries
 /// plus the session's inline config. Inline entries win on name conflicts,
@@ -10,11 +20,14 @@ namespace AgentHub.Api.Library;
 /// </summary>
 public static class McpConfigAssembler
 {
-    /// <summary>Placeholder gateway base until Task 8 wires the real MCP HTTP endpoint.</summary>
-    public const string ApiGatewayUrlPrefix = "https://mcp.invalid/";
+    /// <summary>Fallback gateway origin used when no <see cref="McpGatewayAssembleOptions"/> are supplied (unit tests / create-path validation).</summary>
+    public const string DefaultGatewayBaseUrl = "https://mcp.invalid";
 
     /// <summary>Returns the merged .mcp.json, or null when there is nothing to mount.</summary>
-    public static string? Merge(string? inlineJson, IEnumerable<McpServerRecord> servers)
+    public static string? Merge(
+        string? inlineJson,
+        IEnumerable<McpServerRecord> servers,
+        McpGatewayAssembleOptions? gateway = null)
     {
         JsonObject root;
         if (string.IsNullOrWhiteSpace(inlineJson))
@@ -48,7 +61,7 @@ public static class McpConfigAssembler
         {
             if (inlineServers.ContainsKey(server.Name))
                 continue; // inline definition wins
-            inlineServers[server.Name] = BuildServerEntry(server);
+            inlineServers[server.Name] = BuildServerEntry(server, gateway);
         }
 
         if (inlineServers.Count == 0)
@@ -64,15 +77,28 @@ public static class McpConfigAssembler
         return root.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
     }
 
-    private static JsonNode BuildServerEntry(McpServerRecord server)
+    private static JsonNode BuildServerEntry(McpServerRecord server, McpGatewayAssembleOptions? gateway)
     {
         if (string.Equals(server.Kind, "api", StringComparison.OrdinalIgnoreCase))
         {
-            return new JsonObject
+            var baseUrl = string.IsNullOrWhiteSpace(gateway?.BaseUrl)
+                ? DefaultGatewayBaseUrl
+                : gateway!.BaseUrl.TrimEnd('/');
+            var entry = new JsonObject
             {
                 ["type"] = "http",
-                ["url"] = ApiGatewayUrlPrefix + server.Id
+                ["url"] = $"{baseUrl}/mcp/api/{server.Id}"
             };
+
+            if (gateway?.IssueToken is not null)
+            {
+                entry["headers"] = new JsonObject
+                {
+                    [McpGatewayTokenService.HeaderName] = gateway.IssueToken(server.Id)
+                };
+            }
+
+            return entry;
         }
 
         // kind=raw (default): ConfigJson is the server entry object.

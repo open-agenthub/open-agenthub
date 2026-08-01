@@ -12,6 +12,7 @@ public static class SessionMcpConfig
     /// <summary>
     /// Strict or lenient resolve followed by <see cref="McpConfigAssembler.Merge"/>.
     /// Returns resolved ids (accessible only) and the effective .mcp.json (or null).
+    /// Pass <paramref name="gateway"/> on spawn so <c>kind=api</c> entries get a real URL + token.
     /// </summary>
     public static async Task<(IReadOnlyList<string> Ids, string? EffectiveJson)> ResolveAndAssembleAsync(
         ILibraryAccess library,
@@ -19,13 +20,14 @@ public static class SessionMcpConfig
         string? inlineMcpConfigJson,
         IReadOnlyCollection<string> mcpServerIds,
         bool strict,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        McpGatewayAssembleOptions? gateway = null)
     {
         var servers = mcpServerIds.Count == 0
             ? (IReadOnlyList<McpServerRecord>)Array.Empty<McpServerRecord>()
             : await library.ResolveMcpServersAsync(owner, mcpServerIds, strict, ct);
         var ids = servers.Select(s => s.Id).ToList();
-        var effective = McpConfigAssembler.Merge(inlineMcpConfigJson, servers);
+        var effective = McpConfigAssembler.Merge(inlineMcpConfigJson, servers, gateway);
         return (ids, effective);
     }
 }
