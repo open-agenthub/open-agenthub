@@ -121,6 +121,12 @@ export const api = {
   gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),
   gitDisconnect: (providerId) => req('DELETE', `/git/connections/${providerId}`),
   gitProjects: (provider, q) => req('GET', `/git/projects?provider=${encodeURIComponent(provider)}&q=${encodeURIComponent(q || '')}`),
+  // Personal MCP server catalog (admin org catalog methods land in a later task).
+  mcpServers: () => req('GET', '/mcp-servers'),
+  createMcpServer: (data) => req('POST', '/mcp-servers', data),
+  createMcpServerFromApi: (data) => req('POST', '/mcp-servers/from-api', data),
+  updateMcpServer: (id, data) => req('PUT', `/mcp-servers/${encodeURIComponent(id)}`, data),
+  deleteMcpServer: (id) => req('DELETE', `/mcp-servers/${encodeURIComponent(id)}`),
   async getTranscript(id) {
     const res = await fetch(`/api/sessions/${id}/transcript`, { headers: await authHeaders() })
     if (res.status === 401) handle401()
