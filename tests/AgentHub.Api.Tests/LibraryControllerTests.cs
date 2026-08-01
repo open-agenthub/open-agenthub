@@ -15,7 +15,8 @@ public class LibraryControllerTests
         new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?> { ["Ee:Admins"] = admins })
             .Build(),
-        NullLogger<AdminAccess>.Instance);
+        NullLogger<AdminAccess>.Instance,
+        []);
 
     private static LibraryController Controller(
         string user,

@@ -35,21 +35,21 @@ public sealed class LibraryController(
         ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
         ?? throw new UnauthorizedAccessException();
 
-    private bool IsAdmin => admins.IsAdmin(Owner);
+    private Task<bool> IsAdminAsync(CancellationToken ct) => admins.IsAdminAsync(Owner, ct);
 
     // ---------------------------------------------------------------- Groups
 
     [HttpGet("groups")]
     public async Task<IActionResult> ListGroups(CancellationToken ct)
     {
-        if (Gate(adminOnly: true) is { } failure) return failure;
+        if (await GateAsync(adminOnly: true, ct) is { } failure) return failure;
         return Ok(await store.ListGroupsAsync(ct));
     }
 
     [HttpPost("groups")]
     public async Task<IActionResult> CreateGroup([FromBody] CreateGroupRequest request, CancellationToken ct)
     {
-        if (Gate(adminOnly: true) is { } failure) return failure;
+        if (await GateAsync(adminOnly: true, ct) is { } failure) return failure;
         try
         {
             return Ok(await store.CreateGroupAsync(request.Name, ct));
@@ -63,7 +63,7 @@ public sealed class LibraryController(
     [HttpDelete("groups/{id}")]
     public async Task<IActionResult> DeleteGroup(string id, CancellationToken ct)
     {
-        if (Gate(adminOnly: true) is { } failure) return failure;
+        if (await GateAsync(adminOnly: true, ct) is { } failure) return failure;
         try
         {
             await store.DeleteGroupAsync(id, ct);
@@ -79,7 +79,7 @@ public sealed class LibraryController(
     public async Task<IActionResult> SetGroupMembers(
         string id, [FromBody] SetGroupMembersRequest request, CancellationToken ct)
     {
-        if (Gate(adminOnly: true) is { } failure) return failure;
+        if (await GateAsync(adminOnly: true, ct) is { } failure) return failure;
         try
         {
             return Ok(await store.SetGroupMembersAsync(id, request.Members ?? [], ct));
@@ -100,7 +100,7 @@ public sealed class LibraryController(
     [HttpGet("users")]
     public async Task<IActionResult> ListUsers(CancellationToken ct)
     {
-        if (Gate(adminOnly: true) is { } failure) return failure;
+        if (await GateAsync(adminOnly: true, ct) is { } failure) return failure;
         var users = await directory.ListAsync(ct);
         return Ok(users
             .Select(u => new { owner = u.Owner, displayName = u.DisplayName, email = u.Email })
@@ -112,7 +112,7 @@ public sealed class LibraryController(
     [HttpGet("settings")]
     public async Task<IActionResult> GetSettings(CancellationToken ct)
     {
-        if (Gate(adminOnly: false) is { } failure) return failure;
+        if (await GateAsync(adminOnly: false, ct) is { } failure) return failure;
         return Ok(new LibrarySettings(await store.GetUserSkillPublishingAsync(ct)));
     }
 
@@ -120,7 +120,7 @@ public sealed class LibraryController(
     public async Task<IActionResult> SetSettings(
         [FromBody] UpdateLibrarySettingsRequest request, CancellationToken ct)
     {
-        if (Gate(adminOnly: true) is { } failure) return failure;
+        if (await GateAsync(adminOnly: true, ct) is { } failure) return failure;
         await store.SetUserSkillPublishingAsync(request.UserSkillPublishing, ct);
         return Ok(new LibrarySettings(request.UserSkillPublishing));
     }
@@ -130,7 +130,7 @@ public sealed class LibraryController(
     [HttpGet("{itemType}/{id}/shares")]
     public async Task<IActionResult> GetShares(string itemType, string id, CancellationToken ct)
     {
-        if (Gate(adminOnly: false) is { } failure) return failure;
+        if (await GateAsync(adminOnly: false, ct) is { } failure) return failure;
         if (MapItemType(itemType) is not { } type) return NotFound();
         if (!await OwnsItemAsync(type, id, ct)) return NotFound();
         return Ok(await store.GetSharesAsync(type, id, ct));
@@ -140,11 +140,11 @@ public sealed class LibraryController(
     public async Task<IActionResult> SetShares(
         string itemType, string id, [FromBody] UpdateSharesRequest request, CancellationToken ct)
     {
-        if (Gate(adminOnly: false) is { } failure) return failure;
+        if (await GateAsync(adminOnly: false, ct) is { } failure) return failure;
         if (MapItemType(itemType) is not { } type) return NotFound();
         if (!await OwnsItemAsync(type, id, ct)) return NotFound();
 
-        if (!IsAdmin)
+        if (!await IsAdminAsync(ct))
         {
             // Regular users may only publish/unpublish their own skills to everyone,
             // and only while the admin toggle allows it.
@@ -183,7 +183,7 @@ public sealed class LibraryController(
             : (await skills.GetManyAsync([id], ct)).Any(r => r.Owner == owner);
     }
 
-    private ObjectResult? Gate(bool adminOnly)
+    private async Task<ObjectResult?> GateAsync(bool adminOnly, CancellationToken ct)
     {
         if (!license.Enabled)
         {
@@ -191,7 +191,7 @@ public sealed class LibraryController(
                 StatusCodes.Status402PaymentRequired,
                 new { error = "An active enterprise license is required." });
         }
-        if (adminOnly && !IsAdmin)
+        if (adminOnly && !await IsAdminAsync(ct))
         {
             return StatusCode(
                 StatusCodes.Status403Forbidden,
