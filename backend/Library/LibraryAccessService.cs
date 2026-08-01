@@ -138,7 +138,10 @@ public sealed class LibraryAccessService : ILibraryAccess
             if (!seen.Add(record.Name)) continue;
             var content = await _skills.GetContentAsync(record, ct);
             if (!string.IsNullOrEmpty(content))
-                payloads.Add(new SkillPayload(record.Name, content));
+            {
+                var files = await _skills.GetFilesAsync(record.Id, record.Version, ct);
+                payloads.Add(new SkillPayload(record.Name, content, files));
+            }
         }
         return payloads.OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
     }

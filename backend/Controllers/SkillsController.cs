@@ -74,9 +74,10 @@ public sealed class SkillsController : ControllerBase
         var record = await _access.GetSkillAsync(owner, id, ct);
         if (record is null) return NotFound();
         var content = await _store.GetContentAsync(record, ct) ?? "";
+        var files = await _store.GetFilesAsync(record.Id, record.Version, ct);
         return Ok(new SkillDetail(
             record.Id, record.Name, record.Description, record.Owner,
-            record.Owner == owner, record.ProjectId, record.Version, content,
+            record.Owner == owner, record.ProjectId, record.Version, content, files,
             record.CreatedAt, record.UpdatedAt));
     }
 
@@ -100,9 +101,10 @@ public sealed class SkillsController : ControllerBase
         if (record is null) return NotFound();
         var content = await _store.GetVersionContentAsync(id, version, ct);
         if (content is null) return NotFound();
+        var files = await _store.GetFilesAsync(id, version, ct);
         return Ok(new SkillDetail(
             record.Id, record.Name, record.Description, record.Owner,
-            record.Owner == owner, record.ProjectId, version, content,
+            record.Owner == owner, record.ProjectId, version, content, files,
             record.CreatedAt, record.UpdatedAt));
     }
 

@@ -21,11 +21,13 @@ public sealed class SkillLibraryMcpController : ControllerBase
 
     private readonly ISessionStore _store;
     private readonly SkillLibraryMcpService _mcp;
+    private readonly SkillImporter _importer;
 
-    public SkillLibraryMcpController(ISessionStore store, SkillLibraryMcpService mcp)
+    public SkillLibraryMcpController(ISessionStore store, SkillLibraryMcpService mcp, SkillImporter importer)
     {
         _store = store;
         _mcp = mcp;
+        _importer = importer;
     }
 
     [HttpPost]
@@ -65,5 +67,27 @@ public sealed class SkillLibraryMcpController : ControllerBase
     {
         Response.Headers.Allow = "POST";
         return StatusCode(StatusCodes.Status405MethodNotAllowed);
+    }
+
+    /// <summary>
+    /// Upward sync: the agent pod reports skills it created locally under
+    /// ~/.claude/skills (unmanaged directories); unchanged ones are skipped.
+    /// Called by the entrypoint after start and on graceful shutdown.
+    /// </summary>
+    [HttpPost("/internal/sessions/{id}/skills/import")]
+    public async Task<IActionResult> Import(
+        string id, [FromBody] ImportSkillsRequest request, CancellationToken ct)
+    {
+        if (!Request.Headers.TryGetValue("X-Agent-Token", out var token))
+            return Unauthorized();
+        var session = await _store.GetByCallbackTokenAsync(token!, ct);
+        if (session is null || session.Id != id)
+            return Unauthorized();
+        if (request.Skills is null || request.Skills.Count == 0)
+            return Ok(new ImportSkillsResult([], [], [], []));
+        if (request.Skills.Count > 50)
+            return BadRequest(new { error = "Too many skills in one import." });
+
+        return Ok(await _importer.ImportAsync(session, request.Skills, ct));
     }
 }

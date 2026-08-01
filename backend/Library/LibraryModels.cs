@@ -57,13 +57,21 @@ public sealed class SkillVersionRecord
 }
 
 public sealed record SaveMcpServerRequest(string Name, string? Description, string ConfigJson);
+
+/// <summary>An extra file of a skill next to its SKILL.md — scripts, templates,
+/// reference documents. Text only; the path is relative to the skill directory.</summary>
+public sealed record SkillFile(string Path, string Content);
+
 public sealed record SaveSkillRequest(
     string Name,
     string? Description,
     string Content,
     string? ProjectId = null,
     string? Comment = null,
-    string? SavedBy = null);
+    string? SavedBy = null,
+    // null = keep the current version's files (update) / none (create);
+    // [] = remove all files; a list replaces them.
+    IReadOnlyList<SkillFile>? Files = null);
 
 /// <summary>List/detail view of a library MCP server. The raw config is only
 /// returned to its owner — shared entries may contain tokens.</summary>
@@ -97,6 +105,7 @@ public sealed record SkillDetail(
     string? ProjectId,
     int Version,
     string Content,
+    IReadOnlyList<SkillFile> Files,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
@@ -121,8 +130,9 @@ public sealed record SkillSearchHit(
     double Score,
     DateTime UpdatedAt);
 
-/// <summary>A skill as delivered to an agent pod (name + SKILL.md content).</summary>
-public sealed record SkillPayload(string Name, string Content);
+/// <summary>A skill as delivered to an agent pod (name + SKILL.md content
+/// + extra files such as scripts).</summary>
+public sealed record SkillPayload(string Name, string Content, IReadOnlyList<SkillFile> Files);
 
 public static class LibraryValidation
 {
@@ -208,6 +218,61 @@ public static class LibraryValidation
             throw new ArgumentException("Skill content is required.");
         if (value.Length > MaxSkillContentChars)
             throw new ArgumentException("Skill content is too large.");
+        return value;
+    }
+
+    public const int MaxSkillFiles = 20;
+    public const int MaxSkillFilePathLength = 200;
+    public const int MaxSkillFilesTotalChars = 500_000;
+
+    /// <summary>Validates the extra files of a skill. Paths become real paths under
+    /// ~/.claude/skills/{name}/ in agent pods, so they must be strictly relative,
+    /// shallow and made of safe segments. Returns the normalized list.</summary>
+    public static IReadOnlyList<SkillFile>? ValidateSkillFiles(IReadOnlyList<SkillFile>? files)
+    {
+        if (files is null) return null;
+        if (files.Count > MaxSkillFiles)
+            throw new ArgumentException($"A skill may have at most {MaxSkillFiles} extra files.");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var total = 0;
+        var result = new List<SkillFile>(files.Count);
+        foreach (var file in files)
+        {
+            var path = ValidateSkillFilePath(file.Path);
+            if (!seen.Add(path))
+                throw new ArgumentException($"Duplicate file path: {path}");
+            var content = file.Content ?? "";
+            if (content.Contains('\0'))
+                throw new ArgumentException($"File {path} is not text.");
+            if (content.Length > MaxSkillContentChars)
+                throw new ArgumentException($"File {path} is too large.");
+            total += content.Length;
+            if (total > MaxSkillFilesTotalChars)
+                throw new ArgumentException("The skill's files are too large in total.");
+            result.Add(new SkillFile(path, content));
+        }
+        return result;
+    }
+
+    public static string ValidateSkillFilePath(string? path)
+    {
+        var value = (path ?? "").Trim().Replace('\\', '/');
+        if (value.Length is 0 or > MaxSkillFilePathLength)
+            throw new ArgumentException("File paths must be 1-200 characters.");
+        var segments = value.Split('/');
+        if (segments.Length > 3)
+            throw new ArgumentException($"File path is nested too deeply: {value}");
+        foreach (var segment in segments)
+        {
+            if (segment.Length == 0 || segment is "." or ".."
+                || !segment.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')
+                || segment.StartsWith('.'))
+            {
+                throw new ArgumentException($"Invalid file path segment in: {value}");
+            }
+        }
+        if (string.Equals(value, "SKILL.md", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("SKILL.md is the skill content itself, not an extra file.");
         return value;
     }
 }

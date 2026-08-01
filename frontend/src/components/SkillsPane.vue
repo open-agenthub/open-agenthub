@@ -107,12 +107,16 @@ async function togglePublish(item, e) {
 const formOpen = ref(false)
 const editingId = ref(null)
 const form = ref({ name: '', description: '', content: '', projectId: '', comment: '' })
+// Extra files (scripts, templates) of the edited skill — read-only in the UI;
+// saving without a files payload keeps them (agents manage them via MCP).
+const formFiles = ref([])
 const formError = ref('')
 const saving = ref(false)
 
 function openCreate() {
   editingId.value = null
   form.value = { name: '', description: '', content: SKILL_TEMPLATE, projectId: '', comment: '' }
+  formFiles.value = []
   formError.value = ''
   formOpen.value = true
 }
@@ -129,6 +133,7 @@ async function openEdit(item) {
       projectId: full.projectId || '',
       comment: ''
     }
+    formFiles.value = full.files || []
     formOpen.value = true
   } catch (e) { error.value = String(e.message || e) }
 }
@@ -249,6 +254,12 @@ function scopeLabel(item) {
           <label>Content <span class="dim">— SKILL.md markdown</span></label>
           <textarea v-model="form.content" data-skill-content class="content" :placeholder="SKILL_TEMPLATE"></textarea>
         </div>
+        <div v-if="editingId && formFiles.length" class="field" data-skill-files>
+          <label>Files <span class="dim">— scripts &amp; assets, kept on save (agents manage them via the skill-library MCP)</span></label>
+          <div class="file-chips">
+            <span v-for="f in formFiles" :key="f.path" class="pill file mono">{{ f.path }}</span>
+          </div>
+        </div>
         <div v-if="editingId" class="field">
           <label>Change note <span class="dim">— optional, shown in the version history</span></label>
           <input v-model="form.comment" data-skill-comment placeholder="What changed and why?" />
@@ -341,6 +352,8 @@ function scopeLabel(item) {
 .item-desc { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .item-actions { display: flex; gap: 8px; flex-shrink: 0; }
 .pill.shared, .pill.version, .pill.project { border: 1px solid var(--border-3); color: var(--muted); font-family: var(--mono); font-weight: 400; margin-left: 8px; }
+.file-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.pill.file { border: 1px solid var(--border-3); color: var(--muted); font-weight: 400; padding: 2px 8px; border-radius: 10px; }
 .check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); flex-shrink: 0; cursor: pointer; margin: 0; }
 .check input { width: auto; }
 .history { border-top: 1px solid var(--border-3); margin-top: 12px; padding-top: 10px; }

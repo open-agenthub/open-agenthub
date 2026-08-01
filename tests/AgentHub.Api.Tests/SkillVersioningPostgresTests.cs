@@ -85,6 +85,47 @@ public class SkillVersioningPostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task Files_RoundTripPerVersion_AndSurviveRestore()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync();
+        var created = await db.Skills.CreateAsync("alice", new SaveSkillRequest(
+            "deploy", null, "# v1",
+            Files: [new SkillFile("scripts/check.sh", "true"), new SkillFile("notes.md", "# n")]));
+        Assert.Equal(2, (await db.Skills.GetFilesAsync(created.Id, 1)).Count);
+
+        // Update without files carries the current set into the new version.
+        await db.Skills.UpdateAsync("alice", created.Id, new SaveSkillRequest("deploy", null, "# v2"));
+        Assert.Equal(2, (await db.Skills.GetFilesAsync(created.Id, 2)).Count);
+
+        // Replacing with an empty list clears the files for the new version only.
+        await db.Skills.UpdateAsync("alice", created.Id,
+            new SaveSkillRequest("deploy", null, "# v3", Files: []));
+        Assert.Empty(await db.Skills.GetFilesAsync(created.Id, 3));
+        Assert.Equal(2, (await db.Skills.GetFilesAsync(created.Id, 1)).Count);
+
+        // Restoring v1 brings its files back.
+        var restored = await db.Skills.RestoreVersionAsync("alice", created.Id, 1);
+        Assert.Equal(4, restored.Version);
+        Assert.Equal(["notes.md", "scripts/check.sh"],
+            (await db.Skills.GetFilesAsync(created.Id, 4)).Select(f => f.Path).OrderBy(p => p));
+    }
+
+    [PostgreSqlFact]
+    public async Task Files_LiveInS3WhenConfigured_AndDeleteCleansThem()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync(s3Enabled: true);
+        var created = await db.Skills.CreateAsync("alice", new SaveSkillRequest(
+            "deploy", null, "# v1", Files: [new SkillFile("scripts/check.sh", "true")]));
+
+        Assert.Equal("true",
+            db.Artifacts.Objects[IArtifactStore.SkillFileKey(created.Id, 1, "scripts/check.sh")]);
+        Assert.Equal("true", (await db.Skills.GetFilesAsync(created.Id, 1)).Single().Content);
+
+        await db.Skills.DeleteAsync("alice", created.Id);
+        Assert.DoesNotContain(db.Artifacts.Objects.Keys, k => k.Contains(created.Id));
+    }
+
+    [PostgreSqlFact]
     public async Task S3Mode_ArchivesEveryVersion_AndDeleteCleansAllOfThem()
     {
         await using var db = await PostgresLibraryDatabase.CreateAsync(s3Enabled: true);

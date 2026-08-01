@@ -284,6 +284,25 @@ describe('SkillsPane', () => {
     expect(mocks.api.restoreSkillVersion).toHaveBeenCalledWith('k1', 1)
   })
 
+  it('shows the attached files read-only when editing a skill with scripts', async () => {
+    mocks.api.skill.mockResolvedValue({
+      id: 'k1', name: 'review-checklist', description: '', content: '# body',
+      projectId: null, files: [{ path: 'scripts/check.sh', content: 'true' }]
+    })
+    const wrapper = mount(SkillsPane, { props: { isAdmin: false } })
+    await flushPromises()
+    const own = wrapper.findAll('[data-skill-row]').find(r => r.text().includes('review-checklist'))
+    await own.get('[data-skill-edit]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-skill-files]').text()).toContain('scripts/check.sh')
+
+    // Saving sends no files payload, so the backend keeps them.
+    await wrapper.get('[data-skill-save]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.updateSkill).toHaveBeenCalledWith('k1',
+      expect.not.objectContaining({ files: expect.anything() }))
+  })
+
   it('previews an old version inline', async () => {
     mocks.api.skillVersions.mockResolvedValue([
       { version: 1, name: 'review-checklist', createdBy: 'me', comment: '', createdAt: '2026-07-01T10:00:00Z' }

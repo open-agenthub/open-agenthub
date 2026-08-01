@@ -43,6 +43,7 @@ builder.Services.AddSingleton<AgentHub.Api.Library.ISkillEmbeddingStore, AgentHu
 builder.Services.AddSingleton<AgentHub.Api.Library.IEmbeddingProvider, AgentHub.Api.Library.OpenAiCompatibleEmbeddingProvider>();
 builder.Services.AddSingleton<AgentHub.Api.Library.SkillSearchService>();
 builder.Services.AddSingleton<AgentHub.Api.Library.SkillLibraryMcpService>();
+builder.Services.AddSingleton<AgentHub.Api.Library.SkillImporter>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
 // Monthly API budgets: personal limit (community) + admin limits (enterprise provider below).

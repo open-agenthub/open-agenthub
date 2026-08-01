@@ -56,4 +56,35 @@ public class LibraryValidationTests
             LibraryValidation.ValidateSkillContent(new string('x', LibraryValidation.MaxSkillContentChars + 1)));
         Assert.Equal("# hello", LibraryValidation.ValidateSkillContent("# hello"));
     }
+
+    [Fact]
+    public void SkillFilePaths_MustBeRelativeShallowAndSafe()
+    {
+        Assert.Equal("scripts/check.sh", LibraryValidation.ValidateSkillFilePath("scripts/check.sh"));
+        Assert.Equal("a/b/c.txt", LibraryValidation.ValidateSkillFilePath("a\\b\\c.txt"));
+
+        foreach (var bad in new[]
+                 {
+                     "", "../escape.sh", "a/../b", "/abs.sh", ".hidden", "dir/.env",
+                     "a/b/c/d.txt", "space in name.sh", "SKILL.md", "skill.MD"
+                 })
+        {
+            Assert.Throws<ArgumentException>(() => LibraryValidation.ValidateSkillFilePath(bad));
+        }
+    }
+
+    [Fact]
+    public void SkillFiles_EnforceCountDuplicateAndSizeLimits()
+    {
+        Assert.Null(LibraryValidation.ValidateSkillFiles(null));
+        Assert.Empty(LibraryValidation.ValidateSkillFiles([])!);
+
+        Assert.Throws<ArgumentException>(() => LibraryValidation.ValidateSkillFiles(
+            [new SkillFile("a.sh", "x"), new SkillFile("a.sh", "y")]));
+        Assert.Throws<ArgumentException>(() => LibraryValidation.ValidateSkillFiles(
+            [new SkillFile("bin.dat", "has\0null")]));
+        Assert.Throws<ArgumentException>(() => LibraryValidation.ValidateSkillFiles(
+            Enumerable.Range(0, LibraryValidation.MaxSkillFiles + 1)
+                .Select(i => new SkillFile($"f{i}.txt", "x")).ToList()));
+    }
 }
