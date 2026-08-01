@@ -3,14 +3,20 @@ using System.Text.Json.Nodes;
 
 namespace AgentHub.Api.Library;
 
-/// <summary>Options for emitting HTTP MCP gateway URLs for catalog <c>kind=api</c> entries.</summary>
+/// <summary>Options for emitting HTTP MCP gateway URLs for catalog <c>kind=api</c> and ephemeral entries.</summary>
 public sealed class McpGatewayAssembleOptions
 {
     /// <summary>Base URL agents use to reach the gateway (no trailing slash), e.g. in-cluster service URL.</summary>
     public required string BaseUrl { get; init; }
 
+    /// <summary>Session id used when emitting ephemeral <c>/mcp/session/{sessionId}/{name}</c> URLs.</summary>
+    public string? SessionId { get; init; }
+
     /// <summary>Issues a session-bound token for a catalog MCP server id. When null, no auth header is emitted.</summary>
     public Func<string, string>? IssueToken { get; init; }
+
+    /// <summary>Issues a session-bound token for an ephemeral source name. When null, no auth header is emitted.</summary>
+    public Func<string, string>? IssueEphemeralToken { get; init; }
 }
 
 /// <summary>
@@ -27,7 +33,8 @@ public static class McpConfigAssembler
     public static string? Merge(
         string? inlineJson,
         IEnumerable<McpServerRecord> servers,
-        McpGatewayAssembleOptions? gateway = null)
+        McpGatewayAssembleOptions? gateway = null,
+        IEnumerable<EphemeralApiMcpEntry>? ephemeral = null)
     {
         JsonObject root;
         if (string.IsNullOrWhiteSpace(inlineJson))
@@ -62,6 +69,16 @@ public static class McpConfigAssembler
             if (inlineServers.ContainsKey(server.Name))
                 continue; // inline definition wins
             inlineServers[server.Name] = BuildServerEntry(server, gateway);
+        }
+
+        if (ephemeral is not null)
+        {
+            foreach (var entry in ephemeral)
+            {
+                if (inlineServers.ContainsKey(entry.Name))
+                    continue; // inline definition wins
+                inlineServers[entry.Name] = BuildEphemeralEntry(entry, gateway);
+            }
         }
 
         if (inlineServers.Count == 0)
@@ -114,5 +131,30 @@ public static class McpConfigAssembler
 
         return config as JsonObject
             ?? throw new ArgumentException($"Saved MCP server '{server.Name}' config must be a JSON object.");
+    }
+
+    private static JsonNode BuildEphemeralEntry(EphemeralApiMcpEntry ephemeral, McpGatewayAssembleOptions? gateway)
+    {
+        var baseUrl = string.IsNullOrWhiteSpace(gateway?.BaseUrl)
+            ? DefaultGatewayBaseUrl
+            : gateway!.BaseUrl.TrimEnd('/');
+        var sessionId = !string.IsNullOrWhiteSpace(gateway?.SessionId)
+            ? gateway!.SessionId!.Trim()
+            : ephemeral.SessionId.Trim();
+        var entry = new JsonObject
+        {
+            ["type"] = "http",
+            ["url"] = $"{baseUrl}/mcp/session/{sessionId}/{ephemeral.Name}"
+        };
+
+        if (gateway?.IssueEphemeralToken is not null)
+        {
+            entry["headers"] = new JsonObject
+            {
+                [McpGatewayTokenService.HeaderName] = gateway.IssueEphemeralToken(ephemeral.Name)
+            };
+        }
+
+        return entry;
     }
 }

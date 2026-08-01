@@ -1,5 +1,6 @@
-using AgentHub.Api.Browser;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
 
 namespace AgentHub.Api.Models;
@@ -182,6 +183,12 @@ public record CreateSessionRequest
     /// Merged with McpConfigJson into the effective .mcp.json; inline entries win.</summary>
     public List<string> McpServerIds { get; init; } = new();
 
+    /// <summary>
+    /// Session-scoped OpenAPI/GraphQL MCP sources registered on the gateway for this session only.
+    /// Optional <see cref="EphemeralApiSource.SaveToLibrary"/> also creates a personal catalog entry.
+    /// </summary>
+    public List<EphemeralApiSource> EphemeralApiSources { get; init; } = new();
+
     public AgentKind Agent { get; init; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
     /// <summary>Which existing API key OpenClaw should use; required only for OpenClaw + ApiKey.</summary>
@@ -200,6 +207,19 @@ public record CreateSessionRequest
 
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
+}
+
+/// <summary>Session-scoped OpenAPI/GraphQL source registered on the in-process MCP gateway.</summary>
+public sealed record EphemeralApiSource
+{
+    public string Name { get; init; } = "";
+    public string SpecUrl { get; init; } = "";
+    public string? SpecType { get; init; }
+    public string? BaseUrl { get; init; }
+    public JsonElement? Auth { get; init; }
+    public string? Secret { get; init; }
+    /// <summary>When true, also create a personal <c>kind=api</c> catalog entry.</summary>
+    public bool SaveToLibrary { get; init; }
 }
 
 /// <summary>
