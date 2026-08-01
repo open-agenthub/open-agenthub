@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   api: {
     mcpServers: vi.fn(), createMcpServer: vi.fn(), updateMcpServer: vi.fn(), deleteMcpServer: vi.fn(),
     skills: vi.fn(), skill: vi.fn(), createSkill: vi.fn(), updateSkill: vi.fn(), deleteSkill: vi.fn(),
+    searchSkills: vi.fn(), skillVersions: vi.fn(), skillVersion: vi.fn(), restoreSkillVersion: vi.fn(),
+    listProjects: vi.fn(),
     libraryGroups: vi.fn(), librarySettings: vi.fn(), libraryShares: vi.fn(), setLibraryShares: vi.fn(),
     libraryUsers: vi.fn()
   }
@@ -144,8 +146,8 @@ describe('McpServersPane', () => {
 })
 
 const skills = [
-  { id: 'k1', name: 'review-checklist', description: 'PR review steps', owner: 'me', mine: true },
-  { id: 'k2', name: 'deploy-notes', description: '', owner: 'alice', mine: false }
+  { id: 'k1', name: 'review-checklist', description: 'PR review steps', owner: 'me', mine: true, version: 2, projectId: null },
+  { id: 'k2', name: 'deploy-notes', description: '', owner: 'alice', mine: false, version: 1, projectId: null }
 ]
 
 describe('SkillsPane', () => {
@@ -158,6 +160,11 @@ describe('SkillsPane', () => {
     mocks.api.libraryGroups.mockResolvedValue([])
     mocks.api.libraryUsers.mockResolvedValue([])
     mocks.api.createSkill.mockResolvedValue({ id: 'new' })
+    mocks.api.listProjects.mockResolvedValue([{ id: 'p1', name: 'Webshop' }])
+    mocks.api.searchSkills.mockResolvedValue([])
+    mocks.api.skillVersions.mockResolvedValue([])
+    mocks.api.skillVersion.mockResolvedValue({ content: '' })
+    mocks.api.restoreSkillVersion.mockResolvedValue({})
   })
 
   it('lists skills with shared rows read-only', async () => {
@@ -215,8 +222,82 @@ describe('SkillsPane', () => {
     await wrapper.get('[data-skill-save]').trigger('click')
     await flushPromises()
     expect(mocks.api.createSkill).toHaveBeenCalledWith({
-      name: 'my-skill', description: 'Test skill', content: '---\nname: my-skill\n---\nDo things.'
+      name: 'my-skill', description: 'Test skill', content: '---\nname: my-skill\n---\nDo things.',
+      comment: '', projectId: null
     })
+  })
+
+  it('creates a project-scoped skill when a project is selected', async () => {
+    const wrapper = mount(SkillsPane, { props: { isAdmin: false } })
+    await flushPromises()
+    await wrapper.get('[data-skill-add]').trigger('click')
+    await wrapper.get('[data-skill-name]').setValue('deploy-webshop')
+    await wrapper.get('[data-skill-project]').setValue('p1')
+    await wrapper.get('[data-skill-save]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.createSkill).toHaveBeenCalledWith(
+      expect.objectContaining({ name: 'deploy-webshop', projectId: 'p1' }))
+  })
+
+  it('searches server-side and shows matching rows only', async () => {
+    vi.useFakeTimers()
+    try {
+      mocks.api.searchSkills.mockResolvedValue([
+        { id: 'k1', name: 'review-checklist', score: 0.8 }
+      ])
+      const wrapper = mount(SkillsPane, { props: { isAdmin: false } })
+      await flushPromises()
+      await wrapper.get('[data-skill-search]').setValue('review')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(mocks.api.searchSkills).toHaveBeenCalledWith('review')
+      const rows = wrapper.findAll('[data-skill-row]')
+      expect(rows).toHaveLength(1)
+      expect(rows[0].text()).toContain('review-checklist')
+
+      // Clearing the query restores the full list without another request.
+      await wrapper.get('[data-skill-search]').setValue('')
+      await vi.advanceTimersByTimeAsync(300)
+      await flushPromises()
+      expect(wrapper.findAll('[data-skill-row]')).toHaveLength(2)
+    } finally { vi.useRealTimers() }
+  })
+
+  it('shows the version history and restores an old version', async () => {
+    mocks.api.skillVersions.mockResolvedValue([
+      { version: 2, name: 'review-checklist', createdBy: 'me', comment: 'tightened', createdAt: '2026-08-01T10:00:00Z' },
+      { version: 1, name: 'review-checklist', createdBy: 'me', comment: '', createdAt: '2026-07-01T10:00:00Z' }
+    ])
+    const wrapper = mount(SkillsPane, { props: { isAdmin: false } })
+    await flushPromises()
+    const own = wrapper.findAll('[data-skill-row]').find(r => r.text().includes('review-checklist'))
+    await own.get('[data-skill-history-toggle]').trigger('click')
+    await flushPromises()
+    const rows = wrapper.findAll('[data-skill-history-row]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('tightened')
+
+    // The head version offers no restore button, the old one does.
+    expect(rows[0].find('[data-skill-version-restore]').exists()).toBe(false)
+    await rows[1].get('[data-skill-version-restore]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.restoreSkillVersion).toHaveBeenCalledWith('k1', 1)
+  })
+
+  it('previews an old version inline', async () => {
+    mocks.api.skillVersions.mockResolvedValue([
+      { version: 1, name: 'review-checklist', createdBy: 'me', comment: '', createdAt: '2026-07-01T10:00:00Z' }
+    ])
+    mocks.api.skillVersion.mockResolvedValue({ content: '# old content' })
+    const wrapper = mount(SkillsPane, { props: { isAdmin: false } })
+    await flushPromises()
+    const own = wrapper.findAll('[data-skill-row]').find(r => r.text().includes('review-checklist'))
+    await own.get('[data-skill-history-toggle]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-skill-version-view]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.skillVersion).toHaveBeenCalledWith('k1', 1)
+    expect(wrapper.get('[data-skill-version-preview]').text()).toContain('# old content')
   })
 
   it('rejects non-kebab-case names inline without calling the API', async () => {

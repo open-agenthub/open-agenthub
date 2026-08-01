@@ -34,8 +34,10 @@ public interface IArtifactStore
         $"sessions/{owner}/{id}/browser-cookies.json";
     static string ArtifactKey(string owner, string id, string name)
         => $"sessions/{owner}/{id}/artifacts/{name.TrimStart('/')}";
-    /// <summary>SKILL.md content of a library skill (see SkillStore).</summary>
+    /// <summary>Head SKILL.md content of a library skill (see SkillStore).</summary>
     static string SkillKey(string id) => $"skills/{id}/SKILL.md";
+    /// <summary>Immutable per-version SKILL.md copy (see SkillStore).</summary>
+    static string SkillVersionKey(string id, int version) => $"skills/{id}/v{version}/SKILL.md";
 }
 
 /// <summary>

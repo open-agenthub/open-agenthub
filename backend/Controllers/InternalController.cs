@@ -260,7 +260,7 @@ public sealed class InternalController : ControllerBase
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
-        var skills = await _library.ListSkillPayloadsAsync(rec.Owner, ct);
+        var skills = await _library.ListSkillPayloadsAsync(rec.Owner, rec.ProjectId, ct);
         return Ok(new { skills });
     }
 

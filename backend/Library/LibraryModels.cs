@@ -21,7 +21,9 @@ public sealed class McpServerRecord
 /// <summary>
 /// A reusable agent skill (SKILL.md) saved in a user's account library.
 /// The markdown content lives in S3 when available; otherwise it is kept
-/// in the fallback content column (see SkillStore).
+/// in the fallback content column (see SkillStore). Skills are either
+/// personal (ProjectId null) or scoped to one of the owner's projects.
+/// Every save creates a new immutable version (see SkillVersionRecord).
 /// </summary>
 public sealed class SkillRecord
 {
@@ -31,12 +33,37 @@ public sealed class SkillRecord
     public string Description { get; set; } = "";
     /// <summary>True when the content lives in S3; false = fallback content column.</summary>
     public bool ContentInS3 { get; set; }
+    /// <summary>Owner's project this skill belongs to; null = personal library.</summary>
+    public string? ProjectId { get; set; }
+    /// <summary>Head version number (1-based, monotonically increasing).</summary>
+    public int Version { get; set; } = 1;
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 
+/// <summary>One immutable revision of a skill's SKILL.md.</summary>
+public sealed class SkillVersionRecord
+{
+    public required string SkillId { get; init; }
+    public required int Version { get; init; }
+    public string Name { get; set; } = "";
+    public string Description { get; set; } = "";
+    public bool ContentInS3 { get; set; }
+    /// <summary>Who saved this revision — the owner, or e.g. "session:{id}" for MCP uploads.</summary>
+    public string CreatedBy { get; set; } = "";
+    /// <summary>Optional change note ("what changed and why").</summary>
+    public string Comment { get; set; } = "";
+    public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
+}
+
 public sealed record SaveMcpServerRequest(string Name, string? Description, string ConfigJson);
-public sealed record SaveSkillRequest(string Name, string? Description, string Content);
+public sealed record SaveSkillRequest(
+    string Name,
+    string? Description,
+    string Content,
+    string? ProjectId = null,
+    string? Comment = null,
+    string? SavedBy = null);
 
 /// <summary>List/detail view of a library MCP server. The raw config is only
 /// returned to its owner — shared entries may contain tokens.</summary>
@@ -56,6 +83,8 @@ public sealed record SkillInfo(
     string Description,
     string Owner,
     bool Mine,
+    string? ProjectId,
+    int Version,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
@@ -65,8 +94,31 @@ public sealed record SkillDetail(
     string Description,
     string Owner,
     bool Mine,
+    string? ProjectId,
+    int Version,
     string Content,
     DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+public sealed record SkillVersionInfo(
+    int Version,
+    string Name,
+    string Description,
+    string CreatedBy,
+    string Comment,
+    DateTime CreatedAt);
+
+/// <summary>One search result; the score mixes full-text rank and — when an
+/// embedding provider is configured — vector similarity.</summary>
+public sealed record SkillSearchHit(
+    string Id,
+    string Name,
+    string Description,
+    string Owner,
+    bool Mine,
+    string? ProjectId,
+    int Version,
+    double Score,
     DateTime UpdatedAt);
 
 /// <summary>A skill as delivered to an agent pod (name + SKILL.md content).</summary>
@@ -136,6 +188,16 @@ public static class LibraryValidation
         {
             throw new ArgumentException("MCP server config is not valid JSON.");
         }
+        return value;
+    }
+
+    public const int MaxCommentLength = 500;
+
+    public static string ValidateComment(string? comment)
+    {
+        var value = comment?.Trim() ?? "";
+        if (value.Length > MaxCommentLength)
+            throw new ArgumentException($"Comment must be at most {MaxCommentLength} characters.");
         return value;
     }
 

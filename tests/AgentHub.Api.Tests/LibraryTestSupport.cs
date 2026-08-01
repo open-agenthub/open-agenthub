@@ -1,8 +1,77 @@
 using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Library;
 using AgentHub.Api.Licensing;
+using AgentHub.Api.Models;
+using AgentHub.Api.Persistence;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace AgentHub.Api.Tests;
+
+internal static class LibraryTest
+{
+    /// <summary>Search service without embeddings — pure FTS via the store fake.</summary>
+    public static SkillSearchService SearchService(ISkillStore skills) => new(
+        skills,
+        new InMemorySkillEmbeddingStore(),
+        new NullEmbeddingProvider(),
+        NullLogger<SkillSearchService>.Instance);
+}
+
+internal sealed class InMemoryProjectStore : IProjectStore
+{
+    private readonly Dictionary<(string Owner, string Id), ProjectInfo> _items = new();
+    private int _next;
+
+    public ProjectInfo Add(string owner, string name = "Project")
+    {
+        var info = new ProjectInfo($"project-{++_next}", name, null, 0);
+        _items[(owner, info.Id)] = info;
+        return info;
+    }
+
+    public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task<IReadOnlyList<ProjectInfo>> ListAsync(string owner, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<ProjectInfo>>(
+            _items.Where(kv => kv.Key.Owner == owner).Select(kv => kv.Value).ToList());
+
+    public Task<ProjectInfo?> GetAsync(string owner, string id, CancellationToken ct = default) =>
+        Task.FromResult(_items.GetValueOrDefault((owner, id)));
+
+    public Task<ProjectInfo> CreateAsync(string owner, CreateProjectRequest request, CancellationToken ct = default) =>
+        Task.FromResult(Add(owner, request.Name));
+
+    public Task<ProjectInfo?> UpdateAsync(string owner, string id, UpdateProjectRequest request, CancellationToken ct = default) =>
+        Task.FromResult(_items.GetValueOrDefault((owner, id)));
+
+    public Task<bool> DeleteAsync(string owner, string id, CancellationToken ct = default) =>
+        Task.FromResult(_items.Remove((owner, id)));
+}
+
+internal sealed class InMemorySkillEmbeddingStore : ISkillEmbeddingStore
+{
+    private readonly Dictionary<string, (string Model, float[] Vector)> _items = new();
+
+    public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task UpsertAsync(string skillId, string model, float[] vector, CancellationToken ct = default)
+    {
+        _items[skillId] = (model, vector);
+        return Task.CompletedTask;
+    }
+
+    public Task DeleteAsync(string skillId, CancellationToken ct = default)
+    {
+        _items.Remove(skillId);
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyDictionary<string, float[]>> GetManyAsync(
+        IReadOnlyCollection<string> skillIds, string model, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyDictionary<string, float[]>>(skillIds
+            .Where(id => _items.TryGetValue(id, out var e) && e.Model == model)
+            .ToDictionary(id => id, id => _items[id].Vector));
+}
 
 internal sealed class FakeEnterpriseLicense(bool enabled) : IEnterpriseLicense
 {
@@ -72,14 +141,20 @@ internal sealed class InMemoryMcpServerStore : IMcpServerStore
 internal sealed class InMemorySkillStore : ISkillStore
 {
     private readonly Dictionary<string, SkillRecord> _items = new();
-    private readonly Dictionary<string, string> _contents = new();
+    private readonly Dictionary<(string Id, int Version), string> _contents = new();
+    private readonly Dictionary<string, List<SkillVersionRecord>> _versions = new();
     private int _next;
 
-    public SkillRecord Add(string owner, string name, string content = "# skill")
+    public SkillRecord Add(string owner, string name, string content = "# skill", string? projectId = null)
     {
-        var record = new SkillRecord { Id = $"skill-{++_next}", Owner = owner, Name = name };
+        var record = new SkillRecord
+        {
+            Id = $"skill-{++_next}", Owner = owner, Name = name, ProjectId = projectId
+        };
         _items[record.Id] = record;
-        _contents[record.Id] = content;
+        _contents[(record.Id, 1)] = content;
+        _versions[record.Id] =
+            [new SkillVersionRecord { SkillId = record.Id, Version = 1, Name = name, CreatedBy = owner }];
         return record;
     }
 
@@ -88,17 +163,19 @@ internal sealed class InMemorySkillStore : ISkillStore
     public Task<SkillRecord> CreateAsync(string owner, SaveSkillRequest request, CancellationToken ct = default)
     {
         var name = LibraryValidation.ValidateSkillName(request.Name);
-        if (_items.Values.Any(i => i.Owner == owner && i.Name == name))
-            throw new ArgumentException("You already have a skill with this name.");
+        if (_items.Values.Any(i => i.Owner == owner && i.Name == name && i.ProjectId == request.ProjectId))
+            throw new ArgumentException("A skill with this name already exists in this scope.");
         var record = new SkillRecord
         {
             Id = $"skill-{++_next}",
             Owner = owner,
             Name = name,
-            Description = LibraryValidation.ValidateDescription(request.Description)
+            Description = LibraryValidation.ValidateDescription(request.Description),
+            ProjectId = request.ProjectId
         };
         _items[record.Id] = record;
-        _contents[record.Id] = LibraryValidation.ValidateSkillContent(request.Content);
+        _contents[(record.Id, 1)] = LibraryValidation.ValidateSkillContent(request.Content);
+        _versions[record.Id] = [NewVersion(record, request, 1, owner)];
         return Task.FromResult(record);
     }
 
@@ -108,7 +185,9 @@ internal sealed class InMemorySkillStore : ISkillStore
             throw new KeyNotFoundException();
         record.Name = LibraryValidation.ValidateSkillName(request.Name);
         record.Description = LibraryValidation.ValidateDescription(request.Description);
-        _contents[id] = LibraryValidation.ValidateSkillContent(request.Content);
+        record.Version++;
+        _contents[(id, record.Version)] = LibraryValidation.ValidateSkillContent(request.Content);
+        _versions[id].Add(NewVersion(record, request, record.Version, request.SavedBy ?? owner));
         return Task.FromResult(record);
     }
 
@@ -117,7 +196,8 @@ internal sealed class InMemorySkillStore : ISkillStore
         if (!_items.TryGetValue(id, out var record) || record.Owner != owner)
             throw new KeyNotFoundException();
         _items.Remove(id);
-        _contents.Remove(id);
+        _versions.Remove(id);
+        foreach (var key in _contents.Keys.Where(k => k.Id == id).ToList()) _contents.Remove(key);
         return Task.CompletedTask;
     }
 
@@ -130,7 +210,64 @@ internal sealed class InMemorySkillStore : ISkillStore
             ids.Where(_items.ContainsKey).Select(i => _items[i]).ToList());
 
     public Task<string?> GetContentAsync(SkillRecord record, CancellationToken ct = default) =>
-        Task.FromResult(_contents.GetValueOrDefault(record.Id));
+        Task.FromResult(_contents.GetValueOrDefault((record.Id, record.Version)));
+
+    public Task<IReadOnlyList<SkillVersionRecord>> ListVersionsAsync(string id, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<SkillVersionRecord>>(
+            _versions.GetValueOrDefault(id, []).OrderByDescending(v => v.Version).ToList());
+
+    public Task<string?> GetVersionContentAsync(string id, int version, CancellationToken ct = default) =>
+        Task.FromResult(_contents.GetValueOrDefault((id, version)));
+
+    public async Task<SkillRecord> RestoreVersionAsync(
+        string owner, string id, int version, string? savedBy = null, CancellationToken ct = default)
+    {
+        if (!_items.TryGetValue(id, out var record) || record.Owner != owner)
+            throw new KeyNotFoundException();
+        var content = _contents.GetValueOrDefault((id, version)) ?? throw new KeyNotFoundException();
+        var target = _versions[id].First(v => v.Version == version);
+        return await UpdateAsync(owner, id, new SaveSkillRequest(
+            target.Name, target.Description, content,
+            Comment: $"Restored version {version}.", SavedBy: savedBy ?? owner), ct);
+    }
+
+    public Task<IReadOnlyList<(SkillRecord Record, double Rank)>> SearchAsync(
+        IReadOnlyCollection<string> ids, string query, int limit, CancellationToken ct = default)
+    {
+        var q = query.ToLowerInvariant();
+        var hits = ids
+            .Where(_items.ContainsKey)
+            .Select(i => _items[i])
+            .Select(r => (Record: r, Text: $"{r.Name} {r.Description} {_contents.GetValueOrDefault((r.Id, r.Version), "")}".ToLowerInvariant()))
+            .Where(x => x.Text.Contains(q))
+            .Select(x => (x.Record, Rank: (double)CountOccurrences(x.Text, q)))
+            .OrderByDescending(x => x.Rank)
+            .Take(limit)
+            .ToList();
+        return Task.FromResult<IReadOnlyList<(SkillRecord, double)>>(hits);
+    }
+
+    private static int CountOccurrences(string text, string term)
+    {
+        int count = 0, index = 0;
+        while ((index = text.IndexOf(term, index, StringComparison.Ordinal)) >= 0)
+        {
+            count++;
+            index += term.Length;
+        }
+        return count;
+    }
+
+    private static SkillVersionRecord NewVersion(
+        SkillRecord record, SaveSkillRequest request, int version, string savedBy) => new()
+    {
+        SkillId = record.Id,
+        Version = version,
+        Name = record.Name,
+        Description = record.Description,
+        CreatedBy = savedBy,
+        Comment = LibraryValidation.ValidateComment(request.Comment)
+    };
 }
 
 internal sealed class InMemoryLibraryShareStore : ILibraryShareStore

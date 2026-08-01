@@ -74,7 +74,7 @@ public class LibraryCoreControllersTests
         var foreign = skills.Add("bob", "review", "# shared skill body");
         await shares.SetSharesAsync(LibraryItemTypes.Skill, foreign.Id, all: true, null, null, "bob");
 
-        var controller = WithUser(new SkillsController(skills, access, shares), "alice");
+        var controller = WithUser(new SkillsController(skills, access, shares, LibraryTest.SearchService(skills), new InMemoryProjectStore()), "alice");
         var ok = Assert.IsType<OkObjectResult>(await controller.Get(foreign.Id, default));
         var detail = Assert.IsType<SkillDetail>(ok.Value);
         Assert.Equal("# shared skill body", detail.Content);
@@ -88,7 +88,7 @@ public class LibraryCoreControllersTests
         var foreign = skills.Add("bob", "review");
         await shares.SetSharesAsync(LibraryItemTypes.Skill, foreign.Id, all: true, null, null, "bob");
 
-        var controller = WithUser(new SkillsController(skills, access, shares), "alice");
+        var controller = WithUser(new SkillsController(skills, access, shares, LibraryTest.SearchService(skills), new InMemoryProjectStore()), "alice");
         Assert.IsType<NotFoundResult>(await controller.Get(foreign.Id, default));
     }
 
@@ -96,7 +96,7 @@ public class LibraryCoreControllersTests
     public async Task SkillCreate_ValidationErrorsBecome400()
     {
         var (_, skills, shares, access) = Stores();
-        var controller = WithUser(new SkillsController(skills, access, shares), "alice");
+        var controller = WithUser(new SkillsController(skills, access, shares, LibraryTest.SearchService(skills), new InMemoryProjectStore()), "alice");
 
         var bad = Assert.IsType<BadRequestObjectResult>(
             await controller.Create(new SaveSkillRequest("Not Kebab", null, "# body"), default));
