@@ -53,7 +53,26 @@ public class McpConfigAssemblerTests
         using var doc = JsonDocument.Parse(json!);
         var entry = doc.RootElement.GetProperty("mcpServers").GetProperty("petstore");
         Assert.Equal("http", entry.GetProperty("type").GetString());
-        Assert.Equal("https://mcp.invalid/srv-42", entry.GetProperty("url").GetString());
+        Assert.Equal("https://mcp.invalid/mcp/api/srv-42", entry.GetProperty("url").GetString());
+        Assert.False(entry.TryGetProperty("headers", out _));
+    }
+
+    [Fact]
+    public void ApiServer_UsesGatewayBaseUrlAndTokenHeader()
+    {
+        var opts = new McpGatewayAssembleOptions
+        {
+            BaseUrl = "http://gateway.test",
+            IssueToken = id => $"tok-for-{id}"
+        };
+        var json = McpConfigAssembler.Merge(null, [ApiServer("petstore", "srv-42")], opts);
+        using var doc = JsonDocument.Parse(json!);
+        var entry = doc.RootElement.GetProperty("mcpServers").GetProperty("petstore");
+        Assert.Equal("http", entry.GetProperty("type").GetString());
+        Assert.Equal("http://gateway.test/mcp/api/srv-42", entry.GetProperty("url").GetString());
+        Assert.Equal(
+            "tok-for-srv-42",
+            entry.GetProperty("headers").GetProperty(McpGatewayTokenService.HeaderName).GetString());
     }
 
     [Fact]

@@ -31,9 +31,11 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly Usage.UsageLimitService _usageLimits;
     private readonly IAllowedAgentsProvider _allowedAgents;
     private readonly ILibraryAccess _library;
+    private readonly IMcpGatewayTokenService _mcpGatewayTokens;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
+    private readonly string _mcpGatewayBaseUrl;
     private readonly bool _s3Insecure;
     private readonly bool _browserEnabled;
     private readonly bool _spawnMcpEnabled;
@@ -47,7 +49,8 @@ public sealed class KubernetesSessionService : ISessionService
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
         IArtifactStore artifacts, IBrowserService browsers, IGitAuthService gitAuth,
         Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
-        ILibraryAccess library, ILogger<KubernetesSessionService> log)
+        ILibraryAccess library, IMcpGatewayTokenService mcpGatewayTokens,
+        ILogger<KubernetesSessionService> log)
     {
         _log = log;
         _store = store;
@@ -58,9 +61,16 @@ public sealed class KubernetesSessionService : ISessionService
         _usageLimits = usageLimits;
         _allowedAgents = allowedAgents;
         _library = library;
+        _mcpGatewayTokens = mcpGatewayTokens;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
+        // What agent pods use to reach the in-process OpenAPI MCP gateway.
+        // Empty falls back to CallbackBaseUrl (same in-cluster backend service).
+        var configuredGateway = cfg["McpGateway:BaseUrl"];
+        _mcpGatewayBaseUrl = string.IsNullOrWhiteSpace(configuredGateway)
+            ? _callbackBaseUrl.TrimEnd('/')
+            : configuredGateway.TrimEnd('/');
         _s3Insecure = cfg.GetValue("S3:InsecureTls", false);
         _browserEnabled = cfg.GetValue("Browser:Enabled", true);
         _spawnMcpEnabled = cfg.GetValue("AgentHub:SpawnMcpEnabled", true);
@@ -234,8 +244,13 @@ public sealed class KubernetesSessionService : ISessionService
     /// the session's inline config into the effective .mcp.json.</summary>
     private async Task<string?> BuildEffectiveMcpConfigAsync(string owner, SessionRecord rec, CancellationToken ct)
     {
+        var gateway = new McpGatewayAssembleOptions
+        {
+            BaseUrl = _mcpGatewayBaseUrl,
+            IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner)
+        };
         var (_, effective) = await SessionMcpConfig.ResolveAndAssembleAsync(
-            _library, owner, rec.McpConfigJson, ParseMcpServerIds(rec), strict: false, ct);
+            _library, owner, rec.McpConfigJson, ParseMcpServerIds(rec), strict: false, ct, gateway);
         return effective;
     }
 
@@ -395,8 +410,13 @@ public sealed class KubernetesSessionService : ISessionService
         {
             // Strict resolve + assemble before secret/DB write so bad shape/config fails closed.
             var idsToResolve = req.McpServerIds ?? ParseMcpServerIds(rec);
+            var gateway = new McpGatewayAssembleOptions
+            {
+                BaseUrl = _mcpGatewayBaseUrl,
+                IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner)
+            };
             var (ids, effective) = await SessionMcpConfig.ResolveAndAssembleAsync(
-                _library, owner, rec.McpConfigJson, idsToResolve, strict: true, ct);
+                _library, owner, rec.McpConfigJson, idsToResolve, strict: true, ct, gateway);
             if (req.McpServerIds is not null)
                 rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
             if (effective is not null)

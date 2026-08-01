@@ -25,6 +25,17 @@ builder.Services.AddHostedService<AgentHub.Api.Browser.BrowserReconcileService>(
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpSecretProtector, AgentHub.Api.Library.McpSecretProtector>();
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpServerStore, AgentHub.Api.Library.McpServerStore>();
+builder.Services.AddSingleton<AgentHub.Api.Library.IMcpGatewayTokenService, AgentHub.Api.Library.McpGatewayTokenService>();
+builder.Services.AddSingleton(sp =>
+    new AgentHub.Api.Library.ApiMcpGateway.OpenApiSpecCache(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway")));
+builder.Services.AddSingleton(sp =>
+    new AgentHub.Api.Library.ApiMcpGateway.ApiMcpGatewayHandler(
+        sp.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>(),
+        sp.GetRequiredService<AgentHub.Api.Library.IMcpGatewayTokenService>(),
+        sp.GetRequiredService<AgentHub.Api.Library.ApiMcpGateway.OpenApiSpecCache>(),
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway")));
+builder.Services.AddHttpClient("mcp-gateway");
 // EE share matrix: registered as the core ILibraryShareReader so access resolution
 // consults real shares when the license is enabled (EmptyLibraryShareReader unused).
 builder.Services.AddSingleton<AgentHub.Api.Ee.Library.LibraryShareStore>();
@@ -253,6 +264,16 @@ app.UseAuthorization();
 
 app.MapControllers();
 app.MapHealthChecks("/healthz").AllowAnonymous();
+
+// Catalog OpenAPI → MCP HTTP gateway (session-bound token; not OIDC).
+// Agents connect with type:http + X-AgentHub-Mcp-Token (see McpConfigAssembler).
+app.MapPost("/mcp/api/{id}", async (HttpContext ctx, string id,
+    AgentHub.Api.Library.ApiMcpGateway.ApiMcpGatewayHandler handler) =>
+{
+    await handler.HandleCatalogAsync(ctx, id);
+}).AllowAnonymous();
+app.MapMethods("/mcp/api/{id}", new[] { "GET" }, () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed))
+    .AllowAnonymous();
 
 // Runtime config for the frontend (static nginx image, no build-time env vars):
 // empty authority = auth disabled, so the frontend does not enforce a login.
