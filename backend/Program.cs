@@ -24,6 +24,8 @@ builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserService, AgentHub.Api
 builder.Services.AddHostedService<AgentHub.Api.Browser.BrowserReconcileService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpServerStore, AgentHub.Api.Library.McpServerStore>();
+builder.Services.AddSingleton<AgentHub.Api.Library.ILibraryShareReader, AgentHub.Api.Library.EmptyLibraryShareReader>();
+builder.Services.AddSingleton<AgentHub.Api.Library.ILibraryAccess, AgentHub.Api.Library.LibraryAccessService>();
 builder.Services.AddSingleton<SessionShareStore>();
 builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
