@@ -287,6 +287,44 @@ public class LibraryStoresPostgresTests
         Assert.Empty(state.Users);
         Assert.Empty(state.Groups);
     }
+
+    [PostgreSqlFact]
+    public async Task EphemeralApiMcpStore_RegisterGetAndDeleteBySession()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync();
+        const string secret = """{"token":"ephemeral-secret"}""";
+        await db.EphemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "books", "alice",
+            """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql"}""",
+            secret));
+        await db.EphemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "pets", "alice",
+            """{"specType":"openapi","specUrl":"https://petstore.example.test/openapi.json"}""",
+            null));
+        await db.EphemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-2", "other", "bob",
+            """{"specType":"openapi","specUrl":"https://other.example.test/openapi.json"}""",
+            null));
+
+        var books = await db.EphemeralApiMcps.GetAsync("sess-1", "books");
+        Assert.NotNull(books);
+        Assert.Equal("alice", books.Owner);
+        Assert.Equal(secret, books.SecretJson);
+        Assert.Equal(2, (await db.EphemeralApiMcps.ListBySessionAsync("sess-1")).Count);
+
+        var secretAtRest = await db.ScalarAsync<string?>(
+            "SELECT secret_json FROM ephemeral_api_mcp WHERE session_id = @s AND name = @n",
+            new NpgsqlParameter("s", "sess-1"),
+            new NpgsqlParameter("n", "books"));
+        Assert.NotNull(secretAtRest);
+        Assert.NotEqual(secret, secretAtRest);
+        Assert.DoesNotContain("ephemeral-secret", secretAtRest);
+
+        await db.EphemeralApiMcps.DeleteBySessionAsync("sess-1");
+        Assert.Null(await db.EphemeralApiMcps.GetAsync("sess-1", "books"));
+        Assert.Empty(await db.EphemeralApiMcps.ListBySessionAsync("sess-1"));
+        Assert.NotNull(await db.EphemeralApiMcps.GetAsync("sess-2", "other"));
+    }
 }
 
 internal sealed class PostgresLibraryDatabase : IAsyncDisposable
@@ -296,6 +334,7 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
     private readonly string _connectionString;
 
     public McpServerStore McpServers { get; }
+    public EphemeralApiMcpStore EphemeralApiMcps { get; }
     public LibraryShareStore Shares { get; }
     public UserGroupStore Groups { get; }
     public UserDirectory Users { get; }
@@ -305,6 +344,7 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
         string schema,
         string connectionString,
         McpServerStore mcpServers,
+        EphemeralApiMcpStore ephemeralApiMcps,
         LibraryShareStore shares,
         UserGroupStore groups,
         UserDirectory users)
@@ -313,6 +353,7 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
         _schema = schema;
         _connectionString = connectionString;
         McpServers = mcpServers;
+        EphemeralApiMcps = ephemeralApiMcps;
         Shares = shares;
         Groups = groups;
         Users = users;
@@ -348,18 +389,22 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
             })
             .Build();
 
-        var mcpServers = new McpServerStore(configuration, CreateEphemeralSecretProtector());
+        var secrets = CreateEphemeralSecretProtector();
+        var mcpServers = new McpServerStore(configuration, secrets);
+        var ephemeralApiMcps = new EphemeralApiMcpStore(configuration, secrets);
         var shares = new LibraryShareStore(configuration);
         var groups = new UserGroupStore(configuration);
         var users = new UserDirectory(configuration);
         try
         {
             await mcpServers.InitializeAsync();
+            await ephemeralApiMcps.InitializeAsync();
             await shares.InitializeAsync();
             await groups.InitializeAsync();
             await users.InitializeAsync();
             return new PostgresLibraryDatabase(
-                baseConnectionString, schema, connectionString, mcpServers, shares, groups, users);
+                baseConnectionString, schema, connectionString,
+                mcpServers, ephemeralApiMcps, shares, groups, users);
         }
         catch
         {

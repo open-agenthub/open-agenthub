@@ -34,7 +34,7 @@ public class ApiMcpGatewayTests
         var sp = services.BuildServiceProvider();
         var tokens = new McpGatewayTokenService(sp.GetRequiredService<IDataProtectionProvider>());
         var store = new InMemoryMcpServerStore();
-        var ephemeral = new EphemeralApiMcpStore();
+        var ephemeral = new InMemoryEphemeralApiMcpStore();
         var sessions = new FakeGatewaySessionStore();
         sessions.Upsert(Session("alice", "sess-1"));
         var shares = new FakeLibraryShareReader();

@@ -112,7 +112,7 @@ public sealed class ApiMcpGatewayHandler
             return;
         }
 
-        var entry = _ephemeral.Get(sessionId, name);
+        var entry = await _ephemeral.GetAsync(sessionId, name, ctx.RequestAborted);
         if (entry is null)
         {
             ctx.Response.StatusCode = StatusCodes.Status404NotFound;
@@ -169,7 +169,8 @@ public sealed class ApiMcpGatewayHandler
                     "initialize" => BuildInitializeResult(),
                     "notifications/initialized" => null,
                     "ping" => new { },
-                    "tools/list" => await ToolsListAsync(configJson, ctx.RequestAborted),
+                    "tools/list" => await ToolsListAsync(
+                        configJson, secretJson, canInjectSecret, ctx.RequestAborted),
                     "tools/call" => await ToolsCallAsync(
                         configJson, secretJson, canInjectSecret, claims, root, ctx.RequestAborted),
                     _ => throw new GatewayRpcException(-32601, $"Method not found: {method}")
@@ -225,7 +226,8 @@ public sealed class ApiMcpGatewayHandler
         serverInfo = new { name = "agenthub-api-mcp-gateway", version = "1.0.0" }
     };
 
-    private async Task<object> ToolsListAsync(string configJson, CancellationToken ct)
+    private async Task<object> ToolsListAsync(
+        string configJson, string? secretJson, bool canInjectSecret, CancellationToken ct)
     {
         var api = ParseApiConfig(configJson);
         EnsureSafeOutboundUrl(api.SpecUrl, "specUrl");
@@ -234,7 +236,7 @@ public sealed class ApiMcpGatewayHandler
 
         if (IsGraphQl(api))
         {
-            var tools = await LoadGraphQlToolsAsync(api, ct);
+            var tools = await LoadGraphQlToolsAsync(api, secretJson, canInjectSecret, ct);
             return new
             {
                 tools = tools.Select(t => new
@@ -397,7 +399,7 @@ public sealed class ApiMcpGatewayHandler
         ApiConfig api, string? secretJson, bool canInjectSecret,
         string toolName, JsonElement args, CancellationToken ct)
     {
-        var tools = await LoadGraphQlToolsAsync(api, ct);
+        var tools = await LoadGraphQlToolsAsync(api, secretJson, canInjectSecret, ct);
         var tool = tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.Ordinal))
             ?? throw new GatewayRpcException(-32602, $"Unknown tool: {toolName}");
 
@@ -466,7 +468,8 @@ public sealed class ApiMcpGatewayHandler
         };
     }
 
-    private async Task<IReadOnlyList<GraphQlMappedTool>> LoadGraphQlToolsAsync(ApiConfig api, CancellationToken ct)
+    private async Task<IReadOnlyList<GraphQlMappedTool>> LoadGraphQlToolsAsync(
+        ApiConfig api, string? secretJson, bool canInjectSecret, CancellationToken ct)
     {
         string? document = null;
         try
@@ -487,30 +490,23 @@ public sealed class ApiMcpGatewayHandler
 
         var endpoint = !string.IsNullOrWhiteSpace(api.BaseUrl) ? api.BaseUrl! : api.SpecUrl;
         EnsureSafeOutboundUrl(endpoint, "baseUrl");
-        var introspected = await IntrospectAsync(endpoint, api.Auth, ct);
+        var introspected = await IntrospectAsync(
+            endpoint, api.Auth, secretJson, canInjectSecret, ct);
         return GraphQlToolMapper.MapToolsFromIntrospection(introspected);
     }
 
-    private async Task<string> IntrospectAsync(string endpoint, ApiAuthConfig auth, CancellationToken ct)
+    private async Task<string> IntrospectAsync(
+        string endpoint,
+        ApiAuthConfig auth,
+        string? secretJson,
+        bool canInjectSecret,
+        CancellationToken ct)
     {
-        var cacheKey = $"graphql-introspection:{endpoint.TrimEnd('/')}";
-        try
-        {
-            // Reuse document cache when a prior introspection succeeded (GET of synthetic key fails;
-            // store via Invalidate+manual is awkward — just POST each miss via dedicated fetch).
-            _ = cacheKey;
-        }
-        catch
-        {
-            // ignore
-        }
-
         using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
         var body = JsonSerializer.Serialize(new { query = GraphQlToolMapper.IntrospectionQuery });
         request.Content = new StringContent(body, Encoding.UTF8, "application/json");
-        // Introspection itself may need auth; caller passes canInject separately for tools/call.
-        // For schema load we attempt without secrets (public schemas); authenticated schemas
-        // should publish a schema document URL instead.
+        if (canInjectSecret)
+            ApplyUpstreamAuth(request, auth, secretJson);
         using var resp = await _upstream.SendAsync(request, ct);
         resp.EnsureSuccessStatusCode();
         return await resp.Content.ReadAsStringAsync(ct);

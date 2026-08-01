@@ -22,29 +22,29 @@ public class EphemeralApiMcpTests
     }
 
     [Fact]
-    public void EphemeralStore_RegisterGetAndClearBySession()
+    public async Task EphemeralStore_RegisterGetAndClearBySession()
     {
-        var store = new EphemeralApiMcpStore();
-        store.Register(new EphemeralApiMcpEntry(
+        var store = new InMemoryEphemeralApiMcpStore();
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
             "sess-1", "books", "alice",
             """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql","baseUrl":"https://api.example.test/graphql"}""",
             null));
-        store.Register(new EphemeralApiMcpEntry(
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
             "sess-1", "pets", "alice",
             """{"specType":"openapi","specUrl":"https://petstore.example.test/openapi.json"}""",
             null));
-        store.Register(new EphemeralApiMcpEntry(
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
             "sess-2", "other", "bob",
             """{"specType":"openapi","specUrl":"https://other.example.test/openapi.json"}""",
             null));
 
-        Assert.NotNull(store.Get("sess-1", "books"));
-        Assert.Equal(2, store.ListBySession("sess-1").Count);
+        Assert.NotNull(await store.GetAsync("sess-1", "books"));
+        Assert.Equal(2, (await store.ListBySessionAsync("sess-1")).Count);
 
-        store.DeleteBySession("sess-1");
-        Assert.Null(store.Get("sess-1", "books"));
-        Assert.Empty(store.ListBySession("sess-1"));
-        Assert.NotNull(store.Get("sess-2", "other"));
+        await store.DeleteBySessionAsync("sess-1");
+        Assert.Null(await store.GetAsync("sess-1", "books"));
+        Assert.Empty(await store.ListBySessionAsync("sess-1"));
+        Assert.NotNull(await store.GetAsync("sess-2", "other"));
     }
 
     [Fact]
@@ -139,7 +139,7 @@ public class EphemeralApiMcpTests
         var sp = services.BuildServiceProvider();
         var tokens = new McpGatewayTokenService(sp.GetRequiredService<IDataProtectionProvider>());
         var catalog = new InMemoryMcpServerStore();
-        var ephemeral = new EphemeralApiMcpStore();
+        var ephemeral = new InMemoryEphemeralApiMcpStore();
         var sessions = new FakeSessionStore();
         sessions.Upsert(new SessionRecord
         {
@@ -151,7 +151,7 @@ public class EphemeralApiMcpTests
         var handler = new ApiMcpGatewayHandler(
             catalog, ephemeral, tokens, new OpenApiSpecCache(http), http, sessions, access);
 
-        ephemeral.Register(new EphemeralApiMcpEntry(
+        await ephemeral.RegisterAsync(new EphemeralApiMcpEntry(
             "sess-1", "books", "alice",
             """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql","baseUrl":"https://api.example.test/graphql"}""",
             null));
@@ -177,6 +177,88 @@ public class EphemeralApiMcpTests
         Assert.Contains("addBook", names);
     }
 
+    [Fact]
+    public async Task Gateway_GraphQlIntrospection_SendsBearerWhenSecretPresent()
+    {
+        const string introspection = """
+            {
+              "data": {
+                "__schema": {
+                  "queryType": { "name": "Query" },
+                  "mutationType": null,
+                  "types": [
+                    {
+                      "kind": "OBJECT",
+                      "name": "Query",
+                      "fields": [
+                        {
+                          "name": "hello",
+                          "description": "Say hello",
+                          "args": [],
+                          "type": { "kind": "SCALAR", "name": "String" }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            }
+            """;
+
+        string? seenAuth = null;
+        var upstream = new CapturingAuthHandler((req, _) =>
+        {
+            if (req.Method == HttpMethod.Get)
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            seenAuth = req.Headers.Authorization?.ToString();
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(introspection, Encoding.UTF8, "application/json")
+            };
+        });
+
+        var services = new ServiceCollection();
+        services.AddDataProtection();
+        var sp = services.BuildServiceProvider();
+        var tokens = new McpGatewayTokenService(sp.GetRequiredService<IDataProtectionProvider>());
+        var catalog = new InMemoryMcpServerStore();
+        var ephemeral = new InMemoryEphemeralApiMcpStore();
+        var sessions = new FakeSessionStore();
+        sessions.Upsert(new SessionRecord
+        {
+            Id = "sess-1", Owner = "alice", CallbackToken = "cb", Mode = SessionMode.Interactive,
+            AgentSessionId = "agent-1"
+        });
+        var access = new LibraryAccessService(catalog, new FakeLibraryShareReader(), new FakeEnterpriseLicense(false));
+        var http = new HttpClient(upstream);
+        var handler = new ApiMcpGatewayHandler(
+            catalog, ephemeral, tokens, new OpenApiSpecCache(http), http, sessions, access);
+
+        await ephemeral.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "books", "alice",
+            """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql","baseUrl":"https://api.example.test/graphql","auth":{"type":"bearer"}}""",
+            """{"token":"secret-token"}"""));
+        var token = tokens.IssueEphemeral("sess-1", "books", "alice");
+
+        var ctx = new DefaultHttpContext();
+        ctx.Request.Method = "POST";
+        ctx.Request.ContentType = "application/json";
+        ctx.Request.Body = new MemoryStream(Encoding.UTF8.GetBytes(
+            """{"jsonrpc":"2.0","id":1,"method":"tools/list"}"""));
+        ctx.Request.Headers[McpGatewayTokenService.HeaderName] = token;
+        ctx.Response.Body = new MemoryStream();
+
+        await handler.HandleSessionAsync(ctx, "sess-1", "books");
+
+        Assert.Equal(StatusCodes.Status200OK, ctx.Response.StatusCode);
+        Assert.Equal("Bearer secret-token", seenAuth);
+        ctx.Response.Body.Position = 0;
+        using var doc = await JsonDocument.ParseAsync(ctx.Response.Body);
+        var names = doc.RootElement.GetProperty("result").GetProperty("tools")
+            .EnumerateArray().Select(t => t.GetProperty("name").GetString()).ToHashSet();
+        Assert.Contains("hello", names);
+    }
+
     private sealed class GraphQlSchemaHandler(string sdl) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -192,6 +274,14 @@ public class EphemeralApiMcpTests
 
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }
+    }
+
+    private sealed class CapturingAuthHandler(
+        Func<HttpRequestMessage, CancellationToken, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(respond(request, cancellationToken));
     }
 
     private sealed class FakeSessionStore : ISessionStore
