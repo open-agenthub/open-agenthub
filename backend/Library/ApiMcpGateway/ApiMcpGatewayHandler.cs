@@ -10,12 +10,13 @@ using Microsoft.AspNetCore.Http;
 namespace AgentHub.Api.Library.ApiMcpGateway;
 
 /// <summary>
-/// Minimal Streamable-HTTP MCP endpoint for catalog <c>kind=api</c> OpenAPI entries:
-/// JSON-RPC over POST for initialize / tools/list / tools/call.
+/// Minimal Streamable-HTTP MCP endpoint for catalog <c>kind=api</c> and session-ephemeral
+/// OpenAPI/GraphQL entries: JSON-RPC over POST for initialize / tools/list / tools/call.
 /// </summary>
 public sealed class ApiMcpGatewayHandler
 {
     private readonly IMcpServerStore _store;
+    private readonly IEphemeralApiMcpStore _ephemeral;
     private readonly IMcpGatewayTokenService _tokens;
     private readonly OpenApiSpecCache _specs;
     private readonly HttpClient _upstream;
@@ -24,6 +25,7 @@ public sealed class ApiMcpGatewayHandler
 
     public ApiMcpGatewayHandler(
         IMcpServerStore store,
+        IEphemeralApiMcpStore ephemeral,
         IMcpGatewayTokenService tokens,
         OpenApiSpecCache specs,
         HttpClient upstream,
@@ -31,6 +33,7 @@ public sealed class ApiMcpGatewayHandler
         ILibraryAccess access)
     {
         _store = store;
+        _ephemeral = ephemeral;
         _tokens = tokens;
         _specs = specs;
         _upstream = upstream;
@@ -81,7 +84,61 @@ public sealed class ApiMcpGatewayHandler
         }
 
         server = accessible[0];
+        var canInjectSecret = CanInjectUpstreamSecret(server, claims);
+        await HandleRpcAsync(ctx, server.ConfigJson, server.SecretJson, canInjectSecret, claims);
+    }
 
+    public async Task HandleSessionAsync(HttpContext ctx, string sessionId, string name)
+    {
+        if (!HttpMethods.IsPost(ctx.Request.Method))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
+            return;
+        }
+
+        var token = ExtractToken(ctx.Request);
+        if (!_tokens.TryValidateEphemeral(token, sessionId, name, out var claims))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await ctx.Response.WriteAsync("Unauthorized", ctx.RequestAborted);
+            return;
+        }
+
+        var session = await _sessions.GetAsync(claims.Owner, claims.SessionId, ctx.RequestAborted);
+        if (session is null)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await ctx.Response.WriteAsync("Session not found", ctx.RequestAborted);
+            return;
+        }
+
+        var entry = _ephemeral.Get(sessionId, name);
+        if (entry is null)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status404NotFound;
+            await ctx.Response.WriteAsync("Ephemeral MCP source not found", ctx.RequestAborted);
+            return;
+        }
+
+        if (!string.Equals(entry.Owner, claims.Owner, StringComparison.Ordinal))
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsync("Ephemeral MCP source not accessible", ctx.RequestAborted);
+            return;
+        }
+
+        // Ephemeral secrets are owned by the session owner (same as personal catalog).
+        var canInjectSecret = string.Equals(claims.Owner, entry.Owner, StringComparison.Ordinal);
+        await HandleRpcAsync(ctx, entry.ConfigJson, entry.SecretJson, canInjectSecret, claims);
+    }
+
+    private async Task HandleRpcAsync(
+        HttpContext ctx,
+        string configJson,
+        string? secretJson,
+        bool canInjectSecret,
+        McpGatewayTokenClaims claims)
+    {
         JsonDocument? rpcDoc = null;
         try
         {
@@ -112,8 +169,9 @@ public sealed class ApiMcpGatewayHandler
                     "initialize" => BuildInitializeResult(),
                     "notifications/initialized" => null,
                     "ping" => new { },
-                    "tools/list" => await ToolsListAsync(server, ctx.RequestAborted),
-                    "tools/call" => await ToolsCallAsync(server, claims, root, ctx.RequestAborted),
+                    "tools/list" => await ToolsListAsync(configJson, ctx.RequestAborted),
+                    "tools/call" => await ToolsCallAsync(
+                        configJson, secretJson, canInjectSecret, claims, root, ctx.RequestAborted),
                     _ => throw new GatewayRpcException(-32601, $"Method not found: {method}")
                 };
             }
@@ -167,15 +225,32 @@ public sealed class ApiMcpGatewayHandler
         serverInfo = new { name = "agenthub-api-mcp-gateway", version = "1.0.0" }
     };
 
-    private async Task<object> ToolsListAsync(McpServerRecord server, CancellationToken ct)
+    private async Task<object> ToolsListAsync(string configJson, CancellationToken ct)
     {
-        var (specUrl, _, _) = ParseApiConfig(server.ConfigJson);
-        EnsureSafeOutboundUrl(specUrl, "specUrl");
-        var spec = await _specs.GetAsync(specUrl, ct);
-        var tools = OpenApiToolMapper.MapTools(spec);
+        var api = ParseApiConfig(configJson);
+        EnsureSafeOutboundUrl(api.SpecUrl, "specUrl");
+        if (!string.IsNullOrWhiteSpace(api.BaseUrl))
+            EnsureSafeOutboundUrl(api.BaseUrl!, "baseUrl");
+
+        if (IsGraphQl(api))
+        {
+            var tools = await LoadGraphQlToolsAsync(api, ct);
+            return new
+            {
+                tools = tools.Select(t => new
+                {
+                    name = t.Name,
+                    description = t.Description,
+                    inputSchema = JsonSerializer.Deserialize<JsonElement>(t.InputSchema.GetRawText())
+                }).ToArray()
+            };
+        }
+
+        var spec = await _specs.GetAsync(api.SpecUrl, ct);
+        var openApiTools = OpenApiToolMapper.MapTools(spec);
         return new
         {
-            tools = tools.Select(t => new
+            tools = openApiTools.Select(t => new
             {
                 name = t.Name,
                 description = t.Description,
@@ -185,7 +260,12 @@ public sealed class ApiMcpGatewayHandler
     }
 
     private async Task<object> ToolsCallAsync(
-        McpServerRecord server, McpGatewayTokenClaims claims, JsonElement rpcRoot, CancellationToken ct)
+        string configJson,
+        string? secretJson,
+        bool canInjectSecret,
+        McpGatewayTokenClaims claims,
+        JsonElement rpcRoot,
+        CancellationToken ct)
     {
         if (!rpcRoot.TryGetProperty("params", out var p) || p.ValueKind != JsonValueKind.Object)
             throw new GatewayRpcException(-32602, "tools/call requires params");
@@ -198,26 +278,38 @@ public sealed class ApiMcpGatewayHandler
         if (p.TryGetProperty("arguments", out var argsEl) && argsEl.ValueKind == JsonValueKind.Object)
             args = argsEl;
 
-        var (specUrl, baseUrlOverride, auth) = ParseApiConfig(server.ConfigJson);
-        EnsureSafeOutboundUrl(specUrl, "specUrl");
-        var spec = await _specs.GetAsync(specUrl, ct);
-        var tools = OpenApiToolMapper.MapTools(spec);
-        var tool = tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.Ordinal))
-            ?? throw new GatewayRpcException(-32602, $"Unknown tool: {toolName}");
+        var api = ParseApiConfig(configJson);
+        EnsureSafeOutboundUrl(api.SpecUrl, "specUrl");
+        if (!string.IsNullOrWhiteSpace(api.BaseUrl))
+            EnsureSafeOutboundUrl(api.BaseUrl!, "baseUrl");
 
-        var baseUrl = !string.IsNullOrWhiteSpace(baseUrlOverride)
-            ? baseUrlOverride!.TrimEnd('/')
-            : OpenApiToolMapper.ReadDefaultBaseUrl(spec)
-              ?? throw new GatewayRpcException(-32000, "OpenAPI has no servers.url and config has no baseUrl");
-        EnsureSafeOutboundUrl(baseUrl, "baseUrl");
-
-        var canInjectSecret = CanInjectUpstreamSecret(server, claims);
-        if (!canInjectSecret && auth.Type is not ("none" or ""))
+        if (!canInjectSecret && api.Auth.Type is not ("none" or ""))
         {
             return ToolError(
                 "This API requires credentials. The catalog entry's secret is owner-only; " +
                 "attach your own credentials (not supported in v1) or use an unauthenticated API.");
         }
+
+        if (IsGraphQl(api))
+            return await CallGraphQlAsync(api, secretJson, canInjectSecret, toolName, args, ct);
+
+        return await CallOpenApiAsync(api, secretJson, canInjectSecret, toolName, args, ct);
+    }
+
+    private async Task<object> CallOpenApiAsync(
+        ApiConfig api, string? secretJson, bool canInjectSecret,
+        string toolName, JsonElement args, CancellationToken ct)
+    {
+        var spec = await _specs.GetAsync(api.SpecUrl, ct);
+        var tools = OpenApiToolMapper.MapTools(spec);
+        var tool = tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.Ordinal))
+            ?? throw new GatewayRpcException(-32602, $"Unknown tool: {toolName}");
+
+        var baseUrl = !string.IsNullOrWhiteSpace(api.BaseUrl)
+            ? api.BaseUrl!.TrimEnd('/')
+            : OpenApiToolMapper.ReadDefaultBaseUrl(spec)
+              ?? throw new GatewayRpcException(-32000, "OpenAPI has no servers.url and config has no baseUrl");
+        EnsureSafeOutboundUrl(baseUrl, "baseUrl");
 
         var path = tool.PathTemplate;
         var query = new List<string>();
@@ -275,11 +367,10 @@ public sealed class ApiMcpGatewayHandler
             request.Headers.TryAddWithoutValidation(h, v);
 
         if (canInjectSecret)
-            ApplyUpstreamAuth(request, auth, server.SecretJson);
+            ApplyUpstreamAuth(request, api.Auth, secretJson);
 
         if (tool.HasJsonBody && bodyFields.Count > 0)
         {
-            // Flattened body fields (normal object) vs single "body" wrapper.
             string payload;
             if (bodyFields.Count == 1 && bodyFields.ContainsKey("body"))
                 payload = bodyFields["body"]!.ToJsonString();
@@ -300,6 +391,175 @@ public sealed class ApiMcpGatewayHandler
             content = new[] { new { type = "text", text = contentText } },
             isError
         };
+    }
+
+    private async Task<object> CallGraphQlAsync(
+        ApiConfig api, string? secretJson, bool canInjectSecret,
+        string toolName, JsonElement args, CancellationToken ct)
+    {
+        var tools = await LoadGraphQlToolsAsync(api, ct);
+        var tool = tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.Ordinal))
+            ?? throw new GatewayRpcException(-32602, $"Unknown tool: {toolName}");
+
+        var endpoint = !string.IsNullOrWhiteSpace(api.BaseUrl)
+            ? api.BaseUrl!.TrimEnd('/')
+            : api.SpecUrl.TrimEnd('/');
+        EnsureSafeOutboundUrl(endpoint, "baseUrl");
+
+        foreach (var binding in tool.Arguments)
+        {
+            if (binding.Required
+                && (args.ValueKind != JsonValueKind.Object || !args.TryGetProperty(binding.Name, out _)))
+                throw new GatewayRpcException(-32602, $"Missing required argument: {binding.Name}");
+        }
+
+        var document = BuildGraphQlDocument(tool, args);
+        var variables = new JsonObject();
+        if (args.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in args.EnumerateObject())
+            {
+                if (prop.Name == "_selection")
+                    continue;
+                variables[prop.Name] = JsonNode.Parse(prop.Value.GetRawText());
+            }
+        }
+
+        var payload = new JsonObject
+        {
+            ["query"] = document,
+            ["variables"] = variables
+        };
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        request.Content = new StringContent(payload.ToJsonString(), Encoding.UTF8, "application/json");
+        if (canInjectSecret)
+            ApplyUpstreamAuth(request, api.Auth, secretJson);
+
+        using var resp = await _upstream.SendAsync(request, ct);
+        var respText = await resp.Content.ReadAsStringAsync(ct);
+        var isError = !resp.IsSuccessStatusCode;
+        if (!isError)
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(respText);
+                if (doc.RootElement.TryGetProperty("errors", out var errors)
+                    && errors.ValueKind == JsonValueKind.Array
+                    && errors.GetArrayLength() > 0)
+                    isError = true;
+            }
+            catch (JsonException)
+            {
+                // treat as plain text success
+            }
+        }
+
+        var contentText = isError && !resp.IsSuccessStatusCode
+            ? $"Upstream HTTP {(int)resp.StatusCode}: {respText}"
+            : respText;
+
+        return new
+        {
+            content = new[] { new { type = "text", text = contentText } },
+            isError
+        };
+    }
+
+    private async Task<IReadOnlyList<GraphQlMappedTool>> LoadGraphQlToolsAsync(ApiConfig api, CancellationToken ct)
+    {
+        string? document = null;
+        try
+        {
+            document = await _specs.GetAsync(api.SpecUrl, ct);
+        }
+        catch
+        {
+            // Fall through to introspection against the GraphQL endpoint.
+        }
+
+        if (!string.IsNullOrWhiteSpace(document))
+        {
+            var tools = GraphQlToolMapper.MapTools(document);
+            if (tools.Count > 0)
+                return tools;
+        }
+
+        var endpoint = !string.IsNullOrWhiteSpace(api.BaseUrl) ? api.BaseUrl! : api.SpecUrl;
+        EnsureSafeOutboundUrl(endpoint, "baseUrl");
+        var introspected = await IntrospectAsync(endpoint, api.Auth, ct);
+        return GraphQlToolMapper.MapToolsFromIntrospection(introspected);
+    }
+
+    private async Task<string> IntrospectAsync(string endpoint, ApiAuthConfig auth, CancellationToken ct)
+    {
+        var cacheKey = $"graphql-introspection:{endpoint.TrimEnd('/')}";
+        try
+        {
+            // Reuse document cache when a prior introspection succeeded (GET of synthetic key fails;
+            // store via Invalidate+manual is awkward — just POST each miss via dedicated fetch).
+            _ = cacheKey;
+        }
+        catch
+        {
+            // ignore
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, endpoint);
+        var body = JsonSerializer.Serialize(new { query = GraphQlToolMapper.IntrospectionQuery });
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+        // Introspection itself may need auth; caller passes canInject separately for tools/call.
+        // For schema load we attempt without secrets (public schemas); authenticated schemas
+        // should publish a schema document URL instead.
+        using var resp = await _upstream.SendAsync(request, ct);
+        resp.EnsureSuccessStatusCode();
+        return await resp.Content.ReadAsStringAsync(ct);
+    }
+
+    private static string BuildGraphQlDocument(GraphQlMappedTool tool, JsonElement args)
+    {
+        var op = tool.Kind == GraphQlOperationKind.Mutation ? "mutation" : "query";
+        var varDefs = new List<string>();
+        var argPasses = new List<string>();
+        foreach (var a in tool.Arguments)
+        {
+            var typeExpr = a.Required ? $"{a.TypeName}!" : a.TypeName;
+            varDefs.Add($"${a.Name}: {typeExpr}");
+            argPasses.Add($"{a.Name}: ${a.Name}");
+        }
+
+        string selection;
+        if (tool.ReturnIsScalar)
+        {
+            selection = "";
+        }
+        else if (args.ValueKind == JsonValueKind.Object
+                 && args.TryGetProperty("_selection", out var sel)
+                 && sel.ValueKind == JsonValueKind.String
+                 && !string.IsNullOrWhiteSpace(sel.GetString()))
+        {
+            selection = " " + sel.GetString()!.Trim();
+        }
+        else
+        {
+            selection = " { __typename }";
+        }
+
+        var varClause = varDefs.Count > 0 ? $"({string.Join(", ", varDefs)})" : "";
+        var argClause = argPasses.Count > 0 ? $"({string.Join(", ", argPasses)})" : "";
+        return $"{op} {tool.Name}{varClause} {{ {tool.FieldName}{argClause}{selection} }}";
+    }
+
+    private static bool IsGraphQl(ApiConfig api)
+    {
+        if (api.SpecType is "graphql")
+            return true;
+        if (api.SpecType is "openapi")
+            return false;
+        // auto: sniff URL path
+        return api.SpecUrl.Contains("graphql", StringComparison.OrdinalIgnoreCase)
+               || (!string.IsNullOrWhiteSpace(api.BaseUrl)
+                   && api.BaseUrl!.Contains("graphql", StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -352,7 +612,7 @@ public sealed class ApiMcpGatewayHandler
         }
     }
 
-    private static (string SpecUrl, string? BaseUrl, ApiAuthConfig Auth) ParseApiConfig(string configJson)
+    private static ApiConfig ParseApiConfig(string configJson)
     {
         using var doc = JsonDocument.Parse(configJson);
         var root = doc.RootElement;
@@ -367,6 +627,12 @@ public sealed class ApiMcpGatewayHandler
             && !string.IsNullOrWhiteSpace(baseEl.GetString()))
             baseUrl = baseEl.GetString();
 
+        var specType = "auto";
+        if (root.TryGetProperty("specType", out var st)
+            && st.ValueKind == JsonValueKind.String
+            && !string.IsNullOrWhiteSpace(st.GetString()))
+            specType = st.GetString()!.Trim().ToLowerInvariant();
+
         var auth = new ApiAuthConfig("none", null);
         if (root.TryGetProperty("auth", out var authEl) && authEl.ValueKind == JsonValueKind.Object)
         {
@@ -379,24 +645,24 @@ public sealed class ApiMcpGatewayHandler
             auth = new ApiAuthConfig(type, headerName);
         }
 
-        return (specUrlEl.GetString()!, baseUrl, auth);
+        return new ApiConfig(specUrlEl.GetString()!, baseUrl, specType, auth);
     }
 
     /// <summary>
     /// Blocks obvious SSRF targets (loopback, link-local, cloud metadata IP).
-    /// Hostname-only checks — no DNS resolution in v1.
+    /// Hostname-only checks — no DNS resolution in v1. Throws <see cref="ArgumentException"/>.
     /// </summary>
-    internal static void EnsureSafeOutboundUrl(string url, string fieldName)
+    public static void ValidateSafeOutboundUrl(string url, string fieldName)
     {
         if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
             || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            throw new GatewayRpcException(-32000, $"{fieldName} must be an absolute http(s) URL");
+            throw new ArgumentException($"{fieldName} must be an absolute http(s) URL");
 
         var host = uri.IdnHost;
         if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
             || string.Equals(host, "metadata.google.internal", StringComparison.OrdinalIgnoreCase)
             || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
-            throw new GatewayRpcException(-32000, $"{fieldName} targets a blocked host");
+            throw new ArgumentException($"{fieldName} targets a blocked host");
 
         if (!IPAddress.TryParse(host, out var ip))
             return;
@@ -404,7 +670,19 @@ public sealed class ApiMcpGatewayHandler
         if (IPAddress.IsLoopback(ip)
             || IsLinkLocal(ip)
             || ip.Equals(IPAddress.Parse("169.254.169.254")))
-            throw new GatewayRpcException(-32000, $"{fieldName} targets a blocked address");
+            throw new ArgumentException($"{fieldName} targets a blocked address");
+    }
+
+    internal static void EnsureSafeOutboundUrl(string url, string fieldName)
+    {
+        try
+        {
+            ValidateSafeOutboundUrl(url, fieldName);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new GatewayRpcException(-32000, ex.Message);
+        }
     }
 
     private static bool IsLinkLocal(IPAddress ip)
@@ -421,6 +699,7 @@ public sealed class ApiMcpGatewayHandler
         return false;
     }
 
+    private sealed record ApiConfig(string SpecUrl, string? BaseUrl, string SpecType, ApiAuthConfig Auth);
     private sealed record ApiAuthConfig(string Type, string? HeaderName);
 
     private sealed class GatewayRpcException(int code, string message) : Exception(message)

@@ -26,12 +26,14 @@ builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.A
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpSecretProtector, AgentHub.Api.Library.McpSecretProtector>();
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpServerStore, AgentHub.Api.Library.McpServerStore>();
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpGatewayTokenService, AgentHub.Api.Library.McpGatewayTokenService>();
+builder.Services.AddSingleton<AgentHub.Api.Library.IEphemeralApiMcpStore, AgentHub.Api.Library.EphemeralApiMcpStore>();
 builder.Services.AddSingleton(sp =>
     new AgentHub.Api.Library.ApiMcpGateway.OpenApiSpecCache(
         sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway")));
 builder.Services.AddSingleton(sp =>
     new AgentHub.Api.Library.ApiMcpGateway.ApiMcpGatewayHandler(
         sp.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>(),
+        sp.GetRequiredService<AgentHub.Api.Library.IEphemeralApiMcpStore>(),
         sp.GetRequiredService<AgentHub.Api.Library.IMcpGatewayTokenService>(),
         sp.GetRequiredService<AgentHub.Api.Library.ApiMcpGateway.OpenApiSpecCache>(),
         sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway"),
@@ -276,6 +278,15 @@ app.MapPost("/mcp/api/{id}", async (HttpContext ctx, string id,
 }).AllowAnonymous();
 app.MapMethods("/mcp/api/{id}", new[] { "GET" }, () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed))
     .AllowAnonymous();
+
+// Session-scoped ephemeral OpenAPI/GraphQL → MCP HTTP gateway.
+app.MapPost("/mcp/session/{sessionId}/{name}", async (HttpContext ctx, string sessionId, string name,
+    AgentHub.Api.Library.ApiMcpGateway.ApiMcpGatewayHandler handler) =>
+{
+    await handler.HandleSessionAsync(ctx, sessionId, name);
+}).AllowAnonymous();
+app.MapMethods("/mcp/session/{sessionId}/{name}", new[] { "GET" },
+    () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed)).AllowAnonymous();
 
 // Runtime config for the frontend (static nginx image, no build-time env vars):
 // empty authority = auth disabled, so the frontend does not enforce a login.

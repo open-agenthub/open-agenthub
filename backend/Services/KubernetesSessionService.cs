@@ -2,7 +2,9 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentHub.Api.Agents;
+using AgentHub.Api.Controllers;
 using AgentHub.Api.Library;
+using AgentHub.Api.Library.ApiMcpGateway;
 using AgentHub.Api.Models;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
@@ -31,6 +33,8 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly Usage.UsageLimitService _usageLimits;
     private readonly IAllowedAgentsProvider _allowedAgents;
     private readonly ILibraryAccess _library;
+    private readonly IMcpServerStore _mcpServers;
+    private readonly IEphemeralApiMcpStore _ephemeralApiMcps;
     private readonly IMcpGatewayTokenService _mcpGatewayTokens;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
@@ -49,7 +53,8 @@ public sealed class KubernetesSessionService : ISessionService
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
         IArtifactStore artifacts, IBrowserService browsers, IGitAuthService gitAuth,
         Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
-        ILibraryAccess library, IMcpGatewayTokenService mcpGatewayTokens,
+        ILibraryAccess library, IMcpServerStore mcpServers, IEphemeralApiMcpStore ephemeralApiMcps,
+        IMcpGatewayTokenService mcpGatewayTokens,
         ILogger<KubernetesSessionService> log)
     {
         _log = log;
@@ -61,6 +66,8 @@ public sealed class KubernetesSessionService : ISessionService
         _usageLimits = usageLimits;
         _allowedAgents = allowedAgents;
         _library = library;
+        _mcpServers = mcpServers;
+        _ephemeralApiMcps = ephemeralApiMcps;
         _mcpGatewayTokens = mcpGatewayTokens;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
@@ -157,6 +164,8 @@ public sealed class KubernetesSessionService : ISessionService
         // config fails closed — no half-created session row.
         var (mcpServerIds, _) = await SessionMcpConfig.ResolveAndAssembleAsync(
             _library, owner, mcp, req.McpServerIds, strict: true, ct);
+        // Validate ephemeral sources before allocating a session id / writing a row.
+        var preparedEphemeral = PrepareEphemeralSources(req.EphemeralApiSources);
         var policy = EffectivePolicy(req.Policy, req.AllowedTools);
 
         var id = Guid.NewGuid().ToString("n")[..12];
@@ -179,9 +188,18 @@ public sealed class KubernetesSessionService : ISessionService
             CallbackToken = RandomToken(),
             Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending"
         };
+        await RegisterEphemeralSourcesAsync(owner, id, preparedEphemeral, ct);
         await _store.UpsertAsync(rec, ct);
 
-        await SpawnAsync(owner, rec, req, resume: false, ct);
+        try
+        {
+            await SpawnAsync(owner, rec, req, resume: false, ct);
+        }
+        catch
+        {
+            _ephemeralApiMcps.DeleteBySession(id);
+            throw;
+        }
         return ToInfo(rec, phase: rec.Status, podIp: null);
     }
 
@@ -241,17 +259,90 @@ public sealed class KubernetesSessionService : ISessionService
     }
 
     /// <summary>Merges catalog servers (lenient: inaccessible ids drop out) with
-    /// the session's inline config into the effective .mcp.json.</summary>
+    /// the session's inline config and ephemeral API sources into the effective .mcp.json.</summary>
     private async Task<string?> BuildEffectiveMcpConfigAsync(string owner, SessionRecord rec, CancellationToken ct)
     {
         var gateway = new McpGatewayAssembleOptions
         {
             BaseUrl = _mcpGatewayBaseUrl,
-            IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner)
+            SessionId = rec.Id,
+            IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner),
+            IssueEphemeralToken = name => _mcpGatewayTokens.IssueEphemeral(rec.Id, name, owner)
         };
-        var (_, effective) = await SessionMcpConfig.ResolveAndAssembleAsync(
-            _library, owner, rec.McpConfigJson, ParseMcpServerIds(rec), strict: false, ct, gateway);
-        return effective;
+        var ephemeral = _ephemeralApiMcps.ListBySession(rec.Id);
+        var servers = ParseMcpServerIds(rec).Count == 0
+            ? (IReadOnlyList<McpServerRecord>)Array.Empty<McpServerRecord>()
+            : await _library.ResolveMcpServersAsync(owner, ParseMcpServerIds(rec), strict: false, ct);
+        return McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
+    }
+
+    private static List<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)> PrepareEphemeralSources(
+        IReadOnlyList<EphemeralApiSource> sources)
+    {
+        var prepared = new List<(EphemeralApiSource, string, string?)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var source in sources)
+        {
+            var name = LibraryValidation.ValidateMcpServerName(source.Name);
+            if (!seen.Add(name))
+                throw new ArgumentException($"Duplicate ephemeral API source name '{name}'.");
+
+            var configJson = McpServersController.BuildApiConfigJson(new CreateMcpFromApiRequest(
+                name, Description: null, source.SpecUrl, source.SpecType, source.BaseUrl, source.Auth,
+                source.Secret, Save: false));
+            LibraryValidation.ValidateMcpServerConfig(configJson, "api");
+
+            using (var doc = JsonDocument.Parse(configJson))
+            {
+                var root = doc.RootElement;
+                if (root.TryGetProperty("specUrl", out var specUrl)
+                    && specUrl.ValueKind == JsonValueKind.String)
+                    ApiMcpGatewayHandler.ValidateSafeOutboundUrl(specUrl.GetString()!, "specUrl");
+                if (root.TryGetProperty("baseUrl", out var baseUrl)
+                    && baseUrl.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(baseUrl.GetString()))
+                    ApiMcpGatewayHandler.ValidateSafeOutboundUrl(baseUrl.GetString()!, "baseUrl");
+            }
+
+            string? secretJson = null;
+            if (!string.IsNullOrWhiteSpace(source.Secret))
+            {
+                var secret = source.Secret.Trim();
+                secretJson = secret.StartsWith('{')
+                    ? secret
+                    : JsonSerializer.Serialize(new Dictionary<string, string> { ["token"] = secret });
+            }
+
+            prepared.Add((source with { Name = name }, configJson, secretJson));
+        }
+
+        return prepared;
+    }
+
+    private async Task RegisterEphemeralSourcesAsync(
+        string owner,
+        string sessionId,
+        IReadOnlyList<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)> prepared,
+        CancellationToken ct)
+    {
+        foreach (var (source, configJson, secretJson) in prepared)
+        {
+            _ephemeralApiMcps.Register(new EphemeralApiMcpEntry(
+                sessionId, source.Name, owner, configJson, secretJson));
+
+            if (!source.SaveToLibrary)
+                continue;
+
+            await _mcpServers.CreateAsync(
+                owner,
+                new SaveMcpServerRequest(
+                    source.Name,
+                    Description: null,
+                    Kind: "api",
+                    configJson,
+                    secretJson),
+                ct);
+        }
     }
 
     private async Task ValidateProjectAsync(string owner, string? projectId, CancellationToken ct)
@@ -413,10 +504,14 @@ public sealed class KubernetesSessionService : ISessionService
             var gateway = new McpGatewayAssembleOptions
             {
                 BaseUrl = _mcpGatewayBaseUrl,
-                IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner)
+                SessionId = rec.Id,
+                IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner),
+                IssueEphemeralToken = name => _mcpGatewayTokens.IssueEphemeral(rec.Id, name, owner)
             };
-            var (ids, effective) = await SessionMcpConfig.ResolveAndAssembleAsync(
-                _library, owner, rec.McpConfigJson, idsToResolve, strict: true, ct, gateway);
+            var ephemeral = _ephemeralApiMcps.ListBySession(rec.Id);
+            var servers = await _library.ResolveMcpServersAsync(owner, idsToResolve, strict: true, ct);
+            var ids = servers.Select(s => s.Id).ToList();
+            var effective = McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
             if (req.McpServerIds is not null)
                 rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
             if (effective is not null)
@@ -621,6 +716,7 @@ public sealed class KubernetesSessionService : ISessionService
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
+        _ephemeralApiMcps.DeleteBySession(id);
         await _store.DeleteAsync(id, ct);
         _log.LogInformation("Deleted session {Id} (S3 artifacts are kept)", id);
     }

@@ -34,6 +34,7 @@ public class ApiMcpGatewayTests
         var sp = services.BuildServiceProvider();
         var tokens = new McpGatewayTokenService(sp.GetRequiredService<IDataProtectionProvider>());
         var store = new InMemoryMcpServerStore();
+        var ephemeral = new EphemeralApiMcpStore();
         var sessions = new FakeGatewaySessionStore();
         sessions.Upsert(Session("alice", "sess-1"));
         var shares = new FakeLibraryShareReader();
@@ -41,7 +42,7 @@ public class ApiMcpGatewayTests
         var access = new LibraryAccessService(store, shares, license);
         var http = new HttpClient(upstream ?? new StaticSpecHandler(File.ReadAllText(FixturePath)));
         var cache = new OpenApiSpecCache(http);
-        var handler = new ApiMcpGatewayHandler(store, tokens, cache, http, sessions, access);
+        var handler = new ApiMcpGatewayHandler(store, ephemeral, tokens, cache, http, sessions, access);
         return (handler, tokens, store, sessions, shares, license);
     }
 
