@@ -1,3 +1,4 @@
+using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Library;
 using AgentHub.Api.Licensing;
 
@@ -109,4 +110,95 @@ internal sealed class InMemoryMcpServerStore : IMcpServerStore
     public Task<IReadOnlyList<McpServerRecord>> GetManyAsync(IReadOnlyCollection<string> ids, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<McpServerRecord>>(
             ids.Where(_items.ContainsKey).Select(i => _items[i]).OrderBy(i => i.Name).ToList());
+}
+
+/// <summary>
+/// In-memory share matrix for tests. Groups are IdP group names (same as
+/// <c>UserGroupStore</c>), not a parallel custom-group system.
+/// </summary>
+internal sealed class InMemoryLibraryShareStore : ILibraryShareStore
+{
+    private readonly Dictionary<(string Type, string Id), (bool All, List<string> Users, List<string> Groups)> _shares = new();
+    private readonly Dictionary<string, HashSet<string>> _memberships = new(StringComparer.Ordinal);
+
+    public HashSet<string> KnownUsers { get; } = new(StringComparer.Ordinal);
+    public HashSet<string> KnownGroups { get; } = new(StringComparer.Ordinal);
+    public List<(string Type, string Id)> DeletedItems { get; } = new();
+
+    public void AddMembership(string owner, string groupName)
+    {
+        KnownGroups.Add(groupName);
+        if (!_memberships.TryGetValue(owner, out var groups))
+            _memberships[owner] = groups = new HashSet<string>(StringComparer.Ordinal);
+        groups.Add(groupName);
+    }
+
+    public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+
+    public Task<LibraryShares> GetSharesAsync(string itemType, string itemId, CancellationToken ct = default)
+    {
+        LibraryItemTypes.Validate(itemType);
+        var (all, users, groups) = _shares.GetValueOrDefault(
+            (itemType, itemId), (false, new List<string>(), new List<string>()));
+        return Task.FromResult(new LibraryShares(all, users, groups));
+    }
+
+    public Task<LibraryShares> SetSharesAsync(
+        string itemType, string itemId, bool all,
+        IReadOnlyCollection<string>? users, IReadOnlyCollection<string>? groups,
+        string createdBy, CancellationToken ct = default)
+    {
+        LibraryItemTypes.Validate(itemType);
+        var userList = Normalize(users);
+        var groupList = Normalize(groups);
+        foreach (var user in userList)
+        {
+            if (!KnownUsers.Contains(user))
+                throw new ArgumentException($"'{user}' is not a known user.");
+        }
+        foreach (var group in groupList)
+        {
+            if (!KnownGroups.Contains(group))
+                throw new ArgumentException($"Group '{group}' does not exist.");
+        }
+        _shares[(itemType, itemId)] = (all, userList, groupList);
+        return Task.FromResult(new LibraryShares(all, userList, groupList));
+    }
+
+    public Task DeleteForItemAsync(string itemType, string itemId, CancellationToken ct = default)
+    {
+        LibraryItemTypes.Validate(itemType);
+        _shares.Remove((itemType, itemId));
+        DeletedItems.Add((itemType, itemId));
+        return Task.CompletedTask;
+    }
+
+    public Task<IReadOnlyCollection<string>> ListAccessibleItemIdsAsync(
+        string itemType, string owner, CancellationToken ct = default)
+    {
+        LibraryItemTypes.Validate(itemType);
+        var memberOf = _memberships.GetValueOrDefault(owner) ?? [];
+        var ids = new List<string>();
+        foreach (var ((type, id), (all, users, groups)) in _shares)
+        {
+            if (type != itemType) continue;
+            if (all || users.Contains(owner) || groups.Any(memberOf.Contains))
+                ids.Add(id);
+        }
+        return Task.FromResult<IReadOnlyCollection<string>>(ids);
+    }
+
+    private static List<string> Normalize(IReadOnlyCollection<string>? values)
+    {
+        var result = new List<string>();
+        foreach (var value in values ?? [])
+        {
+            var subject = value?.Trim();
+            if (string.IsNullOrEmpty(subject))
+                throw new ArgumentException("Empty entries are not allowed.");
+            if (!result.Contains(subject, StringComparer.Ordinal))
+                result.Add(subject);
+        }
+        return result;
+    }
 }
