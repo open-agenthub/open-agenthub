@@ -233,4 +233,15 @@ describe('ephemeral API URL paste', () => {
       }]
     }))
   })
+
+  it('omits ephemeralApiSources on edit when the URL is blank so existing ones stay', async () => {
+    const wrapper = mount(EditSessionDialog, {
+      props: { session: baseSession, projects: [] },
+      ...mountOptions
+    })
+    await flushPromises()
+    await wrapper.get('[data-submit]').trigger('click')
+    const payload = mocks.api.updateSession.mock.calls[0][1]
+    expect(payload).not.toHaveProperty('ephemeralApiSources')
+  })
 })

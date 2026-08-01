@@ -122,4 +122,25 @@ public class LibrarySessionIntegrationTests
         // Title-only updates stay allowed for scheduled sessions.
         SessionUpdateValidator.Validate(scheduled, new UpdateSessionRequest { Title = "New" });
     }
+
+    [Fact]
+    public void UpdateValidator_TreatsEphemeralApiSourcesAsRuntimeField()
+    {
+        var scheduled = Source(null);
+        scheduled.Mode = SessionMode.Scheduled;
+        Assert.Throws<ArgumentException>(() => SessionUpdateValidator.Validate(
+            scheduled, new UpdateSessionRequest
+            {
+                EphemeralApiSources =
+                [
+                    new EphemeralApiSource
+                    {
+                        Name = "books",
+                        SpecUrl = "https://api.example.test/schema.graphql"
+                    }
+                ]
+            }));
+
+        SessionUpdateValidator.Validate(scheduled, new UpdateSessionRequest { Title = "New" });
+    }
 }

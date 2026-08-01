@@ -239,6 +239,11 @@ public record UpdateSessionRequest
     public string? McpConfigJson { get; init; }
     /// <summary>Catalog MCP servers; null = unchanged, empty list = none.</summary>
     public List<string>? McpServerIds { get; init; }
+    /// <summary>
+    /// Session-scoped OpenAPI/GraphQL MCP sources; null = unchanged, empty list clears,
+    /// non-empty replaces all ephemerals for the session (then MCP secret is re-assembled).
+    /// </summary>
+    public List<EphemeralApiSource>? EphemeralApiSources { get; init; }
     public AgentKind? Agent { get; init; }
     public AgentAuthMode? AuthMode { get; init; }
     /// <summary>Which existing API key OpenClaw should use; only for OpenClaw + ApiKey.</summary>

@@ -72,6 +72,11 @@ async function save() {
     catch { error.value = 'MCP config is not valid JSON.'; busy.value = false; return }
   }
   try {
+    const ephemeralApiSources = buildEphemeralApiSources({
+      url: ephemeralUrl.value,
+      name: ephemeralName.value,
+      saveToLibrary: ephemeralSaveToLibrary.value
+    })
     const payload = scheduled.value
       ? { title: f.value.title, projectId: f.value.projectId || null }
       : {
@@ -84,11 +89,8 @@ async function save() {
           repos: repos.value,
           mcpConfigJson: f.value.mcpConfigJson,  // "" clears it
           mcpServerIds: selectedMcpIds.value,    // [] = none, null would mean unchanged
-          ephemeralApiSources: buildEphemeralApiSources({
-            url: ephemeralUrl.value,
-            name: ephemeralName.value,
-            saveToLibrary: ephemeralSaveToLibrary.value
-          }),
+          // Omit when blank so existing session ephemerals are left unchanged (null on API).
+          ...(ephemeralApiSources.length ? { ephemeralApiSources } : {}),
           projectId: f.value.projectId || null
         }
     if (!scheduled.value && f.value.authMode !== 'Auto') {
