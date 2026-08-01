@@ -94,7 +94,7 @@ public class InternalAgentPolicyTests
         string token = "callback-token")
     {
         var controller = new InternalController(
-            new CallbackSessionStore(session), [], null!, null!, [], [], sharing!);
+            new CallbackSessionStore(session), [], null!, null!, [], [], sharing!, null!);
         controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
         controller.Request.Headers["X-Agent-Token"] = token;
         return controller;
