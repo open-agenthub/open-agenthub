@@ -5,6 +5,7 @@ using AgentHub.Api.Library;
 using AgentHub.Api.Library.ApiMcpGateway;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
+using AgentHub.Api.Services;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,6 +60,27 @@ public class EphemeralApiMcpTests
         Assert.False(tokens.TryValidateEphemeral(token, "sess-1", "other", out _));
         Assert.False(tokens.TryValidateEphemeral(token, "sess-2", "books", out _));
         Assert.False(tokens.TryValidate(token, "books", out _)); // catalog binding must not accept ephemeral token
+    }
+
+    /// <summary>
+    /// SessionInfo.HasMcp (and thus MCP secret/mount eligibility) must be true for
+    /// sessions that only have ephemeral API sources — no inline JSON / catalog ids.
+    /// </summary>
+    [Fact]
+    public async Task HasMcp_TrueForEphemeralOnlySession()
+    {
+        var store = new InMemoryEphemeralApiMcpStore();
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "books", "alice",
+            """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql"}""",
+            null));
+
+        var hasEphemeral = (await store.ListBySessionAsync("sess-1")).Count > 0;
+        Assert.True(hasEphemeral);
+        Assert.True(SessionMcpConfig.HasMcp(mcpConfigJson: null, mcpServerIds: [], hasEphemeral));
+        Assert.False(SessionMcpConfig.HasMcp(mcpConfigJson: null, mcpServerIds: [], hasEphemeralApiSources: false));
+        Assert.True(SessionMcpConfig.HasMcp("""{"mcpServers":{"local":{"command":"x"}}}""", [], false));
+        Assert.True(SessionMcpConfig.HasMcp(null, ["catalog-id"], false));
     }
 
     [Fact]

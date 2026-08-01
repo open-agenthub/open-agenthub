@@ -10,6 +10,18 @@ namespace AgentHub.Api.Services;
 public static class SessionMcpConfig
 {
     /// <summary>
+    /// Whether the session should expose MCP (secret/mount + <c>SessionInfo.HasMcp</c>).
+    /// True when inline config, catalog ids, or ephemeral API sources are present.
+    /// </summary>
+    public static bool HasMcp(
+        string? mcpConfigJson,
+        IReadOnlyCollection<string>? mcpServerIds,
+        bool hasEphemeralApiSources = false) =>
+        !string.IsNullOrWhiteSpace(mcpConfigJson)
+        || (mcpServerIds is { Count: > 0 })
+        || hasEphemeralApiSources;
+
+    /// <summary>
     /// Strict or lenient resolve followed by <see cref="McpConfigAssembler.Merge"/>.
     /// Returns resolved ids (accessible only) and the effective .mcp.json (or null).
     /// Pass <paramref name="gateway"/> on spawn so <c>kind=api</c> entries get a real URL + token.
