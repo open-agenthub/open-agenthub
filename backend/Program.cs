@@ -57,6 +57,12 @@ builder.Services.AddSingleton<AgentHub.Api.Ee.Identity.UserGroupStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Usage.UsageLimitStore>();
 builder.Services.AddSingleton<AgentHub.Api.Usage.IAdminUsageLimitProvider, AgentHub.Api.Ee.Usage.EeUsageLimitProvider>();
 builder.Services.AddSingleton<AgentHub.Api.Admin.IAdminRoleProvider, AgentHub.Api.Ee.Usage.GroupRoleAdminProvider>();
+// Allowed agent kinds: CE default allows all; EE provider replaces it and self-gates on the license
+// (empty whitelist = unrestricted / all allowed).
+builder.Services.AddSingleton<AgentHub.Api.Agents.IAllowedAgentsProvider, AgentHub.Api.Agents.AllowAllAgentsProvider>();
+builder.Services.AddSingleton<AgentHub.Api.Ee.Agents.AllowedAgentsStore>();
+builder.Services.AddSingleton<AgentHub.Api.Agents.IAllowedAgentsProvider, AgentHub.Api.Ee.Agents.EeAllowedAgentsProvider>();
+
 // Monthly seat heartbeat: reports the licensed-user count and renews the license token.
 builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
 
@@ -183,6 +189,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Usage.UsageLimitStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Agents.AllowedAgentsStore>().InitializeAsync();
     // License token lives in the DB — create its table, then load & verify it.
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.ILicenseStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();

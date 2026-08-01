@@ -14,7 +14,9 @@ const mocks = vi.hoisted(() => ({
     eeSetLimit: vi.fn(),
     eeDeleteLimit: vi.fn(),
     eeListGroups: vi.fn(),
-    eeSetGroupRole: vi.fn()
+    eeSetGroupRole: vi.fn(),
+    adminGetAllowedAgents: vi.fn(),
+    adminSetAllowedAgents: vi.fn()
   },
   config: { gitEnabled: false }
 }))
@@ -110,6 +112,8 @@ describe('AdminLimitsView', () => {
       { name: 'devs', role: null, memberCount: 3 },
       { name: 'leads', role: 'admin', memberCount: 1 }
     ])
+    mocks.api.adminGetAllowedAgents.mockResolvedValue({ agents: [] })
+    mocks.api.adminSetAllowedAgents.mockResolvedValue({ agents: [] })
   })
 
   it('shows the enterprise lock without a license (402)', async () => {
@@ -149,5 +153,40 @@ describe('AdminLimitsView', () => {
     await flushPromises()
     await wrapper.get('[data-group-row="devs"] select').setValue('admin')
     expect(mocks.api.eeSetGroupRole).toHaveBeenCalledWith('devs', 'admin')
+  })
+
+  it('loads allowed-agent checkboxes from the admin API', async () => {
+    mocks.api.adminGetAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex'] })
+    const wrapper = mount(AdminLimitsView)
+    await flushPromises()
+    const panel = wrapper.get('[data-allowed-agents]')
+    expect(panel.text()).toContain('Allowed agents')
+    expect(wrapper.get('[data-allowed-agent="Claude"] input').element.checked).toBe(true)
+    expect(wrapper.get('[data-allowed-agent="Codex"] input').element.checked).toBe(true)
+    expect(wrapper.get('[data-allowed-agent="Cursor"] input').element.checked).toBe(false)
+    expect(wrapper.get('[data-allowed-agent="OpenClaw"] input').element.checked).toBe(false)
+  })
+
+  it('saves the checked allowed-agent list', async () => {
+    mocks.api.adminGetAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex'] })
+    mocks.api.adminSetAllowedAgents.mockResolvedValue({ agents: ['Claude', 'OpenClaw'] })
+    const wrapper = mount(AdminLimitsView)
+    await flushPromises()
+    await wrapper.get('[data-allowed-agent="Codex"] input').setValue(false)
+    await wrapper.get('[data-allowed-agent="OpenClaw"] input').setValue(true)
+    await wrapper.get('[data-save-allowed-agents]').trigger('click')
+    expect(mocks.api.adminSetAllowedAgents).toHaveBeenCalledWith(['Claude', 'OpenClaw'])
+  })
+
+  it('shows a 403 error from the allowed-agents API', async () => {
+    mocks.api.adminGetAllowedAgents.mockResolvedValue({ agents: [] })
+    const err = new Error('403 Forbidden'); err.status = 403
+    mocks.api.adminSetAllowedAgents.mockRejectedValue(err)
+    const wrapper = mount(AdminLimitsView)
+    await flushPromises()
+    await wrapper.get('[data-allowed-agent="Claude"] input').setValue(true)
+    await wrapper.get('[data-save-allowed-agents]').trigger('click')
+    await flushPromises()
+    expect(wrapper.text()).toContain('403 Forbidden')
   })
 })

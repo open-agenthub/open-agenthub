@@ -1,17 +1,24 @@
 <script setup>
 import { computed } from 'vue'
-import { agentOptions, authOptions, credentialReadiness } from '../lib/agent.js'
+import {
+  agentOptions, authOptions, credentialReadiness, needsOpenClawApiKeySource, openClawApiKeySourceOptions
+} from '../lib/agent.js'
 
 const props = defineProps({
   agent: { type: String, required: true },
   authMode: { type: String, required: true },
+  openClawApiKeySource: { type: String, default: 'Anthropic' },
   mode: { type: String, required: true },
   legacyAuthMode: { type: String, default: null },
-  credentialStatus: { type: Object, default: () => ({}) }
+  credentialStatus: { type: Object, default: () => ({}) },
+  options: { type: Array, default: null }
 })
-const emit = defineEmits(['update:agent', 'update:authMode'])
+const emit = defineEmits(['update:agent', 'update:authMode', 'update:openClawApiKeySource'])
+const visibleAgents = computed(() => props.options || agentOptions)
 const billingOptions = computed(() => authOptions(props.agent, props.legacyAuthMode))
-const readiness = computed(() => credentialReadiness(props.agent, props.authMode, props.mode, props.credentialStatus))
+const showOpenClawSource = computed(() => needsOpenClawApiKeySource(props.agent, props.authMode))
+const readiness = computed(() =>
+  credentialReadiness(props.agent, props.authMode, props.mode, props.credentialStatus, props.openClawApiKeySource))
 
 function chooseAgent(agent) {
   emit('update:agent', agent)
@@ -24,11 +31,11 @@ function chooseAgent(agent) {
     <div class="decision-group">
       <div class="decision-label">Agent</div>
       <div class="chips-box" role="group" aria-label="Agent">
-        <button v-for="option in agentOptions" :key="option.value" type="button" class="chip"
+        <button v-for="option in visibleAgents" :key="option.value" type="button" class="chip"
           :class="{ on: agent === option.value }" :aria-pressed="agent === option.value"
           :data-agent-option="option.value" @click="chooseAgent(option.value)">{{ option.label }}</button>
       </div>
-      <small>{{ agentOptions.find(option => option.value === agent)?.hint }}</small>
+      <small>{{ visibleAgents.find(option => option.value === agent)?.hint }}</small>
     </div>
     <div class="decision-group">
       <div class="decision-label">Billing</div>
@@ -39,6 +46,16 @@ function chooseAgent(agent) {
           :data-auth-option="option.value" @click="$emit('update:authMode', option.value)">{{ option.label }}</button>
       </div>
       <small>{{ billingOptions.find(option => option.value === authMode)?.hint }}</small>
+    </div>
+    <div v-if="showOpenClawSource" class="decision-group source-group" data-openclaw-source>
+      <div class="decision-label">API key source</div>
+      <div class="chips-box" role="group" aria-label="OpenClaw API key source">
+        <button v-for="option in openClawApiKeySourceOptions" :key="option.value" type="button" class="chip"
+          :class="{ on: openClawApiKeySource === option.value }" :aria-pressed="openClawApiKeySource === option.value"
+          :data-openclaw-source-option="option.value"
+          @click="$emit('update:openClawApiKeySource', option.value)">{{ option.label }}</button>
+      </div>
+      <small>{{ openClawApiKeySourceOptions.find(option => option.value === openClawApiKeySource)?.hint }}</small>
     </div>
     <p class="readiness" :class="{ ready: readiness.ready }" data-readiness aria-live="polite">{{ readiness.text }}</p>
   </div>
@@ -55,11 +72,12 @@ function chooseAgent(agent) {
 .chip:hover { color: var(--text); }
 .chip.on { background: var(--border-2); color: var(--strong); }
 small { display: block; margin-top: 5px; color: var(--muted-3); font-size: 11px; }
+.source-group { grid-column: 1 / -1; }
 .readiness { grid-column: 1 / -1; margin: 0; padding-top: 10px; border-top: 1px solid var(--border); color: var(--warn); font-size: 12px; line-height: 1.45; }
 .readiness.ready { color: var(--ok); }
 @media (max-width: 600px) {
   .agent-card { grid-template-columns: 1fr; }
-  .readiness { grid-column: 1; }
+  .source-group, .readiness { grid-column: 1; }
   .chips-box { display: flex; }
   .chip { flex: 1; }
 }

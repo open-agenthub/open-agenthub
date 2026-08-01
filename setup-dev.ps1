@@ -51,6 +51,8 @@ docker build --file (Join-Path $repoRoot 'agent-runtime/codex/Dockerfile') --tag
 Assert-NativeSuccess 'Codex image build'
 docker build --file (Join-Path $repoRoot 'agent-runtime/cursor/Dockerfile') --tag 'open-agenthub-dev/agent-runtime-cursor:local' (Join-Path $repoRoot 'agent-runtime')
 Assert-NativeSuccess 'Cursor image build'
+docker build --file (Join-Path $repoRoot 'agent-runtime/openclaw/Dockerfile') --tag 'open-agenthub-dev/agent-runtime-openclaw:local' (Join-Path $repoRoot 'agent-runtime')
+Assert-NativeSuccess 'OpenClaw image build'
 docker build --tag 'open-agenthub-dev/browser:local' (Join-Path $repoRoot 'browser-runtime')
 Assert-NativeSuccess 'Browser image build'
 

@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
-import { defaultAgentForm, defaultPolicy, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import { agentPayload, defaultAgentForm, defaultPolicy, filterAgentOptions, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
@@ -20,6 +20,7 @@ const UI_MODES = [
   { key: 'terminal', label: 'Terminal', hint: 'the agent’s own console UI' },
   { key: 'chat', label: 'Chat', hint: 'a chat view like Claude Desktop (Claude only)' }
 ]
+const agentChoices = ref(filterAgentOptions([]))
 const form = ref({
   title: '',
   mode: 'Interactive',
@@ -48,6 +49,13 @@ watch(canChooseUi, allowed => { if (!allowed) form.value.uiMode = 'terminal' })
 
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* readiness stays advisory */ }
+  try {
+    const allowed = await api.getAllowedAgents()
+    agentChoices.value = filterAgentOptions(allowed?.agents)
+    if (!agentChoices.value.some(option => option.value === form.value.agent) && agentChoices.value[0]) {
+      form.value.agent = agentChoices.value[0].value
+    }
+  } catch { /* keep full catalog if the allowlist endpoint is unavailable */ }
 })
 
 watch(() => form.value.agent, (agent, previousAgent) => {
@@ -74,8 +82,7 @@ async function submit() {
       title: form.value.title || 'Session',
       mode: form.value.mode,
       uiMode: form.value.uiMode,
-      agent: form.value.agent,
-      authMode: form.value.authMode,
+      ...agentPayload(form.value),
       repos: repos.value,
       prompt: form.value.prompt || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
@@ -115,7 +122,8 @@ async function submit() {
           <small class="hint">{{ modeHint }}</small>
         </div>
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
-          :mode="form.mode" :credential-status="credentialStatus" />
+          v-model:open-claw-api-key-source="form.openClawApiKeySource"
+          :mode="form.mode" :credential-status="credentialStatus" :options="agentChoices" />
         <div class="field" v-if="canChooseUi">
           <label>Interface</label>
           <div class="chips-box">
