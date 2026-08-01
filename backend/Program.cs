@@ -23,6 +23,7 @@ builder.Services.AddHttpClient<AgentHub.Api.Browser.IBrowserRuntimeClient, Agent
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserService, AgentHub.Api.Browser.KubernetesBrowserService>();
 builder.Services.AddHostedService<AgentHub.Api.Browser.BrowserReconcileService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
+builder.Services.AddSingleton<AgentHub.Api.Library.IMcpSecretProtector, AgentHub.Api.Library.McpSecretProtector>();
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpServerStore, AgentHub.Api.Library.McpServerStore>();
 // EE share matrix: registered as the core ILibraryShareReader so access resolution
 // consults real shares when the license is enabled (EmptyLibraryShareReader unused).

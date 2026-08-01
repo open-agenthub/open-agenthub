@@ -2,7 +2,9 @@ using AgentHub.Api.Ee.Identity;
 using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Library;
 using AgentHub.Api.Persistence;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Xunit;
 
@@ -136,31 +138,37 @@ public class LibraryStoresPostgresTests
     public async Task McpServerStore_PersistsKindAndSecretJson()
     {
         await using var db = await PostgresLibraryDatabase.CreateAsync();
+        const string plaintext = "{\"token\":\"abc\"}";
         var created = await db.McpServers.CreateAsync(
             "alice",
-            ApiRequest("gateway", "API wrap", secretJson: "{\"token\":\"abc\"}"));
+            ApiRequest("gateway", "API wrap", secretJson: plaintext));
 
         Assert.Equal("api", created.Kind);
-        Assert.Equal("{\"token\":\"abc\"}", created.SecretJson);
+        Assert.Equal(plaintext, created.SecretJson);
 
         var listed = Assert.Single(await db.McpServers.ListByOwnerAsync("alice"));
         Assert.Equal("api", listed.Kind);
-        Assert.Equal("{\"token\":\"abc\"}", listed.SecretJson);
+        Assert.Equal(plaintext, listed.SecretJson);
 
         var kind = await db.ScalarAsync<string>(
             "SELECT kind FROM mcp_servers WHERE id = @id", new NpgsqlParameter("id", created.Id));
-        var secret = await db.ScalarAsync<string?>(
+        var secretAtRest = await db.ScalarAsync<string?>(
             "SELECT secret_json FROM mcp_servers WHERE id = @id", new NpgsqlParameter("id", created.Id));
         Assert.Equal("api", kind);
-        Assert.Equal("{\"token\":\"abc\"}", secret);
+        Assert.NotNull(secretAtRest);
+        Assert.NotEqual(plaintext, secretAtRest);
+        Assert.DoesNotContain("abc", secretAtRest);
 
         var preserved = await db.McpServers.UpdateAsync(
             "alice", created.Id, ApiRequest("gateway", secretJson: null));
-        Assert.Equal("{\"token\":\"abc\"}", preserved.SecretJson);
+        Assert.Equal(plaintext, preserved.SecretJson);
 
         var cleared = await db.McpServers.UpdateAsync(
             "alice", created.Id, ApiRequest("gateway", secretJson: ""));
         Assert.Null(cleared.SecretJson);
+        var clearedAtRest = await db.ScalarAsync<string?>(
+            "SELECT secret_json FROM mcp_servers WHERE id = @id", new NpgsqlParameter("id", created.Id));
+        Assert.Null(clearedAtRest);
     }
 
     [PostgreSqlFact]
@@ -340,7 +348,7 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
             })
             .Build();
 
-        var mcpServers = new McpServerStore(configuration);
+        var mcpServers = new McpServerStore(configuration, CreateEphemeralSecretProtector());
         var shares = new LibraryShareStore(configuration);
         var groups = new UserGroupStore(configuration);
         var users = new UserDirectory(configuration);
@@ -358,6 +366,14 @@ internal sealed class PostgresLibraryDatabase : IAsyncDisposable
             await DropSchemaAsync(baseConnectionString, schema);
             throw;
         }
+    }
+
+    private static IMcpSecretProtector CreateEphemeralSecretProtector()
+    {
+        var services = new ServiceCollection();
+        services.AddDataProtection();
+        return new McpSecretProtector(
+            services.BuildServiceProvider().GetRequiredService<IDataProtectionProvider>());
     }
 
     public Task EnsureUserAsync(string owner)

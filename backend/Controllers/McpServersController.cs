@@ -166,6 +166,7 @@ public sealed class McpServersController : ControllerBase
         record.Kind,
         mine,
         mine ? record.ConfigJson : null,
+        HasSecret: !string.IsNullOrEmpty(record.SecretJson),
         record.CreatedAt,
         record.UpdatedAt);
 }

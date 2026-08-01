@@ -17,12 +17,14 @@ public interface IMcpServerStore
 public sealed class McpServerStore : IMcpServerStore
 {
     private readonly NpgsqlDataSource _db;
+    private readonly IMcpSecretProtector _secrets;
 
-    public McpServerStore(IConfiguration cfg)
+    public McpServerStore(IConfiguration cfg, IMcpSecretProtector secrets)
     {
         var cs = cfg.GetConnectionString("Postgres")
                  ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
         _db = NpgsqlDataSource.Create(cs);
+        _secrets = secrets;
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -51,6 +53,7 @@ public sealed class McpServerStore : IMcpServerStore
         string owner, SaveMcpServerRequest request, CancellationToken ct = default)
     {
         var kind = LibraryValidation.ValidateKind(request.Kind);
+        var plaintextSecret = NormalizeIncomingSecret(request.SecretJson);
         var record = new McpServerRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
@@ -59,7 +62,7 @@ public sealed class McpServerStore : IMcpServerStore
             Description = LibraryValidation.ValidateDescription(request.Description),
             Kind = kind,
             ConfigJson = LibraryValidation.ValidateMcpServerConfig(request.ConfigJson, kind),
-            SecretJson = request.SecretJson
+            SecretJson = plaintextSecret
         };
 
         const string sql = """
@@ -74,7 +77,7 @@ public sealed class McpServerStore : IMcpServerStore
         cmd.Parameters.AddWithValue("description", record.Description);
         cmd.Parameters.AddWithValue("kind", record.Kind);
         cmd.Parameters.AddWithValue("config_json", record.ConfigJson);
-        cmd.Parameters.AddWithValue("secret_json", (object?)record.SecretJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("secret_json", (object?)_secrets.Protect(plaintextSecret) ?? DBNull.Value);
         try
         {
             await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -87,7 +90,7 @@ public sealed class McpServerStore : IMcpServerStore
                 Description = record.Description,
                 Kind = record.Kind,
                 ConfigJson = record.ConfigJson,
-                SecretJson = record.SecretJson,
+                SecretJson = plaintextSecret,
                 CreatedAt = reader.GetDateTime(0),
                 UpdatedAt = reader.GetDateTime(1)
             };
@@ -108,6 +111,7 @@ public sealed class McpServerStore : IMcpServerStore
         // null = leave unchanged; "" = clear; otherwise replace.
         var clearSecret = request.SecretJson is not null && request.SecretJson.Length == 0;
         var setSecret = request.SecretJson is not null && request.SecretJson.Length > 0;
+        var protectedSecret = setSecret ? _secrets.Protect(request.SecretJson) : null;
 
         const string sql = """
             UPDATE mcp_servers
@@ -131,7 +135,7 @@ public sealed class McpServerStore : IMcpServerStore
         cmd.Parameters.AddWithValue("config_json", config);
         cmd.Parameters.AddWithValue("clear_secret", clearSecret);
         cmd.Parameters.AddWithValue("set_secret", setSecret);
-        cmd.Parameters.AddWithValue("secret_json", setSecret ? request.SecretJson! : (object)DBNull.Value);
+        cmd.Parameters.AddWithValue("secret_json", (object?)protectedSecret ?? DBNull.Value);
         try
         {
             await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -145,7 +149,7 @@ public sealed class McpServerStore : IMcpServerStore
                 Description = description,
                 Kind = kind,
                 ConfigJson = config,
-                SecretJson = reader.IsDBNull(2) ? null : reader.GetString(2),
+                SecretJson = _secrets.Unprotect(reader.IsDBNull(2) ? null : reader.GetString(2)),
                 CreatedAt = reader.GetDateTime(0),
                 UpdatedAt = reader.GetDateTime(1)
             };
@@ -189,7 +193,7 @@ public sealed class McpServerStore : IMcpServerStore
         FROM mcp_servers
         """;
 
-    private static async Task<IReadOnlyList<McpServerRecord>> QueryAsync(
+    private async Task<IReadOnlyList<McpServerRecord>> QueryAsync(
         NpgsqlCommand cmd, CancellationToken ct)
     {
         var list = new List<McpServerRecord>();
@@ -204,11 +208,15 @@ public sealed class McpServerStore : IMcpServerStore
                 Description = reader.GetString(3),
                 Kind = reader.GetString(4),
                 ConfigJson = reader.GetString(5),
-                SecretJson = reader.IsDBNull(6) ? null : reader.GetString(6),
+                SecretJson = _secrets.Unprotect(reader.IsDBNull(6) ? null : reader.GetString(6)),
                 CreatedAt = reader.GetDateTime(7),
                 UpdatedAt = reader.GetDateTime(8)
             });
         }
         return list;
     }
+
+    /// <summary>Empty string means no secret on create (same as null).</summary>
+    private static string? NormalizeIncomingSecret(string? secretJson) =>
+        string.IsNullOrEmpty(secretJson) ? null : secretJson;
 }
