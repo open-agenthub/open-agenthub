@@ -23,6 +23,7 @@ public static class SessionUpdateValidator
         request.Cpu is not null ||
         request.Memory is not null ||
         request.McpConfigJson is not null ||
+        request.McpServerIds is not null ||
         request.Repos is not null ||
         request.Agent is not null ||
         request.AuthMode is not null ||
