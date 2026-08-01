@@ -28,6 +28,22 @@ builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<S
 builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
+// Library: reusable MCP servers + skills (community: personal, enterprise: shareable).
+builder.Services.AddSingleton<AgentHub.Api.Library.IMcpServerStore, AgentHub.Api.Library.McpServerStore>();
+builder.Services.AddSingleton<AgentHub.Api.Library.ISkillStore, AgentHub.Api.Library.SkillStore>();
+builder.Services.AddSingleton<AgentHub.Api.Ee.Library.LibraryShareStore>();
+builder.Services.AddSingleton<AgentHub.Api.Ee.Library.ILibraryShareStore>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>());
+builder.Services.AddSingleton<AgentHub.Api.Ee.Library.ILibraryShareReader>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>());
+builder.Services.AddSingleton<AgentHub.Api.Library.ILibraryAccess, AgentHub.Api.Library.LibraryAccessService>();
+// Skill search (FTS always; vector similarity when an embedding provider is configured)
+// and the per-session skill-library MCP server.
+builder.Services.AddSingleton<AgentHub.Api.Library.ISkillEmbeddingStore, AgentHub.Api.Library.SkillEmbeddingStore>();
+builder.Services.AddSingleton<AgentHub.Api.Library.IEmbeddingProvider, AgentHub.Api.Library.OpenAiCompatibleEmbeddingProvider>();
+builder.Services.AddSingleton<AgentHub.Api.Library.SkillSearchService>();
+builder.Services.AddSingleton<AgentHub.Api.Library.SkillLibraryMcpService>();
+builder.Services.AddSingleton<AgentHub.Api.Library.SkillImporter>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
 // Monthly API budgets: personal limit (community) + admin limits (enterprise provider below).
@@ -181,6 +197,10 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
     var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
     await tokenStore.InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillEmbeddingStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();

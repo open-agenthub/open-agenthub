@@ -286,7 +286,7 @@ public class InternalSessionSpawnTests
         bool spawnMcpEnabled = true)
     {
         var controller = new InternalController(
-            new CallbackSessionStore(session), [], svc, null!, [], [], null!,
+            new CallbackSessionStore(session), [], svc, null!, [], [], null!, null!,
             browsers: null, spawnMcpEnabled: spawnMcpEnabled)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

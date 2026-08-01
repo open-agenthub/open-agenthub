@@ -116,6 +116,34 @@ export const api = {
   startLicenseCheckout: (data) => req('POST', '/admin/license/checkout', data),
   deactivateLicense: () => req('DELETE', '/admin/license'),
   setUserSeat: (owner, licensed) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/license`, { licensed }),
+  // Personal library: reusable MCP server entries and skills.
+  mcpServers: () => req('GET', '/mcp-servers'),
+  createMcpServer: (data) => req('POST', '/mcp-servers', data),
+  updateMcpServer: (id, data) => req('PUT', `/mcp-servers/${encodeURIComponent(id)}`, data),
+  deleteMcpServer: (id) => req('DELETE', `/mcp-servers/${encodeURIComponent(id)}`),
+  skills: () => req('GET', '/skills'),
+  skill: (id) => req('GET', `/skills/${encodeURIComponent(id)}`),
+  createSkill: (data) => req('POST', '/skills', data),
+  updateSkill: (id, data) => req('PUT', `/skills/${encodeURIComponent(id)}`, data),
+  deleteSkill: (id) => req('DELETE', `/skills/${encodeURIComponent(id)}`),
+  // Hybrid skill search (FTS + optional vector similarity on the server).
+  searchSkills: (q, projectId) => req('GET', `/skills/search?q=${encodeURIComponent(q)}`
+    + (projectId != null ? `&projectId=${encodeURIComponent(projectId)}` : '')),
+  skillVersions: (id) => req('GET', `/skills/${encodeURIComponent(id)}/versions`),
+  skillVersion: (id, version) => req('GET', `/skills/${encodeURIComponent(id)}/versions/${version}`),
+  restoreSkillVersion: (id, version) => req('POST', `/skills/${encodeURIComponent(id)}/restore`, { version }),
+  // Enterprise library sharing — all of these throw with .status 402 without a license.
+  libraryGroups: () => req('GET', '/ee/library/groups'),
+  createLibraryGroup: (data) => req('POST', '/ee/library/groups', data),
+  deleteLibraryGroup: (id) => req('DELETE', `/ee/library/groups/${encodeURIComponent(id)}`),
+  setLibraryGroupMembers: (id, data) => req('PUT', `/ee/library/groups/${encodeURIComponent(id)}/members`, data),
+  // Known users for the sharing / group member pickers (admin-only).
+  libraryUsers: () => req('GET', '/ee/library/users'),
+  librarySettings: () => req('GET', '/ee/library/settings'),
+  setLibrarySettings: (data) => req('PUT', '/ee/library/settings', data),
+  // kind: 'mcp-servers' | 'skills'
+  libraryShares: (kind, id) => req('GET', `/ee/library/${kind}/${encodeURIComponent(id)}/shares`),
+  setLibraryShares: (kind, id, data) => req('PUT', `/ee/library/${kind}/${encodeURIComponent(id)}/shares`, data),
   // Git OAuth providers / connections.
   gitProviders: () => req('GET', '/git/providers'),
   gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),

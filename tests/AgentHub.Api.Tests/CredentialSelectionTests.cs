@@ -140,7 +140,7 @@ public class CredentialSelectionTests
 
     private static InternalController Controller(SessionRecord session, RecordingSessionService service, string body)
     {
-        var controller = new InternalController(new CallbackSessionStore(session), [], service, null!, [], [], null!);
+        var controller = new InternalController(new CallbackSessionStore(session), [], service, null!, [], [], null!, null!);
         controller.ControllerContext = new ControllerContext
         {
             HttpContext = new DefaultHttpContext()

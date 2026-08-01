@@ -65,6 +65,14 @@ shift.
 - **Remote MCP session orchestration** — external AIs (Cursor, Claude Desktop, …) create,
   list, wait on, and delete sessions via the `mcp/agenthub` stdio server and a personal
   API token; when enabled, in-session agents also get the built-in `agenthub_sessions` MCP.
+- **Versioned skill library with a built-in MCP server** — save reusable skills
+  (SKILL.md plus helper scripts and other files) personally or per project; every
+  save keeps the previous versions restorable. Sessions materialize the matching
+  skills automatically, and the agent itself can search (full-text, optionally
+  semantic via a configurable embeddings endpoint), read, upload, and roll back
+  skills through the injected `skill-library` MCP server. Skills the agent creates
+  locally under `~/.claude/skills` are picked up and imported into the library
+  automatically — so agents grow a shared, versioned knowledge base as they work.
 - **Visible browser on demand** — the built-in `agenthub_browser` MCP starts one isolated
   Chromium only when the agent needs it. The same desktop appears beside the chat through
   noVNC, while idle sessions consume no browser CPU or memory.

@@ -304,6 +304,7 @@ public sealed class KubernetesBrowserServiceTests
         public string PresignPut(string key, TimeSpan ttl) { LastPutKey = key; return "put"; }
         public string PresignGet(string key, TimeSpan ttl) { LastGetKey = key; return "get"; }
         public Task<string?> GetTextAsync(string key, CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task<bool> TryPutTextAsync(string key, string text, CancellationToken ct = default) => Task.FromResult(false);
         public Task DeleteAsync(string key, CancellationToken ct = default) => Task.CompletedTask;
     }
 }
