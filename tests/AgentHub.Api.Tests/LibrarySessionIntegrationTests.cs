@@ -1,3 +1,5 @@
+using System.Text.Json;
+using AgentHub.Api.Library;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
@@ -15,6 +17,63 @@ public class LibrarySessionIntegrationTests
         McpConfigJson = mcpConfigJson,
         McpServerIdsJson = mcpServerIdsJson
     };
+
+    private static (LibraryAccessService Access, InMemoryMcpServerStore Mcp) AccessFixture()
+    {
+        var mcp = new InMemoryMcpServerStore();
+        var access = new LibraryAccessService(mcp, new FakeLibraryShareReader(), new FakeEnterpriseLicense(false));
+        return (access, mcp);
+    }
+
+    /// <summary>
+    /// Create-path seam: catalog-only (null/empty inline) stores resolved ids and
+    /// produces effective .mcp.json containing the catalog server name — what spawn
+    /// would write into the MCP secret.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public async Task CreatePath_CatalogOnly_StoresIdsAndAssemblesEffectiveConfig(string? inline)
+    {
+        var (access, mcp) = AccessFixture();
+        var server = mcp.Add("alice", "docs", configJson: """{"type":"http","url":"https://docs.example.test"}""");
+
+        // Mirrors create: strict resolve + assemble before any session Upsert.
+        var (ids, effective) = await SessionMcpConfig.ResolveAndAssembleAsync(
+            access, "alice", inline, [server.Id], strict: true);
+
+        Assert.Equal([server.Id], ids);
+        Assert.NotNull(effective);
+        using var doc = JsonDocument.Parse(effective!);
+        var entry = doc.RootElement.GetProperty("mcpServers").GetProperty("docs");
+        Assert.Equal("https://docs.example.test", entry.GetProperty("url").GetString());
+
+        // What create persists on the session row.
+        var storedIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
+        Assert.Equal(JsonSerializer.Serialize(new[] { server.Id }), storedIdsJson);
+    }
+
+    [Fact]
+    public async Task CreatePath_InvalidInlineShape_FailsBeforePersist()
+    {
+        var (access, mcp) = AccessFixture();
+        var server = mcp.Add("alice", "docs");
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            SessionMcpConfig.ResolveAndAssembleAsync(
+                access, "alice", "{\"mcpServers\":[]}", [server.Id], strict: true));
+    }
+
+    [Fact]
+    public async Task CreatePath_BadCatalogConfig_FailsBeforePersist()
+    {
+        var (access, mcp) = AccessFixture();
+        var server = mcp.Add("alice", "broken", configJson: "not-json");
+
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            SessionMcpConfig.ResolveAndAssembleAsync(
+                access, "alice", null, [server.Id], strict: true));
+    }
 
     [Fact]
     public void Duplication_CopiesLibraryServers_WhenMcpIsIncluded()
