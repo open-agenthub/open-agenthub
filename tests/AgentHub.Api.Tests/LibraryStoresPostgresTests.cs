@@ -179,6 +179,30 @@ public class LibraryStoresPostgresTests
         Assert.Single(await db.McpServers.ListByOwnerAsync(McpServerRecord.OrgOwner));
         Assert.Single(await db.McpServers.ListByOwnerAsync("alice"));
     }
+
+    [PostgreSqlFact]
+    public async Task McpServerStore_Create_RejectsDuplicateNamePerOwner_CaseInsensitive()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync();
+        await db.McpServers.CreateAsync("alice", RawRequest("Docs"));
+        await db.McpServers.CreateAsync("bob", RawRequest("docs")); // other owner OK
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            db.McpServers.CreateAsync("alice", RawRequest("docs")));
+        Assert.Contains("already exists", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [PostgreSqlFact]
+    public async Task McpServerStore_Update_RejectsDuplicateNamePerOwner()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync();
+        await db.McpServers.CreateAsync("alice", RawRequest("alpha"));
+        var beta = await db.McpServers.CreateAsync("alice", RawRequest("beta"));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            db.McpServers.UpdateAsync("alice", beta.Id, RawRequest("ALPHA")));
+        Assert.Contains("already exists", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
 }
 
 internal sealed class PostgresLibraryDatabase : IAsyncDisposable
