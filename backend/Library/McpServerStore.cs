@@ -40,6 +40,8 @@ public sealed class McpServerStore : IMcpServerStore
                 updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             CREATE INDEX IF NOT EXISTS idx_mcp_servers_owner ON mcp_servers(owner);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_owner_name
+                ON mcp_servers (owner, lower(name));
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -73,20 +75,27 @@ public sealed class McpServerStore : IMcpServerStore
         cmd.Parameters.AddWithValue("kind", record.Kind);
         cmd.Parameters.AddWithValue("config_json", record.ConfigJson);
         cmd.Parameters.AddWithValue("secret_json", (object?)record.SecretJson ?? DBNull.Value);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        await reader.ReadAsync(ct);
-        return new McpServerRecord
+        try
         {
-            Id = record.Id,
-            Owner = record.Owner,
-            Name = record.Name,
-            Description = record.Description,
-            Kind = record.Kind,
-            ConfigJson = record.ConfigJson,
-            SecretJson = record.SecretJson,
-            CreatedAt = reader.GetDateTime(0),
-            UpdatedAt = reader.GetDateTime(1)
-        };
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            await reader.ReadAsync(ct);
+            return new McpServerRecord
+            {
+                Id = record.Id,
+                Owner = record.Owner,
+                Name = record.Name,
+                Description = record.Description,
+                Kind = record.Kind,
+                ConfigJson = record.ConfigJson,
+                SecretJson = record.SecretJson,
+                CreatedAt = reader.GetDateTime(0),
+                UpdatedAt = reader.GetDateTime(1)
+            };
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            throw new ArgumentException("An MCP server with this name already exists for this owner.");
+        }
     }
 
     public async Task<McpServerRecord> UpdateAsync(
@@ -113,21 +122,28 @@ public sealed class McpServerStore : IMcpServerStore
         cmd.Parameters.AddWithValue("kind", kind);
         cmd.Parameters.AddWithValue("config_json", config);
         cmd.Parameters.AddWithValue("secret_json", (object?)secret ?? DBNull.Value);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            throw new KeyNotFoundException();
-        return new McpServerRecord
+        try
         {
-            Id = id,
-            Owner = owner,
-            Name = name,
-            Description = description,
-            Kind = kind,
-            ConfigJson = config,
-            SecretJson = secret,
-            CreatedAt = reader.GetDateTime(0),
-            UpdatedAt = reader.GetDateTime(1)
-        };
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                throw new KeyNotFoundException();
+            return new McpServerRecord
+            {
+                Id = id,
+                Owner = owner,
+                Name = name,
+                Description = description,
+                Kind = kind,
+                ConfigJson = config,
+                SecretJson = secret,
+                CreatedAt = reader.GetDateTime(0),
+                UpdatedAt = reader.GetDateTime(1)
+            };
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            throw new ArgumentException("An MCP server with this name already exists for this owner.");
+        }
     }
 
     public async Task DeleteAsync(string owner, string id, CancellationToken ct = default)

@@ -82,6 +82,30 @@ public class LibraryStoresPostgresTests
         Assert.Empty(await store.ListByOwnerAsync("alice"));
     }
 
+    [Fact]
+    public async Task InMemory_Create_RejectsDuplicateNamePerOwner_CaseInsensitive()
+    {
+        var store = new InMemoryMcpServerStore();
+        await store.CreateAsync("alice", RawRequest("Docs"));
+        await store.CreateAsync("bob", RawRequest("docs")); // other owner OK
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.CreateAsync("alice", RawRequest("docs")));
+        Assert.Contains("already exists", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task InMemory_Update_RejectsDuplicateNamePerOwner()
+    {
+        var store = new InMemoryMcpServerStore();
+        await store.CreateAsync("alice", RawRequest("alpha"));
+        var beta = await store.CreateAsync("alice", RawRequest("beta"));
+
+        var error = await Assert.ThrowsAsync<ArgumentException>(() =>
+            store.UpdateAsync("alice", beta.Id, RawRequest("ALPHA")));
+        Assert.Contains("already exists", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [PostgreSqlFact]
     public async Task McpServerStore_CrudIsOwnerScoped()
     {
