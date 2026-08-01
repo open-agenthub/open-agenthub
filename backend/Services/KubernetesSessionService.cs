@@ -200,7 +200,7 @@ public sealed class KubernetesSessionService : ISessionService
             await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
             throw;
         }
-        return ToInfo(rec, phase: rec.Status, podIp: null);
+        return await ToInfoAsync(rec, phase: rec.Status, podIp: null, ct: ct);
     }
 
     public async Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default)
@@ -418,7 +418,7 @@ public sealed class KubernetesSessionService : ISessionService
         };
         await SpawnAsync(owner, rec, req, resume: true, ct);
         _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.AgentSessionId);
-        return ToInfo(rec, phase: rec.Status, podIp: null);
+        return await ToInfoAsync(rec, phase: rec.Status, podIp: null, ct: ct);
     }
 
     /// <summary>
@@ -444,7 +444,7 @@ public sealed class KubernetesSessionService : ISessionService
         rec.QuestionPending = false;
         await _store.UpsertAsync(rec, ct);
         _log.LogInformation("Paused session {Id} (pod removed, state uploaded to S3)", id);
-        return ToInfo(rec, phase: SessionStatus.Paused, podIp: null);
+        return await ToInfoAsync(rec, phase: SessionStatus.Paused, podIp: null, ct: ct);
     }
 
     /// <summary>
@@ -555,8 +555,8 @@ public sealed class KubernetesSessionService : ISessionService
         _log.LogInformation("Updated session {Id} settings", id);
 
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
-            await _browsers.GetSummaryAsync(id, ct));
+        return await ToInfoAsync(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
+            await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
     private static void ValidateQuantity(string value, string what)
@@ -672,10 +672,14 @@ public sealed class KubernetesSessionService : ISessionService
 
         var browserSummaries = await _browsers.GetSummariesAsync(
             records.Select(record => record.Id).ToArray(), ct);
+        var ephemeralFlags = await Task.WhenAll(records.Select(async r =>
+            (r.Id, Has: await SessionHasEphemeralMcpAsync(r.Id, ct))));
+        var ephemeralById = ephemeralFlags.ToDictionary(x => x.Id, x => x.Has);
         return records.Select(r =>
         {
             byId.TryGetValue(r.Id, out var pod);
-            return ToInfo(r, pod?.Status?.Phase ?? r.Status, pod?.Status?.PodIP, browserSummaries[r.Id]);
+            return ToInfo(r, pod?.Status?.Phase ?? r.Status, pod?.Status?.PodIP, browserSummaries[r.Id],
+                ephemeralById.GetValueOrDefault(r.Id));
         }).ToList();
     }
 
@@ -684,8 +688,8 @@ public sealed class KubernetesSessionService : ISessionService
         var rec = await _store.GetAsync(owner, id, ct);
         if (rec is null) return null;
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
-            await _browsers.GetSummaryAsync(id, ct));
+        return await ToInfoAsync(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
+            await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
     public async Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default)
@@ -805,11 +809,19 @@ public sealed class KubernetesSessionService : ISessionService
             Type = "Opaque", Data = new Dictionary<string, byte[]> { ["mcp.json"] = Encoding.UTF8.GetBytes(json) }
         }, ct);
 
-    private static SessionInfo ToInfo(SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null) => new()
+    private async Task<bool> SessionHasEphemeralMcpAsync(string sessionId, CancellationToken ct) =>
+        (await _ephemeralApiMcps.ListBySessionAsync(sessionId, ct)).Count > 0;
+
+    private async Task<SessionInfo> ToInfoAsync(
+        SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, CancellationToken ct = default) =>
+        ToInfo(r, phase, podIp, browser, await SessionHasEphemeralMcpAsync(r.Id, ct));
+
+    private static SessionInfo ToInfo(
+        SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, bool hasEphemeralMcp = false) => new()
     {
         Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, UiMode = r.UiMode, RepoUrl = r.RepoUrl,
         Repos = ParseRepos(r),
-        HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson) || ParseMcpServerIds(r).Count > 0,
+        HasMcp = SessionMcpConfig.HasMcp(r.McpConfigJson, ParseMcpServerIds(r), hasEphemeralMcp),
         McpConfigJson = r.McpConfigJson, McpServerIds = ParseMcpServerIds(r),
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
