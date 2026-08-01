@@ -21,6 +21,9 @@ const UI_MODES = [
   { key: 'chat', label: 'Chat', hint: 'a chat view like Claude Desktop (Claude only)' }
 ]
 const agentChoices = ref(filterAgentOptions([]))
+// Saved MCP servers from the personal library (own + shared with me).
+const savedMcpServers = ref([])
+const selectedMcpIds = ref([])
 const form = ref({
   title: '',
   mode: 'Interactive',
@@ -56,6 +59,7 @@ onMounted(async () => {
       form.value.agent = agentChoices.value[0].value
     }
   } catch { /* keep full catalog if the allowlist endpoint is unavailable */ }
+  try { savedMcpServers.value = await api.mcpServers() } catch { /* library is optional */ }
 })
 
 watch(() => form.value.agent, (agent, previousAgent) => {
@@ -88,6 +92,7 @@ async function submit() {
       schedule: needsSchedule.value ? form.value.schedule : null,
       projectId: form.value.projectId || null,
       mcpConfigJson: form.value.mcpConfigJson || null,
+      mcpServerIds: selectedMcpIds.value,
       policy: policyPayload(form.value),
       image: form.value.image.trim() || null,
       runAsRoot: form.value.runAsRoot,
@@ -175,6 +180,13 @@ async function submit() {
               <textarea v-model="form.allowedCommandsRaw" data-policy="allowedCommands" :placeholder="commandsPlaceholder(form.agent)" />
             </div>
           </div>
+          <div v-if="savedMcpServers.length" class="field" data-mcp-picker>
+            <label>Saved MCP servers <span class="dim">— from your library</span></label>
+            <label v-for="s in savedMcpServers" :key="s.id" class="check mcp-pick">
+              <input type="checkbox" :value="s.id" v-model="selectedMcpIds" data-mcp-option />
+              <span>{{ s.name }}<span v-if="!s.mine" class="dim"> — shared by {{ s.owner }}</span></span>
+            </label>
+          </div>
           <div class="field">
             <label>Extra tools <span class="dim">— MCP servers the agent can use (.mcp.json)</span></label>
             <textarea v-model="form.mcpConfigJson" placeholder='{ "mcpServers": { "snipe-it": { "url": "https://…/sse" } } }'></textarea>
@@ -228,6 +240,7 @@ async function submit() {
 .grid3 { display: grid; grid-template-columns: 2fr 1fr 1fr; gap: 14px; }
 .check { display: flex; align-items: flex-start; gap: 10px; margin: 4px 0 0; font-size: 13px; color: var(--text); cursor: pointer; }
 .check input { width: auto; margin-top: 2px; }
+.mcp-pick { margin: 0 0 6px; }
 .row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
 .note-inline { font-size: 12px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }

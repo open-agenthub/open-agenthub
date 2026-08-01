@@ -14,7 +14,11 @@ public interface IArtifactStore
     string PresignPut(string key, TimeSpan ttl);
     string PresignGet(string key, TimeSpan ttl);
     Task<string?> GetTextAsync(string key, CancellationToken ct = default);
-    Task DeleteAsync(string key, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>Writes text content. Returns false when no object storage is configured
+    /// (NullArtifactStore) so callers can fall back to database storage.</summary>
+    Task<bool> TryPutTextAsync(string key, string text, CancellationToken ct = default);
+    /// <summary>Best-effort delete; missing objects are not an error.</summary>
+    Task DeleteAsync(string key, CancellationToken ct = default);
 
     static string StateKey(string owner, string id) => StateKey(owner, id, AgentKind.Claude);
     static string StateKey(string owner, string id, AgentKind agent) =>
@@ -31,6 +35,12 @@ public interface IArtifactStore
         $"sessions/{owner}/{id}/browser-cookies.json";
     static string ArtifactKey(string owner, string id, string name)
         => $"sessions/{owner}/{id}/artifacts/{name.TrimStart('/')}";
+    /// <summary>Head SKILL.md content of a library skill (see SkillStore).</summary>
+    static string SkillKey(string id) => $"skills/{id}/SKILL.md";
+    /// <summary>Immutable per-version SKILL.md copy (see SkillStore).</summary>
+    static string SkillVersionKey(string id, int version) => $"skills/{id}/v{version}/SKILL.md";
+    /// <summary>Extra skill file (script, template) of one version (see SkillStore).</summary>
+    static string SkillFileKey(string id, int version, string path) => $"skills/{id}/v{version}/files/{path}";
 }
 
 /// <summary>
@@ -42,6 +52,8 @@ public sealed class NullArtifactStore : IArtifactStore
     public string PresignPut(string key, TimeSpan ttl) => "";
     public string PresignGet(string key, TimeSpan ttl) => "";
     public Task<string?> GetTextAsync(string key, CancellationToken ct = default) => Task.FromResult<string?>(null);
+    public Task<bool> TryPutTextAsync(string key, string text, CancellationToken ct = default) => Task.FromResult(false);
+    public Task DeleteAsync(string key, CancellationToken ct = default) => Task.CompletedTask;
 }
 
 public sealed class S3ArtifactStore : IArtifactStore
@@ -84,11 +96,6 @@ public sealed class S3ArtifactStore : IArtifactStore
             Expires = DateTime.UtcNow.Add(ttl)
         });
 
-    public async Task DeleteAsync(string key, CancellationToken ct = default)
-    {
-        await _s3.DeleteObjectAsync(_bucket, key, ct);
-    }
-
     public async Task<string?> GetTextAsync(string key, CancellationToken ct = default)
     {
         try
@@ -100,6 +107,29 @@ public sealed class S3ArtifactStore : IArtifactStore
         catch (AmazonS3Exception e) when (e.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
             return null;
+        }
+    }
+
+    public async Task<bool> TryPutTextAsync(string key, string text, CancellationToken ct = default)
+    {
+        await _s3.PutObjectAsync(new PutObjectRequest
+        {
+            BucketName = _bucket,
+            Key = key,
+            ContentBody = text,
+            ContentType = "text/markdown; charset=utf-8"
+        }, ct);
+        return true;
+    }
+
+    public async Task DeleteAsync(string key, CancellationToken ct = default)
+    {
+        try
+        {
+            await _s3.DeleteObjectAsync(_bucket, key, ct);
+        }
+        catch (AmazonS3Exception e) when (e.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
         }
     }
 }

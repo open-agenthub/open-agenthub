@@ -104,6 +104,17 @@ oidc:
   scope: openid profile email
   requireHttpsMetadata: true
 
+# Skill library: agents get a built-in "skill-library" MCP server in every
+# session to search, upload and version skills (per project or personal).
+skillLibrary:
+  mcp: true
+  # Optional semantic (vector) search via an OpenAI-compatible /embeddings
+  # endpoint (OpenAI, Voyage, Ollama, LocalAI, ...). Empty = keyword search only.
+  embeddings:
+    endpoint: ""
+    model: ""
+    apiKey: ""
+
 # S3/MinIO for session state, scrollback, and artifacts. Empty serviceUrl = AWS endpoints.
 s3:
   serviceUrl: ""

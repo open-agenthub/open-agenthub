@@ -102,8 +102,26 @@ function createCommonServer(options = {}) {
     }).catch(() => {}).finally(() => done && done());
   }
 
+  // Reports skills the agent created in its local skill directory back to the
+  // hub (unchanged ones are skipped server-side). Best-effort with a hard timeout
+  // so a slow hub can never eat the grace period needed for the state upload.
+  function syncSkillsUp(done) {
+    if (!callback || !token) return done && done();
+    const script = require('node:path').join(__dirname, 'skills-sync-up.js');
+    let finished = false;
+    const finish = () => { if (!finished) { finished = true; done && done(); } };
+    try {
+      const child = spawnProcess(process.execPath, [script], { env, stdio: 'ignore' });
+      const timer = setTimeoutImpl(() => { try { child.kill(); } catch {} finish(); }, 8000);
+      child.on('exit', () => { clearTimeout(timer); finish(); });
+      child.on('error', () => { clearTimeout(timer); finish(); });
+    } catch {
+      finish();
+    }
+  }
+
   function persistAll(done) {
-    backupScrollback(() => persistScrollback(() => persistState(done)));
+    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistState(done))));
   }
 
   function postStatus(status, done) {

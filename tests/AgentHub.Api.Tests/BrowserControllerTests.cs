@@ -86,7 +86,7 @@ public sealed class BrowserControllerTests
         var session = Session();
         var browser = new RecordingBrowserService(Connection());
         var controller = new InternalController(
-            new CallbackStore(session), [], null!, null!, [], [], null!, browser)
+            new CallbackStore(session), [], null!, null!, [], [], null!, null!, browser)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
