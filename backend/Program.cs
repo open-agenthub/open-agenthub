@@ -13,6 +13,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
+builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileRegistry, AgentHub.Api.Files.PostgresSessionFileRegistry>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserLeaseStore, AgentHub.Api.Browser.PostgresBrowserLeaseStore>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserSessionLock, AgentHub.Api.Browser.PostgresBrowserSessionLock>();
@@ -176,6 +177,7 @@ using (var scope = app.Services.CreateScope())
 {
     var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
     await store.InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Files.ISessionFileRegistry>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
