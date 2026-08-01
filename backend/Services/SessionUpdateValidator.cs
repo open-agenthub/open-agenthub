@@ -13,7 +13,8 @@ public static class SessionUpdateValidator
                 "Scheduled sessions run from a fixed CronJob spec — delete and recreate to change runtime settings.");
 
         AgentConfiguration.ValidateForUpdate(
-            record.Agent, record.AuthMode, request.Agent, request.AuthMode);
+            record.Agent, record.AuthMode, request.Agent, request.AuthMode,
+            record.OpenClawApiKeySource, request.OpenClawApiKeySource);
     }
 
     private static bool HasRuntimeField(UpdateSessionRequest request) =>
@@ -25,5 +26,6 @@ public static class SessionUpdateValidator
         request.Repos is not null ||
         request.Agent is not null ||
         request.AuthMode is not null ||
+        request.OpenClawApiKeySource is not null ||
         request.Policy is not null;
 }

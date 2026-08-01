@@ -40,6 +40,17 @@ public class ArtifactStoreKeyTests
     }
 
     [Fact]
+    public void StateKey_OpenClawUsesSeparateProviderKey()
+    {
+        Assert.Equal(
+            "sessions/alice/session-id/openclaw-state.tgz",
+            IArtifactStore.StateKey("alice", "session-id", AgentKind.OpenClaw));
+        Assert.NotEqual(
+            IArtifactStore.StateKey("alice", "session-id", AgentKind.Cursor),
+            IArtifactStore.StateKey("alice", "session-id", AgentKind.OpenClaw));
+    }
+
+    [Fact]
     public void ProviderStateKeys_DoNotChangeOtherArtifactKeys()
     {
         Assert.Equal("sessions/alice/session-id/scrollback.log",

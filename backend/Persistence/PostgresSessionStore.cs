@@ -18,6 +18,8 @@ public sealed class SessionRecord
     public string? Prompt { get; set; }
     public AgentKind Agent { get; set; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; set; } = AgentAuthMode.Auto;
+    /// <summary>Which existing API key OpenClaw should use; set only for OpenClaw + ApiKey.</summary>
+    public OpenClawApiKeySource? OpenClawApiKeySource { get; set; }
     public string? AgentPolicyJson { get; set; }
     public string? AllowedToolsJson { get; set; }
     /// <summary>Agent session ID assigned by us (used for --resume).</summary>
@@ -101,6 +103,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS allowed_tools TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent TEXT NOT NULL DEFAULT 'Claude';
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auth_mode TEXT NOT NULL DEFAULT 'Auto';
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS openclaw_api_key_source TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_policy JSONB;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_session_id TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ui_mode TEXT NOT NULL DEFAULT 'terminal';
@@ -116,10 +119,12 @@ public sealed class PostgresSessionStore : ISessionStore
     public async Task UpsertAsync(SessionRecord r, CancellationToken ct = default)
     {
         const string sql = """
-            INSERT INTO sessions (id, owner, title, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy,
+            INSERT INTO sessions (id, owner, title, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
+                                  openclaw_api_key_source, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
                                   mcp_config, repos, project_id, prompt, allowed_tools, created_at, updated_at)
-            VALUES (@id, @owner, @title, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode, @policy,
+            VALUES (@id, @owner, @title, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
+                    @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @repos, @project, @prompt, @allowedTools, @created, now())
             ON CONFLICT (id) DO UPDATE SET
@@ -127,7 +132,9 @@ public sealed class PostgresSessionStore : ISessionStore
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
                 question_pending = EXCLUDED.question_pending,
                 agent_session_id = EXCLUDED.agent_session_id,
-                agent = EXCLUDED.agent, auth_mode = EXCLUDED.auth_mode, agent_policy = EXCLUDED.agent_policy,
+                agent = EXCLUDED.agent, auth_mode = EXCLUDED.auth_mode,
+                openclaw_api_key_source = EXCLUDED.openclaw_api_key_source,
+                agent_policy = EXCLUDED.agent_policy,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
                 mcp_config = EXCLUDED.mcp_config, repos = EXCLUDED.repos,
@@ -199,7 +206,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, prompt, allowed_tools, ui_mode FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, prompt, allowed_tools, ui_mode FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -221,6 +228,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("agentSessionId", r.AgentSessionId);
         cmd.Parameters.AddWithValue("agent", r.Agent.ToString());
         cmd.Parameters.AddWithValue("authMode", r.AuthMode.ToString());
+        cmd.Parameters.AddWithValue("openClawApiKeySource", (object?)r.OpenClawApiKeySource?.ToString() ?? DBNull.Value);
         cmd.Parameters.AddWithValue("policy", NpgsqlTypes.NpgsqlDbType.Jsonb, (object?)r.AgentPolicyJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("status", r.Status);
         cmd.Parameters.AddWithValue("qp", r.QuestionPending);
@@ -248,21 +256,22 @@ public sealed class PostgresSessionStore : ISessionStore
         AgentSessionId = r.GetString(6),
         Agent = Enum.Parse<AgentKind>(r.GetString(7)),
         AuthMode = Enum.Parse<AgentAuthMode>(r.GetString(8)),
-        AgentPolicyJson = r.IsDBNull(9) ? null : r.GetString(9),
-        Status = r.GetString(10),
-        QuestionPending = r.GetBoolean(11),
-        CallbackToken = r.GetString(12),
-        CreatedAt = r.GetDateTime(13),
-        UpdatedAt = r.GetDateTime(14),
-        Image = r.IsDBNull(15) ? null : r.GetString(15),
-        RunAsRoot = r.GetBoolean(16),
-        Cpu = r.GetString(17),
-        Memory = r.GetString(18),
-        McpConfigJson = r.IsDBNull(19) ? null : r.GetString(19),
-        ReposJson = r.IsDBNull(20) ? null : r.GetString(20),
-        ProjectId = r.IsDBNull(21) ? null : r.GetString(21),
-        Prompt = r.IsDBNull(22) ? null : r.GetString(22),
-        AllowedToolsJson = r.IsDBNull(23) ? null : r.GetString(23),
-        UiMode = r.GetString(24)
+        OpenClawApiKeySource = r.IsDBNull(9) ? null : Enum.Parse<OpenClawApiKeySource>(r.GetString(9)),
+        AgentPolicyJson = r.IsDBNull(10) ? null : r.GetString(10),
+        Status = r.GetString(11),
+        QuestionPending = r.GetBoolean(12),
+        CallbackToken = r.GetString(13),
+        CreatedAt = r.GetDateTime(14),
+        UpdatedAt = r.GetDateTime(15),
+        Image = r.IsDBNull(16) ? null : r.GetString(16),
+        RunAsRoot = r.GetBoolean(17),
+        Cpu = r.GetString(18),
+        Memory = r.GetString(19),
+        McpConfigJson = r.IsDBNull(20) ? null : r.GetString(20),
+        ReposJson = r.IsDBNull(21) ? null : r.GetString(21),
+        ProjectId = r.IsDBNull(22) ? null : r.GetString(22),
+        Prompt = r.IsDBNull(23) ? null : r.GetString(23),
+        AllowedToolsJson = r.IsDBNull(24) ? null : r.GetString(24),
+        UiMode = r.GetString(25)
     };
 }

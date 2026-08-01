@@ -1,0 +1,195 @@
+'use strict';
+
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const http = require('node:http');
+const os = require('node:os');
+const path = require('node:path');
+const test = require('node:test');
+
+const { watchCredential, MAX_CREDENTIAL_BYTES } = require('../../openclaw/auth-watcher');
+
+async function withServer(statuses, run) {
+  const requests = [];
+  const server = http.createServer((request, response) => {
+    let body = '';
+    request.setEncoding('utf8');
+    request.on('data', chunk => { body += chunk; });
+    request.on('end', () => {
+      requests.push({ method: request.method, url: request.url, headers: request.headers, body });
+      response.writeHead(statuses.shift() || 204);
+      response.end();
+    });
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  try {
+    await run('http://127.0.0.1:' + address.port + '/internal/sessions/test', requests);
+  } finally {
+    await new Promise(resolve => server.close(resolve));
+  }
+}
+
+// OpenClaw 2026.7.1-2 auth-profiles store shape (logical JSON / SQLite store_json).
+function fixture(value) {
+  return JSON.stringify({
+    version: 1,
+    profiles: {
+      'anthropic:default': {
+        type: 'api_key',
+        provider: 'anthropic',
+        key: 'synthetic-key-' + value
+      }
+    }
+  });
+}
+
+test('OpenClaw watcher skips restored content and uploads each later valid change once', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
+  const source = path.join(directory, 'auth-profiles.json');
+  fs.writeFileSync(source, fixture('restored-token'));
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source, callbackUrl, callbackToken: 'synthetic-callback-token', intervalMs: 60_000
+    });
+    await watcher.ready;
+    assert.equal(requests.length, 0);
+    fs.writeFileSync(source, fixture('created-token'));
+    await watcher.poll();
+    await watcher.poll();
+    fs.writeFileSync(source, fixture('refreshed-token'));
+    await watcher.poll();
+    watcher.stop();
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests.map(request => request.method), ['PUT', 'PUT']);
+    assert.deepEqual(requests.map(request => request.url), [
+      '/internal/sessions/test/openclaw-credentials',
+      '/internal/sessions/test/openclaw-credentials'
+    ]);
+    assert.equal(requests[0].headers['content-type'], 'application/json');
+    assert.equal(requests[0].headers['x-agent-token'], 'synthetic-callback-token');
+  });
+});
+
+test('OpenClaw watcher uploads a refresh that happens before its delayed first read', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
+  const source = path.join(directory, 'auth-profiles.json');
+  const restored = fixture('restored-before-watcher');
+  const refreshed = fixture('refreshed-before-first-read');
+  fs.writeFileSync(source, restored);
+  const baselineHash = crypto.createHash('sha256').update(restored).digest('hex');
+  const logs = [];
+  let releaseFirstRead;
+  let markFirstReadStarted;
+  const firstReadStarted = new Promise(resolve => { markFirstReadStarted = resolve; });
+  const firstReadGate = new Promise(resolve => { releaseFirstRead = resolve; });
+  let firstRead = true;
+  const fsImpl = {
+    promises: {
+      async open(...args) {
+        if (firstRead) {
+          firstRead = false;
+          markFirstReadStarted();
+          await firstReadGate;
+        }
+        return fs.promises.open(...args);
+      }
+    }
+  };
+
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source,
+      callbackUrl,
+      callbackToken: 'delayed-read-callback-secret',
+      baselineHash,
+      intervalMs: 60_000,
+      fsImpl,
+      logger: { warn: message => logs.push(String(message)), info: message => logs.push(String(message)) }
+    });
+    try {
+      await firstReadStarted;
+      fs.writeFileSync(source, refreshed);
+      releaseFirstRead();
+      await watcher.ready;
+      await watcher.poll();
+
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].body, refreshed);
+      assert.doesNotMatch(logs.join('\n'),
+        /restored-before-watcher|refreshed-before-first-read|delayed-read-callback-secret/);
+    } finally {
+      watcher.stop();
+    }
+  });
+});
+
+test('OpenClaw watcher uploads creation and retries unchanged content after failure', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
+  const source = path.join(directory, 'auth-profiles.json');
+  const logs = [];
+  await withServer([500, 204], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source, callbackUrl, callbackToken: 'callback-secret-never-log', intervalMs: 60_000,
+      logger: { warn: message => logs.push(String(message)), info: message => logs.push(String(message)) }
+    });
+    await watcher.ready;
+    fs.writeFileSync(source, fixture('credential-secret-never-log'));
+    await watcher.poll();
+    await watcher.poll();
+    watcher.stop();
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].body, requests[1].body);
+    assert.doesNotMatch(logs.join('\n'), /credential-secret-never-log|callback-secret-never-log/);
+  });
+});
+
+test('OpenClaw watcher uploads login created before its first poll when creation was expected', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
+  const source = path.join(directory, 'auth-profiles.json');
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source,
+      callbackUrl,
+      callbackToken: 'synthetic-callback-token',
+      intervalMs: 60_000,
+      expectCreate: true
+    });
+    try {
+      fs.writeFileSync(source, fixture('created-before-first-poll'));
+      await watcher.ready;
+      await watcher.poll();
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].body, fixture('created-before-first-poll'));
+    } finally {
+      watcher.stop();
+    }
+  });
+});
+
+test('OpenClaw watcher rejects invalid shape and content over backend 64 KiB limit', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-watcher-'));
+  const source = path.join(directory, 'auth-profiles.json');
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source, callbackUrl, callbackToken: 'synthetic-callback-token', intervalMs: 60_000
+    });
+    await watcher.ready;
+    fs.writeFileSync(source, '{"profiles":');
+    await watcher.poll();
+    fs.writeFileSync(source, JSON.stringify({ openclawAuth: { accessToken: 'x' } }));
+    await watcher.poll();
+    fs.writeFileSync(source, JSON.stringify({ version: 1, profiles: {} }));
+    await watcher.poll();
+    fs.writeFileSync(source, JSON.stringify({ version: 1, profiles: [] }));
+    await watcher.poll();
+    fs.writeFileSync(source, Buffer.alloc(MAX_CREDENTIAL_BYTES + 1, 0x20));
+    await watcher.poll();
+    assert.equal(requests.length, 0);
+    fs.writeFileSync(source, fixture('valid'));
+    await watcher.poll();
+    watcher.stop();
+    assert.equal(requests.length, 1);
+  });
+});

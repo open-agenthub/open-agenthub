@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { defaultAgentForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import { agentPayload, defaultAgentForm, filterAgentOptions, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
@@ -14,6 +14,8 @@ const advOpen = ref(false)
 const busy = ref(false)
 const error = ref('')
 const credentialStatus = ref({})
+const allowedAgents = ref([])
+const agentChoices = computed(() => filterAgentOptions(allowedAgents.value, { include: props.session?.agent }))
 
 const scheduled = computed(() => props.session.mode === 'Scheduled')
 const automated = computed(() => props.session.mode !== 'Interactive')
@@ -39,6 +41,10 @@ watch(() => props.session.id, () => reset(props.session))
 
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
+  try {
+    const allowed = await api.getAllowedAgents()
+    allowedAgents.value = allowed?.agents || []
+  } catch { /* keep unrestricted catalog */ }
 })
 
 async function save() {
@@ -62,8 +68,7 @@ async function save() {
           projectId: f.value.projectId || null
         }
     if (!scheduled.value && f.value.authMode !== 'Auto') {
-      payload.agent = f.value.agent
-      payload.authMode = f.value.authMode
+      Object.assign(payload, agentPayload(f.value))
     }
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
@@ -87,8 +92,9 @@ async function save() {
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
       </div>
       <template v-if="!scheduled">
-        <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode" :mode="session.mode"
-          :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" />
+        <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode"
+          v-model:open-claw-api-key-source="f.openClawApiKeySource" :mode="session.mode"
+          :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
         <div class="card sect">
           <label>Repositories</label>
           <RepoPicker v-model="repos" />

@@ -118,11 +118,13 @@ public class AgentSessionResourceOrchestratorTests
         ClaudeCredentialSecretName = "claude-owner",
         CodexCredentialSecretName = "codex-owner",
         CursorCredentialSecretName = "cursor-owner",
+        OpenClawCredentialSecretName = "openclaw-owner",
         CallbackUrl = "http://callback/internal/sessions/session-id",
         StatePutUrl = "http://s3/state-put",
         StateGetUrl = "",
         ScrollbackPutUrl = "http://s3/scroll-put",
-        RuntimeImages = new AgentRuntimeImages("runtime-claude", "runtime-codex", "runtime-cursor", "Always")
+        RuntimeImages = new AgentRuntimeImages(
+            "runtime-claude", "runtime-codex", "runtime-cursor", "runtime-openclaw", "Always")
     };
 
     private sealed class RecordingArtifactStore : IArtifactStore

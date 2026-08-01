@@ -50,7 +50,8 @@ public static class CredentialSecretFactory
     public static CredentialStatus CredentialStatus(IDictionary<string, byte[]> data,
         IDictionary<string, byte[]>? claudeSubscription = null,
         IDictionary<string, byte[]>? codexSubscription = null,
-        IDictionary<string, byte[]>? cursorSubscription = null) => new()
+        IDictionary<string, byte[]>? cursorSubscription = null,
+        IDictionary<string, byte[]>? openclawSubscription = null) => new()
     {
         SshPrivateKey = data.ContainsKey("ssh_key"),
         GitlabToken = data.ContainsKey("gitlab_token"),
@@ -63,7 +64,9 @@ public static class CredentialSecretFactory
         ClaudeSubscription = claudeSubscription?.ContainsKey("credentials.json") == true,
         CodexSubscription = codexSubscription?.ContainsKey("auth.json") == true,
         // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
-        CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true
+        CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true,
+        // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
+        OpenclawSubscription = openclawSubscription?.ContainsKey("auth-profiles.json") == true
     };
 
     public static V1Secret CreateProviderSecret(string name, string @namespace, string ownerLabelValue,
@@ -78,6 +81,8 @@ public static class CredentialSecretFactory
             AgentKind.Codex => "auth.json",
             // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
             AgentKind.Cursor => "auth.json",
+            // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
+            AgentKind.OpenClaw => "auth-profiles.json",
             _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
         };
         return Secret(name, @namespace, ownerLabelValue, new Dictionary<string, byte[]>

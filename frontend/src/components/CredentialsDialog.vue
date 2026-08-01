@@ -85,7 +85,9 @@ async function save() {
         <label>Anthropic API key
           <span v-if="stored.anthropicApiKey" class="chip" :class="{ del: clear.has('anthropicApiKey') }" @click="toggleClear('anthropicApiKey')">{{ clear.has('anthropicApiKey') ? 'remove ✕' : 'stored ✓' }}</span>
         </label>
-        <input v-model="c.anthropicApiKey" type="password" :placeholder="placeholderFor('anthropicApiKey', 'sk-ant-…')" />
+        <input v-model="c.anthropicApiKey" data-credential="anthropicApiKey" type="password" autocomplete="off"
+          :placeholder="placeholderFor('anthropicApiKey', 'sk-ant-…')" />
+        <small data-credential-hint="anthropicApiKey">Claude API key billing, or OpenClaw with Anthropic as the API key source. Write-only.</small>
       </div>
       <div class="field">
         <label>OpenAI API key
@@ -95,7 +97,7 @@ async function save() {
         </label>
         <input v-model="c.openAiApiKey" data-credential="openAiApiKey" type="password" autocomplete="off"
           :placeholder="placeholderFor('openAiApiKey', 'sk-…')" />
-        <small>Used only when a Codex session selects API key billing. The key remains write-only.</small>
+        <small data-credential-hint="openAiApiKey">Codex API key billing, or OpenClaw with OpenAI as the API key source. Write-only.</small>
       </div>
       <div class="field">
         <label>Cursor API key
@@ -106,9 +108,17 @@ async function save() {
         </label>
         <input v-model="c.cursorApiKey" data-credential="cursorApiKey" type="password" autocomplete="off"
           :placeholder="placeholderFor('cursorApiKey', 'key_…')" />
-        <small>Used only when a Cursor session selects API key billing. The key remains write-only.</small>
+        <small data-credential-hint="cursorApiKey">Cursor API key billing, or OpenClaw with Cursor as the API key source. Write-only.</small>
         <small v-if="stored.cursorSubscription" data-credential-status="cursorSubscription">
           Cursor subscription login is stored (sign-in happens in an Interactive session).
+        </small>
+      </div>
+      <div class="field" data-openclaw-credentials>
+        <small v-if="stored.openclawSubscription" data-credential-status="openclawSubscription">
+          OpenClaw subscription login is stored (sign-in happens in an Interactive session).
+        </small>
+        <small v-else data-credential-status="openclawSubscription">
+          No OpenClaw subscription login is stored yet. Sign in during an Interactive OpenClaw session.
         </small>
       </div>
       <div class="grid">
