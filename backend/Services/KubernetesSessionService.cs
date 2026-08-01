@@ -221,13 +221,16 @@ public sealed class KubernetesSessionService : ISessionService
     }
 
     /// <summary>Merges the session's saved library servers (lenient: inaccessible ids
-    /// drop out) with its inline config into the effective .mcp.json.</summary>
+    /// drop out) and the built-in skill-library MCP server with its inline config
+    /// into the effective .mcp.json.</summary>
     private async Task<string?> BuildEffectiveMcpConfigAsync(string owner, SessionRecord rec, CancellationToken ct)
     {
         var ids = ParseMcpServerIds(rec);
         var servers = ids.Count == 0
             ? (IReadOnlyList<McpServerRecord>)Array.Empty<McpServerRecord>()
             : await _library.ResolveMcpServersAsync(owner, ids, strict: false, ct);
+        if (_opts.SkillLibraryMcp)
+            servers = servers.Append(SkillLibraryMcpConfig.BuildServer(_callbackBaseUrl, rec)).ToList();
         return McpConfigAssembler.Merge(rec.McpConfigJson, servers);
     }
 
@@ -761,6 +764,10 @@ public sealed class AgentHubOptions
     /// <summary>Grace period (seconds) when pausing a session, so the agent can upload
     /// its state to S3 before the container is killed.</summary>
     public int PauseGracePeriodSeconds { get; set; } = 30;
+    /// <summary>Inject the built-in skill-library MCP server into every session, so the
+    /// agent can search, upload and version skills. An inline server entry with the
+    /// same name ("skill-library") overrides the injected one.</summary>
+    public bool SkillLibraryMcp { get; set; } = true;
     /// <summary>Enable Claude Code OpenTelemetry metrics export (token/cost usage) from session pods.</summary>
     public bool TelemetryEnabled { get; set; }
     /// <summary>Optional OTLP endpoint base override. Empty = derive from CallbackBaseUrl

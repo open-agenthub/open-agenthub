@@ -90,7 +90,7 @@ public class LibraryAccessServiceTests
         await shares.SetSharesAsync(LibraryItemTypes.Skill, foreign.Id, all: true, null, null, "bob");
         await shares.SetSharesAsync(LibraryItemTypes.Skill, extra.Id, all: true, null, null, "bob");
 
-        var payloads = await access.ListSkillPayloadsAsync("alice");
+        var payloads = await access.ListSkillPayloadsAsync("alice", null);
         Assert.Equal(["deploy", "review"], payloads.Select(p => p.Name));
         Assert.Equal("# my own review skill", payloads.Single(p => p.Name == "review").Content);
     }

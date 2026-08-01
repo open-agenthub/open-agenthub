@@ -121,6 +121,12 @@ export const api = {
   createSkill: (data) => req('POST', '/skills', data),
   updateSkill: (id, data) => req('PUT', `/skills/${encodeURIComponent(id)}`, data),
   deleteSkill: (id) => req('DELETE', `/skills/${encodeURIComponent(id)}`),
+  // Hybrid skill search (FTS + optional vector similarity on the server).
+  searchSkills: (q, projectId) => req('GET', `/skills/search?q=${encodeURIComponent(q)}`
+    + (projectId != null ? `&projectId=${encodeURIComponent(projectId)}` : '')),
+  skillVersions: (id) => req('GET', `/skills/${encodeURIComponent(id)}/versions`),
+  skillVersion: (id, version) => req('GET', `/skills/${encodeURIComponent(id)}/versions/${version}`),
+  restoreSkillVersion: (id, version) => req('POST', `/skills/${encodeURIComponent(id)}/restore`, { version }),
   // Enterprise library sharing — all of these throw with .status 402 without a license.
   libraryGroups: () => req('GET', '/ee/library/groups'),
   createLibraryGroup: (data) => req('POST', '/ee/library/groups', data),

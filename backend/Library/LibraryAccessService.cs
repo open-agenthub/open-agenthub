@@ -24,8 +24,18 @@ public interface ILibraryAccess
     Task<IReadOnlyList<McpServerRecord>> ResolveMcpServersAsync(
         string owner, IReadOnlyCollection<string> ids, bool strict, CancellationToken ct = default);
 
-    /// <summary>Skills materialized into an agent pod, name conflicts resolved (own wins).</summary>
-    Task<IReadOnlyList<SkillPayload>> ListSkillPayloadsAsync(string owner, CancellationToken ct = default);
+    /// <summary>
+    /// Skills visible to a session: the owner's personal skills, the skills of the
+    /// session's project (when set) and shared skills. Skills of other projects
+    /// stay out of scope.
+    /// </summary>
+    Task<IReadOnlyList<SkillRecord>> ListAccessibleSkillsAsync(
+        string owner, string? projectId, CancellationToken ct = default);
+
+    /// <summary>Skills materialized into an agent pod, name conflicts resolved
+    /// (project beats personal beats shared).</summary>
+    Task<IReadOnlyList<SkillPayload>> ListSkillPayloadsAsync(
+        string owner, string? projectId, CancellationToken ct = default);
 }
 
 public sealed class LibraryAccessService : ILibraryAccess
@@ -105,14 +115,25 @@ public sealed class LibraryAccessService : ILibraryAccess
         return accessible;
     }
 
-    public async Task<IReadOnlyList<SkillPayload>> ListSkillPayloadsAsync(
-        string owner, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SkillRecord>> ListAccessibleSkillsAsync(
+        string owner, string? projectId, CancellationToken ct = default)
     {
-        var records = await ListSkillsAsync(owner, ct);
+        var all = await ListSkillsAsync(owner, ct);
+        return all
+            .Where(r => r.Owner != owner || r.ProjectId is null || r.ProjectId == projectId)
+            .ToList();
+    }
+
+    public async Task<IReadOnlyList<SkillPayload>> ListSkillPayloadsAsync(
+        string owner, string? projectId, CancellationToken ct = default)
+    {
+        var records = await ListAccessibleSkillsAsync(owner, projectId, ct);
         var payloads = new List<SkillPayload>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        // Own skills win name conflicts against shared ones.
-        foreach (var record in records.OrderBy(r => r.Owner == owner ? 0 : 1))
+        // Name conflicts: the session project's skill wins over a personal one,
+        // and own skills win against shared ones.
+        foreach (var record in records.OrderBy(r =>
+                     r.Owner != owner ? 2 : r.ProjectId is null ? 1 : 0))
         {
             if (!seen.Add(record.Name)) continue;
             var content = await _skills.GetContentAsync(record, ct);

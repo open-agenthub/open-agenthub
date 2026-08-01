@@ -1,11 +1,12 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
 import LibraryShareControls from './LibraryShareControls.vue'
 
-// Personal skill library (SKILL.md files). Own skills are editable, shared
-// ones read-only. Non-admins get a "publish to everyone" toggle when the
-// admin has enabled user skill publishing (enterprise).
+// Skill library (SKILL.md files) — personal or per project, versioned on every
+// save and searchable. Own skills are editable, shared ones read-only.
+// Non-admins get a "publish to everyone" toggle when the admin has enabled
+// user skill publishing (enterprise).
 const props = defineProps({ isAdmin: { type: Boolean, default: false } })
 
 const SKILL_TEMPLATE = `---
@@ -20,12 +21,50 @@ const items = ref([])
 const loading = ref(true)
 const error = ref('')
 
+const projects = ref([])
+const projectNames = computed(() =>
+  Object.fromEntries(projects.value.map(p => [p.id, p.name])))
+
 async function load() {
   loading.value = true; error.value = ''
   try { items.value = await api.skills() }
   catch (e) { error.value = String(e.message || e) }
   finally { loading.value = false }
 }
+
+async function loadProjects() {
+  try { projects.value = await api.listProjects() }
+  catch { projects.value = [] }
+}
+
+// --- search (server-side: full-text + optional vector similarity) ---
+const query = ref('')
+const searching = ref(false)
+const searchResults = ref(null) // null = not searching, [] = no hits
+let searchTimer = null
+
+watch(query, () => {
+  clearTimeout(searchTimer)
+  const q = query.value.trim()
+  if (!q) { searchResults.value = null; return }
+  searchTimer = setTimeout(runSearch, 250)
+})
+
+async function runSearch() {
+  const q = query.value.trim()
+  if (!q) { searchResults.value = null; return }
+  searching.value = true
+  try {
+    const hits = await api.searchSkills(q)
+    // Keep the row shape of the plain listing (search hits carry no timestamps
+    // for shared items we cannot see — merge with the loaded list by id).
+    const byId = Object.fromEntries(items.value.map(i => [i.id, i]))
+    searchResults.value = hits.map(h => byId[h.id] || h)
+  } catch (e) { error.value = String(e.message || e) }
+  finally { searching.value = false }
+}
+
+const visible = computed(() => searchResults.value ?? items.value)
 
 // --- optional "publish to everyone" toggle (non-admin owners) ---
 // Hidden entirely when the enterprise endpoints answer 402 or the admin
@@ -47,7 +86,7 @@ async function loadPublishing() {
   }
 }
 
-onMounted(async () => { await load(); await loadPublishing() })
+onMounted(async () => { await Promise.all([load(), loadProjects()]); await loadPublishing() })
 
 async function togglePublish(item, e) {
   const on = e.target.checked
@@ -67,13 +106,13 @@ async function togglePublish(item, e) {
 // --- inline create / edit form ---
 const formOpen = ref(false)
 const editingId = ref(null)
-const form = ref({ name: '', description: '', content: '' })
+const form = ref({ name: '', description: '', content: '', projectId: '', comment: '' })
 const formError = ref('')
 const saving = ref(false)
 
 function openCreate() {
   editingId.value = null
-  form.value = { name: '', description: '', content: SKILL_TEMPLATE }
+  form.value = { name: '', description: '', content: SKILL_TEMPLATE, projectId: '', comment: '' }
   formError.value = ''
   formOpen.value = true
 }
@@ -83,7 +122,13 @@ async function openEdit(item) {
   try {
     const full = await api.skill(item.id) // list rows carry no content
     editingId.value = item.id
-    form.value = { name: full.name, description: full.description || '', content: full.content || '' }
+    form.value = {
+      name: full.name,
+      description: full.description || '',
+      content: full.content || '',
+      projectId: full.projectId || '',
+      comment: ''
+    }
     formOpen.value = true
   } catch (e) { error.value = String(e.message || e) }
 }
@@ -97,11 +142,17 @@ async function save() {
   }
   saving.value = true
   try {
-    const payload = { name, description: form.value.description.trim(), content: form.value.content }
+    const payload = {
+      name,
+      description: form.value.description.trim(),
+      content: form.value.content,
+      comment: form.value.comment.trim()
+    }
     if (editingId.value) await api.updateSkill(editingId.value, payload)
-    else await api.createSkill(payload)
+    else await api.createSkill({ ...payload, projectId: form.value.projectId || null })
     formOpen.value = false
     await load()
+    if (searchResults.value) await runSearch()
   } catch (e) { formError.value = String(e.message || e) }
   finally { saving.value = false }
 }
@@ -113,10 +164,54 @@ async function remove(item) {
   catch (e) { error.value = String(e.message || e) }
 }
 
+// --- per-item version history expander ---
+const historyOpenId = ref(null)
+const historyItems = ref([])
+const historyError = ref('')
+const historyPreview = ref(null) // { version, content }
+const restoring = ref(false)
+
+async function toggleHistory(item) {
+  historyPreview.value = null
+  historyError.value = ''
+  if (historyOpenId.value === item.id) { historyOpenId.value = null; return }
+  historyOpenId.value = item.id
+  historyItems.value = []
+  try { historyItems.value = await api.skillVersions(item.id) }
+  catch (e) { historyError.value = String(e.message || e) }
+}
+
+async function previewVersion(item, version) {
+  historyError.value = ''
+  if (historyPreview.value?.version === version) { historyPreview.value = null; return }
+  try {
+    const detail = await api.skillVersion(item.id, version)
+    historyPreview.value = { version, content: detail.content }
+  } catch (e) { historyError.value = String(e.message || e) }
+}
+
+async function restoreVersion(item, version) {
+  historyError.value = ''
+  restoring.value = true
+  try {
+    await api.restoreSkillVersion(item.id, version)
+    await load()
+    historyItems.value = await api.skillVersions(item.id)
+    historyPreview.value = null
+  } catch (e) { historyError.value = String(e.message || e) }
+  finally { restoring.value = false }
+}
+
 // --- per-item sharing expander (admins, own items) ---
 const shareOpenId = ref(null)
 function toggleShare(item) {
   shareOpenId.value = shareOpenId.value === item.id ? null : item.id
+}
+
+function scopeLabel(item) {
+  if (!item.mine) return null
+  if (!item.projectId) return null
+  return projectNames.value[item.projectId] || 'project'
 }
 </script>
 
@@ -125,20 +220,38 @@ function toggleShare(item) {
     <div class="embed-inner">
       <h3 class="pane-head">Skills</h3>
       <p class="note">
-        Reusable skills (SKILL.md) your agents can load in sessions. Skills shared with you
-        by other users are read-only.
+        Reusable skills (SKILL.md) your agents can load in sessions — personal or scoped to a
+        project, versioned on every save. Agents can also search and upload skills themselves
+        through the built-in <span class="mono">skill-library</span> MCP server. Skills shared
+        with you by other users are read-only.
       </p>
 
-      <div v-if="!formOpen" class="row start">
-        <button class="primary" data-skill-add @click="openCreate">Add skill</button>
+      <div class="row toolbar">
+        <input
+          v-model="query"
+          data-skill-search
+          class="search"
+          placeholder="Search skills…" />
+        <button v-if="!formOpen" class="primary" data-skill-add @click="openCreate">Add skill</button>
       </div>
-      <div v-else class="card form-card" data-skill-form>
+      <div v-if="formOpen" class="card form-card" data-skill-form>
         <h4>{{ editingId ? 'Edit skill' : 'New skill' }}</h4>
         <div class="field"><label>Name <span class="dim">— kebab-case: lowercase letters, digits, hyphens</span></label><input v-model="form.name" data-skill-name placeholder="review-checklist" class="mono" /></div>
         <div class="field"><label>Description <span class="dim">— optional</span></label><input v-model="form.description" data-skill-desc placeholder="When should the agent use it?" /></div>
+        <div v-if="!editingId && projects.length" class="field">
+          <label>Scope <span class="dim">— a project skill is only loaded into that project’s sessions</span></label>
+          <select v-model="form.projectId" data-skill-project>
+            <option value="">Personal (all my sessions)</option>
+            <option v-for="p in projects" :key="p.id" :value="p.id">Project: {{ p.name }}</option>
+          </select>
+        </div>
         <div class="field">
           <label>Content <span class="dim">— SKILL.md markdown</span></label>
           <textarea v-model="form.content" data-skill-content class="content" :placeholder="SKILL_TEMPLATE"></textarea>
+        </div>
+        <div v-if="editingId" class="field">
+          <label>Change note <span class="dim">— optional, shown in the version history</span></label>
+          <input v-model="form.comment" data-skill-comment placeholder="What changed and why?" />
         </div>
         <p v-if="formError" class="err" data-skill-form-error>{{ formError }}</p>
         <div class="row">
@@ -150,13 +263,17 @@ function toggleShare(item) {
       <p v-if="error" class="err">{{ error }}</p>
       <p v-if="publishError" class="err" data-skill-publish-error>{{ publishError }}</p>
       <p v-if="loading" class="muted">Loading…</p>
-      <p v-else-if="!items.length" class="muted">No skills yet — add one to reuse it across sessions.</p>
+      <p v-else-if="searching" class="muted">Searching…</p>
+      <p v-else-if="searchResults && !visible.length" class="muted" data-skill-no-results>No skills match your search.</p>
+      <p v-else-if="!visible.length" class="muted">No skills yet — add one to reuse it across sessions.</p>
       <div v-else class="list">
-        <div v-for="item in items" :key="item.id" class="card item" data-skill-row>
+        <div v-for="item in visible" :key="item.id" class="card item" data-skill-row>
           <div class="item-row">
             <div class="item-info">
               <div>
                 <span class="item-name mono">{{ item.name }}</span>
+                <span class="pill version" data-skill-version>v{{ item.version }}</span>
+                <span v-if="scopeLabel(item)" class="pill project" data-skill-project-pill>{{ scopeLabel(item) }}</span>
                 <span v-if="!item.mine" class="pill shared" data-skill-shared>shared · {{ item.owner }}</span>
               </div>
               <div v-if="item.description" class="item-desc">{{ item.description }}</div>
@@ -165,11 +282,36 @@ function toggleShare(item) {
               <input type="checkbox" :checked="!!publishState[item.id]" data-skill-publish @change="togglePublish(item, $event)" />
               <span>Publish to everyone</span>
             </label>
-            <div v-if="item.mine" class="item-actions">
-              <button v-if="isAdmin" data-skill-share-toggle @click="toggleShare(item)">Sharing {{ shareOpenId === item.id ? '▾' : '▸' }}</button>
-              <button data-skill-edit @click="openEdit(item)">Edit</button>
-              <button class="danger" data-skill-delete @click="remove(item)">Delete</button>
+            <div class="item-actions">
+              <button data-skill-history-toggle @click="toggleHistory(item)">History {{ historyOpenId === item.id ? '▾' : '▸' }}</button>
+              <template v-if="item.mine">
+                <button v-if="isAdmin" data-skill-share-toggle @click="toggleShare(item)">Sharing {{ shareOpenId === item.id ? '▾' : '▸' }}</button>
+                <button data-skill-edit @click="openEdit(item)">Edit</button>
+                <button class="danger" data-skill-delete @click="remove(item)">Delete</button>
+              </template>
             </div>
+          </div>
+          <div v-if="historyOpenId === item.id" class="history" data-skill-history>
+            <p v-if="historyError" class="err" data-skill-history-error>{{ historyError }}</p>
+            <p v-else-if="!historyItems.length" class="muted">Loading history…</p>
+            <div v-for="v in historyItems" :key="v.version" class="history-row" data-skill-history-row>
+              <span class="mono">v{{ v.version }}</span>
+              <span class="history-meta">
+                {{ new Date(v.createdAt).toLocaleString() }} · {{ v.createdBy }}
+                <template v-if="v.comment"> · {{ v.comment }}</template>
+              </span>
+              <span class="history-actions">
+                <button data-skill-version-view @click="previewVersion(item, v.version)">
+                  {{ historyPreview?.version === v.version ? 'Hide' : 'View' }}
+                </button>
+                <button
+                  v-if="item.mine && v.version !== item.version"
+                  data-skill-version-restore
+                  :disabled="restoring"
+                  @click="restoreVersion(item, v.version)">Restore</button>
+              </span>
+            </div>
+            <pre v-if="historyPreview" class="preview mono" data-skill-version-preview>{{ historyPreview.content }}</pre>
           </div>
           <div v-if="isAdmin && item.mine && shareOpenId === item.id" data-skill-share-controls>
             <LibraryShareControls kind="skills" :item-id="item.id" />
@@ -184,7 +326,8 @@ function toggleShare(item) {
 .pane-head { font-size: 22px; margin: 0 0 16px; }
 .note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 16px; }
 .row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
-.row.start { justify-content: flex-start; margin-bottom: 16px; }
+.row.toolbar { justify-content: flex-start; margin-bottom: 16px; }
+.search { flex: 1; max-width: 340px; }
 .form-card { padding: 18px 20px; margin-bottom: 16px; }
 .form-card h4 { margin: 0 0 12px; font-size: 15px; }
 .dim { color: var(--faint); font-weight: 400; }
@@ -197,9 +340,14 @@ function toggleShare(item) {
 .item-name { font-weight: 600; color: var(--strong); }
 .item-desc { color: var(--muted); font-size: 12px; margin-top: 3px; }
 .item-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.pill.shared { border: 1px solid var(--border-3); color: var(--muted); font-family: var(--mono); font-weight: 400; margin-left: 8px; }
+.pill.shared, .pill.version, .pill.project { border: 1px solid var(--border-3); color: var(--muted); font-family: var(--mono); font-weight: 400; margin-left: 8px; }
 .check { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); flex-shrink: 0; cursor: pointer; margin: 0; }
 .check input { width: auto; }
+.history { border-top: 1px solid var(--border-3); margin-top: 12px; padding-top: 10px; }
+.history-row { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 12px; }
+.history-meta { color: var(--muted); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.preview { background: var(--bg-2, rgba(127,127,127,.08)); border: 1px solid var(--border-3); border-radius: 6px; padding: 10px 12px; font-size: 11px; max-height: 260px; overflow: auto; white-space: pre-wrap; }
 .muted { color: var(--muted); font-size: 12px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
 @media (max-width: 620px) { .item-row { flex-wrap: wrap; } }

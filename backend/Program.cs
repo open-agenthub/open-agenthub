@@ -37,6 +37,12 @@ builder.Services.AddSingleton<AgentHub.Api.Ee.Library.ILibraryShareStore>(sp =>
 builder.Services.AddSingleton<AgentHub.Api.Ee.Library.ILibraryShareReader>(sp =>
     sp.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>());
 builder.Services.AddSingleton<AgentHub.Api.Library.ILibraryAccess, AgentHub.Api.Library.LibraryAccessService>();
+// Skill search (FTS always; vector similarity when an embedding provider is configured)
+// and the per-session skill-library MCP server.
+builder.Services.AddSingleton<AgentHub.Api.Library.ISkillEmbeddingStore, AgentHub.Api.Library.SkillEmbeddingStore>();
+builder.Services.AddSingleton<AgentHub.Api.Library.IEmbeddingProvider, AgentHub.Api.Library.OpenAiCompatibleEmbeddingProvider>();
+builder.Services.AddSingleton<AgentHub.Api.Library.SkillSearchService>();
+builder.Services.AddSingleton<AgentHub.Api.Library.SkillLibraryMcpService>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
 // Monthly API budgets: personal limit (community) + admin limits (enterprise provider below).
@@ -186,6 +192,7 @@ using (var scope = app.Services.CreateScope())
     await tokenStore.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillEmbeddingStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
