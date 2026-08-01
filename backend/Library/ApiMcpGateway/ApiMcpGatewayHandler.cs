@@ -1,7 +1,10 @@
+using System.Net;
 using System.Net.Http.Headers;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using AgentHub.Api.Persistence;
 using Microsoft.AspNetCore.Http;
 
 namespace AgentHub.Api.Library.ApiMcpGateway;
@@ -16,17 +19,23 @@ public sealed class ApiMcpGatewayHandler
     private readonly IMcpGatewayTokenService _tokens;
     private readonly OpenApiSpecCache _specs;
     private readonly HttpClient _upstream;
+    private readonly ISessionStore _sessions;
+    private readonly ILibraryAccess _access;
 
     public ApiMcpGatewayHandler(
         IMcpServerStore store,
         IMcpGatewayTokenService tokens,
         OpenApiSpecCache specs,
-        HttpClient upstream)
+        HttpClient upstream,
+        ISessionStore sessions,
+        ILibraryAccess access)
     {
         _store = store;
         _tokens = tokens;
         _specs = specs;
         _upstream = upstream;
+        _sessions = sessions;
+        _access = access;
     }
 
     public async Task HandleCatalogAsync(HttpContext ctx, string id)
@@ -38,10 +47,18 @@ public sealed class ApiMcpGatewayHandler
         }
 
         var token = ExtractToken(ctx.Request);
-        if (!_tokens.TryValidate(token, id, out _))
+        if (!_tokens.TryValidate(token, id, out var claims))
         {
             ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await ctx.Response.WriteAsync("Unauthorized", ctx.RequestAborted);
+            return;
+        }
+
+        var session = await _sessions.GetAsync(claims.Owner, claims.SessionId, ctx.RequestAborted);
+        if (session is null)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await ctx.Response.WriteAsync("Session not found", ctx.RequestAborted);
             return;
         }
 
@@ -53,6 +70,17 @@ public sealed class ApiMcpGatewayHandler
             await ctx.Response.WriteAsync("MCP server not found", ctx.RequestAborted);
             return;
         }
+
+        var accessible = await _access.ResolveMcpServersAsync(
+            claims.Owner, [id], strict: false, ctx.RequestAborted);
+        if (accessible.Count == 0)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await ctx.Response.WriteAsync("MCP server not accessible", ctx.RequestAborted);
+            return;
+        }
+
+        server = accessible[0];
 
         JsonDocument? rpcDoc = null;
         try
@@ -85,7 +113,7 @@ public sealed class ApiMcpGatewayHandler
                     "notifications/initialized" => null,
                     "ping" => new { },
                     "tools/list" => await ToolsListAsync(server, ctx.RequestAborted),
-                    "tools/call" => await ToolsCallAsync(server, root, ctx.RequestAborted),
+                    "tools/call" => await ToolsCallAsync(server, claims, root, ctx.RequestAborted),
                     _ => throw new GatewayRpcException(-32601, $"Method not found: {method}")
                 };
             }
@@ -142,6 +170,7 @@ public sealed class ApiMcpGatewayHandler
     private async Task<object> ToolsListAsync(McpServerRecord server, CancellationToken ct)
     {
         var (specUrl, _, _) = ParseApiConfig(server.ConfigJson);
+        EnsureSafeOutboundUrl(specUrl, "specUrl");
         var spec = await _specs.GetAsync(specUrl, ct);
         var tools = OpenApiToolMapper.MapTools(spec);
         return new
@@ -155,7 +184,8 @@ public sealed class ApiMcpGatewayHandler
         };
     }
 
-    private async Task<object> ToolsCallAsync(McpServerRecord server, JsonElement rpcRoot, CancellationToken ct)
+    private async Task<object> ToolsCallAsync(
+        McpServerRecord server, McpGatewayTokenClaims claims, JsonElement rpcRoot, CancellationToken ct)
     {
         if (!rpcRoot.TryGetProperty("params", out var p) || p.ValueKind != JsonValueKind.Object)
             throw new GatewayRpcException(-32602, "tools/call requires params");
@@ -169,6 +199,7 @@ public sealed class ApiMcpGatewayHandler
             args = argsEl;
 
         var (specUrl, baseUrlOverride, auth) = ParseApiConfig(server.ConfigJson);
+        EnsureSafeOutboundUrl(specUrl, "specUrl");
         var spec = await _specs.GetAsync(specUrl, ct);
         var tools = OpenApiToolMapper.MapTools(spec);
         var tool = tools.FirstOrDefault(t => string.Equals(t.Name, toolName, StringComparison.Ordinal))
@@ -178,6 +209,15 @@ public sealed class ApiMcpGatewayHandler
             ? baseUrlOverride!.TrimEnd('/')
             : OpenApiToolMapper.ReadDefaultBaseUrl(spec)
               ?? throw new GatewayRpcException(-32000, "OpenAPI has no servers.url and config has no baseUrl");
+        EnsureSafeOutboundUrl(baseUrl, "baseUrl");
+
+        var canInjectSecret = CanInjectUpstreamSecret(server, claims);
+        if (!canInjectSecret && auth.Type is not ("none" or ""))
+        {
+            return ToolError(
+                "This API requires credentials. The catalog entry's secret is owner-only; " +
+                "attach your own credentials (not supported in v1) or use an unauthenticated API.");
+        }
 
         var path = tool.PathTemplate;
         var query = new List<string>();
@@ -234,7 +274,8 @@ public sealed class ApiMcpGatewayHandler
         foreach (var (h, v) in headers)
             request.Headers.TryAddWithoutValidation(h, v);
 
-        ApplyUpstreamAuth(request, auth, server.SecretJson);
+        if (canInjectSecret)
+            ApplyUpstreamAuth(request, auth, server.SecretJson);
 
         if (tool.HasJsonBody && bodyFields.Count > 0)
         {
@@ -260,6 +301,20 @@ public sealed class ApiMcpGatewayHandler
             isError
         };
     }
+
+    /// <summary>
+    /// Org shared secrets may be injected for any allowed consumer.
+    /// Personal secrets are owner-only (claims.Owner must match server.Owner).
+    /// </summary>
+    internal static bool CanInjectUpstreamSecret(McpServerRecord server, McpGatewayTokenClaims claims)
+        => server.Owner == McpServerRecord.OrgOwner
+           || string.Equals(claims.Owner, server.Owner, StringComparison.Ordinal);
+
+    private static object ToolError(string message) => new
+    {
+        content = new[] { new { type = "text", text = message } },
+        isError = true
+    };
 
     private static void ApplyUpstreamAuth(HttpRequestMessage request, ApiAuthConfig auth, string? secretJson)
     {
@@ -325,6 +380,45 @@ public sealed class ApiMcpGatewayHandler
         }
 
         return (specUrlEl.GetString()!, baseUrl, auth);
+    }
+
+    /// <summary>
+    /// Blocks obvious SSRF targets (loopback, link-local, cloud metadata IP).
+    /// Hostname-only checks — no DNS resolution in v1.
+    /// </summary>
+    internal static void EnsureSafeOutboundUrl(string url, string fieldName)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+            throw new GatewayRpcException(-32000, $"{fieldName} must be an absolute http(s) URL");
+
+        var host = uri.IdnHost;
+        if (string.Equals(host, "localhost", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host, "metadata.google.internal", StringComparison.OrdinalIgnoreCase)
+            || host.EndsWith(".localhost", StringComparison.OrdinalIgnoreCase))
+            throw new GatewayRpcException(-32000, $"{fieldName} targets a blocked host");
+
+        if (!IPAddress.TryParse(host, out var ip))
+            return;
+
+        if (IPAddress.IsLoopback(ip)
+            || IsLinkLocal(ip)
+            || ip.Equals(IPAddress.Parse("169.254.169.254")))
+            throw new GatewayRpcException(-32000, $"{fieldName} targets a blocked address");
+    }
+
+    private static bool IsLinkLocal(IPAddress ip)
+    {
+        if (ip.AddressFamily == AddressFamily.InterNetwork)
+        {
+            var b = ip.GetAddressBytes();
+            return b[0] == 169 && b[1] == 254;
+        }
+
+        if (ip.AddressFamily == AddressFamily.InterNetworkV6)
+            return ip.IsIPv6LinkLocal;
+
+        return false;
     }
 
     private sealed record ApiAuthConfig(string Type, string? HeaderName);

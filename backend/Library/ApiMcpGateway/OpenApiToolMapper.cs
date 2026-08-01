@@ -36,13 +36,15 @@ public static class OpenApiToolMapper
         {
             if (pathProp.Value.ValueKind != JsonValueKind.Object)
                 continue;
-            foreach (var methodProp in pathProp.Value.EnumerateObject())
+            var pathItem = pathProp.Value;
+            foreach (var methodProp in pathItem.EnumerateObject())
             {
                 if (!HttpMethods.Contains(methodProp.Name, StringComparer.OrdinalIgnoreCase))
                     continue;
                 if (methodProp.Value.ValueKind != JsonValueKind.Object)
                     continue;
-                tools.Add(MapOperation(root, pathProp.Name, methodProp.Name.ToUpperInvariant(), methodProp.Value));
+                tools.Add(MapOperation(
+                    root, pathProp.Name, methodProp.Name.ToUpperInvariant(), pathItem, methodProp.Value));
             }
         }
 
@@ -68,7 +70,7 @@ public static class OpenApiToolMapper
     }
 
     private static OpenApiMappedTool MapOperation(
-        JsonElement root, string path, string method, JsonElement op)
+        JsonElement root, string path, string method, JsonElement pathItem, JsonElement op)
     {
         var name = op.TryGetProperty("operationId", out var opId)
                    && opId.ValueKind == JsonValueKind.String
@@ -85,34 +87,35 @@ public static class OpenApiToolMapper
                 ? desc.GetString() ?? $"{method} {path}"
                 : $"{method} {path}";
 
+        // Path-item parameters first; operation parameters win on duplicate name+in.
+        var merged = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        ApplyParameterArray(pathItem, merged);
+        ApplyParameterArray(op, merged);
+
         var bindings = new List<OpenApiParamBinding>();
         var properties = new JsonObject();
         var required = new JsonArray();
 
-        if (op.TryGetProperty("parameters", out var parameters)
-            && parameters.ValueKind == JsonValueKind.Array)
+        foreach (var p in merged.Values)
         {
-            foreach (var p in parameters.EnumerateArray())
-            {
-                if (!p.TryGetProperty("name", out var nameEl)
-                    || nameEl.ValueKind != JsonValueKind.String)
-                    continue;
-                var paramName = nameEl.GetString()!;
-                var loc = p.TryGetProperty("in", out var inEl) && inEl.ValueKind == JsonValueKind.String
-                    ? inEl.GetString()!.ToLowerInvariant()
-                    : "query";
-                var isRequired = p.TryGetProperty("required", out var reqEl)
-                                 && reqEl.ValueKind == JsonValueKind.True;
-                bindings.Add(new OpenApiParamBinding(paramName, loc, isRequired));
+            if (!p.TryGetProperty("name", out var nameEl)
+                || nameEl.ValueKind != JsonValueKind.String)
+                continue;
+            var paramName = nameEl.GetString()!;
+            var loc = p.TryGetProperty("in", out var inEl) && inEl.ValueKind == JsonValueKind.String
+                ? inEl.GetString()!.ToLowerInvariant()
+                : "query";
+            var isRequired = p.TryGetProperty("required", out var reqEl)
+                             && reqEl.ValueKind == JsonValueKind.True;
+            bindings.Add(new OpenApiParamBinding(paramName, loc, isRequired));
 
-                JsonNode schemaNode = p.TryGetProperty("schema", out var schema)
-                    ? JsonNode.Parse(ResolveRef(root, schema).GetRawText())
-                      ?? new JsonObject { ["type"] = "string" }
-                    : new JsonObject { ["type"] = "string" };
-                properties[paramName] = schemaNode;
-                if (isRequired)
-                    required.Add(paramName);
-            }
+            JsonNode schemaNode = p.TryGetProperty("schema", out var schema)
+                ? JsonNode.Parse(ResolveRef(root, schema).GetRawText())
+                  ?? new JsonObject { ["type"] = "string" }
+                : new JsonObject { ["type"] = "string" };
+            properties[paramName] = schemaNode;
+            if (isRequired)
+                required.Add(paramName);
         }
 
         var hasJsonBody = false;
@@ -172,6 +175,24 @@ public static class OpenApiToolMapper
             bindings,
             hasJsonBody,
             schemaDoc.RootElement.Clone());
+    }
+
+    private static void ApplyParameterArray(JsonElement container, Dictionary<string, JsonElement> merged)
+    {
+        if (!container.TryGetProperty("parameters", out var parameters)
+            || parameters.ValueKind != JsonValueKind.Array)
+            return;
+
+        foreach (var p in parameters.EnumerateArray())
+        {
+            if (!p.TryGetProperty("name", out var nameEl) || nameEl.ValueKind != JsonValueKind.String)
+                continue;
+            var paramName = nameEl.GetString()!;
+            var loc = p.TryGetProperty("in", out var inEl) && inEl.ValueKind == JsonValueKind.String
+                ? inEl.GetString()!.ToLowerInvariant()
+                : "query";
+            merged[$"{paramName}\n{loc}"] = p.Clone();
+        }
     }
 
     /// <summary>Resolves local <c>#/components/...</c> refs (one level; enough for v1 fixtures).</summary>

@@ -34,7 +34,9 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>(),
         sp.GetRequiredService<AgentHub.Api.Library.IMcpGatewayTokenService>(),
         sp.GetRequiredService<AgentHub.Api.Library.ApiMcpGateway.OpenApiSpecCache>(),
-        sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway")));
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway"),
+        sp.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>(),
+        sp.GetRequiredService<AgentHub.Api.Library.ILibraryAccess>()));
 builder.Services.AddHttpClient("mcp-gateway");
 // EE share matrix: registered as the core ILibraryShareReader so access resolution
 // consults real shares when the license is enabled (EmptyLibraryShareReader unused).
