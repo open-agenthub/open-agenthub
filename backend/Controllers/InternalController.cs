@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using AgentHub.Api.Library;
 using AgentHub.Api.Models;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Notifications;
@@ -30,14 +31,16 @@ public sealed class InternalController : ControllerBase
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly ISessionMcpPolicyReader _shares;
     private readonly IBrowserService? _browsers;
+    private readonly ILibraryAccess _library;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares,
-        IBrowserService? browsers = null)
+        ILibraryAccess library, IBrowserService? browsers = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
+        _library = library;
         _browsers = browsers;
     }
 
@@ -246,6 +249,19 @@ public sealed class InternalController : ControllerBase
 
         var result = AgentPolicyMatcher.Decide(policy, body.Tool ?? string.Empty, body.Input);
         return Ok(new { decision = result.Decision, reason = result.Reason });
+    }
+
+    /// <summary>
+    /// Skills accessible to the session owner (own + shared while licensed),
+    /// fetched by the entrypoint and materialized under ~/.claude/skills.
+    /// </summary>
+    [HttpGet("skills")]
+    public async Task<IActionResult> Skills(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        var skills = await _library.ListSkillPayloadsAsync(rec.Owner, ct);
+        return Ok(new { skills });
     }
 
     /// <summary>Mints a presigned PUT URL so the agent can upload an artifact to S3.</summary>

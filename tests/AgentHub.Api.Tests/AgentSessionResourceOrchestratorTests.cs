@@ -145,5 +145,10 @@ public class AgentSessionResourceOrchestratorTests
 
         public Task<string?> GetTextAsync(string key, CancellationToken ct = default) =>
             Task.FromResult<string?>(null);
+
+        public Task<bool> TryPutTextAsync(string key, string text, CancellationToken ct = default) =>
+            Task.FromResult(false);
+
+        public Task DeleteAsync(string key, CancellationToken ct = default) => Task.CompletedTask;
     }
 }
