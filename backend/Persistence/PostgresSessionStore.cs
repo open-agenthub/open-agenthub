@@ -38,6 +38,9 @@ public sealed class SessionRecord
     public string Memory { get; set; } = "1Gi";
     /// <summary>MCP configuration (.mcp.json content); null/empty = no MCP servers.</summary>
     public string? McpConfigJson { get; set; }
+    /// <summary>JSON array of catalog MCP server ids merged into the effective
+    /// config at spawn time. Null = none.</summary>
+    public string? McpServerIdsJson { get; set; }
     /// <summary>Repositories to check out, as a JSON array of {url,branch,providerId}. Null = none.
     /// (RepoUrl mirrors the first entry for display and backward compatibility.)</summary>
     public string? ReposJson { get; set; }
@@ -115,6 +118,7 @@ public sealed class PostgresSessionStore : ISessionStore
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(owner, project_id);
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
             CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(owner, parent_session_id);
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_server_ids TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -126,11 +130,11 @@ public sealed class PostgresSessionStore : ISessionStore
             INSERT INTO sessions (id, owner, title, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
                                   openclaw_api_key_source, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
-                                  mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, created_at, updated_at)
+                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, allowed_tools, created_at, updated_at)
             VALUES (@id, @owner, @title, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
-                    @mcp, @repos, @project, @parent, @prompt, @allowedTools, @created, now())
+                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @allowedTools, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
@@ -141,7 +145,8 @@ public sealed class PostgresSessionStore : ISessionStore
                 agent_policy = EXCLUDED.agent_policy,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
-                mcp_config = EXCLUDED.mcp_config, repos = EXCLUDED.repos,
+                mcp_config = EXCLUDED.mcp_config, mcp_server_ids = EXCLUDED.mcp_server_ids,
+                repos = EXCLUDED.repos,
                 project_id = EXCLUDED.project_id, parent_session_id = EXCLUDED.parent_session_id,
                 prompt = EXCLUDED.prompt,
                 allowed_tools = EXCLUDED.allowed_tools, updated_at = now();
@@ -211,7 +216,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -243,6 +248,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("cpu", r.Cpu);
         cmd.Parameters.AddWithValue("memory", r.Memory);
         cmd.Parameters.AddWithValue("mcp", (object?)r.McpConfigJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("mcpServerIds", (object?)r.McpServerIdsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("repos", (object?)r.ReposJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("project", (object?)r.ProjectId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("parent", (object?)r.ParentSessionId ?? DBNull.Value);
@@ -279,6 +285,7 @@ public sealed class PostgresSessionStore : ISessionStore
         ParentSessionId = r.IsDBNull(23) ? null : r.GetString(23),
         Prompt = r.IsDBNull(24) ? null : r.GetString(24),
         AllowedToolsJson = r.IsDBNull(25) ? null : r.GetString(25),
-        UiMode = r.GetString(26)
+        UiMode = r.GetString(26),
+        McpServerIdsJson = r.IsDBNull(27) ? null : r.GetString(27)
     };
 }

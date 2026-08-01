@@ -178,6 +178,10 @@ public record CreateSessionRequest
     /// <summary>MCP configuration as a JSON string (.mcp.json format), mounted into the container.</summary>
     public string? McpConfigJson { get; init; }
 
+    /// <summary>Ids of catalog MCP servers to include (own, org, or EE-shared).
+    /// Merged with McpConfigJson into the effective .mcp.json; inline entries win.</summary>
+    public List<string> McpServerIds { get; init; } = new();
+
     public AgentKind Agent { get; init; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
     /// <summary>Which existing API key OpenClaw should use; required only for OpenClaw + ApiKey.</summary>
@@ -212,6 +216,8 @@ public record UpdateSessionRequest
     public string? Memory { get; init; }
     /// <summary>MCP config (.mcp.json); null = unchanged, empty string = remove all MCP servers.</summary>
     public string? McpConfigJson { get; init; }
+    /// <summary>Catalog MCP servers; null = unchanged, empty list = none.</summary>
+    public List<string>? McpServerIds { get; init; }
     public AgentKind? Agent { get; init; }
     public AgentAuthMode? AuthMode { get; init; }
     /// <summary>Which existing API key OpenClaw should use; only for OpenClaw + ApiKey.</summary>
@@ -232,7 +238,8 @@ public record UpdateSessionRequest
 
 public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
     AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null,
-    OpenClawApiKeySource? OpenClawApiKeySource = null);
+    OpenClawApiKeySource? OpenClawApiKeySource = null,
+    List<string>? McpServerIds = null);
 
 public static class SessionDuplication
 {
@@ -251,6 +258,10 @@ public static class SessionDuplication
             Prompt = source.Prompt,
             Schedule = source.Schedule,
             McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
+            // An explicit list (from the duplicate dialog's picker) wins; otherwise the
+            // catalog servers follow the IncludeMcp choice like the inline config does.
+            McpServerIds = request.McpServerIds
+                ?? (request.IncludeMcp ? Deserialize<List<string>>(source.McpServerIdsJson) : new List<string>()),
             Agent = agent,
             AuthMode = authMode,
             OpenClawApiKeySource = agent == AgentKind.OpenClaw && authMode == AgentAuthMode.ApiKey
@@ -302,6 +313,8 @@ public record SessionInfo
     public bool HasMcp { get; init; }
     /// <summary>MCP config JSON (returned so the edit dialog can prefill it).</summary>
     public string? McpConfigJson { get; init; }
+    /// <summary>Catalog MCP servers included in this session.</summary>
+    public IReadOnlyList<string> McpServerIds { get; init; } = Array.Empty<string>();
     public required string Phase { get; init; }       // Pending | Running | Paused | Succeeded | Failed | Scheduled
     public string? PodIp { get; init; }
     public DateTime CreatedAt { get; init; }
