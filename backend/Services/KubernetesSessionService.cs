@@ -497,6 +497,14 @@ public sealed class KubernetesSessionService : ISessionService
         }
         if (req.McpServerIds is not null)
             mcpDirty = true;
+        // null = leave session ephemerals alone; non-null replaces the full set (empty clears).
+        if (req.EphemeralApiSources is not null)
+        {
+            var preparedEphemeral = PrepareEphemeralSources(req.EphemeralApiSources);
+            await _ephemeralApiMcps.DeleteBySessionAsync(rec.Id, ct);
+            await RegisterEphemeralSourcesAsync(owner, rec.Id, preparedEphemeral, ct);
+            mcpDirty = true;
+        }
         if (mcpDirty)
         {
             // Strict resolve + assemble before secret/DB write so bad shape/config fails closed.

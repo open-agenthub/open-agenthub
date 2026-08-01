@@ -130,6 +130,67 @@ public class EphemeralApiMcpTests
     }
 
     [Fact]
+    public void UpdateSessionRequest_AcceptsEphemeralApiSources()
+    {
+        var omitted = JsonSerializer.Deserialize<UpdateSessionRequest>("{}",
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.Null(omitted!.EphemeralApiSources);
+
+        var req = JsonSerializer.Deserialize<UpdateSessionRequest>(
+            """{"ephemeralApiSources":[{"name":"books","specUrl":"https://api.example.test/schema.graphql","specType":"auto","saveToLibrary":true}]}""",
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.NotNull(req.EphemeralApiSources);
+        Assert.Single(req.EphemeralApiSources!);
+        Assert.Equal("books", req.EphemeralApiSources![0].Name);
+        Assert.True(req.EphemeralApiSources[0].SaveToLibrary);
+
+        var cleared = JsonSerializer.Deserialize<UpdateSessionRequest>(
+            """{"ephemeralApiSources":[]}""",
+            new JsonSerializerOptions(JsonSerializerDefaults.Web))!;
+        Assert.NotNull(cleared.EphemeralApiSources);
+        Assert.Empty(cleared.EphemeralApiSources!);
+    }
+
+    /// <summary>
+    /// Update-path seam: replace session ephemerals then re-assemble effective .mcp.json
+    /// (what UpdateSession writes into the MCP secret after DeleteBySession + Register).
+    /// </summary>
+    [Fact]
+    public async Task UpdatePath_ReplaceEphemerals_ReassemblesEffectiveConfig()
+    {
+        var store = new InMemoryEphemeralApiMcpStore();
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "old", "alice",
+            """{"specType":"openapi","specUrl":"https://old.example.test/openapi.json"}""",
+            null));
+
+        // Replace semantics used by UpdateSession when EphemeralApiSources is non-null.
+        await store.DeleteBySessionAsync("sess-1");
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "books", "alice",
+            """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql"}""",
+            null));
+
+        var ephemeral = await store.ListBySessionAsync("sess-1");
+        Assert.Single(ephemeral);
+        Assert.Equal("books", ephemeral[0].Name);
+
+        var opts = new McpGatewayAssembleOptions
+        {
+            BaseUrl = "http://gateway.test",
+            SessionId = "sess-1",
+            IssueToken = id => $"tok-{id}",
+            IssueEphemeralToken = name => $"eph-{name}"
+        };
+        var json = McpConfigAssembler.Merge(null, [], opts, ephemeral);
+        using var doc = JsonDocument.Parse(json!);
+        var servers = doc.RootElement.GetProperty("mcpServers");
+        Assert.False(servers.TryGetProperty("old", out _));
+        Assert.Equal("http://gateway.test/mcp/session/sess-1/books",
+            servers.GetProperty("books").GetProperty("url").GetString());
+    }
+
+    [Fact]
     public async Task Gateway_EphemeralGraphQl_ToolsListFromSchemaUrl()
     {
         var sdl = File.ReadAllText(Path.GetFullPath(Path.Combine(
