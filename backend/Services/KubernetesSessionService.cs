@@ -197,7 +197,7 @@ public sealed class KubernetesSessionService : ISessionService
         }
         catch
         {
-            _ephemeralApiMcps.DeleteBySession(id);
+            await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
             throw;
         }
         return ToInfo(rec, phase: rec.Status, podIp: null);
@@ -269,7 +269,7 @@ public sealed class KubernetesSessionService : ISessionService
             IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner),
             IssueEphemeralToken = name => _mcpGatewayTokens.IssueEphemeral(rec.Id, name, owner)
         };
-        var ephemeral = _ephemeralApiMcps.ListBySession(rec.Id);
+        var ephemeral = await _ephemeralApiMcps.ListBySessionAsync(rec.Id, ct);
         var servers = ParseMcpServerIds(rec).Count == 0
             ? (IReadOnlyList<McpServerRecord>)Array.Empty<McpServerRecord>()
             : await _library.ResolveMcpServersAsync(owner, ParseMcpServerIds(rec), strict: false, ct);
@@ -327,8 +327,8 @@ public sealed class KubernetesSessionService : ISessionService
     {
         foreach (var (source, configJson, secretJson) in prepared)
         {
-            _ephemeralApiMcps.Register(new EphemeralApiMcpEntry(
-                sessionId, source.Name, owner, configJson, secretJson));
+            await _ephemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
+                sessionId, source.Name, owner, configJson, secretJson), ct);
 
             if (!source.SaveToLibrary)
                 continue;
@@ -508,7 +508,7 @@ public sealed class KubernetesSessionService : ISessionService
                 IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner),
                 IssueEphemeralToken = name => _mcpGatewayTokens.IssueEphemeral(rec.Id, name, owner)
             };
-            var ephemeral = _ephemeralApiMcps.ListBySession(rec.Id);
+            var ephemeral = await _ephemeralApiMcps.ListBySessionAsync(rec.Id, ct);
             var servers = await _library.ResolveMcpServersAsync(owner, idsToResolve, strict: true, ct);
             var ids = servers.Select(s => s.Id).ToList();
             var effective = McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
@@ -716,7 +716,7 @@ public sealed class KubernetesSessionService : ISessionService
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
-        _ephemeralApiMcps.DeleteBySession(id);
+        await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
         await _store.DeleteAsync(id, ct);
         _log.LogInformation("Deleted session {Id} (S3 artifacts are kept)", id);
     }
