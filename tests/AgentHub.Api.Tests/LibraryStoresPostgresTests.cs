@@ -154,8 +154,12 @@ public class LibraryStoresPostgresTests
         Assert.Equal("api", kind);
         Assert.Equal("{\"token\":\"abc\"}", secret);
 
-        var cleared = await db.McpServers.UpdateAsync(
+        var preserved = await db.McpServers.UpdateAsync(
             "alice", created.Id, ApiRequest("gateway", secretJson: null));
+        Assert.Equal("{\"token\":\"abc\"}", preserved.SecretJson);
+
+        var cleared = await db.McpServers.UpdateAsync(
+            "alice", created.Id, ApiRequest("gateway", secretJson: ""));
         Assert.Null(cleared.SecretJson);
     }
 

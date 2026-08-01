@@ -23,6 +23,10 @@ public sealed class McpServerRecord
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
 
+/// <param name="SecretJson">
+/// On create: null means no secret. On update: null leaves the existing secret unchanged;
+/// an empty string clears it; any other value replaces it.
+/// </param>
 public sealed record SaveMcpServerRequest(
     string Name,
     string? Description,

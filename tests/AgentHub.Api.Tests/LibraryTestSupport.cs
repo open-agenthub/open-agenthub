@@ -79,7 +79,9 @@ internal sealed class InMemoryMcpServerStore : IMcpServerStore
         record.Description = LibraryValidation.ValidateDescription(request.Description);
         record.Kind = kind;
         record.ConfigJson = LibraryValidation.ValidateMcpServerConfig(request.ConfigJson, kind);
-        record.SecretJson = request.SecretJson;
+        // null = leave unchanged; "" = clear; otherwise replace.
+        if (request.SecretJson is not null)
+            record.SecretJson = request.SecretJson.Length == 0 ? null : request.SecretJson;
         record.UpdatedAt = DateTime.UtcNow;
         return Task.FromResult(record);
     }
