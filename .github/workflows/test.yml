@@ -58,6 +58,10 @@ jobs:
         run: docker build --file agent-runtime/cursor/Dockerfile --tag open-agenthub-dev/agent-runtime-cursor:test agent-runtime
       - name: Smoke Cursor CLI
         run: docker run --rm --entrypoint agent open-agenthub-dev/agent-runtime-cursor:test --version
+      - name: Build OpenClaw runtime
+        run: docker build --file agent-runtime/openclaw/Dockerfile --tag open-agenthub-dev/agent-runtime-openclaw:test agent-runtime
+      - name: Smoke OpenClaw CLI
+        run: docker run --rm --entrypoint openclaw open-agenthub-dev/agent-runtime-openclaw:test --version
 
   helm:
     runs-on: ubuntu-latest
@@ -72,6 +76,9 @@ jobs:
       - name: Verify Cursor runtime images
         shell: pwsh
         run: ./tests/helm/cursor-runtime-values.ps1
+      - name: Verify OpenClaw runtime images
+        shell: pwsh
+        run: ./tests/helm/openclaw-runtime-values.ps1
       - name: Verify browser values and RBAC
         shell: pwsh
         run: ./tests/helm/browser-values.ps1

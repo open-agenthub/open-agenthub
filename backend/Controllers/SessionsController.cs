@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using AgentHub.Api.Agents;
 using AgentHub.Api.Models;
 using AgentHub.Api.Permissions;
 using AgentHub.Api.Services;
@@ -25,6 +26,9 @@ public sealed class SessionsController : ControllerBase
         ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
         ?? throw new UnauthorizedAccessException();
 
+    private ObjectResult ForbiddenAgent(AgentNotAllowedException e)
+        => StatusCode(StatusCodes.Status403Forbidden, e.Message);
+
     [HttpGet]
     public async Task<IReadOnlyList<SessionInfo>> List(CancellationToken ct)
         => await _svc.ListSessionsAsync(Owner, ct);
@@ -37,6 +41,7 @@ public sealed class SessionsController : ControllerBase
     public async Task<ActionResult<SessionInfo>> Create([FromBody] CreateSessionRequest req, CancellationToken ct)
     {
         try { return Ok(await _svc.CreateSessionAsync(Owner, req, ct)); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
@@ -47,6 +52,7 @@ public sealed class SessionsController : ControllerBase
     {
         try { return Ok(await _svc.UpdateSessionAsync(Owner, id, req, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
     }
 
@@ -55,6 +61,7 @@ public sealed class SessionsController : ControllerBase
     {
         try { return Ok(await _svc.DuplicateSessionAsync(Owner, id, request, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
@@ -65,6 +72,7 @@ public sealed class SessionsController : ControllerBase
     {
         try { return Ok(await _svc.ResumeSessionAsync(Owner, id, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
     }

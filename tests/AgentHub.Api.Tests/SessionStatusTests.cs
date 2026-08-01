@@ -53,6 +53,7 @@ public class SessionStatusTests
     {
         new UpdateSessionRequest { Agent = AgentKind.Codex },
         new UpdateSessionRequest { AuthMode = AgentAuthMode.ApiKey },
+        new UpdateSessionRequest { OpenClawApiKeySource = OpenClawApiKeySource.OpenAI },
         new UpdateSessionRequest { Policy = new AgentPolicy() },
         new UpdateSessionRequest { Image = "custom/image" }
     };

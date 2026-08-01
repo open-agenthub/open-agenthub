@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using AgentHub.Api.Agents;
 using AgentHub.Api.Models;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
@@ -27,6 +28,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IBrowserService _browsers;
     private readonly IGitAuthService _gitAuth;
     private readonly Usage.UsageLimitService _usageLimits;
+    private readonly IAllowedAgentsProvider _allowedAgents;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -42,7 +44,8 @@ public sealed class KubernetesSessionService : ISessionService
 
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
         IArtifactStore artifacts, IBrowserService browsers, IGitAuthService gitAuth,
-        Usage.UsageLimitService usageLimits, ILogger<KubernetesSessionService> log)
+        Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
+        ILogger<KubernetesSessionService> log)
     {
         _log = log;
         _store = store;
@@ -51,6 +54,7 @@ public sealed class KubernetesSessionService : ISessionService
         _browsers = browsers;
         _gitAuth = gitAuth;
         _usageLimits = usageLimits;
+        _allowedAgents = allowedAgents;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
@@ -87,7 +91,8 @@ public sealed class KubernetesSessionService : ISessionService
         var claude = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Claude), ct))?.Data;
         var codex = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Codex), ct))?.Data;
         var cursor = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Cursor), ct))?.Data;
-        return CredentialSecretFactory.CredentialStatus(data, claude, codex, cursor);
+        var openclaw = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.OpenClaw), ct))?.Data;
+        return CredentialSecretFactory.CredentialStatus(data, claude, codex, cursor, openclaw);
     }
 
     /// <summary>
@@ -111,9 +116,10 @@ public sealed class KubernetesSessionService : ISessionService
         if (req.Mode is SessionMode.Autonomous or SessionMode.Scheduled && string.IsNullOrWhiteSpace(req.Prompt))
             throw new ArgumentException("A prompt is required for Autonomous/Scheduled sessions.");
         if (allowMigratedClaudeAuto)
-            AgentConfiguration.ValidateForDuplicatedSession(req.Agent, req.AuthMode);
+            AgentConfiguration.ValidateForDuplicatedSession(req.Agent, req.AuthMode, req.OpenClawApiKeySource);
         else
-            AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode);
+            AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode, req.OpenClawApiKeySource);
+        var uiMode = SessionUiMode.NormalizeForCreate(req.UiMode, req.Agent, req.Mode);
 
         var image = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image.Trim();
         if (image is not null)
@@ -128,6 +134,7 @@ public sealed class KubernetesSessionService : ISessionService
         ValidateQuantity(req.Cpu, "cpu");
         ValidateQuantity(req.Memory, "memory");
         await ValidateProjectAsync(owner, req.ProjectId, ct);
+        await EnsureAgentAllowedAsync(req.Agent, ct);
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
         await SessionSoftLimit.EnsureCanCreateAsync(_store, owner, _maxRunningSessionsPerOwner, ct);
 
@@ -138,11 +145,14 @@ public sealed class KubernetesSessionService : ISessionService
         var id = Guid.NewGuid().ToString("n")[..12];
         var rec = new SessionRecord
         {
-            Id = id, Owner = owner, Title = req.Title, Mode = req.Mode,
+            Id = id, Owner = owner, Title = req.Title, Mode = req.Mode, UiMode = uiMode,
             RepoUrl = repos.FirstOrDefault()?.Url, ReposJson = SerializeRepos(repos),
             Schedule = req.Schedule, McpConfigJson = mcp,
             ProjectId = req.ProjectId, ParentSessionId = req.ParentSessionId, Prompt = req.Prompt,
             Agent = req.Agent, AuthMode = req.AuthMode,
+            OpenClawApiKeySource = req.Agent == AgentKind.OpenClaw && req.AuthMode == AgentAuthMode.ApiKey
+                ? req.OpenClawApiKeySource
+                : null,
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
             Image = image, RunAsRoot = req.RunAsRoot,
@@ -211,6 +221,9 @@ public sealed class KubernetesSessionService : ISessionService
             throw new ArgumentException("Project not found.");
     }
 
+    private Task EnsureAgentAllowedAsync(AgentKind agent, CancellationToken ct)
+        => AllowedAgentsGuard.EnsureAgentAllowedAsync(_allowedAgents, agent, ct);
+
     // Monthly API-budget gate. Auto-mode sessions only bill the API when no Claude
     // subscription login is stored, so the stored-login check decides whether Auto counts.
     private async Task EnforceUsageLimitAsync(string owner, AgentKind agent, AgentAuthMode authMode, CancellationToken ct)
@@ -251,6 +264,7 @@ public sealed class KubernetesSessionService : ISessionService
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Scheduled sessions are not resumed; they run on their schedule.");
+        await EnsureAgentAllowedAsync(rec.Agent, ct);
         await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, ct);
 
         await _browsers.StopAsync(id, ct);
@@ -262,10 +276,11 @@ public sealed class KubernetesSessionService : ISessionService
 
         var req = new CreateSessionRequest
         {
-            Title = rec.Title, Mode = rec.Mode,
+            Title = rec.Title, Mode = rec.Mode, UiMode = rec.UiMode,
             Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
             ProjectId = rec.ProjectId, Prompt = rec.Prompt,
-            Agent = rec.Agent, AuthMode = rec.AuthMode, Policy = ParsePolicy(rec),
+            Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
+            Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot,
             Cpu = rec.Cpu, Memory = rec.Memory
@@ -310,6 +325,8 @@ public sealed class KubernetesSessionService : ISessionService
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         SessionUpdateValidator.Validate(rec, req);
+        if (req.Agent is { } requestedAgent)
+            await EnsureAgentAllowedAsync(requestedAgent, ct);
 
         if (!string.IsNullOrWhiteSpace(req.Title))
             rec.Title = req.Title.Trim();
@@ -365,6 +382,15 @@ public sealed class KubernetesSessionService : ISessionService
             rec.Agent = agent;
         if (req.AuthMode is { } authMode)
             rec.AuthMode = authMode;
+        if (rec.Agent == AgentKind.OpenClaw && rec.AuthMode == AgentAuthMode.ApiKey)
+        {
+            if (req.OpenClawApiKeySource is { } source)
+                rec.OpenClawApiKeySource = source;
+        }
+        else if (req.Agent is not null || req.AuthMode is not null)
+        {
+            rec.OpenClawApiKeySource = null;
+        }
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
@@ -552,10 +578,11 @@ public sealed class KubernetesSessionService : ISessionService
             {
                 AgentKind.Codex => ("openai_api_key", "auth.json"),
                 AgentKind.Cursor => ("cursor_api_key", "auth.json"),
+                AgentKind.OpenClaw => (AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource), "auth-profiles.json"),
                 _ => ("anthropic_api_key", "credentials.json")
             };
             if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
-                hasApiKey = await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
+                hasApiKey = apiKey is not null && await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
             if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
                 hasSubscription = await HasSecretKeyAsync(ProviderSecretName(owner, record.Agent), providerKey, ct);
         }
@@ -571,6 +598,7 @@ public sealed class KubernetesSessionService : ISessionService
             ClaudeCredentialSecretName = ProviderSecretName(owner, AgentKind.Claude),
             CodexCredentialSecretName = ProviderSecretName(owner, AgentKind.Codex),
             CursorCredentialSecretName = ProviderSecretName(owner, AgentKind.Cursor),
+            OpenClawCredentialSecretName = ProviderSecretName(owner, AgentKind.OpenClaw),
             HasSelectedApiKey = hasApiKey,
             HasSelectedSubscriptionCredential = hasSubscription,
             HasGitCredentials = hasGitCredentials,
@@ -580,7 +608,8 @@ public sealed class KubernetesSessionService : ISessionService
             ScrollbackPutUrl = artifactUrls.ScrollbackPutUrl,
             S3Insecure = _s3Insecure,
             RuntimeImages = new AgentRuntimeImages(
-                claudeImage, _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.AgentImagePullPolicy),
+                claudeImage, _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.OpenClawAgentImage,
+                _opts.AgentImagePullPolicy),
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
@@ -614,12 +643,13 @@ public sealed class KubernetesSessionService : ISessionService
 
     private static SessionInfo ToInfo(SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null) => new()
     {
-        Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, RepoUrl = r.RepoUrl,
+        Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, UiMode = r.UiMode, RepoUrl = r.RepoUrl,
         Repos = ParseRepos(r),
         HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson), McpConfigJson = r.McpConfigJson,
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
-        Agent = r.Agent, AuthMode = r.AuthMode, Policy = ParsePolicy(r),
+        Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
+        Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
         Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory,
@@ -675,6 +705,7 @@ public sealed class KubernetesSessionService : ISessionService
         AgentKind.Claude => $"claude-{Sanitize(owner)}",
         AgentKind.Codex => $"codex-{Sanitize(owner)}",
         AgentKind.Cursor => $"cursor-{Sanitize(owner)}",
+        AgentKind.OpenClaw => $"openclaw-{Sanitize(owner)}",
         _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
     };
 
@@ -697,6 +728,7 @@ public sealed class AgentHubOptions
     public string ClaudeAgentImage { get; set; } = "";
     public string CodexAgentImage { get; set; } = "";
     public string CursorAgentImage { get; set; } = "";
+    public string OpenClawAgentImage { get; set; } = "";
     public int AgentPort { get; set; } = 7681;
     public string GitCloneImage { get; set; } = "alpine/git:2.45.2";
     /// <summary>Pull policy for the agent/runtime image. Set "Always" when the agent

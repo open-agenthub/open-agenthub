@@ -38,7 +38,7 @@ public sealed class SessionAgentModelTests
     [InlineData((AgentKind)(-1))]
     public void CreateConfiguration_RejectsUnknownAgentKinds(AgentKind agent)
     {
-        // Ordinals 0–2 are Claude/Codex/Cursor; keep probing only out-of-range values.
+        // Ordinals 0–3 are Claude/Codex/Cursor/OpenClaw; keep probing only out-of-range values.
         Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForCreate(agent, AgentAuthMode.Subscription));
     }
 
@@ -54,6 +54,36 @@ public sealed class SessionAgentModelTests
     {
         Assert.Throws<ArgumentException>(() =>
             AgentConfiguration.ValidateForCreate(AgentKind.Cursor, AgentAuthMode.Auto));
+    }
+
+    [Fact]
+    public void CreateConfiguration_AcceptsOpenClawSubscriptionAndApiKey()
+    {
+        AgentConfiguration.ValidateForCreate(AgentKind.OpenClaw, AgentAuthMode.Subscription);
+        AgentConfiguration.ValidateForCreate(AgentKind.OpenClaw, AgentAuthMode.ApiKey,
+            OpenClawApiKeySource.Anthropic);
+    }
+
+    [Fact]
+    public void CreateConfiguration_RejectsOpenClawAuto()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            AgentConfiguration.ValidateForCreate(AgentKind.OpenClaw, AgentAuthMode.Auto));
+    }
+
+    [Fact]
+    public void CreateConfiguration_RequiresApiKeySourceForOpenClawApiKey()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            AgentConfiguration.ValidateForCreate(AgentKind.OpenClaw, AgentAuthMode.ApiKey, null));
+    }
+
+    [Fact]
+    public void CreateConfiguration_RejectsApiKeySourceUnlessOpenClawApiKey()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            AgentConfiguration.ValidateForCreate(AgentKind.Claude, AgentAuthMode.ApiKey,
+                OpenClawApiKeySource.OpenAI));
     }
 
     [Theory]
@@ -84,6 +114,57 @@ public sealed class SessionAgentModelTests
     {
         AgentConfiguration.ValidateForUpdate(
             AgentKind.Claude, AgentAuthMode.Auto, AgentKind.Codex, AgentAuthMode.ApiKey);
+    }
+
+    [Fact]
+    public void PartialUpdate_RejectsSourceOnlyWhenEffectivePairIsNotOpenClawApiKey()
+    {
+        Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForUpdate(
+            AgentKind.Claude, AgentAuthMode.Subscription, null, null,
+            currentOpenClawApiKeySource: null, requestedOpenClawApiKeySource: OpenClawApiKeySource.OpenAI));
+    }
+
+    [Fact]
+    public void PartialUpdate_AcceptsSourceOnlyWhenEffectivePairIsOpenClawApiKey()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.ApiKey, null, null,
+            currentOpenClawApiKeySource: null, requestedOpenClawApiKeySource: OpenClawApiKeySource.Anthropic);
+    }
+
+    [Fact]
+    public void PartialUpdate_KeepsCurrentOpenClawApiKeySourceWhenRequestOmitsIt()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.Subscription, null, AgentAuthMode.ApiKey,
+            currentOpenClawApiKeySource: OpenClawApiKeySource.Anthropic,
+            requestedOpenClawApiKeySource: null);
+    }
+
+    [Fact]
+    public void PartialUpdate_RequiresSourceWhenEffectiveOpenClawApiKeyHasNone()
+    {
+        Assert.Throws<ArgumentException>(() => AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.Subscription, null, AgentAuthMode.ApiKey,
+            currentOpenClawApiKeySource: null, requestedOpenClawApiKeySource: null));
+    }
+
+    [Fact]
+    public void PartialUpdate_OmitsCurrentSourceWhenLeavingOpenClawApiKey()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.ApiKey, AgentKind.Claude, AgentAuthMode.Subscription,
+            currentOpenClawApiKeySource: OpenClawApiKeySource.Anthropic,
+            requestedOpenClawApiKeySource: null);
+    }
+
+    [Fact]
+    public void PartialUpdate_OmitsCurrentSourceWhenSwitchingOpenClawApiKeyToSubscription()
+    {
+        AgentConfiguration.ValidateForUpdate(
+            AgentKind.OpenClaw, AgentAuthMode.ApiKey, null, AgentAuthMode.Subscription,
+            currentOpenClawApiKeySource: OpenClawApiKeySource.OpenAI,
+            requestedOpenClawApiKeySource: null);
     }
 
     [Fact]

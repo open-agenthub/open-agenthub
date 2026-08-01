@@ -37,6 +37,12 @@ subscription for production use.
   groups claim (configurable via `Ee:Groups:Claim`) and can be mapped to roles:
   members of an **admin** group get admin access without listing each username in
   `Ee:Admins`. Sources under [`backend/Identity/`](./backend/Identity).
+- **Allowed agent kinds** ✅ — admins can optionally restrict which agent kinds
+  (Claude, Codex, Cursor, OpenClaw, …) may be used. An empty whitelist means no
+  restriction (all agents allowed); a non-empty list is an exact allowlist.
+  Without a valid license every agent stays available. Sources under
+  [`backend/Agents/`](./backend/Agents); managed via `GET`/`PUT`
+  `/api/admin/allowed-agents`.
 ## Subscription
 
 Using the Enterprise Edition in production requires a valid

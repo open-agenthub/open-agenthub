@@ -65,6 +65,84 @@ public sealed class SessionDuplicationTests
     }
 
     [Fact]
+    public void DuplicateRequest_CopiesOpenClawApiKeySource()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "OpenClaw", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.OpenClaw, AuthMode = AgentAuthMode.ApiKey,
+            OpenClawApiKeySource = OpenClawApiKeySource.Anthropic,
+            AgentSessionId = "thread", CallbackToken = "token", Status = "Succeeded"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
+
+        Assert.Equal(AgentKind.OpenClaw, copy.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
+        Assert.Equal(OpenClawApiKeySource.Anthropic, copy.OpenClawApiKeySource);
+    }
+
+    [Fact]
+    public void DuplicateRequest_AppliesOpenClawApiKeySourceWhenSwitchingToOpenClawApiKey()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "Claude", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+            AgentSessionId = "thread", CallbackToken = "token", Status = "Succeeded"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, AgentKind.OpenClaw, AgentAuthMode.ApiKey, null,
+                OpenClawApiKeySource.Anthropic));
+
+        Assert.Equal(AgentKind.OpenClaw, copy.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
+        Assert.Equal(OpenClawApiKeySource.Anthropic, copy.OpenClawApiKeySource);
+        AgentConfiguration.ValidateForDuplicatedSession(copy.Agent, copy.AuthMode, copy.OpenClawApiKeySource);
+    }
+
+    [Fact]
+    public void DuplicateRequest_AppliesRequestOpenClawApiKeySourceOverride()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "OpenClaw", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.OpenClaw, AuthMode = AgentAuthMode.ApiKey,
+            OpenClawApiKeySource = OpenClawApiKeySource.Anthropic,
+            AgentSessionId = "thread", CallbackToken = "token", Status = "Succeeded"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, AgentKind.OpenClaw, AgentAuthMode.ApiKey, null,
+                OpenClawApiKeySource.OpenAI));
+
+        Assert.Equal(AgentKind.OpenClaw, copy.Agent);
+        Assert.Equal(AgentAuthMode.ApiKey, copy.AuthMode);
+        Assert.Equal(OpenClawApiKeySource.OpenAI, copy.OpenClawApiKeySource);
+        AgentConfiguration.ValidateForDuplicatedSession(copy.Agent, copy.AuthMode, copy.OpenClawApiKeySource);
+    }
+
+    [Fact]
+    public void DuplicateRequest_ClearsOpenClawApiKeySourceWhenOverrideLeavesNonOpenClawApiKey()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "OpenClaw", Mode = SessionMode.Autonomous,
+            Agent = AgentKind.OpenClaw, AuthMode = AgentAuthMode.ApiKey,
+            OpenClawApiKeySource = OpenClawApiKeySource.Anthropic,
+            AgentSessionId = "thread", CallbackToken = "token", Status = "Succeeded"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, AgentKind.Claude, AgentAuthMode.Subscription));
+
+        Assert.Equal(AgentKind.Claude, copy.Agent);
+        Assert.Equal(AgentAuthMode.Subscription, copy.AuthMode);
+        Assert.Null(copy.OpenClawApiKeySource);
+    }
+
+    [Fact]
     public void DuplicateRequest_AppliesExplicitAgentAuthAndPolicyOverrides()
     {
         var source = new SessionRecord
@@ -101,6 +179,33 @@ public sealed class SessionDuplicationTests
 
         Assert.Empty(copy.Policy.AllowedTools);
         Assert.Empty(copy.AllowedTools);
+    }
+
+    [Fact]
+    public void DuplicateRequest_CopiesUiMode()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "Chat", Mode = SessionMode.Interactive,
+            UiMode = SessionUiMode.Chat, Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+            AgentSessionId = "thread", CallbackToken = "token", Status = "Succeeded"
+        };
+
+        var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
+
+        Assert.Equal(SessionUiMode.Chat, copy.UiMode);
+    }
+
+    [Fact]
+    public void UpdateRequest_HasNoUiModeFieldSoUpdatesIgnoreIt()
+    {
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        var request = System.Text.Json.JsonSerializer.Deserialize<UpdateSessionRequest>(
+            "{\"title\":\"Renamed\",\"uiMode\":\"chat\"}", options);
+
+        Assert.NotNull(request);
+        Assert.Equal("Renamed", request!.Title);
+        Assert.Null(typeof(UpdateSessionRequest).GetProperty("UiMode"));
     }
 
     [Fact]
