@@ -116,9 +116,64 @@ public class LibraryCoreControllersTests
             await controller.Create(Raw("docs", secretJson: "{\"token\":\"s3cr3t\"}"), default));
         var info = Assert.IsType<McpServerInfo>(ok.Value);
         Assert.True(info.Mine);
+        Assert.True(info.HasSecret);
         Assert.NotNull(info.ConfigJson);
         Assert.DoesNotContain("s3cr3t", JsonSerializer.Serialize(info));
         Assert.Equal("{\"token\":\"s3cr3t\"}", (await mcp.ListByOwnerAsync("alice")).Single().SecretJson);
+    }
+
+    [Fact]
+    public async Task McpCreate_WithoutSecret_HasSecretFalse()
+    {
+        var (mcp, shares, access) = Stores();
+        var controller = WithUser(new McpServersController(mcp, access, shares), "alice");
+
+        var ok = Assert.IsType<OkObjectResult>(await controller.Create(Raw("docs"), default));
+        var info = Assert.IsType<McpServerInfo>(ok.Value);
+        Assert.False(info.HasSecret);
+    }
+
+    [Fact]
+    public async Task McpList_NonOwner_OmitsConfig_AndNeverExposesOrgSecret()
+    {
+        var (mcp, shares, access) = Stores(licensed: false);
+        mcp.Add("alice", "own");
+        mcp.Add(
+            McpServerRecord.OrgOwner,
+            "org-api",
+            kind: "api",
+            configJson: "{\"specType\":\"openapi\",\"specUrl\":\"https://org.example.test/openapi.json\"}",
+            secretJson: "{\"token\":\"org-s3cr3t\"}");
+
+        var controller = WithUser(new McpServersController(mcp, access, shares), "alice");
+        var list = await controller.List(default);
+
+        var org = list.Single(i => i.Name == "org-api");
+        Assert.False(org.Mine);
+        Assert.Null(org.ConfigJson);
+        Assert.True(org.HasSecret);
+        var json = JsonSerializer.Serialize(list);
+        Assert.DoesNotContain("org-s3cr3t", json);
+        Assert.DoesNotContain("SecretJson", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AdminCreate_WithSecret_HasSecretTrue_ButResponseOmitsValue()
+    {
+        var (mcp, shares, _) = Stores();
+        var controller = WithUser(
+            new AdminMcpServersController(mcp, shares, Admins()), "admin");
+
+        var ok = Assert.IsType<OkObjectResult>(
+            await controller.Create(
+                Raw("org-api", secretJson: "{\"token\":\"admin-secret\"}"), default));
+        var info = Assert.IsType<McpServerInfo>(ok.Value);
+        Assert.True(info.HasSecret);
+        Assert.True(info.Mine);
+        Assert.DoesNotContain("admin-secret", JsonSerializer.Serialize(info));
+        Assert.Equal(
+            "{\"token\":\"admin-secret\"}",
+            (await mcp.ListByOwnerAsync(McpServerRecord.OrgOwner)).Single().SecretJson);
     }
 
     [Fact]

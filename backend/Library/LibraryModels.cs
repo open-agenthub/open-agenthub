@@ -35,7 +35,9 @@ public sealed record SaveMcpServerRequest(
     string? SecretJson = null);
 
 /// <summary>List/detail view of a catalog MCP server. ConfigJson is only
-/// returned to its owner — shared entries may contain tokens.</summary>
+/// returned to its owner — shared entries may contain tokens.
+/// Secret values are never included; <see cref="HasSecret"/> lets the UI show
+/// that a secret is configured.</summary>
 public sealed record McpServerInfo(
     string Id,
     string Name,
@@ -44,5 +46,6 @@ public sealed record McpServerInfo(
     string Kind,
     bool Mine,
     string? ConfigJson,
+    bool HasSecret,
     DateTime CreatedAt,
     DateTime UpdatedAt);
