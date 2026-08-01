@@ -26,6 +26,7 @@ const personalTabs = computed(() => [
 
 const adminTabs = [
   { key: 'users', label: 'Users & seats' },
+  { key: 'org-mcp', label: 'Org MCP catalog' },
   { key: 'limits', label: 'Usage limits & groups' },
   { key: 'billing', label: 'Billing & invoices' },
   { key: 'license', label: 'License' }
@@ -67,10 +68,11 @@ const active = ref(props.initialTab)
       </div>
       <AccountDialog v-else-if="active === 'account'" embedded />
       <CredentialsDialog v-else-if="active === 'credentials'" embedded @accounts="active = 'account'" />
-      <McpServersPane v-else-if="active === 'mcp'" :is-admin="isAdmin" />
+      <McpServersPane v-else-if="active === 'mcp'" :is-admin="isAdmin" mode="personal" />
       <SettingsDialog v-else-if="active === 'notifications'" embedded section="notifications" />
       <SettingsDialog v-else-if="active === 'tokens'" embedded section="tokens" />
       <AdminView v-else-if="active === 'users'" embedded section="seats" />
+      <McpServersPane v-else-if="active === 'org-mcp'" :is-admin="true" mode="org" />
       <AdminLimitsView v-else-if="active === 'limits'" embedded />
       <AdminView v-else-if="active === 'billing'" embedded section="billing" />
       <AdminView v-else-if="active === 'license'" embedded section="license" />

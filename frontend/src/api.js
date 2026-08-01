@@ -121,12 +121,21 @@ export const api = {
   gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),
   gitDisconnect: (providerId) => req('DELETE', `/git/connections/${providerId}`),
   gitProjects: (provider, q) => req('GET', `/git/projects?provider=${encodeURIComponent(provider)}&q=${encodeURIComponent(q || '')}`),
-  // Personal MCP server catalog (admin org catalog methods land in a later task).
+  // Personal MCP server catalog.
   mcpServers: () => req('GET', '/mcp-servers'),
   createMcpServer: (data) => req('POST', '/mcp-servers', data),
   createMcpServerFromApi: (data) => req('POST', '/mcp-servers/from-api', data),
   updateMcpServer: (id, data) => req('PUT', `/mcp-servers/${encodeURIComponent(id)}`, data),
   deleteMcpServer: (id) => req('DELETE', `/mcp-servers/${encodeURIComponent(id)}`),
+  // Admin org MCP catalog (owner=__org__). Not license-gated.
+  adminMcpServers: () => req('GET', '/admin/mcp-servers'),
+  createAdminMcpServer: (data) => req('POST', '/admin/mcp-servers', data),
+  updateAdminMcpServer: (id, data) => req('PUT', `/admin/mcp-servers/${encodeURIComponent(id)}`, data),
+  deleteAdminMcpServer: (id) => req('DELETE', `/admin/mcp-servers/${encodeURIComponent(id)}`),
+  // Enterprise library sharing for MCP catalog entries. 402 without a license.
+  // kind: 'mcp-servers'
+  libraryShares: (kind, id) => req('GET', `/ee/library/${kind}/${encodeURIComponent(id)}/shares`),
+  setLibraryShares: (kind, id, data) => req('PUT', `/ee/library/${kind}/${encodeURIComponent(id)}/shares`, data),
   async getTranscript(id) {
     const res = await fetch(`/api/sessions/${id}/transcript`, { headers: await authHeaders() })
     if (res.status === 401) handle401()

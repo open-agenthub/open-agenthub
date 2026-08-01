@@ -1,10 +1,16 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted } from 'vue'
 import { api } from '../api.js'
+import LibraryShareControls from './LibraryShareControls.vue'
 
-// Personal MCP server library: own entries are editable; entries shared by
-// other users appear read-only with the owner's name.
-defineProps({ isAdmin: { type: Boolean, default: false } })
+// Personal MCP library (mode=personal) or admin org catalog (mode=org).
+// Own / org entries are editable; personal entries shared by others are read-only.
+const props = defineProps({
+  isAdmin: { type: Boolean, default: false },
+  mode: { type: String, default: 'personal' } // 'personal' | 'org'
+})
+
+const isOrg = computed(() => props.mode === 'org')
 
 const items = ref([])
 const loading = ref(true)
@@ -13,8 +19,9 @@ const error = ref('')
 async function load() {
   loading.value = true
   error.value = ''
-  try { items.value = await api.mcpServers() }
-  catch (e) { error.value = String(e.message || e) }
+  try {
+    items.value = isOrg.value ? await api.adminMcpServers() : await api.mcpServers()
+  } catch (e) { error.value = String(e.message || e) }
   finally { loading.value = false }
 }
 onMounted(load)
@@ -87,6 +94,12 @@ function validateRawConfig(configJson) {
   return ''
 }
 
+function buildApiSecretJson(secret) {
+  const trimmed = secret.trim()
+  if (!trimmed) return null
+  return trimmed.startsWith('{') ? trimmed : JSON.stringify({ token: trimmed })
+}
+
 async function save() {
   formError.value = ''
   const name = form.value.name.trim()
@@ -100,31 +113,46 @@ async function save() {
         formError.value = 'Spec URL is required for an API entry.'
         return
       }
-      const payload = {
-        name,
-        description: form.value.description.trim(),
-        specUrl,
-        specType: form.value.specType || 'auto',
-        save: true
-      }
+      const description = form.value.description.trim()
+      const specType = form.value.specType || 'auto'
       const baseUrl = form.value.baseUrl.trim()
-      if (baseUrl) payload.baseUrl = baseUrl
       const secret = form.value.secret.trim()
-      if (secret) payload.secret = secret
 
-      if (editingId.value) {
-        // Update path: rebuild api config JSON; omit secret unless user typed one.
-        const config = { specType: payload.specType, specUrl }
+      if (isOrg.value) {
+        const config = { specType, specUrl }
         if (baseUrl) config.baseUrl = baseUrl
-        const update = {
+        const payload = {
           name,
-          description: payload.description,
+          description,
           kind: 'api',
           configJson: JSON.stringify(config)
         }
-        if (secret) update.secretJson = secret.startsWith('{') ? secret : JSON.stringify({ token: secret })
+        const secretJson = buildApiSecretJson(secret)
+        if (secretJson) payload.secretJson = secretJson
+        else if (editingId.value) { /* omit — leave existing secret */ }
+        if (editingId.value) await api.updateAdminMcpServer(editingId.value, payload)
+        else await api.createAdminMcpServer(payload)
+      } else if (editingId.value) {
+        const config = { specType, specUrl }
+        if (baseUrl) config.baseUrl = baseUrl
+        const update = {
+          name,
+          description,
+          kind: 'api',
+          configJson: JSON.stringify(config)
+        }
+        if (secret) update.secretJson = buildApiSecretJson(secret)
         await api.updateMcpServer(editingId.value, update)
       } else {
+        const payload = {
+          name,
+          description,
+          specUrl,
+          specType,
+          save: true
+        }
+        if (baseUrl) payload.baseUrl = baseUrl
+        if (secret) payload.secret = secret
         await api.createMcpServerFromApi(payload)
       }
     } else {
@@ -136,8 +164,14 @@ async function save() {
         kind: 'raw',
         configJson: form.value.configJson
       }
-      if (editingId.value) await api.updateMcpServer(editingId.value, payload)
-      else await api.createMcpServer(payload)
+      if (isOrg.value) {
+        if (editingId.value) await api.updateAdminMcpServer(editingId.value, payload)
+        else await api.createAdminMcpServer(payload)
+      } else if (editingId.value) {
+        await api.updateMcpServer(editingId.value, payload)
+      } else {
+        await api.createMcpServer(payload)
+      }
     }
     formOpen.value = false
     await load()
@@ -148,20 +182,33 @@ async function save() {
 async function remove(item) {
   if (!confirm(`Delete MCP server "${item.name}"? Sessions keep any copy they already use.`)) return
   error.value = ''
-  try { await api.deleteMcpServer(item.id); await load() }
-  catch (e) { error.value = String(e.message || e) }
+  try {
+    if (isOrg.value) await api.deleteAdminMcpServer(item.id)
+    else await api.deleteMcpServer(item.id)
+    await load()
+  } catch (e) { error.value = String(e.message || e) }
 }
+
+// Sharing expander: personal owners on own items; org catalog always (admin tab).
+const shareOpenId = ref(null)
+function canShare(item) {
+  return isOrg.value || !!item.mine
+}
+function toggleShare(item) {
+  shareOpenId.value = shareOpenId.value === item.id ? null : item.id
+}
+
+const title = computed(() => isOrg.value ? 'Org MCP catalog' : 'MCP servers')
+const note = computed(() => isOrg.value
+  ? 'Organization-wide MCP server entries. Without an enterprise license every signed-in user can use them; with a license, share each entry with everyone, specific users, or IdP groups.'
+  : 'Reusable MCP server entries you can attach to any session. Add an OpenAPI/GraphQL API URL (wrapped by AgentHub) or a raw MCP config object. Entries shared with you by other users are read-only.')
 </script>
 
 <template>
   <div class="embed">
     <div class="embed-inner">
-      <h3 class="pane-head">MCP servers</h3>
-      <p class="note">
-        Reusable MCP server entries you can attach to any session. Add an OpenAPI/GraphQL
-        API URL (wrapped by AgentHub) or a raw MCP config object. Entries shared with you
-        by other users are read-only.
-      </p>
+      <h3 class="pane-head">{{ title }}</h3>
+      <p class="note">{{ note }}</p>
 
       <div v-if="!formOpen" class="row start">
         <button class="primary" data-mcp-add @click="openCreate">Add MCP server</button>
@@ -222,14 +269,18 @@ async function remove(item) {
                 <span class="item-name">{{ item.name }}</span>
                 <span class="pill kind" data-mcp-kind>{{ item.kind || 'raw' }}</span>
                 <span v-if="item.hasSecret" class="pill secret" data-mcp-has-secret>has secret</span>
-                <span v-if="!item.mine" class="pill shared" data-mcp-shared>shared · {{ item.owner }}</span>
+                <span v-if="!isOrg && !item.mine" class="pill shared" data-mcp-shared>shared · {{ item.owner }}</span>
               </div>
               <div v-if="item.description" class="item-desc">{{ item.description }}</div>
             </div>
-            <div v-if="item.mine" class="item-actions">
+            <div v-if="isOrg || item.mine" class="item-actions">
+              <button v-if="canShare(item)" data-mcp-share-toggle @click="toggleShare(item)">Sharing {{ shareOpenId === item.id ? '▾' : '▸' }}</button>
               <button data-mcp-edit @click="openEdit(item)">Edit</button>
               <button class="danger" data-mcp-delete @click="remove(item)">Delete</button>
             </div>
+          </div>
+          <div v-if="canShare(item) && shareOpenId === item.id" data-mcp-share-controls>
+            <LibraryShareControls kind="mcp-servers" :item-id="item.id" />
           </div>
         </div>
       </div>
