@@ -55,6 +55,34 @@ test('never clobbers a skill directory the user created in the session', () => {
   assert.equal(read(dir, 'mine'), '# user made this');
 });
 
+test('materializes extra files and rebuilds managed dirs so removed files disappear', () => {
+  const dir = tempSkillsDir();
+  materializeSkills({
+    skills: [{
+      name: 'deploy',
+      content: '# deploy',
+      files: [
+        { path: 'scripts/check.sh', content: '#!/bin/sh\ntrue' },
+        { path: 'notes.md', content: '# notes' },
+        { path: '../escape.sh', content: 'nope' },
+        { path: 'bad\0path', content: 'nope' }
+      ]
+    }]
+  }, dir);
+
+  assert.equal(fs.readFileSync(path.join(dir, 'deploy', 'scripts', 'check.sh'), 'utf8'), '#!/bin/sh\ntrue');
+  assert.equal(fs.readFileSync(path.join(dir, 'deploy', 'notes.md'), 'utf8'), '# notes');
+  assert.equal(fs.existsSync(path.join(dir, 'escape.sh')), false);
+
+  // The library dropped notes.md — the managed dir is rebuilt without it.
+  materializeSkills({
+    skills: [{ name: 'deploy', content: '# deploy v2', files: [{ path: 'scripts/check.sh', content: 'false' }] }]
+  }, dir);
+  assert.equal(read(dir, 'deploy'), '# deploy v2');
+  assert.equal(fs.existsSync(path.join(dir, 'deploy', 'notes.md')), false);
+  assert.equal(fs.readFileSync(path.join(dir, 'deploy', 'scripts', 'check.sh'), 'utf8'), 'false');
+});
+
 test('skips invalid names and empty content', () => {
   const dir = tempSkillsDir();
   const result = materializeSkills({

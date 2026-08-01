@@ -142,10 +142,12 @@ internal sealed class InMemorySkillStore : ISkillStore
 {
     private readonly Dictionary<string, SkillRecord> _items = new();
     private readonly Dictionary<(string Id, int Version), string> _contents = new();
+    private readonly Dictionary<(string Id, int Version), IReadOnlyList<SkillFile>> _files = new();
     private readonly Dictionary<string, List<SkillVersionRecord>> _versions = new();
     private int _next;
 
-    public SkillRecord Add(string owner, string name, string content = "# skill", string? projectId = null)
+    public SkillRecord Add(string owner, string name, string content = "# skill", string? projectId = null,
+        IReadOnlyList<SkillFile>? files = null)
     {
         var record = new SkillRecord
         {
@@ -153,6 +155,7 @@ internal sealed class InMemorySkillStore : ISkillStore
         };
         _items[record.Id] = record;
         _contents[(record.Id, 1)] = content;
+        _files[(record.Id, 1)] = files ?? [];
         _versions[record.Id] =
             [new SkillVersionRecord { SkillId = record.Id, Version = 1, Name = name, CreatedBy = owner }];
         return record;
@@ -175,7 +178,8 @@ internal sealed class InMemorySkillStore : ISkillStore
         };
         _items[record.Id] = record;
         _contents[(record.Id, 1)] = LibraryValidation.ValidateSkillContent(request.Content);
-        _versions[record.Id] = [NewVersion(record, request, 1, owner)];
+        _files[(record.Id, 1)] = LibraryValidation.ValidateSkillFiles(request.Files) ?? [];
+        _versions[record.Id] = [NewVersion(record, request, 1, request.SavedBy ?? owner)];
         return Task.FromResult(record);
     }
 
@@ -185,8 +189,11 @@ internal sealed class InMemorySkillStore : ISkillStore
             throw new KeyNotFoundException();
         record.Name = LibraryValidation.ValidateSkillName(request.Name);
         record.Description = LibraryValidation.ValidateDescription(request.Description);
+        var files = LibraryValidation.ValidateSkillFiles(request.Files)
+            ?? _files.GetValueOrDefault((id, record.Version), []);
         record.Version++;
         _contents[(id, record.Version)] = LibraryValidation.ValidateSkillContent(request.Content);
+        _files[(id, record.Version)] = files;
         _versions[id].Add(NewVersion(record, request, record.Version, request.SavedBy ?? owner));
         return Task.FromResult(record);
     }
@@ -198,6 +205,7 @@ internal sealed class InMemorySkillStore : ISkillStore
         _items.Remove(id);
         _versions.Remove(id);
         foreach (var key in _contents.Keys.Where(k => k.Id == id).ToList()) _contents.Remove(key);
+        foreach (var key in _files.Keys.Where(k => k.Id == id).ToList()) _files.Remove(key);
         return Task.CompletedTask;
     }
 
@@ -211,6 +219,9 @@ internal sealed class InMemorySkillStore : ISkillStore
 
     public Task<string?> GetContentAsync(SkillRecord record, CancellationToken ct = default) =>
         Task.FromResult(_contents.GetValueOrDefault((record.Id, record.Version)));
+
+    public Task<IReadOnlyList<SkillFile>> GetFilesAsync(string id, int version, CancellationToken ct = default) =>
+        Task.FromResult(_files.GetValueOrDefault((id, version), []));
 
     public Task<IReadOnlyList<SkillVersionRecord>> ListVersionsAsync(string id, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<SkillVersionRecord>>(
@@ -228,7 +239,8 @@ internal sealed class InMemorySkillStore : ISkillStore
         var target = _versions[id].First(v => v.Version == version);
         return await UpdateAsync(owner, id, new SaveSkillRequest(
             target.Name, target.Description, content,
-            Comment: $"Restored version {version}.", SavedBy: savedBy ?? owner), ct);
+            Comment: $"Restored version {version}.", SavedBy: savedBy ?? owner,
+            Files: _files.GetValueOrDefault((id, version), [])), ct);
     }
 
     public Task<IReadOnlyList<(SkillRecord Record, double Rank)>> SearchAsync(

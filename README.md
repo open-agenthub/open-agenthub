@@ -63,12 +63,13 @@ shift.
 - **Bring your tools via MCP** — attach any MCP server (issue tracker, database,
   observability) per session and turn the agent into a teammate.
 - **Versioned skill library with a built-in MCP server** — save reusable skills
-  (SKILL.md) personally or per project; every save keeps the previous versions
-  restorable. Sessions materialize the matching skills automatically, and the agent
-  itself can search (full-text, optionally semantic via a configurable embeddings
-  endpoint), read, upload, and roll back skills through the injected
-  `skill-library` MCP server — so agents grow a shared, versioned knowledge base
-  as they work.
+  (SKILL.md plus helper scripts and other files) personally or per project; every
+  save keeps the previous versions restorable. Sessions materialize the matching
+  skills automatically, and the agent itself can search (full-text, optionally
+  semantic via a configurable embeddings endpoint), read, upload, and roll back
+  skills through the injected `skill-library` MCP server. Skills the agent creates
+  locally under `~/.claude/skills` are picked up and imported into the library
+  automatically — so agents grow a shared, versioned knowledge base as they work.
 - **Visible browser on demand** — the built-in `agenthub_browser` MCP starts one isolated
   Chromium only when the agent needs it. The same desktop appears beside the chat through
   noVNC, while idle sessions consume no browser CPU or memory.

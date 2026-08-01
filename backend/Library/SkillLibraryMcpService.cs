@@ -96,11 +96,24 @@ public sealed class SkillLibraryMcpService
             {
                 ["name"] = "agenthub-skill-library",
                 ["title"] = "AgentHub Skill Library",
-                ["version"] = "1.0.0"
+                ["version"] = "1.1.0"
             },
             ["instructions"] =
-                "Search, read, upload and version reusable agent skills (SKILL.md documents) " +
-                "in this AgentHub instance. Uploads are scoped to the session's project when it has one."
+                "This AgentHub instance keeps a persistent, versioned library of agent skills " +
+                "(SKILL.md documents, optionally with helper scripts and other files). Use it " +
+                "proactively, without waiting to be asked:\n" +
+                "- BEFORE starting a non-trivial task, call search_skills — a proven runbook, " +
+                "checklist or script for it may already exist.\n" +
+                "- AFTER you worked out a reusable procedure, fixed something in a non-obvious " +
+                "way, or wrote a helper script worth keeping, save it with upload_skill (or " +
+                "update the existing skill) so future sessions benefit. Offer this to the user " +
+                "when unsure; for clearly reusable knowledge just do it and mention it.\n" +
+                "- Skills you create as directories under ~/.claude/skills are also picked up " +
+                "automatically when the session ends, but upload_skill makes them available " +
+                "immediately and lets you add a change comment.\n" +
+                "Every save creates a new version; nothing is lost — old versions can be listed " +
+                "and restored. Uploads are scoped to this session's project when it has one, " +
+                "otherwise to the owner's personal library."
         };
     }
 
@@ -110,39 +123,62 @@ public sealed class SkillLibraryMcpService
     {
         ["tools"] = new JsonArray(
             Tool("search_skills",
-                "Search the skill library (project, personal and shared skills) by meaning and keywords. " +
-                "Returns the best matches with id, name, description and version.",
+                "Search the persistent skill library (project, personal and shared skills) by meaning " +
+                "and keywords. Use this proactively BEFORE starting a non-trivial task — a proven " +
+                "runbook, checklist or helper script may already exist. Returns the best matches with " +
+                "id, name, description and version.",
                 new JsonObject
                 {
                     ["query"] = Prop("string", "What you are looking for."),
                     ["limit"] = Prop("integer", "Maximum number of results (default 10, max 50).")
                 }, required: ["query"]),
             Tool("get_skill",
-                "Read a skill's SKILL.md content by name (or id). Optionally a specific version.",
+                "Read a skill: its SKILL.md content and the list of extra files (scripts, templates). " +
+                "Pass 'file' to read one of those files, 'version' for an older revision.",
                 new JsonObject
                 {
                     ["name"] = Prop("string", "Skill name (kebab-case) or skill id."),
-                    ["version"] = Prop("integer", "Specific version to read; omit for the latest.")
+                    ["version"] = Prop("integer", "Specific version to read; omit for the latest."),
+                    ["file"] = Prop("string", "Path of an extra file to read (e.g. scripts/check.sh); omit for SKILL.md.")
                 }, required: ["name"]),
             Tool("upload_skill",
-                "Create or update a skill. Saves a new immutable version; the previous content stays " +
-                "in the history. The skill lands in this session's project, or in the personal library " +
-                "when the session has no project.",
+                "Save a skill to the persistent library — create it or update the existing one. Use this " +
+                "proactively whenever you have worked out a reusable procedure, a non-obvious fix, a " +
+                "checklist, or helper scripts worth keeping: future sessions (yours and this project's) " +
+                "will find them via search_skills. Saving is safe — every upload creates a new immutable " +
+                "version and older versions stay restorable. The skill lands in this session's project, " +
+                "or in the personal library when the session has no project.",
                 new JsonObject
                 {
-                    ["name"] = Prop("string", "Skill name: lowercase letters, digits and hyphens."),
-                    ["description"] = Prop("string", "One-line description of when to use the skill."),
-                    ["content"] = Prop("string", "The full SKILL.md markdown content."),
-                    ["comment"] = Prop("string", "Optional change note (what changed and why).")
+                    ["name"] = Prop("string", "Skill name: lowercase letters, digits and hyphens (e.g. deploy-runbook)."),
+                    ["description"] = Prop("string", "One line on when the agent should use this skill — important for discovery."),
+                    ["content"] = Prop("string", "The full SKILL.md markdown content (frontmatter with name/description recommended)."),
+                    ["comment"] = Prop("string", "Optional change note (what changed and why) for the version history."),
+                    ["files"] = new JsonObject
+                    {
+                        ["type"] = "array",
+                        ["description"] = "Extra files stored next to SKILL.md — helper scripts, templates, reference docs. " +
+                            "Replaces the previous file set when given; omit to keep the existing files.",
+                        ["items"] = new JsonObject
+                        {
+                            ["type"] = "object",
+                            ["properties"] = new JsonObject
+                            {
+                                ["path"] = Prop("string", "Relative path, e.g. scripts/check.sh (max depth 3)."),
+                                ["content"] = Prop("string", "Text content of the file.")
+                            },
+                            ["required"] = new JsonArray("path", "content")
+                        }
+                    }
                 }, required: ["name", "content"]),
             Tool("list_skill_versions",
-                "List the version history of a skill (newest first).",
+                "List the version history of a skill (newest first), with author and change comments.",
                 new JsonObject
                 {
                     ["name"] = Prop("string", "Skill name (kebab-case) or skill id.")
                 }, required: ["name"]),
             Tool("restore_skill_version",
-                "Restore an older version of one of your skills as the new latest version.",
+                "Restore an older version of one of your skills (content and files) as the new latest version.",
                 new JsonObject
                 {
                     ["name"] = Prop("string", "Skill name (kebab-case) or skill id."),
@@ -200,12 +236,30 @@ public sealed class SkillLibraryMcpService
         JsonElement args, SessionRecord session, CancellationToken ct)
     {
         var record = await ResolveAsync(RequireString(args, "name"), session, ct);
-        var version = OptionalInt(args, "version");
-        var content = version is null || version == record.Version
+        var version = OptionalInt(args, "version") ?? record.Version;
+        var files = await _skills.GetFilesAsync(record.Id, version, ct);
+
+        if (OptionalString(args, "file") is { Length: > 0 } filePath)
+        {
+            var file = files.FirstOrDefault(f => f.Path == filePath)
+                ?? throw new ArgumentException(
+                    $"Skill '{record.Name}' (v{version}) has no file '{filePath}'. " +
+                    $"Available: {(files.Count == 0 ? "none" : string.Join(", ", files.Select(f => f.Path)))}");
+            return ToolResult(new JsonObject
+            {
+                ["id"] = record.Id,
+                ["name"] = record.Name,
+                ["version"] = version,
+                ["file"] = file.Path,
+                ["content"] = file.Content
+            });
+        }
+
+        var content = version == record.Version
             ? await _skills.GetContentAsync(record, ct)
-            : await _skills.GetVersionContentAsync(record.Id, version.Value, ct);
+            : await _skills.GetVersionContentAsync(record.Id, version, ct);
         if (content is null)
-            throw new ArgumentException(version is null
+            throw new ArgumentException(version == record.Version
                 ? $"Skill '{record.Name}' has no content."
                 : $"Skill '{record.Name}' has no version {version}.");
         return ToolResult(new JsonObject
@@ -213,8 +267,9 @@ public sealed class SkillLibraryMcpService
             ["id"] = record.Id,
             ["name"] = record.Name,
             ["description"] = record.Description,
-            ["version"] = version ?? record.Version,
-            ["content"] = content
+            ["version"] = version,
+            ["content"] = content,
+            ["files"] = new JsonArray(files.Select(f => (JsonNode)f.Path).ToArray())
         });
     }
 
@@ -228,7 +283,8 @@ public sealed class SkillLibraryMcpService
             RequireString(args, "content"),
             ProjectId: session.ProjectId,
             Comment: OptionalString(args, "comment"),
-            SavedBy: $"session:{session.Id}");
+            SavedBy: $"session:{session.Id}",
+            Files: ParseFiles(args));
 
         // Upsert within the session's scope; a same-named skill in another
         // scope (other project, shared by someone else) is not touched.
@@ -240,13 +296,15 @@ public sealed class SkillLibraryMcpService
                 request with { Description = OptionalString(args, "description") ?? existing.Description }, ct);
         await _search.IndexAsync(record, request.Content, ct);
 
+        var storedFiles = await _skills.GetFilesAsync(record.Id, record.Version, ct);
         return ToolResult(new JsonObject
         {
             ["id"] = record.Id,
             ["name"] = record.Name,
             ["version"] = record.Version,
             ["scope"] = record.ProjectId is null ? "personal" : "project",
-            ["created"] = existing is null
+            ["created"] = existing is null,
+            ["files"] = new JsonArray(storedFiles.Select(f => (JsonNode)f.Path).ToArray())
         });
     }
 
@@ -371,6 +429,26 @@ public sealed class SkillLibraryMcpService
             return s;
         }
         throw new ArgumentException($"Argument '{name}' is required.");
+    }
+
+    /// <summary>Parses the optional files argument; null = keep existing files.</summary>
+    private static IReadOnlyList<SkillFile>? ParseFiles(JsonElement args)
+    {
+        if (args.ValueKind != JsonValueKind.Object
+            || !args.TryGetProperty("files", out var value))
+        {
+            return null;
+        }
+        if (value.ValueKind != JsonValueKind.Array)
+            throw new ArgumentException("'files' must be an array of {path, content} objects.");
+        var files = new List<SkillFile>();
+        foreach (var item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+                throw new ArgumentException("'files' must be an array of {path, content} objects.");
+            files.Add(new SkillFile(RequireString(item, "path"), RequireString(item, "content")));
+        }
+        return files;
     }
 
     private static string? OptionalString(JsonElement args, string name) =>

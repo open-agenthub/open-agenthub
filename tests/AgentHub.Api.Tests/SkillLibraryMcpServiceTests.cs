@@ -159,6 +159,58 @@ public class SkillLibraryMcpServiceTests
     }
 
     [Fact]
+    public async Task UploadSkill_WithScripts_StoresAndListsAndReadsThem()
+    {
+        var (service, skills, _) = Build();
+        var session = Session();
+
+        var uploaded = ToolPayload(await CallAsync(service, session,
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"deploy","content":"# skill","files":[{"path":"scripts/check.sh","content":"#!/bin/sh\ntrue"},{"path":"reference.md","content":"# docs"}]}}}"""));
+        Assert.Equal(["scripts/check.sh", "reference.md"],
+            uploaded["files"]!.AsArray().Select(f => f!.GetValue<string>()));
+
+        var detail = ToolPayload(await CallAsync(service, session,
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy"}}}"""));
+        Assert.Equal(2, detail["files"]!.AsArray().Count);
+
+        var file = ToolPayload(await CallAsync(service, session,
+            """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy","file":"scripts/check.sh"}}}"""));
+        Assert.Equal("#!/bin/sh\ntrue", file["content"]!.GetValue<string>());
+
+        // Update without files keeps them; missing file paths list the alternatives.
+        ToolPayload(await CallAsync(service, session,
+            """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"deploy","content":"# v2"}}}"""));
+        var record = (await skills.ListByOwnerAsync("alice")).Single();
+        Assert.Equal(2, (await skills.GetFilesAsync(record.Id, record.Version)).Count);
+
+        var missing = await CallAsync(service, session,
+            """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy","file":"nope.sh"}}}""");
+        Assert.True(missing!["result"]!["isError"]!.GetValue<bool>());
+        Assert.Contains("scripts/check.sh", missing["result"]!["content"]![0]!["text"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task UploadSkill_RejectsUnsafeFilePaths()
+    {
+        var (service, _, _) = Build();
+        var response = await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"bad","content":"# x","files":[{"path":"../escape.sh","content":"x"}]}}}""");
+        Assert.True(response!["result"]!["isError"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public async Task Initialize_InstructionsNudgeProactiveUse()
+    {
+        var (service, _, _) = Build();
+        var response = await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18"}}""");
+        var instructions = response!["result"]!["instructions"]!.GetValue<string>();
+        Assert.Contains("proactively", instructions);
+        Assert.Contains("upload_skill", instructions);
+        Assert.Contains("search_skills", instructions);
+    }
+
+    [Fact]
     public async Task ToolErrors_AreReportedAsToolResults()
     {
         var (service, _, _) = Build();

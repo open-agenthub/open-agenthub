@@ -15,6 +15,9 @@ public interface ISkillStore
     /// <summary>Resolves the SKILL.md content from S3 or the fallback column.</summary>
     Task<string?> GetContentAsync(SkillRecord record, CancellationToken ct = default);
 
+    /// <summary>Extra files (scripts, templates) of one skill version, content resolved.</summary>
+    Task<IReadOnlyList<SkillFile>> GetFilesAsync(string id, int version, CancellationToken ct = default);
+
     /// <summary>Version history, newest first. Access is the caller's concern.</summary>
     Task<IReadOnlyList<SkillVersionRecord>> ListVersionsAsync(string id, CancellationToken ct = default);
     /// <summary>SKILL.md content of one specific version; null when the version is unknown.</summary>
@@ -95,6 +98,15 @@ public sealed class SkillStore : ISkillStore
                 created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
                 PRIMARY KEY (skill_id, version)
             );
+
+            CREATE TABLE IF NOT EXISTS skill_files (
+                skill_id      TEXT NOT NULL,
+                version       INT NOT NULL,
+                path          TEXT NOT NULL,
+                content       TEXT,
+                content_in_s3 BOOLEAN NOT NULL DEFAULT FALSE,
+                PRIMARY KEY (skill_id, version, path)
+            );
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -108,15 +120,20 @@ public sealed class SkillStore : ISkillStore
         var description = LibraryValidation.ValidateDescription(request.Description);
         var content = LibraryValidation.ValidateSkillContent(request.Content);
         var comment = LibraryValidation.ValidateComment(request.Comment);
+        var files = LibraryValidation.ValidateSkillFiles(request.Files) ?? [];
         var inS3 = await PutContentAsync(id, 1, content, ct);
+        var filesInS3 = await PutFilesAsync(id, 1, files, ct);
 
-        // One command = one implicit transaction: a failure in either INSERT rolls both back.
+        // One command = one implicit transaction: a failure in any INSERT rolls all back.
         const string sql = """
             INSERT INTO skills (id, owner, name, description, content, content_in_s3, project_id, version, search_text)
             VALUES (@id, @owner, @name, @description, @content, @inS3, @project, 1, @searchText)
             RETURNING created_at, updated_at;
             INSERT INTO skill_versions (skill_id, version, name, description, content, content_in_s3, created_by, comment)
-            VALUES (@id, 1, @name, @description, @content, @inS3, @savedBy, @comment)
+            VALUES (@id, 1, @name, @description, @content, @inS3, @savedBy, @comment);
+            INSERT INTO skill_files (skill_id, version, path, content, content_in_s3)
+            SELECT @id, 1, u.path, u.content, u.in_s3
+            FROM unnest(@filePaths, @fileContents, @fileInS3) AS u(path, content, in_s3)
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("id", id);
@@ -129,6 +146,7 @@ public sealed class SkillStore : ISkillStore
         cmd.Parameters.AddWithValue("searchText", content[..Math.Min(content.Length, SearchTextChars)]);
         cmd.Parameters.AddWithValue("savedBy", request.SavedBy ?? owner);
         cmd.Parameters.AddWithValue("comment", comment);
+        AddFileParameters(cmd, files, filesInS3);
         try
         {
             await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -142,7 +160,9 @@ public sealed class SkillStore : ISkillStore
         }
         catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
         {
-            if (inS3) await DeleteContentAsync(id, [1], CancellationToken.None);
+            if (inS3) await DeleteContentAsync(id, [1], [], CancellationToken.None);
+            if (filesInS3.Any(f => f))
+                await DeleteFileObjectsAsync(id, 1, files.Select(f => f.Path), CancellationToken.None);
             throw new ArgumentException("A skill with this name already exists in this scope.");
         }
     }
@@ -154,8 +174,9 @@ public sealed class SkillStore : ISkillStore
         var description = LibraryValidation.ValidateDescription(request.Description);
         var content = LibraryValidation.ValidateSkillContent(request.Content);
         var comment = LibraryValidation.ValidateComment(request.Comment);
+        var files = LibraryValidation.ValidateSkillFiles(request.Files);
         return await SaveNewVersionAsync(owner, id, name, description, content,
-            request.SavedBy ?? owner, comment, ct);
+            request.SavedBy ?? owner, comment, files, ct);
     }
 
     public async Task<SkillRecord> RestoreVersionAsync(
@@ -166,23 +187,27 @@ public sealed class SkillStore : ISkillStore
             ?? throw new KeyNotFoundException();
         var content = await GetVersionContentAsync(id, version, ct)
             ?? throw new KeyNotFoundException();
+        var files = await GetFilesAsync(id, version, ct);
         return await SaveNewVersionAsync(owner, id, target.Name, target.Description, content,
-            savedBy ?? owner, $"Restored version {version}.", ct);
+            savedBy ?? owner, $"Restored version {version}.", files, ct);
     }
 
     /// <summary>Bumps the head to a fresh version and archives it in skill_versions.
-    /// The head's version counter is the single source of the next number.</summary>
+    /// The head's version counter is the single source of the next number.
+    /// files null = the new version keeps the current head's files.</summary>
     private async Task<SkillRecord> SaveNewVersionAsync(
         string owner, string id, string name, string description, string content,
-        string savedBy, string comment, CancellationToken ct)
+        string savedBy, string comment, IReadOnlyList<SkillFile>? files, CancellationToken ct)
     {
         var current = (await GetManyAsync([id], ct)).FirstOrDefault(r => r.Owner == owner)
             ?? throw new KeyNotFoundException();
         var next = current.Version + 1;
+        files ??= await GetFilesAsync(id, current.Version, ct);
         var inS3 = await PutContentAsync(id, next, content, ct);
+        var filesInS3 = await PutFilesAsync(id, next, files, ct);
 
-        // One command = one implicit transaction; the version row is only written
-        // when the optimistic head update actually matched (owner + expected version).
+        // One command = one implicit transaction; the version + file rows are only
+        // written when the optimistic head update actually matched (owner + version).
         const string sql = """
             UPDATE skills
             SET name = @name, description = @description, content = @content,
@@ -191,6 +216,10 @@ public sealed class SkillStore : ISkillStore
             RETURNING project_id, created_at, updated_at;
             INSERT INTO skill_versions (skill_id, version, name, description, content, content_in_s3, created_by, comment)
             SELECT @id, @version, @name, @description, @content, @inS3, @savedBy, @comment
+            WHERE EXISTS (SELECT 1 FROM skills WHERE id = @id AND owner = @owner AND version = @version);
+            INSERT INTO skill_files (skill_id, version, path, content, content_in_s3)
+            SELECT @id, @version, u.path, u.content, u.in_s3
+            FROM unnest(@filePaths, @fileContents, @fileInS3) AS u(path, content, in_s3)
             WHERE EXISTS (SELECT 1 FROM skills WHERE id = @id AND owner = @owner AND version = @version)
             """;
         await using var cmd = _db.CreateCommand(sql);
@@ -205,6 +234,7 @@ public sealed class SkillStore : ISkillStore
         cmd.Parameters.AddWithValue("searchText", content[..Math.Min(content.Length, SearchTextChars)]);
         cmd.Parameters.AddWithValue("savedBy", savedBy);
         cmd.Parameters.AddWithValue("comment", comment);
+        AddFileParameters(cmd, files, filesInS3);
         try
         {
             await using var reader = await cmd.ExecuteReaderAsync(ct);
@@ -231,8 +261,11 @@ public sealed class SkillStore : ISkillStore
     public async Task DeleteAsync(string owner, string id, CancellationToken ct = default)
     {
         var versions = (await ListVersionsAsync(id, ct)).Select(v => v.Version).ToList();
+        var fileKeys = await ListStoredFileKeysAsync(id, ct);
         const string sql = """
             DELETE FROM skill_versions WHERE skill_id = @id
+                AND EXISTS (SELECT 1 FROM skills WHERE id = @id AND owner = @owner);
+            DELETE FROM skill_files WHERE skill_id = @id
                 AND EXISTS (SELECT 1 FROM skills WHERE id = @id AND owner = @owner);
             DELETE FROM skills WHERE id = @id AND owner = @owner
             """;
@@ -243,7 +276,7 @@ public sealed class SkillStore : ISkillStore
             throw new KeyNotFoundException();
         try
         {
-            await DeleteContentAsync(id, versions, ct);
+            await DeleteContentAsync(id, versions, fileKeys, ct);
         }
         catch (Exception e)
         {
@@ -280,6 +313,34 @@ public sealed class SkillStore : ISkillStore
         cmd.Parameters.AddWithValue("id", record.Id);
         var value = await cmd.ExecuteScalarAsync(ct);
         return value is string s ? s : null;
+    }
+
+    public async Task<IReadOnlyList<SkillFile>> GetFilesAsync(
+        string id, int version, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT path, content, content_in_s3 FROM skill_files
+            WHERE skill_id = @id AND version = @version ORDER BY path
+            """;
+        await using var cmd = _db.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("version", version);
+        var rows = new List<(string Path, string? Content, bool InS3)>();
+        await using (var reader = await cmd.ExecuteReaderAsync(ct))
+        {
+            while (await reader.ReadAsync(ct))
+                rows.Add((reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1), reader.GetBoolean(2)));
+        }
+        var files = new List<SkillFile>(rows.Count);
+        foreach (var (path, content, inS3) in rows)
+        {
+            var text = inS3
+                ? await _artifacts.GetTextAsync(IArtifactStore.SkillFileKey(id, version, path), ct)
+                : content;
+            if (text is not null)
+                files.Add(new SkillFile(path, text));
+        }
+        return files;
     }
 
     public async Task<IReadOnlyList<SkillVersionRecord>> ListVersionsAsync(
@@ -368,11 +429,55 @@ public sealed class SkillStore : ISkillStore
         return inS3;
     }
 
-    private async Task DeleteContentAsync(string id, IEnumerable<int> versions, CancellationToken ct)
+    /// <summary>Uploads each file to S3 when configured; the flags mirror the file list.</summary>
+    private async Task<bool[]> PutFilesAsync(
+        string id, int version, IReadOnlyList<SkillFile> files, CancellationToken ct)
+    {
+        var flags = new bool[files.Count];
+        for (var i = 0; i < files.Count; i++)
+        {
+            flags[i] = await _artifacts.TryPutTextAsync(
+                IArtifactStore.SkillFileKey(id, version, files[i].Path), files[i].Content, ct);
+        }
+        return flags;
+    }
+
+    private static void AddFileParameters(NpgsqlCommand cmd, IReadOnlyList<SkillFile> files, bool[] inS3)
+    {
+        cmd.Parameters.AddWithValue("filePaths", files.Select(f => f.Path).ToArray());
+        cmd.Parameters.AddWithValue("fileContents",
+            files.Select((f, i) => inS3[i] ? null : f.Content).ToArray());
+        cmd.Parameters.AddWithValue("fileInS3", inS3);
+    }
+
+    /// <summary>All S3 object keys of a skill's files (every version), for cleanup.</summary>
+    private async Task<IReadOnlyList<string>> ListStoredFileKeysAsync(string id, CancellationToken ct)
+    {
+        const string sql = "SELECT version, path FROM skill_files WHERE skill_id = @id AND content_in_s3";
+        await using var cmd = _db.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("id", id);
+        var keys = new List<string>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+            keys.Add(IArtifactStore.SkillFileKey(id, reader.GetInt32(0), reader.GetString(1)));
+        return keys;
+    }
+
+    private async Task DeleteContentAsync(
+        string id, IEnumerable<int> versions, IEnumerable<string> fileKeys, CancellationToken ct)
     {
         await _artifacts.DeleteAsync(IArtifactStore.SkillKey(id), ct);
         foreach (var version in versions)
             await _artifacts.DeleteAsync(IArtifactStore.SkillVersionKey(id, version), ct);
+        foreach (var key in fileKeys)
+            await _artifacts.DeleteAsync(key, ct);
+    }
+
+    private async Task DeleteFileObjectsAsync(
+        string id, int version, IEnumerable<string> paths, CancellationToken ct)
+    {
+        foreach (var path in paths)
+            await _artifacts.DeleteAsync(IArtifactStore.SkillFileKey(id, version, path), ct);
     }
 
     private const string SelectBase =

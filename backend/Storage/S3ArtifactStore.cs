@@ -38,6 +38,8 @@ public interface IArtifactStore
     static string SkillKey(string id) => $"skills/{id}/SKILL.md";
     /// <summary>Immutable per-version SKILL.md copy (see SkillStore).</summary>
     static string SkillVersionKey(string id, int version) => $"skills/{id}/v{version}/SKILL.md";
+    /// <summary>Extra skill file (script, template) of one version (see SkillStore).</summary>
+    static string SkillFileKey(string id, int version, string path) => $"skills/{id}/v{version}/files/{path}";
 }
 
 /// <summary>
