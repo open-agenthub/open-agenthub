@@ -143,14 +143,10 @@ public sealed class KubernetesSessionService : ISessionService
 
         var repos = NormalizeRepos(req);
         var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
-        if (mcp is not null)
-        {
-            try { _ = JsonDocument.Parse(mcp); }
-            catch { throw new ArgumentException("MCP config is not valid JSON."); }
-        }
-        // Strict: creating a session with unknown/inaccessible catalog servers is an error.
-        var mcpServerIds = (await _library.ResolveMcpServersAsync(owner, req.McpServerIds, strict: true, ct))
-            .Select(s => s.Id).ToList();
+        // Strict resolve + assemble before Upsert so invalid inline shape or bad catalog
+        // config fails closed — no half-created session row.
+        var (mcpServerIds, _) = await SessionMcpConfig.ResolveAndAssembleAsync(
+            _library, owner, mcp, req.McpServerIds, strict: true, ct);
         var policy = EffectivePolicy(req.Policy, req.AllowedTools);
 
         var id = Guid.NewGuid().ToString("n")[..12];
@@ -238,11 +234,9 @@ public sealed class KubernetesSessionService : ISessionService
     /// the session's inline config into the effective .mcp.json.</summary>
     private async Task<string?> BuildEffectiveMcpConfigAsync(string owner, SessionRecord rec, CancellationToken ct)
     {
-        var ids = ParseMcpServerIds(rec);
-        var servers = ids.Count == 0
-            ? (IReadOnlyList<McpServerRecord>)Array.Empty<McpServerRecord>()
-            : await _library.ResolveMcpServersAsync(owner, ids, strict: false, ct);
-        return McpConfigAssembler.Merge(rec.McpConfigJson, servers);
+        var (_, effective) = await SessionMcpConfig.ResolveAndAssembleAsync(
+            _library, owner, rec.McpConfigJson, ParseMcpServerIds(rec), strict: false, ct);
+        return effective;
     }
 
     private async Task ValidateProjectAsync(string owner, string? projectId, CancellationToken ct)
@@ -391,26 +385,20 @@ public sealed class KubernetesSessionService : ISessionService
         var mcpDirty = false;
         if (req.McpConfigJson is not null)
         {
-            // Empty string clears the MCP config; otherwise validate and replace.
-            var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
-            if (mcp is not null)
-            {
-                try { _ = JsonDocument.Parse(mcp); }
-                catch { throw new ArgumentException("MCP config is not valid JSON."); }
-            }
-            rec.McpConfigJson = mcp;
+            // Empty string clears inline MCP config; catalog ids are unchanged unless also sent.
+            rec.McpConfigJson = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
             mcpDirty = true;
         }
         if (req.McpServerIds is not null)
-        {
-            var ids = (await _library.ResolveMcpServersAsync(owner, req.McpServerIds, strict: true, ct))
-                .Select(s => s.Id).ToList();
-            rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
             mcpDirty = true;
-        }
         if (mcpDirty)
         {
-            var effective = await BuildEffectiveMcpConfigAsync(owner, rec, ct);
+            // Strict resolve + assemble before secret/DB write so bad shape/config fails closed.
+            var idsToResolve = req.McpServerIds ?? ParseMcpServerIds(rec);
+            var (ids, effective) = await SessionMcpConfig.ResolveAndAssembleAsync(
+                _library, owner, rec.McpConfigJson, idsToResolve, strict: true, ct);
+            if (req.McpServerIds is not null)
+                rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
             if (effective is not null)
                 await CreateMcpSecretAsync(owner, id, effective, ct);
             else

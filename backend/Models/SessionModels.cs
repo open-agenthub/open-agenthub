@@ -214,7 +214,8 @@ public record UpdateSessionRequest
     public bool? RunAsRoot { get; init; }
     public string? Cpu { get; init; }
     public string? Memory { get; init; }
-    /// <summary>MCP config (.mcp.json); null = unchanged, empty string = remove all MCP servers.</summary>
+    /// <summary>Inline MCP config (.mcp.json); null = unchanged, empty string clears inline
+    /// config only (catalog <see cref="McpServerIds"/> are unchanged unless also sent).</summary>
     public string? McpConfigJson { get; init; }
     /// <summary>Catalog MCP servers; null = unchanged, empty list = none.</summary>
     public List<string>? McpServerIds { get; init; }
