@@ -26,7 +26,7 @@ const busy = computed(() => { void version.value; return log.busy })
 
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 const canSend = computed(() => isLive.value && !props.readonly)
-const canAttach = computed(() => canSend.value && !props.sharedToken)
+const canAttach = computed(() => canSend.value && !pendingTurn.value && !props.sharedToken)
 const attachmentVersion = ref(0)
 let attachmentQueue = makeAttachmentQueue()
 const attachmentItems = computed(() => {

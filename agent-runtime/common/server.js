@@ -211,13 +211,19 @@ function createCommonServer(options = {}) {
       handleAgentExit(code == null ? 1 : code, signal || undefined));
 
     chat = {
-      sendUser(text, delivery = {}) {
+      async sendUser(text, delivery = {}) {
         const agentText = delivery.agentText ?? text;
         const event = {
           type: 'user',
           message: { role: 'user', content: [{ type: 'text', text: agentText }] }
         };
-        try { child.stdin.write(JSON.stringify(event) + '\n'); } catch { return; }
+        await new Promise((resolve, reject) => {
+          try {
+            child.stdin.write(JSON.stringify(event) + '\n', error => error ? reject(error) : resolve());
+          } catch (error) {
+            reject(error);
+          }
+        });
         // The CLI never echoes user input on stdout, so replays need our copy.
         const echoEvent = {
           type: 'user',
@@ -244,7 +250,7 @@ function createCommonServer(options = {}) {
 
     if (!attemptedResume && !promptSent && env.AGENTHUB_PROMPT) {
       promptSent = true;
-      chat.sendUser(env.AGENTHUB_PROMPT);
+      void chat.sendUser(env.AGENTHUB_PROMPT).catch(() => {});
     }
   }
 
@@ -317,7 +323,7 @@ function createCommonServer(options = {}) {
       size: file.size,
       visualDelivery: file.visualDelivery
     }));
-    chat.sendUser(message.text, {
+    await chat.sendUser(message.text, {
       agentText: attachmentPrompt(message.text, attachments),
       attachments: safeAttachments
     });
@@ -333,11 +339,6 @@ function createCommonServer(options = {}) {
     const attachments = message.attachments === undefined ? [] : message.attachments;
     if (!Array.isArray(attachments)) {
       safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed', clientTurnId: message.clientTurnId }));
-      return;
-    }
-    if (attachments.length === 0 && pendingChatDeliveries === 0) {
-      chat.sendUser(message.text);
-      if (message.clientTurnId) safeSend(socket, deliveryEvent('chat_delivered', message));
       return;
     }
     pendingChatDeliveries += 1;
