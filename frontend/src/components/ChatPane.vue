@@ -1,14 +1,17 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, getSharedTranscript, sharedTerminalUrl, terminalUrl } from '../api.js'
+import { createAttachmentQueue } from '../lib/attachments.js'
 import { createChatLog } from '../lib/chat.js'
 import { renderMarkdown } from '../lib/markdown.js'
+import ChatAttachments from './ChatAttachments.vue'
 
 const props = defineProps({ session: Object, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null } })
 const emit = defineEmits(['status'])
 
 const scroller = ref(null)
 const text = ref('')
+const fileInput = ref(null)
 let ws, reconnectTimer
 let disposed = false
 let connectionGeneration = 0
@@ -22,6 +25,25 @@ const busy = computed(() => { void version.value; return log.busy })
 
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 const canSend = computed(() => isLive.value && !props.readonly)
+const canAttach = computed(() => canSend.value && !props.sharedToken)
+const attachmentVersion = ref(0)
+let attachmentQueue = makeAttachmentQueue()
+const attachmentItems = computed(() => {
+  void attachmentVersion.value
+  return attachmentQueue.items.slice()
+})
+const readyAttachments = computed(() => attachmentItems.value.filter(item => item.state === 'ready'))
+const attachmentsSettled = computed(() => attachmentItems.value.every(item => item.state === 'ready'))
+const canSubmit = computed(() => canSend.value && attachmentsSettled.value &&
+  Boolean(text.value.trim() || readyAttachments.value.length))
+
+function makeAttachmentQueue() {
+  return createAttachmentQueue({
+    sessionId: props.session?.id,
+    api,
+    onChange: () => { attachmentVersion.value += 1 }
+  })
+}
 
 function feed(data) {
   log.feed(data)
@@ -97,11 +119,32 @@ async function transcript() {
   if (!disposed && sessionId === props.session.id) feed(saved || '')
 }
 
+function addFiles(files) {
+  if (canAttach.value && files?.length) attachmentQueue.add(files)
+}
+
+function pasteFiles(event) {
+  const files = event.clipboardData?.files
+  if (files?.length) {
+    event.preventDefault()
+    addFiles(files)
+  }
+}
+
+function dropFiles(event) {
+  addFiles(event.dataTransfer?.files)
+}
+
 function submit() {
   const value = text.value.trim()
-  if (!value || !canSend.value || ws?.readyState !== WebSocket.OPEN) return
-  ws.send(JSON.stringify({ type: 'chat', text: value }))
-  text.value = ''
+  if (!canSubmit.value || ws?.readyState !== WebSocket.OPEN) return
+  const ids = readyAttachments.value.map(item => item.id)
+  const payload = { type: 'chat', text: value, ...(ids.length ? { attachments: ids } : {}) }
+  try {
+    ws.send(JSON.stringify(payload))
+    text.value = ''
+    attachmentQueue.clearReady()
+  } catch { /* retain the draft and attachments for retry */ }
 }
 
 function interrupt() {
@@ -110,6 +153,9 @@ function interrupt() {
 
 function reconnectForCurrentSession() {
   closeSocket()
+  void attachmentQueue.cancelAll()
+  attachmentQueue = makeAttachmentQueue()
+  attachmentVersion.value += 1
   log.reset()
   version.value += 1
   if (isLive.value) connect()
@@ -138,6 +184,7 @@ watch(isLive, (live, wasLive) => {
 onBeforeUnmount(() => {
   disposed = true
   closeSocket()
+  void attachmentQueue.cancelAll()
 })
 </script>
 <template>
@@ -148,7 +195,11 @@ onBeforeUnmount(() => {
           {{ isLive ? 'Send a message to start the conversation.' : 'No saved conversation.' }}
         </div>
         <template v-for="(item, i) in items" :key="i">
-          <div v-if="item.kind === 'user'" class="bubble user" data-chat-user><pre>{{ item.text }}</pre></div>
+          <div v-if="item.kind === 'user'" class="bubble user" data-chat-user>
+            <pre v-if="item.text">{{ item.text }}</pre>
+            <ChatAttachments v-if="item.attachments?.length" :items="item.attachments" :retry="() => {}"
+              :remove="() => {}" transcript />
+          </div>
           <div v-else-if="item.kind === 'assistant'" class="bubble assistant" data-chat-assistant>
             <template v-for="(block, j) in item.blocks" :key="j">
               <div v-if="block.type === 'text'" class="md" v-html="renderMarkdown(block.text)"></div>
@@ -183,11 +234,20 @@ onBeforeUnmount(() => {
         <div v-else-if="busy" class="typing" data-chat-busy><span></span><span></span><span></span></div>
       </div>
     </div>
-    <div v-if="canSend" class="composer">
-      <textarea v-model="text" data-chat-input rows="1" placeholder="Message the agent — Enter to send, Shift+Enter for a new line"
-        @keydown.enter.exact.prevent="submit"></textarea>
-      <button v-if="busy" class="stop" data-chat-stop @click="interrupt">◼ Stop</button>
-      <button class="primary" data-chat-send :disabled="!text.trim()" @click="submit">Send</button>
+    <div v-if="canSend" class="composer" @dragover.prevent @drop.prevent="dropFiles">
+      <ChatAttachments v-if="attachmentItems.length" :items="attachmentItems"
+        :retry="attachmentQueue.retry" :remove="attachmentQueue.remove" />
+      <div class="composer-row">
+        <input v-if="canAttach" ref="fileInput" class="file-input" type="file" multiple
+          accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.md,.markdown,.txt,.docx,.pptx,.xlsx"
+          @change="addFiles($event.target.files); $event.target.value = ''">
+        <button v-if="canAttach" type="button" class="attach" data-chat-attach aria-label="Attach files" title="Attach files"
+          @click="fileInput?.click()">＋</button>
+        <textarea v-model="text" data-chat-input rows="1" placeholder="Message the agent — paste, drop, or attach files"
+          @paste="pasteFiles" @keydown.enter.exact.prevent="submit"></textarea>
+        <button v-if="busy" class="stop" data-chat-stop @click="interrupt">◼ Stop</button>
+        <button class="primary" data-chat-send :disabled="!canSubmit" @click="submit">Send</button>
+      </div>
     </div>
   </div>
 </template>
@@ -226,8 +286,13 @@ onBeforeUnmount(() => {
 .typing span:nth-child(2) { animation-delay: 0.15s; }
 .typing span:nth-child(3) { animation-delay: 0.3s; }
 @keyframes pulse { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
-.composer { display: flex; gap: 10px; padding: 12px 16px; background: var(--bg); border-top: 1px solid var(--border); }
+.composer { display: flex; flex-direction: column; gap: 9px; padding: 10px 16px 12px; background: var(--bg); border-top: 1px solid var(--border); }
+.composer-row { display: flex; align-items: flex-end; gap: 10px; }
 .composer textarea { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); font-family: var(--ui); font-size: 14px; min-height: 42px; max-height: 180px; resize: vertical; }
 .composer button { align-self: flex-end; padding: 9px 18px; white-space: nowrap; }
 .composer .stop { color: var(--danger); border-color: var(--border-3); }
+.composer .attach { width: 42px; height: 42px; padding: 0; color: var(--muted); border-color: var(--border-2); font-size: 20px; }
+.composer .attach:hover { color: var(--accent); }
+.file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
+@media (max-width: 640px) { .composer { padding-inline: 10px; } .composer-row { gap: 6px; } .composer button { padding-inline: 12px; } }
 </style>

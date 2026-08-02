@@ -9,6 +9,21 @@ function textOf(content) {
     .map(block => block.text).join('\n')
 }
 
+function safeAttachments(value) {
+  if (!Array.isArray(value)) return []
+  return value.flatMap(file => {
+    if (!file || typeof file.id !== 'string' || typeof file.name !== 'string' ||
+      typeof file.mimeType !== 'string' || !Number.isFinite(file.size)) return []
+    return [{
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size,
+      ...(typeof file.visualDelivery === 'string' ? { visualDelivery: file.visualDelivery } : {})
+    }]
+  })
+}
+
 export function createChatLog() {
   const toolsById = new Map()
 
@@ -82,8 +97,9 @@ export function createChatLog() {
       return
     }
     const text = textOf(content)
-    if (text) {
-      log.items.push({ kind: 'user', text })
+    const attachments = safeAttachments(event.attachments)
+    if (text || attachments.length) {
+      log.items.push({ kind: 'user', text, ...(attachments.length ? { attachments } : {}) })
       log.busy = true
     }
   }
