@@ -23,18 +23,37 @@ builder.Services.AddHttpClient<AgentHub.Api.Browser.IBrowserRuntimeClient, Agent
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserService, AgentHub.Api.Browser.KubernetesBrowserService>();
 builder.Services.AddHostedService<AgentHub.Api.Browser.BrowserReconcileService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
-builder.Services.AddSingleton<SessionShareStore>();
-builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
-builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
-builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
-builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
-// Library: reusable MCP servers + skills (community: personal, enterprise: shareable).
+// Library: MCP catalog (raw/api + org) + skills (community: personal, enterprise: shareable).
+builder.Services.AddSingleton<AgentHub.Api.Library.IMcpSecretProtector, AgentHub.Api.Library.McpSecretProtector>();
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpServerStore, AgentHub.Api.Library.McpServerStore>();
+builder.Services.AddSingleton<AgentHub.Api.Library.IMcpGatewayTokenService, AgentHub.Api.Library.McpGatewayTokenService>();
+builder.Services.AddSingleton<AgentHub.Api.Library.IEphemeralApiMcpStore, AgentHub.Api.Library.EphemeralApiMcpStore>();
+builder.Services.AddSingleton(sp =>
+    new AgentHub.Api.Library.ApiMcpGateway.OpenApiSpecCache(
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway")));
+builder.Services.AddSingleton(sp =>
+    new AgentHub.Api.Library.ApiMcpGateway.ApiMcpGatewayHandler(
+        sp.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>(),
+        sp.GetRequiredService<AgentHub.Api.Library.IEphemeralApiMcpStore>(),
+        sp.GetRequiredService<AgentHub.Api.Library.IMcpGatewayTokenService>(),
+        sp.GetRequiredService<AgentHub.Api.Library.ApiMcpGateway.OpenApiSpecCache>(),
+        sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway"),
+        sp.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>(),
+        sp.GetRequiredService<AgentHub.Api.Library.ILibraryAccess>()));
+// Do not follow redirects: a 3xx Location to loopback/metadata would bypass
+// ValidateSafeOutboundUrl on the original URL (SSRF). Treat redirects as errors.
+builder.Services.AddHttpClient("mcp-gateway")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        AllowAutoRedirect = false
+    });
 builder.Services.AddSingleton<AgentHub.Api.Library.ISkillStore, AgentHub.Api.Library.SkillStore>();
+// EE share matrix: registered as the core ILibraryShareReader so access resolution
+// consults real shares when the license is enabled (EmptyLibraryShareReader unused).
 builder.Services.AddSingleton<AgentHub.Api.Ee.Library.LibraryShareStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Library.ILibraryShareStore>(sp =>
     sp.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>());
-builder.Services.AddSingleton<AgentHub.Api.Ee.Library.ILibraryShareReader>(sp =>
+builder.Services.AddSingleton<AgentHub.Api.Library.ILibraryShareReader>(sp =>
     sp.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>());
 builder.Services.AddSingleton<AgentHub.Api.Library.ILibraryAccess, AgentHub.Api.Library.LibraryAccessService>();
 // Skill search (FTS always; vector similarity when an embedding provider is configured)
@@ -44,6 +63,11 @@ builder.Services.AddSingleton<AgentHub.Api.Library.IEmbeddingProvider, AgentHub.
 builder.Services.AddSingleton<AgentHub.Api.Library.SkillSearchService>();
 builder.Services.AddSingleton<AgentHub.Api.Library.SkillLibraryMcpService>();
 builder.Services.AddSingleton<AgentHub.Api.Library.SkillImporter>();
+builder.Services.AddSingleton<SessionShareStore>();
+builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
 // Monthly API budgets: personal limit (community) + admin limits (enterprise provider below).
@@ -194,13 +218,14 @@ using (var scope = app.Services.CreateScope())
     await store.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
-    var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
-    await tokenStore.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IEphemeralApiMcpStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillEmbeddingStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
+    var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
+    await tokenStore.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();
@@ -261,6 +286,25 @@ app.UseAuthorization();
 
 app.MapControllers();
 app.MapHealthChecks("/healthz").AllowAnonymous();
+
+// Catalog OpenAPI → MCP HTTP gateway (session-bound token; not OIDC).
+// Agents connect with type:http + X-AgentHub-Mcp-Token (see McpConfigAssembler).
+app.MapPost("/mcp/api/{id}", async (HttpContext ctx, string id,
+    AgentHub.Api.Library.ApiMcpGateway.ApiMcpGatewayHandler handler) =>
+{
+    await handler.HandleCatalogAsync(ctx, id);
+}).AllowAnonymous();
+app.MapMethods("/mcp/api/{id}", new[] { "GET" }, () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed))
+    .AllowAnonymous();
+
+// Session-scoped ephemeral OpenAPI/GraphQL → MCP HTTP gateway.
+app.MapPost("/mcp/session/{sessionId}/{name}", async (HttpContext ctx, string sessionId, string name,
+    AgentHub.Api.Library.ApiMcpGateway.ApiMcpGatewayHandler handler) =>
+{
+    await handler.HandleSessionAsync(ctx, sessionId, name);
+}).AllowAnonymous();
+app.MapMethods("/mcp/session/{sessionId}/{name}", new[] { "GET" },
+    () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed)).AllowAnonymous();
 
 // Runtime config for the frontend (static nginx image, no build-time env vars):
 // empty authority = auth disabled, so the frontend does not enforce a login.

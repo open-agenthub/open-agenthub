@@ -24,6 +24,7 @@ public static class SessionUpdateValidator
         request.Memory is not null ||
         request.McpConfigJson is not null ||
         request.McpServerIds is not null ||
+        request.EphemeralApiSources is not null ||
         request.Repos is not null ||
         request.Agent is not null ||
         request.AuthMode is not null ||

@@ -37,15 +37,32 @@ public class LibraryValidationTests
         Assert.Throws<ArgumentException>(() => LibraryValidation.ValidateSkillName(name));
 
     [Fact]
-    public void McpServerConfig_MustBeSingleServerObject()
+    public void ValidateRawConfig_requires_object()
     {
-        Assert.Throws<ArgumentException>(() => LibraryValidation.ValidateMcpServerConfig(""));
-        Assert.Throws<ArgumentException>(() => LibraryValidation.ValidateMcpServerConfig("not json"));
-        Assert.Throws<ArgumentException>(() => LibraryValidation.ValidateMcpServerConfig("[1]"));
-        // A full .mcp.json is rejected so users don't nest configs by accident.
         Assert.Throws<ArgumentException>(() =>
-            LibraryValidation.ValidateMcpServerConfig("{\"mcpServers\":{\"a\":{}}}"));
-        Assert.Equal("{\"type\":\"http\"}", LibraryValidation.ValidateMcpServerConfig("{\"type\":\"http\"}"));
+            LibraryValidation.ValidateMcpServerConfig("{", kind: "raw"));
+        Assert.Throws<ArgumentException>(() =>
+            LibraryValidation.ValidateMcpServerConfig("{\"mcpServers\":{\"a\":{}}}", kind: "raw"));
+        Assert.Equal("{\"type\":\"http\"}",
+            LibraryValidation.ValidateMcpServerConfig("{\"type\":\"http\"}", kind: "raw"));
+    }
+
+    [Fact]
+    public void ValidateApiConfig_requires_specUrl()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            LibraryValidation.ValidateMcpServerConfig(
+                """{"specType":"openapi"}""", kind: "api"));
+    }
+
+    [Fact]
+    public void ValidateApiConfig_rejects_localhost_specUrl()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            LibraryValidation.ValidateMcpServerConfig(
+                """{"specType":"openapi","specUrl":"http://localhost/openapi.json"}""",
+                kind: "api"));
+        Assert.Contains("blocked", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using AgentHub.Api.Admin;
 using AgentHub.Api.Ee.Library;
+using AgentHub.Api.Library;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -44,56 +45,76 @@ public class LibraryControllerTests
     }
 
     [Fact]
-    public async Task WithoutLicense_EverythingReturns402()
+    public async Task WithoutLicense_SharesAndSettingsReturn402()
     {
-        var controller = Controller("admin", licensed: false);
-        Assert.Equal(402, ((ObjectResult)await controller.ListGroups(default)).StatusCode);
-        Assert.Equal(402, ((ObjectResult)await controller.ListUsers(default)).StatusCode);
-        Assert.Equal(402, ((ObjectResult)await controller.GetSettings(default)).StatusCode);
-        Assert.Equal(402, ((ObjectResult)await controller.SetShares(
-            "skills", "skill-1", new UpdateSharesRequest(true, null, null), default)).StatusCode);
-    }
+        var mcp = new InMemoryMcpServerStore();
+        var server = mcp.Add("admin", "docs");
+        var controller = Controller("admin", licensed: false, mcp: mcp);
 
-    [Fact]
-    public async Task GroupManagement_RequiresAdmin()
-    {
-        var controller = Controller("carol", licensed: true);
-        Assert.Equal(403, ((ObjectResult)await controller.ListGroups(default)).StatusCode);
-        Assert.Equal(403, ((ObjectResult)await controller.ListUsers(default)).StatusCode);
-        Assert.Equal(403, ((ObjectResult)await controller.CreateGroup(new CreateGroupRequest("devs"), default)).StatusCode);
-        Assert.Equal(403, ((ObjectResult)await controller.SetSettings(
-            new UpdateLibrarySettingsRequest(true), default)).StatusCode);
+        Assert.Equal(402, ((ObjectResult)await controller.GetShares("mcp-servers", server.Id, default)).StatusCode);
+        Assert.Equal(402, ((ObjectResult)await controller.SetShares(
+            "mcp-servers", server.Id, new UpdateSharesRequest(true, null, null), default)).StatusCode);
+        Assert.Equal(402, ((ObjectResult)await controller.GetSettings(default)).StatusCode);
     }
 
     [Fact]
     public async Task Settings_AreReadableByRegularUsers()
     {
         var shares = new InMemoryLibraryShareStore { UserSkillPublishing = true };
-        var controller = Controller("carol", licensed: true, shares);
+        var controller = Controller("alice", licensed: true, shares);
         var result = Assert.IsType<OkObjectResult>(await controller.GetSettings(default));
         Assert.True(Assert.IsType<LibrarySettings>(result.Value).UserSkillPublishing);
     }
 
     [Fact]
-    public async Task AdminOwner_CanShareMcpServerWithUsersGroupsAndAll()
+    public async Task PersonalOwner_CanShareWithUsersGroupsAndAll()
     {
         var shares = new InMemoryLibraryShareStore();
         shares.KnownUsers.Add("carol");
-        var group = await shares.CreateGroupAsync("devs");
+        shares.KnownGroups.Add("devs");
         var mcp = new InMemoryMcpServerStore();
-        var server = mcp.Add("admin", "docs");
+        var server = mcp.Add("alice", "docs");
 
-        var controller = Controller("admin", licensed: true, shares, mcp);
+        var controller = Controller("alice", licensed: true, shares, mcp);
         var result = Assert.IsType<OkObjectResult>(await controller.SetShares(
-            "mcp-servers", server.Id, new UpdateSharesRequest(true, ["carol"], [group.Id]), default));
+            "mcp-servers", server.Id, new UpdateSharesRequest(true, ["carol"], ["devs"]), default));
         var state = Assert.IsType<LibraryShares>(result.Value);
         Assert.True(state.All);
         Assert.Equal(["carol"], state.Users);
-        Assert.Equal([group.Id], state.Groups);
+        Assert.Equal(["devs"], state.Groups);
+
+        var get = Assert.IsType<OkObjectResult>(await controller.GetShares("mcp-servers", server.Id, default));
+        Assert.Equal(state, Assert.IsType<LibraryShares>(get.Value));
     }
 
     [Fact]
-    public async Task NonOwner_CannotTouchShares()
+    public async Task Admin_CanShareOrgEntry()
+    {
+        var shares = new InMemoryLibraryShareStore();
+        shares.KnownUsers.Add("carol");
+        var mcp = new InMemoryMcpServerStore();
+        var server = mcp.Add(McpServerRecord.OrgOwner, "org-docs");
+
+        var controller = Controller("admin", licensed: true, shares, mcp);
+        var result = Assert.IsType<OkObjectResult>(await controller.SetShares(
+            "mcp-servers", server.Id, new UpdateSharesRequest(false, ["carol"], null), default));
+        Assert.Equal(["carol"], Assert.IsType<LibraryShares>(result.Value).Users);
+    }
+
+    [Fact]
+    public async Task NonAdmin_CannotShareOrgEntry()
+    {
+        var mcp = new InMemoryMcpServerStore();
+        var server = mcp.Add(McpServerRecord.OrgOwner, "org-docs");
+        var controller = Controller("carol", licensed: true, mcp: mcp);
+
+        Assert.IsType<NotFoundResult>(await controller.GetShares("mcp-servers", server.Id, default));
+        Assert.IsType<NotFoundResult>(await controller.SetShares(
+            "mcp-servers", server.Id, new UpdateSharesRequest(true, null, null), default));
+    }
+
+    [Fact]
+    public async Task NonOwner_CannotTouchPersonalShares()
     {
         var mcp = new InMemoryMcpServerStore();
         var server = mcp.Add("someone-else", "docs");
@@ -109,11 +130,11 @@ public class LibraryControllerTests
     {
         var shares = new InMemoryLibraryShareStore { UserSkillPublishing = true };
         var skills = new InMemorySkillStore();
-        var skill = skills.Add("carol", "review");
-        var controller = Controller("carol", licensed: true, shares, skills: skills);
+        var skill = skills.Add("alice", "review-checklist");
+        var controller = Controller("alice", licensed: true, shares, skills: skills);
 
         var result = Assert.IsType<OkObjectResult>(await controller.SetShares(
-            "skills", skill.Id, new UpdateSharesRequest(true, [], []), default));
+            "skills", skill.Id, new UpdateSharesRequest(true, null, null), default));
         Assert.True(Assert.IsType<LibraryShares>(result.Value).All);
     }
 
@@ -122,36 +143,37 @@ public class LibraryControllerTests
     {
         var shares = new InMemoryLibraryShareStore { UserSkillPublishing = false };
         var skills = new InMemorySkillStore();
-        var skill = skills.Add("carol", "review");
-        var controller = Controller("carol", licensed: true, shares, skills: skills);
+        var skill = skills.Add("alice", "review-checklist");
+        var controller = Controller("alice", licensed: true, shares, skills: skills);
 
         Assert.IsType<ForbidResult>(await controller.SetShares(
-            "skills", skill.Id, new UpdateSharesRequest(true, [], []), default));
+            "skills", skill.Id, new UpdateSharesRequest(true, null, null), default));
     }
 
     [Fact]
     public async Task RegularUser_CannotShareWithSpecificUsersOrGroups()
     {
         var shares = new InMemoryLibraryShareStore { UserSkillPublishing = true };
-        shares.KnownUsers.Add("dave");
+        shares.KnownUsers.Add("bob");
         var skills = new InMemorySkillStore();
-        var skill = skills.Add("carol", "review");
-        var mcp = new InMemoryMcpServerStore();
-        var server = mcp.Add("carol", "docs");
-        var controller = Controller("carol", licensed: true, shares, mcp, skills);
+        var skill = skills.Add("alice", "review-checklist");
+        var controller = Controller("alice", licensed: true, shares, skills: skills);
 
-        // Targeted sharing stays admin-only, even with the publish toggle on.
         Assert.IsType<ForbidResult>(await controller.SetShares(
-            "skills", skill.Id, new UpdateSharesRequest(false, ["dave"], []), default));
-        // MCP servers cannot be published by regular users at all.
-        Assert.IsType<ForbidResult>(await controller.SetShares(
-            "mcp-servers", server.Id, new UpdateSharesRequest(true, [], []), default));
+            "skills", skill.Id, new UpdateSharesRequest(false, ["bob"], null), default));
     }
 
     [Fact]
     public async Task UnknownItemType_IsNotFound()
     {
         var controller = Controller("admin", licensed: true);
-        Assert.IsType<NotFoundResult>(await controller.GetShares("bogus", "id", default));
+        Assert.IsType<NotFoundResult>(await controller.GetShares("widgets", "x", default));
+    }
+
+    [Fact]
+    public async Task UnknownItem_IsNotFound()
+    {
+        var controller = Controller("admin", licensed: true);
+        Assert.IsType<NotFoundResult>(await controller.GetShares("mcp-servers", "missing", default));
     }
 }

@@ -1,7 +1,10 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { agentPayload, defaultAgentForm, filterAgentOptions, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import {
+  agentPayload, defaultAgentForm, filterAgentOptions, mcpBadgeLabel,
+  policyPayload, toolsPlaceholder, commandsPlaceholder
+} from '../lib/agent.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
@@ -14,8 +17,7 @@ const advOpen = ref(false)
 const credentialStatus = ref({})
 const allowedAgents = ref([])
 const agentChoices = computed(() => filterAgentOptions(allowedAgents.value, { include: props.session?.agent }))
-// Saved MCP servers from the personal library; the selection overrides the
-// copied list independently of the inline-JSON includeMcp checkbox.
+// Saved MCP servers; selection overrides the copied list independently of includeMcp.
 const savedMcpServers = ref([])
 const selectedMcpIds = ref([])
 const busy = ref(false); const error = ref('')
@@ -67,7 +69,7 @@ async function submit() {
         <label>Saved MCP servers <span class="dim">— from your library</span></label>
         <label v-for="s in savedMcpServers" :key="s.id" class="check mcp-pick">
           <input type="checkbox" :value="s.id" v-model="selectedMcpIds" data-mcp-option />
-          <span>{{ s.name }}<span v-if="!s.mine" class="dim"> — shared by {{ s.owner }}</span></span>
+          <span>{{ s.name }} <span class="mcp-badge" :data-mcp-badge="s.id">{{ mcpBadgeLabel(s) }}</span></span>
         </label>
       </div>
     </div>
@@ -110,6 +112,7 @@ async function submit() {
 .dim { color: var(--faint); font-weight: 400; }
 .mcp-field { margin: 14px 0 0; }
 .mcp-pick { margin: 0 0 6px; }
+.mcp-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--border-2); border-radius: 4px; color: var(--muted-3); font-size: 11px; font-weight: 700; }
 .row { display: flex; gap: 10px; }
 .err { color: var(--danger); font: 12px var(--mono); }
 @media (max-width: 600px) { .row { flex-wrap: wrap; } }

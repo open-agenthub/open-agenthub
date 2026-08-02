@@ -6,8 +6,27 @@ namespace AgentHub.Api.Tests;
 
 public class McpConfigAssemblerTests
 {
-    private static McpServerRecord Server(string name, string config = "{\"type\":\"http\",\"url\":\"https://docs.example.test\"}") =>
-        new() { Id = $"id-{name}", Owner = "alice", Name = name, ConfigJson = config };
+    private static McpServerRecord RawServer(
+        string name,
+        string config = "{\"type\":\"http\",\"url\":\"https://docs.example.test\"}") =>
+        new()
+        {
+            Id = $"id-{name}",
+            Owner = "alice",
+            Name = name,
+            Kind = "raw",
+            ConfigJson = config
+        };
+
+    private static McpServerRecord ApiServer(string name, string id) =>
+        new()
+        {
+            Id = id,
+            Owner = "alice",
+            Name = name,
+            Kind = "api",
+            ConfigJson = """{"specType":"openapi","specUrl":"https://api.example.test/openapi.json"}"""
+        };
 
     [Fact]
     public void NothingConfigured_ReturnsNull()
@@ -19,12 +38,41 @@ public class McpConfigAssemblerTests
     }
 
     [Fact]
-    public void ServersOnly_BuildsMcpJson()
+    public void RawServersOnly_BuildsMcpJson()
     {
-        var json = McpConfigAssembler.Merge(null, [Server("docs")]);
+        var json = McpConfigAssembler.Merge(null, [RawServer("docs")]);
         using var doc = JsonDocument.Parse(json!);
         var servers = doc.RootElement.GetProperty("mcpServers");
         Assert.Equal("https://docs.example.test", servers.GetProperty("docs").GetProperty("url").GetString());
+    }
+
+    [Fact]
+    public void ApiServer_EmitsGatewayPlaceholderUrl()
+    {
+        var json = McpConfigAssembler.Merge(null, [ApiServer("petstore", "srv-42")]);
+        using var doc = JsonDocument.Parse(json!);
+        var entry = doc.RootElement.GetProperty("mcpServers").GetProperty("petstore");
+        Assert.Equal("http", entry.GetProperty("type").GetString());
+        Assert.Equal("https://mcp.invalid/mcp/api/srv-42", entry.GetProperty("url").GetString());
+        Assert.False(entry.TryGetProperty("headers", out _));
+    }
+
+    [Fact]
+    public void ApiServer_UsesGatewayBaseUrlAndTokenHeader()
+    {
+        var opts = new McpGatewayAssembleOptions
+        {
+            BaseUrl = "http://gateway.test",
+            IssueToken = id => $"tok-for-{id}"
+        };
+        var json = McpConfigAssembler.Merge(null, [ApiServer("petstore", "srv-42")], opts);
+        using var doc = JsonDocument.Parse(json!);
+        var entry = doc.RootElement.GetProperty("mcpServers").GetProperty("petstore");
+        Assert.Equal("http", entry.GetProperty("type").GetString());
+        Assert.Equal("http://gateway.test/mcp/api/srv-42", entry.GetProperty("url").GetString());
+        Assert.Equal(
+            "tok-for-srv-42",
+            entry.GetProperty("headers").GetProperty(McpGatewayTokenService.HeaderName).GetString());
     }
 
     [Fact]
@@ -40,7 +88,7 @@ public class McpConfigAssemblerTests
     public void InlineEntryWins_OnNameConflict()
     {
         var inline = "{\"mcpServers\":{\"docs\":{\"command\":\"my-own\"}}}";
-        var json = McpConfigAssembler.Merge(inline, [Server("docs"), Server("git")]);
+        var json = McpConfigAssembler.Merge(inline, [RawServer("docs"), RawServer("git")]);
         using var doc = JsonDocument.Parse(json!);
         var servers = doc.RootElement.GetProperty("mcpServers");
         Assert.Equal("my-own", servers.GetProperty("docs").GetProperty("command").GetString());
@@ -48,10 +96,21 @@ public class McpConfigAssemblerTests
     }
 
     [Fact]
+    public void InlineWinsOverApiServer_SameName()
+    {
+        var inline = "{\"mcpServers\":{\"petstore\":{\"command\":\"local\"}}}";
+        var json = McpConfigAssembler.Merge(inline, [ApiServer("petstore", "srv-1")]);
+        using var doc = JsonDocument.Parse(json!);
+        var entry = doc.RootElement.GetProperty("mcpServers").GetProperty("petstore");
+        Assert.Equal("local", entry.GetProperty("command").GetString());
+        Assert.False(entry.TryGetProperty("url", out _));
+    }
+
+    [Fact]
     public void OtherTopLevelKeys_ArePreserved()
     {
         var inline = "{\"someExtension\":true}";
-        var json = McpConfigAssembler.Merge(inline, [Server("docs")]);
+        var json = McpConfigAssembler.Merge(inline, [RawServer("docs")]);
         using var doc = JsonDocument.Parse(json!);
         Assert.True(doc.RootElement.GetProperty("someExtension").GetBoolean());
         Assert.True(doc.RootElement.GetProperty("mcpServers").TryGetProperty("docs", out _));
@@ -73,5 +132,12 @@ public class McpConfigAssemblerTests
     public void InvalidInlineConfig_Throws(string inline)
     {
         Assert.Throws<ArgumentException>(() => McpConfigAssembler.Merge(inline, []));
+    }
+
+    [Fact]
+    public void InvalidRawConfig_Throws()
+    {
+        Assert.Throws<ArgumentException>(() =>
+            McpConfigAssembler.Merge(null, [RawServer("bad", "not-json")]));
     }
 }

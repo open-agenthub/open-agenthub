@@ -1,5 +1,6 @@
-using AgentHub.Api.Browser;
+using System.Text.Json;
 using System.Text.Json.Serialization;
+using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
 
 namespace AgentHub.Api.Models;
@@ -178,9 +179,15 @@ public record CreateSessionRequest
     /// <summary>MCP configuration as a JSON string (.mcp.json format), mounted into the container.</summary>
     public string? McpConfigJson { get; init; }
 
-    /// <summary>Ids of saved library MCP servers to include (own or shared with the user).
+    /// <summary>Ids of catalog MCP servers to include (own, org, or EE-shared).
     /// Merged with McpConfigJson into the effective .mcp.json; inline entries win.</summary>
     public List<string> McpServerIds { get; init; } = new();
+
+    /// <summary>
+    /// Session-scoped OpenAPI/GraphQL MCP sources registered on the gateway for this session only.
+    /// Optional <see cref="EphemeralApiSource.SaveToLibrary"/> also creates a personal catalog entry.
+    /// </summary>
+    public List<EphemeralApiSource> EphemeralApiSources { get; init; } = new();
 
     public AgentKind Agent { get; init; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
@@ -202,6 +209,19 @@ public record CreateSessionRequest
     public string Memory { get; init; } = "1Gi";
 }
 
+/// <summary>Session-scoped OpenAPI/GraphQL source registered on the in-process MCP gateway.</summary>
+public sealed record EphemeralApiSource
+{
+    public string Name { get; init; } = "";
+    public string SpecUrl { get; init; } = "";
+    public string? SpecType { get; init; }
+    public string? BaseUrl { get; init; }
+    public JsonElement? Auth { get; init; }
+    public string? Secret { get; init; }
+    /// <summary>When true, also create a personal <c>kind=api</c> catalog entry.</summary>
+    public bool SaveToLibrary { get; init; }
+}
+
 /// <summary>
 /// Partial update of an existing session. Null = unchanged. Everything except
 /// the title only takes effect the next time the session is (re)started.
@@ -214,10 +234,16 @@ public record UpdateSessionRequest
     public bool? RunAsRoot { get; init; }
     public string? Cpu { get; init; }
     public string? Memory { get; init; }
-    /// <summary>MCP config (.mcp.json); null = unchanged, empty string = remove all MCP servers.</summary>
+    /// <summary>Inline MCP config (.mcp.json); null = unchanged, empty string clears inline
+    /// config only (catalog <see cref="McpServerIds"/> are unchanged unless also sent).</summary>
     public string? McpConfigJson { get; init; }
-    /// <summary>Saved library MCP servers; null = unchanged, empty list = none.</summary>
+    /// <summary>Catalog MCP servers; null = unchanged, empty list = none.</summary>
     public List<string>? McpServerIds { get; init; }
+    /// <summary>
+    /// Session-scoped OpenAPI/GraphQL MCP sources; null = unchanged, empty list clears,
+    /// non-empty replaces all ephemerals for the session (then MCP secret is re-assembled).
+    /// </summary>
+    public List<EphemeralApiSource>? EphemeralApiSources { get; init; }
     public AgentKind? Agent { get; init; }
     public AgentAuthMode? AuthMode { get; init; }
     /// <summary>Which existing API key OpenClaw should use; only for OpenClaw + ApiKey.</summary>
@@ -259,7 +285,7 @@ public static class SessionDuplication
             Schedule = source.Schedule,
             McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
             // An explicit list (from the duplicate dialog's picker) wins; otherwise the
-            // library servers follow the IncludeMcp choice like the inline config does.
+            // catalog servers follow the IncludeMcp choice like the inline config does.
             McpServerIds = request.McpServerIds
                 ?? (request.IncludeMcp ? Deserialize<List<string>>(source.McpServerIdsJson) : new List<string>()),
             Agent = agent,
@@ -313,7 +339,7 @@ public record SessionInfo
     public bool HasMcp { get; init; }
     /// <summary>MCP config JSON (returned so the edit dialog can prefill it).</summary>
     public string? McpConfigJson { get; init; }
-    /// <summary>Saved library MCP servers included in this session.</summary>
+    /// <summary>Catalog MCP servers included in this session.</summary>
     public IReadOnlyList<string> McpServerIds { get; init; } = Array.Empty<string>();
     public required string Phase { get; init; }       // Pending | Running | Paused | Succeeded | Failed | Scheduled
     public string? PodIp { get; init; }

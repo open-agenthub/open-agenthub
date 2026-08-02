@@ -1,0 +1,17 @@
+# Minimal GraphQL schema fixture for AgentHub API MCP gateway tests.
+type Query {
+  """Fetch a book by id"""
+  book(id: ID!): Book
+  books: [Book!]!
+}
+
+type Mutation {
+  """Add a book"""
+  addBook(title: String!, author: String!): Book!
+}
+
+type Book {
+  id: ID!
+  title: String!
+  author: String!
+}

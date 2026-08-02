@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentHub.Api.Agents;
+using AgentHub.Api.Controllers;
 using AgentHub.Api.Library;
 using AgentHub.Api.Models;
 using AgentHub.Api.Browser;
@@ -31,9 +32,13 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly Usage.UsageLimitService _usageLimits;
     private readonly IAllowedAgentsProvider _allowedAgents;
     private readonly ILibraryAccess _library;
+    private readonly IMcpServerStore _mcpServers;
+    private readonly IEphemeralApiMcpStore _ephemeralApiMcps;
+    private readonly IMcpGatewayTokenService _mcpGatewayTokens;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
+    private readonly string _mcpGatewayBaseUrl;
     private readonly bool _s3Insecure;
     private readonly bool _browserEnabled;
     private readonly bool _spawnMcpEnabled;
@@ -46,7 +51,9 @@ public sealed class KubernetesSessionService : ISessionService
 
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
         IArtifactStore artifacts, IBrowserService browsers, IGitAuthService gitAuth,
-        Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents, ILibraryAccess library,
+        Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
+        ILibraryAccess library, IMcpServerStore mcpServers, IEphemeralApiMcpStore ephemeralApiMcps,
+        IMcpGatewayTokenService mcpGatewayTokens,
         ILogger<KubernetesSessionService> log)
     {
         _log = log;
@@ -58,9 +65,18 @@ public sealed class KubernetesSessionService : ISessionService
         _usageLimits = usageLimits;
         _allowedAgents = allowedAgents;
         _library = library;
+        _mcpServers = mcpServers;
+        _ephemeralApiMcps = ephemeralApiMcps;
+        _mcpGatewayTokens = mcpGatewayTokens;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
+        // What agent pods use to reach the in-process OpenAPI MCP gateway.
+        // Empty falls back to CallbackBaseUrl (same in-cluster backend service).
+        var configuredGateway = cfg["McpGateway:BaseUrl"];
+        _mcpGatewayBaseUrl = string.IsNullOrWhiteSpace(configuredGateway)
+            ? _callbackBaseUrl.TrimEnd('/')
+            : configuredGateway.TrimEnd('/');
         _s3Insecure = cfg.GetValue("S3:InsecureTls", false);
         _browserEnabled = cfg.GetValue("Browser:Enabled", true);
         _spawnMcpEnabled = cfg.GetValue("AgentHub:SpawnMcpEnabled", true);
@@ -143,14 +159,12 @@ public sealed class KubernetesSessionService : ISessionService
 
         var repos = NormalizeRepos(req);
         var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
-        if (mcp is not null)
-        {
-            try { _ = JsonDocument.Parse(mcp); }
-            catch { throw new ArgumentException("MCP config is not valid JSON."); }
-        }
-        // Strict: creating a session with unknown/inaccessible library servers is an error.
-        var mcpServerIds = (await _library.ResolveMcpServersAsync(owner, req.McpServerIds, strict: true, ct))
-            .Select(s => s.Id).ToList();
+        // Strict resolve + assemble before Upsert so invalid inline shape or bad catalog
+        // config fails closed — no half-created session row.
+        var (mcpServerIds, _) = await SessionMcpConfig.ResolveAndAssembleAsync(
+            _library, owner, mcp, req.McpServerIds, strict: true, ct);
+        // Validate ephemeral sources before allocating a session id / writing a row.
+        var preparedEphemeral = PrepareEphemeralSources(req.EphemeralApiSources);
         var policy = EffectivePolicy(req.Policy, req.AllowedTools);
 
         var id = Guid.NewGuid().ToString("n")[..12];
@@ -173,10 +187,21 @@ public sealed class KubernetesSessionService : ISessionService
             CallbackToken = RandomToken(),
             Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending"
         };
+        // Persist session row before registering ephemerals so a failed Upsert
+        // cannot leave orphaned session-scoped API sources.
         await _store.UpsertAsync(rec, ct);
 
-        await SpawnAsync(owner, rec, req, resume: false, ct);
-        return ToInfo(rec, phase: rec.Status, podIp: null);
+        try
+        {
+            await RegisterEphemeralSourcesAsync(owner, id, preparedEphemeral, ct);
+            await SpawnAsync(owner, rec, req, resume: false, ct);
+        }
+        catch
+        {
+            await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
+            throw;
+        }
+        return await ToInfoAsync(rec, phase: rec.Status, podIp: null, ct: ct);
     }
 
     public async Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default)
@@ -234,19 +259,144 @@ public sealed class KubernetesSessionService : ISessionService
         catch (JsonException) { return new(); }
     }
 
-    /// <summary>Merges the session's saved library servers (lenient: inaccessible ids
-    /// drop out) and the built-in skill-library MCP server with its inline config
+    /// <summary>Merges catalog servers (lenient: inaccessible ids drop out), the
+    /// built-in skill-library MCP server, inline config, and ephemeral API sources
     /// into the effective .mcp.json.</summary>
     private async Task<string?> BuildEffectiveMcpConfigAsync(string owner, SessionRecord rec, CancellationToken ct)
     {
-        var ids = ParseMcpServerIds(rec);
-        var servers = ids.Count == 0
+        var gateway = new McpGatewayAssembleOptions
+        {
+            BaseUrl = _mcpGatewayBaseUrl,
+            SessionId = rec.Id,
+            IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner),
+            IssueEphemeralToken = name => _mcpGatewayTokens.IssueEphemeral(rec.Id, name, owner)
+        };
+        var ephemeral = await _ephemeralApiMcps.ListBySessionAsync(rec.Id, ct);
+        var servers = ParseMcpServerIds(rec).Count == 0
             ? (IReadOnlyList<McpServerRecord>)Array.Empty<McpServerRecord>()
-            : await _library.ResolveMcpServersAsync(owner, ids, strict: false, ct);
+            : await _library.ResolveMcpServersAsync(owner, ParseMcpServerIds(rec), strict: false, ct);
         if (_opts.SkillLibraryMcp)
             servers = servers.Append(SkillLibraryMcpConfig.BuildServer(_callbackBaseUrl, rec)).ToList();
-        return McpConfigAssembler.Merge(rec.McpConfigJson, servers);
+        return McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
     }
+
+    private static List<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)> PrepareEphemeralSources(
+        IReadOnlyList<EphemeralApiSource> sources)
+    {
+        var prepared = new List<(EphemeralApiSource, string, string?)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var source in sources)
+        {
+            var name = LibraryValidation.ValidateMcpServerName(source.Name);
+            if (!seen.Add(name))
+                throw new ArgumentException($"Duplicate ephemeral API source name '{name}'.");
+
+            var configJson = McpServersController.BuildApiConfigJson(new CreateMcpFromApiRequest(
+                name, Description: null, source.SpecUrl, source.SpecType, source.BaseUrl, source.Auth,
+                source.Secret, Save: false));
+            LibraryValidation.ValidateMcpServerConfig(configJson, "api");
+
+            string? secretJson = null;
+            if (!string.IsNullOrWhiteSpace(source.Secret))
+            {
+                var secret = source.Secret.Trim();
+                secretJson = secret.StartsWith('{')
+                    ? secret
+                    : JsonSerializer.Serialize(new Dictionary<string, string> { ["token"] = secret });
+            }
+
+            prepared.Add((source with { Name = name }, configJson, secretJson));
+        }
+
+        return prepared;
+    }
+
+    private async Task RegisterEphemeralSourcesAsync(
+        string owner,
+        string sessionId,
+        IReadOnlyList<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)> prepared,
+        CancellationToken ct)
+    {
+        foreach (var (source, configJson, secretJson) in prepared)
+        {
+            await _ephemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
+                sessionId, source.Name, owner, configJson, secretJson), ct);
+
+            if (!source.SaveToLibrary)
+                continue;
+
+            // Upsert by name so a pre-existing personal catalog entry does not
+            // abort session create/update.
+            await UpsertLibraryApiServerAsync(owner, source.Name, configJson, secretJson, ct);
+        }
+    }
+
+    private async Task UpsertLibraryApiServerAsync(
+        string owner, string name, string configJson, string? secretJson, CancellationToken ct)
+    {
+        var request = new SaveMcpServerRequest(name, Description: null, Kind: "api", configJson, secretJson);
+        try
+        {
+            var existing = (await _mcpServers.ListByOwnerAsync(owner, ct))
+                .FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+            if (existing is not null)
+                await _mcpServers.UpdateAsync(owner, existing.Id, request, ct);
+            else
+                await _mcpServers.CreateAsync(owner, request, ct);
+        }
+        catch (Exception ex)
+        {
+            // Catalog save is best-effort relative to the session row / ephemerals.
+            _log.LogWarning(ex, "SaveToLibrary failed for MCP server {Name}; session continues", name);
+        }
+    }
+
+    /// <summary>
+    /// Replace session ephemerals after assemble validation. Snapshots the previous
+    /// set and restores it if registration or a subsequent commit step fails.
+    /// </summary>
+    private async Task ReplaceEphemeralSourcesAsync(
+        string owner,
+        string sessionId,
+        IReadOnlyList<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)> prepared,
+        CancellationToken ct)
+    {
+        var snapshot = await _ephemeralApiMcps.ListBySessionAsync(sessionId, ct);
+        try
+        {
+            await _ephemeralApiMcps.DeleteBySessionAsync(sessionId, ct);
+            await RegisterEphemeralSourcesAsync(owner, sessionId, prepared, ct);
+        }
+        catch
+        {
+            await RestoreEphemeralSnapshotAsync(snapshot, ct);
+            throw;
+        }
+    }
+
+    private async Task RestoreEphemeralSnapshotAsync(
+        IReadOnlyList<EphemeralApiMcpEntry> snapshot, CancellationToken ct)
+    {
+        if (snapshot.Count == 0) return;
+        var sessionId = snapshot[0].SessionId;
+        try
+        {
+            await _ephemeralApiMcps.DeleteBySessionAsync(sessionId, ct);
+            foreach (var entry in snapshot)
+                await _ephemeralApiMcps.RegisterAsync(entry, ct);
+        }
+        catch (Exception ex)
+        {
+            _log.LogError(ex, "Failed to restore ephemeral API sources for session {SessionId}", sessionId);
+        }
+    }
+
+    private static IReadOnlyList<EphemeralApiMcpEntry> ToEphemeralEntries(
+        string owner,
+        string sessionId,
+        IReadOnlyList<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)> prepared) =>
+        prepared.Select(p => new EphemeralApiMcpEntry(
+            sessionId, p.Source.Name, owner, p.ConfigJson, p.SecretJson)).ToList();
 
     private async Task ValidateProjectAsync(string owner, string? projectId, CancellationToken ct)
     {
@@ -321,7 +471,7 @@ public sealed class KubernetesSessionService : ISessionService
         };
         await SpawnAsync(owner, rec, req, resume: true, ct);
         _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.AgentSessionId);
-        return ToInfo(rec, phase: rec.Status, podIp: null);
+        return await ToInfoAsync(rec, phase: rec.Status, podIp: null, ct: ct);
     }
 
     /// <summary>
@@ -347,7 +497,7 @@ public sealed class KubernetesSessionService : ISessionService
         rec.QuestionPending = false;
         await _store.UpsertAsync(rec, ct);
         _log.LogInformation("Paused session {Id} (pod removed, state uploaded to S3)", id);
-        return ToInfo(rec, phase: SessionStatus.Paused, podIp: null);
+        return await ToInfoAsync(rec, phase: SessionStatus.Paused, podIp: null, ct: ct);
     }
 
     /// <summary>
@@ -391,38 +541,70 @@ public sealed class KubernetesSessionService : ISessionService
             rec.ReposJson = SerializeRepos(repos);
             rec.RepoUrl = repos.FirstOrDefault()?.Url;
         }
-        var mcpDirty = false;
-        if (req.McpConfigJson is not null)
-        {
-            // Empty string clears the MCP config; otherwise validate and replace.
-            var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
-            if (mcp is not null)
-            {
-                try { _ = JsonDocument.Parse(mcp); }
-                catch { throw new ArgumentException("MCP config is not valid JSON."); }
-            }
-            rec.McpConfigJson = mcp;
-            mcpDirty = true;
-        }
-        if (req.McpServerIds is not null)
-        {
-            var ids = (await _library.ResolveMcpServersAsync(owner, req.McpServerIds, strict: true, ct))
-                .Select(s => s.Id).ToList();
-            rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
-            mcpDirty = true;
-        }
-        if (mcpDirty)
-        {
-            var effective = await BuildEffectiveMcpConfigAsync(owner, rec, ct);
-            if (effective is not null)
-                await CreateMcpSecretAsync(owner, id, effective, ct);
-            else
-                try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
-        }
+        // Validate project before mutating ephemerals / MCP secret.
         if (req.ProjectIdSpecified)
         {
             await ValidateProjectAsync(owner, req.ProjectId, ct);
             rec.ProjectId = req.ProjectId;
+        }
+        var mcpDirty = false;
+        if (req.McpConfigJson is not null)
+        {
+            // Empty string clears inline MCP config; catalog ids are unchanged unless also sent.
+            rec.McpConfigJson = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
+            mcpDirty = true;
+        }
+        if (req.McpServerIds is not null)
+            mcpDirty = true;
+        // null = leave session ephemerals alone; non-null replaces the full set (empty clears).
+        // Validate/prepare first; mutate the store only after assemble succeeds.
+        IReadOnlyList<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)>? preparedEphemeral = null;
+        if (req.EphemeralApiSources is not null)
+        {
+            preparedEphemeral = PrepareEphemeralSources(req.EphemeralApiSources);
+            mcpDirty = true;
+        }
+        IReadOnlyList<EphemeralApiMcpEntry>? ephemeralSnapshot = null;
+        if (mcpDirty)
+        {
+            // Strict resolve + assemble with the *proposed* ephemeral set before any
+            // DeleteBySession so a bad catalog id / inline shape cannot wipe sources.
+            var idsToResolve = req.McpServerIds ?? ParseMcpServerIds(rec);
+            var gateway = new McpGatewayAssembleOptions
+            {
+                BaseUrl = _mcpGatewayBaseUrl,
+                SessionId = rec.Id,
+                IssueToken = mcpServerId => _mcpGatewayTokens.Issue(rec.Id, mcpServerId, owner),
+                IssueEphemeralToken = name => _mcpGatewayTokens.IssueEphemeral(rec.Id, name, owner)
+            };
+            var ephemeral = preparedEphemeral is not null
+                ? ToEphemeralEntries(owner, rec.Id, preparedEphemeral)
+                : await _ephemeralApiMcps.ListBySessionAsync(rec.Id, ct);
+            var servers = await _library.ResolveMcpServersAsync(owner, idsToResolve, strict: true, ct);
+            var ids = servers.Select(s => s.Id).ToList();
+            var effective = McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
+            if (req.McpServerIds is not null)
+                rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
+
+            if (preparedEphemeral is not null)
+            {
+                ephemeralSnapshot = await _ephemeralApiMcps.ListBySessionAsync(rec.Id, ct);
+                await ReplaceEphemeralSourcesAsync(owner, rec.Id, preparedEphemeral, ct);
+            }
+
+            try
+            {
+                if (effective is not null)
+                    await CreateMcpSecretAsync(owner, id, effective, ct);
+                else
+                    try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
+            }
+            catch
+            {
+                if (ephemeralSnapshot is not null)
+                    await RestoreEphemeralSnapshotAsync(ephemeralSnapshot, ct);
+                throw;
+            }
         }
         if (req.Agent is { } agent)
             rec.Agent = agent;
@@ -443,12 +625,21 @@ public sealed class KubernetesSessionService : ISessionService
             rec.AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools);
         }
 
-        await _store.UpsertAsync(rec, ct);
+        try
+        {
+            await _store.UpsertAsync(rec, ct);
+        }
+        catch
+        {
+            if (ephemeralSnapshot is not null)
+                await RestoreEphemeralSnapshotAsync(ephemeralSnapshot, ct);
+            throw;
+        }
         _log.LogInformation("Updated session {Id} settings", id);
 
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
-            await _browsers.GetSummaryAsync(id, ct));
+        return await ToInfoAsync(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
+            await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
     private static void ValidateQuantity(string value, string what)
@@ -459,7 +650,7 @@ public sealed class KubernetesSessionService : ISessionService
 
     private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct)
     {
-        // Resolved fresh on every (re)start so shared library entries stay live:
+        // Resolved fresh on every (re)start so catalog entries stay live:
         // an updated shared server lands in the pod on the next resume, and
         // entries that are no longer accessible (revoked share, lapsed license)
         // silently drop out. Own entries always survive.
@@ -564,10 +755,14 @@ public sealed class KubernetesSessionService : ISessionService
 
         var browserSummaries = await _browsers.GetSummariesAsync(
             records.Select(record => record.Id).ToArray(), ct);
+        var ephemeralFlags = await Task.WhenAll(records.Select(async r =>
+            (r.Id, Has: await SessionHasEphemeralMcpAsync(r.Id, ct))));
+        var ephemeralById = ephemeralFlags.ToDictionary(x => x.Id, x => x.Has);
         return records.Select(r =>
         {
             byId.TryGetValue(r.Id, out var pod);
-            return ToInfo(r, pod?.Status?.Phase ?? r.Status, pod?.Status?.PodIP, browserSummaries[r.Id]);
+            return ToInfo(r, pod?.Status?.Phase ?? r.Status, pod?.Status?.PodIP, browserSummaries[r.Id],
+                ephemeralById.GetValueOrDefault(r.Id));
         }).ToList();
     }
 
@@ -576,8 +771,8 @@ public sealed class KubernetesSessionService : ISessionService
         var rec = await _store.GetAsync(owner, id, ct);
         if (rec is null) return null;
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        return ToInfo(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
-            await _browsers.GetSummaryAsync(id, ct));
+        return await ToInfoAsync(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
+            await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
     public async Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default)
@@ -616,6 +811,7 @@ public sealed class KubernetesSessionService : ISessionService
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
+        await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
         await _store.DeleteAsync(id, ct);
         _log.LogInformation("Deleted session {Id} (S3 artifacts are kept)", id);
     }
@@ -696,11 +892,19 @@ public sealed class KubernetesSessionService : ISessionService
             Type = "Opaque", Data = new Dictionary<string, byte[]> { ["mcp.json"] = Encoding.UTF8.GetBytes(json) }
         }, ct);
 
-    private static SessionInfo ToInfo(SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null) => new()
+    private async Task<bool> SessionHasEphemeralMcpAsync(string sessionId, CancellationToken ct) =>
+        (await _ephemeralApiMcps.ListBySessionAsync(sessionId, ct)).Count > 0;
+
+    private async Task<SessionInfo> ToInfoAsync(
+        SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, CancellationToken ct = default) =>
+        ToInfo(r, phase, podIp, browser, await SessionHasEphemeralMcpAsync(r.Id, ct));
+
+    private static SessionInfo ToInfo(
+        SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, bool hasEphemeralMcp = false) => new()
     {
         Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, UiMode = r.UiMode, RepoUrl = r.RepoUrl,
         Repos = ParseRepos(r),
-        HasMcp = !string.IsNullOrWhiteSpace(r.McpConfigJson) || ParseMcpServerIds(r).Count > 0,
+        HasMcp = SessionMcpConfig.HasMcp(r.McpConfigJson, ParseMcpServerIds(r), hasEphemeralMcp),
         McpConfigJson = r.McpConfigJson, McpServerIds = ParseMcpServerIds(r),
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,

@@ -1,13 +1,13 @@
-using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Licensing;
 
 namespace AgentHub.Api.Library;
 
 /// <summary>
 /// Resolves which library items (MCP servers, skills) a user can use.
-/// Own items are always accessible. Items shared by others (per user, per
-/// group, or with everyone) are only visible while an enterprise license is
-/// active — without a license the library is strictly personal.
+/// Own items are always accessible. Without an enterprise license the org
+/// MCP catalog (<c>__org__</c>) is readable by all authenticated users and personal
+/// sharing is off. With a license, org and personal shares follow the share matrix.
+/// Skills shared by others are only visible while an enterprise license is active.
 /// </summary>
 public interface ILibraryAccess
 {
@@ -61,12 +61,29 @@ public sealed class LibraryAccessService : ILibraryAccess
         string owner, CancellationToken ct = default)
     {
         var own = await _mcpServers.ListByOwnerAsync(owner, ct);
-        var sharedIds = await SharedIdsAsync(LibraryItemTypes.Mcp, owner, ct);
-        if (sharedIds.Count == 0) return own;
+        var accessible = new Dictionary<string, McpServerRecord>(StringComparer.Ordinal);
+        foreach (var record in own)
+            accessible[record.Id] = record;
 
-        var shared = (await _mcpServers.GetManyAsync(sharedIds, ct))
-            .Where(s => s.Owner != owner);
-        return own.Concat(shared).OrderBy(s => s.Name, StringComparer.Ordinal).ToList();
+        if (!_license.Enabled)
+        {
+            foreach (var org in await _mcpServers.ListByOwnerAsync(McpServerRecord.OrgOwner, ct))
+                accessible[org.Id] = org;
+        }
+        else
+        {
+            var sharedIds = await SharedIdsAsync(LibraryItemTypes.Mcp, owner, ct);
+            if (sharedIds.Count > 0)
+            {
+                foreach (var shared in await _mcpServers.GetManyAsync(sharedIds, ct))
+                {
+                    if (shared.Owner != owner)
+                        accessible[shared.Id] = shared;
+                }
+            }
+        }
+
+        return accessible.Values.OrderBy(s => s.Name, StringComparer.Ordinal).ToList();
     }
 
     public async Task<IReadOnlyList<SkillRecord>> ListSkillsAsync(
@@ -100,9 +117,12 @@ public sealed class LibraryAccessService : ILibraryAccess
         if (distinct.Count == 0) return [];
 
         var records = await _mcpServers.GetManyAsync(distinct, ct);
-        var sharedIds = await SharedIdsAsync(LibraryItemTypes.Mcp, owner, ct);
+        var sharedIds = _license.Enabled
+            ? await SharedIdsAsync(LibraryItemTypes.Mcp, owner, ct)
+            : (IReadOnlyCollection<string>)[];
+
         var accessible = records
-            .Where(r => r.Owner == owner || sharedIds.Contains(r.Id))
+            .Where(r => IsMcpAccessible(r, owner, sharedIds))
             .ToList();
 
         if (strict && accessible.Count != distinct.Count)
@@ -144,6 +164,15 @@ public sealed class LibraryAccessService : ILibraryAccess
             }
         }
         return payloads.OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
+    }
+
+    private bool IsMcpAccessible(
+        McpServerRecord record, string owner, IReadOnlyCollection<string> sharedIds)
+    {
+        if (record.Owner == owner) return true;
+        if (!_license.Enabled)
+            return record.Owner == McpServerRecord.OrgOwner;
+        return sharedIds.Contains(record.Id);
     }
 
     private async Task<IReadOnlyCollection<string>> SharedIdsAsync(
