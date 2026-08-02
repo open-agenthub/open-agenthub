@@ -24,6 +24,7 @@ const shellOpened = ref(false)
 const shareOpen = ref(false)
 const transcriptText = ref(null)
 const transcriptBlocks = computed(() => toTranscriptBlocks(transcriptText.value))
+const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '', transcript: '' })
 
 // In-app approval of tool-permission requests (in addition to the messengers).
@@ -80,6 +81,7 @@ async function selectTab(tab) {
           <span v-if="session.sharedBy" class="shared">· shared by {{ session.sharedBy }}</span>
         </div>
       </div>
+      <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
       <nav class="tabs">
         <button :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">{{ tabLabel('agent') }}</button>
         <button v-if="isLive && capabilities.canShell" :class="{ on: activeTab === 'shell' }" @click="selectTab('shell')">{{ tabLabel('shell') }}</button>
@@ -113,7 +115,7 @@ async function selectTab(tab) {
         <button class="bar-btn danger" @click="decidePermission(p.id, 'deny')">Deny</button>
       </div>
     </div>
-    <SessionWorkspace :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
+    <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
       <div class="terminal-stack">
         <ChatPane v-if="isChat" v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
         <TerminalPane v-else v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :active="activeTab === 'agent'" @status="statuses.agent = $event" />

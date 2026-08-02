@@ -4,6 +4,7 @@ using System.Text.Json;
 using AgentHub.Api.Agents;
 using AgentHub.Api.Controllers;
 using AgentHub.Api.Library;
+using AgentHub.Api.Files;
 using AgentHub.Api.Models;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
@@ -35,6 +36,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IMcpServerStore _mcpServers;
     private readonly IEphemeralApiMcpStore _ephemeralApiMcps;
     private readonly IMcpGatewayTokenService _mcpGatewayTokens;
+    private readonly ISessionFileCleanup? _fileCleanup;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -53,8 +55,8 @@ public sealed class KubernetesSessionService : ISessionService
         IArtifactStore artifacts, IBrowserService browsers, IGitAuthService gitAuth,
         Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
         ILibraryAccess library, IMcpServerStore mcpServers, IEphemeralApiMcpStore ephemeralApiMcps,
-        IMcpGatewayTokenService mcpGatewayTokens,
-        ILogger<KubernetesSessionService> log)
+        IMcpGatewayTokenService mcpGatewayTokens, ILogger<KubernetesSessionService> log,
+        ISessionFileCleanup? fileCleanup = null)
     {
         _log = log;
         _store = store;
@@ -68,6 +70,7 @@ public sealed class KubernetesSessionService : ISessionService
         _mcpServers = mcpServers;
         _ephemeralApiMcps = ephemeralApiMcps;
         _mcpGatewayTokens = mcpGatewayTokens;
+        _fileCleanup = fileCleanup;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
@@ -492,6 +495,10 @@ public sealed class KubernetesSessionService : ISessionService
         // before the container is killed (the k8s default of 30s is plenty; the
         // agent uploads state, then exits).
         await TryDeletePodAsync($"session-{id}", ct, _opts.PauseGracePeriodSeconds);
+        if (_fileCleanup is not null)
+        {
+            await _fileCleanup.ExpirePodFilesAsync(id, ct);
+        }
 
         rec.Status = SessionStatus.Paused;
         rec.QuestionPending = false;
@@ -805,6 +812,11 @@ public sealed class KubernetesSessionService : ISessionService
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        if (_fileCleanup is not null)
+        {
+            var liveSession = await GetSessionAsync(owner, id, ct);
+            await _fileCleanup.DeleteSessionAsync(id, liveSession, ct);
+        }
         await _browsers.StopAsync(id, ct);
         await _browsers.DeleteStateAsync(rec, ct);
         await TryDeletePodAsync($"session-{id}", ct);
@@ -813,7 +825,7 @@ public sealed class KubernetesSessionService : ISessionService
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
         await _store.DeleteAsync(id, ct);
-        _log.LogInformation("Deleted session {Id} (S3 artifacts are kept)", id);
+        _log.LogInformation("Deleted session {Id}", id);
     }
 
     // ---------------------------------------------------------------- Pod-Spec

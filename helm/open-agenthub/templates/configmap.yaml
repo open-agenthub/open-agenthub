@@ -5,6 +5,7 @@ metadata:
   name: agenthub-config
   labels: {{ include "agenthub.labels" . | nindent 4 }}
 data:
+  Kestrel__Limits__MaxRequestBodySize: "57671680"
   ASPNETCORE_ENVIRONMENT: {{ .Values.backend.environment | default "Production" | quote }}
   DevelopmentAuth__Enabled: {{ .Values.backend.developmentAuth.enabled | default false | quote }}
   DevelopmentAuth__HeaderName: {{ .Values.backend.developmentAuth.headerName | default "X-AgentHub-Test-User" | quote }}
@@ -30,6 +31,21 @@ data:
   AgentHub__TelemetryOtlpEndpoint: {{ .Values.telemetry.otlpEndpoint | default "" | quote }}
   AgentHub__MaxRunningSessionsPerOwner: {{ .Values.maxRunningSessionsPerOwner | default 20 | quote }}
   AgentHub__SpawnMcpEnabled: {{ .Values.spawnMcpEnabled | quote }}
+  Files__MaxImageBytes: {{ .Values.files.maxImageBytes | int64 | quote }}
+  Files__MaxDocumentBytes: {{ .Values.files.maxDocumentBytes | int64 | quote }}
+  Files__MaxMessageBytes: {{ .Values.files.maxMessageBytes | int64 | quote }}
+  Files__MaxMessageFiles: {{ .Values.files.maxMessageFiles | quote }}
+  Files__MaxSessionFiles: {{ .Values.files.maxSessionFiles | quote }}
+  Files__MaxSessionBytes: {{ .Values.files.maxSessionBytes | int64 | quote }}
+  Files__PresignMinutes: {{ .Values.files.presignMinutes | quote }}
+  Files__ReservationMinutes: {{ .Values.files.reservationMinutes | quote }}
+  Files__SweepSeconds: {{ .Values.files.sweepSeconds | quote }}
+  Files__PresentationPollMilliseconds: {{ .Values.files.presentationPollMilliseconds | quote }}
+  Files__OfficePreview__Enabled: {{ .Values.files.officePreview.enabled | quote }}
+  Files__OfficePreview__BaseUrl: {{ .Values.files.officePreview.baseUrl | quote }}
+  Files__OfficePreview__TimeoutSeconds: {{ .Values.files.officePreview.timeoutSeconds | quote }}
+  Files__OfficePreview__MaxOutputBytes: {{ .Values.files.officePreview.maxOutputBytes | int64 | quote }}
+  Files__OfficePreview__PollMilliseconds: {{ .Values.files.officePreview.pollMilliseconds | quote }}
   Browser__Enabled: {{ .Values.browser.enabled | quote }}
   {{ if .Values.browser.enabled }}
   Browser__Image: {{ include "agenthub.browserImage" . | quote }}

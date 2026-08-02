@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { Readable, Writable } = require('node:stream');
 
 const commonDir = path.join(__dirname, '..', '..', 'common');
 const { validateDriver } = require('../../common/driver-contract');
@@ -34,7 +35,11 @@ class FakeChildProcess {
     this.stderrHandlers = [];
     this.handlers = {};
     this.killed = false;
-    this.stdin = { write: data => this.stdinWrites.push(data) };
+    this.stdin = { write: (data, callback) => {
+      this.stdinWrites.push(data);
+      if (callback) queueMicrotask(() => callback(null));
+      return true;
+    }, on() {} };
     this.stdout = { on: (event, handler) => { if (event === 'data') this.stdoutHandlers.push(handler); } };
     this.stderr = { on: (event, handler) => { if (event === 'data') this.stderrHandlers.push(handler); } };
   }
@@ -65,7 +70,7 @@ function tick() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
-function createHarness(environment = {}, driverOverrides = {}) {
+function createHarness(environment = {}, driverOverrides = {}, harnessOptions = {}) {
   const terminals = [];
   const spawns = [];
   const children = [];
@@ -76,6 +81,7 @@ function createHarness(environment = {}, driverOverrides = {}) {
   const intervals = [];
   const exits = [];
 
+  const fileCalls = [];
   class FakeWebSocketServer {
     constructor(options) {
       this.options = options;
@@ -85,10 +91,28 @@ function createHarness(environment = {}, driverOverrides = {}) {
     connect(socket, url) { this.handlers.connection(socket, { url }); }
   }
 
+  class FakeHttpServer {
+    constructor(handler) { this.handler = handler; this.port = null; }
+    listen(port) { this.port = port; }
+    request(request, response) { return this.handler(request, response); }
+  }
+
+  const http = {
+    createServer(handler) { return new FakeHttpServer(handler); }
+  };
+
+  const materializer = {
+    calls: [],
+    materializeResult: [],
+    async materialize(ids) { this.calls.push(ids); return this.materializeResult; }
+  };
+
   const driver = {
     name: 'Test',
     stateDir: '.test-agent',
     authFilename: 'auth.json',
+    attachmentCapabilities: Object.freeze({
+      nativeImages: false, localImagePaths: true, mcpImages: true }),
     prepare() {},
     buildCommand: (_env, allowResume) => ({ cmd: 'test-agent', args: allowResume ? ['resume'] : ['fresh'] }),
     isResumeCommand: command => command.args.includes('resume'),
@@ -121,7 +145,7 @@ function createHarness(environment = {}, driverOverrides = {}) {
         }
       },
       spawn(cmd, args, options) {
-        const child = new FakeChildProcess();
+        const child = harnessOptions.createChild?.() ?? new FakeChildProcess();
         children.push(child);
         pipeSpawns.push({ cmd, args, options });
         return child;
@@ -139,33 +163,117 @@ function createHarness(environment = {}, driverOverrides = {}) {
         requests.push({ url, options });
         return Promise.resolve({ ok: true });
       },
+      http,
+      fileStore: {
+        async put(id, name, readable, maxBytes) {
+          const chunks = [];
+          for await (const chunk of readable) chunks.push(chunk);
+          fileCalls.push({ method: 'PUT', id, name, maxBytes, body: Buffer.concat(chunks).toString() });
+          return { id, name, size: Buffer.concat(chunks).length };
+        },
+        async head(id) { fileCalls.push({ method: 'HEAD', id }); return null; },
+        async open(id) { fileCalls.push({ method: 'GET', id }); return null; },
+        async remove(id) { fileCalls.push({ method: 'DELETE', id }); }
+      },
       process: processLike,
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
+      attachmentMaterializer: materializer,
       setTimeout(callback) { callback(); return 1; },
       now: (() => { let value = 1000; return () => value += 100; })()
     }
   });
 
-  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits };
+  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits, fileCalls, materializer };
 }
 
-function createChatHarness(environment = {}, driverOverrides = {}) {
+function requestHttp(harness, method, url, headers = {}, body = '') {
+  const request = Readable.from(body ? [Buffer.from(body)] : []);
+  request.method = method;
+  request.url = url;
+  request.headers = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const response = {
+      statusCode: 200,
+      headers: {},
+      setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
+      write(chunk) { chunks.push(Buffer.from(chunk)); },
+      end(chunk) {
+        if (chunk) chunks.push(Buffer.from(chunk));
+        resolve({ status: this.statusCode, headers: this.headers, body: Buffer.concat(chunks).toString() });
+      }
+    };
+    Promise.resolve(harness.runtime.httpServer.request(request, response)).catch(reject);
+  });
+}
+
+function createChatHarness(environment = {}, driverOverrides = {}, harnessOptions = {}) {
   return createHarness(environment, {
     buildCommand: (_env, allowResume) =>
       ({ cmd: 'test-agent', args: allowResume ? ['resume'] : ['fresh'], pipe: true }),
     ...driverOverrides
-  });
+  }, harnessOptions);
 }
+test('common server attaches WebSockets and file HTTP routes to one listener', () => {
+  const harness = createHarness();
+  assert.equal(harness.runtime.webSocketServer.options.server, harness.runtime.httpServer);
+  assert.equal(harness.runtime.httpServer.port, 8123);
+});
+
+test('file HTTP routes reject missing and incorrect tokens before touching storage', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' });
+  const id = 'a'.repeat(32);
+
+  const missing = await requestHttp(harness, 'PUT', `/agenthub/files/${id}`,
+    { 'X-Agent-File-Name': 'shot.png' }, 'data');
+  const wrong = await requestHttp(harness, 'PUT', `/agenthub/files/${id}`,
+    { 'X-Agent-Token': 'wrong-token', 'X-Agent-File-Name': 'shot.png' }, 'data');
+
+  assert.equal(missing.status, 401);
+  assert.equal(wrong.status, 401);
+  assert.deepEqual(harness.fileCalls, []);
+});
+
+test('file HTTP routes stream PUT and expose bounded metadata operations', async () => {
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_TOKEN: 'correct-token',
+    AGENTHUB_FILE_MAX_BYTES: '4'
+  });
+  const id = 'b'.repeat(32);
+  const headers = {
+    'X-Agent-Token': 'correct-token',
+    'X-Agent-File-Name': 'shot.png'
+  };
+
+  const put = await requestHttp(harness, 'PUT', `/agenthub/files/${id}`, headers, 'data');
+  assert.equal(put.status, 201);
+  assert.deepEqual(JSON.parse(put.body), { id, name: 'shot.png', size: 4 });
+  assert.deepEqual(harness.fileCalls[0], {
+    method: 'PUT', id, name: 'shot.png', maxBytes: 4, body: 'data'
+  });
+
+  const head = await requestHttp(harness, 'HEAD', `/agenthub/files/${id}`, headers);
+  assert.equal(head.status, 404);
+  const deleted = await requestHttp(harness, 'DELETE', `/agenthub/files/${id}`, headers);
+  assert.equal(deleted.status, 204);
+  assert.deepEqual(harness.fileCalls.slice(1), [
+    { method: 'HEAD', id },
+    { method: 'DELETE', id }
+  ]);
+});
+
 
 test('common transport validates every required driver export', () => {
   const valid = {
     name: 'Example', stateDir: '.example', authFilename: 'auth.json',
+    attachmentCapabilities: {
+      nativeImages: false, localImagePaths: true, mcpImages: true },
     buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
   };
   assert.equal(validateDriver(valid), valid);
 
-  for (const key of ['name', 'stateDir', 'authFilename', 'buildCommand', 'isResumeCommand',
-    'isMissingResume', 'prepare']) {
+  for (const key of ['name', 'stateDir', 'authFilename', 'attachmentCapabilities',
+    'buildCommand', 'isResumeCommand', 'isMissingResume', 'prepare']) {
     const invalid = { ...valid };
     delete invalid[key];
     assert.throws(() => validateDriver(invalid), new RegExp(`missing ${key}`, 'i'));
@@ -176,6 +284,8 @@ test('common transport validates every required driver export', () => {
 test('common transport accepts only safe single relative archive names', () => {
   const valid = {
     name: 'Example', stateDir: '.claude', authFilename: '.credentials.json',
+    attachmentCapabilities: {
+      nativeImages: false, localImagePaths: true, mcpImages: true },
     buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
   };
 
@@ -214,6 +324,8 @@ test('common transport accepts only safe single relative archive names', () => {
 test('common transport accepts optional safe stateExcludes paths and globs', () => {
   const valid = {
     name: 'Example', stateDir: '.openclaw', authFilename: 'auth-profiles.json',
+    attachmentCapabilities: {
+      nativeImages: false, localImagePaths: true, mcpImages: true },
     buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
   };
 
@@ -457,7 +569,7 @@ test('chat transport spawns a pipe instead of a PTY and replays only durable eve
   ]);
 });
 
-test('chat transport forwards user input as stream-json and echoes it durably', () => {
+test('chat transport forwards user input as stream-json and echoes it durably', async () => {
   const harness = createChatHarness();
   const socket = new FakeSocket();
   harness.runtime.webSocketServer.connect(socket, '/');
@@ -466,6 +578,8 @@ test('chat transport forwards user input as stream-json and echoes it durably', 
   socket.emit('message', Buffer.from(JSON.stringify({ type: 'chat', text: '   ' })));
   socket.emit('message', Buffer.from(JSON.stringify({ type: 'input', data: 'raw keys' })));
   socket.emit('message', Buffer.from(JSON.stringify({ type: 'resize', cols: 90, rows: 20 })));
+  await tick();
+  await tick();
 
   const child = harness.children[0];
   assert.deepEqual(child.stdinWrites, [
@@ -483,6 +597,88 @@ test('chat transport forwards user input as stream-json and echoes it durably', 
   assert.deepEqual(replay.sent, [echo]);
 });
 
+test('chat materializes ready IDs and echoes metadata without local paths', async () => {
+  const harness = createChatHarness();
+  const id = 'a'.repeat(32);
+  harness.materializer.materializeResult = [{
+    id, name: 'shot.png', mimeType: 'image/png', size: 12,
+    localPath: '/workspace/.agenthub/files/' + id + '/shot.png'
+  }];
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'chat', text: 'inspect', attachments: [id], clientTurnId: 'turn-1'
+  })));
+  await tick();
+  await tick();
+
+  assert.deepEqual(harness.materializer.calls, [[id]]);
+  assert.match(harness.children[0].stdinWrites[0], /inspect each attached image/i);
+  assert.match(harness.children[0].stdinWrites[0], /shot\.png/);
+  assert.doesNotMatch(socket.sent.join(''), /workspace|localPath/);
+  const echo = JSON.parse(socket.sent[0]);
+  assert.deepEqual(echo.attachments, [{
+    id, name: 'shot.png', mimeType: 'image/png', size: 12,
+    visualDelivery: 'localImagePaths'
+  }]);
+  assert.match(socket.sent.join(''), /"subtype":"chat_delivered".*"clientTurnId":"turn-1"/);
+});
+
+test('chat reports delivery failure when agent stdin rejects the write', async () => {
+  const harness = createChatHarness({}, {}, {
+    createChild() {
+      const child = new FakeChildProcess();
+      child.stdin = new Writable({
+        write(_chunk, _encoding, callback) { callback(new Error('closed')); }
+      });
+      return child;
+    }
+  });
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'chat', text: 'retain me', clientTurnId: 'turn-failed'
+  })));
+  await tick();
+  await tick();
+
+  assert.match(socket.sent.join(''), /attachment_delivery_failed/);
+  assert.match(socket.sent.join(''), /"clientTurnId":"turn-failed"/);
+  assert.doesNotMatch(socket.sent.join(''), /chat_delivered/);
+  assert.doesNotMatch(socket.sent.join(''), /retain me/);
+  assert.deepEqual(harness.exits, []);
+
+  const secondSocket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(secondSocket, '/');
+  assert.deepEqual(secondSocket.closed, []);
+});
+
+test('chat rejects an attachment turn before stdin when no visual delivery exists', async () => {
+  const harness = createChatHarness({}, {
+    attachmentCapabilities: Object.freeze({
+      nativeImages: false, localImagePaths: false, mcpImages: false
+    })
+  });
+  const id = 'b'.repeat(32);
+  harness.materializer.materializeResult = [{
+    id, name: 'shot.png', mimeType: 'image/png', size: 12,
+    localPath: '/workspace/.agenthub/files/' + id + '/shot.png'
+  }];
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'chat', text: 'inspect', attachments: [id], clientTurnId: 'turn-2'
+  })));
+  await tick();
+  await tick();
+
+  assert.deepEqual(harness.children[0].stdinWrites, []);
+  assert.match(socket.sent.join(''), /attachment_delivery_failed/);
+  assert.match(socket.sent.join(''), /"clientTurnId":"turn-2"/);
+});
 test('chat transport sends an interrupt control request on demand', () => {
   const harness = createChatHarness();
   const socket = new FakeSocket();

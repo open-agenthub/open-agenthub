@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using AgentHub.Api.Library;
+using AgentHub.Api.Files;
 using AgentHub.Api.Models;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Notifications;
@@ -33,17 +34,19 @@ public sealed class InternalController : ControllerBase
     private readonly IBrowserService? _browsers;
     private readonly bool _spawnMcpEnabled;
     private readonly ILibraryAccess _library;
+    private readonly IAgentCallbackAuthorizer _callbackAuthorizer;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares,
         ILibraryAccess library, IBrowserService? browsers = null, bool? spawnMcpEnabled = null,
-        IConfiguration? configuration = null)
+        IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
         _library = library;
         _browsers = browsers;
+        _callbackAuthorizer = callbackAuthorizer ?? new AgentCallbackAuthorizer(store);
         _spawnMcpEnabled = spawnMcpEnabled
             ?? configuration?.GetValue("AgentHub:SpawnMcpEnabled", true)
             ?? true;
@@ -62,9 +65,7 @@ public sealed class InternalController : ControllerBase
 
     private async Task<SessionRecord?> AuthAsync(string id, CancellationToken ct)
     {
-        if (!Request.Headers.TryGetValue("X-Agent-Token", out var tok)) return null;
-        var rec = await _store.GetByCallbackTokenAsync(tok!, ct);
-        return rec is not null && rec.Id == id ? rec : null;
+        return await _callbackAuthorizer.AuthorizeAsync(Request, id, ct);
     }
 
     private async Task<string?> ReadProviderCredentialBodyAsync(CancellationToken ct)

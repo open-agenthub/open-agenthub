@@ -20,6 +20,11 @@ test('Cursor driver exposes the provider state contract', () => {
   assert.equal(driver.stateDir, '.cursor');
   // Discovered from Cursor Agent CLI 2026.07.23-e383d2b file store (domain "cursor").
   assert.equal(driver.authFilename, 'auth.json');
+  assert.deepEqual(driver.attachmentCapabilities, {
+    nativeImages: false,
+    localImagePaths: true,
+    mcpImages: true
+  });
   assert.equal(typeof driver.prepare, 'function');
 });
 

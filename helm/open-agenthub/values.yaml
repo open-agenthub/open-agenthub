@@ -29,6 +29,9 @@ ingress:
   # cert-manager ClusterIssuer for the TLS certificate (empty = omit the annotation).
   clusterIssuer: ""
   tlsSecretName: agenthub-tls
+  # Additional controller annotations. Entries override the safe defaults below.
+  annotations: {}
+  bodySize: 55m
 
 backend:
   replicas: 2
@@ -74,6 +77,33 @@ agent:
   # Extra TCP egress ports allowed from session pods (besides 53/80/443/22),
   # e.g. [9000] for a self-hosted S3/MinIO on a non-standard port.
   extraEgressPorts: []
+
+files:
+  maxImageBytes: 20971520
+  maxDocumentBytes: 52428800
+  maxMessageBytes: 52428800
+  maxMessageFiles: 5
+  maxSessionFiles: 200
+  maxSessionBytes: 1073741824
+  presignMinutes: 10
+  reservationMinutes: 15
+  sweepSeconds: 60
+  presentationPollMilliseconds: 1500
+  officePreview:
+    enabled: false
+    replicas: 1
+    baseUrl: http://agenthub-artifact-renderer:8080/
+    timeoutSeconds: 90
+    maxOutputBytes: 52428800
+    pollMilliseconds: 1000
+    temporaryStorage: 256Mi
+    image:
+      repository: ghcr.io/open-agenthub/open-agenthub/artifact-renderer
+      tag: ""
+      pullPolicy: IfNotPresent
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: "1", memory: 1Gi }
 
 browser:
   enabled: true

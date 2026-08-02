@@ -145,6 +145,15 @@ try {
     $agentPod = "session-$script:SessionId"
     Wait-AgentReady $agentPod
 
+    # The companion workspace must be available alongside the browser for every session.
+    $fileCapabilities = Invoke-Api GET "/api/sessions/$script:SessionId/files/capabilities"
+    if ($fileCapabilities.directPreviewMimeTypes -notcontains 'image/png') {
+        throw 'The Files workspace does not advertise direct image previews.'
+    }
+    if ($fileCapabilities.typeSupport.'text/html' -ne 'download_only') {
+        throw 'The Files workspace must keep HTML download-only.'
+    }
+
     $callbackToken = Get-AgentValue $agentPod 'AGENTHUB_CALLBACK_TOKEN'
     $callbackUrl = Get-AgentValue $agentPod 'AGENTHUB_CALLBACK_URL'
     if ([string]::IsNullOrWhiteSpace($callbackToken)) { throw 'The in-cluster callback token fixture returned an empty value.' }
