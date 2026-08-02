@@ -63,6 +63,20 @@ async function uploadSessionFile(upload, body, options = {}) {
   return null
 }
 
+async function fileContent(path, authenticated) {
+  const res = await fetch(`/api${path}`, {
+    method: 'GET',
+    headers: authenticated ? await authHeaders() : {}
+  })
+  if (res.status === 401 && authenticated) handle401()
+  if (!res.ok) {
+    const error = new Error(`${res.status} ${await res.text()}`)
+    error.status = res.status
+    throw error
+  }
+  return res.blob()
+}
+
 async function sharedReq(path) {
   const res = await fetch(`/api${path}`, { method: 'GET', headers: {} })
   if (!res.ok) {
@@ -167,6 +181,10 @@ export const getSharedFileCapabilities = (token) => sharedReq(`/shared/${encodeU
 export const listSharedSessionFiles = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files`)
 export const getSharedFilePresentation = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/presentation`)
 export const sharedSessionFileContentUrl = (token, fileId) => `/api/shared/${encodeURIComponent(token)}/files/${encodeURIComponent(fileId)}/content`
+export const getSessionFileContent = (id, fileId) =>
+  fileContent(`/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/content`, true)
+export const getSharedSessionFileContent = (token, fileId) =>
+  fileContent(`/shared/${encodeURIComponent(token)}/files/${encodeURIComponent(fileId)}/content`, false)
 export const sharedTerminalUrl = (token) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/shared/${encodeURIComponent(token)}/terminal`
 
 // WebSocket URL including the token (browser WebSockets cannot set headers).

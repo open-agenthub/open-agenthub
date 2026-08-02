@@ -17,7 +17,9 @@ vi.mock('./auth.js', () => ({
 
 import {
   api,
+  getSessionFileContent,
   getSharedFileCapabilities,
+  getSharedSessionFileContent,
   getSharedFilePresentation,
   listSharedSessionFiles,
   sharedSessionFileContentUrl
@@ -29,6 +31,7 @@ describe('session file API', () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
+      blob: vi.fn().mockResolvedValue(new Blob(['file'])),
       json: vi.fn().mockResolvedValue({ ok: true }),
       text: vi.fn().mockResolvedValue('')
     })
@@ -95,5 +98,17 @@ describe('session file API', () => {
     for (const [, init] of fetch.mock.calls) {
       expect(init.headers?.Authorization).toBeUndefined()
     }
+  })
+
+  it('fetches authenticated and shared file blobs without putting tokens in URLs', async () => {
+    await getSessionFileContent('session/one', 'file/two')
+    expect(fetch).toHaveBeenLastCalledWith('/api/sessions/session%2Fone/files/file%2Ftwo/content', {
+      method: 'GET', headers: { Authorization: 'Bearer access-token' }
+    })
+
+    await getSharedSessionFileContent('token/value', 'file/two')
+    expect(fetch).toHaveBeenLastCalledWith('/api/shared/token%2Fvalue/files/file%2Ftwo/content', {
+      method: 'GET', headers: {}
+    })
   })
 })
