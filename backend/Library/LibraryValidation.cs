@@ -1,4 +1,5 @@
 using System.Text.Json;
+using AgentHub.Api.Library.ApiMcpGateway;
 
 namespace AgentHub.Api.Library;
 
@@ -81,6 +82,14 @@ public static class LibraryValidation
                     || string.IsNullOrWhiteSpace(specUrl.GetString()))
                 {
                     throw new ArgumentException("API MCP config requires a non-empty specUrl.");
+                }
+
+                ApiMcpGatewayHandler.ValidateSafeOutboundUrl(specUrl.GetString()!, "specUrl");
+                if (doc.RootElement.TryGetProperty("baseUrl", out var baseUrl)
+                    && baseUrl.ValueKind == JsonValueKind.String
+                    && !string.IsNullOrWhiteSpace(baseUrl.GetString()))
+                {
+                    ApiMcpGatewayHandler.ValidateSafeOutboundUrl(baseUrl.GetString()!, "baseUrl");
                 }
             }
         }

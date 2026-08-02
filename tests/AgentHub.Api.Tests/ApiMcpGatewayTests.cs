@@ -213,6 +213,56 @@ public class ApiMcpGatewayTests
         Assert.Equal("Bearer org-shared-secret", upstream.LastRequest!.Headers.Authorization?.ToString());
     }
 
+    [Fact]
+    public void ValidateSafeOutboundUrl_BlocksLocalhost()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            ApiMcpGatewayHandler.ValidateSafeOutboundUrl("http://localhost/openapi.json", "specUrl"));
+        Assert.Contains("blocked", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// SSRF: a 302 Location to loopback must not be followed. Production wires
+    /// mcp-gateway with AllowAutoRedirect=false; the cache also refuses 3xx.
+    /// </summary>
+    [Fact]
+    public async Task SpecCache_DoesNotFollowRedirectToLocalhost()
+    {
+        var seen = new List<string>();
+        // Custom handler (no auto-redirect). Production mcp-gateway client sets
+        // AllowAutoRedirect=false on HttpClientHandler for the same guarantee.
+        var http = new HttpClient(new RedirectToLocalhostHandler(seen));
+        var cache = new OpenApiSpecCache(http);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            cache.GetAsync("https://evil.example.test/openapi.json"));
+
+        Assert.Contains("redirect", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(["https://evil.example.test/openapi.json"], seen);
+    }
+
+    private sealed class RedirectToLocalhostHandler(List<string> seen) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            seen.Add(request.RequestUri!.AbsoluteUri);
+            if (string.Equals(request.RequestUri.Host, "127.0.0.1", StringComparison.Ordinal)
+                || string.Equals(request.RequestUri.Host, "localhost", StringComparison.OrdinalIgnoreCase))
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"openapi":"3.0.0","paths":{}}""", Encoding.UTF8, "application/json")
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Redirect)
+            {
+                Headers = { Location = new Uri("http://127.0.0.1/openapi.json") }
+            });
+        }
+    }
+
     /// <summary>Returns the petstore fixture for any GET (spec fetch).</summary>
     private sealed class StaticSpecHandler(string specJson) : HttpMessageHandler
     {

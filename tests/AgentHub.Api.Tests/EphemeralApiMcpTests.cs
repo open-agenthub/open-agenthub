@@ -174,8 +174,8 @@ public class EphemeralApiMcpTests
     }
 
     /// <summary>
-    /// Update-path seam: replace session ephemerals then re-assemble effective .mcp.json
-    /// (what UpdateSession writes into the MCP secret after DeleteBySession + Register).
+    /// Update-path seam: assemble with the *proposed* ephemeral set, then replace
+    /// (DeleteBySession + Register) — what UpdateSession does after validation.
     /// </summary>
     [Fact]
     public async Task UpdatePath_ReplaceEphemerals_ReassemblesEffectiveConfig()
@@ -186,17 +186,13 @@ public class EphemeralApiMcpTests
             """{"specType":"openapi","specUrl":"https://old.example.test/openapi.json"}""",
             null));
 
-        // Replace semantics used by UpdateSession when EphemeralApiSources is non-null.
-        await store.DeleteBySessionAsync("sess-1");
-        await store.RegisterAsync(new EphemeralApiMcpEntry(
-            "sess-1", "books", "alice",
-            """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql"}""",
-            null));
-
-        var ephemeral = await store.ListBySessionAsync("sess-1");
-        Assert.Single(ephemeral);
-        Assert.Equal("books", ephemeral[0].Name);
-
+        var proposed = new[]
+        {
+            new EphemeralApiMcpEntry(
+                "sess-1", "books", "alice",
+                """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql"}""",
+                null)
+        };
         var opts = new McpGatewayAssembleOptions
         {
             BaseUrl = "http://gateway.test",
@@ -204,12 +200,81 @@ public class EphemeralApiMcpTests
             IssueToken = id => $"tok-{id}",
             IssueEphemeralToken = name => $"eph-{name}"
         };
-        var json = McpConfigAssembler.Merge(null, [], opts, ephemeral);
-        using var doc = JsonDocument.Parse(json!);
-        var servers = doc.RootElement.GetProperty("mcpServers");
-        Assert.False(servers.TryGetProperty("old", out _));
-        Assert.Equal("http://gateway.test/mcp/session/sess-1/books",
-            servers.GetProperty("books").GetProperty("url").GetString());
+        // Validate assemble against proposed list before mutating the store.
+        var json = McpConfigAssembler.Merge(null, [], opts, proposed);
+        using (var doc = JsonDocument.Parse(json!))
+        {
+            Assert.Equal("http://gateway.test/mcp/session/sess-1/books",
+                doc.RootElement.GetProperty("mcpServers").GetProperty("books").GetProperty("url").GetString());
+        }
+
+        await store.DeleteBySessionAsync("sess-1");
+        foreach (var entry in proposed)
+            await store.RegisterAsync(entry);
+
+        var ephemeral = await store.ListBySessionAsync("sess-1");
+        Assert.Single(ephemeral);
+        Assert.Equal("books", ephemeral[0].Name);
+        Assert.False(JsonDocument.Parse(json!).RootElement.GetProperty("mcpServers").TryGetProperty("old", out _));
+    }
+
+    /// <summary>
+    /// Assemble/validation failure must happen before DeleteBySession so existing
+    /// ephemerals are not wiped on a bad update (strict catalog resolve / bad JSON).
+    /// </summary>
+    [Fact]
+    public async Task UpdatePath_AssembleFailure_DoesNotClearExistingEphemerals()
+    {
+        var store = new InMemoryEphemeralApiMcpStore();
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "old", "alice",
+            """{"specType":"openapi","specUrl":"https://old.example.test/openapi.json"}""",
+            null));
+
+        var proposed = new[]
+        {
+            new EphemeralApiMcpEntry(
+                "sess-1", "books", "alice",
+                """{"specType":"graphql","specUrl":"https://api.example.test/schema.graphql"}""",
+                null)
+        };
+        var opts = new McpGatewayAssembleOptions { BaseUrl = "http://gateway.test", SessionId = "sess-1" };
+
+        Assert.Throws<ArgumentException>(() =>
+            McpConfigAssembler.Merge("not-json{", [], opts, proposed));
+
+        // Store untouched — UpdateSession only deletes after assemble succeeds.
+        var still = await store.ListBySessionAsync("sess-1");
+        Assert.Single(still);
+        Assert.Equal("old", still[0].Name);
+    }
+
+    [Fact]
+    public async Task SaveToLibrary_UpsertsWhenNameExists()
+    {
+        var catalog = new InMemoryMcpServerStore();
+        const string configV1 =
+            """{"specType":"openapi","specUrl":"https://api.example.test/v1/openapi.json"}""";
+        const string configV2 =
+            """{"specType":"openapi","specUrl":"https://api.example.test/v2/openapi.json"}""";
+
+        var created = await catalog.CreateAsync("alice",
+            new SaveMcpServerRequest("books", null, "api", configV1, null));
+
+        // Upsert path used when SaveToLibrary=true and name already exists.
+        var existing = (await catalog.ListByOwnerAsync("alice"))
+            .First(s => string.Equals(s.Name, "books", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(created.Id, existing.Id);
+        await catalog.UpdateAsync("alice", existing.Id,
+            new SaveMcpServerRequest("books", null, "api", configV2, null));
+
+        var list = await catalog.ListByOwnerAsync("alice");
+        Assert.Single(list);
+        Assert.Equal(created.Id, list[0].Id);
+        Assert.Contains("v2", list[0].ConfigJson, StringComparison.Ordinal);
+        // Create again would throw — upsert avoids aborting the session update.
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            catalog.CreateAsync("alice", new SaveMcpServerRequest("books", null, "api", configV1, null)));
     }
 
     [Fact]

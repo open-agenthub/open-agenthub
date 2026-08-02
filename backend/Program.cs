@@ -39,7 +39,13 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<IHttpClientFactory>().CreateClient("mcp-gateway"),
         sp.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>(),
         sp.GetRequiredService<AgentHub.Api.Library.ILibraryAccess>()));
-builder.Services.AddHttpClient("mcp-gateway");
+// Do not follow redirects: a 3xx Location to loopback/metadata would bypass
+// ValidateSafeOutboundUrl on the original URL (SSRF). Treat redirects as errors.
+builder.Services.AddHttpClient("mcp-gateway")
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+    {
+        AllowAutoRedirect = false
+    });
 // EE share matrix: registered as the core ILibraryShareReader so access resolution
 // consults real shares when the license is enabled (EmptyLibraryShareReader unused).
 builder.Services.AddSingleton<AgentHub.Api.Ee.Library.LibraryShareStore>();
