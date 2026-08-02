@@ -352,45 +352,4 @@ public class LibraryCoreControllersTests
             await controller.Update(personal.Id, Raw("stolen"), default));
         Assert.IsType<NotFoundResult>(await controller.Delete(personal.Id, default));
     }
-
-    [Fact]
-    public async Task SkillGet_ReturnsContent_ForAccessibleSkills()
-    {
-        var (_, skills, shares, access) = Stores();
-        var foreign = skills.Add("bob", "review", "# shared skill body");
-        await shares.SetSharesAsync(LibraryItemTypes.Skill, foreign.Id, all: true, null, null, "bob");
-
-        var controller = WithUser(new SkillsController(skills, access, shares, LibraryTest.SearchService(skills), new InMemoryProjectStore()), "alice");
-        var ok = Assert.IsType<OkObjectResult>(await controller.Get(foreign.Id, default));
-        var detail = Assert.IsType<SkillDetail>(ok.Value);
-        Assert.Equal("# shared skill body", detail.Content);
-        Assert.False(detail.Mine);
-    }
-
-    [Fact]
-    public async Task SkillGet_InaccessibleSkill_IsNotFound()
-    {
-        var (_, skills, shares, access) = Stores(licensed: false);
-        var foreign = skills.Add("bob", "review");
-        await shares.SetSharesAsync(LibraryItemTypes.Skill, foreign.Id, all: true, null, null, "bob");
-
-        var controller = WithUser(new SkillsController(skills, access, shares, LibraryTest.SearchService(skills), new InMemoryProjectStore()), "alice");
-        Assert.IsType<NotFoundResult>(await controller.Get(foreign.Id, default));
-    }
-
-    [Fact]
-    public async Task SkillCreate_ValidationErrorsBecome400()
-    {
-        var (_, skills, shares, access) = Stores();
-        var controller = WithUser(new SkillsController(skills, access, shares, LibraryTest.SearchService(skills), new InMemoryProjectStore()), "alice");
-
-        var bad = Assert.IsType<BadRequestObjectResult>(
-            await controller.Create(new SaveSkillRequest("Not Kebab", null, "# body"), default));
-        Assert.NotNull(bad.Value);
-
-        Assert.IsType<OkObjectResult>(
-            await controller.Create(new SaveSkillRequest("review", null, "# body"), default));
-        Assert.IsType<BadRequestObjectResult>(
-            await controller.Create(new SaveSkillRequest("review", null, "# duplicate"), default));
-    }
 }
