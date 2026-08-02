@@ -46,12 +46,14 @@ async function reqStatus(method, path, body) {
   }
   return res.status
 }
-async function uploadSessionFile(upload, body) {
+async function uploadSessionFile(upload, body, options = {}) {
   if (!upload?.url || !['proxy', 'presigned'].includes(upload.kind))
     throw new Error('Invalid upload descriptor')
   const headers = { ...(upload.headers || {}) }
   if (upload.kind === 'proxy') Object.assign(headers, await authHeaders())
-  const res = await fetch(upload.url, { method: 'PUT', headers, body })
+  const init = { method: 'PUT', headers, body }
+  if (options.signal) init.signal = options.signal
+  const res = await fetch(upload.url, init)
   if (res.status === 401 && upload.kind === 'proxy') handle401()
   if (!res.ok) {
     const err = new Error(`${res.status} ${await res.text()}`)

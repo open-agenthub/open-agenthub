@@ -21,6 +21,18 @@ describe('createChatLog', () => {
     expect(log.busy).toBe(true)
   })
 
+  it('retains safe echoed attachment metadata for replay', () => {
+    const log = createChatLog()
+    log.feed(line({
+      type: 'user', agenthub_echo: true,
+      attachments: [{ id: 'f1', name: 'shot.png', mimeType: 'image/png', size: 12, visualDelivery: 'local-path', localPath: '/secret' }],
+      message: { role: 'user', content: [{ type: 'text', text: '' }] }
+    }))
+    expect(log.items).toEqual([{ kind: 'user', text: '', attachments: [
+      { id: 'f1', name: 'shot.png', mimeType: 'image/png', size: 12, visualDelivery: 'local-path' }
+    ] }])
+  })
+
   it('merges assistant content blocks of one message into one item', () => {
     const log = createChatLog()
     const message = id => ({ type: 'assistant', message: { id, role: 'assistant', content: [] } })

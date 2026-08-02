@@ -3,10 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ChatPane from './ChatPane.vue'
 
-const mocks = vi.hoisted(() => ({ sockets: [], transcript: '' }))
+const mocks = vi.hoisted(() => ({ sockets: [], transcript: '', uploadError: null }))
 
 vi.mock('../api.js', () => ({
-  api: { getTranscript: vi.fn().mockImplementation(() => Promise.resolve(mocks.transcript)) },
+  api: {
+    getTranscript: vi.fn().mockImplementation(() => Promise.resolve(mocks.transcript)),
+    reserveSessionFile: vi.fn().mockResolvedValue({ file: { id: 'file-1' }, upload: { kind: 'proxy', url: '/upload' } }),
+    uploadSessionFile: vi.fn().mockImplementation(() => mocks.uploadError ? Promise.reject(mocks.uploadError) : Promise.resolve()),
+    completeSessionFile: vi.fn().mockResolvedValue({ id: 'file-1', name: 'shot.png', mimeType: 'image/png', size: 12, state: 'Ready' }),
+    deleteSessionFile: vi.fn().mockResolvedValue(null)
+  },
   terminalUrl: vi.fn().mockResolvedValue('ws://terminal'),
   sharedTerminalUrl: vi.fn().mockReturnValue('ws://shared'),
   getSharedTranscript: vi.fn().mockImplementation(() => Promise.resolve(mocks.transcript))
@@ -25,6 +31,7 @@ describe('ChatPane', () => {
   beforeEach(() => {
     mocks.sockets.length = 0
     mocks.transcript = ''
+    mocks.uploadError = null
     globalThis.WebSocket = MockSocket
   })
 
@@ -52,6 +59,31 @@ describe('ChatPane', () => {
     expect(wrapper.find('[data-chat-input]').element.value).toBe('')
   })
 
+  it('pastes an image, uploads it, and sends its ready file id', async () => {
+    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    await flushPromises()
+    const file = new File([new Uint8Array(12)], 'shot.png', { type: 'image/png', lastModified: 1 })
+    await wrapper.get('[data-chat-input]').trigger('paste', { clipboardData: { files: [file] } })
+    await flushPromises()
+    expect(wrapper.get('[data-attachment]').text()).toContain('shot.png')
+    await wrapper.get('[data-chat-send]').trigger('click')
+    expect(mocks.sockets[0].sent.at(-1)).toEqual({ type: 'chat', text: '', attachments: ['file-1'] })
+    expect(wrapper.find('[data-attachment]').exists()).toBe(false)
+  })
+
+  it('keeps the draft and gates send when an upload fails', async () => {
+    mocks.uploadError = Object.assign(new Error('failed'), { code: 'content_type_mismatch' })
+    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    await flushPromises()
+    await wrapper.get('[data-chat-input]').setValue('keep me')
+    const file = new File([new Uint8Array(12)], 'bad.png', { type: 'image/png', lastModified: 1 })
+    await wrapper.get('[data-chat-input]').trigger('paste', { clipboardData: { files: [file] } })
+    await flushPromises()
+    expect(wrapper.get('[data-chat-send]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-attachment-error]').text()).toContain('File content does not match its type')
+    expect(wrapper.get('[data-chat-input]').element.value).toBe('keep me')
+  })
+
   it('renders streamed events and offers Stop while the agent works', async () => {
     const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
     await flushPromises()
@@ -71,5 +103,15 @@ describe('ChatPane', () => {
     const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' }, readonly: true } })
     await flushPromises()
     expect(wrapper.find('[data-chat-input]').exists()).toBe(false)
+  })
+  it('keeps shared writable chat text while withholding authenticated upload controls', async () => {
+    const wrapper = mount(ChatPane, { props: {
+      session: { id: 's1', phase: 'Running' }, sharedToken: 'share-token'
+    } })
+    await flushPromises()
+    expect(wrapper.find('[data-chat-attach]').exists()).toBe(false)
+    await wrapper.get('[data-chat-input]').setValue('shared message')
+    await wrapper.get('[data-chat-send]').trigger('click')
+    expect(mocks.sockets[0].sent).toEqual([{ type: 'chat', text: 'shared message' }])
   })
 })
