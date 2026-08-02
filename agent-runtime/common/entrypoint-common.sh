@@ -84,7 +84,8 @@ if [ "$MERGED_MCP" = "1" ]; then
   export AGENTHUB_MCP_CONFIG=/tmp/agenthub-mcp.json
 elif [ -n "$MCP_SOURCE" ]; then
   export AGENTHUB_MCP_CONFIG="$MCP_SOURCE"
-fiif [ -n "${AGENTHUB_MCP_CONFIG:-}" ]; then
+fi
+if [ -n "${AGENTHUB_MCP_CONFIG:-}" ]; then
   TARGET="${AGENTHUB_WORKDIR:-/workspace}"
   [ -d "$TARGET" ] || TARGET="/workspace"
   cp "$AGENTHUB_MCP_CONFIG" "$TARGET/.mcp.json"

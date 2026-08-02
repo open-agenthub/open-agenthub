@@ -8,7 +8,7 @@ Last verified: 2026-08-01 on Windows, PowerShell 7, .NET 10, Node 22, Helm, and 
 |---|---|---|
 | Backend contracts, authorization, storage, lifecycle | `dotnet test tests/AgentHub.Api.Tests/AgentHub.Api.Tests.csproj --no-restore` | 610 passed, 52 PostgreSQL-dependent tests skipped |
 | Renderer isolation/conversion unit tests | `dotnet test tests/ArtifactRenderer.Tests/ArtifactRenderer.Tests.csproj --no-restore` | 7 passed |
-| Shared agent runtime, attachments, Files MCP | `npm test` in `agent-runtime/session-agent` | 194 passed |
+| Shared agent runtime, attachments, Files MCP | `npm test` in `agent-runtime/session-agent` | 195 passed |
 | Chat attachments, previews, Files/Browser workspace | `npm test` in `frontend` | 280 passed |
 | Frontend production bundle | `npm run build` in `frontend` | passed |
 | Helm defaults, overrides, security context, no-egress | `pwsh -File tests/helm/files-values.ps1` | passed |
