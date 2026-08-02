@@ -5,6 +5,18 @@ import BrowserPane from './BrowserPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
 import { browserUrl, sharedBrowserUrl } from '../api.js'
 
+vi.mock('../api.js', async importOriginal => {
+  const actual = await importOriginal()
+  return {
+    ...actual,
+    api: {
+      ...actual.api,
+      sessionFileCapabilities: vi.fn().mockResolvedValue({ limits: { presentationPollMilliseconds: 60_000 } }),
+      listSessionFiles: vi.fn().mockResolvedValue([]),
+      getFilePresentation: vi.fn().mockResolvedValue(null)
+    }
+  }
+})
 const novnc = vi.hoisted(() => ({ instances: [] }))
 vi.mock('@novnc/novnc', () => ({ default: class {
   constructor(host, url) { this.host = host; this.url = url; this.listeners = {}; novnc.instances.push(this) }
