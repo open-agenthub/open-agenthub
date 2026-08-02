@@ -20,6 +20,11 @@ test('OpenClaw driver exposes the provider state contract', () => {
   assert.equal(driver.stateDir, '.openclaw');
   // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
   assert.equal(driver.authFilename, 'auth-profiles.json');
+  assert.deepEqual(driver.attachmentCapabilities, {
+    nativeImages: false,
+    localImagePaths: true,
+    mcpImages: true
+  });
   assert.deepEqual(driver.stateExcludes, [
     '.openclaw/agents/main/agent/auth-profiles.json',
     '.openclaw/agents/main/agent/openclaw-agent.sqlite',

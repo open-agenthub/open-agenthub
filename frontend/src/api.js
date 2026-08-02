@@ -46,10 +46,60 @@ async function reqStatus(method, path, body) {
   }
   return res.status
 }
+async function uploadSessionFile(upload, body, options = {}) {
+  if (!upload?.url || !['proxy', 'presigned'].includes(upload.kind))
+    throw new Error('Invalid upload descriptor')
+  const headers = { ...(upload.headers || {}) }
+  if (upload.kind === 'proxy') Object.assign(headers, await authHeaders())
+  const init = { method: 'PUT', headers, body }
+  if (options.signal) init.signal = options.signal
+  const res = await fetch(upload.url, init)
+  if (res.status === 401 && upload.kind === 'proxy') handle401()
+  if (!res.ok) {
+    const err = new Error(`${res.status} ${await res.text()}`)
+    err.status = res.status
+    throw err
+  }
+  return null
+}
+
+async function fileContent(path, authenticated) {
+  const res = await fetch(`/api${path}`, {
+    method: 'GET',
+    headers: authenticated ? await authHeaders() : {}
+  })
+  if (res.status === 401 && authenticated) handle401()
+  if (!res.ok) {
+    const error = new Error(`${res.status} ${await res.text()}`)
+    error.status = res.status
+    throw error
+  }
+  return res.blob()
+}
+
+async function sharedReq(path) {
+  const res = await fetch(`/api${path}`, { method: 'GET', headers: {} })
+  if (!res.ok) {
+    const err = new Error(`${res.status} ${await res.text()}`)
+    err.status = res.status
+    throw err
+  }
+  return res.json()
+}
+
 
 export const api = {
   listSessions: () => req('GET', '/sessions'),
   getSession: (id) => req('GET', `/sessions/${id}`),
+  sessionFileCapabilities: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/capabilities`),
+  reserveSessionFile: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/files/reserve`, data),
+  uploadSessionFile,
+  completeSessionFile: (id, fileId) => req('POST', `/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/complete`),
+  listSessionFiles: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files`),
+  sessionFileContentUrl: (id, fileId) => `/api/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/content`,
+  deleteSessionFile: (id, fileId) => req('DELETE', `/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
+  getFilePresentation: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/presentation`),
+  setFilePresentation: (id, fileId) => req('PUT', `/sessions/${encodeURIComponent(id)}/files/presentation`, { fileId }),
   createSession: (data) => req('POST', '/sessions', data),
   updateSession: (id, data) => req('PATCH', `/sessions/${id}`, data),
   duplicateSession: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/duplicate`, data),
@@ -157,6 +207,14 @@ export const api = {
     return res.ok ? res.text() : ''
   }
 }
+export const getSharedFileCapabilities = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/capabilities`)
+export const listSharedSessionFiles = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files`)
+export const getSharedFilePresentation = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/presentation`)
+export const sharedSessionFileContentUrl = (token, fileId) => `/api/shared/${encodeURIComponent(token)}/files/${encodeURIComponent(fileId)}/content`
+export const getSessionFileContent = (id, fileId) =>
+  fileContent(`/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/content`, true)
+export const getSharedSessionFileContent = (token, fileId) =>
+  fileContent(`/shared/${encodeURIComponent(token)}/files/${encodeURIComponent(fileId)}/content`, false)
 export const sharedTerminalUrl = (token) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/shared/${encodeURIComponent(token)}/terminal`
 
 // WebSocket URL including the token (browser WebSockets cannot set headers).

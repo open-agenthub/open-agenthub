@@ -13,6 +13,8 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
+builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileRegistry, AgentHub.Api.Files.PostgresSessionFileRegistry>();
+builder.Services.AddSingleton<AgentHub.Api.Files.IAgentCallbackAuthorizer, AgentHub.Api.Files.AgentCallbackAuthorizer>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserLeaseStore, AgentHub.Api.Browser.PostgresBrowserLeaseStore>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserSessionLock, AgentHub.Api.Browser.PostgresBrowserSessionLock>();
@@ -79,6 +81,19 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["S3:AccessKey"]))
     builder.Services.AddSingleton<AgentHub.Api.Storage.IArtifactStore, AgentHub.Api.Storage.S3ArtifactStore>();
 else
     builder.Services.AddSingleton<AgentHub.Api.Storage.IArtifactStore, AgentHub.Api.Storage.NullArtifactStore>();
+var sessionFileOptions = builder.Configuration.GetSection("Files")
+    .Get<AgentHub.Api.Files.SessionFileOptions>() ?? new AgentHub.Api.Files.SessionFileOptions();
+builder.Services.AddSingleton(sessionFileOptions);
+builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api.Files.AgentFileClient>();
+builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileService, AgentHub.Api.Files.SessionFileService>();
+builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileCleanup, AgentHub.Api.Files.SessionFileCleanup>();
+builder.Services.AddHostedService<AgentHub.Api.Files.SessionFileSweepService>();
+builder.Services.AddHttpClient<AgentHub.Api.Files.IOfficePreviewClient, AgentHub.Api.Files.OfficePreviewClient>(client =>
+{
+    client.BaseAddress = new Uri(sessionFileOptions.OfficePreview.BaseUrl, UriKind.Absolute);
+    client.Timeout = Timeout.InfiniteTimeSpan;
+});
+builder.Services.AddHostedService<AgentHub.Api.Files.SessionFilePreviewWorker>();
 builder.Services.AddHttpClient<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Notifications.N8nNotifier>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IGitAuthService, GitAuthService>();
@@ -216,6 +231,7 @@ using (var scope = app.Services.CreateScope())
 {
     var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
     await store.InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Files.ISessionFileRegistry>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>().InitializeAsync();

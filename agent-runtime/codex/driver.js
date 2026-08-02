@@ -57,5 +57,7 @@ function isMissingResume(output, exitCode) {
 
 module.exports = {
   name: 'Codex', stateDir: '.codex', authFilename: 'auth.json',
+  attachmentCapabilities: Object.freeze({
+    nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand, isResumeCommand, isMissingResume, prepare
 };

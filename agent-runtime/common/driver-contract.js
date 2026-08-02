@@ -2,7 +2,7 @@
 
 const path = require('node:path');
 
-const REQUIRED = ['name', 'stateDir', 'authFilename', 'buildCommand', 'isResumeCommand',
+const REQUIRED = ['name', 'stateDir', 'authFilename', 'attachmentCapabilities', 'buildCommand', 'isResumeCommand',
   'isMissingResume', 'prepare'];
 const SAFE_RELATIVE_NAME = /^(?!\.{1,2}$)[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 // Optional tar --exclude paths under HOME: relative, no .., may include * globs.
@@ -41,6 +41,17 @@ function validateDriver(driver) {
       if (!isSafeStateExclude(entry)) {
         throw new Error('Agent driver stateExcludes entries must be safe relative paths');
       }
+    }
+  }
+  const capabilities = driver.attachmentCapabilities;
+  const capabilityNames = ['localImagePaths', 'mcpImages', 'nativeImages'];
+  if (!capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities) ||
+      Object.keys(capabilities).sort().join(',') !== capabilityNames.join(',')) {
+    throw new Error('Agent driver attachmentCapabilities must define exactly nativeImages, localImagePaths, and mcpImages');
+  }
+  for (const key of capabilityNames) {
+    if (typeof capabilities[key] !== 'boolean') {
+      throw new Error('Agent driver attachmentCapabilities values must be booleans');
     }
   }
   return driver;

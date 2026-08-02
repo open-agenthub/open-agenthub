@@ -64,6 +64,22 @@ data:
   AgentHub__OpenClawAgentImage: "registry.example.com/agenthub/agent-runtime-openclaw:latest"
   AgentHub__AgentPort: "7681"
   AgentHub__CallbackBaseUrl: "http://agenthub-backend.agenthub.svc.cluster.local"
+  Kestrel__Limits__MaxRequestBodySize: "57671680"
+  Files__MaxImageBytes: "20971520"
+  Files__MaxDocumentBytes: "52428800"
+  Files__MaxMessageBytes: "52428800"
+  Files__MaxMessageFiles: "5"
+  Files__MaxSessionFiles: "200"
+  Files__MaxSessionBytes: "1073741824"
+  Files__PresignMinutes: "10"
+  Files__ReservationMinutes: "15"
+  Files__SweepSeconds: "60"
+  Files__PresentationPollMilliseconds: "1500"
+  Files__OfficePreview__Enabled: "false"
+  Files__OfficePreview__BaseUrl: "http://agenthub-artifact-renderer:8080/"
+  Files__OfficePreview__TimeoutSeconds: "90"
+  Files__OfficePreview__MaxOutputBytes: "52428800"
+  Files__OfficePreview__PollMilliseconds: "1000"
   Browser__Enabled: "true"
   Browser__Image: "registry.example.com/agenthub/browser:latest"
   Browser__PullPolicy: "IfNotPresent"
@@ -97,3 +113,54 @@ stringData:
   ConnectionStrings__Postgres: "Host=postgres.agenthub.svc.cluster.local;Database=agenthub;Username=agenthub;Password=CHANGE_ME"
   S3__AccessKey: "CHANGE_ME"
   S3__SecretKey: "CHANGE_ME"
+---
+# Optional Office preview renderer. Set replicas to 1 and
+# Files__OfficePreview__Enabled to true to enable it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agenthub-artifact-renderer
+  namespace: agenthub
+spec:
+  replicas: 0
+  selector:
+    matchLabels: { app: agenthub-artifact-renderer }
+  template:
+    metadata:
+      labels: { app: agenthub-artifact-renderer }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: renderer
+          image: registry.example.com/agenthub/artifact-renderer:latest
+          ports: [{ containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "100m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agenthub-artifact-renderer
+  namespace: agenthub
+spec:
+  selector: { app: agenthub-artifact-renderer }
+  ports: [{ port: 8080, targetPort: 8080 }]

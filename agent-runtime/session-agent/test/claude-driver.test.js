@@ -25,6 +25,11 @@ test('Claude driver exposes its state and subscription-auth contract', () => {
   assert.equal(driver.name, 'Claude');
   assert.equal(driver.stateDir, '.claude');
   assert.equal(driver.authFilename, '.credentials.json');
+  assert.deepEqual(driver.attachmentCapabilities, {
+    nativeImages: false,
+    localImagePaths: true,
+    mcpImages: true
+  });
   assert.equal(typeof driver.prepare, 'function');
 });
 

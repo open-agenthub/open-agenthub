@@ -1,4 +1,9 @@
 {{- if .Values.ingress.enabled }}
+{{- $annotations := dict
+      "nginx.ingress.kubernetes.io/proxy-body-size" (.Values.ingress.bodySize | default "55m")
+      "nginx.ingress.kubernetes.io/proxy-read-timeout" "3600"
+      "nginx.ingress.kubernetes.io/proxy-send-timeout" "3600" -}}
+{{- $annotations = mergeOverwrite $annotations (.Values.ingress.annotations | default dict) -}}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -8,9 +13,9 @@ metadata:
     {{- with .Values.ingress.clusterIssuer }}
     cert-manager.io/cluster-issuer: {{ . }}
     {{- end }}
-    # Do not time out long WebSocket sessions (terminal)
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    {{- range $key, $value := $annotations }}
+    {{ $key }}: {{ $value | quote }}
+    {{- end }}
 spec:
   ingressClassName: {{ .Values.ingress.className }}
   tls:
