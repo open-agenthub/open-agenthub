@@ -20,6 +20,13 @@ function hasAtMostCodePoints(value, maximum) {
   return true
 }
 
+function isSpinnerOnly(value) {
+  for (const char of value) {
+    if (!SPINNER_GLYPHS.has(char) && !/\s/u.test(char)) return false
+  }
+  return true
+}
+
 function baseTranscriptBlocks(text) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n')
   const blocks = []
@@ -34,13 +41,6 @@ function baseTranscriptBlocks(text) {
   for (const line of lines) {
     if (line.trim() === '') {
       blankRun += 1
-function isSpinnerOnly(value) {
-  for (const char of value) {
-    if (!SPINNER_GLYPHS.has(char) && !/\s/u.test(char)) return false
-  }
-  return true
-}
-
       continue
     }
 
