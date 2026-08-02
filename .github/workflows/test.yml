@@ -92,6 +92,9 @@ jobs:
       - name: Verify browser values and RBAC
         shell: pwsh
         run: ./tests/helm/browser-values.ps1
+      - name: Verify session file and renderer values
+        shell: pwsh
+        run: ./tests/helm/files-values.ps1
       - name: Verify deployment parity
         shell: pwsh
         run: ./tests/helm/deployment-parity.ps1
