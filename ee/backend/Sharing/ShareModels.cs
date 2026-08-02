@@ -72,6 +72,16 @@ public static class SessionAccessRules
 
     public static bool CanWriteTerminal(SessionAccessLevel level)
         => level is SessionAccessLevel.Collaborator or SessionAccessLevel.Owner;
+
+    public static bool CanReadFiles(SessionAccessLevel level)
+        => level is SessionAccessLevel.Viewer or SessionAccessLevel.Collaborator
+            or SessionAccessLevel.Owner;
+
+    public static bool CanWriteFiles(SessionAccessLevel level)
+        => level is SessionAccessLevel.Collaborator or SessionAccessLevel.Owner;
+
+    public static bool CanManageFiles(SessionAccessLevel level)
+        => level == SessionAccessLevel.Owner;
 }
 
 public sealed record IssuedShareToken(string Token, byte[] Hash);
