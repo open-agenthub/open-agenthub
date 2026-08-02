@@ -19,6 +19,11 @@ test('Codex driver exposes the provider state contract', () => {
   assert.equal(driver.name, 'Codex');
   assert.equal(driver.stateDir, '.codex');
   assert.equal(driver.authFilename, 'auth.json');
+  assert.deepEqual(driver.attachmentCapabilities, {
+    nativeImages: false,
+    localImagePaths: true,
+    mcpImages: true
+  });
   assert.equal(typeof driver.prepare, 'function');
 });
 

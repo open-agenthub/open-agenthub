@@ -85,6 +85,8 @@ module.exports = {
   // stateExcludes: nested agent-store credentials (JSON + SQLite) for every agent id.
   // Runtime restore imports Secret into agents/main/agent/ via sync-auth-profiles.js.
   name: 'OpenClaw', stateDir: '.openclaw', authFilename: 'auth-profiles.json',
+  attachmentCapabilities: Object.freeze({
+    nativeImages: false, localImagePaths: true, mcpImages: true }),
   stateExcludes: [
     '.openclaw/agents/main/agent/auth-profiles.json',
     '.openclaw/agents/main/agent/openclaw-agent.sqlite',

@@ -97,10 +97,18 @@ function createHarness(environment = {}, driverOverrides = {}) {
     createServer(handler) { return new FakeHttpServer(handler); }
   };
 
+  const materializer = {
+    calls: [],
+    materializeResult: [],
+    async materialize(ids) { this.calls.push(ids); return this.materializeResult; }
+  };
+
   const driver = {
     name: 'Test',
     stateDir: '.test-agent',
     authFilename: 'auth.json',
+    attachmentCapabilities: Object.freeze({
+      nativeImages: false, localImagePaths: true, mcpImages: true }),
     prepare() {},
     buildCommand: (_env, allowResume) => ({ cmd: 'test-agent', args: allowResume ? ['resume'] : ['fresh'] }),
     isResumeCommand: command => command.args.includes('resume'),
@@ -165,12 +173,13 @@ function createHarness(environment = {}, driverOverrides = {}) {
       },
       process: processLike,
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
+      attachmentMaterializer: materializer,
       setTimeout(callback) { callback(); return 1; },
       now: (() => { let value = 1000; return () => value += 100; })()
     }
   });
 
-  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits, fileCalls };
+  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits, fileCalls, materializer };
 }
 
 function requestHttp(harness, method, url, headers = {}, body = '') {
@@ -253,12 +262,14 @@ test('file HTTP routes stream PUT and expose bounded metadata operations', async
 test('common transport validates every required driver export', () => {
   const valid = {
     name: 'Example', stateDir: '.example', authFilename: 'auth.json',
+    attachmentCapabilities: {
+      nativeImages: false, localImagePaths: true, mcpImages: true },
     buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
   };
   assert.equal(validateDriver(valid), valid);
 
-  for (const key of ['name', 'stateDir', 'authFilename', 'buildCommand', 'isResumeCommand',
-    'isMissingResume', 'prepare']) {
+  for (const key of ['name', 'stateDir', 'authFilename', 'attachmentCapabilities',
+    'buildCommand', 'isResumeCommand', 'isMissingResume', 'prepare']) {
     const invalid = { ...valid };
     delete invalid[key];
     assert.throws(() => validateDriver(invalid), new RegExp(`missing ${key}`, 'i'));
@@ -269,6 +280,8 @@ test('common transport validates every required driver export', () => {
 test('common transport accepts only safe single relative archive names', () => {
   const valid = {
     name: 'Example', stateDir: '.claude', authFilename: '.credentials.json',
+    attachmentCapabilities: {
+      nativeImages: false, localImagePaths: true, mcpImages: true },
     buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
   };
 
@@ -307,6 +320,8 @@ test('common transport accepts only safe single relative archive names', () => {
 test('common transport accepts optional safe stateExcludes paths and globs', () => {
   const valid = {
     name: 'Example', stateDir: '.openclaw', authFilename: 'auth-profiles.json',
+    attachmentCapabilities: {
+      nativeImages: false, localImagePaths: true, mcpImages: true },
     buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
   };
 
@@ -576,6 +591,56 @@ test('chat transport forwards user input as stream-json and echoes it durably', 
   assert.deepEqual(replay.sent, [echo]);
 });
 
+test('chat materializes ready IDs and echoes metadata without local paths', async () => {
+  const harness = createChatHarness();
+  const id = 'a'.repeat(32);
+  harness.materializer.materializeResult = [{
+    id, name: 'shot.png', mimeType: 'image/png', size: 12,
+    localPath: '/workspace/.agenthub/files/' + id + '/shot.png'
+  }];
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'chat', text: 'inspect', attachments: [id]
+  })));
+  await tick();
+  await tick();
+
+  assert.deepEqual(harness.materializer.calls, [[id]]);
+  assert.match(harness.children[0].stdinWrites[0], /inspect each attached image/i);
+  assert.match(harness.children[0].stdinWrites[0], /shot\.png/);
+  assert.doesNotMatch(socket.sent.join(''), /workspace|localPath/);
+  const echo = JSON.parse(socket.sent[0]);
+  assert.deepEqual(echo.attachments, [{
+    id, name: 'shot.png', mimeType: 'image/png', size: 12,
+    visualDelivery: 'localImagePaths'
+  }]);
+});
+
+test('chat rejects an attachment turn before stdin when no visual delivery exists', async () => {
+  const harness = createChatHarness({}, {
+    attachmentCapabilities: Object.freeze({
+      nativeImages: false, localImagePaths: false, mcpImages: false
+    })
+  });
+  const id = 'b'.repeat(32);
+  harness.materializer.materializeResult = [{
+    id, name: 'shot.png', mimeType: 'image/png', size: 12,
+    localPath: '/workspace/.agenthub/files/' + id + '/shot.png'
+  }];
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'chat', text: 'inspect', attachments: [id]
+  })));
+  await tick();
+  await tick();
+
+  assert.deepEqual(harness.children[0].stdinWrites, []);
+  assert.match(socket.sent.join(''), /attachment_delivery_failed/);
+});
 test('chat transport sends an interrupt control request on demand', () => {
   const harness = createChatHarness();
   const socket = new FakeSocket();

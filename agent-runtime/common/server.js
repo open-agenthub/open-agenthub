@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 
 const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
+const { AttachmentMaterializer } = require('../files/materialize');
 
 const MAX_BUFFER = 1_000_000;
 // Protocol chatter that the chat UI only needs live, never on replay.
@@ -25,6 +26,8 @@ function createCommonServer(options = {}) {
   const now = supplied.now || Date.now;
   const fileStore = supplied.fileStore || new LocalFileStore({
     root: env.AGENTHUB_FILE_ROOT || '/workspace/.agenthub/files' });
+  const attachmentMaterializer = supplied.attachmentMaterializer ||
+    new AttachmentMaterializer({ env, fetch: fetchImpl, store: fileStore });
 
   const preparation = driver.prepare(env);
   const childEnv = preparation && preparation.childEnv;
@@ -62,6 +65,8 @@ function createCommonServer(options = {}) {
   let launchedAt = 0;
   let chatMode = false;
   let controlCounter = 0;
+  let chatDelivery = Promise.resolve();
+  let pendingChatDeliveries = 0;
   let promptSent = false;
 
   function remember(chunk) {
@@ -206,11 +211,21 @@ function createCommonServer(options = {}) {
       handleAgentExit(code == null ? 1 : code, signal || undefined));
 
     chat = {
-      sendUser(text) {
-        const event = { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } };
+      sendUser(text, delivery = {}) {
+        const agentText = delivery.agentText ?? text;
+        const event = {
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text: agentText }] }
+        };
         try { child.stdin.write(JSON.stringify(event) + '\n'); } catch { return; }
         // The CLI never echoes user input on stdout, so replays need our copy.
-        const echo = JSON.stringify({ ...event, agenthub_echo: true }) + '\n';
+        const echoEvent = {
+          type: 'user',
+          message: { role: 'user', content: [{ type: 'text', text }] },
+          agenthub_echo: true
+        };
+        if (delivery.attachments?.length) echoEvent.attachments = delivery.attachments;
+        const echo = JSON.stringify(echoEvent) + '\n';
         remember(echo);
         broadcast(echo);
       },
@@ -261,6 +276,69 @@ function createCommonServer(options = {}) {
     term.onExit(({ exitCode, signal }) => handleAgentExit(exitCode, signal));
   }
 
+  function attachmentDelivery() {
+    const capabilities = driver.attachmentCapabilities;
+    if (capabilities.localImagePaths) return 'localImagePaths';
+    if (capabilities.mcpImages) return 'mcpImages';
+    // The current stream-json transport has no native image argument. A future
+    // provider protocol may select nativeImages before reaching this fallback.
+    throw new Error('attachment_visual_delivery_unavailable');
+  }
+
+  function attachmentPrompt(text, attachments) {
+    const lines = attachments.map(file => {
+      const source = file.visualDelivery === 'localImagePaths'
+        ? 'local path "' + file.localPath + '"'
+        : 'file id "' + file.id + '" through agenthub_files.read_file';
+      return '- ' + file.name + ' (' + file.mimeType + ', ' + file.size + ' bytes): ' + source;
+    });
+    const instruction = [
+      '[AgentHub attachments]',
+      ...lines,
+      '',
+      'Inspect each attached image visually before answering. Use the local visual Read path or agenthub_files.read_file as indicated. Do not infer image contents from the filename.',
+      text ? '' : null,
+      text || null
+    ].filter(value => value !== null);
+    return instruction.join('\n');
+  }
+
+  async function deliverAttachmentTurn(message) {
+    const records = await attachmentMaterializer.materialize(message.attachments);
+    const delivery = attachmentDelivery();
+    const attachments = records.map(file => Object.freeze({
+      ...file,
+      visualDelivery: delivery
+    }));
+    const safeAttachments = attachments.map(file => ({
+      id: file.id,
+      name: file.name,
+      mimeType: file.mimeType,
+      size: file.size,
+      visualDelivery: file.visualDelivery
+    }));
+    chat.sendUser(message.text, {
+      agentText: attachmentPrompt(message.text, attachments),
+      attachments: safeAttachments
+    });
+  }
+
+  function queueChatMessage(socket, message) {
+    const attachments = message.attachments === undefined ? [] : message.attachments;
+    if (!Array.isArray(attachments)) {
+      safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed' }));
+      return;
+    }
+    if (attachments.length === 0 && pendingChatDeliveries === 0) {
+      chat.sendUser(message.text);
+      return;
+    }
+    pendingChatDeliveries += 1;
+    chatDelivery = chatDelivery
+      .then(() => attachments.length ? deliverAttachmentTurn({ ...message, attachments }) : chat.sendUser(message.text))
+      .catch(() => safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed' })))
+      .finally(() => { pendingChatDeliveries -= 1; });
+  }
   function handleAgent(socket) {
     clients.add(socket);
     if (scrollback) safeSend(socket, scrollback);
@@ -269,8 +347,11 @@ function createCommonServer(options = {}) {
       try { message = JSON.parse(raw.toString()); } catch { return; }
       if (exited) return;
       if (chatMode) {
-        if (message.type === 'chat' && typeof message.text === 'string' && message.text.trim() && chat) {
-          chat.sendUser(message.text);
+        if (message.type === 'chat' && typeof message.text === 'string' && chat) {
+          const hasAttachments = message.attachments !== undefined;
+          if (message.text.trim() || hasAttachments) {
+            queueChatMessage(socket, message);
+          }
         } else if (message.type === 'interrupt' && chat) {
           chat.interrupt();
         }
