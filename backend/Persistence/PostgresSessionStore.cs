@@ -38,7 +38,7 @@ public sealed class SessionRecord
     public string Memory { get; set; } = "1Gi";
     /// <summary>MCP configuration (.mcp.json content); null/empty = no MCP servers.</summary>
     public string? McpConfigJson { get; set; }
-    /// <summary>JSON array of saved library MCP server ids merged into the effective
+    /// <summary>JSON array of catalog MCP server ids merged into the effective
     /// config at spawn time. Null = none.</summary>
     public string? McpServerIdsJson { get; set; }
     /// <summary>Repositories to check out, as a JSON array of {url,branch,providerId}. Null = none.
@@ -112,13 +112,13 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_policy JSONB;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS agent_session_id TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS ui_mode TEXT NOT NULL DEFAULT 'terminal';
-            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_server_ids TEXT;
             UPDATE sessions SET agent_session_id = claude_session_id WHERE agent_session_id IS NULL;
             ALTER TABLE sessions ALTER COLUMN agent_session_id SET NOT NULL;
             ALTER TABLE sessions ALTER COLUMN claude_session_id DROP NOT NULL;
             CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(owner, project_id);
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parent_session_id TEXT;
             CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(owner, parent_session_id);
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_server_ids TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);

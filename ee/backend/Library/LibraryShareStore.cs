@@ -1,21 +1,22 @@
 // -----------------------------------------------------------------------------
-// Open AgentHub Enterprise Edition — Library sharing (MCP servers & skills).
+// Open AgentHub Enterprise Edition — Library sharing (MCP catalog & skills).
 // Part of the Enterprise Edition; NOT covered by the AGPL-3.0 license of the
 // open-core. Source-available under the Open AgentHub Enterprise License
 // (see ee/LICENSE); a valid subscription is required for production use.
 // -----------------------------------------------------------------------------
+using AgentHub.Api.Library;
 using Npgsql;
 
 namespace AgentHub.Api.Ee.Library;
 
 /// <summary>
-/// Postgres persistence for user groups, library item shares (MCP servers and
-/// skills) and the library-wide settings toggle.
+/// Postgres persistence for library item shares. Group subjects are IdP group
+/// names from <c>UserGroupStore</c> (<c>user_groups.group_name</c>), not a
+/// parallel custom-group system.
 /// </summary>
 public sealed class LibraryShareStore : ILibraryShareStore
 {
     private const string UserSkillPublishingKey = "user_skill_publishing";
-
     private readonly NpgsqlDataSource _db;
 
     public LibraryShareStore(IConfiguration cfg)
@@ -28,20 +29,6 @@ public sealed class LibraryShareStore : ILibraryShareStore
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         const string ddl = """
-            CREATE TABLE IF NOT EXISTS user_groups (
-                id         TEXT PRIMARY KEY,
-                name       TEXT NOT NULL UNIQUE,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            );
-            CREATE TABLE IF NOT EXISTS user_group_members (
-                group_id     TEXT NOT NULL,
-                member_owner TEXT NOT NULL,
-                created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-                PRIMARY KEY (group_id, member_owner)
-            );
-            CREATE INDEX IF NOT EXISTS idx_user_group_members_owner
-                ON user_group_members(member_owner);
-
             CREATE TABLE IF NOT EXISTS library_shares (
                 item_type    TEXT NOT NULL CHECK (item_type IN ('mcp', 'skill')),
                 item_id      TEXT NOT NULL,
@@ -53,148 +40,23 @@ public sealed class LibraryShareStore : ILibraryShareStore
             );
             CREATE INDEX IF NOT EXISTS idx_library_shares_subject
                 ON library_shares(subject_type, subject);
-
             CREATE TABLE IF NOT EXISTS library_settings (
-                key        TEXT PRIMARY KEY,
-                value      TEXT NOT NULL,
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
             );
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
+
+        // Widen item_type check if an older MCP-only constraint exists.
+        await using var alter = _db.CreateCommand("""
+            ALTER TABLE library_shares DROP CONSTRAINT IF EXISTS library_shares_item_type_check;
+            ALTER TABLE library_shares ADD CONSTRAINT library_shares_item_type_check
+                CHECK (item_type IN ('mcp', 'skill'));
+            """);
+        try { await alter.ExecuteNonQueryAsync(ct); }
+        catch (PostgresException) { /* concurrent init / already correct */ }
     }
-
-    // ---------------------------------------------------------------- Groups
-
-    public async Task<IReadOnlyList<UserGroup>> ListGroupsAsync(CancellationToken ct = default)
-    {
-        var groups = new List<(string Id, string Name, DateTime CreatedAt)>();
-        await using (var cmd = _db.CreateCommand(
-            "SELECT id, name, created_at FROM user_groups ORDER BY name"))
-        {
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-                groups.Add((reader.GetString(0), reader.GetString(1), reader.GetDateTime(2)));
-        }
-
-        var members = new Dictionary<string, List<string>>();
-        await using (var cmd = _db.CreateCommand(
-            "SELECT group_id, member_owner FROM user_group_members ORDER BY member_owner"))
-        {
-            await using var reader = await cmd.ExecuteReaderAsync(ct);
-            while (await reader.ReadAsync(ct))
-            {
-                var groupId = reader.GetString(0);
-                if (!members.TryGetValue(groupId, out var list))
-                    members[groupId] = list = new List<string>();
-                list.Add(reader.GetString(1));
-            }
-        }
-
-        return groups
-            .Select(g => new UserGroup(
-                g.Id, g.Name, members.GetValueOrDefault(g.Id) ?? [], g.CreatedAt))
-            .ToList();
-    }
-
-    public async Task<UserGroup> CreateGroupAsync(string name, CancellationToken ct = default)
-    {
-        var trimmed = name?.Trim() ?? "";
-        if (trimmed.Length is 0 or > 100)
-            throw new ArgumentException("Group name must be 1-100 characters.");
-
-        var id = Guid.NewGuid().ToString("n")[..12];
-        const string sql = """
-            INSERT INTO user_groups (id, name) VALUES (@id, @name)
-            RETURNING created_at
-            """;
-        await using var cmd = _db.CreateCommand(sql);
-        cmd.Parameters.AddWithValue("id", id);
-        cmd.Parameters.AddWithValue("name", trimmed);
-        try
-        {
-            var createdAt = (DateTime)(await cmd.ExecuteScalarAsync(ct))!;
-            return new UserGroup(id, trimmed, [], createdAt);
-        }
-        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
-        {
-            throw new ArgumentException("A group with this name already exists.");
-        }
-    }
-
-    public async Task DeleteGroupAsync(string id, CancellationToken ct = default)
-    {
-        await using var connection = await _db.OpenConnectionAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
-
-        await using (var members = new NpgsqlCommand(
-            "DELETE FROM user_group_members WHERE group_id = @id", connection, transaction))
-        {
-            members.Parameters.AddWithValue("id", id);
-            await members.ExecuteNonQueryAsync(ct);
-        }
-        await using (var shares = new NpgsqlCommand(
-            "DELETE FROM library_shares WHERE subject_type = 'group' AND subject = @id",
-            connection, transaction))
-        {
-            shares.Parameters.AddWithValue("id", id);
-            await shares.ExecuteNonQueryAsync(ct);
-        }
-        await using (var group = new NpgsqlCommand(
-            "DELETE FROM user_groups WHERE id = @id", connection, transaction))
-        {
-            group.Parameters.AddWithValue("id", id);
-            if (await group.ExecuteNonQueryAsync(ct) == 0)
-                throw new KeyNotFoundException();
-        }
-
-        await transaction.CommitAsync(ct);
-    }
-
-    public async Task<UserGroup> SetGroupMembersAsync(
-        string id, IReadOnlyCollection<string> members, CancellationToken ct = default)
-    {
-        var normalized = NormalizeSubjects(members);
-
-        await using var connection = await _db.OpenConnectionAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
-
-        string name;
-        DateTime createdAt;
-        await using (var group = new NpgsqlCommand(
-            "SELECT name, created_at FROM user_groups WHERE id = @id", connection, transaction))
-        {
-            group.Parameters.AddWithValue("id", id);
-            await using var reader = await group.ExecuteReaderAsync(ct);
-            if (!await reader.ReadAsync(ct))
-                throw new KeyNotFoundException();
-            name = reader.GetString(0);
-            createdAt = reader.GetDateTime(1);
-        }
-
-        await EnsureUsersExistAsync(connection, transaction, normalized, ct);
-
-        await using (var clear = new NpgsqlCommand(
-            "DELETE FROM user_group_members WHERE group_id = @id", connection, transaction))
-        {
-            clear.Parameters.AddWithValue("id", id);
-            await clear.ExecuteNonQueryAsync(ct);
-        }
-        foreach (var member in normalized)
-        {
-            await using var insert = new NpgsqlCommand(
-                "INSERT INTO user_group_members (group_id, member_owner) VALUES (@id, @member)",
-                connection, transaction);
-            insert.Parameters.AddWithValue("id", id);
-            insert.Parameters.AddWithValue("member", member);
-            await insert.ExecuteNonQueryAsync(ct);
-        }
-
-        await transaction.CommitAsync(ct);
-        return new UserGroup(id, name, normalized, createdAt);
-    }
-
-    // ---------------------------------------------------------------- Shares
 
     public async Task<LibraryShares> GetSharesAsync(
         string itemType, string itemId, CancellationToken ct = default)
@@ -224,7 +86,6 @@ public sealed class LibraryShareStore : ILibraryShareStore
         return new LibraryShares(all, users, groups);
     }
 
-    /// <summary>Replaces the full sharing state of one item.</summary>
     public async Task<LibraryShares> SetSharesAsync(
         string itemType,
         string itemId,
@@ -296,7 +157,7 @@ public sealed class LibraryShareStore : ILibraryShareStore
                 subject_type = 'all'
                 OR (subject_type = 'user' AND subject = @owner)
                 OR (subject_type = 'group' AND subject IN (
-                    SELECT group_id FROM user_group_members WHERE member_owner = @owner)))
+                    SELECT group_name FROM user_groups WHERE owner = @owner)))
             """);
         cmd.Parameters.AddWithValue("type", itemType);
         cmd.Parameters.AddWithValue("owner", owner);
@@ -308,29 +169,25 @@ public sealed class LibraryShareStore : ILibraryShareStore
         return ids;
     }
 
-    // ---------------------------------------------------------------- Settings
-
     public async Task<bool> GetUserSkillPublishingAsync(CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand(
             "SELECT value FROM library_settings WHERE key = @key");
         cmd.Parameters.AddWithValue("key", UserSkillPublishingKey);
-        return await cmd.ExecuteScalarAsync(ct) is string value
-            && string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
+        var value = await cmd.ExecuteScalarAsync(ct) as string;
+        return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
     }
 
     public async Task SetUserSkillPublishingAsync(bool enabled, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("""
             INSERT INTO library_settings (key, value) VALUES (@key, @value)
-            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()
+            ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
             """);
         cmd.Parameters.AddWithValue("key", UserSkillPublishingKey);
         cmd.Parameters.AddWithValue("value", enabled ? "true" : "false");
         await cmd.ExecuteNonQueryAsync(ct);
     }
-
-    // ---------------------------------------------------------------- Helpers
 
     private static List<string> NormalizeSubjects(IReadOnlyCollection<string> values)
     {
@@ -370,9 +227,13 @@ public sealed class LibraryShareStore : ILibraryShareStore
     {
         foreach (var group in groups)
         {
-            await using var cmd = new NpgsqlCommand(
-                "SELECT 1 FROM user_groups WHERE id = @id", connection, transaction);
-            cmd.Parameters.AddWithValue("id", group);
+            await using var cmd = new NpgsqlCommand("""
+                SELECT 1 WHERE EXISTS (
+                    SELECT 1 FROM user_groups WHERE group_name = @g
+                    UNION
+                    SELECT 1 FROM group_roles WHERE group_name = @g)
+                """, connection, transaction);
+            cmd.Parameters.AddWithValue("g", group);
             if (await cmd.ExecuteScalarAsync(ct) is null)
                 throw new ArgumentException($"Group '{group}' does not exist.");
         }

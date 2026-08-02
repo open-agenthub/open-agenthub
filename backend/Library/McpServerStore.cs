@@ -13,16 +13,18 @@ public interface IMcpServerStore
     Task<IReadOnlyList<McpServerRecord>> GetManyAsync(IReadOnlyCollection<string> ids, CancellationToken ct = default);
 }
 
-/// <summary>Postgres persistence for the personal MCP server library.</summary>
+/// <summary>Postgres persistence for the personal/org MCP server catalog.</summary>
 public sealed class McpServerStore : IMcpServerStore
 {
     private readonly NpgsqlDataSource _db;
+    private readonly IMcpSecretProtector _secrets;
 
-    public McpServerStore(IConfiguration cfg)
+    public McpServerStore(IConfiguration cfg, IMcpSecretProtector secrets)
     {
         var cs = cfg.GetConnectionString("Postgres")
                  ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
         _db = NpgsqlDataSource.Create(cs);
+        _secrets = secrets;
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -33,11 +35,15 @@ public sealed class McpServerStore : IMcpServerStore
                 owner       TEXT NOT NULL,
                 name        TEXT NOT NULL,
                 description TEXT NOT NULL DEFAULT '',
-                config      TEXT NOT NULL,
+                kind        TEXT NOT NULL DEFAULT 'raw',
+                config_json TEXT NOT NULL,
+                secret_json TEXT,
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             CREATE INDEX IF NOT EXISTS idx_mcp_servers_owner ON mcp_servers(owner);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_mcp_servers_owner_name
+                ON mcp_servers (owner, lower(name));
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -46,18 +52,22 @@ public sealed class McpServerStore : IMcpServerStore
     public async Task<McpServerRecord> CreateAsync(
         string owner, SaveMcpServerRequest request, CancellationToken ct = default)
     {
+        var kind = LibraryValidation.ValidateKind(request.Kind);
+        var plaintextSecret = NormalizeIncomingSecret(request.SecretJson);
         var record = new McpServerRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
             Owner = owner,
             Name = LibraryValidation.ValidateMcpServerName(request.Name),
             Description = LibraryValidation.ValidateDescription(request.Description),
-            ConfigJson = LibraryValidation.ValidateMcpServerConfig(request.ConfigJson)
+            Kind = kind,
+            ConfigJson = LibraryValidation.ValidateMcpServerConfig(request.ConfigJson, kind),
+            SecretJson = plaintextSecret
         };
 
         const string sql = """
-            INSERT INTO mcp_servers (id, owner, name, description, config)
-            VALUES (@id, @owner, @name, @description, @config)
+            INSERT INTO mcp_servers (id, owner, name, description, kind, config_json, secret_json)
+            VALUES (@id, @owner, @name, @description, @kind, @config_json, @secret_json)
             RETURNING created_at, updated_at
             """;
         await using var cmd = _db.CreateCommand(sql);
@@ -65,44 +75,89 @@ public sealed class McpServerStore : IMcpServerStore
         cmd.Parameters.AddWithValue("owner", record.Owner);
         cmd.Parameters.AddWithValue("name", record.Name);
         cmd.Parameters.AddWithValue("description", record.Description);
-        cmd.Parameters.AddWithValue("config", record.ConfigJson);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        await reader.ReadAsync(ct);
-        return new McpServerRecord
+        cmd.Parameters.AddWithValue("kind", record.Kind);
+        cmd.Parameters.AddWithValue("config_json", record.ConfigJson);
+        cmd.Parameters.AddWithValue("secret_json", (object?)_secrets.Protect(plaintextSecret) ?? DBNull.Value);
+        try
         {
-            Id = record.Id, Owner = record.Owner, Name = record.Name,
-            Description = record.Description, ConfigJson = record.ConfigJson,
-            CreatedAt = reader.GetDateTime(0), UpdatedAt = reader.GetDateTime(1)
-        };
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            await reader.ReadAsync(ct);
+            return new McpServerRecord
+            {
+                Id = record.Id,
+                Owner = record.Owner,
+                Name = record.Name,
+                Description = record.Description,
+                Kind = record.Kind,
+                ConfigJson = record.ConfigJson,
+                SecretJson = plaintextSecret,
+                CreatedAt = reader.GetDateTime(0),
+                UpdatedAt = reader.GetDateTime(1)
+            };
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            throw new ArgumentException("An MCP server with this name already exists for this owner.");
+        }
     }
 
     public async Task<McpServerRecord> UpdateAsync(
         string owner, string id, SaveMcpServerRequest request, CancellationToken ct = default)
     {
+        var kind = LibraryValidation.ValidateKind(request.Kind);
         var name = LibraryValidation.ValidateMcpServerName(request.Name);
         var description = LibraryValidation.ValidateDescription(request.Description);
-        var config = LibraryValidation.ValidateMcpServerConfig(request.ConfigJson);
+        var config = LibraryValidation.ValidateMcpServerConfig(request.ConfigJson, kind);
+        // null = leave unchanged; "" = clear; otherwise replace.
+        var clearSecret = request.SecretJson is not null && request.SecretJson.Length == 0;
+        var setSecret = request.SecretJson is not null && request.SecretJson.Length > 0;
+        var protectedSecret = setSecret ? _secrets.Protect(request.SecretJson) : null;
 
         const string sql = """
             UPDATE mcp_servers
-            SET name = @name, description = @description, config = @config, updated_at = now()
+            SET name = @name, description = @description, kind = @kind,
+                config_json = @config_json,
+                secret_json = CASE
+                    WHEN @clear_secret THEN NULL
+                    WHEN @set_secret THEN @secret_json
+                    ELSE secret_json
+                END,
+                updated_at = now()
             WHERE id = @id AND owner = @owner
-            RETURNING created_at, updated_at
+            RETURNING created_at, updated_at, secret_json
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("owner", owner);
         cmd.Parameters.AddWithValue("name", name);
         cmd.Parameters.AddWithValue("description", description);
-        cmd.Parameters.AddWithValue("config", config);
-        await using var reader = await cmd.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            throw new KeyNotFoundException();
-        return new McpServerRecord
+        cmd.Parameters.AddWithValue("kind", kind);
+        cmd.Parameters.AddWithValue("config_json", config);
+        cmd.Parameters.AddWithValue("clear_secret", clearSecret);
+        cmd.Parameters.AddWithValue("set_secret", setSecret);
+        cmd.Parameters.AddWithValue("secret_json", (object?)protectedSecret ?? DBNull.Value);
+        try
         {
-            Id = id, Owner = owner, Name = name, Description = description, ConfigJson = config,
-            CreatedAt = reader.GetDateTime(0), UpdatedAt = reader.GetDateTime(1)
-        };
+            await using var reader = await cmd.ExecuteReaderAsync(ct);
+            if (!await reader.ReadAsync(ct))
+                throw new KeyNotFoundException();
+            return new McpServerRecord
+            {
+                Id = id,
+                Owner = owner,
+                Name = name,
+                Description = description,
+                Kind = kind,
+                ConfigJson = config,
+                SecretJson = _secrets.Unprotect(reader.IsDBNull(2) ? null : reader.GetString(2)),
+                CreatedAt = reader.GetDateTime(0),
+                UpdatedAt = reader.GetDateTime(1)
+            };
+        }
+        catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
+        {
+            throw new ArgumentException("An MCP server with this name already exists for this owner.");
+        }
     }
 
     public async Task DeleteAsync(string owner, string id, CancellationToken ct = default)
@@ -123,7 +178,6 @@ public sealed class McpServerStore : IMcpServerStore
         return await QueryAsync(cmd, ct);
     }
 
-    /// <summary>Fetches records by id regardless of owner — access is the caller's concern.</summary>
     public async Task<IReadOnlyList<McpServerRecord>> GetManyAsync(
         IReadOnlyCollection<string> ids, CancellationToken ct = default)
     {
@@ -134,9 +188,12 @@ public sealed class McpServerStore : IMcpServerStore
     }
 
     private const string SelectBase =
-        "SELECT id, owner, name, description, config, created_at, updated_at FROM mcp_servers";
+        """
+        SELECT id, owner, name, description, kind, config_json, secret_json, created_at, updated_at
+        FROM mcp_servers
+        """;
 
-    private static async Task<IReadOnlyList<McpServerRecord>> QueryAsync(
+    private async Task<IReadOnlyList<McpServerRecord>> QueryAsync(
         NpgsqlCommand cmd, CancellationToken ct)
     {
         var list = new List<McpServerRecord>();
@@ -149,11 +206,17 @@ public sealed class McpServerStore : IMcpServerStore
                 Owner = reader.GetString(1),
                 Name = reader.GetString(2),
                 Description = reader.GetString(3),
-                ConfigJson = reader.GetString(4),
-                CreatedAt = reader.GetDateTime(5),
-                UpdatedAt = reader.GetDateTime(6)
+                Kind = reader.GetString(4),
+                ConfigJson = reader.GetString(5),
+                SecretJson = _secrets.Unprotect(reader.IsDBNull(6) ? null : reader.GetString(6)),
+                CreatedAt = reader.GetDateTime(7),
+                UpdatedAt = reader.GetDateTime(8)
             });
         }
         return list;
     }
+
+    /// <summary>Empty string means no secret on create (same as null).</summary>
+    private static string? NormalizeIncomingSecret(string? secretJson) =>
+        string.IsNullOrEmpty(secretJson) ? null : secretJson;
 }

@@ -1,19 +1,24 @@
-using System.Text.Json;
-
 namespace AgentHub.Api.Library;
 
 /// <summary>
-/// A reusable MCP server definition saved in a user's account library.
-/// ConfigJson is a single server entry (the value side of an ".mcp.json"
-/// mcpServers object), keyed by Name when applied to a session.
+/// A reusable MCP server definition in the personal or org catalog.
+/// ConfigJson is a single server entry (raw) or API wrapper config (api).
+/// SecretJson holds plaintext secret material in memory after decrypt; the store encrypts at rest.
 /// </summary>
 public sealed class McpServerRecord
 {
+    /// <summary>Owner value for admin/org catalog entries.</summary>
+    public const string OrgOwner = "__org__";
+
     public required string Id { get; init; }
     public required string Owner { get; init; }
     public string Name { get; set; } = "";
     public string Description { get; set; } = "";
+    /// <summary><c>raw</c> or <c>api</c>.</summary>
+    public string Kind { get; set; } = "raw";
     public string ConfigJson { get; set; } = "{}";
+    /// <summary>Plaintext secrets in memory; null when none. Never return to non-owners.</summary>
+    public string? SecretJson { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
@@ -56,7 +61,16 @@ public sealed class SkillVersionRecord
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
 }
 
-public sealed record SaveMcpServerRequest(string Name, string? Description, string ConfigJson);
+/// <param name="SecretJson">
+/// On create: null means no secret. On update: null leaves the existing secret unchanged;
+/// an empty string clears it; any other value replaces it.
+/// </param>
+public sealed record SaveMcpServerRequest(
+    string Name,
+    string? Description,
+    string Kind,
+    string ConfigJson,
+    string? SecretJson = null);
 
 /// <summary>An extra file of a skill next to its SKILL.md — scripts, templates,
 /// reference documents. Text only; the path is relative to the skill directory.</summary>
@@ -73,15 +87,19 @@ public sealed record SaveSkillRequest(
     // [] = remove all files; a list replaces them.
     IReadOnlyList<SkillFile>? Files = null);
 
-/// <summary>List/detail view of a library MCP server. The raw config is only
-/// returned to its owner — shared entries may contain tokens.</summary>
+/// <summary>List/detail view of a catalog MCP server. ConfigJson is only
+/// returned to its owner — shared entries may contain tokens.
+/// Secret values are never included; <see cref="HasSecret"/> lets the UI show
+/// that a secret is configured.</summary>
 public sealed record McpServerInfo(
     string Id,
     string Name,
     string Description,
     string Owner,
+    string Kind,
     bool Mine,
     string? ConfigJson,
+    bool HasSecret,
     DateTime CreatedAt,
     DateTime UpdatedAt);
 
@@ -133,146 +151,3 @@ public sealed record SkillSearchHit(
 /// <summary>A skill as delivered to an agent pod (name + SKILL.md content
 /// + extra files such as scripts).</summary>
 public sealed record SkillPayload(string Name, string Content, IReadOnlyList<SkillFile> Files);
-
-public static class LibraryValidation
-{
-    public const int MaxNameLength = 64;
-    public const int MaxDescriptionLength = 500;
-    public const int MaxMcpConfigBytes = 64_000;
-    public const int MaxSkillContentChars = 200_000;
-
-    /// <summary>Plain MCP server name: becomes the key in mcpServers, so the same
-    /// rules apply as for the sharing policy's server names.</summary>
-    public static string ValidateMcpServerName(string? name)
-    {
-        var value = name?.Trim() ?? "";
-        if (value.Length is 0 or > MaxNameLength
-            || value.StartsWith("mcp__", StringComparison.Ordinal)
-            || value.Contains("__", StringComparison.Ordinal)
-            || value.Any(char.IsWhiteSpace))
-        {
-            throw new ArgumentException("MCP server name must be a plain server name (no whitespace, no '__').");
-        }
-        return value;
-    }
-
-    /// <summary>Skill names become directory names under ~/.claude/skills.</summary>
-    public static string ValidateSkillName(string? name)
-    {
-        var value = name?.Trim() ?? "";
-        if (value.Length is 0 or > MaxNameLength
-            || !value.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c is '-')
-            || value.StartsWith('-') || value.EndsWith('-'))
-        {
-            throw new ArgumentException("Skill name must be lowercase letters, digits and hyphens (kebab-case).");
-        }
-        return value;
-    }
-
-    public static string ValidateDescription(string? description)
-    {
-        var value = description?.Trim() ?? "";
-        if (value.Length > MaxDescriptionLength)
-            throw new ArgumentException($"Description must be at most {MaxDescriptionLength} characters.");
-        return value;
-    }
-
-    /// <summary>The config must be a single JSON object (one server entry).</summary>
-    public static string ValidateMcpServerConfig(string? configJson)
-    {
-        var value = configJson?.Trim() ?? "";
-        if (value.Length == 0)
-            throw new ArgumentException("MCP server config is required.");
-        if (value.Length > MaxMcpConfigBytes)
-            throw new ArgumentException("MCP server config is too large.");
-        try
-        {
-            using var doc = JsonDocument.Parse(value);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-                throw new ArgumentException("MCP server config must be a JSON object.");
-            if (doc.RootElement.TryGetProperty("mcpServers", out _))
-                throw new ArgumentException(
-                    "Provide a single server entry, not a full .mcp.json (no top-level mcpServers).");
-        }
-        catch (JsonException)
-        {
-            throw new ArgumentException("MCP server config is not valid JSON.");
-        }
-        return value;
-    }
-
-    public const int MaxCommentLength = 500;
-
-    public static string ValidateComment(string? comment)
-    {
-        var value = comment?.Trim() ?? "";
-        if (value.Length > MaxCommentLength)
-            throw new ArgumentException($"Comment must be at most {MaxCommentLength} characters.");
-        return value;
-    }
-
-    public static string ValidateSkillContent(string? content)
-    {
-        var value = content ?? "";
-        if (string.IsNullOrWhiteSpace(value))
-            throw new ArgumentException("Skill content is required.");
-        if (value.Length > MaxSkillContentChars)
-            throw new ArgumentException("Skill content is too large.");
-        return value;
-    }
-
-    public const int MaxSkillFiles = 20;
-    public const int MaxSkillFilePathLength = 200;
-    public const int MaxSkillFilesTotalChars = 500_000;
-
-    /// <summary>Validates the extra files of a skill. Paths become real paths under
-    /// ~/.claude/skills/{name}/ in agent pods, so they must be strictly relative,
-    /// shallow and made of safe segments. Returns the normalized list.</summary>
-    public static IReadOnlyList<SkillFile>? ValidateSkillFiles(IReadOnlyList<SkillFile>? files)
-    {
-        if (files is null) return null;
-        if (files.Count > MaxSkillFiles)
-            throw new ArgumentException($"A skill may have at most {MaxSkillFiles} extra files.");
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        var total = 0;
-        var result = new List<SkillFile>(files.Count);
-        foreach (var file in files)
-        {
-            var path = ValidateSkillFilePath(file.Path);
-            if (!seen.Add(path))
-                throw new ArgumentException($"Duplicate file path: {path}");
-            var content = file.Content ?? "";
-            if (content.Contains('\0'))
-                throw new ArgumentException($"File {path} is not text.");
-            if (content.Length > MaxSkillContentChars)
-                throw new ArgumentException($"File {path} is too large.");
-            total += content.Length;
-            if (total > MaxSkillFilesTotalChars)
-                throw new ArgumentException("The skill's files are too large in total.");
-            result.Add(new SkillFile(path, content));
-        }
-        return result;
-    }
-
-    public static string ValidateSkillFilePath(string? path)
-    {
-        var value = (path ?? "").Trim().Replace('\\', '/');
-        if (value.Length is 0 or > MaxSkillFilePathLength)
-            throw new ArgumentException("File paths must be 1-200 characters.");
-        var segments = value.Split('/');
-        if (segments.Length > 3)
-            throw new ArgumentException($"File path is nested too deeply: {value}");
-        foreach (var segment in segments)
-        {
-            if (segment.Length == 0 || segment is "." or ".."
-                || !segment.All(c => char.IsAsciiLetterOrDigit(c) || c is '.' or '_' or '-')
-                || segment.StartsWith('.'))
-            {
-                throw new ArgumentException($"Invalid file path segment in: {value}");
-            }
-        }
-        if (string.Equals(value, "SKILL.md", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("SKILL.md is the skill content itself, not an extra file.");
-        return value;
-    }
-}

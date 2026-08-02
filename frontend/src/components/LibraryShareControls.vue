@@ -3,10 +3,9 @@ import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
 import UserMultiSelect from './UserMultiSelect.vue'
 
-// Inline sharing editor for a library item (admin owners). Loads the current
-// share state and the group list lazily when the expander opens; a 402 from
-// the enterprise endpoints collapses into a short license note instead of
-// crashing the pane.
+// Inline sharing editor for a library item. Loads current share state and
+// IdP groups (via /ee/admin/groups). A 402 from the enterprise share
+// endpoints collapses into a short license note instead of crashing the pane.
 const props = defineProps({
   kind: { type: String, required: true }, // 'mcp-servers' | 'skills'
   itemId: { type: String, required: true }
@@ -21,7 +20,7 @@ const busy = ref(false)
 const all = ref(false)
 const selectedUsers = ref([]) // owner strings (multi-select mode)
 const usersText = ref('')     // comma-separated fallback when the user list is unavailable
-const groupIds = ref([])
+const groupNames = ref([])
 const groups = ref([])
 const knownUsers = ref([])
 const usersLoaded = ref(false)
@@ -30,23 +29,28 @@ onMounted(async () => {
   try {
     const [shares, groupList] = await Promise.all([
       api.libraryShares(props.kind, props.itemId),
-      api.libraryGroups()
+      api.eeListGroups()
     ])
     all.value = !!shares.all
     selectedUsers.value = [...(shares.users || [])]
     usersText.value = (shares.users || []).join(', ')
-    groupIds.value = [...(shares.groups || [])]
-    groups.value = groupList
+    groupNames.value = [...(shares.groups || [])]
+    groups.value = groupList || []
   } catch (e) {
     if (e.status === 402) locked.value = true
     else error.value = String(e.message || e)
     loading.value = false
     return
   }
-  // The known-users list only powers the picker — fall back to a plain
-  // comma-separated input when it is unavailable so nothing breaks.
+  // Known users power the picker — fall back to a plain comma-separated
+  // input when the admin overview is unavailable so nothing breaks.
   try {
-    knownUsers.value = await api.libraryUsers()
+    const overview = await api.adminOverview()
+    knownUsers.value = (overview?.users || []).map(u => ({
+      owner: u.owner,
+      displayName: u.displayName,
+      email: u.email
+    }))
     usersLoaded.value = true
   } catch { usersLoaded.value = false }
   loading.value = false
@@ -60,7 +64,7 @@ async function save() {
       users: usersLoaded.value
         ? selectedUsers.value
         : usersText.value.split(',').map(u => u.trim()).filter(Boolean),
-      groups: groupIds.value
+      groups: groupNames.value
     })
     saved.value = true
   } catch (e) {
@@ -86,8 +90,8 @@ async function save() {
       </div>
       <div v-if="groups.length" class="field">
         <label>Groups</label>
-        <label v-for="g in groups" :key="g.id" class="check">
-          <input type="checkbox" :value="g.id" v-model="groupIds" data-share-group />
+        <label v-for="g in groups" :key="g.name" class="check">
+          <input type="checkbox" :value="g.name" v-model="groupNames" data-share-group />
           <span>{{ g.name }}</span>
         </label>
       </div>

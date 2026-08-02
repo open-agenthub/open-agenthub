@@ -116,11 +116,17 @@ export const api = {
   startLicenseCheckout: (data) => req('POST', '/admin/license/checkout', data),
   deactivateLicense: () => req('DELETE', '/admin/license'),
   setUserSeat: (owner, licensed) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/license`, { licensed }),
-  // Personal library: reusable MCP server entries and skills.
+  // Personal library: MCP catalog (raw/api) + skills.
   mcpServers: () => req('GET', '/mcp-servers'),
   createMcpServer: (data) => req('POST', '/mcp-servers', data),
+  createMcpServerFromApi: (data) => req('POST', '/mcp-servers/from-api', data),
   updateMcpServer: (id, data) => req('PUT', `/mcp-servers/${encodeURIComponent(id)}`, data),
   deleteMcpServer: (id) => req('DELETE', `/mcp-servers/${encodeURIComponent(id)}`),
+  // Admin org MCP catalog (owner=__org__). Not license-gated.
+  adminMcpServers: () => req('GET', '/admin/mcp-servers'),
+  createAdminMcpServer: (data) => req('POST', '/admin/mcp-servers', data),
+  updateAdminMcpServer: (id, data) => req('PUT', `/admin/mcp-servers/${encodeURIComponent(id)}`, data),
+  deleteAdminMcpServer: (id) => req('DELETE', `/admin/mcp-servers/${encodeURIComponent(id)}`),
   skills: () => req('GET', '/skills'),
   skill: (id) => req('GET', `/skills/${encodeURIComponent(id)}`),
   createSkill: (data) => req('POST', '/skills', data),
@@ -132,12 +138,8 @@ export const api = {
   skillVersions: (id) => req('GET', `/skills/${encodeURIComponent(id)}/versions`),
   skillVersion: (id, version) => req('GET', `/skills/${encodeURIComponent(id)}/versions/${version}`),
   restoreSkillVersion: (id, version) => req('POST', `/skills/${encodeURIComponent(id)}/restore`, { version }),
-  // Enterprise library sharing — all of these throw with .status 402 without a license.
-  libraryGroups: () => req('GET', '/ee/library/groups'),
-  createLibraryGroup: (data) => req('POST', '/ee/library/groups', data),
-  deleteLibraryGroup: (id) => req('DELETE', `/ee/library/groups/${encodeURIComponent(id)}`),
-  setLibraryGroupMembers: (id, data) => req('PUT', `/ee/library/groups/${encodeURIComponent(id)}/members`, data),
-  // Known users for the sharing / group member pickers (admin-only).
+  // Enterprise library sharing — throw with .status 402 without a license.
+  // Known users for the sharing pickers (admin-only).
   libraryUsers: () => req('GET', '/ee/library/users'),
   librarySettings: () => req('GET', '/ee/library/settings'),
   setLibrarySettings: (data) => req('PUT', '/ee/library/settings', data),

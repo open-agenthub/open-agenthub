@@ -1,7 +1,10 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
-import { agentPayload, defaultAgentForm, defaultPolicy, filterAgentOptions, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder } from '../lib/agent.js'
+import {
+  agentPayload, buildEphemeralApiSources, defaultAgentForm, defaultPolicy, ephemeralNameFromUrl,
+  filterAgentOptions, mcpBadgeLabel, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder
+} from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 
@@ -21,9 +24,12 @@ const UI_MODES = [
   { key: 'chat', label: 'Chat', hint: 'a chat view like Claude Desktop (Claude only)' }
 ]
 const agentChoices = ref(filterAgentOptions([]))
-// Saved MCP servers from the personal library (own + shared with me).
+// Saved MCP servers from the personal library (own + org + shared with me).
 const savedMcpServers = ref([])
 const selectedMcpIds = ref([])
+const ephemeralUrl = ref('')
+const ephemeralName = ref('')
+const ephemeralSaveToLibrary = ref(false)
 const form = ref({
   title: '',
   mode: 'Interactive',
@@ -62,6 +68,10 @@ onMounted(async () => {
   try { savedMcpServers.value = await api.mcpServers() } catch { /* library is optional */ }
 })
 
+watch(ephemeralUrl, (url) => {
+  ephemeralName.value = String(url || '').trim() ? ephemeralNameFromUrl(url) : ''
+})
+
 watch(() => form.value.agent, (agent, previousAgent) => {
   // Use policyFromForm (not policyPayload) so Cursor's empty-commands submit rule
   // does not treat prior-agent defaults as user-edited.
@@ -93,6 +103,11 @@ async function submit() {
       projectId: form.value.projectId || null,
       mcpConfigJson: form.value.mcpConfigJson || null,
       mcpServerIds: selectedMcpIds.value,
+      ephemeralApiSources: buildEphemeralApiSources({
+        url: ephemeralUrl.value,
+        name: ephemeralName.value,
+        saveToLibrary: ephemeralSaveToLibrary.value
+      }),
       policy: policyPayload(form.value),
       image: form.value.image.trim() || null,
       runAsRoot: form.value.runAsRoot,
@@ -184,8 +199,19 @@ async function submit() {
             <label>Saved MCP servers <span class="dim">— from your library</span></label>
             <label v-for="s in savedMcpServers" :key="s.id" class="check mcp-pick">
               <input type="checkbox" :value="s.id" v-model="selectedMcpIds" data-mcp-option />
-              <span>{{ s.name }}<span v-if="!s.mine" class="dim"> — shared by {{ s.owner }}</span></span>
+              <span>{{ s.name }} <span class="mcp-badge" :data-mcp-badge="s.id">{{ mcpBadgeLabel(s) }}</span></span>
             </label>
+          </div>
+          <div class="field" data-ephemeral-api>
+            <label>API URL <span class="dim">— OpenAPI/GraphQL for this session</span></label>
+            <input v-model="ephemeralUrl" data-ephemeral-url class="mono" placeholder="https://…/openapi.json" />
+            <div class="ephemeral-row">
+              <input v-model="ephemeralName" data-ephemeral-name placeholder="name" />
+              <label class="check ephemeral-save">
+                <input type="checkbox" v-model="ephemeralSaveToLibrary" data-ephemeral-save />
+                <span>Save to my library</span>
+              </label>
+            </div>
           </div>
           <div class="field">
             <label>Extra tools <span class="dim">— MCP servers the agent can use (.mcp.json)</span></label>
@@ -241,6 +267,11 @@ async function submit() {
 .check { display: flex; align-items: flex-start; gap: 10px; margin: 4px 0 0; font-size: 13px; color: var(--text); cursor: pointer; }
 .check input { width: auto; margin-top: 2px; }
 .mcp-pick { margin: 0 0 6px; }
+.mcp-badge { display: inline-block; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--border-2); border-radius: 4px; color: var(--muted-3); font-size: 11px; font-weight: 700; }
+.ephemeral-row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 8px; }
+.ephemeral-row input[data-ephemeral-name] { width: 180px; max-width: 100%; }
+.ephemeral-save { margin: 0; align-items: center; }
+.ephemeral-save input { margin-top: 0; }
 .row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
 .note-inline { font-size: 12px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }

@@ -1,15 +1,16 @@
 using System.Security.Claims;
+using System.Text.Json;
 using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Library;
+using AgentHub.Api.Library.ApiMcpGateway;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
 namespace AgentHub.Api.Controllers;
 
 /// <summary>
-/// Personal MCP server library (community feature). Users manage their own
-/// entries; entries shared by others (enterprise) appear read-only in the list
-/// and never expose their raw config to non-owners.
+/// Personal MCP server catalog. Users manage their own entries; shared/org
+/// entries appear in the list without ConfigJson. Secrets are never returned.
 /// </summary>
 [ApiController]
 [Authorize]
@@ -37,7 +38,7 @@ public sealed class McpServersController : ControllerBase
     {
         var owner = Owner;
         var records = await _access.ListMcpServersAsync(owner, ct);
-        return records.Select(r => ToInfo(r, owner)).ToList();
+        return records.Select(r => ToInfo(r, mine: r.Owner == owner)).ToList();
     }
 
     [HttpPost]
@@ -45,7 +46,43 @@ public sealed class McpServersController : ControllerBase
     {
         try
         {
-            return Ok(ToInfo(await _store.CreateAsync(Owner, request, ct), Owner));
+            return Ok(ToInfo(await _store.CreateAsync(Owner, request, ct), mine: true));
+        }
+        catch (ArgumentException exception)
+        {
+            return BadRequest(new { error = exception.Message });
+        }
+    }
+
+    /// <summary>
+    /// Create a <c>kind=api</c> catalog entry from an OpenAPI/GraphQL URL.
+    /// Spec fetch validation is shallow until the gateway task (URL + config shape).
+    /// </summary>
+    [HttpPost("from-api")]
+    public async Task<IActionResult> CreateFromApi(
+        [FromBody] CreateMcpFromApiRequest request, CancellationToken ct)
+    {
+        if (!request.Save)
+            return BadRequest(new { error = "save must be true for catalog create; use session ephemeral sources otherwise." });
+
+        try
+        {
+            var configJson = BuildApiConfigJson(request);
+            string? secretJson = null;
+            if (!string.IsNullOrWhiteSpace(request.Secret))
+            {
+                var secret = request.Secret.Trim();
+                secretJson = secret.StartsWith('{')
+                    ? secret
+                    : JsonSerializer.Serialize(new Dictionary<string, string> { ["token"] = secret });
+            }
+
+            var saved = await _store.CreateAsync(
+                Owner,
+                new SaveMcpServerRequest(
+                    request.Name, request.Description, "api", configJson, secretJson),
+                ct);
+            return Ok(ToInfo(saved, mine: true));
         }
         catch (ArgumentException exception)
         {
@@ -54,11 +91,12 @@ public sealed class McpServersController : ControllerBase
     }
 
     [HttpPut("{id}")]
-    public async Task<IActionResult> Update(string id, [FromBody] SaveMcpServerRequest request, CancellationToken ct)
+    public async Task<IActionResult> Update(
+        string id, [FromBody] SaveMcpServerRequest request, CancellationToken ct)
     {
         try
         {
-            return Ok(ToInfo(await _store.UpdateAsync(Owner, id, request, ct), Owner));
+            return Ok(ToInfo(await _store.UpdateAsync(Owner, id, request, ct), mine: true));
         }
         catch (KeyNotFoundException)
         {
@@ -81,23 +119,71 @@ public sealed class McpServersController : ControllerBase
         {
             return NotFound();
         }
-        // Sharing rows are metadata of the deleted item — clean them up regardless
-        // of the license state.
+        // Share rows are metadata of the deleted item — clean up regardless of license.
         await _shares.DeleteForItemAsync(LibraryItemTypes.Mcp, id, ct);
         return NoContent();
     }
 
-    private static McpServerInfo ToInfo(McpServerRecord record, string owner)
+    internal static string BuildApiConfigJson(CreateMcpFromApiRequest request)
     {
-        var mine = record.Owner == owner;
-        return new McpServerInfo(
-            record.Id,
-            record.Name,
-            record.Description,
-            record.Owner,
-            mine,
-            mine ? record.ConfigJson : null,
-            record.CreatedAt,
-            record.UpdatedAt);
+        var specUrl = request.SpecUrl?.Trim() ?? "";
+        if (string.IsNullOrEmpty(specUrl)
+            || !Uri.TryCreate(specUrl, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        {
+            throw new ArgumentException("specUrl must be an absolute http(s) URL.");
+        }
+
+        ApiMcpGatewayHandler.ValidateSafeOutboundUrl(specUrl, "specUrl");
+        var baseUrl = string.IsNullOrWhiteSpace(request.BaseUrl) ? null : request.BaseUrl.Trim();
+        if (baseUrl is not null)
+            ApiMcpGatewayHandler.ValidateSafeOutboundUrl(baseUrl, "baseUrl");
+
+        var specType = string.IsNullOrWhiteSpace(request.SpecType)
+            ? "auto"
+            : request.SpecType.Trim().ToLowerInvariant();
+        if (specType is not ("openapi" or "graphql" or "auto"))
+            throw new ArgumentException("specType must be 'openapi', 'graphql', or 'auto'.");
+
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("specType", specType);
+            writer.WriteString("specUrl", specUrl);
+            if (baseUrl is not null)
+                writer.WriteString("baseUrl", baseUrl);
+            if (request.Auth is { ValueKind: not JsonValueKind.Undefined and not JsonValueKind.Null } auth)
+            {
+                writer.WritePropertyName("auth");
+                auth.WriteTo(writer);
+            }
+            writer.WriteEndObject();
+        }
+
+        return System.Text.Encoding.UTF8.GetString(stream.ToArray());
     }
+
+    internal static McpServerInfo ToInfo(McpServerRecord record, bool mine) => new(
+        record.Id,
+        record.Name,
+        record.Description,
+        record.Owner,
+        record.Kind,
+        mine,
+        mine ? record.ConfigJson : null,
+        HasSecret: !string.IsNullOrEmpty(record.SecretJson),
+        record.CreatedAt,
+        record.UpdatedAt);
 }
+
+/// <summary>Body for <c>POST /api/mcp-servers/from-api</c>.</summary>
+public sealed record CreateMcpFromApiRequest(
+    string Name,
+    string? Description,
+    string SpecUrl,
+    string? SpecType = null,
+    string? BaseUrl = null,
+    JsonElement? Auth = null,
+    string? Secret = null,
+    bool Save = true);

@@ -163,3 +163,37 @@ export function credentialReadiness(agent, authMode, mode, status = {}, openClaw
   const statusKey = agent === 'Codex' ? 'openAiApiKey' : agent === 'Cursor' ? 'cursorApiKey' : 'anthropicApiKey'
   return apiKeyReadiness(provider, statusKey, status)
 }
+
+/** Org catalog entries use this owner id (see backend McpServerRecord.OrgOwner). */
+export const ORG_MCP_OWNER = '__org__'
+
+/** Badge label for a catalog MCP row in session pickers. */
+export function mcpBadgeLabel(server) {
+  if (server?.owner === ORG_MCP_OWNER) return 'Org'
+  if (server?.mine) return 'Mine'
+  return 'Shared'
+}
+
+/** Derive a stable MCP name from an API/spec URL hostname (e.g. api.example.com → api-example-com). */
+export function ephemeralNameFromUrl(url) {
+  try {
+    const host = new URL(String(url || '').trim()).hostname
+    const name = host.replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-+|-+$/g, '').toLowerCase()
+    return name || 'api'
+  } catch {
+    return 'api'
+  }
+}
+
+/** Build Create/UpdateSession ephemeralApiSources from the Advanced URL paste fields. */
+export function buildEphemeralApiSources({ url, name, saveToLibrary }) {
+  const specUrl = String(url || '').trim()
+  if (!specUrl) return []
+  const resolved = String(name || '').trim() || ephemeralNameFromUrl(specUrl)
+  return [{
+    name: resolved,
+    specUrl,
+    specType: 'auto',
+    saveToLibrary: !!saveToLibrary
+  }]
+}
