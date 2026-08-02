@@ -235,19 +235,31 @@ public static class SessionFileValidator
 
     private static string? DetectOfficeMime(byte[] bytes)
     {
+        const int maxEntries = 4096;
+        const long maxContentTypesBytes = 256 * 1024;
         try
         {
             using var stream = new MemoryStream(bytes, writable: false);
             using var archive = new ZipArchive(stream, ZipArchiveMode.Read);
             var contentTypes = archive.GetEntry("[Content_Types].xml");
-            if (contentTypes is null)
+            if (archive.Entries.Count > maxEntries || contentTypes is null ||
+                contentTypes.Length > maxContentTypesBytes)
             {
                 return null;
             }
 
             using var reader = new StreamReader(
                 contentTypes.Open(), new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: true);
-            var xml = reader.ReadToEnd();
+            var buffer = new char[maxContentTypesBytes + 1];
+            var total = 0;
+            while (total < buffer.Length)
+            {
+                var read = reader.Read(buffer, total, buffer.Length - total);
+                if (read == 0) break;
+                total += read;
+            }
+            if (total > maxContentTypesBytes) return null;
+            var xml = new string(buffer, 0, total);
             if (xml.Contains("wordprocessingml.document.main+xml", StringComparison.Ordinal))
             {
                 return DocxMime;

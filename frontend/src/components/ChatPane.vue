@@ -13,6 +13,7 @@ const scroller = ref(null)
 const text = ref('')
 const fileInput = ref(null)
 let ws, reconnectTimer
+const pendingTurn = ref(null)
 let disposed = false
 let connectionGeneration = 0
 
@@ -34,7 +35,7 @@ const attachmentItems = computed(() => {
 })
 const readyAttachments = computed(() => attachmentItems.value.filter(item => item.state === 'ready'))
 const attachmentsSettled = computed(() => attachmentItems.value.every(item => item.state === 'ready'))
-const canSubmit = computed(() => canSend.value && attachmentsSettled.value &&
+const canSubmit = computed(() => canSend.value && !pendingTurn.value && attachmentsSettled.value &&
   Boolean(text.value.trim() || readyAttachments.value.length))
 
 function makeAttachmentQueue() {
@@ -45,7 +46,23 @@ function makeAttachmentQueue() {
   })
 }
 
+function handleDeliveryFrame(data) {
+  for (const line of String(data).split('\n')) {
+    let event
+    try { event = JSON.parse(line) } catch { continue }
+    if (event?.type !== 'agenthub' || event.clientTurnId !== pendingTurn.value?.id) continue
+    if (event.subtype === 'chat_delivered') {
+      if (text.value === pendingTurn.value.text) text.value = ''
+      attachmentQueue.clearReady()
+      pendingTurn.value = null
+    } else if (event.subtype === 'error' && event.code === 'attachment_delivery_failed') {
+      pendingTurn.value = null
+    }
+  }
+}
+
 function feed(data) {
+  handleDeliveryFrame(data)
   log.feed(data)
   version.value += 1
   scrollToEnd()
@@ -71,6 +88,7 @@ function closeSocket() {
   connectionGeneration += 1
   clearReconnect()
   const socket = ws
+  pendingTurn.value = null
   ws = undefined
   if (socket) {
     socket.onclose = null
@@ -139,11 +157,11 @@ function submit() {
   const value = text.value.trim()
   if (!canSubmit.value || ws?.readyState !== WebSocket.OPEN) return
   const ids = readyAttachments.value.map(item => item.id)
-  const payload = { type: 'chat', text: value, ...(ids.length ? { attachments: ids } : {}) }
+  const clientTurnId = crypto.randomUUID()
+  const payload = { type: 'chat', text: value, clientTurnId, ...(ids.length ? { attachments: ids } : {}) }
   try {
     ws.send(JSON.stringify(payload))
-    text.value = ''
-    attachmentQueue.clearReady()
+    pendingTurn.value = { id: clientTurnId, text: value }
   } catch { /* retain the draft and attachments for retry */ }
 }
 

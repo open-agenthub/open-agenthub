@@ -6,6 +6,17 @@ public interface ISessionFileRegistry
 {
     Task InitializeAsync(CancellationToken ct = default);
     Task InsertAsync(SessionFileRecord file, CancellationToken ct = default);
+    async Task<SessionFileReservationResult> TryReserveAsync(
+        SessionFileRecord file, int maxFiles, long maxBytes, CancellationToken ct = default)
+    {
+        var active = await ListAsync(file.SessionId, ct);
+        if (active.Count >= maxFiles) return SessionFileReservationResult.CountExceeded;
+        var bytes = active.Aggregate<SessionFileRecord, long>(0,
+            (total, item) => checked(total + item.Size));
+        if (file.Size > maxBytes - bytes) return SessionFileReservationResult.BytesExceeded;
+        await InsertAsync(file, ct);
+        return SessionFileReservationResult.Inserted;
+    }
     Task<SessionFileRecord?> GetAsync(
         string sessionId, string fileId, CancellationToken ct = default);
     Task<IReadOnlyList<SessionFileRecord>> ListAsync(
@@ -26,6 +37,15 @@ public interface ISessionFileRegistry
         string? fileId,
         string presenter,
         CancellationToken ct = default);
+    async Task ClearPresentationIfFileAsync(
+        string sessionId, string fileId, string presenter, CancellationToken ct = default)
+    {
+        var current = await GetPresentationAsync(sessionId, ct);
+        if (current?.FileId == fileId)
+        {
+            await SetPresentationAsync(sessionId, null, presenter, ct);
+        }
+    }
     Task<SessionFileRecord?> ClaimPreviewAsync(CancellationToken ct = default);
     Task LinkPreviewAsync(
         string sourceId,
@@ -34,6 +54,8 @@ public interface ISessionFileRegistry
         CancellationToken ct = default);
     Task<IReadOnlyList<SessionFileRecord>> ExpireReservationsAsync(
         DateTime cutoff, CancellationToken ct = default);
+    Task<IReadOnlyList<SessionFileRecord>> ListReadyPodFilesAsync(CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<SessionFileRecord>>(Array.Empty<SessionFileRecord>());
     Task MarkSessionDeletedAsync(string sessionId, CancellationToken ct = default);
 }
 
@@ -100,6 +122,58 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
 
         await using var command = _db.CreateCommand(ddl);
         await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<SessionFileReservationResult> TryReserveAsync(
+        SessionFileRecord file, int maxFiles, long maxBytes, CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        await using (var sessionLock = new NpgsqlCommand(
+            "SELECT pg_advisory_xact_lock(hashtextextended(@session, 0))", connection, transaction))
+        {
+            sessionLock.Parameters.AddWithValue("session", file.SessionId);
+            await sessionLock.ExecuteNonQueryAsync(ct);
+        }
+
+        int count;
+        long bytes;
+        await using (var usage = new NpgsqlCommand("""
+            SELECT count(*)::int, COALESCE(sum(size), 0)::bigint
+            FROM session_files
+            WHERE session_id = @session AND state NOT IN ('Expired', 'Deleted')
+            """, connection, transaction))
+        {
+            usage.Parameters.AddWithValue("session", file.SessionId);
+            await using var reader = await usage.ExecuteReaderAsync(ct);
+            await reader.ReadAsync(ct);
+            count = reader.GetInt32(0);
+            bytes = reader.GetInt64(1);
+        }
+
+        var result = count >= maxFiles
+            ? SessionFileReservationResult.CountExceeded
+            : file.Size > maxBytes - bytes
+                ? SessionFileReservationResult.BytesExceeded
+                : SessionFileReservationResult.Inserted;
+        if (result == SessionFileReservationResult.Inserted)
+        {
+            await using var insert = new NpgsqlCommand("""
+                INSERT INTO session_files (
+                    id, session_id, owner, name, extension, declared_mime_type,
+                    detected_mime_type, size, storage_kind, storage_locator, state,
+                    preview_state, preview_file_id, creator, source, created_at,
+                    completed_at, expires_at)
+                VALUES (@id, @session, @owner, @name, @extension, @declaredMime,
+                    @detectedMime, @size, @storageKind, @storageLocator, @state,
+                    @previewState, @previewFileId, @creator, @source, @createdAt,
+                    @completedAt, @expiresAt)
+                """, connection, transaction);
+            AddFileParameters(insert, file);
+            await insert.ExecuteNonQueryAsync(ct);
+        }
+        await transaction.CommitAsync(ct);
+        return result;
     }
 
     public async Task InsertAsync(SessionFileRecord file, CancellationToken ct = default)
@@ -239,6 +313,23 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
         return MapPresentation(reader);
     }
 
+    public async Task ClearPresentationIfFileAsync(
+        string sessionId, string fileId, string presenter, CancellationToken ct = default)
+    {
+        await using var command = _db.CreateCommand("""
+            UPDATE session_file_presentations
+            SET file_id = NULL,
+                revision = revision + 1,
+                presenter = @presenter,
+                updated_at = now()
+            WHERE session_id = @session AND file_id = @fileId
+            """);
+        command.Parameters.AddWithValue("session", sessionId);
+        command.Parameters.AddWithValue("fileId", fileId);
+        command.Parameters.AddWithValue("presenter", presenter);
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task<SessionFileRecord?> ClaimPreviewAsync(CancellationToken ct = default)
     {
         await using var command = _db.CreateCommand($"""
@@ -300,6 +391,21 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
             files.Add(MapFile(reader));
         }
 
+        return files;
+    }
+
+    public async Task<IReadOnlyList<SessionFileRecord>> ListReadyPodFilesAsync(
+        CancellationToken ct = default)
+    {
+        var files = new List<SessionFileRecord>();
+        await using var command = _db.CreateCommand($"""
+            SELECT {FileColumns}
+            FROM session_files
+            WHERE storage_kind = 'Pod' AND state = 'Ready'
+            ORDER BY session_id, created_at, id
+            """);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct)) files.Add(MapFile(reader));
         return files;
     }
 

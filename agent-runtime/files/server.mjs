@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { FilesBackendClient } from './client.mjs';
@@ -59,15 +60,28 @@ export function createFilesToolHandlers(options = {}) {
   async function uploadPath(input) {
     await fs.promises.mkdir(managedRoot, { recursive: true, mode: 0o700 });
     const source = await allowedSource(input.path, { workspace, managedRoot });
-    const stat = await fs.promises.stat(source);
     const name = safeDisplayName(input.displayName ?? path.basename(source));
     const mimeType = MIME.get(path.extname(name).toLowerCase());
     if (!mimeType) throw new Error('unsupported_file_type');
     const staging = path.join(managedRoot, '.outgoing');
     await fs.promises.mkdir(staging, { recursive: true, mode: 0o700 });
     const staged = path.join(staging, `${crypto.randomUUID()}-${name}`);
-    await fs.promises.copyFile(source, staged, fs.constants.COPYFILE_EXCL);
-    await fs.promises.chmod(staged, 0o600);
+    const noFollow = fs.constants.O_NOFOLLOW ?? 0;
+    const sourceHandle = await fs.promises.open(source, fs.constants.O_RDONLY | noFollow);
+    let stat;
+    try {
+      stat = await sourceHandle.stat();
+      if (!stat.isFile()) throw new Error('file_source_not_allowed');
+      const output = fs.createWriteStream(staged, { flags: 'wx', mode: 0o600 });
+      try {
+        await pipeline(sourceHandle.createReadStream({ autoClose: false }), output);
+      } catch (error) {
+        await fs.promises.rm(staged, { force: true });
+        throw error;
+      }
+    } finally {
+      await sourceHandle.close();
+    }
     try {
       const reserved = await client.reserve({ name, mimeType, size: stat.size });
       await client.upload(reserved.upload, fs.createReadStream(staged), mimeType);

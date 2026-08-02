@@ -6,6 +6,20 @@ function within(root, candidate) {
   return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative));
 }
 
+const SECRET_NAMES = new Set([
+  '.mcp.json', '.env', 'auth.json', 'credentials.json', 'auth-profiles.json',
+  '.git-credentials', 'hosts.yml', 'config.yml'
+]);
+
+function sensitiveWorkspacePath(workspace, candidate) {
+  const relative = path.relative(workspace, candidate);
+  const parts = relative.split(path.sep);
+  const name = parts.at(-1)?.toLowerCase() ?? '';
+  return parts.some(part => part.toLowerCase() === '.agenthub') ||
+    SECRET_NAMES.has(name) || name.startsWith('.env.') ||
+    /\.(pem|key|p12|pfx)$/i.test(name);
+}
+
 export async function allowedSource(source, options = {}) {
   if (typeof source !== 'string' || !source || source.length > 4096 || !path.isAbsolute(source))
     throw new Error('file_source_not_allowed');
@@ -16,6 +30,8 @@ export async function allowedSource(source, options = {}) {
   catch { throw new Error('file_source_not_allowed'); }
   const stat = await fs.promises.stat(canonical);
   if (!stat.isFile() || (!within(workspace, canonical) && !within(managedRoot, canonical)))
+    throw new Error('file_source_not_allowed');
+  if (within(workspace, canonical) && !within(managedRoot, canonical) && sensitiveWorkspacePath(workspace, canonical))
     throw new Error('file_source_not_allowed');
   return canonical;
 }
