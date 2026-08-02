@@ -2,6 +2,7 @@ using System.Security.Claims;
 using System.Text.Json;
 using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Library;
+using AgentHub.Api.Library.ApiMcpGateway;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -133,6 +134,11 @@ public sealed class McpServersController : ControllerBase
             throw new ArgumentException("specUrl must be an absolute http(s) URL.");
         }
 
+        ApiMcpGatewayHandler.ValidateSafeOutboundUrl(specUrl, "specUrl");
+        var baseUrl = string.IsNullOrWhiteSpace(request.BaseUrl) ? null : request.BaseUrl.Trim();
+        if (baseUrl is not null)
+            ApiMcpGatewayHandler.ValidateSafeOutboundUrl(baseUrl, "baseUrl");
+
         var specType = string.IsNullOrWhiteSpace(request.SpecType)
             ? "auto"
             : request.SpecType.Trim().ToLowerInvariant();
@@ -145,8 +151,8 @@ public sealed class McpServersController : ControllerBase
             writer.WriteStartObject();
             writer.WriteString("specType", specType);
             writer.WriteString("specUrl", specUrl);
-            if (!string.IsNullOrWhiteSpace(request.BaseUrl))
-                writer.WriteString("baseUrl", request.BaseUrl.Trim());
+            if (baseUrl is not null)
+                writer.WriteString("baseUrl", baseUrl);
             if (request.Auth is { ValueKind: not JsonValueKind.Undefined and not JsonValueKind.Null } auth)
             {
                 writer.WritePropertyName("auth");

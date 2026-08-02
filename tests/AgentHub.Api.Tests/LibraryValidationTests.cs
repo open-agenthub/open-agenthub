@@ -25,4 +25,14 @@ public class LibraryValidationTests
             LibraryValidation.ValidateMcpServerConfig(
                 """{"specType":"openapi"}""", kind: "api"));
     }
+
+    [Fact]
+    public void ValidateApiConfig_rejects_localhost_specUrl()
+    {
+        var ex = Assert.Throws<ArgumentException>(() =>
+            LibraryValidation.ValidateMcpServerConfig(
+                """{"specType":"openapi","specUrl":"http://localhost/openapi.json"}""",
+                kind: "api"));
+        Assert.Contains("blocked", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
 }

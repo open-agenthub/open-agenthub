@@ -25,6 +25,11 @@ public sealed class OpenApiSpecCache
             return hit.Document;
 
         using var resp = await _http.GetAsync(key, ct);
+        // mcp-gateway HttpClient has AllowAutoRedirect=false; refuse 3xx so a
+        // Location: http://127.0.0.1/... cannot bypass ValidateSafeOutboundUrl.
+        if ((int)resp.StatusCode is >= 300 and < 400)
+            throw new HttpRequestException(
+                $"Refusing to follow redirect from specUrl (HTTP {(int)resp.StatusCode}).");
         resp.EnsureSuccessStatusCode();
         var document = await resp.Content.ReadAsStringAsync(ct);
         _entries[key] = new CacheEntry(document, DateTimeOffset.UtcNow.Add(_ttl));
