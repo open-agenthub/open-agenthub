@@ -33,6 +33,16 @@ describe('toTranscriptBlocks', () => {
     ))).toEqual(['meaningful terminal output'])
   })
 
+  it('does not treat malformed token counters as elapsed frames', () => {
+    expect(toTranscriptBlocks(separated(
+      '✻50s · ↓ . tokens)',
+      '✻50s · ↓ 1..2k tokens)',
+      'meaningful terminal output'
+    ))).toEqual([
+      '✻50s · ↓ . tokens)\n\n✻50s · ↓ 1..2k tokens)\n\nmeaningful terminal output'
+    ])
+  })
+
   it('removes a run of four short redraw fragments', () => {
     expect(toTranscriptBlocks(separated(
       'l',
@@ -52,6 +62,24 @@ describe('toTranscriptBlocks', () => {
     ))).toEqual([
       'ls\n\n42\n\nOK\n\nmeaningful terminal output'
     ])
+  })
+
+  it('counts astral Unicode characters as single code points at the short-block boundary', () => {
+    expect(toTranscriptBlocks(separated(
+      '😀'.repeat(12),
+      'a',
+      'b',
+      'c',
+      'meaningful terminal output'
+    ))).toEqual(['meaningful terminal output'])
+
+    expect(toTranscriptBlocks(separated(
+      '😀'.repeat(13),
+      'a',
+      'b',
+      'c',
+      'meaningful terminal output'
+    ))).toEqual([`${'😀'.repeat(13)}\n\na\n\nb\n\nc\n\nmeaningful terminal output`])
   })
 
   it('keeps the later whitespace-equivalent redraw', () => {
