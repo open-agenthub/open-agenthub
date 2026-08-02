@@ -14,6 +14,7 @@ builder.Services.AddControllers().AddJsonOptions(o =>
     o.JsonSerializerOptions.Converters.Add(new System.Text.Json.Serialization.JsonStringEnumConverter()));
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileRegistry, AgentHub.Api.Files.PostgresSessionFileRegistry>();
+builder.Services.AddSingleton<AgentHub.Api.Files.IAgentCallbackAuthorizer, AgentHub.Api.Files.AgentCallbackAuthorizer>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserLeaseStore, AgentHub.Api.Browser.PostgresBrowserLeaseStore>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserSessionLock, AgentHub.Api.Browser.PostgresBrowserSessionLock>();
@@ -45,6 +46,8 @@ var sessionFileOptions = builder.Configuration.GetSection("Files")
 builder.Services.AddSingleton(sessionFileOptions);
 builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api.Files.AgentFileClient>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileService, AgentHub.Api.Files.SessionFileService>();
+builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileCleanup, AgentHub.Api.Files.SessionFileCleanup>();
+builder.Services.AddHostedService<AgentHub.Api.Files.SessionFileSweepService>();
 builder.Services.AddHttpClient<AgentHub.Api.Files.IOfficePreviewClient, AgentHub.Api.Files.OfficePreviewClient>(client =>
 {
     client.BaseAddress = new Uri(sessionFileOptions.OfficePreview.BaseUrl, UriKind.Absolute);

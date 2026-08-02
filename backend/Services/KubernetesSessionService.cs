@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using AgentHub.Api.Agents;
+using AgentHub.Api.Files;
 using AgentHub.Api.Models;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
@@ -29,6 +30,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IGitAuthService _gitAuth;
     private readonly Usage.UsageLimitService _usageLimits;
     private readonly IAllowedAgentsProvider _allowedAgents;
+    private readonly ISessionFileCleanup? _fileCleanup;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -45,7 +47,8 @@ public sealed class KubernetesSessionService : ISessionService
     public KubernetesSessionService(IConfiguration cfg, ISessionStore store, IProjectStore projects,
         IArtifactStore artifacts, IBrowserService browsers, IGitAuthService gitAuth,
         Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
-        ILogger<KubernetesSessionService> log)
+        ILogger<KubernetesSessionService> log,
+        ISessionFileCleanup? fileCleanup = null)
     {
         _log = log;
         _store = store;
@@ -55,6 +58,7 @@ public sealed class KubernetesSessionService : ISessionService
         _gitAuth = gitAuth;
         _usageLimits = usageLimits;
         _allowedAgents = allowedAgents;
+        _fileCleanup = fileCleanup;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
@@ -555,6 +559,11 @@ public sealed class KubernetesSessionService : ISessionService
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        if (_fileCleanup is not null)
+        {
+            var liveSession = await GetSessionAsync(owner, id, ct);
+            await _fileCleanup.DeleteSessionAsync(id, liveSession, ct);
+        }
         await _browsers.StopAsync(id, ct);
         await _browsers.DeleteStateAsync(rec, ct);
         await TryDeletePodAsync($"session-{id}", ct);
@@ -562,7 +571,7 @@ public sealed class KubernetesSessionService : ISessionService
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         await _store.DeleteAsync(id, ct);
-        _log.LogInformation("Deleted session {Id} (S3 artifacts are kept)", id);
+        _log.LogInformation("Deleted session {Id}", id);
     }
 
     // ---------------------------------------------------------------- Pod-Spec
