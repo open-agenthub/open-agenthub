@@ -1,11 +1,24 @@
 const SPINNER_GLYPHS = new Set(['*', '·', '…', '✢', '✣', '✳', '✶', '✻', '✽'])
-const ELAPSED_TOKENS = /^(?:[*·…✢✣✳✶✻✽]\s*)*\d+s\s*·\s*↓\s*[\d.]+\s*[kKmM]?\s*tokens\)?$/u
+const ELAPSED_TOKENS = /^(?:[*·…✢✣✳✶✻✽]\s*)*\d+s\s*·\s*↓\s*\d+(?:\.\d+)?\s*[kKmM]?\s*tokens\)?$/u
 const MAX_SHORT_CODE_POINTS = 12
 const MIN_SHORT_BURST = 4
 const MAX_PACKED_CODE_POINTS = 1200
 const MAX_PACKED_BLOCKS = 20
 
-const codePointLength = value => [...value].length
+function codePointLength(value) {
+  let length = 0
+  for (const _char of value) length += 1
+  return length
+}
+
+function hasAtMostCodePoints(value, maximum) {
+  let length = 0
+  for (const _char of value) {
+    length += 1
+    if (length > maximum) return false
+  }
+  return true
+}
 
 function baseTranscriptBlocks(text) {
   const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n')
@@ -21,6 +34,13 @@ function baseTranscriptBlocks(text) {
   for (const line of lines) {
     if (line.trim() === '') {
       blankRun += 1
+function isSpinnerOnly(value) {
+  for (const char of value) {
+    if (!SPINNER_GLYPHS.has(char) && !/\s/u.test(char)) return false
+  }
+  return true
+}
+
       continue
     }
 
@@ -36,14 +56,13 @@ function baseTranscriptBlocks(text) {
 function isKnownTransient(block) {
   const value = block.trim()
   if (!value || value.includes('\n')) return false
-  const spinnerOnly = [...value].every(char => SPINNER_GLYPHS.has(char) || /\s/u.test(char))
-  return spinnerOnly || ELAPSED_TOKENS.test(value)
+  return isSpinnerOnly(value) || ELAPSED_TOKENS.test(value)
 }
 
 function isShortBlock(block) {
   const value = block.trim()
   const nonEmptyLines = value.split('\n').filter(line => line.trim() !== '').length
-  return codePointLength(value) <= MAX_SHORT_CODE_POINTS && nonEmptyLines <= 2
+  return nonEmptyLines <= 2 && hasAtMostCodePoints(value, MAX_SHORT_CODE_POINTS)
 }
 
 function suppressShortBursts(blocks) {
@@ -92,12 +111,13 @@ function packBlocks(blocks) {
   }
 
   for (const block of blocks) {
+    const blockLength = codePointLength(block)
     const separatorLength = current.length ? 2 : 0
-    const nextLength = currentLength + separatorLength + codePointLength(block)
+    const nextLength = currentLength + separatorLength + blockLength
     if (current.length && (current.length >= MAX_PACKED_BLOCKS || nextLength > MAX_PACKED_CODE_POINTS)) flush()
     if (current.length) currentLength += 2
     current.push(block)
-    currentLength += codePointLength(block)
+    currentLength += blockLength
   }
 
   flush()
