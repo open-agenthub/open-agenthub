@@ -45,6 +45,7 @@ public sealed class AgentFileClient : IAgentFileClient
         CancellationToken ct)
     {
         using var request = await CreateRequestAsync(HttpMethod.Put, session, file, ct);
+        request.Headers.Add("X-Agent-File-Name", file.Name);
         request.Content = new StreamContent(content);
         request.Content.Headers.ContentType =
             new System.Net.Http.Headers.MediaTypeHeaderValue(file.DeclaredMimeType);

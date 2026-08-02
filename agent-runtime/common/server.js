@@ -1,6 +1,8 @@
 'use strict';
+const crypto = require('node:crypto');
 
 const { loadDriver, validateDriver } = require('./driver-contract');
+const { LocalFileStore, LocalFileError } = require('../files/local-store');
 
 const MAX_BUFFER = 1_000_000;
 // Protocol chatter that the chat UI only needs live, never on replay.
@@ -13,6 +15,7 @@ function createCommonServer(options = {}) {
   const pty = supplied.pty || require('node-pty');
   const spawnProcess = supplied.spawn || require('node:child_process').spawn;
   const WebSocketServer = supplied.WebSocketServer || require('ws').WebSocketServer;
+  const http = supplied.http || require('node:http');
   const execFile = supplied.execFile || require('node:child_process').execFile;
   const fs = supplied.fs || require('node:fs');
   const fetchImpl = supplied.fetch || fetch;
@@ -20,6 +23,8 @@ function createCommonServer(options = {}) {
   const setIntervalImpl = supplied.setInterval || setInterval;
   const setTimeoutImpl = supplied.setTimeout || setTimeout;
   const now = supplied.now || Date.now;
+  const fileStore = supplied.fileStore || new LocalFileStore({
+    root: env.AGENTHUB_FILE_ROOT || '/workspace/.agenthub/files' });
 
   const preparation = driver.prepare(env);
   const childEnv = preparation && preparation.childEnv;
@@ -42,6 +47,9 @@ function createCommonServer(options = {}) {
   const workdir = env.AGENTHUB_WORKDIR || (hasRepo ? '/workspace/repo' : '/workspace');
   const cwd = fs.existsSync(workdir) ? workdir : '/workspace';
   const curlOption = env.AGENTHUB_S3_INSECURE === '1' ? '-k ' : '';
+  const configuredFileMax = Number.parseInt(env.AGENTHUB_FILE_MAX_BYTES || '', 10);
+  const fileMaxBytes = Number.isSafeInteger(configuredFileMax) && configuredFileMax > 0
+    ? configuredFileMax : 50 * 1024 * 1024;
 
   let scrollback = '';
   const clients = new Set();
@@ -306,20 +314,129 @@ function createCommonServer(options = {}) {
     socket.on('error', cleanup);
   }
 
+  function tokenMatches(requestToken) {
+    if (!token || typeof requestToken !== 'string') return false;
+    const expected = Buffer.from(token);
+    const received = Buffer.from(requestToken);
+    const length = Math.max(expected.length, received.length, 1);
+    const left = Buffer.alloc(length);
+    const right = Buffer.alloc(length);
+    expected.copy(left);
+    received.copy(right);
+    return expected.length === received.length && crypto.timingSafeEqual(left, right);
+  }
+
+  function sendJson(response, status, value) {
+    const body = JSON.stringify(value);
+    response.statusCode = status;
+    response.setHeader('Content-Type', 'application/json; charset=utf-8');
+    response.setHeader('Content-Length', Buffer.byteLength(body));
+    response.end(body);
+  }
+
+  function fileError(response, status, code) {
+    sendJson(response, status, { error: code });
+  }
+
+  async function handleFileRequest(request, response) {
+    const requestPath = (request.url || '').split('?')[0];
+    const match = /^\/agenthub\/files\/([a-f0-9]{32})$/.exec(requestPath);
+    if (!match) {
+      fileError(response, 404, 'not_found');
+      return;
+    }
+    if (!tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+
+    const id = match[1];
+    try {
+      if (request.method === 'PUT') {
+        const name = request.headers['x-agent-file-name'];
+        if (typeof name !== 'string' || !name) {
+          fileError(response, 400, 'invalid_file_name');
+          return;
+        }
+        const declaredLength = Number.parseInt(request.headers['content-length'] || '', 10);
+        if (Number.isFinite(declaredLength) && declaredLength > fileMaxBytes) {
+          fileError(response, 413, 'file_too_large');
+          request.resume();
+          return;
+        }
+        const stored = await fileStore.put(id, name, request, fileMaxBytes);
+        sendJson(response, 201, { id: stored.id, name: stored.name, size: stored.size });
+        return;
+      }
+
+      if (request.method === 'HEAD') {
+        const metadata = await fileStore.head(id);
+        if (!metadata) {
+          response.statusCode = 404;
+          response.end();
+          return;
+        }
+        response.statusCode = 200;
+        response.setHeader('Content-Length', metadata.size);
+        response.setHeader('X-Agent-File-Name', metadata.name);
+        response.end();
+        return;
+      }
+
+      if (request.method === 'GET') {
+        const opened = await fileStore.open(id);
+        if (!opened) {
+          fileError(response, 404, 'file_not_found');
+          return;
+        }
+        response.statusCode = 200;
+        response.setHeader('Content-Type', 'application/octet-stream');
+        response.setHeader('Content-Length', opened.size);
+        response.setHeader('X-Agent-File-Name', opened.name);
+        opened.stream.on('error', () => response.destroy());
+        opened.stream.pipe(response);
+        return;
+      }
+
+      if (request.method === 'DELETE') {
+        await fileStore.remove(id);
+        response.statusCode = 204;
+        response.end();
+        return;
+      }
+
+      response.setHeader('Allow', 'PUT, GET, HEAD, DELETE');
+      fileError(response, 405, 'method_not_allowed');
+    } catch (error) {
+      const code = error instanceof LocalFileError ? error.code : 'file_io_failed';
+      const status = code === 'file_too_large' ? 413
+        : code === 'invalid_file_name' || code === 'invalid_file_id' ? 400
+          : code === 'managed_root_escape' ? 409 : 500;
+      fileError(response, status, code);
+    }
+  }
+
   startAgent(true);
 
   setIntervalImpl(() => {
     if (!exited) persistAll();
   }, 30_000);
 
-  const webSocketServer = new WebSocketServer({ port, handleProtocols: () => 'tty' });
+  const httpServer = http.createServer((request, response) => {
+    Promise.resolve(handleFileRequest(request, response)).catch(() => {
+      if (!response.headersSent) fileError(response, 500, 'file_io_failed');
+      else response.destroy();
+    });
+  });
+  const webSocketServer = new WebSocketServer({ server: httpServer, handleProtocols: () => 'tty' });
   webSocketServer.on('connection', (socket, request) => {
     const requestPath = (request && request.url ? request.url : '/').split('?')[0];
     if (requestPath === '/shell') handleShell(socket);
     else handleAgent(socket);
   });
 
-  console.log('[agent] WebSocket terminal listening on :' + port + ' (paths: / and /shell)');
+  httpServer.listen(port);
+  console.log('[agent] Agent server listening on :' + port + ' (paths: /, /shell, /agenthub/files/:id)');
   postStatus('Running');
 
   for (const signal of ['SIGTERM', 'SIGINT']) {
@@ -331,7 +448,7 @@ function createCommonServer(options = {}) {
     });
   }
 
-  return { env, webSocketServer };
+  return { env, httpServer, webSocketServer };
 }
 
 function startFromEnvironment(options = {}) {

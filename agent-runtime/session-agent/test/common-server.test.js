@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { Readable } = require('node:stream');
 
 const commonDir = path.join(__dirname, '..', '..', 'common');
 const { validateDriver } = require('../../common/driver-contract');
@@ -76,6 +77,7 @@ function createHarness(environment = {}, driverOverrides = {}) {
   const intervals = [];
   const exits = [];
 
+  const fileCalls = [];
   class FakeWebSocketServer {
     constructor(options) {
       this.options = options;
@@ -84,6 +86,16 @@ function createHarness(environment = {}, driverOverrides = {}) {
     on(event, handler) { this.handlers[event] = handler; }
     connect(socket, url) { this.handlers.connection(socket, { url }); }
   }
+
+  class FakeHttpServer {
+    constructor(handler) { this.handler = handler; this.port = null; }
+    listen(port) { this.port = port; }
+    request(request, response) { return this.handler(request, response); }
+  }
+
+  const http = {
+    createServer(handler) { return new FakeHttpServer(handler); }
+  };
 
   const driver = {
     name: 'Test',
@@ -139,6 +151,18 @@ function createHarness(environment = {}, driverOverrides = {}) {
         requests.push({ url, options });
         return Promise.resolve({ ok: true });
       },
+      http,
+      fileStore: {
+        async put(id, name, readable, maxBytes) {
+          const chunks = [];
+          for await (const chunk of readable) chunks.push(chunk);
+          fileCalls.push({ method: 'PUT', id, name, maxBytes, body: Buffer.concat(chunks).toString() });
+          return { id, name, size: Buffer.concat(chunks).length };
+        },
+        async head(id) { fileCalls.push({ method: 'HEAD', id }); return null; },
+        async open(id) { fileCalls.push({ method: 'GET', id }); return null; },
+        async remove(id) { fileCalls.push({ method: 'DELETE', id }); }
+      },
       process: processLike,
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
       setTimeout(callback) { callback(); return 1; },
@@ -146,7 +170,28 @@ function createHarness(environment = {}, driverOverrides = {}) {
     }
   });
 
-  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits };
+  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits, fileCalls };
+}
+
+function requestHttp(harness, method, url, headers = {}, body = '') {
+  const request = Readable.from(body ? [Buffer.from(body)] : []);
+  request.method = method;
+  request.url = url;
+  request.headers = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const response = {
+      statusCode: 200,
+      headers: {},
+      setHeader(name, value) { this.headers[name.toLowerCase()] = value; },
+      write(chunk) { chunks.push(Buffer.from(chunk)); },
+      end(chunk) {
+        if (chunk) chunks.push(Buffer.from(chunk));
+        resolve({ status: this.statusCode, headers: this.headers, body: Buffer.concat(chunks).toString() });
+      }
+    };
+    Promise.resolve(harness.runtime.httpServer.request(request, response)).catch(reject);
+  });
 }
 
 function createChatHarness(environment = {}, driverOverrides = {}) {
@@ -156,6 +201,54 @@ function createChatHarness(environment = {}, driverOverrides = {}) {
     ...driverOverrides
   });
 }
+test('common server attaches WebSockets and file HTTP routes to one listener', () => {
+  const harness = createHarness();
+  assert.equal(harness.runtime.webSocketServer.options.server, harness.runtime.httpServer);
+  assert.equal(harness.runtime.httpServer.port, 8123);
+});
+
+test('file HTTP routes reject missing and incorrect tokens before touching storage', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' });
+  const id = 'a'.repeat(32);
+
+  const missing = await requestHttp(harness, 'PUT', `/agenthub/files/${id}`,
+    { 'X-Agent-File-Name': 'shot.png' }, 'data');
+  const wrong = await requestHttp(harness, 'PUT', `/agenthub/files/${id}`,
+    { 'X-Agent-Token': 'wrong-token', 'X-Agent-File-Name': 'shot.png' }, 'data');
+
+  assert.equal(missing.status, 401);
+  assert.equal(wrong.status, 401);
+  assert.deepEqual(harness.fileCalls, []);
+});
+
+test('file HTTP routes stream PUT and expose bounded metadata operations', async () => {
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_TOKEN: 'correct-token',
+    AGENTHUB_FILE_MAX_BYTES: '4'
+  });
+  const id = 'b'.repeat(32);
+  const headers = {
+    'X-Agent-Token': 'correct-token',
+    'X-Agent-File-Name': 'shot.png'
+  };
+
+  const put = await requestHttp(harness, 'PUT', `/agenthub/files/${id}`, headers, 'data');
+  assert.equal(put.status, 201);
+  assert.deepEqual(JSON.parse(put.body), { id, name: 'shot.png', size: 4 });
+  assert.deepEqual(harness.fileCalls[0], {
+    method: 'PUT', id, name: 'shot.png', maxBytes: 4, body: 'data'
+  });
+
+  const head = await requestHttp(harness, 'HEAD', `/agenthub/files/${id}`, headers);
+  assert.equal(head.status, 404);
+  const deleted = await requestHttp(harness, 'DELETE', `/agenthub/files/${id}`, headers);
+  assert.equal(deleted.status, 204);
+  assert.deepEqual(harness.fileCalls.slice(1), [
+    { method: 'HEAD', id },
+    { method: 'DELETE', id }
+  ]);
+});
+
 
 test('common transport validates every required driver export', () => {
   const valid = {
