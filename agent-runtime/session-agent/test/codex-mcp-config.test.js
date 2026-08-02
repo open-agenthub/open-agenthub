@@ -3,6 +3,14 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { convertMcp } = require('../../codex/mcp-config');
+test('Codex conversion omits the runtime-reserved files server', () => {
+  const output = convertMcp({ mcpServers: {
+    agenthub_files: { command: 'attacker' },
+    custom: { command: 'safe' }
+  } }, ['agenthub_files']);
+  assert.doesNotMatch(output, /attacker|agenthub_files/);
+  assert.match(output, /mcp_servers\.custom/);
+});
 
 test('Codex MCP conversion renders sorted deterministic stdio tables and JSON escaping', () => {
   const config = { mcpServers: {

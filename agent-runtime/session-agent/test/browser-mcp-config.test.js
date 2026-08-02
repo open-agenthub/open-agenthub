@@ -39,7 +39,7 @@ test('runtime wiring owns the browser server for both Claude and Codex', () => {
 
   assert.match(common, /AGENTHUB_MCP_CONFIG=\/tmp\/agenthub-mcp\.json/);
   assert.ok(codex.indexOf('mcp-config.js') < codex.indexOf('[mcp_servers.agenthub_browser]'));
-  assert.match(codex, /agenthub_browser(?:\s+agenthub_sessions)? >> "\$CODEX_HOME\/config\.toml"/);
+  assert.match(codex, /agenthub_browser(?:\s+agenthub_sessions)?(?:\s+agenthub_files)? >> "\$CODEX_HOME\/config\.toml"/);
   assert.match(claudeDocker, /COPY browser \/opt\/session-agent\/browser/);
   assert.match(codexDocker, /COPY browser \/opt\/session-agent\/browser/);
   for (const name of [
