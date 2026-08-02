@@ -1,0 +1,72 @@
+{{- if .Values.files.officePreview.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agenthub-artifact-renderer
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.files.officePreview.replicas }}
+  selector:
+    matchLabels: { app: agenthub-artifact-renderer }
+  template:
+    metadata:
+      labels: { app: agenthub-artifact-renderer }
+    spec:
+      {{- if .Values.image.pullSecret }}
+      imagePullSecrets: [{ name: {{ .Values.image.pullSecret }} }]
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: renderer
+          image: "{{ .Values.files.officePreview.image.repository }}:{{ .Values.files.officePreview.image.tag | default .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.files.officePreview.image.pullPolicy }}
+          ports: [{ containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources: {{ toYaml .Values.files.officePreview.resources | nindent 12 }}
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            initialDelaySeconds: 15
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: {{ .Values.files.officePreview.temporaryStorage }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agenthub-artifact-renderer
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  selector: { app: agenthub-artifact-renderer }
+  ports: [{ port: 8080, targetPort: 8080 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agenthub-artifact-renderer
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { app: agenthub-artifact-renderer }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: agenthub-backend }
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress: []
+{{- end }}

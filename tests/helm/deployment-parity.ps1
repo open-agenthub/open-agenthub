@@ -34,19 +34,19 @@ function Assert-NotMatches {
 $powerShellSetup = Read-RepoFile 'setup-dev.ps1'
 $bashSetup = Read-RepoFile 'setup-dev.sh'
 
-if (($powerShellSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Matches.Count -ne 6) {
-    throw 'setup-dev.ps1 must build exactly six images.'
+if (($powerShellSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Matches.Count -ne 7) {
+    throw 'setup-dev.ps1 must build exactly seven development images.'
 }
-if (($bashSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Matches.Count -ne 6) {
-    throw 'setup-dev.sh must build exactly six images.'
+if (($bashSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Matches.Count -ne 7) {
+    throw 'setup-dev.sh must build exactly seven development images.'
 }
 
 $checkedPowerShellBuilds = [regex]::Matches(
     $powerShellSetup,
     "(?m)^docker build [^\r\n]+\r?\nAssert-NativeSuccess '[^']+ image build'\s*$"
 )
-if ($checkedPowerShellBuilds.Count -ne 6) {
-    throw 'setup-dev.ps1 must stop immediately when any of its six Docker image builds fails.'
+if ($checkedPowerShellBuilds.Count -ne 7) {
+    throw 'setup-dev.ps1 must stop immediately when any development image build fails.'
 }
 
 foreach ($requiredOperation in @(
@@ -127,6 +127,7 @@ Assert-Matches $testWorkflow 'tests/helm/browser-values\.ps1' 'Test workflow mus
 Assert-Matches $testWorkflow 'tests/helm/codex-runtime-values\.ps1' 'Test workflow must run rendered Helm assertions.'
 Assert-Matches $testWorkflow 'tests/helm/cursor-runtime-values\.ps1' 'Test workflow must run Cursor Helm assertions.'
 Assert-Matches $testWorkflow 'tests/helm/openclaw-runtime-values\.ps1' 'Test workflow must run OpenClaw Helm assertions.'
+Assert-Matches $testWorkflow 'tests/helm/files-values\.ps1' 'Test workflow must run session file Helm assertions.'
 Assert-Matches $testWorkflow 'tests/helm/deployment-parity\.ps1' 'Test workflow must run deployment parity assertions.'
 
 $deploymentFiles = @(

@@ -486,6 +486,31 @@ No PVCs. Results flow back via `git push` or as artifacts to S3. What is persist
   (token-authenticated). Without S3 configured, sessions still run — resume and history
   are simply disabled.
 
+### Session files and visual previews
+
+The Chat UI accepts images and documents by file picker, paste, and drag-and-drop. Images,
+PDF, Markdown, and plain text can be opened in the Files workspace beside Chat or Terminal.
+HTML and SVG are download-only. A managed `files` MCP gives every supported agent the same
+provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,
+`upload_file`, `present_file`, and `dismiss_presentation`.
+
+With S3 configured, session files are persistent. Without S3, their content lives only in
+the running agent pod and expires when that pod is gone; the capabilities endpoint reports
+the active storage mode and every format that can be displayed graphically. Limits default
+to five files per message, 20 MiB per image, and 50 MiB per document/message.
+
+DOCX, PPTX, and XLSX previews are optional. Enable the isolated LibreOffice renderer with:
+
+```yaml
+files:
+  officePreview:
+    enabled: true
+```
+
+The supplied NGINX Ingress allows upload bodies up to `55m` via
+`nginx.ingress.kubernetes.io/proxy-body-size`. Override it through
+`ingress.annotations` when an installation needs a different controller-specific value.
+
 Resume recreates the finished session resource with the same selected provider and
 billing mode, restores only that provider's state, and then restores selected
 authentication. Claude resumes its explicit conversation identifier. Codex resumes the
