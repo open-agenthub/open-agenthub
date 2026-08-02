@@ -9,6 +9,7 @@ import { sessionCapabilities } from '../lib/access.js'
 import { api, getSharedTranscript } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { authLabel } from '../lib/agent.js'
+import { toTranscriptBlocks } from '../lib/transcript.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
 defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate'])
@@ -22,6 +23,7 @@ watch(isChat, chat => { if (chat && activeTab.value === 'transcript') activeTab.
 const shellOpened = ref(false)
 const shareOpen = ref(false)
 const transcriptText = ref(null)
+const transcriptBlocks = computed(() => toTranscriptBlocks(transcriptText.value))
 const statuses = reactive({ agent: 'connecting…', shell: '', transcript: '' })
 
 // In-app approval of tool-permission requests (in addition to the messengers).
@@ -116,12 +118,19 @@ async function selectTab(tab) {
         <ChatPane v-if="isChat" v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
         <TerminalPane v-else v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
         <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell'" :session="session" kind="shell" :active="activeTab === 'shell'" @status="statuses.shell = $event" />
-        <div v-if="activeTab === 'transcript'" class="transcript">
+        <section v-if="activeTab === 'transcript'" class="transcript" aria-labelledby="transcript-heading">
           <div class="transcript-inner">
-            <h3>What happened so far</h3>
-            <pre>{{ transcriptText === null ? 'Loading…' : (transcriptText || '[no saved transcript]') }}</pre>
+            <h3 id="transcript-heading">What happened so far</h3>
+            <p v-if="transcriptText === null" class="transcript-state">Loading…</p>
+            <p v-else-if="!transcriptBlocks.length" class="transcript-state">[no saved transcript]</p>
+            <ol v-else class="transcript-list" aria-label="Terminal transcript">
+              <li v-for="(block, index) in transcriptBlocks" :key="index" class="transcript-bubble">
+                <span class="transcript-label">Terminal</span>
+                <pre>{{ block }}</pre>
+              </li>
+            </ol>
           </div>
-        </div>
+        </section>
       </div>
     </SessionWorkspace>
   </div>
@@ -159,5 +168,9 @@ async function selectTab(tab) {
 .transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }
 .transcript-inner { max-width: 760px; margin: 0 auto; padding: 26px 24px; }
 .transcript-inner h3 { font-size: 20px; margin: 0 0 14px; }
-.transcript-inner pre { white-space: pre-wrap; word-break: break-word; font: 13px/1.65 var(--mono); color: #c9c4bb; }
+.transcript-list { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
+.transcript-bubble { padding: 12px 14px 14px; background: var(--panel); border: 1px solid var(--border-2); border-left: 3px solid var(--accent); border-radius: 12px; }
+.transcript-label { display: block; color: var(--muted-3); font: 700 10px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
+.transcript-bubble pre { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); color: #c9c4bb; }
+.transcript-state { margin: 0; color: var(--muted-3); font: 13px/1.6 var(--mono); }
 </style>
