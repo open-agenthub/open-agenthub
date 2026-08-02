@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
-const { Readable } = require('node:stream');
+const { Readable, Writable } = require('node:stream');
 
 const commonDir = path.join(__dirname, '..', '..', 'common');
 const { validateDriver } = require('../../common/driver-contract');
@@ -39,7 +39,7 @@ class FakeChildProcess {
       this.stdinWrites.push(data);
       if (callback) queueMicrotask(() => callback(null));
       return true;
-    } };
+    }, on() {} };
     this.stdout = { on: (event, handler) => { if (event === 'data') this.stdoutHandlers.push(handler); } };
     this.stderr = { on: (event, handler) => { if (event === 'data') this.stderrHandlers.push(handler); } };
   }
@@ -70,7 +70,7 @@ function tick() {
   return new Promise(resolve => setImmediate(resolve));
 }
 
-function createHarness(environment = {}, driverOverrides = {}) {
+function createHarness(environment = {}, driverOverrides = {}, harnessOptions = {}) {
   const terminals = [];
   const spawns = [];
   const children = [];
@@ -145,7 +145,7 @@ function createHarness(environment = {}, driverOverrides = {}) {
         }
       },
       spawn(cmd, args, options) {
-        const child = new FakeChildProcess();
+        const child = harnessOptions.createChild?.() ?? new FakeChildProcess();
         children.push(child);
         pipeSpawns.push({ cmd, args, options });
         return child;
@@ -207,12 +207,12 @@ function requestHttp(harness, method, url, headers = {}, body = '') {
   });
 }
 
-function createChatHarness(environment = {}, driverOverrides = {}) {
+function createChatHarness(environment = {}, driverOverrides = {}, harnessOptions = {}) {
   return createHarness(environment, {
     buildCommand: (_env, allowResume) =>
       ({ cmd: 'test-agent', args: allowResume ? ['resume'] : ['fresh'], pipe: true }),
     ...driverOverrides
-  });
+  }, harnessOptions);
 }
 test('common server attaches WebSockets and file HTTP routes to one listener', () => {
   const harness = createHarness();
@@ -626,11 +626,15 @@ test('chat materializes ready IDs and echoes metadata without local paths', asyn
 });
 
 test('chat reports delivery failure when agent stdin rejects the write', async () => {
-  const harness = createChatHarness();
-  harness.children[0].stdin.write = (_data, callback) => {
-    queueMicrotask(() => callback(new Error('closed')));
-    return false;
-  };
+  const harness = createChatHarness({}, {}, {
+    createChild() {
+      const child = new FakeChildProcess();
+      child.stdin = new Writable({
+        write(_chunk, _encoding, callback) { callback(new Error('closed')); }
+      });
+      return child;
+    }
+  });
   const socket = new FakeSocket();
   harness.runtime.webSocketServer.connect(socket, '/');
 
@@ -644,6 +648,11 @@ test('chat reports delivery failure when agent stdin rejects the write', async (
   assert.match(socket.sent.join(''), /"clientTurnId":"turn-failed"/);
   assert.doesNotMatch(socket.sent.join(''), /chat_delivered/);
   assert.doesNotMatch(socket.sent.join(''), /retain me/);
+  assert.deepEqual(harness.exits, []);
+
+  const secondSocket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(secondSocket, '/');
+  assert.deepEqual(secondSocket.closed, []);
 });
 
 test('chat rejects an attachment turn before stdin when no visual delivery exists', async () => {

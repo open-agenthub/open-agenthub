@@ -185,6 +185,9 @@ function createCommonServer(options = {}) {
     const child = spawnProcess(command.cmd, command.args, {
       cwd, env: agentEnv, stdio: ['pipe', 'pipe', 'pipe']
     });
+    // Writable streams can emit `error` in addition to invoking the write callback.
+    // The callback assigns failure to its chat turn; this listener keeps the runtime alive.
+    child.stdin.on('error', () => {});
 
     let pendingLine = '';
     child.stdout.on('data', chunk => {
