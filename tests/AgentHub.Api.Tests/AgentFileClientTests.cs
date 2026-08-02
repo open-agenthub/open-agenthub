@@ -28,6 +28,7 @@ public sealed class AgentFileClientTests
         Assert.Equal("http://10.0.0.8:7681/agenthub/files/f1", captured.RequestUri!.ToString());
         Assert.Equal("secret-token", captured.Headers.GetValues("X-Agent-Token").Single());
         Assert.Equal(PngBytes(), body);
+        Assert.Equal("shot.png", captured.Headers.GetValues("X-Agent-File-Name").Single());
     }
 
     [Fact]
