@@ -35,7 +35,11 @@ class FakeChildProcess {
     this.stderrHandlers = [];
     this.handlers = {};
     this.killed = false;
-    this.stdin = { write: data => this.stdinWrites.push(data) };
+    this.stdin = { write: (data, callback) => {
+      this.stdinWrites.push(data);
+      if (callback) queueMicrotask(() => callback(null));
+      return true;
+    } };
     this.stdout = { on: (event, handler) => { if (event === 'data') this.stdoutHandlers.push(handler); } };
     this.stderr = { on: (event, handler) => { if (event === 'data') this.stderrHandlers.push(handler); } };
   }
@@ -565,7 +569,7 @@ test('chat transport spawns a pipe instead of a PTY and replays only durable eve
   ]);
 });
 
-test('chat transport forwards user input as stream-json and echoes it durably', () => {
+test('chat transport forwards user input as stream-json and echoes it durably', async () => {
   const harness = createChatHarness();
   const socket = new FakeSocket();
   harness.runtime.webSocketServer.connect(socket, '/');
@@ -574,6 +578,8 @@ test('chat transport forwards user input as stream-json and echoes it durably', 
   socket.emit('message', Buffer.from(JSON.stringify({ type: 'chat', text: '   ' })));
   socket.emit('message', Buffer.from(JSON.stringify({ type: 'input', data: 'raw keys' })));
   socket.emit('message', Buffer.from(JSON.stringify({ type: 'resize', cols: 90, rows: 20 })));
+  await tick();
+  await tick();
 
   const child = harness.children[0];
   assert.deepEqual(child.stdinWrites, [
@@ -617,6 +623,27 @@ test('chat materializes ready IDs and echoes metadata without local paths', asyn
     visualDelivery: 'localImagePaths'
   }]);
   assert.match(socket.sent.join(''), /"subtype":"chat_delivered".*"clientTurnId":"turn-1"/);
+});
+
+test('chat reports delivery failure when agent stdin rejects the write', async () => {
+  const harness = createChatHarness();
+  harness.children[0].stdin.write = (_data, callback) => {
+    queueMicrotask(() => callback(new Error('closed')));
+    return false;
+  };
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  socket.emit('message', Buffer.from(JSON.stringify({
+    type: 'chat', text: 'retain me', clientTurnId: 'turn-failed'
+  })));
+  await tick();
+  await tick();
+
+  assert.match(socket.sent.join(''), /attachment_delivery_failed/);
+  assert.match(socket.sent.join(''), /"clientTurnId":"turn-failed"/);
+  assert.doesNotMatch(socket.sent.join(''), /chat_delivered/);
+  assert.doesNotMatch(socket.sent.join(''), /retain me/);
 });
 
 test('chat rejects an attachment turn before stdin when no visual delivery exists', async () => {

@@ -75,6 +75,10 @@ describe('ChatPane', () => {
     const sent = mocks.sockets[0].sent.at(-1)
     expect(sent).toMatchObject({ type: 'chat', text: '', attachments: ['file-1'] })
     expect(wrapper.find('[data-attachment]').exists()).toBe(true)
+    const later = new File([new Uint8Array(12)], 'later.png', { type: 'image/png', lastModified: 2 })
+    await wrapper.get('[data-chat-input]').trigger('paste', { clipboardData: { files: [later] } })
+    await flushPromises()
+    expect(wrapper.findAll('[data-attachment]')).toHaveLength(1)
     mocks.sockets[0].onmessage({ data: line({ type: 'agenthub', subtype: 'error',
       code: 'attachment_delivery_failed', clientTurnId: sent.clientTurnId }) })
     await flushPromises()
