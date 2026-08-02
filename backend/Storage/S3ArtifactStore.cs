@@ -4,6 +4,8 @@ using AgentHub.Api.Models;
 
 namespace AgentHub.Api.Storage;
 
+public sealed record ArtifactObjectInfo(long Size, string? ContentType);
+
 /// <summary>
 /// Storage in S3 (or MinIO). The agent pod never receives S3 credentials,
 /// only time-limited presigned URLs.
@@ -11,9 +13,12 @@ namespace AgentHub.Api.Storage;
 /// </summary>
 public interface IArtifactStore
 {
+    bool IsConfigured => true;
     string PresignPut(string key, TimeSpan ttl);
     string PresignGet(string key, TimeSpan ttl);
     Task<string?> GetTextAsync(string key, CancellationToken ct = default);
+    Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default) => Task.FromResult<ArtifactObjectInfo?>(null);
+    Task<Stream?> OpenReadAsync(string key, CancellationToken ct = default) => Task.FromResult<Stream?>(null);
     Task DeleteAsync(string key, CancellationToken ct = default) => Task.CompletedTask;
 
     static string StateKey(string owner, string id) => StateKey(owner, id, AgentKind.Claude);
@@ -31,6 +36,9 @@ public interface IArtifactStore
         $"sessions/{owner}/{id}/browser-cookies.json";
     static string ArtifactKey(string owner, string id, string name)
         => $"sessions/{owner}/{id}/artifacts/{name.TrimStart('/')}";
+    static string SessionFileKey(string owner, string id, string fileId, string name) =>
+        $"sessions/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(id)}/files/" +
+        $"{Uri.EscapeDataString(fileId)}/{Uri.EscapeDataString(name)}";
 }
 
 /// <summary>
@@ -41,7 +49,10 @@ public sealed class NullArtifactStore : IArtifactStore
 {
     public string PresignPut(string key, TimeSpan ttl) => "";
     public string PresignGet(string key, TimeSpan ttl) => "";
+    public bool IsConfigured => false;
     public Task<string?> GetTextAsync(string key, CancellationToken ct = default) => Task.FromResult<string?>(null);
+    public Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default) => Task.FromResult<ArtifactObjectInfo?>(null);
+    public Task<Stream?> OpenReadAsync(string key, CancellationToken ct = default) => Task.FromResult<Stream?>(null);
 }
 
 public sealed class S3ArtifactStore : IArtifactStore
@@ -49,6 +60,7 @@ public sealed class S3ArtifactStore : IArtifactStore
     private readonly IAmazonS3 _s3;
     private readonly string _bucket;
 
+    public bool IsConfigured => true;
     public S3ArtifactStore(IConfiguration cfg)
     {
         var s = cfg.GetSection("S3");
@@ -84,6 +96,35 @@ public sealed class S3ArtifactStore : IArtifactStore
             Expires = DateTime.UtcNow.Add(ttl)
         });
 
+    public async Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _s3.GetObjectMetadataAsync(new GetObjectMetadataRequest
+            {
+                BucketName = _bucket,
+                Key = key,
+            }, ct);
+            return new ArtifactObjectInfo(response.ContentLength, response.Headers.ContentType);
+        }
+        catch (AmazonS3Exception exception) when (IsNotFound(exception))
+        {
+            return null;
+        }
+    }
+
+    public async Task<Stream?> OpenReadAsync(string key, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _s3.GetObjectAsync(_bucket, key, ct);
+            return response.ResponseStream;
+        }
+        catch (AmazonS3Exception exception) when (IsNotFound(exception))
+        {
+            return null;
+        }
+    }
     public async Task DeleteAsync(string key, CancellationToken ct = default)
     {
         await _s3.DeleteObjectAsync(_bucket, key, ct);
@@ -97,9 +138,12 @@ public sealed class S3ArtifactStore : IArtifactStore
             using var reader = new StreamReader(resp.ResponseStream);
             return await reader.ReadToEndAsync(ct);
         }
-        catch (AmazonS3Exception e) when (e.StatusCode == System.Net.HttpStatusCode.NotFound)
+        catch (AmazonS3Exception e) when (IsNotFound(e))
         {
             return null;
         }
     }
+
+    private static bool IsNotFound(AmazonS3Exception exception) =>
+        exception.StatusCode == System.Net.HttpStatusCode.NotFound || exception.ErrorCode == "NoSuchKey";
 }

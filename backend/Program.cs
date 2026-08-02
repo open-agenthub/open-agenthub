@@ -40,6 +40,11 @@ if (!string.IsNullOrWhiteSpace(builder.Configuration["S3:AccessKey"]))
     builder.Services.AddSingleton<AgentHub.Api.Storage.IArtifactStore, AgentHub.Api.Storage.S3ArtifactStore>();
 else
     builder.Services.AddSingleton<AgentHub.Api.Storage.IArtifactStore, AgentHub.Api.Storage.NullArtifactStore>();
+var sessionFileOptions = builder.Configuration.GetSection("Files")
+    .Get<AgentHub.Api.Files.SessionFileOptions>() ?? new AgentHub.Api.Files.SessionFileOptions();
+builder.Services.AddSingleton(sessionFileOptions);
+builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api.Files.AgentFileClient>();
+builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileService, AgentHub.Api.Files.SessionFileService>();
 builder.Services.AddHttpClient<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Notifications.N8nNotifier>();
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IGitAuthService, GitAuthService>();
