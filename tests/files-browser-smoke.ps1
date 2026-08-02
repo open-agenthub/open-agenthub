@@ -112,8 +112,8 @@ try {
 
     $capabilities = Invoke-Api GET "/api/sessions/$script:SessionId/files/capabilities"
     if ($capabilities.directPreviewMimeTypes -notcontains 'image/png') { throw 'PNG preview capability is missing.' }
-    if ($capabilities.typeSupport.'text/html' -ne 'download_only') { throw 'HTML must be download-only.' }
-    if ($capabilities.typeSupport.'image/svg+xml' -ne 'download_only') { throw 'SVG must be download-only.' }
+    if ($capabilities.unavailableReasons.'text/html' -ne 'download_only') { throw 'HTML must be download-only.' }
+    if ($capabilities.unavailableReasons.'image/svg+xml' -ne 'download_only') { throw 'SVG must be download-only.' }
 
     $image = Upload-File $script:SessionId ($fixtures | Where-Object Name -eq 'BLUE-47.png') 'image/png'
     $listed = Invoke-Api GET "/api/sessions/$script:SessionId/files"
