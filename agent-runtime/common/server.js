@@ -323,20 +323,28 @@ function createCommonServer(options = {}) {
     });
   }
 
+  function deliveryEvent(subtype, message) {
+    if (!message.clientTurnId) return;
+    return agenthubEvent(subtype, message.clientTurnId
+      ? { clientTurnId: message.clientTurnId }
+      : {});
+  }
   function queueChatMessage(socket, message) {
     const attachments = message.attachments === undefined ? [] : message.attachments;
     if (!Array.isArray(attachments)) {
-      safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed' }));
+      safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed', clientTurnId: message.clientTurnId }));
       return;
     }
     if (attachments.length === 0 && pendingChatDeliveries === 0) {
       chat.sendUser(message.text);
+      if (message.clientTurnId) safeSend(socket, deliveryEvent('chat_delivered', message));
       return;
     }
     pendingChatDeliveries += 1;
     chatDelivery = chatDelivery
       .then(() => attachments.length ? deliverAttachmentTurn({ ...message, attachments }) : chat.sendUser(message.text))
-      .catch(() => safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed' })))
+      .then(() => { if (message.clientTurnId) safeSend(socket, deliveryEvent('chat_delivered', message)); })
+      .catch(() => safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed', clientTurnId: message.clientTurnId })))
       .finally(() => { pendingChatDeliveries -= 1; });
   }
   function handleAgent(socket) {
@@ -348,6 +356,8 @@ function createCommonServer(options = {}) {
       if (exited) return;
       if (chatMode) {
         if (message.type === 'chat' && typeof message.text === 'string' && chat) {
+          if (message.clientTurnId !== undefined &&
+              (typeof message.clientTurnId !== 'string' || !/^[A-Za-z0-9-]{1,64}$/.test(message.clientTurnId))) return;
           const hasAttachments = message.attachments !== undefined;
           if (message.text.trim() || hasAttachments) {
             queueChatMessage(socket, message);

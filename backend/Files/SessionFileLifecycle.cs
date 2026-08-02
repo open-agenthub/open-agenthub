@@ -14,6 +14,8 @@ public interface ISessionFileCleanup
         SessionFileRecord file,
         SessionInfo? liveSession,
         CancellationToken ct = default);
+    Task ExpirePodFilesAsync(string sessionId, CancellationToken ct = default);
+    Task ExpirePodFileAsync(SessionFileRecord file, CancellationToken ct = default);
 }
 
 public sealed class SessionFileCleanup(
@@ -71,6 +73,30 @@ public sealed class SessionFileCleanup(
             SessionFileState.Expired, SessionFileState.Deleted, null, null, ct);
     }
 
+    public async Task ExpirePodFilesAsync(string sessionId, CancellationToken ct = default)
+    {
+        var files = await registry.ListAsync(sessionId, ct);
+        foreach (var file in files.Where(file => file.StorageKind == SessionFileStorageKind.Pod))
+        {
+            if (file.State == SessionFileState.Ready)
+            {
+                await ExpirePodFileAsync(file, ct);
+            }
+            else if (file.State is SessionFileState.Reserved or SessionFileState.Uploading)
+            {
+                await registry.TransitionAsync(file.SessionId, file.Id, file.State,
+                    SessionFileState.Expired, null, null, ct);
+            }
+        }
+    }
+
+    public async Task ExpirePodFileAsync(SessionFileRecord file, CancellationToken ct = default)
+    {
+        await registry.TransitionAsync(file.SessionId, file.Id, SessionFileState.Ready,
+            SessionFileState.Expired, null, null, ct);
+        await registry.ClearPresentationIfFileAsync(file.SessionId, file.Id, "system", ct);
+    }
+
     private async Task DeleteContentAsync(
         SessionFileRecord file,
         SessionInfo? liveSession,
@@ -114,6 +140,24 @@ public sealed class SessionFileSweepService(
                 }
             }
             await cleanup.DeleteExpiredAsync(file, liveSession, ct);
+        }
+
+        var readyPodFiles = await registry.ListReadyPodFilesAsync(ct);
+        foreach (var sessionGroup in readyPodFiles.GroupBy(file => new { file.Owner, file.SessionId }))
+        {
+            SessionInfo? session = null;
+            try
+            {
+                session = await sessions.GetSessionAsync(sessionGroup.Key.Owner, sessionGroup.Key.SessionId, ct);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                logger.LogWarning(exception, "Could not reconcile temporary files for session {SessionId}",
+                    sessionGroup.Key.SessionId);
+                continue;
+            }
+            if (session is { Phase: "Running", PodIp: not null }) continue;
+            foreach (var file in sessionGroup) await cleanup.ExpirePodFileAsync(file, ct);
         }
     }
 

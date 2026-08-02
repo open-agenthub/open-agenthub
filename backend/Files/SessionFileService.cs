@@ -86,19 +86,22 @@ public sealed class SessionFileService : ISessionFileService
     private readonly IAgentFileClient _agentFiles;
     private readonly ISessionService _sessions;
     private readonly SessionFileOptions _options;
+    private readonly ILogger<SessionFileService> _log;
 
     public SessionFileService(
         ISessionFileRegistry registry,
         IArtifactStore artifacts,
         IAgentFileClient agentFiles,
         ISessionService sessions,
-        SessionFileOptions options)
+        SessionFileOptions options,
+        ILogger<SessionFileService>? logger = null)
     {
         _registry = registry;
         _artifacts = artifacts;
         _agentFiles = agentFiles;
         _sessions = sessions;
         _options = options;
+        _log = logger ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<SessionFileService>.Instance;
     }
 
     public async Task<ReserveFileResult> ReserveAsync(
@@ -112,19 +115,6 @@ public sealed class SessionFileService : ISessionFileService
         if (!validation.Allowed)
         {
             throw new SessionFileException(validation.Code!);
-        }
-
-        var active = await _registry.ListAsync(actor.SessionId, ct);
-        if (active.Count >= _options.MaxSessionFiles)
-        {
-            throw new SessionFileException("session_file_count_exceeded");
-        }
-
-        var usedBytes = active.Aggregate<SessionFileRecord, long>(0,
-            (total, file) => checked(total + file.Size));
-        if (request.Size > _options.MaxSessionBytes - usedBytes)
-        {
-            throw new SessionFileException("session_file_bytes_exceeded");
         }
 
         SessionInfo? liveSession = null;
@@ -171,7 +161,16 @@ public sealed class SessionFileService : ISessionFileService
                 $"/api/sessions/{Uri.EscapeDataString(actor.SessionId)}/files/{id}/content",
                 NoHeaders);
 
-        await _registry.InsertAsync(file, ct);
+        var reservation = await _registry.TryReserveAsync(
+            file, _options.MaxSessionFiles, _options.MaxSessionBytes, ct);
+        if (reservation == SessionFileReservationResult.CountExceeded)
+        {
+            throw new SessionFileException("session_file_count_exceeded");
+        }
+        if (reservation == SessionFileReservationResult.BytesExceeded)
+        {
+            throw new SessionFileException("session_file_bytes_exceeded");
+        }
         _ = liveSession;
         return new ReserveFileResult(file, upload);
     }
@@ -308,10 +307,26 @@ public sealed class SessionFileService : ISessionFileService
                 file.Size);
         }
 
-        var liveSession = await GetLiveSessionAsync(actor, ct);
-        var stream = await _agentFiles.OpenReadAsync(liveSession, file, ct)
-            ?? throw new SessionFileException("file_content_expired");
+        var liveSession = await TryGetLiveSessionAsync(actor.Owner, actor.SessionId, ct);
+        if (liveSession is null)
+        {
+            await ExpireReadyPodFileAsync(file, ct);
+            throw new SessionFileException("file_content_expired");
+        }
+        var stream = await _agentFiles.OpenReadAsync(liveSession, file, ct);
+        if (stream is null)
+        {
+            await ExpireReadyPodFileAsync(file, ct);
+            throw new SessionFileException("file_content_expired");
+        }
         return new FileContentResult(stream, null, mimeType, file.Name, file.Size);
+    }
+
+    private async Task ExpireReadyPodFileAsync(SessionFileRecord file, CancellationToken ct)
+    {
+        await _registry.TransitionAsync(file.SessionId, file.Id, SessionFileState.Ready,
+            SessionFileState.Expired, null, null, ct);
+        await _registry.ClearPresentationIfFileAsync(file.SessionId, file.Id, "system", ct);
     }
 
     public async Task DeleteAsync(
@@ -325,23 +340,34 @@ public sealed class SessionFileService : ISessionFileService
         }
 
         var file = await RequireFileAsync(actor.SessionId, fileId, ct);
-        if (file.StorageKind == SessionFileStorageKind.S3)
-        {
-            await _artifacts.DeleteAsync(file.StorageLocator, ct);
-        }
-        else
-        {
-            var session = await TryGetLiveSessionAsync(actor.Owner, actor.SessionId, ct);
-            if (session is not null)
-            {
-                await _agentFiles.DeleteAsync(session, file, ct);
-            }
-        }
-
         if (!await _registry.TransitionAsync(actor.SessionId, file.Id, file.State,
                 SessionFileState.Deleted, null, null, ct))
         {
             throw new SessionFileException("file_state_conflict");
+        }
+        await _registry.ClearPresentationIfFileAsync(file.SessionId, file.Id, actor.Principal, ct);
+        try
+        {
+            if (file.StorageKind == SessionFileStorageKind.S3)
+            {
+                await _artifacts.DeleteAsync(file.StorageLocator, ct);
+            }
+            else
+            {
+                var session = await TryGetLiveSessionAsync(actor.Owner, actor.SessionId, ct);
+                if (session is not null)
+                {
+                    await _agentFiles.DeleteAsync(session, file, ct);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            _log.LogWarning(exception, "Deferred cleanup required for session file {FileId}", file.Id);
         }
     }
 

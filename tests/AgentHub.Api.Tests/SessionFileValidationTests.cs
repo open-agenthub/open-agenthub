@@ -108,6 +108,23 @@ public sealed class SessionFileValidationTests
     }
 
     [Fact]
+    public async Task Detection_rejects_oversized_compressed_office_metadata()
+    {
+        var stream = new MemoryStream();
+        using (var archive = new ZipArchive(stream, ZipArchiveMode.Create, leaveOpen: true))
+        {
+            var entry = archive.CreateEntry("[Content_Types].xml", CompressionLevel.SmallestSize);
+            await using var writer = new StreamWriter(entry.Open(), Encoding.UTF8);
+            await writer.WriteAsync(new string('x', 300_000));
+        }
+        stream.Position = 0;
+
+        var result = await SessionFileValidator.DetectAsync("letter.docx", stream);
+
+        Assert.False(result.Allowed);
+    }
+
+    [Fact]
     public async Task Detection_rejects_magic_bytes_that_do_not_match_the_name()
     {
         await using var stream = new MemoryStream(Encoding.ASCII.GetBytes("%PDF-1.7"));

@@ -135,6 +135,45 @@ public sealed class SessionFileServiceTests
     }
 
     [Fact]
+    public async Task Delete_marks_metadata_first_and_tolerates_storage_cleanup_failure()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        var file = Reserved("f1", SessionFileStorageKind.S3) with
+        {
+            State = SessionFileState.Ready,
+            DetectedMimeType = "image/png",
+        };
+        await harness.Registry.InsertAsync(file);
+        await harness.Registry.SetPresentationAsync("s1", "f1", "alice");
+        harness.Artifacts.FailDelete = true;
+
+        await harness.Service.DeleteAsync(Actor, "f1");
+
+        Assert.Equal(SessionFileState.Deleted, harness.Registry.Files["f1"].State);
+        Assert.Null((await harness.Registry.GetPresentationAsync("s1"))!.FileId);
+    }
+
+    [Fact]
+    public async Task Pod_file_expires_and_returns_gone_when_the_pod_is_unavailable()
+    {
+        var harness = Harness(s3Configured: false, podPhase: "Paused");
+        var file = Reserved("f1", SessionFileStorageKind.Pod) with
+        {
+            State = SessionFileState.Ready,
+            DetectedMimeType = "image/png",
+        };
+        await harness.Registry.InsertAsync(file);
+        await harness.Registry.SetPresentationAsync("s1", "f1", "alice");
+
+        var error = await Assert.ThrowsAsync<SessionFileException>(
+            () => harness.Service.OpenContentAsync(Actor, "f1"));
+
+        Assert.Equal("file_content_expired", error.Code);
+        Assert.Equal(SessionFileState.Expired, harness.Registry.Files["f1"].State);
+        Assert.Null((await harness.Registry.GetPresentationAsync("s1"))!.FileId);
+    }
+
+    [Fact]
     public async Task Presentation_rejects_a_read_only_actor_and_increments_for_a_writer()
     {
         var harness = Harness(s3Configured: true, podPhase: "Running");
@@ -246,6 +285,7 @@ public sealed class SessionFileServiceTests
         public bool IsConfigured => configured;
         public Dictionary<string, byte[]> Objects { get; } = new();
         public List<string> Deleted { get; } = new();
+        public bool FailDelete { get; set; }
         public string PresignPut(string key, TimeSpan ttl) => $"https://storage.test/{key}?put";
         public string PresignGet(string key, TimeSpan ttl) => $"https://storage.test/{key}?get";
         public Task<string?> GetTextAsync(string key, CancellationToken ct = default) => Task.FromResult<string?>(null);
@@ -255,6 +295,7 @@ public sealed class SessionFileServiceTests
             Task.FromResult<Stream?>(Objects.TryGetValue(key, out var bytes) ? new MemoryStream(bytes) : null);
         public Task DeleteAsync(string key, CancellationToken ct = default)
         {
+            if (FailDelete) throw new IOException("storage unavailable");
             Deleted.Add(key);
             Objects.Remove(key);
             return Task.CompletedTask;

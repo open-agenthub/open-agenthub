@@ -54,6 +54,13 @@ public sealed record SessionFilePresentation(
 
 public sealed record SessionFileUsage(int Count, long Bytes);
 
+public enum SessionFileReservationResult
+{
+    Inserted,
+    CountExceeded,
+    BytesExceeded,
+}
+
 public sealed record SessionFileCapabilities(
     string StorageMode,
     bool UploadAvailable,

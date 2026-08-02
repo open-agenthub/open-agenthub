@@ -312,6 +312,10 @@ public sealed class KubernetesSessionService : ISessionService
         // before the container is killed (the k8s default of 30s is plenty; the
         // agent uploads state, then exits).
         await TryDeletePodAsync($"session-{id}", ct, _opts.PauseGracePeriodSeconds);
+        if (_fileCleanup is not null)
+        {
+            await _fileCleanup.ExpirePodFilesAsync(id, ct);
+        }
 
         rec.Status = SessionStatus.Paused;
         rec.QuestionPending = false;

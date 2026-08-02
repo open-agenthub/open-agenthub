@@ -602,7 +602,7 @@ test('chat materializes ready IDs and echoes metadata without local paths', asyn
   harness.runtime.webSocketServer.connect(socket, '/');
 
   socket.emit('message', Buffer.from(JSON.stringify({
-    type: 'chat', text: 'inspect', attachments: [id]
+    type: 'chat', text: 'inspect', attachments: [id], clientTurnId: 'turn-1'
   })));
   await tick();
   await tick();
@@ -616,6 +616,7 @@ test('chat materializes ready IDs and echoes metadata without local paths', asyn
     id, name: 'shot.png', mimeType: 'image/png', size: 12,
     visualDelivery: 'localImagePaths'
   }]);
+  assert.match(socket.sent.join(''), /"subtype":"chat_delivered".*"clientTurnId":"turn-1"/);
 });
 
 test('chat rejects an attachment turn before stdin when no visual delivery exists', async () => {
@@ -633,13 +634,14 @@ test('chat rejects an attachment turn before stdin when no visual delivery exist
   harness.runtime.webSocketServer.connect(socket, '/');
 
   socket.emit('message', Buffer.from(JSON.stringify({
-    type: 'chat', text: 'inspect', attachments: [id]
+    type: 'chat', text: 'inspect', attachments: [id], clientTurnId: 'turn-2'
   })));
   await tick();
   await tick();
 
   assert.deepEqual(harness.children[0].stdinWrites, []);
   assert.match(socket.sent.join(''), /attachment_delivery_failed/);
+  assert.match(socket.sent.join(''), /"clientTurnId":"turn-2"/);
 });
 test('chat transport sends an interrupt control request on demand', () => {
   const harness = createChatHarness();
