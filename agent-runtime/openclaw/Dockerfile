@@ -37,6 +37,7 @@ COPY --from=builder /opt/session-agent/node_modules /opt/session-agent/node_modu
 COPY session-agent/package.json /opt/session-agent/package.json
 COPY session-agent/server.js /opt/session-agent/server.js
 COPY common /opt/session-agent/common
+COPY files /opt/session-agent/files
 COPY openclaw /opt/session-agent/openclaw
 COPY openclaw/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \

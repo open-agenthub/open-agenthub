@@ -28,6 +28,7 @@ COPY --from=builder /opt/session-agent/node_modules /opt/session-agent/node_modu
 COPY session-agent/package.json /opt/session-agent/package.json
 COPY session-agent/server.js /opt/session-agent/server.js
 COPY common /opt/session-agent/common
+COPY files /opt/session-agent/files
 COPY browser /opt/session-agent/browser
 COPY sessions /opt/session-agent/sessions
 COPY claude /opt/session-agent/claude

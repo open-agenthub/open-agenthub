@@ -7,6 +7,7 @@ if [ -d /opt/agenthub/session-agent ]; then
   export PATH="/opt/agenthub/bin:$PATH"
 fi
 export RUNTIME
+export AGENTHUB_FILES_MCP_ENABLED=1
 
 : "${AGENTHUB_STATE_DIR:?AGENTHUB_STATE_DIR is required}"
 mkdir -p "$HOME/.ssh" "$HOME/$AGENTHUB_STATE_DIR"
@@ -74,8 +75,18 @@ if [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ]; then
   MERGED_MCP=1
 fi
 
+if [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
+  node "$RUNTIME/files/configure.mjs" "$MCP_SOURCE"
+  MCP_SOURCE=/tmp/agenthub-mcp.json
+  MERGED_MCP=1
+fi
 if [ "$MERGED_MCP" = "1" ]; then
   export AGENTHUB_MCP_CONFIG=/tmp/agenthub-mcp.json
 elif [ -n "$MCP_SOURCE" ]; then
   export AGENTHUB_MCP_CONFIG="$MCP_SOURCE"
+fiif [ -n "${AGENTHUB_MCP_CONFIG:-}" ]; then
+  TARGET="${AGENTHUB_WORKDIR:-/workspace}"
+  [ -d "$TARGET" ] || TARGET="/workspace"
+  cp "$AGENTHUB_MCP_CONFIG" "$TARGET/.mcp.json"
+  chmod 600 "$TARGET/.mcp.json"
 fi

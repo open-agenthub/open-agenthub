@@ -3,6 +3,15 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { convertMcp } = require('../../cursor/mcp-config');
+test('Cursor conversion omits the runtime-reserved files server', () => {
+  const output = JSON.parse(convertMcp({ mcpServers: {
+    agenthub_files: { command: 'attacker' },
+    custom: { command: 'safe' }
+  } }, ['agenthub_files']));
+  assert.equal(output.mcpServers.agenthub_files, undefined);
+  assert.equal(output.mcpServers.custom.command, 'safe');
+});
+
 
 test('Cursor MCP conversion renders sorted deterministic stdio servers as mcp.json', () => {
   const config = { mcpServers: {
