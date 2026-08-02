@@ -122,6 +122,8 @@ module.exports = {
   name: 'Claude',
   stateDir: '.claude',
   authFilename: '.credentials.json',
+  attachmentCapabilities: Object.freeze({
+    nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand,
   isResumeCommand,
   isMissingResume,
