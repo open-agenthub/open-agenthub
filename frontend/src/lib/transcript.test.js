@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { toTranscriptBlocks } from './transcript.js'
 
+const separated = (...blocks) => blocks.join('\n\n\n')
+
 describe('toTranscriptBlocks', () => {
-  it('turns large whitespace runs into ordered blocks and removes single blank layout lines', () => {
+  it('forms base blocks, removes layout lines, and packs retained content', () => {
     const text = 'first line\n \n\t\nsecond line\n\nthird line'
 
     expect(toTranscriptBlocks(text)).toEqual([
-      'first line',
-      'second line\nthird line'
+      'first line\n\nsecond line\nthird line'
     ])
   })
 
@@ -23,8 +24,73 @@ describe('toTranscriptBlocks', () => {
     ])
   })
 
-  it('returns no blocks for missing or whitespace-only text', () => {
+  it('removes known spinner and elapsed-token frames', () => {
+    expect(toTranscriptBlocks(separated(
+      '✢',
+      '✣ · ✶',
+      '✻50s · ↓ 1.0k tokens)',
+      'meaningful terminal output'
+    ))).toEqual(['meaningful terminal output'])
+  })
+
+  it('removes a run of four short redraw fragments', () => {
+    expect(toTranscriptBlocks(separated(
+      'l',
+      'o',
+      'g',
+      'i',
+      'meaningful terminal output'
+    ))).toEqual(['meaningful terminal output'])
+  })
+
+  it('preserves up to three short blocks and isolated digits', () => {
+    expect(toTranscriptBlocks(separated(
+      'ls',
+      '42',
+      'OK',
+      'meaningful terminal output'
+    ))).toEqual([
+      'ls\n\n42\n\nOK\n\nmeaningful terminal output'
+    ])
+  })
+
+  it('keeps the later whitespace-equivalent redraw', () => {
+    expect(toTranscriptBlocks(separated(
+      'first   screen state',
+      ' first screen state '
+    ))).toEqual([' first screen state '])
+  })
+
+  it('starts a new bubble after twenty source blocks', () => {
+    const source = Array.from({ length: 21 }, (_, index) =>
+      `meaningful source block ${String(index + 1).padStart(2, '0')}`)
+
+    const result = toTranscriptBlocks(separated(...source))
+
+    expect(result).toHaveLength(2)
+    expect(result[0]).toContain('meaningful source block 01')
+    expect(result[0]).toContain('meaningful source block 20')
+    expect(result[0]).not.toContain('meaningful source block 21')
+    expect(result[1]).toBe('meaningful source block 21')
+  })
+
+  it('keeps oversized source blocks intact and respects the size target', () => {
+    const nearLimit = 'x'.repeat(1190)
+    const oversized = 'y'.repeat(1201)
+
+    expect(toTranscriptBlocks(separated(nearLimit, 'meaningful end block'))).toEqual([
+      nearLimit,
+      'meaningful end block'
+    ])
+    expect(toTranscriptBlocks(separated(oversized, 'meaningful end block'))).toEqual([
+      oversized,
+      'meaningful end block'
+    ])
+  })
+
+  it('returns no blocks for missing, whitespace-only, or noise-only text', () => {
     expect(toTranscriptBlocks(null)).toEqual([])
     expect(toTranscriptBlocks(' \n\t\n')).toEqual([])
+    expect(toTranscriptBlocks(separated('*', '·', '✶', '✻10s · ↓ 2k tokens)'))).toEqual([])
   })
 })
