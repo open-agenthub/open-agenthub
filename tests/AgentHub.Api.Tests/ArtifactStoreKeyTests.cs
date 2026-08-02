@@ -60,4 +60,14 @@ public class ArtifactStoreKeyTests
         Assert.Equal("sessions/alice/session-id/browser-cookies.json",
             IArtifactStore.BrowserCookiesKey("alice", "session-id"));
     }
+
+    [Fact]
+    public void SessionFileKey_encodes_untrusted_segments_without_path_traversal()
+    {
+        var key = IArtifactStore.SessionFileKey("alice/team", "../session", "file-id", "shot.png");
+
+        Assert.Equal(
+            "sessions/alice%2Fteam/..%2Fsession/files/file-id/shot.png",
+            key);
+    }
 }
