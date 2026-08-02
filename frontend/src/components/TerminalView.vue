@@ -170,7 +170,7 @@ async function selectTab(tab) {
 .transcript-inner h3 { font-size: 20px; margin: 0 0 14px; }
 .transcript-list { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
 .transcript-bubble { padding: 12px 14px 14px; background: var(--panel); border: 1px solid var(--border-2); border-left: 3px solid var(--accent); border-radius: 12px; }
-.transcript-label { display: block; color: var(--muted-3); font: 700 10px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
+.transcript-label { display: block; color: var(--muted-2); font: 700 10px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
 .transcript-bubble pre { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); color: #c9c4bb; }
 .transcript-state { margin: 0; color: var(--muted-3); font: 13px/1.6 var(--mono); }
 </style>
