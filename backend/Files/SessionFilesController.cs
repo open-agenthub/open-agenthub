@@ -255,14 +255,14 @@ public static class SessionFileApi
                 ["text/html"] = "download_only",
                 ["image/svg+xml"] = "download_only",
                 ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] =
-                    "office_preview_disabled",
+                    options.OfficePreview.Enabled ? "office_preview_pending" : "office_preview_disabled",
                 ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] =
-                    "office_preview_disabled",
+                    options.OfficePreview.Enabled ? "office_preview_pending" : "office_preview_disabled",
                 ["application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] =
-                    "office_preview_disabled",
+                    options.OfficePreview.Enabled ? "office_preview_pending" : "office_preview_disabled",
             },
-            false,
-            "disabled",
+            options.OfficePreview.Enabled,
+            options.OfficePreview.Enabled ? "available" : "disabled",
             options);
 
     public static IActionResult Content(ControllerBase controller, FileContentResult content)

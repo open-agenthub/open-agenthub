@@ -29,6 +29,9 @@ jobs:
           - component: agent-runtime-claude
             context: ./agent-runtime
             dockerfile: ./agent-runtime/claude/Dockerfile
+          - component: artifact-renderer
+            context: .
+            dockerfile: ./artifact-renderer/Dockerfile
           - component: agent-runtime-codex
             context: ./agent-runtime
             dockerfile: ./agent-runtime/codex/Dockerfile

@@ -11,4 +11,14 @@ public sealed class SessionFileOptions
     public int PresignMinutes { get; init; } = 10;
     public int ReservationMinutes { get; init; } = 15;
     public int PresentationPollMilliseconds { get; init; } = 1500;
+    [System.Text.Json.Serialization.JsonIgnore] public OfficePreviewOptions OfficePreview { get; init; } = new();
+}
+
+public sealed class OfficePreviewOptions
+{
+    public bool Enabled { get; init; }
+    public string BaseUrl { get; init; } = "http://agenthub-artifact-renderer:8080/";
+    public int TimeoutSeconds { get; init; } = 90;
+    public long MaxOutputBytes { get; init; } = 50L * 1024 * 1024;
+    public int PollMilliseconds { get; init; } = 1000;
 }
