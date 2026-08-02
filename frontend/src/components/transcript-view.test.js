@@ -79,4 +79,19 @@ describe('terminal transcript bubbles', () => {
     expect(wrapper.find('.transcript-state').text()).toBe('[no saved transcript]')
     expect(wrapper.findAll('.transcript-bubble')).toHaveLength(0)
   })
+
+  it('shows loading while the transcript request is pending', async () => {
+    let resolveTranscript
+    mocks.api.getTranscript.mockImplementation(() => new Promise(resolve => { resolveTranscript = resolve }))
+    const wrapper = mountView()
+    const button = wrapper.findAll('.tabs button').find(item => item.text() === 'Transcript')
+
+    await button.trigger('click')
+
+    expect(wrapper.find('.transcript-state').text()).toBe('Loading…')
+
+    resolveTranscript('ready')
+    await flushPromises()
+    expect(wrapper.find('.transcript-bubble pre').text()).toBe('ready')
+  })
 })
