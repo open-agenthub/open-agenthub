@@ -57,8 +57,10 @@ describe('terminal transcript bubbles', () => {
     await openTranscript(wrapper)
 
     expect(mocks.api.getTranscript).toHaveBeenCalledWith('terminal-1')
-    expect(wrapper.findAll('.transcript-bubble').map(item => item.find('pre').text())).toEqual(['first', 'second'])
-    expect(wrapper.findAll('.transcript-label').map(item => item.text())).toEqual(['Terminal', 'Terminal'])
+    expect(wrapper.findAll('.transcript-bubble').map(item => item.find('pre').text())).toEqual([
+      'first\n\nsecond'
+    ])
+    expect(wrapper.findAll('.transcript-label').map(item => item.text())).toEqual(['Terminal'])
   })
 
   it('uses the same bubble rendering for shared transcripts', async () => {
@@ -68,7 +70,9 @@ describe('terminal transcript bubbles', () => {
     await openTranscript(wrapper)
 
     expect(mocks.getSharedTranscript).toHaveBeenCalledWith('shared-token')
-    expect(wrapper.findAll('.transcript-bubble').map(item => item.find('pre').text())).toEqual(['shared first', 'shared second'])
+    expect(wrapper.findAll('.transcript-bubble').map(item => item.find('pre').text())).toEqual([
+      'shared first\n\nshared second'
+    ])
   })
 
   it('keeps the existing empty transcript state', async () => {
