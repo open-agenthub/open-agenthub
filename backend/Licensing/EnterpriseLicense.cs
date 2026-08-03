@@ -15,6 +15,8 @@ public sealed record LicenseStatus
     public string? Org { get; init; }
     public string? Email { get; init; }
     public DateTime? ValidUntil { get; init; }
+    /// <summary>Subscription/trial validity for display; gating stays on ValidUntil (heartbeat).</summary>
+    public DateTime? PlanValidUntil { get; init; }
     public string Reason { get; init; } = "";  // why invalid (for the admin UI)
 }
 
@@ -93,6 +95,7 @@ public sealed class EnterpriseLicense : IEnterpriseLicense
                 Valid = !expired, Present = true, LicenseId = claims.LicenseId,
                 Plan = claims.Plan, Seats = claims.Seats, Org = claims.Org, Email = claims.Email,
                 ValidUntil = claims.ValidUntil,
+                PlanValidUntil = claims.PlanValidUntil,
                 Reason = expired ? "License expired." : ""
             };
         }
@@ -128,7 +131,11 @@ public sealed class EnterpriseLicense : IEnterpriseLicense
                 root.TryGetProperty("plan", out var p) ? p.GetString() : null,
                 root.TryGetProperty("validUntil", out var v) && v.GetString() is { } vs
                     ? DateTime.Parse(vs, null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal)
-                    : DateTime.MinValue);
+                    : DateTime.MinValue,
+                // Optional (older tokens lack it): the subscription's own validity, display only.
+                root.TryGetProperty("planValidUntil", out var pv) && pv.GetString() is { } pvs
+                    ? DateTime.Parse(pvs, null, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal)
+                    : null);
         }
         catch (Exception ex) { _log.LogWarning(ex, "License token could not be parsed."); return null; }
     }
@@ -140,5 +147,5 @@ public sealed class EnterpriseLicense : IEnterpriseLicense
         return Convert.FromBase64String(s);
     }
 
-    private sealed record LicenseClaims(Guid? LicenseId, string? Org, string? Email, int Seats, string? Plan, DateTime ValidUntil);
+    private sealed record LicenseClaims(Guid? LicenseId, string? Org, string? Email, int Seats, string? Plan, DateTime ValidUntil, DateTime? PlanValidUntil);
 }

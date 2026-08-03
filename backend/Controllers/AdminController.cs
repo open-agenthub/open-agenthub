@@ -46,6 +46,14 @@ public sealed class AdminController : ControllerBase
     {
         if (!await IsAdminAsync(ct)) return Forbid();
         var status = _license.Status;
+        // Claims are cached per process: right after an activation handled by another
+        // replica this one would still say "unlicensed". Before claiming that on the
+        // admin page, re-read the store once (cheap, admin-only traffic).
+        if (!status.Valid)
+        {
+            await _license.ReloadAsync(ct);
+            status = _license.Status;
+        }
         var used = await _dir.CountLicensedAsync(ct);
         var users = await _dir.ListAsync(ct);
         var lastCheckIn = await _store.GetLastReportAsync(ct);
