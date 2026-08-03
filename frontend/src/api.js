@@ -164,6 +164,11 @@ export const api = {
   activateLicense: (token) => req('POST', '/admin/license', { token }),
   // Starts a Stripe checkout on the license service; returns { url } to redirect to.
   startLicenseCheckout: (data) => req('POST', '/admin/license/checkout', data),
+  // Self-service activation: pull this instance's token from the service by billing email
+  // (matched against the instance key sent at checkout). Recovers a lost redirect/email.
+  claimLicense: (email) => req('POST', '/admin/license/claim', { email }),
+  // Fresh Stripe billing-portal session for the licensed email; returns { url }.
+  openBillingPortal: () => req('POST', '/admin/billing-portal'),
   deactivateLicense: () => req('DELETE', '/admin/license'),
   setUserSeat: (owner, licensed) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/license`, { licensed }),
   // Personal library: MCP catalog (raw/api) + skills.
