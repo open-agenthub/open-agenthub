@@ -120,6 +120,9 @@ builder.Services.AddSingleton<AgentHub.Api.Agents.IAllowedAgentsProvider, AgentH
 
 // Monthly seat heartbeat: reports the licensed-user count and renews the license token.
 builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
+// License claims are cached per process; with several replicas an activation handled by
+// one pod must propagate to the rest — this poller re-reads the store every ~30s.
+builder.Services.AddHostedService<AgentHub.Api.Licensing.LicenseRefresher>();
 
 // Community chat integrations (Telegram/Signal): session-to-conversation bindings.
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatBindingStore>();

@@ -199,7 +199,9 @@ function fmtDateTime(d) {
               <div><span>Plan</span><b>{{ lic.plan || '—' }}</b></div>
               <div><span>Organization</span><b>{{ lic.org || '—' }}</b></div>
               <div><span>Seats included</span><b>{{ lic.seats || '—' }}</b></div>
-              <div><span>Valid until</span><b>{{ fmtDate(lic.validUntil) }}</b></div>
+              <!-- Plan validity (trial/period end); older tokens only carry the 45-day
+                   heartbeat expiry, which is a renewal mechanism, not the plan runtime. -->
+              <div><span>Valid until</span><b>{{ fmtDate(lic.planValidUntil || lic.validUntil) }}</b></div>
             </div>
             <p v-else-if="lic.reason" class="reason">{{ lic.reason }}</p>
             <p v-if="lic.valid && data.cancelAt" class="cancel-warn" data-cancel-warning>
