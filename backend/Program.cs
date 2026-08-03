@@ -256,6 +256,24 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();
 }
 
+// Behind a TLS-terminating ingress (Traefik/HAProxy) the backend sees plain http, so
+// scheme-derived URLs — the checkout returnUrl same-origin check in particular — would
+// reject the browser's https origin. Honor X-Forwarded-Proto ONLY: X-Forwarded-For must
+// stay untrusted because pod identity (browser routes) is derived from the socket's
+// RemoteIpAddress and must not be spoofable by an in-cluster caller.
+{
+    var forwarded = new ForwardedHeadersOptions
+    {
+        ForwardedHeaders = Microsoft.AspNetCore.HttpOverrides.ForwardedHeaders.XForwardedProto
+    };
+    // The ingress reaches us from a dynamic pod IP, not loopback; the default known-proxy
+    // list would ignore the header entirely. Spoofing X-Forwarded-Proto only ever changes
+    // the perceived scheme, which gates nothing security-relevant on its own.
+    forwarded.KnownNetworks.Clear();
+    forwarded.KnownProxies.Clear();
+    app.UseForwardedHeaders(forwarded);
+}
+
 app.UseCors();
 app.UseWebSockets();
 app.UseAuthentication();
