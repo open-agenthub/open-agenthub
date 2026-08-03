@@ -86,12 +86,29 @@ public sealed class SeatUsageReporter(
                 return;
             }
             await store.SetLastReportAsync(DateTime.UtcNow, ct);
+            // Mirror the scheduled cancellation (null clears it after a resume) so the
+            // admin UI can warn before enterprise features lapse.
+            await store.SetCancelAtAsync(ParseCancelAt(body), ct);
             log.LogInformation("Reported {Seats} seat(s); license token renewed.", seats);
         }
         else
         {
             log.LogWarning("Seat report accepted but no token was returned.");
         }
+    }
+
+    /// <summary>Extracts the scheduled cancellation date from a report response, or null.</summary>
+    public static DateTime? ParseCancelAt(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("cancelAt", out var c)
+                && c.ValueKind == JsonValueKind.String && c.TryGetDateTime(out var when))
+                return when.ToUniversalTime();
+        }
+        catch (JsonException) { /* not JSON / unexpected shape */ }
+        return null;
     }
 
     /// <summary>Extracts the renewed token from a report response body, if present.</summary>

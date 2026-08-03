@@ -91,6 +91,36 @@ async function startCheckout() {
   finally { checkoutBusy.value = false }
 }
 
+// Self-service recovery: if the post-checkout redirect and the license email were both
+// lost, pull the token from the service by billing email (matched against this instance's
+// key sent at checkout) and activate it — no key to copy-paste.
+const claiming = ref(false)
+async function claimLicense() {
+  const email = (checkout.value.email || '').trim()
+  if (!email) { error.value = 'Enter your billing email to retrieve the license.'; return }
+  claiming.value = true; error.value = ''; activateMsg.value = ''
+  try {
+    await api.claimLicense(email)
+    checkoutOpen.value = false
+    activateMsg.value = 'License activated ✓'
+    await load()
+  } catch (e) { error.value = String(e.message || e) }
+  finally { claiming.value = false }
+}
+
+// Billing portal without configuration: ask our backend for a fresh Stripe portal
+// session (created by the license service for the licensed email) and open it.
+const portalBusy = ref(false)
+async function openPortal() {
+  portalBusy.value = true; error.value = ''
+  try {
+    const res = await api.openBillingPortal()
+    if (res?.url) window.open(res.url, '_blank', 'noopener')
+    else error.value = 'The license service did not return a portal URL.'
+  } catch (e) { error.value = String(e.message || e) }
+  finally { portalBusy.value = false }
+}
+
 function fmtDate(d) {
   if (!d) return '—'
   try { return new Date(d).toLocaleDateString() } catch { return d }
@@ -143,6 +173,12 @@ function fmtDateTime(d) {
                 <button @click="checkoutOpen = false">Cancel</button>
                 <span class="muted">You will be redirected to Stripe and back here afterwards — the license activates automatically.</span>
               </div>
+              <div class="row start">
+                <span class="muted">Already paid but not activated? Retrieve the license for this billing email:</span>
+                <button data-claim-license :disabled="claiming || !checkout.email.trim()" @click="claimLicense">
+                  {{ claiming ? 'Checking…' : 'Retrieve license' }}
+                </button>
+              </div>
             </div>
           </section>
 
@@ -166,6 +202,10 @@ function fmtDateTime(d) {
               <div><span>Valid until</span><b>{{ fmtDate(lic.validUntil) }}</b></div>
             </div>
             <p v-else-if="lic.reason" class="reason">{{ lic.reason }}</p>
+            <p v-if="lic.valid && data.cancelAt" class="cancel-warn" data-cancel-warning>
+              ⚠ Subscription canceled — runs until <b>{{ fmtDate(data.cancelAt) }}</b>, after which the
+              license stops renewing. Resume it any time through the billing portal.
+            </p>
 
             <div class="field">
               <label>License token</label>
@@ -223,9 +263,15 @@ function fmtDateTime(d) {
               Subscription, invoices and cancellation are managed through the billing portal.
               Statutory invoices can be downloaded there.
             </p>
+            <p v-if="lic.valid && data.cancelAt" class="cancel-warn">
+              ⚠ Subscription canceled — runs until <b>{{ fmtDate(data.cancelAt) }}</b>.
+            </p>
             <div class="row">
               <a v-if="data.billingPortalUrl" class="btn-link" :href="data.billingPortalUrl" target="_blank" rel="noopener">Open billing portal ↗</a>
-              <span v-else class="muted">No billing portal configured on this instance.</span>
+              <button v-else-if="lic.valid" data-billing-portal :disabled="portalBusy" @click="openPortal">
+                {{ portalBusy ? 'Opening…' : 'Open billing portal ↗' }}
+              </button>
+              <span v-else class="muted">Billing opens here once a license is active.</span>
             </div>
           </section>
         </template>
@@ -256,6 +302,8 @@ function fmtDateTime(d) {
 .badge.off { color: var(--muted); }
 .note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 14px; }
 .reason { color: var(--danger); font-size: 12px; }
+.cancel-warn { color: #d9a13c; font-size: 12.5px; line-height: 1.5; margin: 10px 0 0;
+               padding: 8px 12px; border: 1px solid #4a3e1e; border-radius: 8px; background: #1f1b12; }
 .kv { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 14px; }
 .kv > div { display: flex; flex-direction: column; gap: 2px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
 .kv span { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }

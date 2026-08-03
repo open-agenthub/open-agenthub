@@ -38,7 +38,8 @@ public sealed class AdminController : ControllerBase
     public sealed record SeatInfo(int Used, int Included);
     public sealed record Overview(
         bool IsAdmin, LicenseStatus License, SeatInfo Seats,
-        IReadOnlyList<AdminUser> Users, string? BillingPortalUrl, DateTime? LastCheckIn);
+        IReadOnlyList<AdminUser> Users, string? BillingPortalUrl, DateTime? LastCheckIn,
+        DateTime? CancelAt);
 
     [HttpGet("overview")]
     public async Task<IActionResult> GetOverview(CancellationToken ct)
@@ -48,8 +49,10 @@ public sealed class AdminController : ControllerBase
         var used = await _dir.CountLicensedAsync(ct);
         var users = await _dir.ListAsync(ct);
         var lastCheckIn = await _store.GetLastReportAsync(ct);
+        var cancelAt = await _store.GetCancelAtAsync(ct);
         return Ok(new Overview(
-            true, status, new SeatInfo(used, status.Seats), users, _cfg["Ee:BillingPortalUrl"], lastCheckIn));
+            true, status, new SeatInfo(used, status.Seats), users, _cfg["Ee:BillingPortalUrl"], lastCheckIn,
+            cancelAt));
     }
 
     public sealed record CheckoutReq(string Email, string Org, int Seats, string? ReturnUrl);
@@ -79,9 +82,13 @@ public sealed class AdminController : ControllerBase
             return BadRequest(new { error = "returnUrl must be on this instance." });
         var returnUrl = req.ReturnUrl ?? $"{origin}/license/activate";
 
+        // Send this instance's stable key so the resulting license is bound to us: if the
+        // redirect and email are both lost, we can still self-activate via license/claim.
+        var instanceKey = await _store.GetOrCreateInstanceKeyAsync(ct);
+
         using var client = httpFactory.CreateClient();
         using var resp = await client.PostAsJsonAsync($"{serviceUrl}/api/checkout",
-            new { email = req.Email.Trim(), org = req.Org.Trim(), seats = req.Seats, returnUrl }, ct);
+            new { email = req.Email.Trim(), org = req.Org.Trim(), seats = req.Seats, returnUrl, instanceKey }, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         return new ContentResult { Content = body, ContentType = "application/json", StatusCode = (int)resp.StatusCode };
     }
@@ -98,18 +105,86 @@ public sealed class AdminController : ControllerBase
     {
         if (!await IsAdminAsync(ct)) return Forbid();
         if (string.IsNullOrWhiteSpace(req.Token)) return BadRequest(new { error = "Token is required." });
+        return await ApplyTokenAsync(req.Token.Trim(), "License token is invalid.", ct);
+    }
 
-        // Store then verify: ReloadAsync reads back from the store and validates the
-        // signature/expiry. If it doesn't come out valid, roll the store back.
+    /// <summary>
+    /// Opens the Stripe billing portal for this instance's license: asks the license
+    /// service for a fresh portal session using the licensed billing email. A static
+    /// Ee:BillingPortalUrl (chart value) takes precedence in the overview; this endpoint
+    /// makes the portal work with zero configuration once a license is active.
+    /// </summary>
+    [HttpPost("billing-portal")]
+    public async Task<IActionResult> OpenBillingPortal([FromServices] IHttpClientFactory httpFactory, CancellationToken ct)
+    {
+        if (!await IsAdminAsync(ct)) return Forbid();
+        var serviceUrl = _cfg["Ee:License:ServiceUrl"]?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(serviceUrl))
+            return StatusCode(StatusCodes.Status501NotImplemented,
+                new { error = "No license service configured (Ee:License:ServiceUrl)." });
+
+        var email = _license.Status.Email;
+        if (!_license.Status.Valid || string.IsNullOrWhiteSpace(email))
+            return BadRequest(new { error = "No active license — activate one to manage billing." });
+
+        using var client = httpFactory.CreateClient();
+        using var resp = await client.PostAsJsonAsync($"{serviceUrl}/api/portal", new { email }, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
+        return new ContentResult { Content = body, ContentType = "application/json", StatusCode = (int)resp.StatusCode };
+    }
+
+    public sealed record ClaimReq(string Email);
+    private sealed record ClaimResponse(string? Token);
+
+    /// <summary>
+    /// Self-service activation: ask the license service for this instance's token using the
+    /// billing email plus our stored instance key, then activate it. Recovers a purchase
+    /// whose post-checkout redirect and license email were both lost.
+    /// </summary>
+    [HttpPost("license/claim")]
+    public async Task<IActionResult> ClaimLicense([FromBody] ClaimReq req,
+        [FromServices] IHttpClientFactory httpFactory, CancellationToken ct)
+    {
+        if (!await IsAdminAsync(ct)) return Forbid();
+        var serviceUrl = _cfg["Ee:License:ServiceUrl"]?.TrimEnd('/');
+        if (string.IsNullOrWhiteSpace(serviceUrl))
+            return StatusCode(StatusCodes.Status501NotImplemented,
+                new { error = "No license service configured (Ee:License:ServiceUrl)." });
+        if (string.IsNullOrWhiteSpace(req.Email))
+            return BadRequest(new { error = "email is required." });
+
+        var instanceKey = await _store.GetOrCreateInstanceKeyAsync(ct);
+
+        using var client = httpFactory.CreateClient();
+        using var resp = await client.PostAsJsonAsync($"{serviceUrl}/api/license/claim",
+            new { email = req.Email.Trim(), instanceKey }, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            // Surface the service's own message (e.g. "no license found", "not active yet").
+            var err = await resp.Content.ReadAsStringAsync(ct);
+            return new ContentResult { Content = err, ContentType = "application/json", StatusCode = (int)resp.StatusCode };
+        }
+
+        var payload = await resp.Content.ReadFromJsonAsync<ClaimResponse>(ct);
+        if (payload is null || string.IsNullOrWhiteSpace(payload.Token))
+            return BadRequest(new { error = "The license service did not return a token." });
+
+        return await ApplyTokenAsync(payload.Token.Trim(), "Claimed token is invalid.", ct);
+    }
+
+    // Store the token, reload + verify against the compiled-in service key, and roll back to
+    // the previous token if it doesn't come out valid. Shared by manual activation and claim.
+    private async Task<IActionResult> ApplyTokenAsync(string token, string invalidMessage, CancellationToken ct)
+    {
         var previous = await _store.GetTokenAsync(ct);
-        await _store.SetTokenAsync(req.Token.Trim(), ct);
+        await _store.SetTokenAsync(token, ct);
         await _license.ReloadAsync(ct);
         var status = _license.Status;
         if (!status.Valid)
         {
             await _store.SetTokenAsync(previous, ct);
             await _license.ReloadAsync(ct);
-            return BadRequest(new { error = string.IsNullOrEmpty(status.Reason) ? "License token is invalid." : status.Reason });
+            return BadRequest(new { error = string.IsNullOrEmpty(status.Reason) ? invalidMessage : status.Reason });
         }
         return Ok(status);
     }
