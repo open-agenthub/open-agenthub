@@ -23,6 +23,10 @@ const activating = ref(false)
 const activateMsg = ref('')
 
 const lic = computed(() => data.value?.license || {})
+// End date worth showing: a scheduled cancellation, or the fixed term of a granted
+// license. A running subscription has none — it renews automatically.
+const licenseEnd = computed(() =>
+  data.value?.cancelAt || (lic.value.plan === 'granted' ? (lic.value.planValidUntil || lic.value.validUntil) : null))
 const seats = computed(() => data.value?.seats || { used: 0, included: 0 })
 const badge = computed(() => licenseBadge(lic.value))
 const badgeLabel = computed(() => licenseBadgeLabel(lic.value))
@@ -199,9 +203,11 @@ function fmtDateTime(d) {
               <div><span>Plan</span><b>{{ lic.plan || '—' }}</b></div>
               <div><span>Organization</span><b>{{ lic.org || '—' }}</b></div>
               <div><span>Seats included</span><b>{{ lic.seats || '—' }}</b></div>
-              <!-- Plan validity (trial/period end); older tokens only carry the 45-day
-                   heartbeat expiry, which is a renewal mechanism, not the plan runtime. -->
-              <div><span>Valid until</span><b>{{ fmtDate(lic.planValidUntil || lic.validUntil) }}</b></div>
+              <!-- A running subscription renews automatically — a date would be misleading
+                   (it moves every period). Show one only when there IS an end: a scheduled
+                   cancellation, or a fixed-term granted license (planValidUntil). -->
+              <div v-if="licenseEnd"><span>Valid until</span><b>{{ fmtDate(licenseEnd) }}</b></div>
+              <div v-else><span>Renewal</span><b>automatic</b></div>
             </div>
             <p v-else-if="lic.reason" class="reason">{{ lic.reason }}</p>
             <p v-if="lic.valid && data.cancelAt" class="cancel-warn" data-cancel-warning>
