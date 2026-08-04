@@ -25,7 +25,8 @@ public sealed class SessionFileRegistryPostgresTests
     public async Task Presentation_revision_increases_and_never_returns_a_stale_selection()
     {
         await using var db = await SessionFilePostgresFixture.CreateAsync();
-        await db.Registry.InsertAsync(File("f1", "s1"));
+        // Only a Ready file can be presented — a Reserved one is rejected by design.
+        await db.Registry.InsertAsync(File("f1", "s1", SessionFileState.Ready));
 
         var first = await db.Registry.SetPresentationAsync("s1", "f1", "alice");
         var second = await db.Registry.SetPresentationAsync("s1", null, "alice");

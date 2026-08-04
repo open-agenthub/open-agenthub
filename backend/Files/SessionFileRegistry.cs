@@ -302,7 +302,12 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
             RETURNING session_id, file_id, revision, presenter, updated_at
             """);
         command.Parameters.AddWithValue("session", sessionId);
-        command.Parameters.AddWithValue("fileId", DbValue(fileId));
+        // Explicitly typed: the parameter sits in a bare SELECT list, so a plain untyped
+        // null (clearing the presentation) leaves Postgres unable to infer its type — 42P08.
+        command.Parameters.Add(new NpgsqlParameter("fileId", NpgsqlTypes.NpgsqlDbType.Text)
+        {
+            Value = DbValue(fileId)
+        });
         command.Parameters.AddWithValue("presenter", presenter);
         await using var reader = await command.ExecuteReaderAsync(ct);
         if (!await reader.ReadAsync(ct))
