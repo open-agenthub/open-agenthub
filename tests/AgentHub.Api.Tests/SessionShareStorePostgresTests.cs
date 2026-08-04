@@ -204,10 +204,18 @@ public class SessionShareStorePostgresTests
 
         await database.UpsertSessionAsync(record);
         var stored = await database.GetSessionAsync("alice", "agent-session");
+        // Scope to this test's schema: every instance creates its own, and they coexist in
+        // one database — an unscoped information_schema lookup picks an arbitrary one.
         var agentDefault = await database.ScalarAsync<string>(
-            "SELECT column_default FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'agent'");
+            """
+            SELECT column_default FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = 'sessions' AND column_name = 'agent'
+            """);
         var authDefault = await database.ScalarAsync<string>(
-            "SELECT column_default FROM information_schema.columns WHERE table_name = 'sessions' AND column_name = 'auth_mode'");
+            """
+            SELECT column_default FROM information_schema.columns
+            WHERE table_schema = current_schema() AND table_name = 'sessions' AND column_name = 'auth_mode'
+            """);
 
         Assert.NotNull(stored);
         Assert.Equal(AgentKind.Codex, stored!.Agent);
