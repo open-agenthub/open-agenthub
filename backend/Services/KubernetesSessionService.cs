@@ -184,7 +184,7 @@ public sealed class KubernetesSessionService : ISessionService
                 : null,
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
-            Image = image, RunAsRoot = req.RunAsRoot,
+            Image = image, RunAsRoot = req.RunAsRoot, AutoApprove = req.AutoApprove,
             Cpu = req.Cpu, Memory = req.Memory,
             AgentSessionId = Guid.NewGuid().ToString(),
             CallbackToken = RandomToken(),
@@ -469,7 +469,7 @@ public sealed class KubernetesSessionService : ISessionService
             Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
             Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
-            Image = rec.Image, RunAsRoot = rec.RunAsRoot,
+            Image = rec.Image, RunAsRoot = rec.RunAsRoot, AutoApprove = rec.AutoApprove,
             Cpu = rec.Cpu, Memory = rec.Memory
         };
         await SpawnAsync(owner, rec, req, resume: true, ct);
@@ -540,6 +540,9 @@ public sealed class KubernetesSessionService : ISessionService
                 throw new ArgumentException("Root sessions are disabled on this instance.");
             rec.RunAsRoot = asRoot;
         }
+        // Unlike the fields around it this needs no respawn: the permission endpoint reads
+        // the flag off the record on every request, so it applies to the live session.
+        if (req.AutoApprove is { } autoApprove) rec.AutoApprove = autoApprove;
         if (req.Cpu is not null) { ValidateQuantity(req.Cpu, "cpu"); rec.Cpu = req.Cpu; }
         if (req.Memory is not null) { ValidateQuantity(req.Memory, "memory"); rec.Memory = req.Memory; }
         if (req.Repos is not null)
@@ -924,7 +927,7 @@ public sealed class KubernetesSessionService : ISessionService
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
-        Image = r.Image, RunAsRoot = r.RunAsRoot, Cpu = r.Cpu, Memory = r.Memory,
+        Image = r.Image, RunAsRoot = r.RunAsRoot, AutoApprove = r.AutoApprove, Cpu = r.Cpu, Memory = r.Memory,
         Browser = browser ?? BrowserSummary.Stopped
     };
 

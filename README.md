@@ -91,6 +91,8 @@ shift.
 - **Chat integrations** — session updates, replies, and permission approvals from your
   phone via **Telegram or Signal** (free, community) — Slack is part of the Enterprise
   edition — plus browser desktop notifications. [Setup below.](#chat-integrations)
+- **Auto approve** — let a session run its tools without asking, set when you create the
+  session or flipped on a running one. [Details below.](#auto-approve)
 - **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
 - **Security by default** — unprivileged pods, default-deny network policies, per-user
   secrets, no Kubernetes service-account token in agent pods, and only the selected
@@ -251,6 +253,28 @@ Plain manifests without Helm are available under [`k8s/`](k8s/) (namespaces, RBA
 backend, network policies, dev Postgres) — fill in the secrets before applying.
 
 </details>
+
+### Auto approve
+
+Normally every tool a session wants to use raises a permission prompt — in the web app
+and, if configured, in your messenger. **Auto approve** answers those prompts with "allow"
+automatically, so the agent works without interruption.
+
+It can be set two ways:
+
+- **When creating a session** — the *Auto approve* checkbox in the new-session dialog.
+- **On a running session** — the toggle above the terminal, or the checkbox in *Edit
+  session*. It applies immediately, no restart: the backend evaluates the flag per
+  permission request. Switching it on also approves the prompts that are already waiting.
+
+Recommended only for **non-root containers**. With *Run as root* the agent may run any
+command as root in that container, unattended — combine the two only for a container you
+would hand over anyway. Auto approve changes nothing about the pod's isolation: network
+policies, the unprivileged pod spec, and the per-user secret mounts all still apply, so
+the blast radius stays the session's own container.
+
+What it does *not* change: the session's own container is still the boundary. Auto approve
+grants nothing outside it.
 
 ### Chat integrations
 

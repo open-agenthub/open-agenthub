@@ -168,6 +168,10 @@ public sealed class InternalController : ControllerBase
         if (rec is null) return Unauthorized();
 
         var tool = string.IsNullOrWhiteSpace(body.Tool) ? "a tool" : body.Tool.Trim();
+        // Auto-approve is read off the session record on every request, so switching it on
+        // (or off) applies to the running session without a restart. No request row is
+        // created — there is nothing for anyone to decide.
+        if (rec.AutoApprove) return Ok(new { decision = "allow" });
         if (await _permissions.IsAlwaysAllowedAsync(id, tool, ct))
             return Ok(new { decision = "allow" });
 
