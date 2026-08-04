@@ -9,33 +9,40 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
-    # Without a database the PostgreSQL integration tests skip themselves, which quietly
-    # took ~70 tests out of CI — including every store round-trip.
-    services:
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: agenthub_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      # Capped parallelism: the suite opens a connection pool per test class and
-      # exhausts the default max_connections of 100 when it runs wide open.
+      # Without a database the PostgreSQL integration tests skip themselves, which quietly
+      # took ~70 tests out of CI — including every store round-trip.
+      #
+      # Started here rather than as a service container because the suite opens a
+      # connection pool per test class and blows past the default max_connections of 100
+      # ("53300: sorry, too many clients already"); a service container cannot take
+      # postgres command-line arguments.
+      - name: Start PostgreSQL
+        run: |
+          docker run -d --name test-postgres \
+            -e POSTGRES_PASSWORD=test -e POSTGRES_DB=agenthub_test \
+            -p 5432:5432 postgres:16-alpine -c max_connections=500
+          for i in $(seq 1 30); do
+            docker exec test-postgres pg_isready -U postgres && exit 0
+            sleep 1
+          done
+          echo "PostgreSQL did not become ready" >&2
+          docker logs test-postgres >&2
+          exit 1
+      # Parallelism is capped as well: even with plenty of connections available, running
+      # every Postgres-backed class at once starves them into command timeouts.
       - run: >-
           dotnet test tests/AgentHub.Api.Tests/AgentHub.Api.Tests.csproj -c Release
           -- xunit.maxParallelThreads=3
         env:
           AGENTHUB_TEST_POSTGRES_CONNECTION_STRING: "Host=localhost;Port=5432;Username=postgres;Password=test;Database=agenthub_test"
+      - name: Stop PostgreSQL
+        if: always()
+        run: docker rm -f test-postgres
 
   frontend:
     runs-on: ubuntu-latest

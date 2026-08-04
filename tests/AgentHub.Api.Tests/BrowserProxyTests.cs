@@ -10,8 +10,9 @@ public sealed class BrowserProxyTests
     [Fact]
     public async Task Viewer_PumpsProtocolToDedicatedViewOnlyUpstream()
     {
-        var client = new MemoryWebSocket("key");
-        var upstream = new MemoryWebSocket("screen");
+        var rendezvous = new FrameRendezvous(expectedFrames: 2);
+        var client = new MemoryWebSocket(rendezvous, "key");
+        var upstream = new MemoryWebSocket(rendezvous, "screen");
 
         await BrowserProxy.RelayAsync(client, upstream, canWrite: false, CancellationToken.None);
 
@@ -29,8 +30,9 @@ public sealed class BrowserProxyTests
     [Fact]
     public async Task Collaborator_PumpsBothDirections()
     {
-        var client = new MemoryWebSocket("key");
-        var upstream = new MemoryWebSocket("screen");
+        var rendezvous = new FrameRendezvous(expectedFrames: 2);
+        var client = new MemoryWebSocket(rendezvous, "key");
+        var upstream = new MemoryWebSocket(rendezvous, "screen");
 
         await BrowserProxy.RelayAsync(client, upstream, canWrite: true, CancellationToken.None);
 
@@ -51,7 +53,30 @@ public sealed class BrowserProxyTests
         Assert.False(authorized);
         Assert.Equal(2, calls);
     }
-    private sealed class MemoryWebSocket(params string[] incoming) : WebSocket
+    /// <summary>
+    /// Holds both sockets open until every expected frame has been forwarded.
+    ///
+    /// RelayAsync stops as soon as the *first* direction finishes and cancels the other —
+    /// correct behaviour, but it means a socket that reports "closed" the moment its queue
+    /// runs dry can tear the relay down before the opposite pump has even been scheduled
+    /// (PumpAsync starts with an await). Without this gate the relay tests pass on a fast
+    /// machine and fail on a loaded CI runner.
+    /// </summary>
+    private sealed class FrameRendezvous(int expectedFrames)
+    {
+        private readonly TaskCompletionSource _allDelivered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _remaining = expectedFrames;
+
+        public Task AllDelivered => _allDelivered.Task;
+
+        public void Delivered()
+        {
+            if (Interlocked.Decrement(ref _remaining) == 0) _allDelivered.TrySetResult();
+        }
+    }
+
+    private sealed class MemoryWebSocket(FrameRendezvous rendezvous, params string[] incoming) : WebSocket
     {
         private readonly Queue<byte[]> _incoming = new(incoming.Select(Encoding.UTF8.GetBytes));
         private WebSocketState _state = WebSocketState.Open;
@@ -70,21 +95,25 @@ public sealed class BrowserProxyTests
             string? statusDescription, CancellationToken cancellationToken) =>
             CloseAsync(closeStatus, statusDescription, cancellationToken);
         public override void Dispose() => _state = WebSocketState.Closed;
-        public override Task<WebSocketReceiveResult> ReceiveAsync(
+        public override async Task<WebSocketReceiveResult> ReceiveAsync(
             ArraySegment<byte> buffer, CancellationToken cancellationToken)
         {
             if (_incoming.Count == 0)
-                return Task.FromResult(new WebSocketReceiveResult(
-                    0, WebSocketMessageType.Close, true, WebSocketCloseStatus.NormalClosure, "done"));
+            {
+                // Only report the close once the other direction has delivered too.
+                await rendezvous.AllDelivered.WaitAsync(cancellationToken);
+                return new WebSocketReceiveResult(
+                    0, WebSocketMessageType.Close, true, WebSocketCloseStatus.NormalClosure, "done");
+            }
             var bytes = _incoming.Dequeue();
             bytes.CopyTo(buffer.Array!, buffer.Offset);
-            return Task.FromResult(new WebSocketReceiveResult(bytes.Length,
-                WebSocketMessageType.Binary, true));
+            return new WebSocketReceiveResult(bytes.Length, WebSocketMessageType.Binary, true);
         }
         public override Task SendAsync(ArraySegment<byte> buffer,
             WebSocketMessageType messageType, bool endOfMessage, CancellationToken cancellationToken)
         {
             SentFrames.Add(Encoding.UTF8.GetString(buffer.Array!, buffer.Offset, buffer.Count));
+            rendezvous.Delivered();
             return Task.CompletedTask;
         }
     }
