@@ -4,6 +4,9 @@ set -eu
 export DISPLAY=:99
 SCREEN="${AGENTHUB_BROWSER_SCREEN:-2560x1600}"
 X11_SOCKET_DIR="${AGENTHUB_BROWSER_X11_SOCKET_DIR:-/tmp/.X11-unix}"
+# Overridable for the same reason as the socket directory: the entrypoint test runs this
+# script outside its image, where /data is neither present nor creatable.
+DATA_DIR="${AGENTHUB_BROWSER_DATA_DIR:-/data}"
 X11_READY_ATTEMPTS="${AGENTHUB_BROWSER_X11_READY_ATTEMPTS:-100}"
 PIDS=""
 SUPERVISOR_PID=""
@@ -41,7 +44,7 @@ stop_children() {
 trap 'stop_children; exit 0' TERM INT
 trap 'stop_children' EXIT
 
-mkdir -p /data/chromium /data/home /tmp/runtime "$X11_SOCKET_DIR"
+mkdir -p "$DATA_DIR/chromium" "$DATA_DIR/home" /tmp/runtime "$X11_SOCKET_DIR"
 
 start_child Xvfb :99 -screen 0 "${SCREEN}x24" -nolisten tcp
 XVFB_PID=$CHILD_PID
@@ -64,7 +67,7 @@ start_child chromium \
   --display=:99 \
   --remote-debugging-address=127.0.0.1 \
   --remote-debugging-port=9223 \
-  --user-data-dir=/data/chromium \
+  --user-data-dir="$DATA_DIR/chromium" \
   --no-first-run \
   --no-default-browser-check \
   --no-sandbox \
