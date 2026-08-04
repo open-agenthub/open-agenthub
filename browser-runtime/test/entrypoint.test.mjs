@@ -68,9 +68,12 @@ while :; do sleep 1; done
     }, 5_000);
 
     child.kill('SIGTERM');
+    // Generous on purpose. This asserts that shutdown happens and in what order, not how
+    // fast: the entrypoint polls on one-second sleeps and deliberately gives the
+    // supervisor time to drain, so a tight budget just makes the test flaky under load.
     await Promise.race([
       new Promise(resolve => child.once('exit', resolve)),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('entrypoint did not stop')), 5_000)),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('entrypoint did not stop')), 30_000)),
     ]);
 
     const events = await readEvents(eventsFile);
