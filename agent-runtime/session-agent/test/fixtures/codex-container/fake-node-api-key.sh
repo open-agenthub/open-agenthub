@@ -12,4 +12,8 @@ fi
 if [ "$1" = "/opt/session-agent/codex/auth-watcher.js" ]; then
   touch /tmp/watcher-called
 fi
+# The shared entrypoint always enables the files MCP, so every start runs this.
+if [ "$1" = "/opt/session-agent/files/configure.mjs" ]; then
+  exec /usr/local/bin/node "$@"
+fi
 exit 2

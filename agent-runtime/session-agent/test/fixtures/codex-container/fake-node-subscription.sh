@@ -6,6 +6,10 @@ fi
 if [ "$1" = "/opt/session-agent/codex/mcp-config.js" ]; then
   exec /usr/local/bin/node "$@"
 fi
+# The shared entrypoint always enables the files MCP, so every start runs this.
+if [ "$1" = "/opt/session-agent/files/configure.mjs" ]; then
+  exec /usr/local/bin/node "$@"
+fi
 if [ "$1" = "/opt/session-agent/common/server.js" ]; then
   test -z "${CODEX_API_KEY+x}"
   cmp /fixtures/subscription-auth.json "$CODEX_HOME/auth.json"
