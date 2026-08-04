@@ -51,6 +51,10 @@ const autoApprove = ref(!!props.session?.autoApprove)
 const autoApproveBusy = ref(false)
 watch(() => props.session?.autoApprove, v => { autoApprove.value = !!v })
 
+const autoApproveHint = computed(() => props.session?.runAsRoot
+  ? 'Auto approve every tool for this session. This container runs as root, so the agent may run any command as root, unattended.'
+  : 'Auto approve every tool for the rest of this session. Recommended only for non-root containers.')
+
 async function toggleAutoApprove() {
   const next = !autoApprove.value
   autoApprove.value = next
@@ -125,16 +129,19 @@ async function selectTab(tab) {
     <div v-if="session.questionPending && capabilities.canWrite" class="asking">
       <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ isChat ? 'below' : 'in the terminal below' }}.
     </div>
-    <div v-if="isLive && capabilities.canManage && !sharedToken" class="auto-bar" :class="{ on: autoApprove }">
-      <label class="auto-toggle">
-        <input type="checkbox" data-auto-approve :checked="autoApprove" :disabled="autoApproveBusy" @change="toggleAutoApprove" />
-        <span><b>Auto approve</b> — run tools without asking</span>
-      </label>
-      <span class="auto-hint">
-        {{ session.runAsRoot
-          ? 'This container runs as root — the agent may run any command as root, unattended.'
-          : 'Recommended only for non-root containers.' }}
-      </span>
+    <div v-if="autoApprove && isLive && capabilities.canManage && !sharedToken" class="perm auto-on">
+      <span class="ask-dot"></span>
+      <div class="perm-text">
+        <strong>Auto approve is on — tools run without asking.</strong>
+        <span class="perm-summary">
+          {{ session.runAsRoot
+            ? 'This container runs as root, so the agent may run any command as root, unattended.'
+            : 'Recommended only for non-root containers.' }}
+        </span>
+      </div>
+      <div class="perm-actions">
+        <button class="bar-btn" data-auto-approve :disabled="autoApproveBusy" @click="toggleAutoApprove">Turn off</button>
+      </div>
     </div>
     <div v-for="p in pendingPermissions" :key="p.id" class="perm">
       <span class="ask-dot"></span>
@@ -145,6 +152,8 @@ async function selectTab(tab) {
       <div class="perm-actions">
         <button class="bar-btn primary" @click="decidePermission(p.id, 'allow')">Allow</button>
         <button class="bar-btn" @click="decidePermission(p.id, 'allowAlways')">Allow (don't ask again)</button>
+        <button v-if="capabilities.canManage && !sharedToken" class="bar-btn" data-auto-approve
+                :disabled="autoApproveBusy" :title="autoApproveHint" @click="toggleAutoApprove">Allow everything</button>
         <button class="bar-btn danger" @click="decidePermission(p.id, 'deny')">Deny</button>
       </div>
     </div>
@@ -194,11 +203,6 @@ async function selectTab(tab) {
 .share-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px 0; font-family: var(--display); font-weight: 700; color: var(--strong); }
 .asking { display: flex; align-items: center; gap: 8px; padding: 10px 20px; font-weight: 700; color: var(--warn); font-size: 12px; background: #1f1b12; border-bottom: 1px solid #4a3e1e; }
 .ask-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex-shrink: 0; }
-.auto-bar { display: flex; align-items: center; gap: 12px; padding: 7px 20px; font-size: 12px; color: var(--muted-3); border-bottom: 1px solid var(--border-2); flex-wrap: wrap; }
-.auto-bar.on { color: var(--warn); background: #1f1b12; border-bottom-color: #4a3e1e; }
-.auto-toggle { display: flex; align-items: center; gap: 8px; cursor: pointer; }
-.auto-toggle input { width: auto; margin: 0; }
-.auto-hint { min-width: 0; }
 .perm { display: flex; align-items: center; gap: 10px; padding: 10px 20px; font-size: 12px; color: var(--warn); background: #1f1b12; border-bottom: 1px solid #4a3e1e; flex-wrap: wrap; }
 .perm-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1; }
 .perm-summary { color: var(--muted-3); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

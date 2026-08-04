@@ -263,9 +263,13 @@ automatically, so the agent works without interruption.
 It can be set two ways:
 
 - **When creating a session** — the *Auto approve* checkbox in the new-session dialog.
-- **On a running session** — the toggle above the terminal, or the checkbox in *Edit
-  session*. It applies immediately, no restart: the backend evaluates the flag per
-  permission request. Switching it on also approves the prompts that are already waiting.
+- **From a permission prompt** — the *Allow everything* button, next to *Allow* and
+  *Allow (don't ask again)*.
+- **On a running session** — the *Auto approve* toggle in *Edit session*.
+
+The last two apply immediately, no restart: the backend evaluates the flag per permission
+request. Switching it on also approves the prompts that are already waiting. While it is
+on, a banner above the terminal offers *Turn off*.
 
 Recommended only for **non-root containers**. With *Run as root* the agent may run any
 command as root in that container, unattended — combine the two only for a container you
