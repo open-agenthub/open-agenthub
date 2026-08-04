@@ -1,3 +1,4 @@
+using System.Text.Json;
 using AgentHub.Api.Ee.Sharing;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
@@ -212,7 +213,14 @@ public class SessionShareStorePostgresTests
         Assert.Equal(AgentKind.Codex, stored!.Agent);
         Assert.Equal(AgentAuthMode.ApiKey, stored.AuthMode);
         Assert.Equal("thread-1", stored.AgentSessionId);
-        Assert.Equal(policy, stored.AgentPolicyJson);
+        // agent_policy is a jsonb column, so Postgres returns its own normalized text
+        // (whitespace and key order differ from what went in) — compare the parsed policy.
+        var storedPolicy = JsonSerializer.Deserialize<AgentPolicy>(
+            stored.AgentPolicyJson!, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        Assert.NotNull(storedPolicy);
+        Assert.Equal(new[] { "Read" }, storedPolicy!.AllowedTools);
+        Assert.Equal(new[] { "mcp__git" }, storedPolicy.AllowedMcpTools);
+        Assert.Equal(new[] { "git status" }, storedPolicy.AllowedCommands);
         Assert.Contains("Claude", agentDefault);
         Assert.Contains("Auto", authDefault);
     }
@@ -241,6 +249,38 @@ public class SessionShareStorePostgresTests
         Assert.Equal(SessionUiMode.Chat, stored!.UiMode);
         Assert.NotNull(legacy);
         Assert.Equal(SessionUiMode.Terminal, legacy!.UiMode);
+    }
+
+    [PostgreSqlFact]
+    public async Task SessionStore_RoundTripsAutoApproveAndDefaultsLegacyRowsToOff()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var record = new SessionRecord
+        {
+            Id = "auto-session", Owner = "alice", Title = "Auto", Mode = SessionMode.Interactive,
+            AutoApprove = true, AgentSessionId = "thread-auto", CallbackToken = "callback-auto"
+        };
+
+        await database.UpsertSessionAsync(record);
+        await database.ExecuteAsync(
+            """
+            INSERT INTO sessions (id, owner, title, mode, agent_session_id, callback_token)
+            VALUES ('legacy-auto', 'alice', 'Legacy', 'Interactive', 'thread-legacy-auto', 'callback-legacy-auto')
+            """);
+
+        var stored = await database.GetSessionAsync("alice", "auto-session");
+        var legacy = await database.GetSessionAsync("alice", "legacy-auto");
+
+        Assert.NotNull(stored);
+        Assert.True(stored!.AutoApprove);
+        Assert.NotNull(legacy);
+        Assert.False(legacy!.AutoApprove);
+
+        // Toggling it back off must survive the upsert path too — that is what the
+        // running-session switch does.
+        record.AutoApprove = false;
+        await database.UpsertSessionAsync(record);
+        Assert.False((await database.GetSessionAsync("alice", "auto-session"))!.AutoApprove);
     }
 
     [PostgreSqlFact]
