@@ -14,7 +14,7 @@
 
   <ItemGroup>
     <!-- Offizieller Kubernetes-Client -->
-    <PackageReference Include="KubernetesClient" Version="14.0.2" />
+    <PackageReference Include="KubernetesClient" Version="17.0.14" />
     <!-- OIDC / JWT (Keycloak) -->
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <!-- Persistenz -->
