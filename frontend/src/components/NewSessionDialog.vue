@@ -41,6 +41,7 @@ const form = ref({
   ...defaultAgentForm(),
   image: '',
   runAsRoot: false,
+  autoApprove: false,
   cpu: '500m',
   memory: '1Gi'
 })
@@ -111,6 +112,7 @@ async function submit() {
       policy: policyPayload(form.value),
       image: form.value.image.trim() || null,
       runAsRoot: form.value.runAsRoot,
+      autoApprove: form.value.autoApprove,
       cpu: form.value.cpu,
       memory: form.value.memory
     })
@@ -226,6 +228,14 @@ async function submit() {
             <input type="checkbox" v-model="form.runAsRoot" />
             <span><b>Run as root</b> — only if the task needs system packages (apt, npm&nbsp;-g, …)</span>
           </label>
+          <label class="check">
+            <input type="checkbox" v-model="form.autoApprove" />
+            <span><b>Auto approve</b> — run tools without asking. Recommended only for non-root containers.</span>
+          </label>
+          <p v-if="form.autoApprove && form.runAsRoot" class="warn">
+            Auto approve with <b>Run as root</b> lets the agent run any command as root in this
+            container, unattended. Only do this for a container you would hand over anyway.
+          </p>
         </div>
       </div>
 
@@ -275,6 +285,7 @@ async function submit() {
 .row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
 .note-inline { font-size: 12px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
+.warn { margin: 6px 0 0 28px; font-size: 12px; line-height: 1.5; color: var(--warn); }
 @media (max-width: 760px) {
   .grid3 { grid-template-columns: 1fr; }
   .row { align-items: stretch; flex-wrap: wrap; }

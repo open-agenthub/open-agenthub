@@ -34,6 +34,7 @@ function reset(session) {
     title: session.title,
     image: session.image || '',
     runAsRoot: !!session.runAsRoot,
+    autoApprove: !!session.autoApprove,
     cpu: session.cpu || '500m',
     memory: session.memory || '1Gi',
     mcpConfigJson: session.mcpConfigJson || '',
@@ -78,12 +79,15 @@ async function save() {
       saveToLibrary: ephemeralSaveToLibrary.value
     })
     const payload = scheduled.value
-      ? { title: f.value.title, projectId: f.value.projectId || null }
+      // Auto approve is not part of the pod spec, so it is safe to change even for a
+      // scheduled session (everything else there is fixed by the CronJob spec).
+      ? { title: f.value.title, projectId: f.value.projectId || null, autoApprove: f.value.autoApprove }
       : {
           title: f.value.title,
           policy: policyPayload(f.value),
           image: f.value.image.trim(),          // empty = default agent image
           runAsRoot: f.value.runAsRoot,
+          autoApprove: f.value.autoApprove,
           cpu: f.value.cpu.trim(),
           memory: f.value.memory.trim(),
           repos: repos.value,
@@ -108,7 +112,7 @@ async function save() {
     <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3 class="form-title">Edit session</h3>
       <p class="note" v-if="scheduled">Scheduled sessions run from a fixed CronJob spec — delete and recreate the session to change its agent, billing, policy, or runtime settings.</p>
-      <p class="note" v-else>The title applies immediately. Image, root mode and resources take effect the next time the session is resumed.</p>
+      <p class="note" v-else>The title and auto approve apply immediately. Image, root mode and resources take effect the next time the session is resumed.</p>
 
       <div class="card sect">
         <div class="field">
@@ -116,6 +120,14 @@ async function save() {
           <input v-model="f.title" />
         </div>
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
+        <label class="check" data-auto-approve>
+          <input type="checkbox" v-model="f.autoApprove" />
+          <span><b>Auto approve</b> — run tools without asking. Recommended only for non-root containers.</span>
+        </label>
+        <p v-if="f.autoApprove && f.runAsRoot" class="warn">
+          Auto approve with <b>Run as root</b> lets the agent run any command as root in this
+          container, unattended. Only do this for a container you would hand over anyway.
+        </p>
       </div>
       <template v-if="!scheduled">
         <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode"
@@ -223,6 +235,7 @@ async function save() {
 .row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
 .note-inline { font-size: 12px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
+.warn { margin: 6px 0 0 28px; font-size: 12px; line-height: 1.5; color: var(--warn); }
 @media (max-width: 760px) {
   .grid3 { grid-template-columns: 1fr; }
   .row { align-items: stretch; flex-wrap: wrap; }

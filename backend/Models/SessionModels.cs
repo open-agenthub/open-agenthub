@@ -205,6 +205,11 @@ public record CreateSessionRequest
     /// The pod stays unprivileged (no privileged mode, no hostPath, NetworkPolicies apply).</summary>
     public bool RunAsRoot { get; init; }
 
+    /// <summary>Approve every tool-permission request of this session automatically, without
+    /// asking in the web app or the messengers. Only sensible for a session whose container
+    /// you are willing to let the agent use unattended — see <see cref="RunAsRoot"/>.</summary>
+    public bool AutoApprove { get; init; }
+
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
 }
@@ -232,6 +237,10 @@ public record UpdateSessionRequest
     /// <summary>Custom container image; empty string resets to the default agent image.</summary>
     public string? Image { get; init; }
     public bool? RunAsRoot { get; init; }
+    /// <summary>Auto-approve tool permissions. Unlike the other fields this takes effect
+    /// immediately — the backend evaluates it per permission request, so it can be flipped
+    /// on a running session without a restart.</summary>
+    public bool? AutoApprove { get; init; }
     public string? Cpu { get; init; }
     public string? Memory { get; init; }
     /// <summary>Inline MCP config (.mcp.json); null = unchanged, empty string clears inline
@@ -299,6 +308,7 @@ public static class SessionDuplication
             AllowedTools = request.Policy is null ? Deserialize<List<string>>(source.AllowedToolsJson) : new List<string>(),
             Image = source.Image,
             RunAsRoot = source.RunAsRoot,
+            AutoApprove = source.AutoApprove,
             Cpu = source.Cpu,
             Memory = source.Memory
         };
@@ -358,6 +368,8 @@ public record SessionInfo
     /// <summary>Custom image of the session (null = default agent image).</summary>
     public string? Image { get; init; }
     public bool RunAsRoot { get; init; }
+    /// <summary>Tool permissions are approved automatically for this session.</summary>
+    public bool AutoApprove { get; init; }
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
     public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;

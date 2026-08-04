@@ -50,10 +50,31 @@ public sealed class SessionsController : ControllerBase
     [HttpPatch("{id}")]
     public async Task<ActionResult<SessionInfo>> Update(string id, [FromBody] UpdateSessionRequest req, CancellationToken ct)
     {
-        try { return Ok(await _svc.UpdateSessionAsync(Owner, id, req, ct)); }
+        try
+        {
+            var info = await _svc.UpdateSessionAsync(Owner, id, req, ct);
+            // Auto-approve only short-circuits *new* requests. Requests raised before the
+            // switch was flipped would keep the agent waiting until they expire, so clear
+            // them out here — whoever turned it on has already said yes to all of them.
+            if (req.AutoApprove == true) await AllowPendingAsync(id, ct);
+            return Ok(info);
+        }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
+    /// <summary>Resolves every still-pending request of the session as "allow" and defuses
+    /// the chat prompts that were posted for them.</summary>
+    private async Task AllowPendingAsync(string id, CancellationToken ct)
+    {
+        foreach (var pending in await _permissions.GetPendingRequestsAsync(id, ct))
+        {
+            if (await _permissions.ResolveAsync(pending.Id, "allow", id, ct) is not { } resolved) continue;
+            if (resolved.Platform is { } platform)
+                foreach (var e in _promptEditors.Where(e => e.Platform == platform))
+                    await e.MarkDecidedAsync(resolved, "allow", ct);
+        }
     }
 
     [HttpPost("{id}/duplicate")]
