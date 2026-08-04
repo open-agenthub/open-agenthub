@@ -19,9 +19,13 @@ public sealed class GitProviderConfig
     public string? Scopes { get; set; }
 
     public string Kind => Type.Trim().ToLowerInvariant();
-    public string WebBase => (BaseUrl ?? (Kind == "github" ? "https://github.com" : "https://gitlab.com")).TrimEnd('/');
+    // Treat an empty BaseUrl like an absent one: config sources cannot express null, so
+    // "not set" arrives as "". Falling through with "" would make every derived URL
+    // relative, and the browser would just navigate back into the app.
+    private bool HasBaseUrl => !string.IsNullOrWhiteSpace(BaseUrl);
+    public string WebBase => (HasBaseUrl ? BaseUrl! : (Kind == "github" ? "https://github.com" : "https://gitlab.com")).TrimEnd('/');
     public string ApiBase => Kind == "github"
-        ? (BaseUrl is null ? "https://api.github.com" : $"{WebBase}/api/v3")
+        ? (HasBaseUrl ? $"{WebBase}/api/v3" : "https://api.github.com")
         : $"{WebBase}/api/v4";
     public string AuthorizeUrl => Kind == "github" ? $"{WebBase}/login/oauth/authorize" : $"{WebBase}/oauth/authorize";
     public string TokenUrl => Kind == "github" ? $"{WebBase}/login/oauth/access_token" : $"{WebBase}/oauth/token";
