@@ -7,7 +7,8 @@ const mocks = vi.hoisted(() => ({
   api: {
     getTranscript: vi.fn().mockResolvedValue(''),
     listPermissions: vi.fn().mockResolvedValue([]),
-    decidePermission: vi.fn().mockResolvedValue({ decision: 'allow' })
+    decidePermission: vi.fn().mockResolvedValue({ decision: 'allow' }),
+    updateSession: vi.fn().mockResolvedValue({})
   }
 }))
 
@@ -41,7 +42,21 @@ describe('in-app permission approvals', () => {
     expect(wrapper.text()).toContain('The agent wants to use Bash.')
     expect(wrapper.text()).toContain('Run a shell command.')
     const labels = wrapper.findAll('.perm-actions button').map(b => b.text())
-    expect(labels).toEqual(['Allow', "Allow (don't ask again)", 'Deny'])
+    expect(labels).toEqual(['Allow', "Allow (don't ask again)", 'Allow everything', 'Deny'])
+  })
+
+  it('turns on auto approve from the prompt and clears the pending requests', async () => {
+    mocks.api.listPermissions.mockResolvedValueOnce([{ id: 'p1', tool: 'Bash', summary: null }])
+    const wrapper = mountView()
+    await flushPromises()
+
+    // The backend resolves the pending requests when auto approve is switched on.
+    mocks.api.listPermissions.mockResolvedValue([])
+    await wrapper.find('[data-auto-approve]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith('s1', { autoApprove: true })
+    expect(wrapper.find('.perm.auto-on').exists()).toBe(true)
   })
 
   it('resolves a request and removes it from the list', async () => {

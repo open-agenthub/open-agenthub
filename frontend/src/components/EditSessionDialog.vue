@@ -120,14 +120,19 @@ async function save() {
           <input v-model="f.title" />
         </div>
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
-        <label class="check" data-auto-approve>
-          <input type="checkbox" v-model="f.autoApprove" />
-          <span><b>Auto approve</b> — run tools without asking. Recommended only for non-root containers.</span>
-        </label>
-        <p v-if="f.autoApprove && f.runAsRoot" class="warn">
-          Auto approve with <b>Run as root</b> lets the agent run any command as root in this
-          container, unattended. Only do this for a container you would hand over anyway.
-        </p>
+        <div class="field last toggle-field">
+          <label>Auto approve <span class="dim">— run tools without asking</span></label>
+          <button type="button" class="toggle" role="switch" data-auto-approve
+                  :aria-checked="f.autoApprove ? 'true' : 'false'" :class="{ on: f.autoApprove }"
+                  @click="f.autoApprove = !f.autoApprove">
+            <span class="knob"></span>
+            <span class="toggle-label">{{ f.autoApprove ? 'On' : 'Off' }}</span>
+          </button>
+          <p v-if="f.autoApprove && f.runAsRoot" class="warn">
+            With <b>Run as root</b> the agent may run any command as root in this container,
+            unattended. Only do this for a container you would hand over anyway.
+          </p>
+        </div>
       </div>
       <template v-if="!scheduled">
         <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode"
@@ -235,7 +240,16 @@ async function save() {
 .row { display: flex; align-items: center; gap: 10px; padding-bottom: 8px; }
 .note-inline { font-size: 12px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
-.warn { margin: 6px 0 0 28px; font-size: 12px; line-height: 1.5; color: var(--warn); }
+.warn { margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: var(--warn); }
+.toggle-field { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.toggle { display: inline-flex; align-items: center; gap: 10px; width: auto; padding: 5px 14px 5px 6px; border: 1px solid var(--border-2); border-radius: 999px; background: none; font-size: 12px; color: var(--muted-3); }
+.toggle:hover { background: var(--hover); }
+.toggle .knob { width: 30px; height: 17px; padding: 2px; border-radius: 999px; background: var(--border-3); transition: background .15s; }
+.toggle .knob::after { content: ''; display: block; width: 13px; height: 13px; border-radius: 50%; background: var(--panel); transition: transform .15s; }
+.toggle.on { border-color: var(--warn); color: var(--warn); }
+.toggle.on .knob { background: var(--warn); }
+.toggle.on .knob::after { transform: translateX(13px); }
+.toggle-label { font-weight: 700; }
 @media (max-width: 760px) {
   .grid3 { grid-template-columns: 1fr; }
   .row { align-items: stretch; flex-wrap: wrap; }
