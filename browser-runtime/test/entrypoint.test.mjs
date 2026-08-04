@@ -57,6 +57,8 @@ while :; do sleep 1; done
         PATH: `${binDirectory}:${process.env.PATH}`,
         AGENTHUB_BROWSER_X11_SOCKET_DIR: socketDirectory,
         AGENTHUB_BROWSER_X11_READY_ATTEMPTS: '50',
+        // The real /data only exists inside the image, and creating it needs root.
+        AGENTHUB_BROWSER_DATA_DIR: path.join(directory, 'data'),
         AGENTHUB_TEST_EVENTS: eventsFile,
       },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -66,6 +68,11 @@ while :; do sleep 1; done
       const events = await readEvents(eventsFile);
       return events.some(event => event === 'node' || event === 'node-early') || child.exitCode !== null;
     }, 5_000);
+
+    // A script that already died (say, because a directory could not be created) has
+    // fired its exit event long before we could listen for it — waiting for another one
+    // would just hang until the timeout and report the wrong problem.
+    assert.equal(child.exitCode, null, `entrypoint exited early with status ${child.exitCode}`);
 
     child.kill('SIGTERM');
     // Generous on purpose. This asserts that shutdown happens and in what order, not how
