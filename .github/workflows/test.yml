@@ -9,25 +9,36 @@ on:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    # Without a database the PostgreSQL integration tests skip themselves, which quietly
+    # took ~70 tests out of CI — including every store round-trip.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: agenthub_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: 10.0.x
-      - run: dotnet test tests/AgentHub.Api.Tests/AgentHub.Api.Tests.csproj -c Release
+      # Capped parallelism: the suite opens a connection pool per test class and
+      # exhausts the default max_connections of 100 when it runs wide open.
+      - run: >-
+          dotnet test tests/AgentHub.Api.Tests/AgentHub.Api.Tests.csproj -c Release
+          -- xunit.maxParallelThreads=3
+        env:
+          AGENTHUB_TEST_POSTGRES_CONNECTION_STRING: "Host=localhost;Port=5432;Username=postgres;Password=test;Database=agenthub_test"
 
   frontend:
     runs-on: ubuntu-latest
-  renderer:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: 10.0.x
-      - run: dotnet test tests/ArtifactRenderer.Tests/ArtifactRenderer.Tests.csproj -c Release
-      - run: docker build --file artifact-renderer/Dockerfile --tag open-agenthub-dev/artifact-renderer:test .
-
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -39,6 +50,16 @@ jobs:
         run: npm test
       - working-directory: frontend
         run: npm run build
+
+  renderer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet test tests/ArtifactRenderer.Tests/ArtifactRenderer.Tests.csproj -c Release
+      - run: docker build --file artifact-renderer/Dockerfile --tag open-agenthub-dev/artifact-renderer:test .
 
   runtimes:
     runs-on: ubuntu-latest
