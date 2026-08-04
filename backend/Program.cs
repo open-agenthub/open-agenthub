@@ -132,6 +132,9 @@ builder.Services.AddSingleton<AgentHub.Api.Chat.WorkingIndicator>();
 var telegramOpts = builder.Configuration.GetSection("Chat:Telegram").Get<AgentHub.Api.Chat.Telegram.TelegramOptions>() ?? new();
 builder.Services.AddSingleton(telegramOpts);
 builder.Services.AddSingleton<AgentHub.Api.Chat.Telegram.TelegramClient>();
+// The bot token is part of every Telegram request path, and the HTTP client factory's default
+// loggers write the full request URI — drop them for this client so the token stays out of the logs.
+builder.Services.AddHttpClient(AgentHub.Api.Chat.Telegram.TelegramOptions.HttpClientName).RemoveAllLoggers();
 var signalOpts = builder.Configuration.GetSection("Chat:Signal").Get<AgentHub.Api.Chat.Signal.SignalOptions>() ?? new();
 builder.Services.AddSingleton(signalOpts);
 builder.Services.AddSingleton<AgentHub.Api.Chat.Signal.SignalClient>();

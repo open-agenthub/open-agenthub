@@ -34,7 +34,7 @@ public sealed class TelegramClient
         {
             try
             {
-                var c = _http.CreateClient();
+                var c = _http.CreateClient(TelegramOptions.HttpClientName);
                 using var resp = await c.PostAsJsonAsync(Url(method), body, ct);
                 var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
                 if (doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean()) return (doc, null);
@@ -163,7 +163,7 @@ public sealed class TelegramClient
     {
         try
         {
-            var c = _http.CreateClient();
+            var c = _http.CreateClient(TelegramOptions.HttpClientName);
             // The server holds the request for up to 50s (timeout=50). Instead of raising the shared
             // HttpClient.Timeout we bound this request via a linked CTS at 70s (poll timeout + margin),
             // which stays below the factory client's 100s default and never affects other requests.
