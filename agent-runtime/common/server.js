@@ -106,6 +106,22 @@ function createCommonServer(options = {}) {
     ], () => done && done());
   }
 
+  function restoreScrollback(done) {
+    if (env.AGENTHUB_RESUME !== '1' || !callback || scrollback) return done();
+    let settled = false;
+    const finish = () => { if (!settled) { settled = true; done(); } };
+    // Never let a slow or unreachable hub hold up the agent: the session is more
+    // important than its history.
+    setTimeoutImpl(finish, 10000);
+    fetchImpl(callback + '/scrollback', { headers: { 'X-Agent-Token': token } })
+      .then(response => (response && response.ok ? response.text() : ''))
+      .then(text => {
+        if (typeof text === 'string' && text && !scrollback) remember(text);
+      })
+      .catch(() => {})
+      .finally(finish);
+  }
+
   function backupScrollback(done) {
     if (!callback) return done && done();
     fetchImpl(callback + '/scrollback', {
@@ -529,7 +545,11 @@ function createCommonServer(options = {}) {
     }
   }
 
-  startAgent(true);
+  // A resumed session runs in a fresh pod, so the buffer every client is replayed on
+  // connect would start empty and the conversation so far would look lost. Seed it from
+  // the copy the hub kept before starting the agent, so the history is there for the
+  // first client and stays part of what we persist from here on.
+  restoreScrollback(() => startAgent(true));
 
   setIntervalImpl(() => {
     if (!exited) persistAll();
