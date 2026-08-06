@@ -55,6 +55,44 @@ export function formatApproxCost(usd) {
   return '~' + formatCost(usd)
 }
 
+/** Byte count for memory/network: 1536 -> "1.5 KB", 0 -> "0 B". */
+export function formatBytes(n) {
+  const v = Number(n) || 0
+  if (v < 1024) return Math.round(v) + ' B'
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = v
+  let unit = 'B'
+  for (const next of units) {
+    if (value < 1024) break
+    value /= 1024
+    unit = next
+  }
+  return trim(value) + ' ' + unit
+}
+
+/** CPU time in seconds: 42 -> "42s", 90 -> "1m 30s", 3700 -> "1h 2m". */
+export function formatCpuSeconds(seconds) {
+  const v = Math.max(0, Number(seconds) || 0)
+  if (v < 60) return Math.round(v) + 's'
+  const minutes = Math.floor(v / 60)
+  if (minutes < 60) {
+    const rest = Math.round(v - minutes * 60)
+    return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`
+  }
+  const hours = Math.floor(minutes / 60)
+  const restMinutes = minutes - hours * 60
+  return restMinutes > 0 ? `${hours}h ${restMinutes}m` : `${hours}h`
+}
+
+/** True when a usage row carries any pod resource data (older rows have none). */
+export function hasResources(row) {
+  if (!row) return false
+  return (Number(row.cpuSeconds) || 0) > 0
+    || (Number(row.peakMemoryBytes) || 0) > 0
+    || (Number(row.rxBytes) || 0) > 0
+    || (Number(row.txBytes) || 0) > 0
+}
+
 function trim(x) {
   // One decimal, but drop a trailing ".0" (e.g. 2.0K -> 2K).
   return (Math.round(x * 10) / 10).toString()

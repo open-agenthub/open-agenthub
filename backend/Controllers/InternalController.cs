@@ -8,6 +8,7 @@ using AgentHub.Api.Notifications;
 using AgentHub.Api.Permissions;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
+using AgentHub.Api.Usage;
 using AgentHub.Api.Ee.Sharing;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -35,17 +36,20 @@ public sealed class InternalController : ControllerBase
     private readonly bool _spawnMcpEnabled;
     private readonly ILibraryAccess _library;
     private readonly IAgentCallbackAuthorizer _callbackAuthorizer;
+    private readonly IUsageStore? _usage;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares,
         ILibraryAccess library, IBrowserService? browsers = null, bool? spawnMcpEnabled = null,
-        IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null)
+        IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null,
+        IUsageStore? usage = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
         _library = library;
         _browsers = browsers;
+        _usage = usage;
         _callbackAuthorizer = callbackAuthorizer ?? new AgentCallbackAuthorizer(store);
         _spawnMcpEnabled = spawnMcpEnabled
             ?? configuration?.GetValue("AgentHub:SpawnMcpEnabled", true)
@@ -111,6 +115,25 @@ public sealed class InternalController : ControllerBase
         await _store.SetQuestionPendingAsync(id, true, ct);
         await NotifyAllAsync(rec, body.Event ?? "question",
             string.IsNullOrWhiteSpace(body.Message) ? "The agent is waiting for your reply." : body.Message, ct);
+        return NoContent();
+    }
+
+    public record ResourcesBody(double CpuSeconds, long MemoryBytes, long RxBytes, long TxBytes);
+
+    /// <summary>
+    /// Periodic pod resource snapshot (cgroup CPU/memory, /proc/net/dev counters), posted by
+    /// the session agent alongside its persistence heartbeat. Feeds the Usage dashboard.
+    /// </summary>
+    [HttpPost("resources")]
+    public async Task<IActionResult> Resources(string id, [FromBody] ResourcesBody body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (_usage is null) return NoContent();
+
+        var sample = new SessionResourceSample(body.CpuSeconds, body.MemoryBytes, body.RxBytes, body.TxBytes);
+        if (!sample.IsValid) return BadRequest();
+        await _usage.AddResourceSampleAsync(id, rec.Owner, sample, ct);
         return NoContent();
     }
 

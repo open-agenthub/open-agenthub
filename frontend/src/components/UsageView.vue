@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api.js'
-import { formatApproxCost, formatCost, formatTokens, formatTokensExact, percent, sessionCost, totalTokens } from '../lib/usage.js'
+import { formatApproxCost, formatBytes, formatCost, formatCpuSeconds, formatTokens, formatTokensExact, hasResources, percent, sessionCost, totalTokens } from '../lib/usage.js'
 
 const summary = ref(null)
 const rows = ref([])
@@ -92,6 +92,11 @@ async function saveLimit() {
           <div class="stat-value">{{ formatTokens(summaryTotal) }}</div>
           <div class="stat-sub">{{ formatTokens(summary?.inputTokens) }} in · {{ formatTokens(summary?.outputTokens) }} out · cache {{ formatTokens((summary?.cacheReadTokens || 0) + (summary?.cacheCreationTokens || 0)) }}</div>
         </div>
+        <div class="card stat" data-compute>
+          <div class="stat-label">Compute</div>
+          <div class="stat-value">{{ formatCpuSeconds(summary?.cpuSeconds) }}</div>
+          <div class="stat-sub">CPU time · network ↓{{ formatBytes(summary?.rxBytes) }} ↑{{ formatBytes(summary?.txBytes) }}</div>
+        </div>
       </div>
       <div class="card budget" data-usage-limit>
         <div class="budget-head">
@@ -127,11 +132,15 @@ async function saveLimit() {
       </div>
       <div class="card table">
         <div class="table-head">Cost by session</div>
-        <div class="thead"><span>SESSION</span><span>TOKENS</span><span>MIX</span><span class="right">COST</span></div>
+        <div class="thead"><span>SESSION</span><span>TOKENS</span><span>MIX</span><span>RESOURCES</span><span class="right">COST</span></div>
         <div v-for="r in sorted" :key="r.sessionId" class="trow">
           <span class="ttitle">{{ r.title || r.sessionId }}</span>
           <span class="tnum">{{ formatTokens(totalTokens(r)) }}</span>
           <span class="tbar"><span class="bar small"><span v-for="s in segments(r)" :key="s.key" class="seg" :style="{ width: s.pct + '%', background: s.color }"></span></span></span>
+          <span class="tnum tres" :title="hasResources(r) ? `CPU ${formatCpuSeconds(r.cpuSeconds)} · peak memory ${formatBytes(r.peakMemoryBytes)} · received ${formatBytes(r.rxBytes)} · sent ${formatBytes(r.txBytes)}` : ''">
+            <template v-if="hasResources(r)">{{ formatCpuSeconds(r.cpuSeconds) }} · {{ formatBytes(r.peakMemoryBytes) }} · ↓{{ formatBytes(r.rxBytes) }} ↑{{ formatBytes(r.txBytes) }}</template>
+            <template v-else>—</template>
+          </span>
           <span class="tnum right">
             <span v-if="sessionCost(r).approx" class="src-pill sub" title="Covered by a Claude subscription — estimated API-equivalent">sub</span>
             <span v-else class="src-pill api" title="Billed against an API key">api</span>
@@ -147,7 +156,7 @@ async function saveLimit() {
 .usage-page { flex: 1; min-width: 0; padding: 26px 28px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
 h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .sub { font-size: 14px; color: var(--muted-2); margin-top: 4px; }
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
 .stat { padding: 15px 17px; }
 .stat-label { font-size: 12px; color: var(--muted-2); }
 .stat-value { font-family: var(--display); font-size: 30px; font-weight: 700; margin-top: 5px; color: var(--strong); }
@@ -176,12 +185,13 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .lnum { font-family: var(--mono); color: var(--muted); }
 .table { overflow: hidden; }
 .table-head { padding: 13px 18px; font-weight: 700; font-size: 14px; color: var(--strong); }
-.thead { display: grid; grid-template-columns: 2.2fr 0.8fr 1.4fr 1fr; padding: 8px 18px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted-3); border-top: 1px solid var(--border); }
-.trow { display: grid; grid-template-columns: 2.2fr 0.8fr 1.4fr 1fr; padding: 11px 18px; border-top: 1px solid var(--border); align-items: center; }
+.thead { display: grid; grid-template-columns: 1.8fr 0.7fr 1fr 1.6fr 1fr; padding: 8px 18px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: var(--muted-3); border-top: 1px solid var(--border); }
+.trow { display: grid; grid-template-columns: 1.8fr 0.7fr 1fr 1.6fr 1fr; padding: 11px 18px; border-top: 1px solid var(--border); align-items: center; }
 .trow:hover { background: var(--hover); }
 .ttitle { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
 .tnum { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .tbar { display: flex; padding-right: 14px; }
+.tres { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
 .right { text-align: right; }
 .src-pill { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 7px; border-radius: 8px; margin-right: 6px; vertical-align: 1px; }
 .src-pill.sub { color: var(--sched); background: rgba(201, 184, 249, 0.12); }
@@ -190,5 +200,6 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .pad { padding: 14px 18px; }
 .err { color: var(--danger); font: 12px var(--mono); }
 code { font-family: var(--mono); font-size: 12px; }
-@media (max-width: 700px) { .stats { grid-template-columns: 1fr; } .thead, .trow { grid-template-columns: 2fr 1fr 1fr; } .tbar { display: none; } }
+@media (max-width: 700px) { .stats { grid-template-columns: 1fr; } .thead, .trow { grid-template-columns: 2fr 1fr 1fr; } .tbar, .tres { display: none; } }
+@media (max-width: 1100px) and (min-width: 701px) { .stats { grid-template-columns: repeat(2, 1fr); } }
 </style>

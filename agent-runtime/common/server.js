@@ -150,7 +150,68 @@ function createCommonServer(options = {}) {
   }
 
   function persistAll(done) {
+    postResources();
     syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistState(done))));
+  }
+
+  // ---- Pod resource snapshot (CPU/memory from the cgroup, network from /proc/net/dev) ----
+
+  function readNumberFile(file) {
+    try {
+      const value = parseInt(fs.readFileSync(file, 'utf8').trim(), 10);
+      return Number.isFinite(value) ? value : null;
+    } catch { return null; }
+  }
+
+  function readCpuSeconds() {
+    // cgroup v2: cpu.stat has "usage_usec <n>"; v1 fallback: cpuacct.usage in nanoseconds.
+    try {
+      const stat = fs.readFileSync('/sys/fs/cgroup/cpu.stat', 'utf8');
+      const match = /^usage_usec\s+(\d+)/m.exec(stat);
+      if (match) return parseInt(match[1], 10) / 1e6;
+    } catch {}
+    const v1 = readNumberFile('/sys/fs/cgroup/cpuacct/cpuacct.usage');
+    return v1 === null ? null : v1 / 1e9;
+  }
+
+  function readMemoryBytes() {
+    const v2 = readNumberFile('/sys/fs/cgroup/memory.current');
+    if (v2 !== null) return v2;
+    return readNumberFile('/sys/fs/cgroup/memory/memory.usage_in_bytes');
+  }
+
+  function readNetworkBytes() {
+    // /proc/net/dev: "iface: rx_bytes ... (8 cols) tx_bytes ..."; loopback is not traffic.
+    try {
+      let rx = 0, tx = 0, seen = false;
+      for (const line of fs.readFileSync('/proc/net/dev', 'utf8').split('\n')) {
+        const match = /^\s*([^:\s]+):\s*(\d+)(?:\s+\d+){7}\s+(\d+)/.exec(line);
+        if (!match || match[1] === 'lo') continue;
+        rx += parseInt(match[2], 10); tx += parseInt(match[3], 10);
+        seen = true;
+      }
+      return seen ? { rx, tx } : null;
+    } catch { return null; }
+  }
+
+  // Best-effort: reports cumulative pod counters; the hub adds up the deltas. Skipped
+  // entirely when none of the sources are readable (e.g. non-Linux dev environments).
+  function postResources(done) {
+    if (!callback || !token) return done && done();
+    const cpuSeconds = readCpuSeconds();
+    const memoryBytes = readMemoryBytes();
+    const network = readNetworkBytes();
+    if (cpuSeconds === null && memoryBytes === null && network === null) return done && done();
+    fetchImpl(callback + '/resources', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Agent-Token': token },
+      body: JSON.stringify({
+        cpuSeconds: cpuSeconds || 0,
+        memoryBytes: memoryBytes || 0,
+        rxBytes: network ? network.rx : 0,
+        txBytes: network ? network.tx : 0
+      })
+    }).catch(() => {}).finally(() => done && done());
   }
 
   function postStatus(status, done) {
