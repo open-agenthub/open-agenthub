@@ -1025,7 +1025,7 @@ public sealed class AgentHubOptions
     /// same name ("skill-library") overrides the injected one.</summary>
     public bool SkillLibraryMcp { get; set; } = true;
     /// <summary>Enable Claude Code OpenTelemetry metrics export (token/cost usage) from session pods.</summary>
-    public bool TelemetryEnabled { get; set; }
+    public bool TelemetryEnabled { get; set; } = true;
     /// <summary>Optional OTLP endpoint base override. Empty = derive from CallbackBaseUrl
     /// (the internal backend service); the OTEL SDK appends "/v1/metrics".</summary>
     public string TelemetryOtlpEndpoint { get; set; } = "";
