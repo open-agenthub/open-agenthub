@@ -161,7 +161,8 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       },
       fetch(url, options = {}) {
         requests.push({ url, options });
-        return Promise.resolve({ ok: true });
+        return Promise.resolve(
+          harnessOptions.fetchResponse?.(url, options) ?? { ok: true, text: async () => '' });
       },
       http,
       fileStore: {
@@ -377,6 +378,44 @@ test('common transport caps scrollback and replays it on WebSocket connect', () 
   socket.emit('message', Buffer.from(JSON.stringify({ type: 'resize', cols: 90, rows: 20 })));
   assert.deepEqual(harness.terminals[0].writes, ['hello']);
   assert.deepEqual(harness.terminals[0].resizes, [[90, 20]]);
+});
+
+test('a resumed session replays the history the hub kept, ahead of its own output', async () => {
+  const harness = createHarness(
+    {
+      AGENTHUB_RESUME: '1',
+      AGENTHUB_CALLBACK_URL: 'https://hub.invalid/internal/sessions/s1',
+      AGENTHUB_CALLBACK_TOKEN: 'agent-token'
+    },
+    {},
+    {
+      fetchResponse: url => url.endsWith('/scrollback')
+        ? { ok: true, text: async () => 'conversation before the resume' }
+        : { ok: true, text: async () => '' }
+    }
+  );
+  await tick();
+
+  const restore = harness.requests.find(request => request.url.endsWith('/scrollback'));
+  assert.equal(restore.options.headers['X-Agent-Token'], 'agent-token');
+  assert.notEqual(restore.options.method, 'PUT');
+
+  harness.terminals[0].emitData(' and after it');
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/?token=ignored');
+
+  assert.deepEqual(socket.sent, ['conversation before the resume and after it']);
+});
+
+test('a fresh session starts without waiting on the hub', () => {
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_URL: 'https://hub.invalid/internal/sessions/s1',
+    AGENTHUB_CALLBACK_TOKEN: 'agent-token'
+  });
+
+  // No resume, so the agent must be up synchronously and ask for nothing.
+  assert.equal(harness.terminals.length, 1);
+  assert.equal(harness.requests.filter(r => r.url.endsWith('/scrollback')).length, 0);
 });
 
 test('common transport routes /shell to a login shell in the selected working directory', () => {

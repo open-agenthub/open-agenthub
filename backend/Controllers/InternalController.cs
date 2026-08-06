@@ -152,6 +152,19 @@ public sealed class InternalController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>
+    /// Hands the stored scrollback back to a restarting agent. A resumed session runs in a
+    /// fresh pod with an empty buffer, so without this everything said before the resume is
+    /// missing from the replay every client gets on connect.
+    /// </summary>
+    [HttpGet("scrollback")]
+    public async Task<IActionResult> GetScrollback(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        return Content(await _svc.GetTranscriptAsync(rec.Owner, id, ct) ?? "", "text/plain");
+    }
+
     public record PermissionBody(string Tool, string? Input);
     public record AgentPolicyBody(string Tool, JsonElement Input);
 
