@@ -184,7 +184,7 @@ chat:
 # which aggregates them per session/owner for the "Usage" view. Agent->backend egress is
 # already permitted by the networkpolicy, so no extra egress rule is needed.
 telemetry:
-  enabled: false
+  enabled: true
   # Optional OTLP endpoint base override (the exporter appends "/v1/metrics").
   # Empty = the internal backend service (http://agenthub-backend.<ns>.svc.cluster.local/internal/otel).
   otlpEndpoint: ""
