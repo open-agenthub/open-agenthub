@@ -63,7 +63,10 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 
 {{- define "agenthub.browserImage" -}}
 {{- $repository := required "browser.image.repository is required" .Values.browser.image.repository | trimSuffix "/" -}}
-{{- $tag := .Values.browser.image.tag | default .Chart.AppVersion -}}
+{{- /* Follow the shared image.tag before falling back to the chart version: every other
+       component is pinned by image.tag, and a deployment tracking "latest" would otherwise
+       ask for a browser tag that is only published for tagged releases. */ -}}
+{{- $tag := .Values.browser.image.tag | default .Values.image.tag | default .Chart.AppVersion -}}
 {{- printf "%s:%s" $repository $tag -}}
 {{- end }}
 
