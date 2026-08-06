@@ -22,7 +22,7 @@ $enabled = Render
 foreach ($expected in @(
     'AgentHub__ControlNamespace: "agenthub-test"',
     'Browser__Enabled: "true"',
-    'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:0.4.0"',
+    'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:latest"',
     'Browser__PullPolicy: "IfNotPresent"',
     'Browser__CpuRequest: "250m"',
     'Browser__MemoryRequest: "512Mi"',
@@ -43,6 +43,21 @@ $custom = Render @(
     '--set', 'browser.extraEgressPorts[0]=8443'
 )
 Assert-Contains $custom 'Browser__Image: "registry.example.com/browser:pinned"'
+
+# The browser follows the shared image.tag like every other component, and only falls
+# back to the chart version when no tag is configured at all.
+$sharedTag = Render @('--set-string', 'image.tag=v9.9.9')
+Assert-Contains $sharedTag 'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:v9.9.9"'
+
+# Clearing image.tag means every agent image has to be given explicitly, so pin them all.
+$noTag = Render @(
+    '--set-string', 'image.tag=',
+    '--set-string', 'agent.images.claude=example/claude:test',
+    '--set-string', 'agent.images.codex=example/codex:test',
+    '--set-string', 'agent.images.cursor=example/cursor:test',
+    '--set-string', 'agent.images.openclaw=example/openclaw:test'
+)
+Assert-Contains $noTag 'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:0.4.0"'
 Assert-Contains $custom 'Browser__ExtraEgressPorts__0: "8443"'
 
 $disabled = Render @('--set', 'browser.enabled=false')
