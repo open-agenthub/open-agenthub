@@ -17,4 +17,11 @@ public sealed class BrowserOptions
     public int CookieCheckpointSeconds { get; set; } = 60;
     public int CookieStateMaxBytes { get; set; } = 1_048_576;
     public int[] ExtraEgressPorts { get; set; } = [];
+
+    /// <summary>
+    /// Ports on the session's own pod that the browser may open, so an agent can serve a
+    /// page it is building and look at it. Defaults cover the usual dev servers: Next/CRA,
+    /// Vite preview, Vite, python -m http.server, and a generic 8080.
+    /// </summary>
+    public int[] PreviewPorts { get; set; } = [3000, 4173, 5173, 8000, 8080];
 }

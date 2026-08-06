@@ -10,7 +10,15 @@ public sealed record BrowserPodResources(
     V1NetworkPolicy CdpIngress,
     V1NetworkPolicy CdpEgress,
     V1NetworkPolicy BrowserEgress,
-    V1NetworkPolicy VncIngress);
+    V1NetworkPolicy VncIngress,
+    V1NetworkPolicy? PreviewIngress = null,
+    V1NetworkPolicy? PreviewEgress = null)
+{
+    /// <summary>Every policy that belongs to this lease, in creation order.</summary>
+    public IEnumerable<V1NetworkPolicy> Policies =>
+        new[] { CdpIngress, CdpEgress, BrowserEgress, VncIngress, PreviewIngress, PreviewEgress }
+            .Where(policy => policy is not null)!;
+}
 
 public sealed record BrowserPodContext
 {
@@ -214,7 +222,46 @@ public static class BrowserPodSpecFactory
                 }
             ]);
 
-        return new BrowserPodResources(pod, cdpIngress, cdpEgress, browserEgress, vncIngress);
+        // Preview: let the browser open a server the agent runs in its own pod, so a page
+        // being built can be looked at without publishing it anywhere. The namespace denies
+        // this by default, so it takes a matching pair — egress on the browser, ingress on
+        // the agent — exactly like CDP in the other direction.
+        var previewPorts = (options.PreviewPorts ?? [])
+            .Where(port => port is > 0 and <= 65535)
+            .Distinct()
+            .Select(port => new V1NetworkPolicyPort(protocol: "TCP", port: port))
+            .ToList();
+        V1NetworkPolicy? previewIngress = null;
+        V1NetworkPolicy? previewEgress = null;
+        if (previewPorts.Count > 0)
+        {
+            previewIngress = Policy(
+                $"{name}-preview-in", context.Namespace, Labels(session.Id, "agent"), ["Ingress"], lease.LeaseId,
+                ingress:
+                [
+                    new V1NetworkPolicyIngressRule
+                    {
+                        FromProperty = [new V1NetworkPolicyPeer(podSelector: Selector(Labels(session.Id, "browser")))],
+                        Ports = previewPorts
+                    }
+                ]);
+            previewEgress = Policy(
+                $"{name}-preview-out", context.Namespace, Labels(session.Id, "browser"), ["Egress"], lease.LeaseId,
+                egress:
+                [
+                    new V1NetworkPolicyEgressRule
+                    {
+                        To = [new V1NetworkPolicyPeer(ipBlock: new V1IPBlock
+                        {
+                            Cidr = $"{agentPodIp}/{(agentPodIp.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork ? 32 : 128)}"
+                        })],
+                        Ports = previewPorts
+                    }
+                ]);
+        }
+
+        return new BrowserPodResources(
+            pod, cdpIngress, cdpEgress, browserEgress, vncIngress, previewIngress, previewEgress);
     }
 
     private static V1NetworkPolicy Policy(string name, string ns,

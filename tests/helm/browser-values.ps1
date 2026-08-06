@@ -33,6 +33,8 @@ foreach ($expected in @(
     'Browser__StartupTimeoutSeconds: "90"',
     'Browser__CookieCheckpointSeconds: "60"',
     'Browser__CookieStateMaxBytes: "1048576"',
+    'Browser__PreviewPorts__0: "3000"',
+    'Browser__PreviewPorts__2: "5173"',
     'resources: ["networkpolicies"]',
     'verbs: ["get", "list", "watch", "create", "delete"]'
 )) { Assert-Contains $enabled $expected }
