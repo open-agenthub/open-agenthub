@@ -64,6 +64,9 @@ data:
   {{ range $i, $port := .Values.browser.extraEgressPorts }}
   Browser__ExtraEgressPorts__{{ $i }}: {{ $port | quote }}
   {{ end }}
+  {{ range $i, $port := .Values.browser.previewPorts }}
+  Browser__PreviewPorts__{{ $i }}: {{ $port | quote }}
+  {{ end }}
   {{ end }}
   AgentHub__SkillLibraryMcp: {{ .Values.skillLibrary.mcp | default true | quote }}
   Embeddings__Endpoint: {{ .Values.skillLibrary.embeddings.endpoint | quote }}

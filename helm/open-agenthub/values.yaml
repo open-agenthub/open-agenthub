@@ -119,6 +119,10 @@ browser:
   cookieCheckpointSeconds: 60
   cookieStateMaxBytes: 1048576
   extraEgressPorts: []
+  # Ports on the session's own pod that the browser may open, so an agent can serve a page
+  # it is building and look at it (`browser_navigate` to http://$AGENTHUB_POD_IP:<port>).
+  # The defaults cover the usual dev servers; set [] to disallow it entirely.
+  previewPorts: [3000, 4173, 5173, 8000, 8080]
 
 # Kubernetes Secret data is base64-encoded, not automatically encrypted at rest.
 # Production clusters should enable API-server encryption at rest (preferably KMS),

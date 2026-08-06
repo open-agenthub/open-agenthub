@@ -153,6 +153,16 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_SESSION_ID", Value = record.Id },
             new() { Name = "AGENTHUB_CLAUDE_SESSION_ID", Value = record.AgentSessionId },
             new() { Name = "AGENTHUB_PORT", Value = context.Runtime.AgentPort.ToString() },
+            // The agent needs its own address to hand the browser a preview URL for a
+            // server it started itself; the browser reaches it by IP, not by name.
+            new()
+            {
+                Name = "AGENTHUB_POD_IP",
+                ValueFrom = new V1EnvVarSource
+                {
+                    FieldRef = new V1ObjectFieldSelector { FieldPath = "status.podIP" }
+                }
+            },
             new() { Name = "AGENTHUB_HAS_REPO", Value = hasRepo ? "1" : "0" },
             new() { Name = "AGENTHUB_WORKDIR", Value = repos.Count == 1 ? "/workspace/repo" : "/workspace" },
             new() { Name = "AGENTHUB_HAS_MCP", Value = hasMcp ? "1" : "0" },

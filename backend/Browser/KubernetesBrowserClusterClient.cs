@@ -30,10 +30,7 @@ public sealed class KubernetesBrowserClusterClient : IBrowserClusterClient
 
     public async Task CreateAsync(BrowserPodResources resources, CancellationToken ct = default)
     {
-        await CreatePolicyAsync(resources.CdpIngress, ct);
-        await CreatePolicyAsync(resources.CdpEgress, ct);
-        await CreatePolicyAsync(resources.BrowserEgress, ct);
-        await CreatePolicyAsync(resources.VncIngress, ct);
+        foreach (var policy in resources.Policies) await CreatePolicyAsync(policy, ct);
         try
         {
             await _k8s.CoreV1.CreateNamespacedPodAsync(resources.Pod,

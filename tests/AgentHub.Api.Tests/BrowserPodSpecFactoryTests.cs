@@ -141,6 +141,48 @@ public sealed class BrowserPodSpecFactoryTests
     private static BrowserLease Lease() => BrowserLease.Pending(
         "session-1", "lease-1", new byte[] { 1 });
 
+    [Fact]
+    public void Build_OpensThePreviewPortsBothWaysBetweenBrowserAndAgent()
+    {
+        var context = Context() with
+        {
+            Options = new BrowserOptions { PreviewPorts = [5173, 8000, 5173, 0, 70000] }
+        };
+
+        var resources = BrowserPodSpecFactory.Build(Session("session-1"), Lease(), context);
+
+        // Egress on the browser, to the agent's address.
+        Assert.NotNull(resources.PreviewEgress);
+        Assert.Equal("browser", resources.PreviewEgress!.Spec.PodSelector.MatchLabels["agenthub.dev/component"]);
+        var outbound = resources.PreviewEgress.Spec.Egress.Single();
+        Assert.Equal("10.0.0.8/32", outbound.To.Single().IpBlock.Cidr);
+        Assert.Equal(["5173", "8000"],outbound.Ports.Select(port => port.Port.Value).ToArray());
+
+        // Ingress on the agent, from the browser pod.
+        Assert.NotNull(resources.PreviewIngress);
+        Assert.Equal("agent", resources.PreviewIngress!.Spec.PodSelector.MatchLabels["agenthub.dev/component"]);
+        var inbound = resources.PreviewIngress.Spec.Ingress.Single();
+        Assert.Equal("browser", inbound.FromProperty.Single().PodSelector.MatchLabels["agenthub.dev/component"]);
+        Assert.Equal(["5173", "8000"],inbound.Ports.Select(port => port.Port.Value).ToArray());
+
+        // Both are lease-labelled, so the existing cleanup removes them with the rest.
+        Assert.Equal(6, resources.Policies.Count());
+        Assert.All(resources.Policies,
+            policy => Assert.Equal("true", policy.Metadata.Labels["agenthub.dev/browser-resource"]));
+    }
+
+    [Fact]
+    public void Build_OmitsPreviewPoliciesWhenPreviewIsDisabled()
+    {
+        var context = Context() with { Options = new BrowserOptions { PreviewPorts = [] } };
+
+        var resources = BrowserPodSpecFactory.Build(Session(), Lease(), context);
+
+        Assert.Null(resources.PreviewIngress);
+        Assert.Null(resources.PreviewEgress);
+        Assert.Equal(4, resources.Policies.Count());
+    }
+
     private static BrowserPodContext Context(string leaseToken = "lease-token") => new()
     {
         Namespace = "sessions-ns",
