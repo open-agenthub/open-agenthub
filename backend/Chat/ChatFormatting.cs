@@ -31,6 +31,38 @@ public static class ChatFormatting
     public static string Header(string sessionId, string title) => $"🤖 #{Tag(sessionId)} · {title}";
 
     /// <summary>
+    /// Recognizes a "start a session" chat command ("/new &lt;prompt&gt;" or "!new &lt;prompt&gt;",
+    /// case-insensitive) and extracts the prompt (may be empty — the caller answers with
+    /// a usage hint then). Anything else is not a new-command.
+    /// </summary>
+    public static bool TryParseNewCommand(string text, out string prompt)
+    {
+        prompt = "";
+        var trimmed = text.Trim();
+        foreach (var prefix in new[] { "/new", "!new" })
+        {
+            if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            if (trimmed.Length > prefix.Length && !char.IsWhiteSpace(trimmed[prefix.Length])) continue;
+            prompt = trimmed[prefix.Length..].Trim();
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Derives a session title from a /new prompt: its first line, trimmed to ~48 chars
+    /// at a word boundary. Falls back to a generic title for an all-whitespace prompt.
+    /// </summary>
+    public static string TitleFromPrompt(string prompt)
+    {
+        var line = prompt.Trim().Split('\n')[0].Trim();
+        if (line.Length == 0) return "Chat session";
+        if (line.Length <= 48) return line;
+        var cut = line.LastIndexOf(' ', 47);
+        return (cut > 20 ? line[..cut] : line[..47]).TrimEnd() + "…";
+    }
+
+    /// <summary>
     /// Splits text into chunks of at most maxLen, preferring line boundaries; a single
     /// line longer than maxLen is hard-split (never inside a surrogate pair). Blank lines
     /// at chunk boundaries and leading/trailing newlines may be dropped; content lines

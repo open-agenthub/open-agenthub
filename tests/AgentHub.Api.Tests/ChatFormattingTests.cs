@@ -102,4 +102,34 @@ public class ChatFormattingTests
         Assert.Contains("Bash", s);
         Assert.Contains("https://x/s/1", s);
     }
+
+    [Theory]
+    [InlineData("!new fix the login bug", true, "fix the login bug")]
+    [InlineData("/new fix the login bug", true, "fix the login bug")]
+    [InlineData("  !NEW   spaced out  ", true, "spaced out")]
+    [InlineData("!new", true, "")]                    // usage hint case
+    [InlineData("!newer sessions", false, "")]        // not the command
+    [InlineData("please !new thing", false, "")]      // must start the message
+    [InlineData("just a reply", false, "")]
+    public void TryParseNewCommand_RecognizesOnlyTheCommand(string text, bool expected, string expectedPrompt)
+    {
+        Assert.Equal(expected, ChatFormatting.TryParseNewCommand(text, out var prompt));
+        Assert.Equal(expectedPrompt, prompt);
+    }
+
+    [Fact]
+    public void TitleFromPrompt_UsesTheFirstLine_TrimmedAtAWordBoundary()
+    {
+        Assert.Equal("Fix the login bug", ChatFormatting.TitleFromPrompt("Fix the login bug\nSteps: …"));
+        Assert.Equal("Chat session", ChatFormatting.TitleFromPrompt("   \n  "));
+
+        var longTitle = ChatFormatting.TitleFromPrompt(
+            "Investigate why the usage dashboard sometimes shows zero for subscription sessions");
+        Assert.True(longTitle.Length <= 49);
+        Assert.EndsWith("…", longTitle);
+        Assert.DoesNotContain("  ", longTitle);
+
+        var unbreakable = ChatFormatting.TitleFromPrompt(new string('x', 100));
+        Assert.Equal(48, unbreakable.Length); // 47 chars + ellipsis
+    }
 }

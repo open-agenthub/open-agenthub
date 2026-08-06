@@ -7,7 +7,7 @@ namespace AgentHub.Api.Chat.Telegram;
 
 /// <summary>
 /// Telegram long-poll router: getUpdates in a loop, dispatching permission button
-/// callbacks, link/sessions/use/status commands and plain replies (typed into the
+/// callbacks, link/new/sessions/use/status commands and plain replies (typed into the
 /// bound session's terminal). Runs only when a bot token is configured. Community
 /// feature — no license required.
 /// </summary>
@@ -23,6 +23,7 @@ public sealed class TelegramUpdateService : BackgroundService
     private readonly UserDirectory _users;
     private readonly PermissionStore _permissions;
     private readonly ISessionService _sessions;
+    private readonly TelegramConversationFactory _conversations;
     private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
@@ -35,10 +36,11 @@ public sealed class TelegramUpdateService : BackgroundService
 
     public TelegramUpdateService(TelegramOptions opts, TelegramClient tg, ChatBindingStore bindings,
         ChatLinkCodeStore codes, UserDirectory users, PermissionStore permissions,
-        ISessionService sessions, WorkingIndicator indicator, IConfiguration cfg, ILogger<TelegramUpdateService> log)
+        ISessionService sessions, TelegramConversationFactory conversations, WorkingIndicator indicator,
+        IConfiguration cfg, ILogger<TelegramUpdateService> log)
     {
         _opts = opts; _tg = tg; _bindings = bindings; _codes = codes; _users = users;
-        _permissions = permissions; _sessions = sessions; _indicator = indicator;
+        _permissions = permissions; _sessions = sessions; _conversations = conversations; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
         _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
@@ -165,6 +167,9 @@ public sealed class TelegramUpdateService : BackgroundService
             case "/status" or "!status":
                 await HandleStatusAsync(u, ct);
                 return;
+            case "/new" or "!new":
+                await HandleNewAsync(u, arg, ct);
+                return;
             default:
                 await HandlePlainAsync(u, text, ct);
                 return;
@@ -261,6 +266,57 @@ public sealed class TelegramUpdateService : BackgroundService
 
         await _bindings.SetActiveAsync("telegram", u.ChatId, match!.SessionId, ct);
         await ReplyAsync(u, $"✅ Plain replies now go to #{ChatFormatting.Tag(match.SessionId)}.", ct);
+    }
+
+    /// <summary>
+    /// Starts a new autonomous session from chat: "/new &lt;prompt&gt;". Only the account
+    /// this chat is linked to can start sessions, and they run under that account —
+    /// same authority as a reply into a running session. The session's conversation
+    /// is opened here immediately (header + topic) and made the chat's active session.
+    /// </summary>
+    private async Task HandleNewAsync(TelegramUpdate u, string? prompt, CancellationToken ct)
+    {
+        var linked = await _users.GetByTelegramChatAsync(u.ChatId, ct);
+        if (linked is null)
+        {
+            await ReplyAsync(u, "This chat is not linked. Send /link <code> first.", ct);
+            return;
+        }
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            await ReplyAsync(u, "Send /new <prompt> — starts an autonomous session that works on the prompt.", ct);
+            return;
+        }
+
+        Models.SessionInfo info;
+        try
+        {
+            info = await _sessions.CreateSessionAsync(linked.Owner, new Models.CreateSessionRequest
+            {
+                Title = ChatFormatting.TitleFromPrompt(prompt),
+                Mode = Models.SessionMode.Autonomous,
+                Prompt = prompt.Trim()
+            }, ct);
+        }
+        catch (Exception e) when (e is ArgumentException or Services.SessionLimitExceededException
+                                    or Usage.UsageLimitExceededException)
+        {
+            await ReplyAsync(u, $"⚠️ Could not start the session: {e.Message}", ct);
+            return;
+        }
+
+        // Open the session's conversation right away (instead of waiting for its first
+        // question) and point the chat's plain replies at it.
+        var binding = await _conversations.CreateBindingAsync(info.Id, info.Title, linked.Owner, info.Mode, ct);
+        if (binding is not null)
+        {
+            await _bindings.SetActiveAsync("telegram", binding.ChatId, info.Id, ct);
+        }
+        else
+        {
+            var link = _frontendOrigin.Length == 0 ? "" : $"\n{_frontendOrigin}/s/{info.Id}";
+            await ReplyAsync(u, $"✅ Session #{ChatFormatting.Tag(info.Id)} started.{link}", ct);
+        }
     }
 
     /// <summary>Answers with the target session's current state.</summary>

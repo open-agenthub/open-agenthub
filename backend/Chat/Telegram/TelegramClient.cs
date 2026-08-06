@@ -149,6 +149,7 @@ public sealed class TelegramClient
             commands = new[]
             {
                 new { command = "link", description = "Link this chat to your AgentHub account" },
+                new { command = "new", description = "Start a new session: /new <prompt>" },
                 new { command = "sessions", description = "List sessions in this chat" },
                 new { command = "use", description = "Choose the session for plain replies" },
                 new { command = "status", description = "Show session status" }
