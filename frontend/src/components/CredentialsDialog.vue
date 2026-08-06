@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api, config } from '../api.js'
+import { docsUrl } from '../lib/docs.js'
 
 const emit = defineEmits(['close', 'accounts'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
@@ -60,7 +61,8 @@ async function save() {
         <div class="gh-text"><b>Tip for admins:</b> account connect (OAuth) is not configured on this instance.
         Register an OAuth app at your GitHub/GitLab and set <code>git.providers</code>
         (clientId/clientSecret) plus <code>git.stateKey</code> in the Helm values — users can then connect
-        their accounts here instead of pasting tokens.</div>
+        their accounts here instead of pasting tokens.
+        <a :href="docsUrl('git')" target="_blank" rel="noopener">Callback URL and scopes ↗</a></div>
       </div>
 
       <div class="field">

@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { api, config } from '../api.js'
 import { desktopNotifyEnabled, desktopNotifySupported, setDesktopNotify } from '../lib/desktop-notify.js'
+import { docsUrl } from '../lib/docs.js'
 
 const emit = defineEmits(['close'])
 // section: 'all' (legacy combined view) or 'notifications' | 'tokens' for a single settings tab.
@@ -284,7 +285,9 @@ const mcpSnippet = computed(() =>
       </section>
 
       <section v-if="showSlack && telegramEnabled" class="slack" data-section="telegram">
-        <h4>Telegram notifications</h4>
+        <h4>Telegram notifications
+          <a class="docs-link" :href="docsUrl('chat')" target="_blank" rel="noopener">Docs ↗</a>
+        </h4>
         <p class="note">
           Link your Telegram account (or a forum group) to get session updates and reply from Telegram.
           <span :class="chat.telegram.linked ? 'ok-text' : 'muted'" data-telegram-status>
@@ -313,7 +316,9 @@ const mcpSnippet = computed(() =>
       </section>
 
       <section v-if="showSlack && signalEnabled" class="slack" data-section="signal">
-        <h4>Signal notifications</h4>
+        <h4>Signal notifications
+          <a class="docs-link" :href="docsUrl('chat')" target="_blank" rel="noopener">Docs ↗</a>
+        </h4>
         <p class="note">
           Get session updates on Signal and reply from your phone. Your number is verified with a one-time code.
           <span :class="chat.signal.verified ? 'ok-text' : 'muted'" data-signal-status>
@@ -411,6 +416,8 @@ const mcpSnippet = computed(() =>
 .modal { width: 620px; max-width: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; }
 .modal h3 { margin: 0 0 6px; }
 .note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 16px; }
+.docs-link { margin-left: 10px; font-size: 11px; font-weight: 400; color: var(--muted-3); }
+.docs-link:hover { color: var(--accent); }
 .create { display: flex; gap: 10px; margin-bottom: 12px; }
 .create input { flex: 1; }
 .fresh { background: rgba(0,0,0,.25); border: 1px solid var(--accent); border-radius: 10px; padding: 12px; margin-bottom: 14px; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }

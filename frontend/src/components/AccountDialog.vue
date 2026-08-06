@@ -1,6 +1,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
+import { docsUrl } from '../lib/docs.js'
 
 const emit = defineEmits(['close'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
@@ -41,7 +42,10 @@ onMounted(() => {
   <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
     <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3>Account · Git connections</h3>
-      <p class="note">Connect a GitHub or GitLab account so sessions can list, clone and push your projects — no personal access token needed. Tokens are stored server-side and never shown.</p>
+      <p class="note">
+        Connect a GitHub or GitLab account so sessions can list, clone and push your projects — no personal access token needed. Tokens are stored server-side and never shown.
+        <a :href="docsUrl('git')" target="_blank" rel="noopener">Setting this up ↗</a>
+      </p>
 
       <p v-if="loading" class="muted">Loading…</p>
       <p v-else-if="!providers.length" class="muted">No Git providers are configured on this instance.</p>
