@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 FROM node:22-bookworm-slim
 # Cursor Agent CLI version discovered at image build from https://cursor.com/install
 # (symlink target under ~/.local/share/cursor-agent/versions/<version>/). Pin when known.
-ARG CURSOR_AGENT_VERSION=2026.07.23-e383d2b
+ARG CURSOR_AGENT_VERSION=2026.08.04-aaa8809
 ARG GH_VERSION=2.63.2
 ARG GLAB_VERSION=1.48.0
 ENV CURSOR_AGENT_VERSION=${CURSOR_AGENT_VERSION}
