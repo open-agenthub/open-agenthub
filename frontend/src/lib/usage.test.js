@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatApproxCost, formatTokens, formatTokensExact, formatCost, sessionCost, totalTokens, percent } from './usage.js'
+import { formatApproxCost, formatBytes, formatCpuSeconds, formatTokens, formatTokensExact, formatCost, hasResources, sessionCost, totalTokens, percent } from './usage.js'
 
 describe('formatTokens', () => {
   it('keeps small numbers exact', () => {
@@ -68,6 +68,52 @@ describe('sessionCost', () => {
 describe('formatApproxCost', () => {
   it('prefixes the cost with a tilde', () => {
     expect(formatApproxCost(1.5)).toBe('~$1.50')
+  })
+})
+
+describe('formatBytes', () => {
+  it('keeps small values in bytes', () => {
+    expect(formatBytes(0)).toBe('0 B')
+    expect(formatBytes(1023)).toBe('1023 B')
+  })
+  it('scales through the binary units', () => {
+    expect(formatBytes(1536)).toBe('1.5 KB')
+    expect(formatBytes(104857600)).toBe('100 MB')
+    expect(formatBytes(3.5 * 1024 ** 3)).toBe('3.5 GB')
+  })
+  it('handles undefined/garbage as 0', () => {
+    expect(formatBytes(undefined)).toBe('0 B')
+    expect(formatBytes(null)).toBe('0 B')
+  })
+})
+
+describe('formatCpuSeconds', () => {
+  it('shows plain seconds under a minute', () => {
+    expect(formatCpuSeconds(0)).toBe('0s')
+    expect(formatCpuSeconds(42.4)).toBe('42s')
+  })
+  it('switches to minutes and hours', () => {
+    expect(formatCpuSeconds(90)).toBe('1m 30s')
+    expect(formatCpuSeconds(600)).toBe('10m')
+    expect(formatCpuSeconds(3720)).toBe('1h 2m')
+    expect(formatCpuSeconds(7200)).toBe('2h')
+  })
+  it('clamps negatives and garbage to 0', () => {
+    expect(formatCpuSeconds(-5)).toBe('0s')
+    expect(formatCpuSeconds(undefined)).toBe('0s')
+  })
+})
+
+describe('hasResources', () => {
+  it('is true when any resource counter is set', () => {
+    expect(hasResources({ cpuSeconds: 1 })).toBe(true)
+    expect(hasResources({ peakMemoryBytes: 5 })).toBe(true)
+    expect(hasResources({ rxBytes: 1 })).toBe(true)
+    expect(hasResources({ txBytes: 1 })).toBe(true)
+  })
+  it('is false for old rows and null', () => {
+    expect(hasResources({ inputTokens: 10 })).toBe(false)
+    expect(hasResources(null)).toBe(false)
   })
 })
 

@@ -21,6 +21,15 @@ public sealed class SessionUsage
     public double EstimatedCostUsd { get; init; }
     /// <summary>Session auth mode snapshot ("Subscription" | "ApiKey" | "Auto"); null for old rows.</summary>
     public string? AuthMode { get; init; }
+    /// <summary>Total CPU time (seconds) consumed by the session's pods.</summary>
+    public double CpuSeconds { get; init; }
+    /// <summary>Memory footprint (bytes) at the last pod snapshot.</summary>
+    public long MemoryBytes { get; init; }
+    /// <summary>Highest memory footprint (bytes) seen across all snapshots.</summary>
+    public long PeakMemoryBytes { get; init; }
+    /// <summary>Total network bytes received/sent by the session's pods.</summary>
+    public long RxBytes { get; init; }
+    public long TxBytes { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
     public long TotalTokens => InputTokens + OutputTokens + CacheReadTokens + CacheCreationTokens;
@@ -43,6 +52,10 @@ public sealed class UsageSummary
     public double EstimatedCostUsd { get; init; }
     /// <summary>"Would have cost" — estimated cost of the subscription-covered sessions only.</summary>
     public double SubscriptionEstimatedCostUsd { get; init; }
+    /// <summary>Pod resource totals (see <see cref="SessionUsage"/>).</summary>
+    public double CpuSeconds { get; init; }
+    public long RxBytes { get; init; }
+    public long TxBytes { get; init; }
     public DateTime? From { get; init; }
     public DateTime? To { get; init; }
     public long TotalTokens => InputTokens + OutputTokens + CacheReadTokens + CacheCreationTokens;
@@ -60,6 +73,13 @@ public interface IUsageStore
     /// <c>user.id</c> is only a fallback. Returns false when no owner can be determined (row skipped).
     /// </summary>
     Task<bool> AddDeltaAsync(SessionUsageDelta delta, CancellationToken ct = default);
+
+    /// <summary>
+    /// Records a pod resource snapshot (cumulative counters + memory gauge) on the session's
+    /// aggregate row. The owner comes from the already-authorized session record, so no lookup
+    /// happens here. Counter resets (new pod after a resume) are handled as full deltas.
+    /// </summary>
+    Task AddResourceSampleAsync(string sessionId, string owner, SessionResourceSample sample, CancellationToken ct = default);
 
     Task<IReadOnlyList<SessionUsage>> ListByOwnerAsync(string owner, CancellationToken ct = default);
     Task<SessionUsage?> GetAsync(string owner, string sessionId, CancellationToken ct = default);
@@ -104,6 +124,17 @@ public sealed class PostgresUsageStore : IUsageStore
             -- Real-vs-estimated split (subscription sessions report cost 0; see ClaudePricing).
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS auth_mode TEXT;
+            -- Pod resource consumption (fed by POST /internal/sessions/{id}/resources).
+            -- cpu/rx/tx are session totals; the last_* columns hold the previous pod counter
+            -- snapshot so each report only adds its positive delta (resume = counter reset).
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS cpu_seconds       DOUBLE PRECISION NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS memory_bytes      BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS peak_memory_bytes BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rx_bytes          BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS tx_bytes          BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS last_cpu_seconds  DOUBLE PRECISION NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS last_rx_bytes     BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS last_tx_bytes     BIGINT NOT NULL DEFAULT 0;
             CREATE INDEX IF NOT EXISTS idx_session_usage_owner ON session_usage(owner);
             CREATE INDEX IF NOT EXISTS idx_session_usage_updated ON session_usage(updated_at);
             -- Monthly rollup: deltas are attributed to the month they arrive in, so limits are
@@ -168,6 +199,43 @@ public sealed class PostgresUsageStore : IUsageStore
         return true;
     }
 
+    public async Task AddResourceSampleAsync(string sessionId, string owner, SessionResourceSample sample, CancellationToken ct = default)
+    {
+        // Counters are cumulative per pod: add only the positive delta against the previous
+        // snapshot. A counter that went backwards means a fresh pod (resume), whose full
+        // value is the delta. Memory is a gauge — keep the latest value and the peak.
+        const string sql = """
+            INSERT INTO session_usage
+                (session_id, owner, cpu_seconds, memory_bytes, peak_memory_bytes, rx_bytes, tx_bytes,
+                 last_cpu_seconds, last_rx_bytes, last_tx_bytes, updated_at)
+            VALUES (@sid, @owner, @cpu, @mem, @mem, @rx, @tx, @cpu, @rx, @tx, now())
+            ON CONFLICT (session_id) DO UPDATE SET
+                cpu_seconds       = session_usage.cpu_seconds +
+                                    CASE WHEN @cpu >= session_usage.last_cpu_seconds
+                                         THEN @cpu - session_usage.last_cpu_seconds ELSE @cpu END,
+                rx_bytes          = session_usage.rx_bytes +
+                                    CASE WHEN @rx >= session_usage.last_rx_bytes
+                                         THEN @rx - session_usage.last_rx_bytes ELSE @rx END,
+                tx_bytes          = session_usage.tx_bytes +
+                                    CASE WHEN @tx >= session_usage.last_tx_bytes
+                                         THEN @tx - session_usage.last_tx_bytes ELSE @tx END,
+                memory_bytes      = @mem,
+                peak_memory_bytes = GREATEST(session_usage.peak_memory_bytes, @mem),
+                last_cpu_seconds  = @cpu,
+                last_rx_bytes     = @rx,
+                last_tx_bytes     = @tx,
+                updated_at        = now();
+            """;
+        await using var cmd = _db.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("sid", sessionId);
+        cmd.Parameters.AddWithValue("owner", owner);
+        cmd.Parameters.AddWithValue("cpu", sample.CpuSeconds);
+        cmd.Parameters.AddWithValue("mem", sample.MemoryBytes);
+        cmd.Parameters.AddWithValue("rx", sample.RxBytes);
+        cmd.Parameters.AddWithValue("tx", sample.TxBytes);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     private async Task<(string? Owner, string? AuthMode)> ResolveSessionAsync(string sessionId, CancellationToken ct)
     {
         await using var cmd = _db.CreateCommand("SELECT owner, auth_mode FROM sessions WHERE id = @id");
@@ -180,7 +248,8 @@ public sealed class PostgresUsageStore : IUsageStore
     private const string SelectBase = """
         SELECT u.session_id, u.owner, s.title,
                u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_creation_tokens,
-               u.cost_usd, u.estimated_cost_usd, u.auth_mode, u.created_at, u.updated_at
+               u.cost_usd, u.estimated_cost_usd, u.auth_mode, u.created_at, u.updated_at,
+               u.cpu_seconds, u.memory_bytes, u.peak_memory_bytes, u.rx_bytes, u.tx_bytes
         FROM session_usage u
         LEFT JOIN sessions s ON s.id = u.session_id
         """;
@@ -219,7 +288,10 @@ public sealed class PostgresUsageStore : IUsageStore
                    COALESCE(SUM(cost_usd), 0),
                    COALESCE(SUM(estimated_cost_usd), 0),
                    COALESCE(SUM(CASE WHEN auth_mode = 'ApiKey' OR cost_usd > 0
-                                     THEN 0 ELSE estimated_cost_usd END), 0)
+                                     THEN 0 ELSE estimated_cost_usd END), 0),
+                   COALESCE(SUM(cpu_seconds), 0),
+                   COALESCE(SUM(rx_bytes), 0),
+                   COALESCE(SUM(tx_bytes), 0)
             FROM session_usage {where}
             """;
         await using var cmd = _db.CreateCommand(sql);
@@ -239,6 +311,9 @@ public sealed class PostgresUsageStore : IUsageStore
             CostUsd = r.GetDouble(5),
             EstimatedCostUsd = r.GetDouble(6),
             SubscriptionEstimatedCostUsd = r.GetDouble(7),
+            CpuSeconds = r.GetDouble(8),
+            RxBytes = r.GetInt64(9),
+            TxBytes = r.GetInt64(10),
             From = from, To = to
         };
     }
@@ -264,6 +339,11 @@ public sealed class PostgresUsageStore : IUsageStore
         EstimatedCostUsd = r.GetDouble(8),
         AuthMode = r.IsDBNull(9) ? null : r.GetString(9),
         CreatedAt = r.GetDateTime(10),
-        UpdatedAt = r.GetDateTime(11)
+        UpdatedAt = r.GetDateTime(11),
+        CpuSeconds = r.GetDouble(12),
+        MemoryBytes = r.GetInt64(13),
+        PeakMemoryBytes = r.GetInt64(14),
+        RxBytes = r.GetInt64(15),
+        TxBytes = r.GetInt64(16)
     };
 }

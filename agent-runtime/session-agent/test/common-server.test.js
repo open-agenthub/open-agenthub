@@ -157,7 +157,11 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       },
       fs: {
         existsSync(file) { return exists.has(file); },
-        writeFileSync(file, data) { writes.push({ file, data }); }
+        writeFileSync(file, data) { writes.push({ file, data }); },
+        readFileSync(file) {
+          if (harnessOptions.files && file in harnessOptions.files) return harnessOptions.files[file];
+          throw new Error('ENOENT: ' + file);
+        }
       },
       fetch(url, options = {}) {
         requests.push({ url, options });
@@ -492,6 +496,63 @@ test('common transport backs up scrollback and posts Running and terminal status
     'completed output' + newline + '[agent] Session ended (code 0).' + newline);
   assert.equal(harness.requests[2].options.body, JSON.stringify({ status: 'Succeeded' }));
   assert.deepEqual(harness.exits, [0]);
+});
+
+test('common transport reports pod resource usage with the persistence heartbeat', () => {
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_URL: 'https://backend.invalid/internal/session',
+    AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback-token'
+  }, {}, {
+    files: {
+      '/sys/fs/cgroup/cpu.stat': 'usage_usec 2500000\nuser_usec 2000000\nsystem_usec 500000\n',
+      '/sys/fs/cgroup/memory.current': '104857600\n',
+      '/proc/net/dev': 'Inter-|   Receive                |  Transmit\n' +
+        ' face |bytes packets errs drop fifo frame compressed multicast|bytes packets errs drop fifo colls carrier compressed\n' +
+        '    lo:     999      9    0    0    0     0          0         0      999       9    0    0    0     0       0          0\n' +
+        '  eth0:    1000     10    0    0    0     0          0         0     2000      20    0    0    0     0       0          0\n'
+    }
+  });
+  harness.intervals[0].callback(); // the 30s persistence tick
+
+  const post = harness.requests.find(request => request.url.endsWith('/resources'));
+  assert.ok(post, 'expected a POST to /resources');
+  assert.equal(post.options.method, 'POST');
+  assert.equal(post.options.headers['X-Agent-Token'], 'synthetic-callback-token');
+  const body = JSON.parse(post.options.body);
+  assert.equal(body.cpuSeconds, 2.5);          // usage_usec -> seconds
+  assert.equal(body.memoryBytes, 104857600);
+  assert.equal(body.rxBytes, 1000);            // eth0 only; loopback is not traffic
+  assert.equal(body.txBytes, 2000);
+});
+
+test('common transport skips the resource report when no source is readable', () => {
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_URL: 'https://backend.invalid/internal/session',
+    AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback-token'
+  });
+  harness.intervals[0].callback();
+  assert.equal(harness.requests.filter(request => request.url.endsWith('/resources')).length, 0);
+});
+
+test('common transport falls back to cgroup v1 resource files', () => {
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_URL: 'https://backend.invalid/internal/session',
+    AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback-token'
+  }, {}, {
+    files: {
+      '/sys/fs/cgroup/cpuacct/cpuacct.usage': '3000000000\n', // ns
+      '/sys/fs/cgroup/memory/memory.usage_in_bytes': '52428800\n'
+    }
+  });
+  harness.intervals[0].callback();
+
+  const post = harness.requests.find(request => request.url.endsWith('/resources'));
+  assert.ok(post);
+  const body = JSON.parse(post.options.body);
+  assert.equal(body.cpuSeconds, 3);
+  assert.equal(body.memoryBytes, 52428800);
+  assert.equal(body.rxBytes, 0);
+  assert.equal(body.txBytes, 0);
 });
 
 test('common transport retries a missing resume once and then launches fresh', () => {

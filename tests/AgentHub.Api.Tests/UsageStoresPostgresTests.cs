@@ -4,6 +4,7 @@ using AgentHub.Api.Licensing;
 using AgentHub.Api.Models;
 using AgentHub.Api.Otel;
 using AgentHub.Api.Persistence;
+using AgentHub.Api.Usage;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Xunit;
@@ -73,6 +74,48 @@ public class UsageStoresPostgresTests
 
         Assert.Equal(2.5, await db.Usage.MonthToDateApiCostAsync("alice"), 6);
         Assert.Equal(0, await db.Usage.MonthToDateApiCostAsync("someone-else"), 6);
+    }
+
+    [PostgreSqlFact]
+    public async Task AddResourceSample_AccumulatesDeltas_AndHandlesPodRestarts()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("sess-res", "alice", AgentAuthMode.Subscription);
+
+        // First pod: two snapshots — totals follow the cumulative counters.
+        await db.Usage.AddResourceSampleAsync("sess-res", "alice",
+            new SessionResourceSample(CpuSeconds: 10, MemoryBytes: 500, RxBytes: 1_000, TxBytes: 100));
+        await db.Usage.AddResourceSampleAsync("sess-res", "alice",
+            new SessionResourceSample(CpuSeconds: 25, MemoryBytes: 300, RxBytes: 4_000, TxBytes: 250));
+
+        var row = Assert.Single(await db.Usage.ListByOwnerAsync("alice"));
+        Assert.Equal(25, row.CpuSeconds, 6);
+        Assert.Equal(300, row.MemoryBytes);   // gauge: latest
+        Assert.Equal(500, row.PeakMemoryBytes);
+        Assert.Equal(4_000, row.RxBytes);
+        Assert.Equal(250, row.TxBytes);
+
+        // Resume = fresh pod, counters restart from zero: the full value is the delta.
+        await db.Usage.AddResourceSampleAsync("sess-res", "alice",
+            new SessionResourceSample(CpuSeconds: 5, MemoryBytes: 800, RxBytes: 500, TxBytes: 50));
+
+        row = Assert.Single(await db.Usage.ListByOwnerAsync("alice"));
+        Assert.Equal(30, row.CpuSeconds, 6);
+        Assert.Equal(800, row.MemoryBytes);
+        Assert.Equal(800, row.PeakMemoryBytes);
+        Assert.Equal(4_500, row.RxBytes);
+        Assert.Equal(300, row.TxBytes);
+
+        // Resource samples and token deltas share the row without clobbering each other.
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "sess-res", InputTokens = 42 });
+        row = Assert.Single(await db.Usage.ListByOwnerAsync("alice"));
+        Assert.Equal(42, row.InputTokens);
+        Assert.Equal(30, row.CpuSeconds, 6);
+
+        var summary = await db.Usage.SummaryAsync("alice", null, null);
+        Assert.Equal(30, summary.CpuSeconds, 6);
+        Assert.Equal(4_500, summary.RxBytes);
+        Assert.Equal(300, summary.TxBytes);
     }
 
     // ---------------------------------------------------------------- group store

@@ -26,10 +26,11 @@ const summary = {
   sessionCount: 2,
   inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheCreationTokens: 0,
   costUsd: 1.25, apiCostUsd: 1.25,
-  estimatedCostUsd: 6.25, subscriptionEstimatedCostUsd: 5
+  estimatedCostUsd: 6.25, subscriptionEstimatedCostUsd: 5,
+  cpuSeconds: 90, rxBytes: 1048576, txBytes: 2048
 }
 const rows = [
-  { sessionId: 'api-1', title: 'API session', inputTokens: 100, costUsd: 1.25, estimatedCostUsd: 1.25, authMode: 'ApiKey', apiBilled: true },
+  { sessionId: 'api-1', title: 'API session', inputTokens: 100, costUsd: 1.25, estimatedCostUsd: 1.25, authMode: 'ApiKey', apiBilled: true, cpuSeconds: 90, memoryBytes: 100, peakMemoryBytes: 536870912, rxBytes: 1048576, txBytes: 2048 },
   { sessionId: 'sub-1', title: 'Sub session', inputTokens: 900, costUsd: 0, estimatedCostUsd: 5, authMode: 'Subscription', apiBilled: false }
 ]
 const limitOk = { personalLimitUsd: 10, effectiveLimitUsd: 10, source: 'personal', monthApiCostUsd: 1.25, blocked: false }
@@ -57,6 +58,17 @@ describe('UsageView', () => {
     expect(rowsText.find(t => t.includes('Sub session'))).toContain('sub')
     expect(rowsText.find(t => t.includes('API session'))).toContain('$1.25')
     expect(rowsText.find(t => t.includes('API session'))).toContain('api')
+  })
+
+  it('shows pod resource totals and per-session resources', async () => {
+    const wrapper = mount(UsageView)
+    await flushPromises()
+    const compute = wrapper.get('[data-compute]').text()
+    expect(compute).toContain('1m 30s')          // summary CPU time
+    expect(compute).toContain('↓1 MB ↑2 KB')     // summary network
+    const rowsText = wrapper.findAll('.trow').map(r => r.text())
+    expect(rowsText.find(t => t.includes('API session'))).toContain('1m 30s · 512 MB · ↓1 MB ↑2 KB')
+    expect(rowsText.find(t => t.includes('Sub session'))).toContain('—') // no resource data yet
   })
 
   it('shows the monthly budget with month-to-date spend', async () => {
