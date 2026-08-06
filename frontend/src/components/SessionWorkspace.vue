@@ -160,7 +160,8 @@ onBeforeUnmount(() => { stopDragging(); loadGeneration += 1; clearTimeout(presen
         <div class="companion-body">
           <FilesPane v-show="activeCompanion === 'files'" :session-id="session.id" :files="files" :selected-id="selectedId"
             :capabilities="fileCapabilities" :can-write="canWrite && !sharedToken" :shared-token="sharedToken"
-            :presented="isPresented" @select="selectFile" @close="closeFiles" @dismiss="dismissPresentation" />
+            :presented="isPresented" @select="selectFile" @close="closeFiles" @dismiss="dismissPresentation"
+            @uploaded="refreshFiles()" />
           <BrowserPane v-if="browserVisible" v-show="activeCompanion === 'browser'" :session="session" :can-write="canWrite" :shared-token="sharedToken" />
         </div>
       </div>

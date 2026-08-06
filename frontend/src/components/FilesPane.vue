@@ -1,7 +1,10 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { fileIcon, fileSize } from '../lib/files.js'
+import { createAttachmentQueue } from '../lib/attachments.js'
+import { api } from '../api.js'
 import FilePreview from './FilePreview.vue'
+import ChatAttachments from './ChatAttachments.vue'
 
 const props = defineProps({
   sessionId: { type: String, required: true },
@@ -12,15 +15,82 @@ const props = defineProps({
   sharedToken: { type: String, default: null },
   presented: { type: Boolean, default: false }
 })
-defineEmits(['select', 'close', 'dismiss'])
+const emit = defineEmits(['select', 'close', 'dismiss', 'uploaded'])
 const selected = computed(() => props.files.find(file => file.id === props.selectedId) || null)
+
+// Uploading is the same reserve/upload/complete flow the chat pane uses; the difference
+// is that nothing is attached to a turn afterwards — the file simply joins the session.
+const canUpload = computed(() => props.canWrite && !props.sharedToken)
+const dragging = ref(false)
+const fileInput = ref(null)
+const uploadVersion = ref(0)
+let queue = makeQueue()
+const uploadItems = computed(() => {
+  void uploadVersion.value
+  return queue.items.slice()
+})
+
+function makeQueue() {
+  return createAttachmentQueue({
+    sessionId: props.sessionId,
+    api,
+    onChange: items => {
+      uploadVersion.value += 1
+      // Show the file as soon as it lands rather than waiting for the next poll.
+      if (items.some(item => item.state === 'ready')) emit('uploaded')
+    }
+  })
+}
+
+function addFiles(files) {
+  if (canUpload.value && files?.length) queue.add(files)
+}
+
+function pick(event) {
+  addFiles(event.target.files)
+  event.target.value = ''
+}
+
+function drop(event) {
+  dragging.value = false
+  addFiles(event.dataTransfer?.files)
+}
+
+// A finished upload belongs to the session, so keep the rows only until they are listed.
+function clearFinished() {
+  queue.clearReady()
+  uploadVersion.value += 1
+}
+
+watch(() => props.sessionId, () => {
+  void queue.cancelAll()
+  queue = makeQueue()
+  uploadVersion.value += 1
+})
+onBeforeUnmount(() => { void queue.cancelAll() })
 </script>
 
 <template>
-  <section class="files-pane" data-files-pane>
+  <section class="files-pane" data-files-pane
+    :class="{ dropping: dragging && canUpload }"
+    @dragover.prevent="dragging = canUpload"
+    @dragleave="dragging = false"
+    @drop.prevent="drop">
     <aside class="file-rail">
-      <header><strong>Files</strong><span>{{ files.length }}</span></header>
-      <div v-if="!files.length" class="empty">Images and documents created by the agent appear here.</div>
+      <header>
+        <strong>Files</strong><span>{{ files.length }}</span>
+        <button v-if="canUpload" type="button" class="upload-btn" data-files-upload
+          title="Upload files to this session" @click="fileInput?.click()">Upload</button>
+      </header>
+      <input v-if="canUpload" ref="fileInput" type="file" multiple class="file-input"
+        data-files-input @change="pick" />
+      <div v-if="!files.length && !uploadItems.length" class="empty">
+        Images and documents created by the agent appear here.<template v-if="canUpload"> Drop files anywhere in this pane to add your own.</template>
+      </div>
+      <div v-if="uploadItems.length" class="uploads" data-files-uploads>
+        <ChatAttachments :items="uploadItems" :retry="queue.retry" :remove="queue.remove" />
+        <button type="button" class="clear-done" data-files-clear @click="clearFinished">Clear finished</button>
+      </div>
       <button v-for="file in files" :key="file.id" type="button" class="file-row"
         :class="{ active: file.id === selectedId }" :data-file="file.id" @click="$emit('select', file.id)">
         <span class="file-icon">{{ fileIcon(file) }}</span>
@@ -42,6 +112,13 @@ const selected = computed(() => props.files.find(file => file.id === props.selec
 
 <style scoped>
 .files-pane { display: grid; grid-template-columns: minmax(150px, 31%) minmax(0, 1fr); height: 100%; min-height: 0; color: #dce5f1; background: #0c1118; }
+.files-pane.dropping { outline: 2px dashed var(--accent); outline-offset: -6px; }
+.file-input { display: none; }
+.upload-btn { margin-left: auto; padding: 3px 10px; border: 1px solid #29303a; border-radius: 7px; background: none; color: #dce5f1; font-size: 11px; }
+.upload-btn:hover { border-color: var(--accent); color: var(--accent); }
+.uploads { padding: 8px 10px; border-bottom: 1px solid #29303a; }
+.clear-done { margin-top: 6px; padding: 2px 8px; border: none; background: none; color: #8b94a3; font-size: 11px; }
+.clear-done:hover { color: var(--accent); }
 .file-rail { min-width: 0; overflow-y: auto; border-right: 1px solid #29303a; background: #121821; }
 .file-rail > header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 10px; border-bottom: 1px solid #29303a; background: #171c24; font: 10px var(--mono); text-transform: uppercase; }
 .file-rail > header span { color: #738094; }

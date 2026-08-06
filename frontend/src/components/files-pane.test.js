@@ -1,7 +1,18 @@
 // @vitest-environment happy-dom
 import { describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import FilesPane from './FilesPane.vue'
+
+const mocks = vi.hoisted(() => ({
+  api: {
+    reserveSessionFile: vi.fn(),
+    uploadSessionFile: vi.fn(),
+    completeSessionFile: vi.fn(),
+    deleteSessionFile: vi.fn().mockResolvedValue({})
+  }
+}))
+
+vi.mock('../api.js', () => ({ api: mocks.api }))
 
 describe('FilesPane', () => {
   it('selects files and exposes local close and shared dismiss separately', async () => {
@@ -17,5 +28,36 @@ describe('FilesPane', () => {
     expect(wrapper.emitted('select')[0]).toEqual(['f1'])
     expect(wrapper.emitted('close')).toHaveLength(1)
     expect(wrapper.emitted('dismiss')).toHaveLength(1)
+  })
+
+  it('uploads dropped files and asks the workspace to refresh once they land', async () => {
+    mocks.api.reserveSessionFile.mockResolvedValue({
+      file: { id: 'f-new' }, upload: { kind: 'proxy', url: '/upload' }
+    })
+    mocks.api.uploadSessionFile.mockResolvedValue({})
+    mocks.api.completeSessionFile.mockResolvedValue({
+      id: 'f-new', name: 'notes.txt', mimeType: 'text/plain', size: 4
+    })
+
+    const wrapper = mount(FilesPane, {
+      props: { sessionId: 's1', files: [], capabilities: {}, canWrite: true },
+      global: { stubs: { FilePreview: true } }
+    })
+    const file = new File(['note'], 'notes.txt', { type: 'text/plain' })
+    await wrapper.get('[data-files-pane]').trigger('drop', { dataTransfer: { files: [file] } })
+    await flushPromises()
+
+    expect(mocks.api.reserveSessionFile).toHaveBeenCalledWith('s1', expect.objectContaining({ name: 'notes.txt' }))
+    expect(mocks.api.completeSessionFile).toHaveBeenCalledWith('s1', 'f-new')
+    expect(wrapper.emitted('uploaded')?.length).toBeGreaterThan(0)
+  })
+
+  it('offers no upload affordance in a shared read-only view', () => {
+    const wrapper = mount(FilesPane, {
+      props: { sessionId: 's1', files: [], capabilities: {}, canWrite: false, sharedToken: 'tok' },
+      global: { stubs: { FilePreview: true } }
+    })
+    expect(wrapper.find('[data-files-upload]').exists()).toBe(false)
+    expect(wrapper.find('[data-files-input]').exists()).toBe(false)
   })
 })
