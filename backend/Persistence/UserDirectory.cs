@@ -174,6 +174,23 @@ public sealed class UserDirectory : AgentHub.Api.Usage.IPersonalUsageLimitSource
     public Task<AppUser?> GetBySignalNumberAsync(string number, CancellationToken ct = default)
         => GetOneAsync("signal_number = @n", "n", number, ct);
 
+    /// <summary>
+    /// The user with this email (case-insensitive) — ONLY when it is unambiguous.
+    /// Emails carry no unique constraint, and callers use this to map an external
+    /// identity (e.g. a Slack account) to an owner: a duplicate email must yield
+    /// nobody rather than an arbitrary account.
+    /// </summary>
+    public async Task<AppUser?> GetUniqueByEmailAsync(string email, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand(
+            $"SELECT {AppUserColumns} FROM app_users WHERE lower(email) = lower(@e) LIMIT 2");
+        cmd.Parameters.AddWithValue("e", email);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        var user = ReadAppUser(r);
+        return await r.ReadAsync(ct) ? null : user; // ambiguous — refuse to guess
+    }
+
     public async Task SetSlackPrefsAsync(string owner, bool enabled, string? channelOverride, CancellationToken ct = default)
     {
         const string sql = """

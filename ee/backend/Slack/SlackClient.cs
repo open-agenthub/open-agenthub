@@ -126,6 +126,29 @@ public sealed class SlackClient
         catch (Exception ex) { _log.LogWarning(ex, "Slack DM resolution for {Email} failed", email); return null; }
     }
 
+    /// <summary>The workspace-verified email of a Slack user (users.info), or null.</summary>
+    public async Task<string?> GetUserEmailAsync(string userId, CancellationToken ct)
+    {
+        var c = Client(_opts.BotToken);
+        try
+        {
+            using var resp = await c.GetAsync($"https://slack.com/api/users.info?user={Uri.EscapeDataString(userId)}", ct);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            var root = doc.RootElement;
+            if (!root.TryGetProperty("ok", out var ok) || !ok.GetBoolean())
+            {
+                _log.LogInformation("Slack users.info for {User} failed: {Err}", userId,
+                    root.TryGetProperty("error", out var e) ? e.GetString() : "unknown");
+                return null;
+            }
+            return root.GetProperty("user").TryGetProperty("profile", out var profile) &&
+                   profile.TryGetProperty("email", out var email)
+                ? email.GetString()
+                : null;
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Slack users.info for {User} error", userId); return null; }
+    }
+
     /// <summary>Opens a Socket Mode connection and returns the wss URL to connect to.</summary>
     public async Task<string?> OpenSocketAsync(CancellationToken ct)
     {

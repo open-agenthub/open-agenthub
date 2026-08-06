@@ -9,7 +9,7 @@ namespace AgentHub.Api.Chat.Signal;
 /// <summary>
 /// Signal receive loop: keeps a WebSocket to signal-cli-rest-api's /v1/receive endpoint
 /// and routes inbound events — 👍/👎 reactions on permission prompts, a quoted "always"
-/// reply for allowAlways, !sessions/!use/!status commands, and plain replies (typed
+/// reply for allowAlways, !new/!sessions/!use/!status commands, and plain replies (typed
 /// into the bound session's terminal). Only verified, opted-in senders are handled;
 /// everything else is dropped. Community feature — no license required.
 /// SECURITY: phone numbers are PII — logs carry owner/session ids only, never the number.
@@ -153,6 +153,9 @@ public sealed class SignalReceiveService : BackgroundService
             case "!status":
                 await HandleStatusAsync(e, user, ct);
                 return;
+            case "!new":
+                await HandleNewAsync(e, user, parts.Length > 1 ? parts[1] : "", ct);
+                return;
             default:
                 await HandlePlainAsync(e, user, text, ct);
                 return;
@@ -230,6 +233,49 @@ public sealed class SignalReceiveService : BackgroundService
 
         await _bindings.SetActiveAsync("signal", e.Sender, match!.SessionId, ct);
         await _signal.SendAsync(e.Sender, $"✅ Plain replies now go to #{ChatFormatting.Tag(match.SessionId)}.", ct);
+    }
+
+    /// <summary>
+    /// Starts a new autonomous session from Signal: "!new &lt;prompt&gt;". The sender's
+    /// verified number IS the identity (checked in DispatchAsync), so the session runs
+    /// under their account — same authority as a reply into a running session. The
+    /// session's conversation opens here immediately and becomes the active session.
+    /// </summary>
+    private async Task HandleNewAsync(SignalEnvelope e, AppUser user, string prompt, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            await _signal.SendAsync(e.Sender, "Send !new <prompt> — starts an autonomous session that works on the prompt.", ct);
+            return;
+        }
+
+        Models.SessionInfo info;
+        try
+        {
+            info = await _sessions.CreateSessionAsync(user.Owner, new Models.CreateSessionRequest
+            {
+                Title = ChatFormatting.TitleFromPrompt(prompt),
+                Mode = Models.SessionMode.Autonomous,
+                Prompt = prompt.Trim()
+            }, ct);
+        }
+        catch (Exception ex) when (ex is ArgumentException or SessionLimitExceededException
+                                     or Usage.UsageLimitExceededException)
+        {
+            await _signal.SendAsync(e.Sender, $"⚠️ Could not start the session: {ex.Message}", ct);
+            return;
+        }
+
+        // Open the session's conversation right away (header mirrors the notifier's
+        // first contact) and point plain replies at it.
+        var header = ChatFormatting.Header(info.Id, info.Title) + $" ({info.Mode})\n" +
+                     (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"{_frontendOrigin}/s/{info.Id}\n") +
+                     "Quote a message of this session to answer it; plain replies go to the newest session. !status shows progress.";
+        var headerTs = await _signal.SendAsync(e.Sender, header, ct);
+        var binding = new ChatBinding("signal", info.Id, user.Owner, e.Sender, null, null, false);
+        await _bindings.UpsertAsync(binding, ct);
+        if (headerTs is not null) await _bindings.RecordMessageAsync("signal", e.Sender, headerTs, info.Id, ct);
+        await _bindings.SetActiveAsync("signal", e.Sender, info.Id, ct);
     }
 
     /// <summary>Answers with the target session's current state.</summary>

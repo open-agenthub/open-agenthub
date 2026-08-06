@@ -89,9 +89,10 @@ shift.
   every session. Set yourself a monthly API budget (admins can enforce org-wide limits
   in the Enterprise Edition).
 - **Push notifications** when your agent has a question (via webhook, e.g. n8n → Slack).
-- **Chat integrations** — session updates, replies, and permission approvals from your
-  phone via **Telegram or Signal** (free, community) — Slack is part of the Enterprise
-  edition — plus browser desktop notifications. [Setup below.](#chat-integrations)
+- **Chat integrations** — session updates, replies, permission approvals, and starting
+  new sessions (`/new <prompt>`) from your phone via **Telegram or Signal** (free,
+  community) — Slack is part of the Enterprise edition — plus browser desktop
+  notifications. [Setup below.](#chat-integrations)
 - **Auto approve** — let a session run its tools without asking, set when you create the
   session or flipped on a running one. [Details below.](#auto-approve)
 - **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
@@ -311,7 +312,8 @@ the bot as admin with the **Manage topics** permission, and send `/link <code>` 
 group — every session then gets its own topic. Note: **everyone in a linked group** can
 reply to sessions and approve permission prompts.
 
-Commands: `/sessions` (list), `/use <tag>` (route plain replies), `!status`. Plain
+Commands: `/new <prompt>` (start an autonomous session right from the chat),
+`/sessions` (list), `/use <tag>` (route plain replies), `!status`. Plain
 messages are typed into the active session's terminal. Only **one backend replica** may
 run Telegram long-polling (a second poller conflicts on `getUpdates`).
 </details>
@@ -336,8 +338,8 @@ run Telegram long-polling (a second poller conflicts on `getUpdates`).
 
 Reply routing: **quote** a session message to answer that session; plain replies go to
 the newest session (or the one picked with `!use`). React 👍/👎 on a permission prompt to
-allow/deny; quote-reply `always` for allow-always. Commands: `!sessions`, `!use <tag>`,
-`!status`.
+allow/deny; quote-reply `always` for allow-always. Commands: `!new <prompt>` (start an
+autonomous session), `!sessions`, `!use <tag>`, `!status`.
 </details>
 
 **Desktop notifications** (browser): a notification when a session waits for input or

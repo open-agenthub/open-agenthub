@@ -15,15 +15,16 @@ public sealed class TelegramNotifier : INotifier
     private readonly TelegramClient _tg;
     private readonly ChatBindingStore _bindings;
     private readonly UserDirectory _users;
+    private readonly TelegramConversationFactory _conversations;
     private readonly WorkingIndicator _indicator;
-    private readonly string _frontendOrigin;
     private readonly ILogger<TelegramNotifier> _log;
 
     public TelegramNotifier(TelegramOptions opts, TelegramClient tg, ChatBindingStore bindings,
-        UserDirectory users, WorkingIndicator indicator, IConfiguration cfg, ILogger<TelegramNotifier> log)
+        UserDirectory users, TelegramConversationFactory conversations, WorkingIndicator indicator,
+        ILogger<TelegramNotifier> log)
     {
-        _opts = opts; _tg = tg; _bindings = bindings; _users = users; _indicator = indicator;
-        _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
+        _opts = opts; _tg = tg; _bindings = bindings; _users = users; _conversations = conversations;
+        _indicator = indicator;
         _log = log;
     }
 
@@ -61,7 +62,7 @@ public sealed class TelegramNotifier : INotifier
 
             if (binding is null)
             {
-                binding = await CreateBindingAsync(s, ct);
+                binding = await _conversations.CreateBindingAsync(s.Id, s.Title, s.Owner, s.Mode, ct);
                 if (binding is null) return; // user not linked / opted out
             }
 
@@ -82,44 +83,6 @@ public sealed class TelegramNotifier : INotifier
             }
         }
         catch (Exception ex) { _log.LogWarning(ex, "Telegram notify failed for session {Id}", s.Id); }
-    }
-
-    /// <summary>
-    /// First contact: creates the session's conversation in the owner's linked chat —
-    /// a forum topic when the chat is a forum group (falling back to the main chat when
-    /// topic creation fails), plus a header message with the session link and reply
-    /// instructions. Null when the owner is not linked or opted out, or the header
-    /// could not be sent.
-    /// </summary>
-    private async Task<ChatBinding?> CreateBindingAsync(SessionRecord s, CancellationToken ct)
-    {
-        var user = await _users.GetAsync(s.Owner, ct);
-        if (user is not { TelegramEnabled: true, TelegramChatId: not null }) return null;
-
-        string? threadId = null;
-        if (user.TelegramForum)
-        {
-            threadId = await _tg.CreateForumTopicAsync(user.TelegramChatId, $"{s.Title} #{ChatFormatting.Tag(s.Id)}", ct);
-            if (threadId is null)
-                _log.LogWarning("Telegram forum topic creation failed for session {Id} — using the main chat", s.Id);
-        }
-
-        var header = ChatFormatting.Header(s.Id, s.Title) + $" ({s.Mode})\n" +
-                     (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"{_frontendOrigin}/s/{s.Id}\n") +
-                     (threadId is not null
-                         ? "Reply in this topic to answer. !status shows progress."
-                         : $"Reply to a message of this session (or /use {ChatFormatting.Tag(s.Id)}) to answer. !status shows progress.") +
-                     // Group chats carry chat-level authority (like Slack threads): make that visible.
-                     (user.TelegramForum ? "\nNote: everyone in this group can reply and approve permissions." : "");
-
-        var headerId = await _tg.SendMessageAsync(user.TelegramChatId, header, threadId, null, ct);
-        if (headerId is null) return null;
-
-        // Active=false per the store contract — SetActiveAsync flips it right after.
-        var binding = new ChatBinding("telegram", s.Id, s.Owner, user.TelegramChatId, threadId, null, false);
-        await _bindings.UpsertAsync(binding, ct);
-        await _bindings.RecordMessageAsync("telegram", binding.ChatId, headerId, s.Id, ct);
-        return binding;
     }
 
     /// <summary>True when the binding's target still is the owner's currently linked,

@@ -9,8 +9,11 @@ using System.Text;
 using System.Text.Json;
 using AgentHub.Api.Chat;
 using AgentHub.Api.Licensing;
+using AgentHub.Api.Models;
 using AgentHub.Api.Permissions;
+using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
+using AgentHub.Api.Usage;
 
 namespace AgentHub.Api.Ee.Slack;
 
@@ -27,6 +30,7 @@ public sealed class SlackSocketModeService : BackgroundService
     private readonly SlackThreadStore _threads;
     private readonly AgentHub.Api.Permissions.PermissionStore _permissions;
     private readonly ISessionService _sessions;
+    private readonly UserDirectory _users;
     private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
@@ -34,10 +38,11 @@ public sealed class SlackSocketModeService : BackgroundService
 
     public SlackSocketModeService(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
         SlackThreadStore threads, AgentHub.Api.Permissions.PermissionStore permissions,
-        ISessionService sessions, WorkingIndicator indicator, IConfiguration cfg, ILogger<SlackSocketModeService> log)
+        ISessionService sessions, UserDirectory users, WorkingIndicator indicator,
+        IConfiguration cfg, ILogger<SlackSocketModeService> log)
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _permissions = permissions;
-        _sessions = sessions; _indicator = indicator;
+        _sessions = sessions; _users = users; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
         _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
@@ -114,9 +119,16 @@ public sealed class SlackSocketModeService : BackgroundService
         // Ignore edits/deletes and anything the bot itself posted (avoid loops).
         if (ev.TryGetProperty("subtype", out _)) return;
         if (ev.TryGetProperty("bot_id", out _)) return;
-        if (!ev.TryGetProperty("thread_ts", out var tts) || tts.GetString() is not { } threadTs) return;
         var textReply = ev.TryGetProperty("text", out var txt) ? txt.GetString() ?? "" : "";
         if (string.IsNullOrWhiteSpace(textReply)) return;
+        if (!ev.TryGetProperty("thread_ts", out var tts) || tts.GetString() is not { } threadTs)
+        {
+            // Outside a session thread only "!new <prompt>" is understood — it starts a
+            // session and opens its thread right here.
+            if (ChatFormatting.TryParseNewCommand(textReply, out var prompt))
+                await HandleNewSessionAsync(ev, prompt, ct);
+            return;
+        }
 
         var thread = await _threads.GetByThreadTsAsync(threadTs, ct);
         if (thread is null) return;
@@ -149,6 +161,65 @@ public sealed class SlackSocketModeService : BackgroundService
             var channel = thread.Channel;
             _indicator.Start(thread.SessionId, (text, c) => _slack.UpdateMessageAsync(channel, statusTs, text, null, c));
         }
+    }
+
+    /// <summary>
+    /// Starts a new autonomous session from Slack: "!new &lt;prompt&gt;" anywhere the bot
+    /// can read. The sender is mapped to their AgentHub account via their
+    /// workspace-verified Slack email — the same identity the notifier trusts in the
+    /// opposite direction (email → DM). The session's thread is opened in the same
+    /// conversation, so replies and permission prompts continue there.
+    /// </summary>
+    private async Task HandleNewSessionAsync(JsonElement ev, string prompt, CancellationToken ct)
+    {
+        var channel = ev.TryGetProperty("channel", out var ch) ? ch.GetString() : null;
+        var slackUser = ev.TryGetProperty("user", out var us) ? us.GetString() : null;
+        if (channel is null || slackUser is null) return;
+
+        if (prompt.Length == 0)
+        {
+            await _slack.PostMessageAsync(channel, "Send `!new <prompt>` — starts an autonomous session that works on the prompt.", null, ct);
+            return;
+        }
+
+        var email = await _slack.GetUserEmailAsync(slackUser, ct);
+        var user = email is null ? null : await _users.GetUniqueByEmailAsync(email, ct);
+        if (user is null || !user.SlackEnabled)
+        {
+            await _slack.PostMessageAsync(channel,
+                ":warning: I can't map your Slack account to an AgentHub user (matching, unambiguous email required).", null, ct);
+            return;
+        }
+
+        SessionInfo info;
+        try
+        {
+            info = await _sessions.CreateSessionAsync(user.Owner, new CreateSessionRequest
+            {
+                Title = ChatFormatting.TitleFromPrompt(prompt),
+                Mode = SessionMode.Autonomous,
+                Prompt = prompt
+            }, ct);
+        }
+        catch (Exception e) when (e is ArgumentException or SessionLimitExceededException or UsageLimitExceededException)
+        {
+            await _slack.PostMessageAsync(channel, $":warning: Could not start the session: {Escape(e.Message)}", null, ct);
+            return;
+        }
+
+        // Open the session's thread right here (same header as the notifier's first
+        // contact) so replies in it drive the session from the start.
+        var header = $":robot_face: *Open AgentHub* · *{Escape(info.Title)}* (`{info.Mode}`)\n" +
+                     $"Session `{info.Id}` — owner `{user.Owner}`\n" +
+                     (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"<{_frontendOrigin}/s/{info.Id}|Open the session ↗>\n") +
+                     "_Reply in this thread to talk to the agent. !status shows progress._";
+        var ts = await _slack.PostMessageAsync(channel, header, null, ct);
+        if (ts is null)
+        {
+            _log.LogWarning("Slack header for session {Id} failed — the session runs without a thread", info.Id);
+            return;
+        }
+        await _threads.UpsertAsync(new SlackThread(info.Id, user.Owner, channel, ts, 0), ct);
     }
 
     /// <summary>Answers a "!status" thread reply with the session's current state.</summary>

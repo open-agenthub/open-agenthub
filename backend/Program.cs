@@ -139,6 +139,7 @@ var signalOpts = builder.Configuration.GetSection("Chat:Signal").Get<AgentHub.Ap
 builder.Services.AddSingleton(signalOpts);
 builder.Services.AddSingleton<AgentHub.Api.Chat.Signal.SignalClient>();
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatLinkCodeStore>();
+builder.Services.AddSingleton<AgentHub.Api.Chat.Telegram.TelegramConversationFactory>();
 builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Chat.Telegram.TelegramNotifier>();
 
 // Enterprise: Slack integration (only active with a valid license + tokens).
