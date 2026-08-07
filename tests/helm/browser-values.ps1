@@ -59,7 +59,7 @@ $noTag = Render @(
     '--set-string', 'agent.images.cursor=example/cursor:test',
     '--set-string', 'agent.images.openclaw=example/openclaw:test'
 )
-Assert-Contains $noTag 'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:0.6.0"'
+Assert-Contains $noTag 'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:0.6.1"'
 Assert-Contains $custom 'Browser__ExtraEgressPorts__0: "8443"'
 
 $disabled = Render @('--set', 'browser.enabled=false')
