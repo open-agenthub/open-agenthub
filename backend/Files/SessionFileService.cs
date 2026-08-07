@@ -151,7 +151,9 @@ public sealed class SessionFileService : ISessionFileService
             null,
             storageKind == SessionFileStorageKind.Pod ? null : DateTime.UtcNow.AddMinutes(_options.ReservationMinutes));
 
-        var upload = storageKind == SessionFileStorageKind.S3
+        // A presigned URL only helps when the browser can reach object storage. With the
+        // usual cluster-internal endpoint it cannot, so the bytes go through the API.
+        var upload = storageKind == SessionFileStorageKind.S3 && _artifacts.CanServeBrowsersDirectly
             ? new FileUploadDescriptor(
                 "presigned",
                 _artifacts.PresignPut(locator, TimeSpan.FromMinutes(_options.PresignMinutes)),
@@ -183,9 +185,32 @@ public sealed class SessionFileService : ISessionFileService
     {
         RequireWrite(actor);
         var file = await RequireFileAsync(actor.SessionId, fileId, ct);
-        if (file.StorageKind != SessionFileStorageKind.Pod || file.State != SessionFileState.Reserved)
+        if (file.State != SessionFileState.Reserved)
         {
             throw new SessionFileException("file_state_conflict");
+        }
+
+        // S3-backed files take the same route whenever storage is not reachable from the
+        // browser; the API streams them on rather than handing out a presigned URL.
+        if (file.StorageKind == SessionFileStorageKind.S3)
+        {
+            await using var limitedS3 = new SizeLimitedReadStream(content, file.Size);
+            try
+            {
+                await _artifacts.TryPutStreamAsync(
+                    file.StorageLocator, limitedS3, file.DeclaredMimeType, ct);
+            }
+            catch (InvalidDataException)
+            {
+                throw new SessionFileException("file_too_large");
+            }
+
+            if (!await _registry.TransitionAsync(actor.SessionId, file.Id,
+                    SessionFileState.Reserved, SessionFileState.Uploading, null, null, ct))
+            {
+                throw new SessionFileException("file_state_conflict");
+            }
+            return;
         }
 
         var liveSession = await GetLiveSessionAsync(actor, ct);
@@ -298,13 +323,21 @@ public sealed class SessionFileService : ISessionFileService
         var mimeType = file.DetectedMimeType ?? file.DeclaredMimeType;
         if (file.StorageKind == SessionFileStorageKind.S3)
         {
-            return new FileContentResult(
-                null,
-                _artifacts.PresignGet(
-                    file.StorageLocator, TimeSpan.FromMinutes(_options.PresignMinutes)),
-                mimeType,
-                file.Name,
-                file.Size);
+            // Redirecting is cheaper, but only works if the client can reach storage.
+            if (_artifacts.CanServeBrowsersDirectly)
+            {
+                return new FileContentResult(
+                    null,
+                    _artifacts.PresignGet(
+                        file.StorageLocator, TimeSpan.FromMinutes(_options.PresignMinutes)),
+                    mimeType,
+                    file.Name,
+                    file.Size);
+            }
+
+            var objectStream = await _artifacts.OpenReadAsync(file.StorageLocator, ct)
+                ?? throw new SessionFileException("file_content_expired");
+            return new FileContentResult(objectStream, null, mimeType, file.Name, file.Size);
         }
 
         var liveSession = await TryGetLiveSessionAsync(actor.Owner, actor.SessionId, ct);

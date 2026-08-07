@@ -33,9 +33,38 @@ public sealed class SessionFileServiceTests
         var result = await harness.Service.ReserveAsync(Actor,
             new ReserveSessionFileCommand("shot.png", "image/png", 8, null, "user"));
 
+        // Storage is only reachable from inside the cluster, so the bytes have to come
+        // through the API — a presigned URL would point at an address the browser cannot
+        // resolve.
         Assert.Equal(SessionFileStorageKind.S3, result.File.StorageKind);
+        Assert.Equal("proxy", result.Upload.Kind);
+        Assert.StartsWith("/api/sessions/", result.Upload.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Reserve_presigns_when_storage_is_reachable_from_the_browser()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        harness.Artifacts.CanServeBrowsersDirectly = true;
+
+        var result = await harness.Service.ReserveAsync(Actor,
+            new ReserveSessionFileCommand("shot.png", "image/png", 8, null, "user"));
+
         Assert.Equal("presigned", result.Upload.Kind);
         Assert.StartsWith("https://storage.test/", result.Upload.Url, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Proxied_upload_of_an_s3_file_stores_the_content_without_a_live_pod()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        var file = Reserved("f1", SessionFileStorageKind.S3);
+        await harness.Registry.InsertAsync(file);
+
+        await harness.Service.PutPodContentAsync(Actor, "f1", new MemoryStream([1, 2, 3, 4]));
+
+        Assert.Equal([1, 2, 3, 4], harness.Artifacts.Objects[file.StorageLocator]);
+        Assert.Equal(SessionFileState.Uploading, harness.Registry.Files["f1"].State);
     }
 
     [Fact]
@@ -118,6 +147,7 @@ public sealed class SessionFileServiceTests
     public async Task S3_read_returns_a_redirect_and_manager_delete_marks_the_file_deleted()
     {
         var harness = Harness(s3Configured: true, podPhase: "Paused");
+        harness.Artifacts.CanServeBrowsersDirectly = true;
         var file = Reserved("f1", SessionFileStorageKind.S3) with
         {
             State = SessionFileState.Ready,
@@ -132,6 +162,27 @@ public sealed class SessionFileServiceTests
         Assert.StartsWith("https://storage.test/", opened.RedirectUrl, StringComparison.Ordinal);
         Assert.Equal(SessionFileState.Deleted, harness.Registry.Files["f1"].State);
         Assert.Contains(file.StorageLocator, harness.Artifacts.Deleted);
+    }
+
+    [Fact]
+    public async Task S3_read_streams_through_the_api_when_storage_is_internal_only()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        var file = Reserved("f1", SessionFileStorageKind.S3) with
+        {
+            State = SessionFileState.Ready,
+            DetectedMimeType = "image/png",
+        };
+        await harness.Registry.InsertAsync(file);
+        harness.Artifacts.Objects[file.StorageLocator] = [7, 7, 7];
+
+        var opened = await harness.Service.OpenContentAsync(Actor, "f1");
+
+        Assert.Null(opened.RedirectUrl);
+        Assert.NotNull(opened.Content);
+        using var buffer = new MemoryStream();
+        await opened.Content!.CopyToAsync(buffer);
+        Assert.Equal([7, 7, 7], buffer.ToArray());
     }
 
     [Fact]
@@ -283,6 +334,15 @@ public sealed class SessionFileServiceTests
     private sealed class MemoryArtifacts(bool configured) : IArtifactStore
     {
         public bool IsConfigured => configured;
+        public bool CanServeBrowsersDirectly { get; set; }
+        public async Task<bool> TryPutStreamAsync(
+            string key, Stream content, string? contentType, CancellationToken ct = default)
+        {
+            using var buffer = new MemoryStream();
+            await content.CopyToAsync(buffer, ct);
+            Objects[key] = buffer.ToArray();
+            return true;
+        }
         public Dictionary<string, byte[]> Objects { get; } = new();
         public List<string> Deleted { get; } = new();
         public bool FailDelete { get; set; }

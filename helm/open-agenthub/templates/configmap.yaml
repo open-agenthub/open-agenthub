@@ -72,6 +72,9 @@ data:
   Embeddings__Endpoint: {{ .Values.skillLibrary.embeddings.endpoint | quote }}
   Embeddings__Model: {{ .Values.skillLibrary.embeddings.model | quote }}
   S3__ServiceUrl: {{ .Values.s3.serviceUrl | quote }}
+  {{- if .Values.s3.publicUrl }}
+  S3__PublicUrl: {{ .Values.s3.publicUrl | quote }}
+  {{- end }}
   S3__Region: {{ .Values.s3.region | quote }}
   S3__Bucket: {{ .Values.s3.bucket | quote }}
   S3__InsecureTls: {{ .Values.s3.insecureTls | default false | quote }}

@@ -401,6 +401,7 @@ test('a resumed session replays the history the hub kept, ahead of its own outpu
   await tick();
 
   const restore = harness.requests.find(request => request.url.endsWith('/scrollback'));
+  assert.ok(restore, 'the agent should ask the hub for the history it kept');
   assert.equal(restore.options.headers['X-Agent-Token'], 'agent-token');
   assert.notEqual(restore.options.method, 'PUT');
 
@@ -409,6 +410,30 @@ test('a resumed session replays the history the hub kept, ahead of its own outpu
   harness.runtime.webSocketServer.connect(socket, '/?token=ignored');
 
   assert.deepEqual(socket.sent, ['conversation before the resume and after it']);
+});
+
+test('a resumed session still starts when the history cannot be fetched', async () => {
+  const harness = createHarness(
+    {
+      AGENTHUB_RESUME: '1',
+      AGENTHUB_CALLBACK_URL: 'https://hub.invalid/internal/sessions/s1',
+      AGENTHUB_CALLBACK_TOKEN: 'agent-token'
+    },
+    {},
+    {
+      fetchResponse: url => url.endsWith('/scrollback')
+        ? { ok: false, status: 503, text: async () => '' }
+        : { ok: true, text: async () => '' }
+    }
+  );
+  await tick();
+
+  // Losing the history is bad; refusing to start the session over it would be worse.
+  assert.equal(harness.terminals.length, 1);
+  harness.terminals[0].emitData('fresh output');
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/?token=ignored');
+  assert.deepEqual(socket.sent, ['fresh output']);
 });
 
 test('a fresh session starts without waiting on the hub', () => {
