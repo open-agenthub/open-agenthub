@@ -47,4 +47,45 @@ describe('renderMarkdown', () => {
     expect(renderMarkdown('')).toBe('')
     expect(renderMarkdown(null)).toBe('')
   })
+
+  it('renders GFM pipe tables with alignment and inline markup in cells', () => {
+    const html = renderMarkdown(
+      '| Name | Count | Note |\n| --- | ---: | :---: |\n| **a** | 1 | x |\n| b | 22 | `y` |')
+    expect(html).toContain('<div class="md-table"><table>')
+    expect(html).toContain('<thead><tr><th>Name</th><th style="text-align:right">Count</th><th style="text-align:center">Note</th></tr></thead>')
+    expect(html).toContain('<td><strong>a</strong></td>')
+    expect(html).toContain('<td style="text-align:right">22</td>')
+    expect(html).toContain('<td style="text-align:center"><code>y</code></td>')
+  })
+
+  it('keeps escaped pipes inside table cells', () => {
+    const html = renderMarkdown('| a | b |\n| --- | --- |\n| x \\| y | z |')
+    expect(html).toContain('<td>x | y</td>')
+  })
+
+  it('does not treat a lone pipe line without separator as a table', () => {
+    const html = renderMarkdown('a | b\nplain text')
+    expect(html).not.toContain('<table>')
+    expect(html).toContain('a | b')
+  })
+
+  it('renders blockquotes, horizontal rules, and strikethrough', () => {
+    const html = renderMarkdown('> quoted **line**\n> second\n\n---\n\n~~gone~~ kept')
+    expect(html).toContain('<blockquote><p>quoted <strong>line</strong><br>second</p></blockquote>')
+    expect(html).toContain('<hr>')
+    expect(html).toContain('<del>gone</del> kept')
+  })
+
+  it('renders task lists with disabled checkboxes', () => {
+    const html = renderMarkdown('- [x] done\n- [ ] open')
+    expect(html).toContain('<li class="task"><input type="checkbox" disabled checked> done</li>')
+    expect(html).toContain('<li class="task"><input type="checkbox" disabled> open</li>')
+  })
+
+  it('marks mermaid fences for client-side rendering, escaped', () => {
+    const html = renderMarkdown('```mermaid\ngraph TD; A-->B & C<D\n```\n```js\nconst x = 1\n```')
+    expect(html).toContain('<pre class="md-code md-mermaid"><code>graph TD; A--&gt;B &amp; C&lt;D</code></pre>')
+    expect(html).toContain('<pre class="md-code"><code>const x = 1</code></pre>')
+    expect(html).not.toContain('md-mermaid"><code>const x')
+  })
 })
