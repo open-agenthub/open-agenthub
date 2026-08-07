@@ -43,11 +43,22 @@ public static class AgentTerminal
         using var ws = new ClientWebSocket();
         ws.Options.AddSubProtocol("tty");
         await ws.ConnectAsync(new Uri($"ws://{podIp}:{port}/"), ct);
-        // Submit the reply as if typed, followed by Enter.
-        var payload = JsonSerializer.Serialize(new { type = "input", data = text + "\r" });
-        await ws.SendAsync(Encoding.UTF8.GetBytes(payload), WebSocketMessageType.Text, true, ct);
+        // Submit the reply as if typed. The Enter goes out as its OWN write after a
+        // pause: Claude Code's TUI treats a fast multi-character burst as a paste, and
+        // a "\r" inside the same chunk becomes a newline IN the input box instead of
+        // submitting it — the text then sits in the prompt until someone hits Enter
+        // manually. A separate, delayed write is recognized as a real keypress.
+        await SendChunkAsync(ws, text, ct);
+        await Task.Delay(300, ct);
+        await SendChunkAsync(ws, "\r", ct);
         await Task.Delay(150, ct);
         try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None); } catch { }
+    }
+
+    private static Task SendChunkAsync(ClientWebSocket ws, string data, CancellationToken ct)
+    {
+        var payload = JsonSerializer.Serialize(new { type = "input", data });
+        return ws.SendAsync(Encoding.UTF8.GetBytes(payload), WebSocketMessageType.Text, true, ct);
     }
 
     // ANSI/terminal escape stripping. ESC (0x1b) and BEL (0x07) are built from char
