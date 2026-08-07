@@ -108,18 +108,49 @@ function createCommonServer(options = {}) {
 
   function restoreScrollback(done) {
     if (env.AGENTHUB_RESUME !== '1' || !callback || scrollback) return done();
-    let settled = false;
-    const finish = () => { if (!settled) { settled = true; done(); } };
-    // Never let a slow or unreachable hub hold up the agent: the session is more
-    // important than its history.
-    setTimeoutImpl(finish, 10000);
-    fetchImpl(callback + '/scrollback', { headers: { 'X-Agent-Token': token } })
-      .then(response => (response && response.ok ? response.text() : ''))
-      .then(text => {
-        if (typeof text === 'string' && text && !scrollback) remember(text);
-      })
-      .catch(() => {})
-      .finally(finish);
+    let started = false;
+    let stopped = false;
+    // Starting the agent and fetching the history are deliberately decoupled. The agent
+    // must come up even if the hub never answers, so a timer releases it; a reply that
+    // arrives later still seeds the buffer, as long as nothing has been written to it —
+    // prepending history behind live output would interleave the two.
+    const start = reason => {
+      if (started) return;
+      started = true;
+      console.log('[agent] History: ' + reason);
+      done();
+    };
+    setTimeoutImpl(() => start('not restored in time, starting without it'), 30000);
+
+    // Retried on purpose: this runs while the pod is still settling, and a single failed
+    // lookup used to lose the whole conversation silently.
+    const attempt = n => {
+      if (stopped) return;
+      fetchImpl(callback + '/scrollback', { headers: { 'X-Agent-Token': token } })
+        .then(response => {
+          if (!response || !response.ok) throw new Error('HTTP ' + (response && response.status));
+          return response.text();
+        })
+        .then(text => {
+          stopped = true;
+          if (typeof text === 'string' && text && !scrollback) {
+            remember(text);
+            start('restored ' + text.length + ' characters');
+          } else {
+            start(text ? 'arrived too late, session already writing' : 'nothing stored yet');
+          }
+        })
+        .catch(error => {
+          if (stopped) return;
+          if (n >= 4) {
+            stopped = true;
+            return start('unavailable after ' + n + ' attempts (' + error.message + ')');
+          }
+          console.log('[agent] History: attempt ' + n + ' failed (' + error.message + '), retrying');
+          setTimeoutImpl(() => attempt(n + 1), n * 1000);
+        });
+    };
+    attempt(1);
   }
 
   function backupScrollback(done) {

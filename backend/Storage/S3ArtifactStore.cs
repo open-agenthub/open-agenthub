@@ -14,8 +14,17 @@ public sealed record ArtifactObjectInfo(long Size, string? ContentType);
 public interface IArtifactStore
 {
     bool IsConfigured => true;
+    /// <summary>
+    /// Whether a browser can reach object storage directly, i.e. a presigned URL is worth
+    /// handing out. False for the common setup where the endpoint is a cluster-internal
+    /// address — the caller has to proxy the bytes through the API instead.
+    /// </summary>
+    bool CanServeBrowsersDirectly => false;
     string PresignPut(string key, TimeSpan ttl);
     string PresignGet(string key, TimeSpan ttl);
+    /// <summary>Streams content in. Returns false when no object storage is configured.</summary>
+    Task<bool> TryPutStreamAsync(string key, Stream content, string? contentType, CancellationToken ct = default)
+        => Task.FromResult(false);
     Task<string?> GetTextAsync(string key, CancellationToken ct = default);
     /// <summary>Writes text content. Returns false when no object storage is configured
     /// (NullArtifactStore) so callers can fall back to database storage.</summary>
@@ -70,9 +79,14 @@ public sealed class NullArtifactStore : IArtifactStore
 public sealed class S3ArtifactStore : IArtifactStore
 {
     private readonly IAmazonS3 _s3;
+    // Signs URLs against the externally reachable endpoint. Null when none is configured,
+    // which is what makes CanServeBrowsersDirectly false.
+    private readonly IAmazonS3? _publicS3;
     private readonly string _bucket;
 
     public bool IsConfigured => true;
+    public bool CanServeBrowsersDirectly => _publicS3 is not null;
+
     public S3ArtifactStore(IConfiguration cfg)
     {
         var s = cfg.GetSection("S3");
@@ -85,6 +99,17 @@ public sealed class S3ArtifactStore : IArtifactStore
         if (s.GetValue("InsecureTls", false)) s3cfg.HttpClientFactory = new InsecureHttpClientFactory();
 
         _s3 = new AmazonS3Client(s["AccessKey"], s["SecretKey"], s3cfg);
+
+        // ServiceUrl is where the backend talks to storage, which is usually a Service
+        // address no browser can resolve. Only a separately configured public endpoint
+        // makes presigned URLs usable by a client.
+        var publicUrl = s["PublicUrl"];
+        if (!string.IsNullOrWhiteSpace(publicUrl))
+        {
+            var publicCfg = new AmazonS3Config { ForcePathStyle = true, ServiceURL = publicUrl.Trim() };
+            if (!string.IsNullOrEmpty(s["Region"])) publicCfg.AuthenticationRegion = s["Region"];
+            _publicS3 = new AmazonS3Client(s["AccessKey"], s["SecretKey"], publicCfg);
+        }
     }
 
     /// <summary>Produces HttpClients that skip TLS server-certificate validation
@@ -100,7 +125,7 @@ public sealed class S3ArtifactStore : IArtifactStore
     public string PresignGet(string key, TimeSpan ttl) => Presign(key, HttpVerb.GET, ttl);
 
     private string Presign(string key, HttpVerb verb, TimeSpan ttl) =>
-        _s3.GetPreSignedURL(new GetPreSignedUrlRequest
+        (_publicS3 ?? _s3).GetPreSignedURL(new GetPreSignedUrlRequest
         {
             BucketName = _bucket,
             Key = key,
@@ -160,6 +185,21 @@ public sealed class S3ArtifactStore : IArtifactStore
             ContentBody = text,
             ContentType = "text/markdown; charset=utf-8"
         }, ct);
+        return true;
+    }
+
+    public async Task<bool> TryPutStreamAsync(
+        string key, Stream content, string? contentType, CancellationToken ct = default)
+    {
+        var request = new PutObjectRequest
+        {
+            BucketName = _bucket,
+            Key = key,
+            InputStream = content,
+            AutoCloseStream = false
+        };
+        if (!string.IsNullOrWhiteSpace(contentType)) request.ContentType = contentType;
+        await _s3.PutObjectAsync(request, ct);
         return true;
     }
 

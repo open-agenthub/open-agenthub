@@ -151,7 +151,13 @@ skillLibrary:
 
 # S3/MinIO for session state, scrollback, and artifacts. Empty serviceUrl = AWS endpoints.
 s3:
+  # Where the backend reaches object storage. Usually a cluster-internal address.
   serviceUrl: ""
+  # Where a *browser* reaches the same storage, if it can at all — e.g. an ingress in
+  # front of MinIO. Leave empty (the default) and file uploads and downloads are streamed
+  # through the API instead, which is the only thing that works with an internal endpoint.
+  # Setting it hands out presigned URLs again and keeps the traffic off the backend.
+  publicUrl: ""
   region: us-east-1
   bucket: agenthub
   accessKey: ""
