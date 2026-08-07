@@ -1,8 +1,9 @@
 <script setup>
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { getSessionFileContent, getSharedSessionFileContent } from '../api.js'
 import { previewKind } from '../lib/files.js'
 import { renderMarkdown } from '../lib/markdown.js'
+import { renderMermaidBlocks } from '../lib/mermaid.js'
 
 const props = defineProps({
   sessionId: { type: String, required: true },
@@ -15,6 +16,7 @@ const MAX_TEXT_BYTES = 1024 * 1024
 const loading = ref(false)
 const error = ref('')
 const objectUrl = ref('')
+const markdownEl = ref(null)
 const text = ref('')
 const truncated = ref(false)
 let generation = 0
@@ -53,6 +55,7 @@ async function load() {
 }
 
 watch(() => [props.file?.id, props.file?.previewFileId, props.file?.state, props.file?.previewState, props.sharedToken], load, { immediate: true })
+watch(text, () => nextTick(() => { if (markdownEl.value) void renderMermaidBlocks(markdownEl.value) }))
 onBeforeUnmount(() => { generation += 1; releaseUrl() })
 </script>
 
@@ -71,7 +74,7 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
     <iframe v-else-if="['pdf', 'office-pdf'].includes(kind) && objectUrl" :src="objectUrl" sandbox
       :title="`Preview of ${file.name}`" data-file-preview="pdf"></iframe>
     <div v-else-if="kind === 'markdown'" class="document markdown" data-file-preview="markdown">
-      <div class="md" v-html="renderMarkdown(text)"></div>
+      <div ref="markdownEl" class="md" v-html="renderMarkdown(text)"></div>
       <p v-if="truncated" class="truncated">Preview limited to the first 1 MiB.</p>
     </div>
     <div v-else-if="kind === 'text'" class="document" data-file-preview="text">
@@ -98,5 +101,15 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
 .md :deep(h3), .md :deep(h4), .md :deep(h5) { margin: 20px 0 10px; color: #f2f6fb; }
 .md :deep(code) { font-family: var(--mono); }
 .md :deep(pre) { padding: 12px; overflow: auto; border: 1px solid #293544; border-radius: 8px; background: #111923; }
+.md :deep(.md-table) { overflow-x: auto; margin: 0 0 10px; }
+.md :deep(table) { border-collapse: collapse; font-size: 13px; }
+.md :deep(th), .md :deep(td) { border: 1px solid #293544; padding: 6px 12px; text-align: left; vertical-align: top; }
+.md :deep(th) { background: #111923; color: #f2f6fb; font-weight: 600; }
+.md :deep(blockquote) { margin: 0 0 10px; padding: 2px 14px; border-left: 3px solid #354255; color: #8692a2; }
+.md :deep(hr) { border: none; border-top: 1px solid #293544; margin: 16px 0; }
+.md :deep(li.task) { list-style: none; margin-left: -18px; }
+.md :deep(li.task input) { margin-right: 6px; vertical-align: -1px; accent-color: var(--accent); }
+.md :deep(.md-mermaid-svg) { border: 1px solid #293544; border-radius: 8px; background: #111923; padding: 14px; margin: 0 0 10px; overflow-x: auto; display: flex; justify-content: center; }
+.md :deep(.md-mermaid-svg svg) { max-width: 100%; height: auto; }
 .truncated { margin-top: 18px; color: var(--warn); font-size: 11px; }
 </style>

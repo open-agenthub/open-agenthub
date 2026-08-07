@@ -16,6 +16,7 @@
     "@novnc/novnc": "1.7.0",
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
+    "mermaid": "^11.16.1",
     "oidc-client-ts": "^3.1.0",
     "vue": "^3.4.0"
   },
