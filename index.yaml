@@ -2,6 +2,17 @@ apiVersion: v1
 entries:
   open-agenthub:
   - apiVersion: v2
+    appVersion: 0.6.1
+    created: "2026-08-07T05:47:45.312623987Z"
+    description: Open AgentHub – platform for running and controlling coding agents
+      in Kubernetes
+    digest: 8a2f8890da9a1114c0d636c24a9404209dc4d960e275595710055d4599f957eb
+    name: open-agenthub
+    type: application
+    urls:
+    - https://github.com/open-agenthub/open-agenthub/releases/download/open-agenthub-0.6.1/open-agenthub-0.6.1.tgz
+    version: 0.6.1
+  - apiVersion: v2
     appVersion: 0.5.0
     created: "2026-08-06T21:44:41.798331431Z"
     description: Open AgentHub – platform for running and controlling coding agents
@@ -78,4 +89,4 @@ entries:
     urls:
     - https://github.com/open-agenthub/open-agenthub/releases/download/open-agenthub-0.1.0/open-agenthub-0.1.0.tgz
     version: 0.1.0
-generated: "2026-08-06T21:44:41.798353464Z"
+generated: "2026-08-07T05:47:45.312640853Z"
