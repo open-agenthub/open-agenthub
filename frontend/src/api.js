@@ -124,6 +124,8 @@ export const api = {
   storeCredentials: (data) => req('PUT', '/credentials', data),
   // Which credential fields have a stored value (booleans only, never values).
   getCredentialStatus: () => req('GET', '/credentials'),
+  // GDPR: irreversibly deletes the caller's account and all its data.
+  deleteAccount: (confirm) => req('DELETE', `/account?confirm=${encodeURIComponent(confirm)}`),
   // Personal API tokens for driving sessions remotely.
   listApiTokens: () => req('GET', '/tokens'),
   // Returns the plaintext token exactly once (in the `token` field).

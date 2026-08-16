@@ -31,6 +31,9 @@ public interface IArtifactStore
     Task<bool> TryPutTextAsync(string key, string text, CancellationToken ct = default) => Task.FromResult(false);
     /// <summary>Best-effort delete; missing objects are not an error.</summary>
     Task DeleteAsync(string key, CancellationToken ct = default);
+    /// <summary>Deletes every object under the prefix (account purge). No-op when no
+    /// object storage is configured.</summary>
+    Task DeleteByPrefixAsync(string prefix, CancellationToken ct = default) => Task.CompletedTask;
     Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default) => Task.FromResult<ArtifactObjectInfo?>(null);
     Task<Stream?> OpenReadAsync(string key, CancellationToken ct = default) => Task.FromResult<Stream?>(null);
 
@@ -212,6 +215,25 @@ public sealed class S3ArtifactStore : IArtifactStore
         catch (AmazonS3Exception e) when (IsNotFound(e))
         {
         }
+    }
+
+    public async Task DeleteByPrefixAsync(string prefix, CancellationToken ct = default)
+    {
+        // An empty prefix would wipe the whole bucket — refuse.
+        if (string.IsNullOrWhiteSpace(prefix)) throw new ArgumentException("Prefix is required.", nameof(prefix));
+        var request = new ListObjectsV2Request { BucketName = _bucket, Prefix = prefix };
+        ListObjectsV2Response page;
+        do
+        {
+            page = await _s3.ListObjectsV2Async(request, ct);
+            if (page.S3Objects is { Count: > 0 })
+                await _s3.DeleteObjectsAsync(new DeleteObjectsRequest
+                {
+                    BucketName = _bucket,
+                    Objects = page.S3Objects.Select(o => new KeyVersion { Key = o.Key }).ToList()
+                }, ct);
+            request.ContinuationToken = page.NextContinuationToken;
+        } while (page.IsTruncated == true);
     }
 
     private static bool IsNotFound(AmazonS3Exception exception) =>
