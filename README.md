@@ -96,6 +96,10 @@ shift.
 - **Auto approve** — let a session run its tools without asking, set when you create the
   session or flipped on a running one. [Details below.](#auto-approve)
 - **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
+- **Account deletion (GDPR)** — every user can irreversibly delete their account under
+  **Settings → Profile**: all sessions, files, credentials, git connections, skills,
+  MCP servers, usage history and chat links are purged from the database, Kubernetes
+  secrets and object storage. (The identity at the OIDC provider itself is not touched.)
 - **Security by default** — unprivileged pods, default-deny network policies, per-user
   secrets, no Kubernetes service-account token in agent pods, and only the selected
   provider credential mounted or injected. [Details below.](#security)

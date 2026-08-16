@@ -25,4 +25,7 @@ public interface ISessionService
     Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default);
     Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default);
     Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default);
+    /// <summary>Deletes every per-user Kubernetes secret (credentials, provider logins,
+    /// git OAuth tokens) — part of the account purge. Default no-op for test doubles.</summary>
+    Task DeleteUserSecretsAsync(string owner, CancellationToken ct = default) => Task.CompletedTask;
 }

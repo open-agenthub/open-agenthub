@@ -124,6 +124,10 @@ builder.Services.AddHostedService<AgentHub.Api.Licensing.SeatUsageReporter>();
 // one pod must propagate to the rest — this poller re-reads the store every ~30s.
 builder.Services.AddHostedService<AgentHub.Api.Licensing.LicenseRefresher>();
 
+// GDPR account deletion: full per-user data purge (DB, K8s secrets, S3).
+builder.Services.AddSingleton<AgentHub.Api.Persistence.IAccountPurgeStore, AgentHub.Api.Persistence.AccountPurgeStore>();
+builder.Services.AddSingleton<AgentHub.Api.Services.AccountDeletionService>();
+
 // Community chat integrations (Telegram/Signal): session-to-conversation bindings.
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatBindingStore>();
 builder.Services.AddSingleton<AgentHub.Api.Chat.WorkingIndicator>();

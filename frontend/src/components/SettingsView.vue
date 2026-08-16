@@ -1,6 +1,6 @@
 <script setup>
 import { computed, ref } from 'vue'
-import { auth, config } from '../api.js'
+import { api, auth, config } from '../api.js'
 import AccountDialog from './AccountDialog.vue'
 import CredentialsDialog from './CredentialsDialog.vue'
 import SettingsDialog from './SettingsDialog.vue'
@@ -36,6 +36,27 @@ const adminTabs = [
   { key: 'license', label: 'License' }
 ]
 const active = ref(props.initialTab)
+
+// GDPR account deletion: type-to-confirm, no popup (inline card).
+const deleteConfirm = ref('')
+const deleteBusy = ref(false)
+const deleteError = ref('')
+const deleteArmed = computed(() => deleteConfirm.value === auth.user)
+
+async function deleteAccount() {
+  if (!deleteArmed.value || deleteBusy.value) return
+  deleteBusy.value = true
+  deleteError.value = ''
+  try {
+    await api.deleteAccount(auth.user)
+    // The account is gone — end the session. Without auth, just reload into dev mode.
+    if (auth.enabled) auth.logout()
+    else location.assign('/')
+  } catch (e) {
+    deleteError.value = String(e.message || e)
+    deleteBusy.value = false
+  }
+}
 </script>
 
 <template>
@@ -68,6 +89,21 @@ const active = ref(props.initialTab)
             <button v-if="auth.enabled" class="danger" @click="auth.logout()">Sign out</button>
             <span v-else class="pmeta">Local development mode — authentication is disabled.</span>
           </div>
+        </div>
+        <div class="card danger-card" data-danger-zone>
+          <div class="dz-title">Danger zone</div>
+          <p class="pmeta">Deleting your account removes <b>all</b> of your data permanently:
+          sessions and their files, credentials, git connections, skills, MCP servers,
+          usage history and chat links. This cannot be undone. Your sign-in identity at the
+          identity provider is not affected — signing in again starts an empty account.</p>
+          <label class="dz-label" for="delete-confirm">Type your username <b>{{ auth.user }}</b> to confirm</label>
+          <div class="dz-row">
+            <input id="delete-confirm" v-model="deleteConfirm" data-delete-confirm
+              :placeholder="auth.user" autocomplete="off" />
+            <button class="danger" data-delete-account :disabled="!deleteArmed || deleteBusy"
+              @click="deleteAccount">{{ deleteBusy ? 'Deleting…' : 'Delete account permanently' }}</button>
+          </div>
+          <p v-if="deleteError" class="dz-err" data-delete-error>{{ deleteError }}</p>
         </div>
       </div>
       <AccountDialog v-else-if="active === 'account'" embedded />
@@ -107,5 +143,11 @@ const active = ref(props.initialTab)
 .pmeta { font-size: 13px; color: var(--muted-2); margin-top: 2px; }
 .plabel { font-size: 12px; color: var(--muted-2); margin-bottom: 4px; }
 .pvalue { font-family: var(--mono); font-size: 13px; }
+.danger-card { margin-top: 18px; padding: 18px 20px; border-color: var(--danger); }
+.dz-title { font-weight: 700; color: var(--danger); margin-bottom: 6px; }
+.dz-label { display: block; font-size: 12px; color: var(--muted-2); margin: 12px 0 6px; }
+.dz-row { display: flex; gap: 10px; align-items: center; }
+.dz-row input { flex: 1; font-family: var(--mono); }
+.dz-err { color: var(--danger); font-family: var(--mono); font-size: 12px; margin: 8px 0 0; }
 @media (max-width: 760px) { .settings-page { flex-direction: column; } .subnav { width: 100%; flex-direction: row; flex-wrap: wrap; border-right: 0; border-bottom: 1px solid var(--border); } .head { flex-basis: 100%; } }
 </style>

@@ -831,6 +831,20 @@ public sealed class KubernetesSessionService : ISessionService
         _log.LogInformation("Deleted session {Id}", id);
     }
 
+    /// <summary>
+    /// Deletes every secret labeled with the owner (creds-*, provider logins, gitauth-*,
+    /// plus any leftover per-session secrets) — the Kubernetes part of an account purge.
+    /// </summary>
+    public async Task DeleteUserSecretsAsync(string owner, CancellationToken ct = default)
+    {
+        await _k8s.CoreV1.DeleteCollectionNamespacedSecretAsync(_opts.Namespace,
+            labelSelector: $"{OwnerLabel}={Sanitize(owner)}", cancellationToken: ct);
+        _log.LogInformation("Deleted per-user secrets for an account purge");
+    }
+
+    /// <summary>Stable, non-reversible owner key used in labels and S3 key prefixes.</summary>
+    public static string OwnerKey(string owner) => Sanitize(owner);
+
     // ---------------------------------------------------------------- Pod-Spec
 
     private async Task<PodBuildContext> BuildPodContextAsync(
