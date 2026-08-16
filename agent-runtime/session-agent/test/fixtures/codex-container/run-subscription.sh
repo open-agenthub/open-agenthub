@@ -8,4 +8,6 @@ export HOME=/tmp/fixture-home
 export AGENTHUB_MODE=autonomous
 export AGENTHUB_AUTH_MODE=subscription
 export AGENTHUB_HAS_MCP=1
+export AGENTHUB_BROWSER_ENABLED=1
+export AGENTHUB_SPAWN_MCP_ENABLED=1
 exec /usr/local/bin/entrypoint.sh
