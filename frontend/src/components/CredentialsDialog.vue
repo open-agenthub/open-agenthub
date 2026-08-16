@@ -67,25 +67,33 @@ async function save() {
 
       <div class="field">
         <label>SSH private key (for GitLab)
-          <span v-if="stored.sshPrivateKey" class="chip" :class="{ del: clear.has('sshPrivateKey') }" @click="toggleClear('sshPrivateKey')">{{ clear.has('sshPrivateKey') ? 'remove ✕' : 'stored ✓' }}</span>
+          <button v-if="stored.sshPrivateKey" type="button" class="chip" :class="{ del: clear.has('sshPrivateKey') }"
+            data-clear="sshPrivateKey" :aria-label="clear.has('sshPrivateKey') ? 'Keep stored SSH private key' : 'Remove stored SSH private key'"
+            @click="toggleClear('sshPrivateKey')">{{ clear.has('sshPrivateKey') ? 'remove ✕' : 'stored ✓ — click to remove' }}</button>
         </label>
         <textarea v-model="c.sshPrivateKey" :placeholder="placeholderFor('sshPrivateKey', '-----BEGIN OPENSSH PRIVATE KEY-----')"></textarea>
       </div>
       <div class="field">
         <label>known_hosts entry (GitLab host)
-          <span v-if="stored.gitKnownHosts" class="chip" :class="{ del: clear.has('gitKnownHosts') }" @click="toggleClear('gitKnownHosts')">{{ clear.has('gitKnownHosts') ? 'remove ✕' : 'stored ✓' }}</span>
+          <button v-if="stored.gitKnownHosts" type="button" class="chip" :class="{ del: clear.has('gitKnownHosts') }"
+            data-clear="gitKnownHosts" :aria-label="clear.has('gitKnownHosts') ? 'Keep stored known_hosts entry' : 'Remove stored known_hosts entry'"
+            @click="toggleClear('gitKnownHosts')">{{ clear.has('gitKnownHosts') ? 'remove ✕' : 'stored ✓ — click to remove' }}</button>
         </label>
         <textarea v-model="c.gitKnownHosts" :placeholder="placeholderFor('gitKnownHosts', 'gitlab.example.com ssh-ed25519 AAAA…')"></textarea>
       </div>
       <div class="field">
         <label>GitLab token (for HTTPS remotes, optional)
-          <span v-if="stored.gitlabToken" class="chip" :class="{ del: clear.has('gitlabToken') }" @click="toggleClear('gitlabToken')">{{ clear.has('gitlabToken') ? 'remove ✕' : 'stored ✓' }}</span>
+          <button v-if="stored.gitlabToken" type="button" class="chip" :class="{ del: clear.has('gitlabToken') }"
+            data-clear="gitlabToken" :aria-label="clear.has('gitlabToken') ? 'Keep stored GitLab token' : 'Remove stored GitLab token'"
+            @click="toggleClear('gitlabToken')">{{ clear.has('gitlabToken') ? 'remove ✕' : 'stored ✓ — click to remove' }}</button>
         </label>
         <input v-model="c.gitlabToken" type="password" :placeholder="placeholderFor('gitlabToken', 'glpat-…')" />
       </div>
       <div class="field">
         <label>Anthropic API key
-          <span v-if="stored.anthropicApiKey" class="chip" :class="{ del: clear.has('anthropicApiKey') }" @click="toggleClear('anthropicApiKey')">{{ clear.has('anthropicApiKey') ? 'remove ✕' : 'stored ✓' }}</span>
+          <button v-if="stored.anthropicApiKey" type="button" class="chip" :class="{ del: clear.has('anthropicApiKey') }"
+            data-clear="anthropicApiKey" :aria-label="clear.has('anthropicApiKey') ? 'Keep stored Anthropic API key' : 'Remove stored Anthropic API key'"
+            @click="toggleClear('anthropicApiKey')">{{ clear.has('anthropicApiKey') ? 'remove ✕' : 'stored ✓' }}</button>
         </label>
         <input v-model="c.anthropicApiKey" data-credential="anthropicApiKey" type="password" autocomplete="off"
           :placeholder="placeholderFor('anthropicApiKey', 'sk-ant-…')" />
@@ -126,13 +134,17 @@ async function save() {
       <div class="grid">
         <div class="field">
           <label>Git name
-            <span v-if="stored.gitUserName" class="chip" :class="{ del: clear.has('gitUserName') }" @click="toggleClear('gitUserName')">{{ clear.has('gitUserName') ? 'remove ✕' : 'stored ✓' }}</span>
+            <button v-if="stored.gitUserName" type="button" class="chip" :class="{ del: clear.has('gitUserName') }"
+              data-clear="gitUserName" :aria-label="clear.has('gitUserName') ? 'Keep stored git name' : 'Remove stored git name'"
+              @click="toggleClear('gitUserName')">{{ clear.has('gitUserName') ? 'remove ✕' : 'stored ✓' }}</button>
           </label>
           <input v-model="c.gitUserName" :placeholder="placeholderFor('gitUserName', 'Jane Doe')" />
         </div>
         <div class="field">
           <label>Git email
-            <span v-if="stored.gitUserEmail" class="chip" :class="{ del: clear.has('gitUserEmail') }" @click="toggleClear('gitUserEmail')">{{ clear.has('gitUserEmail') ? 'remove ✕' : 'stored ✓' }}</span>
+            <button v-if="stored.gitUserEmail" type="button" class="chip" :class="{ del: clear.has('gitUserEmail') }"
+              data-clear="gitUserEmail" :aria-label="clear.has('gitUserEmail') ? 'Keep stored git email' : 'Remove stored git email'"
+              @click="toggleClear('gitUserEmail')">{{ clear.has('gitUserEmail') ? 'remove ✕' : 'stored ✓' }}</button>
           </label>
           <input v-model="c.gitUserEmail" :placeholder="placeholderFor('gitUserEmail', 'jane@…')" />
         </div>

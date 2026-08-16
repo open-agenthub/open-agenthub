@@ -383,6 +383,43 @@ describe('OpenAI credentials', () => {
   })
 })
 
+describe('Git credentials', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.getCredentialStatus.mockResolvedValue({
+      gitlabToken: true, sshPrivateKey: true, gitKnownHosts: true, gitUserName: true, gitUserEmail: true
+    })
+    mocks.api.storeCredentials.mockResolvedValue(null)
+  })
+
+  it('removes a stored GitLab token via the clear control', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    const chip = wrapper.get('[data-clear="gitlabToken"]')
+    expect(chip.text()).toContain('stored')
+    await chip.trigger('click')
+    expect(wrapper.get('[data-clear="gitlabToken"]').text()).toContain('remove')
+    await wrapper.get('[data-save-credentials]').trigger('click')
+    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['gitlabToken'] })
+  })
+
+  it('offers a clear control for every stored git credential', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    for (const field of ['gitlabToken', 'sshPrivateKey', 'gitKnownHosts', 'gitUserName', 'gitUserEmail'])
+      expect(wrapper.find(`[data-clear="${field}"]`).exists()).toBe(true)
+  })
+
+  it('toggling the clear control twice keeps the stored token', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    await wrapper.get('[data-clear="gitlabToken"]').trigger('click')
+    await wrapper.get('[data-clear="gitlabToken"]').trigger('click')
+    await wrapper.get('[data-save-credentials]').trigger('click')
+    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({})
+  })
+})
+
 describe('Cursor credentials', () => {
   beforeEach(() => {
     vi.clearAllMocks()
