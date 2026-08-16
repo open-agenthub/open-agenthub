@@ -312,10 +312,12 @@ the bot as admin with the **Manage topics** permission, and send `/link <code>` 
 group — every session then gets its own topic. Note: **everyone in a linked group** can
 reply to sessions and approve permission prompts.
 
-Commands: `/new <prompt>` (start an autonomous session right from the chat),
-`/sessions` (list), `/use <tag>` (route plain replies), `!status`. Plain
-messages are typed into the active session's terminal. Only **one backend replica** may
-run Telegram long-polling (a second poller conflicts on `getUpdates`).
+Commands: `/new [+repo …] <prompt>` (start an autonomous session right from the chat —
+leading `+name`, `+group/name`, `+name#branch` or `+https://…` tokens attach repositories),
+`/repos [query]` (list your GitHub/GitLab projects), `/sessions` (list), `/use <tag>`
+(route plain replies), `!status`. Plain messages are typed into the active session's
+terminal. Only **one backend replica** may run Telegram long-polling (a second poller
+conflicts on `getUpdates`).
 </details>
 
 <details>
@@ -338,8 +340,9 @@ run Telegram long-polling (a second poller conflicts on `getUpdates`).
 
 Reply routing: **quote** a session message to answer that session; plain replies go to
 the newest session (or the one picked with `!use`). React 👍/👎 on a permission prompt to
-allow/deny; quote-reply `always` for allow-always. Commands: `!new <prompt>` (start an
-autonomous session), `!sessions`, `!use <tag>`, `!status`.
+allow/deny; quote-reply `always` for allow-always. Commands: `!new [+repo …] <prompt>`
+(start an autonomous session — leading `+name` tokens attach repositories),
+`!repos [query]` (list your GitHub/GitLab projects), `!sessions`, `!use <tag>`, `!status`.
 </details>
 
 **Desktop notifications** (browser): a notification when a session waits for input or

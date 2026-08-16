@@ -31,6 +31,7 @@ public sealed class SlackSocketModeService : BackgroundService
     private readonly AgentHub.Api.Permissions.PermissionStore _permissions;
     private readonly ISessionService _sessions;
     private readonly UserDirectory _users;
+    private readonly ChatRepoService _repos;
     private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
@@ -38,11 +39,11 @@ public sealed class SlackSocketModeService : BackgroundService
 
     public SlackSocketModeService(SlackOptions opts, IEnterpriseLicense license, SlackClient slack,
         SlackThreadStore threads, AgentHub.Api.Permissions.PermissionStore permissions,
-        ISessionService sessions, UserDirectory users, WorkingIndicator indicator,
+        ISessionService sessions, UserDirectory users, ChatRepoService repos, WorkingIndicator indicator,
         IConfiguration cfg, ILogger<SlackSocketModeService> log)
     {
         _opts = opts; _license = license; _slack = slack; _threads = threads; _permissions = permissions;
-        _sessions = sessions; _users = users; _indicator = indicator;
+        _sessions = sessions; _users = users; _repos = repos; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
         _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
@@ -123,10 +124,12 @@ public sealed class SlackSocketModeService : BackgroundService
         if (string.IsNullOrWhiteSpace(textReply)) return;
         if (!ev.TryGetProperty("thread_ts", out var tts) || tts.GetString() is not { } threadTs)
         {
-            // Outside a session thread only "!new <prompt>" is understood — it starts a
-            // session and opens its thread right here.
+            // Outside a session thread only "!new <prompt>" (starts a session and opens
+            // its thread right here) and "!repos [query]" are understood.
             if (ChatFormatting.TryParseNewCommand(textReply, out var prompt))
                 await HandleNewSessionAsync(ev, prompt, ct);
+            else if (ChatFormatting.TryParseReposCommand(textReply, out var query))
+                await HandleListReposAsync(ev, query, ct);
             return;
         }
 
@@ -176,9 +179,10 @@ public sealed class SlackSocketModeService : BackgroundService
         var slackUser = ev.TryGetProperty("user", out var us) ? us.GetString() : null;
         if (channel is null || slackUser is null) return;
 
-        if (prompt.Length == 0)
+        var (repoTokens, rest) = ChatFormatting.SplitRepoTokens(prompt);
+        if (rest.Length == 0)
         {
-            await _slack.PostMessageAsync(channel, "Send `!new <prompt>` — starts an autonomous session that works on the prompt.", null, ct);
+            await _slack.PostMessageAsync(channel, "Send `!new <prompt>` — starts an autonomous session that works on the prompt. Add repos with leading `+name` tokens (`!repos` lists them).", null, ct);
             return;
         }
 
@@ -191,14 +195,22 @@ public sealed class SlackSocketModeService : BackgroundService
             return;
         }
 
+        var resolution = await _repos.ResolveAsync(user.Owner, repoTokens, ct);
+        if (resolution.Error is not null)
+        {
+            await _slack.PostMessageAsync(channel, $":warning: {Escape(resolution.Error)}", null, ct);
+            return;
+        }
+
         SessionInfo info;
         try
         {
             info = await _sessions.CreateSessionAsync(user.Owner, new CreateSessionRequest
             {
-                Title = ChatFormatting.TitleFromPrompt(prompt),
+                Title = ChatFormatting.TitleFromPrompt(rest),
                 Mode = SessionMode.Autonomous,
-                Prompt = prompt
+                Prompt = rest,
+                Repos = resolution.Repos.ToList()
             }, ct);
         }
         catch (Exception e) when (e is ArgumentException or SessionLimitExceededException or UsageLimitExceededException)
@@ -220,6 +232,27 @@ public sealed class SlackSocketModeService : BackgroundService
             return;
         }
         await _threads.UpsertAsync(new SlackThread(info.Id, user.Owner, channel, ts, 0), ct);
+    }
+
+    /// <summary>Answers "!repos [query]" with the sender's git projects — the same
+    /// email-based account mapping as !new.</summary>
+    private async Task HandleListReposAsync(JsonElement ev, string query, CancellationToken ct)
+    {
+        var channel = ev.TryGetProperty("channel", out var ch) ? ch.GetString() : null;
+        var slackUser = ev.TryGetProperty("user", out var us) ? us.GetString() : null;
+        if (channel is null || slackUser is null) return;
+
+        var email = await _slack.GetUserEmailAsync(slackUser, ct);
+        var user = email is null ? null : await _users.GetUniqueByEmailAsync(email, ct);
+        if (user is null || !user.SlackEnabled)
+        {
+            await _slack.PostMessageAsync(channel,
+                ":warning: I can't map your Slack account to an AgentHub user (matching, unambiguous email required).", null, ct);
+            return;
+        }
+
+        var text = await _repos.ListProjectsTextAsync(user.Owner, query.Length == 0 ? null : query, ct);
+        await _slack.PostMessageAsync(channel, Escape(text), null, ct);
     }
 
     /// <summary>Answers a "!status" thread reply with the session's current state.</summary>

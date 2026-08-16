@@ -117,6 +117,48 @@ public class ChatFormattingTests
         Assert.Equal(expectedPrompt, prompt);
     }
 
+    [Theory]
+    [InlineData("!repos", true, "")]
+    [InlineData("/repos", true, "")]
+    [InlineData("/repos agenthub", true, "agenthub")]
+    [InlineData("  !REPOS  front  ", true, "front")]
+    [InlineData("!projects tool", true, "tool")]       // alias
+    [InlineData("!repository", false, "")]             // not the command
+    [InlineData("show !repos", false, "")]             // must start the message
+    public void TryParseReposCommand_RecognizesOnlyTheCommand(string text, bool expected, string expectedQuery)
+    {
+        Assert.Equal(expected, ChatFormatting.TryParseReposCommand(text, out var query));
+        Assert.Equal(expectedQuery, query);
+    }
+
+    [Fact]
+    public void SplitRepoTokens_TakesLeadingPlusTokensOnly()
+    {
+        var (tokens, rest) = ChatFormatting.SplitRepoTokens("+app +acme/tool#dev fix the bug");
+        Assert.Equal(new[] { "app", "acme/tool#dev" }, tokens);
+        Assert.Equal("fix the bug", rest);
+
+        (tokens, rest) = ChatFormatting.SplitRepoTokens("fix the bug in a+b");
+        Assert.Empty(tokens);
+        Assert.Equal("fix the bug in a+b", rest);
+
+        (tokens, rest) = ChatFormatting.SplitRepoTokens("fix +app later");   // not leading
+        Assert.Empty(tokens);
+        Assert.Equal("fix +app later", rest);
+
+        (tokens, rest) = ChatFormatting.SplitRepoTokens("+ app");            // bare plus is prose
+        Assert.Empty(tokens);
+        Assert.Equal("+ app", rest);
+
+        (tokens, rest) = ChatFormatting.SplitRepoTokens("+app");             // token without prompt
+        Assert.Equal(new[] { "app" }, tokens);
+        Assert.Equal("", rest);
+
+        (tokens, rest) = ChatFormatting.SplitRepoTokens("+https://git.example.test/acme/app.git do it");
+        Assert.Equal(new[] { "https://git.example.test/acme/app.git" }, tokens);
+        Assert.Equal("do it", rest);
+    }
+
     [Fact]
     public void TitleFromPrompt_UsesTheFirstLine_TrimmedAtAWordBoundary()
     {

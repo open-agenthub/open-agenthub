@@ -9,7 +9,7 @@ namespace AgentHub.Api.Chat.Signal;
 /// <summary>
 /// Signal receive loop: keeps a WebSocket to signal-cli-rest-api's /v1/receive endpoint
 /// and routes inbound events — 👍/👎 reactions on permission prompts, a quoted "always"
-/// reply for allowAlways, !new/!sessions/!use/!status commands, and plain replies (typed
+/// reply for allowAlways, !new/!repos/!sessions/!use/!status commands, and plain replies (typed
 /// into the bound session's terminal). Only verified, opted-in senders are handled;
 /// everything else is dropped. Community feature — no license required.
 /// SECURITY: phone numbers are PII — logs carry owner/session ids only, never the number.
@@ -29,6 +29,7 @@ public sealed class SignalReceiveService : BackgroundService
     private readonly UserDirectory _users;
     private readonly PermissionStore _permissions;
     private readonly ISessionService _sessions;
+    private readonly ChatRepoService _repos;
     private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
@@ -38,10 +39,10 @@ public sealed class SignalReceiveService : BackgroundService
 
     public SignalReceiveService(SignalOptions opts, SignalClient signal, ChatBindingStore bindings,
         UserDirectory users, PermissionStore permissions, ISessionService sessions,
-        WorkingIndicator indicator, IConfiguration cfg, ILogger<SignalReceiveService> log)
+        ChatRepoService repos, WorkingIndicator indicator, IConfiguration cfg, ILogger<SignalReceiveService> log)
     {
         _opts = opts; _signal = signal; _bindings = bindings; _users = users;
-        _permissions = permissions; _sessions = sessions; _indicator = indicator;
+        _permissions = permissions; _sessions = sessions; _repos = repos; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
         _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
@@ -156,6 +157,10 @@ public sealed class SignalReceiveService : BackgroundService
             case "!new":
                 await HandleNewAsync(e, user, parts.Length > 1 ? parts[1] : "", ct);
                 return;
+            case "!repos" or "!projects":
+                await _signal.SendAsync(e.Sender,
+                    await _repos.ListProjectsTextAsync(user.Owner, parts.Length > 1 ? parts[1] : null, ct), ct);
+                return;
             default:
                 await HandlePlainAsync(e, user, text, ct);
                 return;
@@ -236,16 +241,24 @@ public sealed class SignalReceiveService : BackgroundService
     }
 
     /// <summary>
-    /// Starts a new autonomous session from Signal: "!new &lt;prompt&gt;". The sender's
-    /// verified number IS the identity (checked in DispatchAsync), so the session runs
-    /// under their account — same authority as a reply into a running session. The
-    /// session's conversation opens here immediately and becomes the active session.
+    /// Starts a new autonomous session from Signal: "!new [+repo …] &lt;prompt&gt;". The
+    /// sender's verified number IS the identity (checked in DispatchAsync), so the session
+    /// runs under their account — same authority as a reply into a running session.
+    /// Leading "+repo" tokens attach repositories (see ChatRepoService). The session's
+    /// conversation opens here immediately and becomes the active session.
     /// </summary>
     private async Task HandleNewAsync(SignalEnvelope e, AppUser user, string prompt, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(prompt))
+        var (repoTokens, rest) = ChatFormatting.SplitRepoTokens(prompt);
+        if (string.IsNullOrWhiteSpace(rest))
         {
-            await _signal.SendAsync(e.Sender, "Send !new <prompt> — starts an autonomous session that works on the prompt.", ct);
+            await _signal.SendAsync(e.Sender, "Send !new <prompt> — starts an autonomous session that works on the prompt. Add repos with leading +name tokens (!repos lists them).", ct);
+            return;
+        }
+        var resolution = await _repos.ResolveAsync(user.Owner, repoTokens, ct);
+        if (resolution.Error is not null)
+        {
+            await _signal.SendAsync(e.Sender, $"⚠️ {resolution.Error}", ct);
             return;
         }
 
@@ -254,9 +267,10 @@ public sealed class SignalReceiveService : BackgroundService
         {
             info = await _sessions.CreateSessionAsync(user.Owner, new Models.CreateSessionRequest
             {
-                Title = ChatFormatting.TitleFromPrompt(prompt),
+                Title = ChatFormatting.TitleFromPrompt(rest),
                 Mode = Models.SessionMode.Autonomous,
-                Prompt = prompt.Trim()
+                Prompt = rest,
+                Repos = resolution.Repos.ToList()
             }, ct);
         }
         catch (Exception ex) when (ex is ArgumentException or SessionLimitExceededException
