@@ -24,6 +24,7 @@ public sealed class TelegramUpdateService : BackgroundService
     private readonly PermissionStore _permissions;
     private readonly ISessionService _sessions;
     private readonly TelegramConversationFactory _conversations;
+    private readonly ChatRepoService _repos;
     private readonly WorkingIndicator _indicator;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
@@ -36,11 +37,12 @@ public sealed class TelegramUpdateService : BackgroundService
 
     public TelegramUpdateService(TelegramOptions opts, TelegramClient tg, ChatBindingStore bindings,
         ChatLinkCodeStore codes, UserDirectory users, PermissionStore permissions,
-        ISessionService sessions, TelegramConversationFactory conversations, WorkingIndicator indicator,
-        IConfiguration cfg, ILogger<TelegramUpdateService> log)
+        ISessionService sessions, TelegramConversationFactory conversations, ChatRepoService repos,
+        WorkingIndicator indicator, IConfiguration cfg, ILogger<TelegramUpdateService> log)
     {
         _opts = opts; _tg = tg; _bindings = bindings; _codes = codes; _users = users;
-        _permissions = permissions; _sessions = sessions; _conversations = conversations; _indicator = indicator;
+        _permissions = permissions; _sessions = sessions; _conversations = conversations;
+        _repos = repos; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
         _frontendOrigin = (cfg["FrontendOrigin"] ?? "").TrimEnd('/');
         _log = log;
@@ -170,6 +172,9 @@ public sealed class TelegramUpdateService : BackgroundService
             case "/new" or "!new":
                 await HandleNewAsync(u, arg, ct);
                 return;
+            case "/repos" or "!repos" or "/projects" or "!projects":
+                await HandleReposAsync(u, arg, ct);
+                return;
             default:
                 await HandlePlainAsync(u, text, ct);
                 return;
@@ -268,11 +273,24 @@ public sealed class TelegramUpdateService : BackgroundService
         await ReplyAsync(u, $"✅ Plain replies now go to #{ChatFormatting.Tag(match.SessionId)}.", ct);
     }
 
+    /// <summary>Lists the linked account's git projects: "/repos [query]".</summary>
+    private async Task HandleReposAsync(TelegramUpdate u, string? query, CancellationToken ct)
+    {
+        var linked = await _users.GetByTelegramChatAsync(u.ChatId, ct);
+        if (linked is null)
+        {
+            await ReplyAsync(u, "This chat is not linked. Send /link <code> first.", ct);
+            return;
+        }
+        await ReplyAsync(u, await _repos.ListProjectsTextAsync(linked.Owner, query, ct), ct);
+    }
+
     /// <summary>
-    /// Starts a new autonomous session from chat: "/new &lt;prompt&gt;". Only the account
-    /// this chat is linked to can start sessions, and they run under that account —
-    /// same authority as a reply into a running session. The session's conversation
-    /// is opened here immediately (header + topic) and made the chat's active session.
+    /// Starts a new autonomous session from chat: "/new [+repo …] &lt;prompt&gt;". Only the
+    /// account this chat is linked to can start sessions, and they run under that account —
+    /// same authority as a reply into a running session. Leading "+repo" tokens attach
+    /// repositories (see ChatRepoService). The session's conversation is opened here
+    /// immediately (header + topic) and made the chat's active session.
     /// </summary>
     private async Task HandleNewAsync(TelegramUpdate u, string? prompt, CancellationToken ct)
     {
@@ -282,9 +300,16 @@ public sealed class TelegramUpdateService : BackgroundService
             await ReplyAsync(u, "This chat is not linked. Send /link <code> first.", ct);
             return;
         }
-        if (string.IsNullOrWhiteSpace(prompt))
+        var (repoTokens, rest) = ChatFormatting.SplitRepoTokens(prompt ?? "");
+        if (string.IsNullOrWhiteSpace(rest))
         {
-            await ReplyAsync(u, "Send /new <prompt> — starts an autonomous session that works on the prompt.", ct);
+            await ReplyAsync(u, "Send /new <prompt> — starts an autonomous session that works on the prompt. Add repos with leading +name tokens (/repos lists them).", ct);
+            return;
+        }
+        var resolution = await _repos.ResolveAsync(linked.Owner, repoTokens, ct);
+        if (resolution.Error is not null)
+        {
+            await ReplyAsync(u, $"⚠️ {resolution.Error}", ct);
             return;
         }
 
@@ -293,9 +318,10 @@ public sealed class TelegramUpdateService : BackgroundService
         {
             info = await _sessions.CreateSessionAsync(linked.Owner, new Models.CreateSessionRequest
             {
-                Title = ChatFormatting.TitleFromPrompt(prompt),
+                Title = ChatFormatting.TitleFromPrompt(rest),
                 Mode = Models.SessionMode.Autonomous,
-                Prompt = prompt.Trim()
+                Prompt = rest,
+                Repos = resolution.Repos.ToList()
             }, ct);
         }
         catch (Exception e) when (e is ArgumentException or Services.SessionLimitExceededException

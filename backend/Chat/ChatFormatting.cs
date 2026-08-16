@@ -50,6 +50,45 @@ public static class ChatFormatting
     }
 
     /// <summary>
+    /// Recognizes a "list git projects" chat command ("/repos [query]" or "!repos [query]",
+    /// case-insensitive) and extracts the optional search query. Anything else is not a
+    /// repos-command.
+    /// </summary>
+    public static bool TryParseReposCommand(string text, out string query)
+    {
+        query = "";
+        var trimmed = text.Trim();
+        foreach (var prefix in new[] { "/repos", "!repos", "/projects", "!projects" })
+        {
+            if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
+            if (trimmed.Length > prefix.Length && !char.IsWhiteSpace(trimmed[prefix.Length])) continue;
+            query = trimmed[prefix.Length..].Trim();
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Splits leading "+repo" tokens off a /new prompt: "+name +group/name#branch fix it"
+    /// → tokens ["name", "group/name#branch"], rest "fix it". Tokens are only recognized
+    /// at the START of the prompt so a "+" later in normal prose is left alone. A bare
+    /// "+" is not a token.
+    /// </summary>
+    public static (IReadOnlyList<string> RepoTokens, string Prompt) SplitRepoTokens(string prompt)
+    {
+        var tokens = new List<string>();
+        var rest = prompt.Trim();
+        while (rest.StartsWith('+') && rest.Length > 1 && !char.IsWhiteSpace(rest[1]))
+        {
+            var end = rest.IndexOfAny(new[] { ' ', '\t', '\n', '\r' });
+            var token = end < 0 ? rest[1..] : rest[1..end];
+            tokens.Add(token);
+            rest = end < 0 ? "" : rest[(end + 1)..].TrimStart();
+        }
+        return (tokens, rest);
+    }
+
+    /// <summary>
     /// Derives a session title from a /new prompt: its first line, trimmed to ~48 chars
     /// at a word boundary. Falls back to a generic title for an all-whitespace prompt.
     /// </summary>

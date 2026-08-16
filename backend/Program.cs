@@ -127,6 +127,8 @@ builder.Services.AddHostedService<AgentHub.Api.Licensing.LicenseRefresher>();
 // Community chat integrations (Telegram/Signal): session-to-conversation bindings.
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatBindingStore>();
 builder.Services.AddSingleton<AgentHub.Api.Chat.WorkingIndicator>();
+// Git project listing/resolution for chat commands (/repos, /new +repo).
+builder.Services.AddSingleton<AgentHub.Api.Chat.ChatRepoService>();
 
 // Community: Telegram/Signal chat integrations (no license required).
 var telegramOpts = builder.Configuration.GetSection("Chat:Telegram").Get<AgentHub.Api.Chat.Telegram.TelegramOptions>() ?? new();

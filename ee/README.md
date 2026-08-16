@@ -11,8 +11,10 @@ subscription for production use.
 
 - **Slack integration** ✅ — when a session waits for input you are asked in a
   Slack thread (with the new terminal output), and your thread replies are sent
-  back to the agent; `!new <prompt>` starts a new autonomous session right from
-  Slack (sender mapped via their workspace email). Uses Socket Mode (no public
+  back to the agent; `!new [+repo …] <prompt>` starts a new autonomous session right
+  from Slack (sender mapped via their workspace email; leading `+name` tokens attach
+  GitHub/GitLab repositories) and `!repos [query]` lists your projects. Uses Socket
+  Mode (no public
   endpoint). Backend sources under
   [`backend/Slack/`](./backend/Slack); configured via `ee.slack.*` and gated by a
   valid license (`license.token` / `license.publicKey`). See the chart `values.yaml`.
