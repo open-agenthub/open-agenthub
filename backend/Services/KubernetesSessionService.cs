@@ -173,7 +173,9 @@ public sealed class KubernetesSessionService : ISessionService
         var id = Guid.NewGuid().ToString("n")[..12];
         var rec = new SessionRecord
         {
-            Id = id, Owner = owner, Title = req.Title, Mode = req.Mode, UiMode = uiMode,
+            Id = id, Owner = owner, Title = req.Title,
+            Description = SessionDescription.Normalize(req.Description),
+            Mode = req.Mode, UiMode = uiMode,
             RepoUrl = repos.FirstOrDefault()?.Url, ReposJson = SerializeRepos(repos),
             Schedule = req.Schedule, McpConfigJson = mcp,
             McpServerIdsJson = mcpServerIds.Count == 0 ? null : JsonSerializer.Serialize(mcpServerIds),
@@ -462,7 +464,7 @@ public sealed class KubernetesSessionService : ISessionService
 
         var req = new CreateSessionRequest
         {
-            Title = rec.Title, Mode = rec.Mode, UiMode = rec.UiMode,
+            Title = rec.Title, Description = rec.Description, Mode = rec.Mode, UiMode = rec.UiMode,
             Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
             McpServerIds = ParseMcpServerIds(rec),
             ProjectId = rec.ProjectId, Prompt = rec.Prompt,
@@ -521,6 +523,9 @@ public sealed class KubernetesSessionService : ISessionService
 
         if (!string.IsNullOrWhiteSpace(req.Title))
             rec.Title = req.Title.Trim();
+        // null = unchanged; an empty string clears the description.
+        if (req.Description is not null)
+            rec.Description = SessionDescription.Normalize(req.Description);
         if (req.Image is not null)
         {
             // Empty string resets to the default agent image.
@@ -931,7 +936,8 @@ public sealed class KubernetesSessionService : ISessionService
     private static SessionInfo ToInfo(
         SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, bool hasEphemeralMcp = false) => new()
     {
-        Id = r.Id, Title = r.Title, Owner = r.Owner, Mode = r.Mode, UiMode = r.UiMode, RepoUrl = r.RepoUrl,
+        Id = r.Id, Title = r.Title, Description = r.Description, Owner = r.Owner,
+        Mode = r.Mode, UiMode = r.UiMode, RepoUrl = r.RepoUrl,
         Repos = ParseRepos(r),
         HasMcp = SessionMcpConfig.HasMcp(r.McpConfigJson, ParseMcpServerIds(r), hasEphemeralMcp),
         McpConfigJson = r.McpConfigJson, McpServerIds = ParseMcpServerIds(r),

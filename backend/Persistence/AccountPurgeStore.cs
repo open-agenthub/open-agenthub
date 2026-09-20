@@ -57,6 +57,8 @@ public sealed class AccountPurgeStore : IAccountPurgeStore
         await DeleteAsync(conn, "chat_session_bindings", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "permission_requests", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "session_usage", "owner = @o OR session_id = ANY(@ids)", owner, sessions, ct);
+        await DeleteAsync(conn, "session_messages",
+            "owner = @o OR to_session_id = ANY(@ids) OR from_session_id = ANY(@ids)", owner, sessions, ct);
         await DeleteAsync(conn, "usage_monthly", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "mcp_servers", "owner = @o", owner, sessions, ct);
 
