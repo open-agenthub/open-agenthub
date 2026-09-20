@@ -44,7 +44,7 @@ test('runtime wiring owns the browser server for both Claude and Codex', () => {
   assert.match(require('../../codex/mcp-config')
     .builtinToml({ AGENTHUB_BROWSER_ENABLED: '1' }, '/usr/local/bin/node'),
     /\[mcp_servers\.agenthub_browser\]/);
-  assert.match(codex, /agenthub_browser(?:\s+agenthub_sessions)?(?:\s+agenthub_files)? >> "\$CODEX_HOME\/config\.toml"/);
+  assert.match(codex, /agenthub_browser(?:\s+agenthub_sessions)?(?:\s+agenthub_files)?(?:\s+agenthub_network)? >> "\$CODEX_HOME\/config\.toml"/);
   assert.match(claudeDocker, /COPY browser \/opt\/session-agent\/browser/);
   assert.match(codexDocker, /COPY browser \/opt\/session-agent\/browser/);
   for (const name of [

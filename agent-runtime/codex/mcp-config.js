@@ -153,7 +153,8 @@ function convertMcp(agentHubJson, reservedServers = []) {
 const BUILTIN_SERVERS = [
   { name: 'agenthub_browser', dir: 'browser', flag: 'AGENTHUB_BROWSER_ENABLED', extraEnv: [] },
   { name: 'agenthub_sessions', dir: 'sessions', flag: 'AGENTHUB_SPAWN_MCP_ENABLED', extraEnv: ['AGENTHUB_SESSION_ID'] },
-  { name: 'agenthub_files', dir: 'files', flag: 'AGENTHUB_FILES_MCP_ENABLED', extraEnv: ['AGENTHUB_WORKDIR', 'AGENTHUB_FILE_ROOT'] }
+  { name: 'agenthub_files', dir: 'files', flag: 'AGENTHUB_FILES_MCP_ENABLED', extraEnv: ['AGENTHUB_WORKDIR', 'AGENTHUB_FILE_ROOT'] },
+  { name: 'agenthub_network', dir: 'network', flag: 'AGENTHUB_NETWORK_MCP_ENABLED', extraEnv: [] }
 ];
 
 function builtinToml(env = process.env, nodeBin = process.execPath) {

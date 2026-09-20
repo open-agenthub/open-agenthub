@@ -31,6 +31,7 @@ COPY common /opt/session-agent/common
 COPY files /opt/session-agent/files
 COPY browser /opt/session-agent/browser
 COPY sessions /opt/session-agent/sessions
+COPY network /opt/session-agent/network
 COPY codex /opt/session-agent/codex
 COPY codex/requirements.toml /etc/codex/requirements.toml
 COPY codex/entrypoint.sh /usr/local/bin/entrypoint.sh

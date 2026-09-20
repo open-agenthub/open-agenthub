@@ -44,6 +44,7 @@ COPY session-agent/server.js /opt/session-agent/server.js
 COPY common /opt/session-agent/common
 COPY files /opt/session-agent/files
 COPY sessions /opt/session-agent/sessions
+COPY network /opt/session-agent/network
 COPY cursor /opt/session-agent/cursor
 COPY cursor/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \

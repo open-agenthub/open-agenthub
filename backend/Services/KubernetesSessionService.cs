@@ -37,6 +37,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IEphemeralApiMcpStore _ephemeralApiMcps;
     private readonly IMcpGatewayTokenService _mcpGatewayTokens;
     private readonly ISessionFileCleanup? _fileCleanup;
+    private readonly Network.INetworkSessionCleanup? _networkCleanup;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -44,6 +45,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly bool _s3Insecure;
     private readonly bool _browserEnabled;
     private readonly bool _spawnMcpEnabled;
+    private readonly bool _networkMcpEnabled;
     private readonly int _maxRunningSessionsPerOwner;
 
     private const string OwnerLabel = "agenthub.dev/owner";
@@ -56,7 +58,7 @@ public sealed class KubernetesSessionService : ISessionService
         Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
         ILibraryAccess library, IMcpServerStore mcpServers, IEphemeralApiMcpStore ephemeralApiMcps,
         IMcpGatewayTokenService mcpGatewayTokens, ILogger<KubernetesSessionService> log,
-        ISessionFileCleanup? fileCleanup = null)
+        ISessionFileCleanup? fileCleanup = null, Network.INetworkSessionCleanup? networkCleanup = null)
     {
         _log = log;
         _store = store;
@@ -71,6 +73,7 @@ public sealed class KubernetesSessionService : ISessionService
         _ephemeralApiMcps = ephemeralApiMcps;
         _mcpGatewayTokens = mcpGatewayTokens;
         _fileCleanup = fileCleanup;
+        _networkCleanup = networkCleanup;
         _opts = cfg.GetSection("AgentHub").Get<AgentHubOptions>() ?? new AgentHubOptions();
         _callbackBaseUrl = cfg["AgentHub:CallbackBaseUrl"]
             ?? "http://agenthub-backend.agenthub.svc.cluster.local";
@@ -83,6 +86,7 @@ public sealed class KubernetesSessionService : ISessionService
         _s3Insecure = cfg.GetValue("S3:InsecureTls", false);
         _browserEnabled = cfg.GetValue("Browser:Enabled", true);
         _spawnMcpEnabled = cfg.GetValue("AgentHub:SpawnMcpEnabled", true);
+        _networkMcpEnabled = cfg.GetValue("Network:Enabled", true);
         _maxRunningSessionsPerOwner = SessionSoftLimit.NormalizeMax(
             cfg.GetValue("AgentHub:MaxRunningSessionsPerOwner", SessionSoftLimit.DefaultMax));
 
@@ -822,6 +826,8 @@ public sealed class KubernetesSessionService : ISessionService
         }
         await _browsers.StopAsync(id, ct);
         await _browsers.DeleteStateAsync(rec, ct);
+        // Dynamic port-request NetworkPolicies (and their grant rows) die with the session.
+        if (_networkCleanup is not null) await _networkCleanup.CleanupSessionAsync(id, ct);
         await TryDeletePodAsync($"session-{id}", ct);
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
@@ -895,6 +901,7 @@ public sealed class KubernetesSessionService : ISessionService
                 AgentPort = _opts.AgentPort,
                 BrowserEnabled = _browserEnabled,
                 SpawnMcpEnabled = _spawnMcpEnabled,
+                NetworkMcpEnabled = _networkMcpEnabled,
                 GitCloneImage = _opts.GitCloneImage,
                 ImagePullSecret = _opts.ImagePullSecret,
                 RuntimeClassName = _opts.RuntimeClassName,

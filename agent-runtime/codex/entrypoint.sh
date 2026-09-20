@@ -15,7 +15,7 @@ umask 077
 printf '%s\n' 'cli_auth_credentials_store = "file"' > "$CODEX_HOME/config.toml"
 # Always omit runtime-owned server names from user MCP so they cannot be spoofed.
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
-  node "$RUNTIME/codex/mcp-config.js" /secrets/mcp/mcp.json agenthub_browser agenthub_sessions agenthub_files >> "$CODEX_HOME/config.toml"
+  node "$RUNTIME/codex/mcp-config.js" /secrets/mcp/mcp.json agenthub_browser agenthub_sessions agenthub_files agenthub_network >> "$CODEX_HOME/config.toml"
 fi
 # Codex clears the environment for MCP subprocesses and only forwards the
 # variables named in env_vars; the script renders each builtin server with an
