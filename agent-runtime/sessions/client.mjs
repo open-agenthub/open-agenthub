@@ -37,6 +37,22 @@ export class SessionsBackendClient {
     return { deleted: true };
   }
 
+  /** Directory of this session's project fleet (slim records, includes a `self` marker). */
+  listProjectAgents() {
+    return this.#request('GET', '/project-agents');
+  }
+
+  /** Sends a message/task to a peer agent (already resolved to a session id). */
+  sendAgentMessage(toSessionId, message) {
+    return this.#request('POST', '/messages', { to: toSessionId, body: message });
+  }
+
+  /** Takes undelivered inbox messages, long-polling up to waitSeconds (0..60). */
+  inbox(waitSeconds = 0) {
+    const wait = Math.min(60, Math.max(0, Math.trunc(Number(waitSeconds) || 0)));
+    return this.#request('GET', `/messages?wait=${wait}`);
+  }
+
   async #request(method, path, body) {
     const headers = { 'X-Agent-Token': this.token, Accept: 'application/json' };
     const init = { method, headers, signal: AbortSignal.timeout(300_000) };

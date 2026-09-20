@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { SessionsBackendClient } from './client.mjs';
+import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
 
@@ -70,6 +71,42 @@ register('session_delete', {
   description: 'Delete a descendant session (pod and record). Does not cascade to its children.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
 }, async ({ id }) => text(sanitizeSession(await client.delete(id))));
+
+register('agents_list', {
+  description: 'List the agents (sessions) of this session\'s project: id, title (= agent name), '
+    + 'description (what the agent is for), phase. Without a project: this session and its descendants.',
+  inputSchema: z.object({})
+}, async () => text(await client.listProjectAgents()));
+
+register('agent_send', {
+  description: 'Send a message/task to a peer agent of the same project. "to" is a session id or a '
+    + 'unique agent title (see agents_list); an ambiguous title fails with the candidate list. '
+    + 'The peer reads it via its agent_inbox tool.',
+  inputSchema: z.object({
+    to: z.string().min(1).max(256),
+    message: z.string().min(1).max(4000)
+  })
+}, async ({ to, message }) => {
+  const agents = await client.listProjectAgents();
+  let targetId;
+  try {
+    targetId = resolveAgentTarget((Array.isArray(agents) ? agents : []).filter(a => !a?.self), to);
+  } catch (error) {
+    if (error?.code !== 'agent_not_found' && error?.code !== 'agent_title_ambiguous') throw error;
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: error.code, candidates: error.candidates ?? [] }) }],
+      isError: true
+    };
+  }
+  return text(await client.sendAgentMessage(targetId, message));
+});
+
+register('agent_inbox', {
+  description: 'Fetch new messages/tasks sent to this agent and mark them delivered (max 4 per call — '
+    + 'call again for more). Pass waitSeconds (up to 60) to long-poll; loop to keep waiting for new tasks. '
+    + 'Reply with agent_send.',
+  inputSchema: z.object({ waitSeconds: z.number().int().min(0).max(60).optional() })
+}, async ({ waitSeconds }) => text(await client.inbox(waitSeconds ?? 0)));
 
 function safeError(error) {
   const message = error instanceof Error ? error.message : '';
