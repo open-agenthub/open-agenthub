@@ -32,6 +32,7 @@ const automated = computed(() => props.session.mode !== 'Interactive')
 function reset(session) {
   f.value = {
     title: session.title,
+    description: session.description || '',
     image: session.image || '',
     runAsRoot: !!session.runAsRoot,
     autoApprove: !!session.autoApprove,
@@ -81,9 +82,11 @@ async function save() {
     const payload = scheduled.value
       // Auto approve is not part of the pod spec, so it is safe to change even for a
       // scheduled session (everything else there is fixed by the CronJob spec).
-      ? { title: f.value.title, projectId: f.value.projectId || null, autoApprove: f.value.autoApprove }
+      // The description ("" clears it) is plain metadata and applies immediately too.
+      ? { title: f.value.title, description: f.value.description, projectId: f.value.projectId || null, autoApprove: f.value.autoApprove }
       : {
           title: f.value.title,
+          description: f.value.description,  // "" clears it
           policy: policyPayload(f.value),
           image: f.value.image.trim(),          // empty = default agent image
           runAsRoot: f.value.runAsRoot,
@@ -118,6 +121,10 @@ async function save() {
         <div class="field">
           <label>Title</label>
           <input v-model="f.title" />
+        </div>
+        <div class="field">
+          <label>Description <span class="dim">— what is this agent for? Shown to the other agents of the project.</span></label>
+          <input v-model="f.description" data-description maxlength="500" placeholder="e.g. Reviews merge requests and hands findings to the coder" />
         </div>
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
         <div class="field last toggle-field">
