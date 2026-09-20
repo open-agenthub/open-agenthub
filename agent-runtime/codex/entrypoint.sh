@@ -17,29 +17,10 @@ printf '%s\n' 'cli_auth_credentials_store = "file"' > "$CODEX_HOME/config.toml"
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   node "$RUNTIME/codex/mcp-config.js" /secrets/mcp/mcp.json agenthub_browser agenthub_sessions agenthub_files >> "$CODEX_HOME/config.toml"
 fi
-# Codex clears the environment for MCP subprocesses and only forwards a small
-# default whitelist, so the backend callback variables must be listed explicitly.
-if [ "${AGENTHUB_BROWSER_ENABLED:-0}" = "1" ]; then
-  printf '%s\n' \
-    '[mcp_servers.agenthub_browser]' \
-    'command = "node"' \
-    "args = [\"$RUNTIME/browser/server.mjs\"]" \
-    'env_vars = ["AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN"]' >> "$CODEX_HOME/config.toml"
-fi
-if [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ]; then
-  printf '%s\n' \
-    '[mcp_servers.agenthub_sessions]' \
-    'command = "node"' \
-    "args = [\"$RUNTIME/sessions/server.mjs\"]" \
-    'env_vars = ["AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_SESSION_ID"]' >> "$CODEX_HOME/config.toml"
-fi
-if [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
-  printf '%s\n' \
-    '[mcp_servers.agenthub_files]' \
-    'command = "node"' \
-    "args = [\"$RUNTIME/files/server.mjs\"]" \
-    'env_vars = ["AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_WORKDIR", "AGENTHUB_FILE_ROOT", "RUNTIME"]' >> "$CODEX_HOME/config.toml"
-fi
+# Codex clears the environment for MCP subprocesses and only forwards the
+# variables named in env_vars; the script renders each builtin server with an
+# absolute node path and the full forwarding list (PATH, RUNTIME, callbacks).
+node "$RUNTIME/codex/mcp-config.js" --builtin >> "$CODEX_HOME/config.toml"
 chmod 600 "$CODEX_HOME/config.toml"
 
 # State restore always precedes authentication, and archived credentials are never trusted.

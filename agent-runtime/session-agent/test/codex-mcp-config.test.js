@@ -2,7 +2,42 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { convertMcp } = require('../../codex/mcp-config');
+const { convertMcp, builtinToml } = require('../../codex/mcp-config');
+
+test('Codex builtin servers use an absolute interpreter and forward PATH and RUNTIME', () => {
+  const env = {
+    AGENTHUB_BROWSER_ENABLED: '1',
+    AGENTHUB_SPAWN_MCP_ENABLED: '1',
+    AGENTHUB_FILES_MCP_ENABLED: '1',
+    RUNTIME: '/opt/agenthub/session-agent'
+  };
+  const toml = builtinToml(env, '/opt/agenthub/bin/node');
+
+  for (const name of ['agenthub_browser', 'agenthub_sessions', 'agenthub_files']) {
+    assert.match(toml, new RegExp('\\[mcp_servers\\.' + name + '\\]'));
+  }
+  // Codex clears the subprocess environment: a bare "node" or a missing PATH or
+  // RUNTIME kills every builtin server before its initialize response.
+  assert.doesNotMatch(toml, /command = "node"/);
+  assert.match(toml, /command = "\/opt\/agenthub\/bin\/node"/);
+  assert.match(toml, /args = \["\/opt\/agenthub\/session-agent\/browser\/server\.mjs"\]/);
+  const envVarLines = toml.split('\n').filter(line => line.startsWith('env_vars'));
+  assert.equal(envVarLines.length, 3);
+  for (const line of envVarLines) {
+    for (const required of ['PATH', 'RUNTIME', 'AGENTHUB_CALLBACK_URL', 'AGENTHUB_CALLBACK_TOKEN']) {
+      assert.match(line, new RegExp('"' + required + '"'), line);
+    }
+  }
+  assert.match(toml, /env_vars = \[[^\]]*"AGENTHUB_SESSION_ID"/);
+  assert.match(toml, /env_vars = \[[^\]]*"AGENTHUB_WORKDIR", "AGENTHUB_FILE_ROOT"/);
+});
+
+test('Codex builtin servers render only the enabled ones and default the runtime root', () => {
+  assert.equal(builtinToml({}, '/usr/local/bin/node'), '');
+  const toml = builtinToml({ AGENTHUB_FILES_MCP_ENABLED: '1' }, '/usr/local/bin/node');
+  assert.doesNotMatch(toml, /agenthub_browser|agenthub_sessions/);
+  assert.match(toml, /args = \["\/opt\/session-agent\/files\/server\.mjs"\]/);
+});
 test('Codex conversion omits the runtime-reserved files server', () => {
   const output = convertMcp({ mcpServers: {
     agenthub_files: { command: 'attacker' },
