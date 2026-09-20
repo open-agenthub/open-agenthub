@@ -9,6 +9,8 @@ public sealed class SessionRecord
     public required string Id { get; init; }
     public required string Owner { get; init; }
     public string Title { get; set; } = "";
+    /// <summary>What this agent is for — shown in the UI and the project agent directory.</summary>
+    public string? Description { get; set; }
     public SessionMode Mode { get; set; }
     /// <summary>UI rendering mode: "terminal" or "chat".</summary>
     public string UiMode { get; set; } = SessionUiMode.Terminal;
@@ -123,6 +125,7 @@ public sealed class PostgresSessionStore : ISessionStore
             CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(owner, parent_session_id);
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_server_ids TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_approve BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS description TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -131,16 +134,17 @@ public sealed class PostgresSessionStore : ISessionStore
     public async Task UpsertAsync(SessionRecord r, CancellationToken ct = default)
     {
         const string sql = """
-            INSERT INTO sessions (id, owner, title, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
+            INSERT INTO sessions (id, owner, title, description, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
                                   openclaw_api_key_source, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
                                   mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, allowed_tools, auto_approve, created_at, updated_at)
-            VALUES (@id, @owner, @title, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
+            VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @allowedTools, @autoApprove, @created, now())
             ON CONFLICT (id) DO UPDATE SET
-                title = EXCLUDED.title, mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
+                title = EXCLUDED.title, description = EXCLUDED.description,
+                mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
                 question_pending = EXCLUDED.question_pending,
                 agent_session_id = EXCLUDED.agent_session_id,
@@ -220,7 +224,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -235,6 +239,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("id", r.Id);
         cmd.Parameters.AddWithValue("owner", r.Owner);
         cmd.Parameters.AddWithValue("title", r.Title);
+        cmd.Parameters.AddWithValue("description", (object?)r.Description ?? DBNull.Value);
         cmd.Parameters.AddWithValue("mode", r.Mode.ToString());
         cmd.Parameters.AddWithValue("uiMode", r.UiMode);
         cmd.Parameters.AddWithValue("repo", (object?)r.RepoUrl ?? DBNull.Value);
@@ -292,6 +297,7 @@ public sealed class PostgresSessionStore : ISessionStore
         AllowedToolsJson = r.IsDBNull(25) ? null : r.GetString(25),
         UiMode = r.GetString(26),
         McpServerIdsJson = r.IsDBNull(27) ? null : r.GetString(27),
-        AutoApprove = r.GetBoolean(28)
+        AutoApprove = r.GetBoolean(28),
+        Description = r.IsDBNull(29) ? null : r.GetString(29)
     };
 }
