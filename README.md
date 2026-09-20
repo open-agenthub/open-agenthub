@@ -577,6 +577,11 @@ The NetworkPolicy only allows agent egress to the backend.
 Browser configuration, trust boundaries, cookie handling, and diagnostics are documented
 in [Browser operation and security](docs/browser-security.md).
 
+Agents can request additional network ports at runtime (e.g. egress to Postgres 5432, or
+browser→agent for app development) via the built-in `agenthub_network` MCP server; the
+session owner approves each request and approved ports become per-session NetworkPolicies.
+See [Dynamic network port requests](docs/network-ports.md).
+
 ## Assumptions
 
 - **Auth**: any OIDC provider works. Client `agenthub`, claim `preferred_username` as the

@@ -10,6 +10,7 @@ import { api, getSharedTranscript } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { authLabel } from '../lib/agent.js'
 import { toTranscriptBlocks } from '../lib/transcript.js'
+import { permissionTitle } from '../lib/permissions.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
 defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate'])
@@ -146,7 +147,7 @@ async function selectTab(tab) {
     <div v-for="p in pendingPermissions" :key="p.id" class="perm">
       <span class="ask-dot"></span>
       <div class="perm-text">
-        <strong>The agent wants to use {{ p.tool }}.</strong>
+        <strong>{{ permissionTitle(p.tool) }}</strong>
         <span v-if="p.summary" class="perm-summary">{{ p.summary }}</span>
       </div>
       <div class="perm-actions">

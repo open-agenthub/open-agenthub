@@ -189,6 +189,14 @@ builder.Services.AddHostedService<AgentHub.Api.Chat.Signal.SignalReceiveService>
 // Safety net: expires pending permission prompts whose hook never called /expire.
 builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepService>();
 
+// Runtime network port requests: agents ask for extra ports (agenthub_network MCP),
+// the owner approves via the permission channel, approved ports become NetworkPolicies.
+builder.Services.AddSingleton<AgentHub.Api.Network.IPortGrantStore, AgentHub.Api.Network.PortGrantStore>();
+builder.Services.AddSingleton<AgentHub.Api.Network.INetworkPolicyClient, AgentHub.Api.Network.KubernetesNetworkPolicyClient>();
+builder.Services.AddSingleton<AgentHub.Api.Network.NetworkPortService>();
+builder.Services.AddSingleton<AgentHub.Api.Network.INetworkSessionCleanup>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Network.NetworkPortService>());
+
 builder.Services.AddHealthChecks();
 
 // --- Auth: generic OIDC/JWT provider (e.g. Keycloak). Multi-user separation via preferred_username. ---
@@ -261,6 +269,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatLinkCodeStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Network.IPortGrantStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Usage.UsageLimitStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Agents.AllowedAgentsStore>().InitializeAsync();

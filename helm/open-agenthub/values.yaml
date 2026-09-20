@@ -77,6 +77,16 @@ agent:
   # Extra TCP egress ports allowed from session pods (besides 53/80/443/22),
   # e.g. [9000] for a self-hosted S3/MinIO on a non-standard port.
   extraEgressPorts: []
+  # Runtime port requests: an agent may ask (via the built-in agenthub_network MCP
+  # server) to open additional ports while the session runs — egress (e.g. Postgres
+  # 5432) or browser→agent (a dev server beyond the default preview ports). The
+  # session owner approves each request; approved ports become per-session
+  # NetworkPolicies that are deleted with the session. Only ports listed here can be
+  # requested — anything else is rejected without asking. Entries are single ports
+  # or "from-to" ranges; [] disallows requests entirely.
+  portRequests:
+    enabled: true
+    requestablePorts: ["5432", "3306", "6379", "27017", "9000-9100"]
 
 files:
   maxImageBytes: 20971520
