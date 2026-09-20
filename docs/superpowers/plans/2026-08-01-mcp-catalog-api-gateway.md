@@ -368,6 +368,6 @@ git commit -m "fix(mcp-catalog): harden gateway wiring and access edge cases"
 
 - Prefer copying MCP-only files from `.worktrees/skill-library-mcp` then adapting over rewriting from scratch.
 - Do not merge skills code.
-- No Relaxdays references.
+- No company or internal-environment references.
 - Commit after each task; do not push unless asked.
 - TDD: red → green → commit per task.
