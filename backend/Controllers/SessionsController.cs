@@ -2,6 +2,7 @@ using System.Security.Claims;
 using AgentHub.Api.Agents;
 using AgentHub.Api.Models;
 using AgentHub.Api.Permissions;
+using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -16,10 +17,11 @@ public sealed class SessionsController : ControllerBase
     private readonly ISessionService _svc;
     private readonly PermissionStore _permissions;
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
+    private readonly ISessionMessageStore? _messages;
 
     public SessionsController(ISessionService svc, PermissionStore permissions,
-        IEnumerable<IPermissionPromptEditor> promptEditors)
-    { _svc = svc; _permissions = permissions; _promptEditors = promptEditors; }
+        IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMessageStore? messages = null)
+    { _svc = svc; _permissions = permissions; _promptEditors = promptEditors; _messages = messages; }
 
     private string Owner =>
         User.FindFirstValue("preferred_username")
@@ -118,6 +120,24 @@ public sealed class SessionsController : ControllerBase
     {
         try { await _svc.DeleteSessionAsync(Owner, id, ct); return NoContent(); }
         catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    /// <summary>Recent agent messages sent to this session — a read-only view for the web
+    /// app; it never marks messages delivered (that flag belongs to the agent's inbox).</summary>
+    [HttpGet("{id}/messages")]
+    public async Task<IActionResult> Messages(string id, CancellationToken ct)
+    {
+        if (await _svc.GetSessionAsync(Owner, id, ct) is null) return NotFound();
+        if (_messages is null) return Ok(Array.Empty<AgentMessageInfo>());
+
+        var recent = (await _messages.ListRecentAsync(id, 20, ct)).Where(m => m.Owner == Owner).ToList();
+        var titles = recent.Any(m => m.FromSessionId is not null)
+            ? (await _svc.ListSessionsAsync(Owner, ct)).ToDictionary(s => s.Id, s => s.Title)
+            : new Dictionary<string, string>();
+        return Ok(recent.Select(m => new AgentMessageInfo(
+            m.Id, m.FromSessionId,
+            m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId),
+            m.Body, m.CreatedAt, m.DeliveredAt)).ToList());
     }
 
     public record PermissionDecisionBody(string Decision);

@@ -20,15 +20,18 @@ public sealed class RemoteController : ControllerBase
 {
     private readonly Func<string, CancellationToken, Task<string?>> _findOwner;
     private readonly ISessionService _svc;
+    private readonly ISessionMessageStore? _messages;
 
-    public RemoteController(ApiTokenStore tokens, ISessionService svc)
-        : this(tokens.FindOwnerByTokenAsync, svc) { }
+    public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null)
+        : this(tokens.FindOwnerByTokenAsync, svc, messages) { }
 
     /// <summary>Test seam: resolve owner from a plaintext token without Postgres.</summary>
-    public RemoteController(Func<string, CancellationToken, Task<string?>> findOwnerByToken, ISessionService svc)
+    public RemoteController(Func<string, CancellationToken, Task<string?>> findOwnerByToken, ISessionService svc,
+        ISessionMessageStore? messages = null)
     {
         _findOwner = findOwnerByToken;
         _svc = svc;
+        _messages = messages;
     }
 
     /// <summary>Resolves the bearer token to its owner, or null if missing/invalid.</summary>
@@ -69,6 +72,36 @@ public sealed class RemoteController : ControllerBase
         var owner = await ResolveOwnerAsync(ct);
         if (owner is null) return Unauthorized();
         return Ok(await _svc.ListSessionsAsync(owner, ct));
+    }
+
+    /// <summary>
+    /// Sends a message/task to one of the token owner's sessions. Stored with a null
+    /// sender session — the receiving agent sees it as an external message from its owner.
+    /// </summary>
+    [HttpPost("sessions/{id}/messages")]
+    public async Task<IActionResult> SendMessage(string id, [FromBody] RemoteAgentMessageRequest req, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        if (_messages is null) return NotFound();
+
+        var text = AgentMessaging.NormalizeBody(req.Body);
+        if (text is null)
+            return BadRequest($"A message body of 1..{AgentMessaging.MaxBodyChars} characters is required.");
+        var target = await _svc.GetSessionAsync(owner, id, ct);
+        if (target is null) return NotFound();
+
+        var message = new SessionMessageRecord
+        {
+            Id = Guid.NewGuid().ToString("n")[..12],
+            ProjectId = target.ProjectId,
+            FromSessionId = null,
+            ToSessionId = target.Id,
+            Owner = owner,
+            Body = text
+        };
+        await _messages.AddAsync(message, ct);
+        return Ok(new { id = message.Id, to = target.Id });
     }
 
     [HttpDelete("sessions/{id}")]
