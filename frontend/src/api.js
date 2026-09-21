@@ -117,6 +117,8 @@ export const api = {
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
+  // Recent agent-to-agent messages sent to a session (read-only fleet inbox view).
+  listSessionMessages: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/messages`),
   // Pending tool-permission requests + in-app approval (mirrors the messenger buttons).
   listPermissions: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/permissions`),
   decidePermission: (id, reqId, decision) => req('POST', `/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(reqId)}`, { decision }),

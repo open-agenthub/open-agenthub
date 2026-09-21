@@ -137,6 +137,21 @@ public static class SessionUiMode
     }
 }
 
+/// <summary>Normalizes the optional agent description (trimmed, empty → null, length-capped).</summary>
+public static class SessionDescription
+{
+    public const int MaxLength = 500;
+
+    public static string? Normalize(string? description)
+    {
+        var trimmed = description?.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return null;
+        if (trimmed.Length > MaxLength)
+            throw new ArgumentException($"The description is limited to {MaxLength} characters.");
+        return trimmed;
+    }
+}
+
 /// <summary>A repository to check out into the session workspace.</summary>
 public record RepoRef
 {
@@ -152,6 +167,10 @@ public record RepoRef
 public record CreateSessionRequest
 {
     public string Title { get; init; } = "Untitled";
+
+    /// <summary>What this agent is for — shown in the UI and to other agents of the project.</summary>
+    public string? Description { get; init; }
+
     public SessionMode Mode { get; init; } = SessionMode.Interactive;
 
     /// <summary>UI rendering mode: "terminal" (default) or "chat" (interactive Claude only).</summary>
@@ -234,6 +253,8 @@ public sealed record EphemeralApiSource
 public record UpdateSessionRequest
 {
     public string? Title { get; init; }
+    /// <summary>Agent description; null = unchanged, empty string clears it. Applies immediately.</summary>
+    public string? Description { get; init; }
     /// <summary>Custom container image; empty string resets to the default agent image.</summary>
     public string? Image { get; init; }
     public bool? RunAsRoot { get; init; }
@@ -285,6 +306,7 @@ public static class SessionDuplication
         return new()
         {
             Title = request.Title,
+            Description = source.Description,
             ProjectId = request.ProjectId,
             Mode = source.Mode,
             UiMode = source.UiMode,
@@ -335,6 +357,8 @@ public record SessionInfo
 {
     public required string Id { get; init; }
     public required string Title { get; init; }
+    /// <summary>What this agent is for (null = none set).</summary>
+    public string? Description { get; init; }
     public required string Owner { get; init; }
     public string? ProjectId { get; init; }
     /// <summary>Optional parent session for orchestration (null = root session).</summary>

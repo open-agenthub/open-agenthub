@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AgentHubClient } from './client.mjs';
+import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
 
@@ -74,6 +75,36 @@ register('session_delete', {
   description: 'Delete a session (pod and record). Does not cascade to its children.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
 }, async ({ id }) => text(sanitizeSession(await client.delete(id))));
+
+register('agents_list', {
+  description: 'List your agents (sessions) with title (= agent name), description (what the agent '
+    + 'is for), and phase — optionally scoped to one projectId.',
+  inputSchema: z.object({ projectId: z.string().max(128).optional() })
+}, async ({ projectId }) => text(sanitizeSession(await client.listAgents(projectId))));
+
+register('agent_send', {
+  description: 'Send a message/task to one of your agents. "to" is a session id or a unique title '
+    + '(scope the lookup with projectId); an ambiguous title fails with the candidate list. The agent '
+    + 'reads it via its in-session agent_inbox tool.',
+  inputSchema: z.object({
+    to: z.string().min(1).max(256),
+    message: z.string().min(1).max(4000),
+    projectId: z.string().max(128).optional()
+  })
+}, async ({ to, message, projectId }) => {
+  const agents = await client.listAgents(projectId);
+  let targetId;
+  try {
+    targetId = resolveAgentTarget(agents, to);
+  } catch (error) {
+    if (error?.code !== 'agent_not_found' && error?.code !== 'agent_title_ambiguous') throw error;
+    return {
+      content: [{ type: 'text', text: JSON.stringify({ error: error.code, candidates: error.candidates ?? [] }) }],
+      isError: true
+    };
+  }
+  return text(await client.sendAgentMessage(targetId, message));
+});
 
 function safeError(error) {
   const message = error instanceof Error ? error.message : '';

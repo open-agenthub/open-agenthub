@@ -8,6 +8,7 @@ test('sanitizeSession omits mcpConfigJson and other secrets', async () => {
   const raw = {
     id: 's1',
     title: 'child',
+    description: 'Implements tasks handed over by the reviewer.',
     owner: 'alice',
     mode: 'Autonomous',
     agent: 'Claude',
@@ -34,6 +35,7 @@ test('sanitizeSession omits mcpConfigJson and other secrets', async () => {
 
   const safe = sanitizeSession(raw);
   assert.equal(safe.id, 's1');
+  assert.equal(safe.description, 'Implements tasks handed over by the reviewer.');
   assert.equal(safe.prompt, 'do work');
   assert.equal(safe.hasMcp, true);
   assert.deepEqual(safe.repos, [{ url: 'https://example.com/r.git', branch: 'main' }]);

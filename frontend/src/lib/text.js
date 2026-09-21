@@ -11,7 +11,7 @@ export function sessionMatches(session, query) {
   const q = (query || '').trim().toLowerCase()
   if (!q) return true
   const authLabel = session.authMode === 'ApiKey' ? 'API key' : session.authMode === 'Auto' ? 'Auto legacy' : session.authMode
-  const fields = [session.title, session.repoUrl, session.mode, session.agent, session.authMode, authLabel,
+  const fields = [session.title, session.description, session.repoUrl, session.mode, session.agent, session.authMode, authLabel,
     ...((session.repos || []).map(r => r.url))]
   return fields.filter(Boolean).some(v => String(v).toLowerCase().includes(q))
 }

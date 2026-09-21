@@ -75,6 +75,7 @@ function repoLine(s) {
           </div>
           <div class="row-main">
             <div class="row-title">{{ s.title }}</div>
+            <div v-if="s.description" class="row-desc" data-session-description>{{ s.description }}</div>
             <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span></div>
           </div>
           <div v-if="sessionCapabilities(s).canManage" class="row-actions">
@@ -117,6 +118,7 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .mode { font-size: 11px; color: var(--muted-3); font-weight: 600; }
 .row-main { flex: 1; min-width: 0; }
 .row-title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row-desc { font-size: 12px; color: var(--muted-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-repo { font-family: var(--mono); font-size: 12px; color: var(--muted-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shared-by { color: var(--accent); }
 .row-actions { display: flex; gap: 4px; flex-shrink: 0; }
