@@ -203,6 +203,11 @@ export const api = {
   // kind: 'mcp-servers' | 'skills'
   libraryShares: (kind, id) => req('GET', `/ee/library/${kind}/${encodeURIComponent(id)}/shares`),
   setLibraryShares: (kind, id, data) => req('PUT', `/ee/library/${kind}/${encodeURIComponent(id)}/shares`, data),
+  // Webhook triggers: inbound GitLab/GitHub MR/PR webhooks start autonomous sessions.
+  listWebhookTriggers: () => req('GET', '/webhook-triggers'),
+  // Returns { trigger, secret } — the plaintext secret is shown exactly once.
+  createWebhookTrigger: (data) => req('POST', '/webhook-triggers', data),
+  deleteWebhookTrigger: (id) => req('DELETE', `/webhook-triggers/${encodeURIComponent(id)}`),
   // Git OAuth providers / connections.
   gitProviders: () => req('GET', '/git/providers'),
   gitConnectUrl: (providerId) => req('GET', `/git/connect/${providerId}`),

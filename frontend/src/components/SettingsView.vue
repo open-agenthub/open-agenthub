@@ -9,6 +9,7 @@ import AdminLimitsView from './AdminLimitsView.vue'
 import McpServersPane from './McpServersPane.vue'
 import SkillsPane from './SkillsPane.vue'
 import GroupsPane from './GroupsPane.vue'
+import WebhooksPane from './WebhooksPane.vue'
 import { initials } from '../lib/text.js'
 
 defineEmits(['close'])
@@ -24,7 +25,8 @@ const personalTabs = computed(() => [
   { key: 'mcp', label: 'MCP servers' },
   { key: 'skills', label: 'Skills' },
   { key: 'notifications', label: 'Notifications' },
-  { key: 'tokens', label: 'API tokens' }
+  { key: 'tokens', label: 'API tokens' },
+  { key: 'webhooks', label: 'Webhooks' }
 ].filter(t => !t.show || t.show()))
 
 const adminTabs = [
@@ -113,6 +115,7 @@ async function deleteAccount() {
       <GroupsPane v-else-if="active === 'groups'" />
       <SettingsDialog v-else-if="active === 'notifications'" embedded section="notifications" />
       <SettingsDialog v-else-if="active === 'tokens'" embedded section="tokens" />
+      <WebhooksPane v-else-if="active === 'webhooks'" />
       <AdminView v-else-if="active === 'users'" embedded section="seats" />
       <McpServersPane v-else-if="active === 'org-mcp'" :is-admin="true" mode="org" />
       <AdminLimitsView v-else-if="active === 'limits'" embedded />
