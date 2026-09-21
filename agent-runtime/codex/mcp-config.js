@@ -147,13 +147,42 @@ function convertMcp(agentHubJson, reservedServers = []) {
     (names.length ? '\n' : '');
 }
 
+// Codex starts MCP subprocesses with a cleared environment and forwards only the
+// variables named in env_vars, so the interpreter must be an absolute path and
+// PATH/RUNTIME must be forwarded explicitly or the server dies before initialize.
+const BUILTIN_SERVERS = [
+  { name: 'agenthub_browser', dir: 'browser', flag: 'AGENTHUB_BROWSER_ENABLED', extraEnv: [] },
+  { name: 'agenthub_sessions', dir: 'sessions', flag: 'AGENTHUB_SPAWN_MCP_ENABLED', extraEnv: ['AGENTHUB_SESSION_ID'] },
+  { name: 'agenthub_files', dir: 'files', flag: 'AGENTHUB_FILES_MCP_ENABLED', extraEnv: ['AGENTHUB_WORKDIR', 'AGENTHUB_FILE_ROOT'] }
+];
+
+function builtinToml(env = process.env, nodeBin = process.execPath) {
+  const runtime = env.RUNTIME || '/opt/session-agent';
+  const blocks = BUILTIN_SERVERS
+    .filter(server => env[server.flag] === '1')
+    .map(server => [
+      '[mcp_servers.' + server.name + ']',
+      'command = ' + quoted(nodeBin),
+      'args = ' + array([runtime + '/' + server.dir + '/server.mjs']),
+      'env_vars = ' + array([
+        'PATH', 'RUNTIME', 'AGENTHUB_CALLBACK_URL', 'AGENTHUB_CALLBACK_TOKEN',
+        ...server.extraEnv
+      ])
+    ].join('\n'));
+  return blocks.join('\n\n') + (blocks.length ? '\n' : '');
+}
+
 if (require.main === module) {
-  try {
-    process.stdout.write(convertMcp(fs.readFileSync(process.argv[2], 'utf8'), process.argv.slice(3)));
-  } catch (error) {
-    console.error('[codex-mcp] MCP configuration rejected: ' + error.message);
-    process.exit(1);
+  if (process.argv[2] === '--builtin') {
+    process.stdout.write(builtinToml());
+  } else {
+    try {
+      process.stdout.write(convertMcp(fs.readFileSync(process.argv[2], 'utf8'), process.argv.slice(3)));
+    } catch (error) {
+      console.error('[codex-mcp] MCP configuration rejected: ' + error.message);
+      process.exit(1);
+    }
   }
 }
 
-module.exports = { convertMcp };
+module.exports = { convertMcp, builtinToml };

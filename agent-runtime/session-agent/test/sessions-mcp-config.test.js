@@ -43,9 +43,11 @@ test('runtime wiring owns the sessions server for Claude, Codex, and Cursor', ()
 
   assert.match(common, /AGENTHUB_SPAWN_MCP_ENABLED/);
   assert.match(common, /sessions\/configure\.mjs/);
-  assert.ok(codex.indexOf('mcp-config.js') < codex.indexOf('[mcp_servers.agenthub_sessions]'));
+  assert.ok(codex.indexOf('/secrets/mcp/mcp.json') < codex.indexOf('--builtin'));
   assert.match(codex, /agenthub_sessions >> "\$CODEX_HOME\/config\.toml"|agenthub_sessions/);
-  assert.match(codex, /AGENTHUB_SPAWN_MCP_ENABLED/);
+  assert.match(require('../../codex/mcp-config').builtinToml(
+    { AGENTHUB_SPAWN_MCP_ENABLED: '1' }, '/usr/local/bin/node'),
+    /\[mcp_servers\.agenthub_sessions\]/);
   assert.match(cursor, /AGENTHUB_SPAWN_MCP_ENABLED/);
   assert.match(cursor, /agenthub_sessions|sessions\/configure\.mjs/);
   assert.match(claudeDocker, /COPY sessions \/opt\/session-agent\/sessions/);
@@ -83,8 +85,10 @@ test('Cursor conversion omits runtime-reserved sessions server', () => {
 test('entrypoint injects sessions only when AGENTHUB_SPAWN_MCP_ENABLED=1', () => {
   const runtime = path.join(__dirname, '..', '..');
   const common = fs.readFileSync(path.join(runtime, 'common', 'entrypoint-common.sh'), 'utf8');
-  const codex = fs.readFileSync(path.join(runtime, 'codex', 'entrypoint.sh'), 'utf8');
+  const { builtinToml } = require('../../codex/mcp-config');
 
   assert.match(common, /AGENTHUB_SPAWN_MCP_ENABLED:-0.*= "1"/);
-  assert.match(codex, /AGENTHUB_SPAWN_MCP_ENABLED:-0.*= "1"/);
+  assert.doesNotMatch(builtinToml({}, '/usr/local/bin/node'), /agenthub_sessions/);
+  assert.match(builtinToml({ AGENTHUB_SPAWN_MCP_ENABLED: '1' }, '/usr/local/bin/node'),
+    /agenthub_sessions/);
 });

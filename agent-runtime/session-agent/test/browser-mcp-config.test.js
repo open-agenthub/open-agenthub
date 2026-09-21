@@ -38,7 +38,12 @@ test('runtime wiring owns the browser server for both Claude and Codex', () => {
   const server = fs.readFileSync(path.join(runtime, 'browser', 'server.mjs'), 'utf8');
 
   assert.match(common, /AGENTHUB_MCP_CONFIG=\/tmp\/agenthub-mcp\.json/);
-  assert.ok(codex.indexOf('mcp-config.js') < codex.indexOf('[mcp_servers.agenthub_browser]'));
+  // User MCP conversion runs first so a spoofed builtin name is dropped before
+  // the runtime-owned blocks are rendered.
+  assert.ok(codex.indexOf('/secrets/mcp/mcp.json') < codex.indexOf('--builtin'));
+  assert.match(require('../../codex/mcp-config')
+    .builtinToml({ AGENTHUB_BROWSER_ENABLED: '1' }, '/usr/local/bin/node'),
+    /\[mcp_servers\.agenthub_browser\]/);
   assert.match(codex, /agenthub_browser(?:\s+agenthub_sessions)?(?:\s+agenthub_files)? >> "\$CODEX_HOME\/config\.toml"/);
   assert.match(claudeDocker, /COPY browser \/opt\/session-agent\/browser/);
   assert.match(codexDocker, /COPY browser \/opt\/session-agent\/browser/);
