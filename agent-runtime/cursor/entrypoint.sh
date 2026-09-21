@@ -42,14 +42,18 @@ chmod 600 "$CURSOR_CONFIG_DIR/cli-config.json"
 
 # Always omit runtime-owned server names from user MCP so they cannot be spoofed.
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
-  node "$RUNTIME/cursor/mcp-config.js" /secrets/mcp/mcp.json agenthub_sessions agenthub_files > "$CURSOR_CONFIG_DIR/mcp.json"
+  node "$RUNTIME/cursor/mcp-config.js" /secrets/mcp/mcp.json agenthub_sessions agenthub_files agenthub_network > "$CURSOR_CONFIG_DIR/mcp.json"
   chmod 600 "$CURSOR_CONFIG_DIR/mcp.json"
-elif [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ] || [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
+elif [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ] || [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ] || [ "${AGENTHUB_NETWORK_MCP_ENABLED:-0}" = "1" ]; then
   printf '%s\n' '{"mcpServers":{}}' > "$CURSOR_CONFIG_DIR/mcp.json"
   chmod 600 "$CURSOR_CONFIG_DIR/mcp.json"
 fi
 if [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ]; then
   node "$RUNTIME/sessions/configure.mjs" "$CURSOR_CONFIG_DIR/mcp.json" "$CURSOR_CONFIG_DIR/mcp.json"
+  chmod 600 "$CURSOR_CONFIG_DIR/mcp.json"
+fi
+if [ "${AGENTHUB_NETWORK_MCP_ENABLED:-0}" = "1" ]; then
+  node "$RUNTIME/network/configure.mjs" "$CURSOR_CONFIG_DIR/mcp.json" "$CURSOR_CONFIG_DIR/mcp.json"
   chmod 600 "$CURSOR_CONFIG_DIR/mcp.json"
 fi
 

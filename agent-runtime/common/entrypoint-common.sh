@@ -74,6 +74,11 @@ if [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ]; then
   MCP_SOURCE=/tmp/agenthub-mcp.json
   MERGED_MCP=1
 fi
+if [ "${AGENTHUB_NETWORK_MCP_ENABLED:-0}" = "1" ]; then
+  node "$RUNTIME/network/configure.mjs" "$MCP_SOURCE"
+  MCP_SOURCE=/tmp/agenthub-mcp.json
+  MERGED_MCP=1
+fi
 
 if [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
   node "$RUNTIME/files/configure.mjs" "$MCP_SOURCE"
