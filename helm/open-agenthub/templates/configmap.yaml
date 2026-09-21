@@ -31,6 +31,10 @@ data:
   AgentHub__TelemetryOtlpEndpoint: {{ .Values.telemetry.otlpEndpoint | default "" | quote }}
   AgentHub__MaxRunningSessionsPerOwner: {{ .Values.maxRunningSessionsPerOwner | default 20 | quote }}
   AgentHub__SpawnMcpEnabled: {{ .Values.spawnMcpEnabled | quote }}
+  Network__Enabled: {{ .Values.agent.portRequests.enabled | quote }}
+  # One string (not indexed keys): an empty list must yield an EMPTY allowlist in the
+  # backend instead of falling back to the compiled-in defaults.
+  Network__RequestablePorts: {{ join "," .Values.agent.portRequests.requestablePorts | quote }}
   Files__MaxImageBytes: {{ .Values.files.maxImageBytes | int64 | quote }}
   Files__MaxDocumentBytes: {{ .Values.files.maxDocumentBytes | int64 | quote }}
   Files__MaxMessageBytes: {{ .Values.files.maxMessageBytes | int64 | quote }}
