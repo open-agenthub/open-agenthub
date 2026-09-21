@@ -37,19 +37,21 @@ public sealed class InternalController : ControllerBase
     private readonly ILibraryAccess _library;
     private readonly IAgentCallbackAuthorizer _callbackAuthorizer;
     private readonly IUsageStore? _usage;
+    private readonly ISessionMessageStore? _messages;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares,
         ILibraryAccess library, IBrowserService? browsers = null, bool? spawnMcpEnabled = null,
         IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null,
-        IUsageStore? usage = null)
+        IUsageStore? usage = null, ISessionMessageStore? messages = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
         _library = library;
         _browsers = browsers;
         _usage = usage;
+        _messages = messages;
         _callbackAuthorizer = callbackAuthorizer ?? new AgentCallbackAuthorizer(store);
         _spawnMcpEnabled = spawnMcpEnabled
             ?? configuration?.GetValue("AgentHub:SpawnMcpEnabled", true)
@@ -398,4 +400,111 @@ public sealed class InternalController : ControllerBase
         byId.TryAdd(parent.Id, parent.ParentSessionId);
         return SessionDescent.IsDescendant(childId, parent.Id, id => byId.GetValueOrDefault(id));
     }
+
+    // ------------------------------------------------------------- project agent fleet
+
+    /// <summary>
+    /// Directory of the session's project fleet: every session of the same owner in the
+    /// same project, as slim <see cref="ProjectAgentInfo"/> records (no MCP configs, no
+    /// runtime settings). A session without a project sees only itself and its descendants.
+    /// </summary>
+    [HttpGet("project-agents")]
+    public async Task<IActionResult> ProjectAgents(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        var all = await _svc.ListSessionsAsync(rec.Owner, ct);
+        IEnumerable<SessionInfo> scope;
+        if (rec.ProjectId is not null)
+        {
+            scope = all.Where(s => s.ProjectId == rec.ProjectId);
+        }
+        else
+        {
+            var byId = all.ToDictionary(s => s.Id, s => s.ParentSessionId);
+            byId.TryAdd(rec.Id, rec.ParentSessionId);
+            scope = all.Where(s => s.Id == rec.Id ||
+                SessionDescent.IsDescendant(s.Id, rec.Id, x => byId.GetValueOrDefault(x)));
+        }
+        return Ok(scope
+            .Select(s => new ProjectAgentInfo(s.Id, s.Title, s.Description, s.Phase, s.Mode,
+                s.Agent, s.QuestionPending, s.CreatedAt, Self: s.Id == rec.Id))
+            .ToList());
+    }
+
+    /// <summary>
+    /// Sends a message/task from this session to a peer agent. Peers exist only inside a
+    /// project: the target must belong to the same owner and the same (non-null) project —
+    /// anything else answers 404 so nothing about foreign sessions leaks.
+    /// </summary>
+    [HttpPost("messages")]
+    public async Task<IActionResult> SendMessage(string id, [FromBody] SendAgentMessageRequest body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (_messages is null) return NotFound();
+
+        var text = AgentMessaging.NormalizeBody(body.Body);
+        if (text is null)
+            return BadRequest($"A message body of 1..{AgentMessaging.MaxBodyChars} characters is required.");
+        var to = body.To?.Trim();
+        if (string.IsNullOrEmpty(to)) return BadRequest("A target session id is required.");
+        if (to == id) return BadRequest("A session cannot message itself.");
+        if (rec.ProjectId is null) return NotFound();
+
+        var target = await _store.GetAsync(rec.Owner, to, ct);
+        if (target is null || target.ProjectId != rec.ProjectId) return NotFound();
+
+        var message = new SessionMessageRecord
+        {
+            Id = Guid.NewGuid().ToString("n")[..12],
+            ProjectId = rec.ProjectId,
+            FromSessionId = rec.Id,
+            ToSessionId = target.Id,
+            Owner = rec.Owner,
+            Body = text
+        };
+        await _messages.AddAsync(message, ct);
+        // Best-effort visibility beyond the pull inbox: the same fan-out that carries
+        // question/finished events to Slack/Telegram/n8n. The web app reads the message
+        // itself from the public messages endpoint.
+        await NotifyAllAsync(target, "agent-message",
+            $"Agent \"{rec.Title}\" sent a message to \"{target.Title}\": {Truncate(text, 300)}", ct);
+        return Ok(new { id = message.Id, to = target.Id });
+    }
+
+    /// <summary>
+    /// The session's inbox: takes undelivered messages (marking them delivered), long-polling
+    /// up to <paramref name="wait"/> seconds. Batches are capped so a full response stays
+    /// under the in-pod MCP client's response limit — callers poll again for the rest.
+    /// </summary>
+    [HttpGet("messages")]
+    public async Task<IActionResult> InboxMessages(string id, CancellationToken ct, [FromQuery] int wait = 0)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (_messages is null) return Ok(new { messages = Array.Empty<AgentMessageInfo>() });
+
+        var deadline = DateTime.UtcNow.AddSeconds(Math.Clamp(wait, 0, AgentMessaging.MaxWaitSeconds));
+        IReadOnlyList<SessionMessageRecord> taken;
+        while (true)
+        {
+            taken = await _messages.TakeUndeliveredAsync(id, AgentMessaging.InboxBatchLimit, ct);
+            if (taken.Count > 0 || DateTime.UtcNow >= deadline) break;
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+        }
+
+        var titles = taken.Any(m => m.FromSessionId is not null)
+            ? (await _svc.ListSessionsAsync(rec.Owner, ct)).ToDictionary(s => s.Id, s => s.Title)
+            : new Dictionary<string, string>();
+        var messages = taken.Select(m => new AgentMessageInfo(
+            m.Id, m.FromSessionId,
+            m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId),
+            m.Body, m.CreatedAt, m.DeliveredAt)).ToList();
+        return Ok(new { messages });
+    }
+
+    private static string Truncate(string text, int max) =>
+        text.Length <= max ? text : text[..max] + "…";
 }

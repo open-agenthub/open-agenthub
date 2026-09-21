@@ -32,6 +32,7 @@ const ephemeralName = ref('')
 const ephemeralSaveToLibrary = ref(false)
 const form = ref({
   title: '',
+  description: '',
   mode: 'Interactive',
   uiMode: 'terminal',
   prompt: '',
@@ -95,6 +96,7 @@ async function submit() {
   try {
     const session = await api.createSession({
       title: form.value.title || 'Session',
+      description: form.value.description.trim() || null,
       mode: form.value.mode,
       uiMode: form.value.uiMode,
       ...agentPayload(form.value),
@@ -134,6 +136,10 @@ async function submit() {
         <div class="field">
           <label>Title</label>
           <input v-model="form.title" placeholder="e.g. Resolve ticket OPS-1423" />
+        </div>
+        <div class="field">
+          <label>Description <span class="dim">— what is this agent for? Shown to the other agents of the project.</span></label>
+          <input v-model="form.description" data-description maxlength="500" placeholder="e.g. Reviews merge requests and hands findings to the coder" />
         </div>
         <div class="field">
           <label>Mode</label>

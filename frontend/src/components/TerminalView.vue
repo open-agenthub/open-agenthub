@@ -40,6 +40,26 @@ async function refreshPermissions() {
   try { pendingPermissions.value = await api.listPermissions(props.session.id) } catch {}
 }
 
+// Fleet inbox: messages other agents of the project sent to this session. The view is
+// read-only — only the agent's own inbox poll marks messages delivered — so a banner
+// stays visible until the agent picks the message up or the user dismisses it.
+const agentMessages = ref([])
+const dismissedMessages = ref(new Set())
+const visibleMessages = computed(() => agentMessages.value
+  .filter(m => !m.deliveredAt && !dismissedMessages.value.has(m.id)))
+
+async function refreshMessages() {
+  if (props.sharedToken || !capabilities.value.canManage) {
+    agentMessages.value = []
+    return
+  }
+  try { agentMessages.value = await api.listSessionMessages(props.session.id) } catch {}
+}
+
+function dismissMessage(id) {
+  dismissedMessages.value = new Set([...dismissedMessages.value, id])
+}
+
 async function decidePermission(reqId, decision) {
   pendingPermissions.value = pendingPermissions.value.filter(p => p.id !== reqId)
   try { await api.decidePermission(props.session.id, reqId, decision) } catch {}
@@ -73,10 +93,17 @@ async function toggleAutoApprove() {
 
 onMounted(() => {
   refreshPermissions()
-  permissionTimer = setInterval(refreshPermissions, 4000)
+  refreshMessages()
+  permissionTimer = setInterval(() => { refreshPermissions(); refreshMessages() }, 4000)
 })
 onBeforeUnmount(() => clearInterval(permissionTimer))
-watch(() => props.session?.id, () => { pendingPermissions.value = []; refreshPermissions() })
+watch(() => props.session?.id, () => {
+  pendingPermissions.value = []
+  agentMessages.value = []
+  dismissedMessages.value = new Set()
+  refreshPermissions()
+  refreshMessages()
+})
 
 const repoLabel = computed(() => repoShortName(props.session?.repoUrl || props.session?.repos?.[0]?.url || ''))
 
@@ -144,6 +171,16 @@ async function selectTab(tab) {
         <button class="bar-btn" data-auto-approve :disabled="autoApproveBusy" @click="toggleAutoApprove">Turn off</button>
       </div>
     </div>
+    <div v-for="m in visibleMessages" :key="m.id" class="perm agent-msg" data-agent-message>
+      <span class="ask-dot msg-dot"></span>
+      <div class="perm-text">
+        <strong>Message from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}</strong>
+        <span class="msg-body">{{ m.body }}</span>
+      </div>
+      <div class="perm-actions">
+        <button class="bar-btn" data-dismiss-message @click="dismissMessage(m.id)">Dismiss</button>
+      </div>
+    </div>
     <div v-for="p in pendingPermissions" :key="p.id" class="perm">
       <span class="ask-dot"></span>
       <div class="perm-text">
@@ -209,6 +246,9 @@ async function selectTab(tab) {
 .perm-summary { color: var(--muted-3); font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .perm-actions { display: flex; gap: 8px; }
 .perm-actions .danger { color: #e5484d; }
+.agent-msg { color: var(--accent-2); background: #121a24; border-bottom: 1px solid #24405c; }
+.msg-dot { background: var(--accent-2); }
+.msg-body { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .terminal-stack { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }
 .transcript-inner { max-width: 760px; margin: 0 auto; padding: 26px 24px; }

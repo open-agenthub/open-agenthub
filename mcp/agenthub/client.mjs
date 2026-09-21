@@ -44,6 +44,17 @@ export class AgentHubClient {
     return { deleted: true };
   }
 
+  /** Owner sessions as an agent directory, optionally scoped to one project. */
+  async listAgents(projectId) {
+    const sessions = await this.list();
+    return projectId === undefined ? sessions : sessions.filter(session => session.projectId === projectId);
+  }
+
+  /** Sends a message/task to an owned session (stored as an external message). */
+  sendAgentMessage(sessionId, message) {
+    return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(sessionId)}/messages`, { body: message });
+  }
+
   async #request(method, path, body) {
     const headers = {
       Authorization: `Bearer ${this.token}`,

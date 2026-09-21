@@ -11,6 +11,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
     <span class="dot" :class="{ ask: s.questionPending }" :style="{ background: statusStyle(s).color }"></span>
     <div class="info">
       <div class="title">{{ s.title }}</div>
+      <div v-if="s.description" class="desc" data-session-description>{{ s.description }}</div>
       <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span></div>
     </div>
     <span v-if="sessionCapabilities(s).canManage" class="acts">
@@ -33,6 +34,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
 @keyframes blink { 50% { opacity: .25; } }
 .info { flex: 1; min-width: 0; }
 .title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.desc { font-size: 11px; color: var(--muted-2); margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { font-size: 11px; color: var(--muted-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st { font-weight: 700; }
 .role, .owner { color: var(--accent); }
