@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { api, getSharedTranscript, sharedTerminalUrl, shellUrl, terminalUrl } from '../api.js'
+import { submitToAgent } from '../lib/terminal-input.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null } })
 const emit = defineEmits(['status'])
@@ -21,6 +22,10 @@ const canSend = computed(() => isLive.value && !props.readonly)
 
 function send(value) {
   if (canSend.value && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value))
+}
+
+function sendComposerMessage() {
+  if (submitToAgent(send, mobileInput.value)) mobileInput.value = ''
 }
 
 function resize(force = false) {
@@ -179,5 +184,5 @@ onBeforeUnmount(() => {
   fit = undefined
 })
 </script>
-<template><div class="pane"><div ref="host" class="term"></div><div v-if="canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="send({ type: 'input', data: mobileInput + '\r' }); mobileInput = ''" /><button class="primary" @click="send({ type: 'input', data: mobileInput + '\r' }); mobileInput = ''">Send</button></div></div></template>
+<template><div class="pane"><div ref="host" class="term"></div><div v-if="canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="sendComposerMessage" /><button class="primary" @click="sendComposerMessage">Send</button></div></div></template>
 <style scoped>.pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; } .term { flex: 1; min-height: 0; padding: 10px 12px; overflow: hidden; } .composer { display: flex; gap: 10px; padding: 12px 16px; background: var(--bg); border-top: 1px solid var(--border); } .composer input { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); } .composer button { align-self: center; padding: 9px 18px; }</style>
