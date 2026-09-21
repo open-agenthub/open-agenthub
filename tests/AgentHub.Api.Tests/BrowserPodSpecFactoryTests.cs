@@ -172,6 +172,24 @@ public sealed class BrowserPodSpecFactoryTests
     }
 
     [Fact]
+    public void PolicySuffixes_CoverEveryPolicyTheFactoryCanCreate()
+    {
+        var context = Context() with
+        {
+            Options = new BrowserOptions { PreviewPorts = [5173] }
+        };
+
+        var resources = BrowserPodSpecFactory.Build(Session("session-1"), Lease(), context);
+
+        // Cleanup deletes by "browser-<session>-<suffix>"; a policy whose suffix is missing
+        // from the list survives as an orphan and blocks the next lease via the label check.
+        Assert.All(resources.Policies, policy => Assert.Contains(
+            BrowserPodSpecFactory.PolicySuffixes,
+            suffix => policy.Metadata.Name == $"browser-session-1-{suffix}"));
+        Assert.Equal(BrowserPodSpecFactory.PolicySuffixes.Count, resources.Policies.Count());
+    }
+
+    [Fact]
     public void Build_OmitsPreviewPoliciesWhenPreviewIsDisabled()
     {
         var context = Context() with { Options = new BrowserOptions { PreviewPorts = [] } };
