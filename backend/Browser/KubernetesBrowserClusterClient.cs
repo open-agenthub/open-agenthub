@@ -107,7 +107,7 @@ public sealed class KubernetesBrowserClusterClient : IBrowserClusterClient
         while (DateTime.UtcNow < deadline &&
                await GetAsync(namespaceName, sessionId, ct) is not null)
             await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
-        foreach (var suffix in new[] { "cdp-in", "cdp-out", "egress", "vnc-in" })
+        foreach (var suffix in BrowserPodSpecFactory.PolicySuffixes)
             await IgnoreNotFoundAsync(() => _k8s.NetworkingV1.DeleteNamespacedNetworkPolicyAsync(
                 $"{name}-{suffix}", namespaceName, cancellationToken: ct));
     }

@@ -36,6 +36,11 @@ public static class BrowserPodSpecFactory
     private const string ComponentLabel = "agenthub.dev/component";
     public const string LeaseLabel = "agenthub.dev/browser-lease";
 
+    /// <summary>Every policy name suffix a lease can create; cleanup must cover all of them,
+    /// or an orphan survives and its stale lease label blocks the next browser start.</summary>
+    public static readonly IReadOnlyList<string> PolicySuffixes =
+        ["cdp-in", "cdp-out", "egress", "vnc-in", "preview-in", "preview-out"];
+
     public static BrowserPodResources Build(
         SessionRecord session, BrowserLease lease, BrowserPodContext context)
     {
