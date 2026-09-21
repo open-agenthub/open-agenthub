@@ -98,6 +98,11 @@ builder.Services.AddHttpClient<AgentHub.Api.Notifications.INotifier, AgentHub.Ap
 builder.Services.AddHttpClient();
 builder.Services.AddSingleton<IGitAuthService, GitAuthService>();
 
+// Git webhook triggers: inbound GitLab/GitHub MR/PR webhooks start autonomous sessions.
+builder.Services.AddSingleton<AgentHub.Api.Webhooks.IWebhookSecretProtector, AgentHub.Api.Webhooks.WebhookSecretProtector>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.IWebhookTriggerStore, AgentHub.Api.Persistence.PostgresWebhookTriggerStore>();
+builder.Services.AddSingleton(new AgentHub.Api.Webhooks.WebhookDeduplicator());
+
 // Enterprise license gate (offline-verified token, activated via the admin UI, stored in the DB).
 // Register the concrete store once and alias the interface to it, so the seat reporter can
 // use the extra check-in methods while everything else depends on ILicenseStore.
@@ -255,6 +260,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
     var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
     await tokenStore.InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IWebhookTriggerStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();
