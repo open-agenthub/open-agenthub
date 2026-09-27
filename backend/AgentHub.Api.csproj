@@ -21,6 +21,22 @@
     <PackageReference Include="Npgsql" Version="10.0.0" />
     <!-- S3 / MinIO (Presigned URLs, Transkript) -->
     <PackageReference Include="AWSSDK.S3" Version="3.7.405.1" />
+    <!-- Remote MCP endpoint (Streamable HTTP) and the OAuth 2.1 server that guards it.
+         The OpenIddict store is in-memory: only dynamically registered clients need to
+         outlive a restart, and those are persisted in Postgres (McpClientStore). The
+         interactive OIDC handler drives the browser login for /connect/authorize; the
+         API itself stays on JwtBearer. -->
+    <PackageReference Include="ModelContextProtocol.AspNetCore" Version="2.0.0-preview.2" />
+    <PackageReference Include="OpenIddict.AspNetCore" Version="7.5.0" />
+    <PackageReference Include="OpenIddict.EntityFrameworkCore" Version="7.5.0" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" Version="10.0.9" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.0" />
+    <!-- OpenIddict pulls this in transitively (via DataProtection) at 10.0.7, which carries five
+         known high-severity advisories; 10.0.10 is the first patched 10.x. Pinned directly so the
+         transitive version cannot win. Remove once OpenIddict's own floor moves past it.
+         NU1510 suggests dropping it as redundant. It is not: without this reference the
+         transitive 10.0.7 is what resolves, and NuGet's vulnerability listing reports it. -->
+    <PackageReference Include="System.Security.Cryptography.Xml" Version="10.0.12" NoWarn="NU1510" />
   </ItemGroup>
 
 </Project>

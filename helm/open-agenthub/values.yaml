@@ -22,6 +22,18 @@ image:
   # namespace AND in the sessionsNamespace (agent pods use it to pull the agent-runtime image).
   pullSecret: ""
 
+# Remote MCP server at <host>/mcp, so AI clients can drive sessions on behalf of a signed-in
+# user. Guarded by an OAuth 2.1 authorization server this instance runs itself, which federates
+# the login to the configured OIDC provider (or, on an instance without one, attributes
+# everything to the local "dev" user like the rest of the API does).
+#
+# Off by default: enabling it exposes an authorization server and a dynamic client registration
+# endpoint, which should be a deliberate choice rather than something a chart upgrade turns on.
+mcp:
+  enabled: false
+  # Externally reachable HTTPS origin, no trailing slash. Empty derives it from ingress.host.
+  publicUrl: ""
+
 ingress:
   enabled: true
   host: agenthub.example.com

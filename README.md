@@ -582,6 +582,10 @@ browser→agent for app development) via the built-in `agenthub_network` MCP ser
 session owner approves each request and approved ports become per-session NetworkPolicies.
 See [Dynamic network port requests](docs/network-ports.md).
 
+AgentHub can also be driven *as* an MCP server: enable `mcp.enabled` and AI clients create and
+steer sessions on behalf of a signed-in user, authenticated through an OAuth 2.1 server the
+instance runs itself. Off by default. See [Remote MCP server](docs/mcp-server.md).
+
 ## Assumptions
 
 - **Auth**: any OIDC provider works. Client `agenthub`, claim `preferred_username` as the
