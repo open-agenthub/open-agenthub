@@ -224,10 +224,21 @@ public record CreateSessionRequest
     /// The pod stays unprivileged (no privileged mode, no hostPath, NetworkPolicies apply).</summary>
     public bool RunAsRoot { get; init; }
 
-    /// <summary>Approve every tool-permission request of this session automatically, without
-    /// asking in the web app or the messengers. Only sensible for a session whose container
-    /// you are willing to let the agent use unattended — see <see cref="RunAsRoot"/>.</summary>
-    public bool AutoApprove { get; init; }
+    /// <summary>
+    /// Approve every tool-permission request of this session automatically, without asking in
+    /// the web app or the messengers.
+    ///
+    /// Null means "decide from the mode", which is what <see cref="AutoApproveFor"/> does:
+    /// on by default for Autonomous and Scheduled sessions, off for Interactive ones. Nobody is
+    /// watching an unattended session, so a permission prompt there has no one to answer it —
+    /// the agent stalls on its first tool call and reports back having done nothing.
+    /// Set it explicitly to false to keep an autonomous session gated anyway.
+    /// </summary>
+    public bool? AutoApprove { get; init; }
+
+    /// <summary>The effective auto-approve setting: an explicit choice, else the mode's default.</summary>
+    public static bool AutoApproveFor(bool? requested, SessionMode mode) =>
+        requested ?? mode is SessionMode.Autonomous or SessionMode.Scheduled;
 
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
