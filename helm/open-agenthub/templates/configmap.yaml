@@ -89,6 +89,11 @@ data:
   Oidc__Scope: {{ .Values.oidc.scope | quote }}
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
   FrontendOrigin: {{ .Values.frontendOrigin | default (printf "https://%s" .Values.ingress.host) | quote }}
+  {{- if .Values.mcp.enabled }}
+  {{- /* The issuer is baked into every token and into the discovery document, so it has to be
+         the externally reachable origin — derived from the ingress host unless overridden. */}}
+  Mcp__PublicUrl: {{ .Values.mcp.publicUrl | default (printf "https://%s" (required "ingress.host is required when mcp.enabled is true (or set mcp.publicUrl)" .Values.ingress.host)) | quote }}
+  {{- end }}
   Ee__Admins: {{ .Values.ee.admins | default "" | quote }}
   Ee__BillingPortalUrl: {{ .Values.ee.billingPortalUrl | default "" | quote }}
   Ee__License__ServiceUrl: {{ .Values.ee.license.serviceUrl | default "" | quote }}

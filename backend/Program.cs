@@ -1,11 +1,18 @@
 using System.Security.Claims;
 using System.Text.Encodings.Web;
+using AgentHub.Api.Mcp;
 using AgentHub.Api.Services;
 using AgentHub.Api.WebSockets;
 using AgentHub.Api.Ee.Sharing;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
+using OpenIddict.Abstractions;
+using OpenIddict.Server;
+using OpenIddict.Validation.AspNetCore;
+using static OpenIddict.Abstractions.OpenIddictConstants;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -209,9 +216,10 @@ builder.Services.AddHealthChecks();
 // Without an authority the backend runs in "auth disabled" mode (local development): every request = user "dev".
 var oidc = builder.Configuration.GetSection("Oidc");
 var authEnabled = !string.IsNullOrWhiteSpace(oidc["Authority"]);
+AuthenticationBuilder authBuilder;
 if (authEnabled)
 {
-    builder.Services
+    authBuilder = builder.Services
         .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         .AddJwtBearer(o =>
         {
@@ -240,11 +248,124 @@ if (authEnabled)
 }
 else
 {
-    builder.Services
+    authBuilder = builder.Services
         .AddAuthentication(DevAuthHandler.SchemeName)
         .AddScheme<AuthenticationSchemeOptions, DevAuthHandler>(DevAuthHandler.SchemeName, null);
 }
 builder.Services.AddAuthorization();
+
+// --- Remote MCP endpoint (Streamable HTTP) and its OAuth 2.1 authorization server ---
+// Opt-in: only active when Mcp:PublicUrl names the externally reachable HTTPS origin of this
+// deployment. The value becomes the OAuth issuer and the audience of every token, so it is
+// taken from configuration rather than from the request host.
+var mcpOptions = new McpOAuthOptions
+{
+    PublicBaseUrl = builder.Configuration["Mcp:PublicUrl"] ?? "",
+    AuthEnabled = authEnabled
+};
+builder.Services.AddSingleton(mcpOptions);
+
+if (mcpOptions.IsConfigured)
+{
+    builder.Services.AddSingleton<McpClientStore>();
+    builder.Services.AddHttpContextAccessor();
+    builder.Services.AddAntiforgery();
+    builder.Services.AddMcpServer().WithHttpTransport().WithTools<AgentHubMcpTools>();
+
+    if (authEnabled)
+    {
+        // Browser login used only by /connect/authorize. Neither scheme is the default, so the
+        // API keeps authenticating with JwtBearer exactly as before.
+        authBuilder
+            .AddCookie(McpAuthorizationController.CookieScheme, o =>
+            {
+                o.Cookie.Name = "agenthub.mcp";
+                o.Cookie.HttpOnly = true;
+                o.Cookie.SecurePolicy = CookieSecurePolicy.Always;
+                // The OIDC provider posts/redirects back cross-site, so Strict would drop the
+                // correlation cookie and every login would fail with "correlation failed".
+                o.Cookie.SameSite = SameSiteMode.Lax;
+                o.ExpireTimeSpan = TimeSpan.FromHours(1);
+            })
+            .AddOpenIdConnect(McpAuthorizationController.OidcScheme, o =>
+            {
+                o.Authority = oidc["Authority"];
+                o.ClientId = oidc["ClientId"] ?? "agenthub";
+                // Empty for the usual public SPA client; PKCE carries the proof instead.
+                o.ClientSecret = oidc["ClientSecret"];
+                o.UsePkce = true;
+                o.ResponseType = "code";
+                o.SignInScheme = McpAuthorizationController.CookieScheme;
+                o.RequireHttpsMetadata = oidc.GetValue("RequireHttpsMetadata", true);
+                o.CallbackPath = "/connect/oidc-callback";
+                o.SaveTokens = false;
+                o.Scope.Clear();
+                foreach (var scope in (oidc["Scope"] ?? "openid profile email")
+                         .Split(' ', StringSplitOptions.RemoveEmptyEntries))
+                    o.Scope.Add(scope);
+                // Match the claim the rest of the API keys ownership on.
+                o.TokenValidationParameters.NameClaimType = "preferred_username";
+            });
+    }
+
+    // The OpenIddict store is in-memory; only registered clients must survive a restart, and
+    // those live in Postgres and are replayed below. A shared database root keeps the startup
+    // seed and per-request scopes on the SAME store — otherwise the seeded "mcp" scope is
+    // invisible at request time and OpenIddict rejects the resource with invalid_target.
+    var oauthDbRoot = new InMemoryDatabaseRoot();
+    builder.Services.AddDbContext<McpOAuthDbContext>(o =>
+    {
+        o.UseInMemoryDatabase("openiddict", oauthDbRoot);
+        o.UseOpenIddict();
+    });
+
+    builder.Services.AddOpenIddict()
+        .AddCore(o => o.UseEntityFrameworkCore().UseDbContext<McpOAuthDbContext>())
+        .AddServer(o =>
+        {
+            o.SetIssuer(new Uri(mcpOptions.Issuer));
+            o.SetAuthorizationEndpointUris("connect/authorize")
+             .SetTokenEndpointUris("connect/token");
+            o.AllowAuthorizationCodeFlow().AllowRefreshTokenFlow();
+            // PKCE is mandatory (OAuth 2.1 and the MCP authorization spec).
+            o.RequireProofKeyForCodeExchange();
+            o.RegisterScopes(Scopes.OpenId, Scopes.Profile, Scopes.Email, Scopes.OfflineAccess, McpScopes.Mcp);
+            o.AddDevelopmentEncryptionCertificate().AddDevelopmentSigningCertificate();
+            // Self-contained signed (not encrypted) access tokens, so the resource server can
+            // read them without a lookup and no token state needs persisting.
+            o.DisableAccessTokenEncryption();
+            o.DisableTokenStorage();
+            o.UseAspNetCore().EnableAuthorizationEndpointPassthrough().EnableTokenEndpointPassthrough();
+            // Advertise the dynamic client registration endpoint so MCP clients find it.
+            o.AddEventHandler<OpenIddictServerEvents.HandleConfigurationRequestContext>(handler =>
+                handler.UseInlineHandler(context =>
+                {
+                    context.Metadata["registration_endpoint"] = mcpOptions.Issuer + "/connect/register";
+                    return default;
+                }));
+        })
+        .AddValidation(o =>
+        {
+            // Validate against the local server instance. Pointing a JwtBearer handler at the
+            // public URL would make the pod fetch discovery and JWKS from itself through the
+            // ingress, which fails wherever the cluster cannot hairpin to its own hostname —
+            // valid tokens would then be rejected.
+            o.AddAudiences(mcpOptions.McpResource);
+            o.UseLocalServer();
+            o.UseAspNetCore();
+        });
+
+    // Clients target the resource via the RFC 8707 `resource` parameter, which OpenIddict
+    // validates against this static list rather than against scope-to-resource mappings.
+    builder.Services.Configure<OpenIddictServerOptions>(o =>
+        o.Resources.Add(new Uri(mcpOptions.McpResource)));
+
+    builder.Services.AddAuthorization(o => o.AddPolicy("McpPolicy", p =>
+    {
+        p.AddAuthenticationSchemes(OpenIddictValidationAspNetCoreDefaults.AuthenticationScheme);
+        p.RequireAuthenticatedUser();
+    }));
+}
 
 // CORS only for our own frontend (origin can be overridden via config).
 var frontendOrigin = builder.Configuration["FrontendOrigin"] ?? "http://localhost:5173";
@@ -286,6 +407,42 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();
 }
 
+// Prime the OAuth server: create the schema for registered MCP clients, associate the "mcp"
+// scope with the resource, and replay the stored registrations into the in-memory store.
+if (mcpOptions.IsConfigured)
+{
+    using var mcpScope = app.Services.CreateScope();
+    var services = mcpScope.ServiceProvider;
+    services.GetRequiredService<McpOAuthDbContext>().Database.EnsureCreated();
+
+    var clientStore = services.GetRequiredService<McpClientStore>();
+    await clientStore.InitializeAsync();
+
+    // Associating the resource with the scope is what authorises a client that was granted the
+    // scope to use the resource; without it OpenIddict refuses the request (ID2192).
+    var scopeManager = services.GetRequiredService<IOpenIddictScopeManager>();
+    if (await scopeManager.FindByNameAsync(McpScopes.Mcp) is null)
+    {
+        await scopeManager.CreateAsync(new OpenIddictScopeDescriptor
+        {
+            Name = McpScopes.Mcp,
+            Resources = { mcpOptions.McpResource }
+        });
+    }
+
+    // Without this replay every restart invalidates existing registrations, and clients fail
+    // their next silent reconnect with invalid_client instead of simply asking to sign in.
+    var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
+    foreach (var stored in await clientStore.ListAsync())
+    {
+        if (await applications.FindByClientIdAsync(stored.ClientId) is null)
+        {
+            await applications.CreateAsync(
+                McpClientDescriptor.Build(stored.ClientId, stored.DisplayName, stored.RedirectUris, mcpOptions));
+        }
+    }
+}
+
 // Behind a TLS-terminating ingress (Traefik/HAProxy) the backend sees plain http, so
 // scheme-derived URLs — the checkout returnUrl same-origin check in particular — would
 // reject the browser's https origin. Honor X-Forwarded-Proto ONLY: X-Forwarded-For must
@@ -306,6 +463,32 @@ using (var scope = app.Services.CreateScope())
 
 app.UseCors();
 app.UseWebSockets();
+
+// RFC 9728: every 401 on /mcp must point the client at the protected-resource metadata, which
+// is how an MCP client discovers where to authenticate.
+if (mcpOptions.IsConfigured)
+{
+    app.Use(async (context, next) =>
+    {
+        if (context.Request.Path.StartsWithSegments("/mcp"))
+        {
+            context.Response.OnStarting(() =>
+            {
+                if (context.Response.StatusCode == StatusCodes.Status401Unauthorized)
+                {
+                    // Replace rather than append: the validation handler already emitted a bare
+                    // "Bearer", and a client that reads only the first header would never see the
+                    // metadata pointer and could not discover where to authenticate.
+                    context.Response.Headers["WWW-Authenticate"] =
+                        $"Bearer resource_metadata=\"{mcpOptions.Issuer}/.well-known/oauth-protected-resource\"";
+                }
+                return Task.CompletedTask;
+            });
+        }
+        await next();
+    });
+}
+
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -346,6 +529,32 @@ app.UseAuthorization();
         }
         await next();
     });
+}
+
+// Remote MCP endpoint. Fail closed: without a configured public URL there is no authorization
+// server, and an open /mcp would let a client connect without ever being challenged — it would
+// look connected while every tool call failed. Answer explicitly instead.
+if (mcpOptions.IsConfigured)
+{
+    app.MapMcp("/mcp").RequireAuthorization("McpPolicy");
+
+    // RFC 9728: tells MCP clients which authorization server guards this resource.
+    app.MapGet("/.well-known/oauth-protected-resource", () => Results.Json(new
+    {
+        resource = mcpOptions.McpResource,
+        authorization_servers = new[] { mcpOptions.Issuer },
+        bearer_methods_supported = new[] { "header" },
+        scopes_supported = new[] { McpScopes.Mcp }
+    })).AllowAnonymous();
+}
+else
+{
+    app.Map("/mcp", () => Results.Problem(
+        statusCode: StatusCodes.Status503ServiceUnavailable,
+        title: "MCP endpoint disabled",
+        detail: "Mcp:PublicUrl is not configured on this instance. Set it to the externally "
+              + "reachable HTTPS origin of this deployment to enable the MCP server."))
+        .AllowAnonymous();
 }
 
 app.MapControllers();
