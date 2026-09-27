@@ -1,0 +1,47 @@
+version: 2
+
+# Keeps dependencies current. The agent CLIs pinned in agent-runtime/*/Dockerfile are
+# not covered here — Dependabot cannot read them — see update-agent-runtimes.yml.
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      dotnet:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: npm
+    directories:
+      - /frontend
+      - /agent-runtime/session-agent
+      - /browser-runtime
+      - /mcp/agenthub
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      npm:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Base images (node:22-bookworm-slim, the .NET SDK/runtime images, …).
+  - package-ecosystem: docker
+    directories:
+      - /backend
+      - /frontend
+      - /artifact-renderer
+      - /browser-runtime
+      - /agent-runtime/claude
+      - /agent-runtime/codex
+      - /agent-runtime/cursor
+      - /agent-runtime/openclaw
+    schedule:
+      interval: weekly

@@ -158,9 +158,12 @@ test('Cursor image installs agent CLI and preserves custom-image injection paths
   assert.match(dockerfile, /COPY cursor\/entrypoint\.sh\s+\/usr\/local\/bin\/entrypoint\.sh/);
   assert.match(dockerfile, /\/opt\/session-agent\/cursor\/login\.sh/);
   assert.match(dockerfile, /cursor\.com\/install/);
-  assert.match(dockerfile, /ARG CURSOR_AGENT_VERSION=/);
-  assert.match(dockerfile, /test "\$AGENT_VER" = "\$CURSOR_AGENT_VERSION"/);
-  assert.match(dockerfile, /agent --version 2>&1 \| grep -Fq "\$CURSOR_AGENT_VERSION"/);
+  // The installer only ever serves latest, so the image records the version it got
+  // instead of asserting an expected one — a pin assertion here broke the build on
+  // every Cursor release. The entrypoint re-exports the recorded value.
+  assert.match(dockerfile, /echo "\$AGENT_VER" > \/usr\/local\/share\/cursor-agent\/INSTALLED_VERSION/);
+  assert.match(dockerfile, /agent --version 2>&1 \| grep -Fq "\$AGENT_VER"/);
+  assert.doesNotMatch(dockerfile, /ARG CURSOR_AGENT_VERSION=/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/node/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/agent/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai|@openai\/codex|COPY claude|COPY codex/);
