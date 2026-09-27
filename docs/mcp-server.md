@@ -106,7 +106,13 @@ into the in-memory OpenIddict store at startup. Without that replay, every resta
 invalidate existing registrations and clients would fail their next silent reconnect with
 `invalid_client` instead of simply asking the user to sign in again.
 
-The signing and encryption certificates are OpenIddict's development certificates, which are
-regenerated per instance. Issued tokens therefore do not survive a certificate change, and
-multiple replicas would each mint tokens the others reject — run a single backend replica, or
-provide real certificates, before scaling out.
+The signing and encryption certificates are generated once and kept in Postgres
+(`mcp_signing_keys`). Issued tokens therefore survive a restart, and every replica signs with
+the same key, so no single-replica restriction applies.
+
+OpenIddict's `AddDevelopment*Certificate` helpers are deliberately not used: they write the
+generated certificate into the user's X509 store, which is a path on disk, and the backend
+container runs with a read-only root filesystem. The write fails on every request that reaches
+an OAuth endpoint — the app starts, then answers `500` on `/healthz` and crashloops. If you see
+`CryptographicException: The X509 certificate could not be added to the store`, something has
+reintroduced them.
