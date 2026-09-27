@@ -102,8 +102,18 @@ public sealed class S3ArtifactStore : IArtifactStore
         var s = cfg.GetSection("S3");
         _bucket = s["Bucket"] ?? throw new InvalidOperationException("S3:Bucket is missing.");
 
-        var s3cfg = new AmazonS3Config { ForcePathStyle = true }; // MinIO prefers path-style
-        if (!string.IsNullOrEmpty(s["ServiceUrl"])) s3cfg.ServiceURL = s["ServiceUrl"];
+        var s3cfg = new AmazonS3Config { ForcePathStyle = true }; // path-style for S3-compatible servers
+        if (!string.IsNullOrEmpty(s["ServiceUrl"]))
+        {
+            s3cfg.ServiceURL = s["ServiceUrl"];
+            // UseHttp is what decides the scheme of a PRESIGNED url; it does not follow from
+            // ServiceURL and defaults to false. Left unset, an endpoint configured as http://
+            // still gets signed as https://, and whoever follows that url — the session pod
+            // fetching its own state tarball — fails the TLS handshake against a plain-HTTP
+            // port. The request never reaches storage, so the session starts without history
+            // and never writes any back.
+            s3cfg.UseHttp = IsPlainHttp(s["ServiceUrl"]);
+        }
         if (!string.IsNullOrEmpty(s["Region"])) s3cfg.AuthenticationRegion = s["Region"];
         // Internal MinIO endpoints often use a self-signed certificate. Opt-in only.
         if (s.GetValue("InsecureTls", false)) s3cfg.HttpClientFactory = new InsecureHttpClientFactory();
@@ -116,11 +126,21 @@ public sealed class S3ArtifactStore : IArtifactStore
         var publicUrl = s["PublicUrl"];
         if (!string.IsNullOrWhiteSpace(publicUrl))
         {
-            var publicCfg = new AmazonS3Config { ForcePathStyle = true, ServiceURL = publicUrl.Trim() };
+            var publicCfg = new AmazonS3Config
+            {
+                ForcePathStyle = true,
+                ServiceURL = publicUrl.Trim(),
+                UseHttp = IsPlainHttp(publicUrl)
+            };
             if (!string.IsNullOrEmpty(s["Region"])) publicCfg.AuthenticationRegion = s["Region"];
             _publicS3 = new AmazonS3Client(s["AccessKey"], s["SecretKey"], publicCfg);
         }
     }
+
+    /// <summary>True for an endpoint served over plain HTTP, which presigned urls must match.</summary>
+    public static bool IsPlainHttp(string? serviceUrl) =>
+        serviceUrl is not null &&
+        serviceUrl.Trim().StartsWith("http://", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Produces HttpClients that skip TLS server-certificate validation
     /// (for internal S3/MinIO endpoints with a self-signed certificate). Opt-in.</summary>
