@@ -1,9 +1,6 @@
 {{- if and (or .Values.chat.telegram.enabled .Values.chat.signal.enabled) (gt (int .Values.backend.replicas) 1) }}
 {{- fail "chat.telegram/chat.signal require backend.replicas=1 (Telegram getUpdates and the Signal receive socket allow only one consumer)" }}
 {{- end }}
-{{- if and .Values.mcp.enabled (gt (int .Values.backend.replicas) 1) }}
-{{- fail "mcp.enabled requires backend.replicas=1: the OAuth server signs tokens with OpenIddict's development certificates, which are generated per instance, so each replica would reject the tokens the others issued" }}
-{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
