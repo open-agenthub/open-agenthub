@@ -187,7 +187,7 @@ public sealed class SessionFileAccessTests
             LastActor = actor;
             return Task.FromResult<SessionFilePresentation?>(null);
         }
-        public Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, long? contentLength = null, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionFileRecord> CompleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task DeleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionFilePresentation> SetPresentationAsync(SessionFileActor actor, string? fileId, CancellationToken ct = default) => throw new NotSupportedException();
