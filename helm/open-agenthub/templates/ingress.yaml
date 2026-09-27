@@ -61,6 +61,14 @@ spec:
             pathType: Prefix
             backend:
               service: { name: agenthub-backend, port: { number: 80 } }
+          # The discovery document advertises this as jwks_uri; unrouted it serves the SPA and a
+          # client trying to validate a token finds no keys. Listed individually rather than
+          # routing all of /.well-known, which would also swallow cert-manager's
+          # acme-challenge path.
+          - path: /.well-known/jwks
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-backend, port: { number: 80 } }
           {{- end }}
           # Everything else: SPA
           - path: /
