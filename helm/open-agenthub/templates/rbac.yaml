@@ -28,10 +28,18 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]
-  {{ if .Values.browser.enabled }}
+  {{ if or .Values.browser.enabled .Values.agent.portRequests.enabled }}
+  # Per-session network policies come from two features now: the browser (CDP in/out) and
+  # approved runtime port requests. Gating this on browser.enabled alone left an instance with
+  # only port requests unable to manage them at all.
+  #
+  # deletecollection is required, not optional: session teardown removes a session's policies
+  # by label selector in one call. Without it, deleting a session fails with a 403 from the API
+  # server — the pod goes away and the record does not, and the error surfaces as a generic
+  # failure rather than a permissions problem.
   - apiGroups: ["networking.k8s.io"]
     resources: ["networkpolicies"]
-    verbs: ["get", "list", "watch", "create", "delete"]
+    verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]
   {{ end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
