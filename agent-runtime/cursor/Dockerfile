@@ -8,12 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 
 # ---- runtime (non-root) ----
 FROM node:22-bookworm-slim
-# Cursor Agent CLI version discovered at image build from https://cursor.com/install
-# (symlink target under ~/.local/share/cursor-agent/versions/<version>/). Pin when known.
-ARG CURSOR_AGENT_VERSION=2026.08.04-aaa8809
-ARG GH_VERSION=2.63.2
-ARG GLAB_VERSION=1.48.0
-ENV CURSOR_AGENT_VERSION=${CURSOR_AGENT_VERSION}
+# https://cursor.com/install has no version selector — it always serves the newest build,
+# so this image cannot pin the Cursor CLI the way the other runtimes pin theirs. Asserting
+# an expected version here only converted "not reproducible" into "build broken" every
+# time Cursor shipped, which blocked the whole image set. The installed version is
+# recorded instead (INSTALLED_VERSION, exported as CURSOR_AGENT_VERSION by the entrypoint).
+ARG GH_VERSION=2.101.0
+ARG GLAB_VERSION=1.119.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates bash curl tar \
  && curl https://cursor.com/install -fsS | bash \
@@ -25,8 +26,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && ln -sfn "/usr/local/share/cursor-agent/versions/${AGENT_VER}/cursor-agent" /usr/local/bin/agent \
  && ln -sfn "/usr/local/share/cursor-agent/versions/${AGENT_VER}/cursor-agent" /usr/local/bin/cursor-agent \
  && echo "$AGENT_VER" > /usr/local/share/cursor-agent/INSTALLED_VERSION \
- && test "$AGENT_VER" = "$CURSOR_AGENT_VERSION" \
- && agent --version 2>&1 | grep -Fq "$CURSOR_AGENT_VERSION" \
+ && agent --version 2>&1 | grep -Fq "$AGENT_VER" \
  && mkdir -p /tmp/gh /tmp/glab \
  && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp/gh \
  && install -m0755 "$(find /tmp/gh -type f -name gh | head -1)" /usr/local/bin/gh \

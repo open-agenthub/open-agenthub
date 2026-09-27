@@ -1,0 +1,105 @@
+name: Update agent runtime versions
+
+# The agent CLIs live on the image's read-only root filesystem, so a session cannot
+# update itself — the image is the update unit. This job watches upstream nightly,
+# bumps the pinned versions, proves the images still build, and opens a PR.
+#
+# NOTE: PRs opened with GITHUB_TOKEN do not trigger other workflows, which is why this
+# job builds the changed runtimes itself instead of relying on the PR's image build.
+
+on:
+  schedule:
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve upstream versions
+        id: latest
+        run: |
+          set -euo pipefail
+          {
+            echo "claude=$(npm view @anthropic-ai/claude-code version)"
+            echo "codex=$(npm view @openai/codex version)"
+            echo "openclaw=$(npm view openclaw version)"
+            echo "gh=$(gh api repos/cli/cli/releases/latest --jq .tag_name | sed 's/^v//')"
+            echo "glab=$(curl -fsSL https://gitlab.com/api/v4/projects/34675721/releases \
+              | jq -r '.[0].tag_name' | sed 's/^v//')"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rewrite the pins
+        id: bump
+        run: |
+          set -euo pipefail
+          bump() { # <file> <arg-name> <new-value>
+            local file="$1" arg="$2" new="$3" old
+            old="$(sed -n "s/^ARG ${arg}=//p" "$file" | head -1)"
+            [ -n "$new" ] && [ "$old" != "$new" ] || return 0
+            sed -i "s|^ARG ${arg}=.*|ARG ${arg}=${new}|" "$file"
+            echo "- \`${arg}\`: ${old} → ${new} (${file})" >> "$RUNNER_TEMP/bump-notes.md"
+          }
+
+          R=agent-runtime
+          bump $R/claude/Dockerfile   CLAUDE_CODE_VERSION   "${{ steps.latest.outputs.claude }}"
+          bump $R/codex/Dockerfile    CODEX_VERSION         "${{ steps.latest.outputs.codex }}"
+          # cursor has no pin to bump — its installer always serves latest, so every image
+          # build picks the newest CLI up by itself.
+          # openclaw is deliberately excluded: sync-auth-profiles.js depends on the auth
+          # store layout of the pinned version. Report it instead of rewriting it.
+          for f in claude codex cursor openclaw; do
+            bump $R/$f/Dockerfile GH_VERSION   "${{ steps.latest.outputs.gh }}"
+            bump $R/$f/Dockerfile GLAB_VERSION "${{ steps.latest.outputs.glab }}"
+          done
+
+          current_openclaw="$(sed -n 's/^ARG OPENCLAW_VERSION=//p' $R/openclaw/Dockerfile | head -1)"
+          if [ "$current_openclaw" != "${{ steps.latest.outputs.openclaw }}" ]; then
+            echo "" >> "$RUNNER_TEMP/bump-notes.md"
+            echo "openclaw ${current_openclaw} → **${{ steps.latest.outputs.openclaw }}** is available but was **not** applied: \`sync-auth-profiles.js\` reads the agent's auth-profile store directly, so the bump needs a manual check of that store's layout." >> "$RUNNER_TEMP/bump-notes.md"
+          fi
+
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "runtimes=$(git diff --name-only | sed 's|agent-runtime/\([^/]*\)/Dockerfile|\1|' | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the changed runtimes
+        if: steps.bump.outputs.changed == 'true'
+        # Proves the new pins actually install before a human is asked to look at the PR —
+        # this is the check that would have caught the stale Cursor pin.
+        run: |
+          set -euo pipefail
+          for runtime in ${{ steps.bump.outputs.runtimes }}; do
+            echo "::group::build $runtime"
+            docker build -f "agent-runtime/$runtime/Dockerfile" -t "runtime-$runtime:verify" agent-runtime
+            echo "::endgroup::"
+          done
+
+      - name: Open the pull request
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          branch="chore/agent-runtime-versions"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git commit -am "chore(agent-runtime): update pinned CLI versions"
+          git push -f origin "$branch"
+
+          body="$(printf 'Nightly upstream check. Every changed runtime image was built successfully before this PR was opened.\n\n%s\n' "$(cat "$RUNNER_TEMP/bump-notes.md")")"
+          gh pr create --title "chore(agent-runtime): update pinned CLI versions" \
+                       --body "$body" --base main --head "$branch" \
+            || gh pr edit "$branch" --body "$body"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
