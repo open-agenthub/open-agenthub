@@ -105,7 +105,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
       - name: Lint development chart
         run: helm lint helm/open-agenthub --values helm/open-agenthub/values-dev.yaml --set-string postgres.password=test-only
       - name: Verify rendered runtime images
