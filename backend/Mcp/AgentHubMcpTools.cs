@@ -54,6 +54,9 @@ public sealed class AgentHubMcpTools(
         [Description("Project that groups the session.")] string? projectId = null,
         [Description("Parent session id for orchestration.")] string? parentSessionId = null,
         [Description("Cron expression; only for Scheduled sessions.")] string? schedule = null,
+        [Description("CPU request, e.g. \"500m\". Lower it on a small cluster where the default "
+                     + "would leave the pod unschedulable.")] string? cpu = null,
+        [Description("Memory request, e.g. \"1Gi\".")] string? memory = null,
         CancellationToken ct = default)
     {
         var request = new CreateSessionRequest
@@ -71,6 +74,10 @@ public sealed class AgentHubMcpTools(
             Schedule = schedule
         };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
+        // Only override the record's own defaults when a value was actually supplied; passing
+        // null through would blank them and produce a pod spec with no resource request.
+        if (!string.IsNullOrWhiteSpace(cpu)) request = request with { Cpu = cpu.Trim() };
+        if (!string.IsNullOrWhiteSpace(memory)) request = request with { Memory = memory.Trim() };
 
         var created = await sessions.CreateSessionAsync(Owner, request, ct);
         logger.LogInformation("MCP client created session {SessionId} for {Owner}", created.Id, created.Owner);
