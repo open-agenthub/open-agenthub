@@ -557,6 +557,15 @@ public sealed class SessionFileService : ISessionFileService
             Count(read);
             return read;
         }
+        /// <summary>
+        /// The array overload has to be overridden too. The AWS SDK reads through it, and
+        /// <see cref="Stream"/>'s default implementation of it routes to the synchronous
+        /// <see cref="Read(byte[],int,int)"/> above — which on a Kestrel request body throws
+        /// "Synchronous operations are disallowed", failing the upload after the request was
+        /// already accepted. Overriding only the Memory version is not enough.
+        /// </summary>
+        public override Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken ct)
+            => ReadAsync(buffer.AsMemory(offset, count), ct).AsTask();
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
         public override void SetLength(long value) => throw new NotSupportedException();
         public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
