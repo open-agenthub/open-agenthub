@@ -36,7 +36,9 @@ foreach ($expected in @(
     'Browser__PreviewPorts__0: "3000"',
     'Browser__PreviewPorts__2: "5173"',
     'resources: ["networkpolicies"]',
-    'verbs: ["get", "list", "watch", "create", "delete"]'
+    # deletecollection included deliberately: session teardown removes a session's policies by
+    # label selector in one call, and without the verb every delete fails with a 403.
+    'verbs: ["get", "list", "watch", "create", "delete", "deletecollection"]'
 )) { Assert-Contains $enabled $expected }
 
 $custom = Render @(
@@ -64,9 +66,16 @@ Assert-Contains $custom 'Browser__ExtraEgressPorts__0: "8443"'
 
 $disabled = Render @('--set', 'browser.enabled=false')
 Assert-Contains $disabled 'Browser__Enabled: "false"'
-Assert-NotContains $disabled 'resources: ["networkpolicies"]'
 Assert-Contains $disabled 'name: allow-agent-egress'
 Assert-Contains $disabled 'name: allow-agent-to-backend'
 Assert-NotContains $disabled 'port: 9222'
+# Per-session network policies come from the browser AND from approved runtime port requests,
+# so turning the browser off alone must not drop the permission — an instance running port
+# requests would then be unable to manage the policies it creates.
+Assert-Contains $disabled 'resources: ["networkpolicies"]'
+
+# Least privilege still holds: with neither feature enabled there is nothing to manage.
+$noPolicies = Render @('--set', 'browser.enabled=false', '--set', 'agent.portRequests.enabled=false')
+Assert-NotContains $noPolicies 'resources: ["networkpolicies"]'
 
 Write-Output 'Browser Helm values and least-privilege RBAC assertions passed.'
