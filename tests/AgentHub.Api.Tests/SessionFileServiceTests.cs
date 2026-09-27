@@ -96,7 +96,11 @@ public sealed class SessionFileServiceTests
             set => throw new NotSupportedException();
         }
         public override void Flush() { }
-        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+        // Kestrel refuses synchronous reads of a request body, so this does too. Allowing it
+        // here is what let a wrapper that falls back to synchronous Read pass the tests and
+        // still fail every real upload.
+        public override int Read(byte[] buffer, int offset, int count) =>
+            throw new InvalidOperationException("Synchronous operations are disallowed.");
         public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) =>
             _inner.ReadAsync(buffer, ct);
         public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
@@ -384,7 +388,13 @@ public sealed class SessionFileServiceTests
                 throw new InvalidOperationException("Could not determine content length");
             PutContentLengths[key] = contentLength;
             using var buffer = new MemoryStream();
-            await content.CopyToAsync(buffer, ct);
+            // Reads through the byte[] overload on purpose, because that is the one the AWS SDK
+            // uses. CopyToAsync goes through the Memory overload instead, so it never exercised
+            // the path that actually broke uploads.
+            var chunk = new byte[512];
+            int read;
+            while ((read = await content.ReadAsync(chunk, 0, chunk.Length, ct)) > 0)
+                buffer.Write(chunk, 0, read);
             Objects[key] = buffer.ToArray();
             return true;
         }
