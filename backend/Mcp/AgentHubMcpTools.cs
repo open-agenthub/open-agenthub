@@ -57,6 +57,10 @@ public sealed class AgentHubMcpTools(
         [Description("CPU request, e.g. \"500m\". Lower it on a small cluster where the default "
                      + "would leave the pod unschedulable.")] string? cpu = null,
         [Description("Memory request, e.g. \"1Gi\".")] string? memory = null,
+        [Description("Approve tool-permission requests automatically. Defaults to on for "
+                     + "Autonomous and Scheduled sessions, where nobody is watching to answer a "
+                     + "prompt; pass false to keep such a session gated anyway.")]
+        bool? autoApprove = null,
         CancellationToken ct = default)
     {
         var request = new CreateSessionRequest
@@ -71,7 +75,8 @@ public sealed class AgentHubMcpTools(
             RepoBranch = repoBranch,
             ProjectId = projectId,
             ParentSessionId = parentSessionId,
-            Schedule = schedule
+            Schedule = schedule,
+            AutoApprove = autoApprove
         };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
         // Only override the record's own defaults when a value was actually supplied; passing
