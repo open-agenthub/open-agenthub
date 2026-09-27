@@ -8,11 +8,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 
 # ---- runtime (non-root) ----
 FROM node:22-bookworm-slim
-ARG GH_VERSION=2.63.2
-ARG GLAB_VERSION=1.48.0
+# Pinned so a rebuild of this commit yields the same CLI. update-agent-runtimes.yml
+# opens a PR when a newer version ships.
+ARG CLAUDE_CODE_VERSION=2.1.283
+ARG GH_VERSION=2.101.0
+ARG GLAB_VERSION=1.119.0
+ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates bash curl tar \
- && npm install -g @anthropic-ai/claude-code \
+ && npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+ && claude --version 2>&1 | grep -Fq "$CLAUDE_CODE_VERSION" \
  && mkdir -p /tmp/gh /tmp/glab \
  && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp/gh \
  && install -m0755 "$(find /tmp/gh -type f -name gh | head -1)" /usr/local/bin/gh \

@@ -15,9 +15,12 @@ FROM node:22-bookworm-slim
 #   Store shape: { version: 1, profiles: {...}, order?: {...} }
 # AgentHub Secret key + watched file: ~/.openclaw/auth-profiles.json
 # sync-auth-profiles.js imports Secret → agent SQLite and exports SQLite → Secret JSON.
+# sync-auth-profiles.js depends on the auth-store layout documented above, so a bump has
+# to be verified by hand — update-agent-runtimes.yml proposes it in a PR but does not
+# merge it. Hence this pin trails the other runtimes on purpose.
 ARG OPENCLAW_VERSION=2026.7.1-2
-ARG GH_VERSION=2.63.2
-ARG GLAB_VERSION=1.48.0
+ARG GH_VERSION=2.101.0
+ARG GLAB_VERSION=1.119.0
 ENV OPENCLAW_VERSION=${OPENCLAW_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates bash curl tar \
