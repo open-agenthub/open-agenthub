@@ -269,6 +269,14 @@ if (mcpOptions.IsConfigured)
 {
     builder.Services.AddSingleton<McpClientStore>();
     builder.Services.AddHttpContextAccessor();
+
+    // OpenIddict wants the certificates while services are still being registered, so these are
+    // fetched synchronously here rather than in the post-build initialisation below.
+    var mcpKeys = new McpSigningKeyStore(builder.Configuration);
+    mcpKeys.InitializeAsync().GetAwaiter().GetResult();
+    var mcpSigningCertificate = mcpKeys.GetSigningCertificateAsync().GetAwaiter().GetResult();
+    var mcpEncryptionCertificate = mcpKeys.GetEncryptionCertificateAsync().GetAwaiter().GetResult();
+
     builder.Services.AddAntiforgery();
     builder.Services.AddMcpServer().WithHttpTransport().WithTools<AgentHubMcpTools>();
 
@@ -330,7 +338,12 @@ if (mcpOptions.IsConfigured)
             // PKCE is mandatory (OAuth 2.1 and the MCP authorization spec).
             o.RequireProofKeyForCodeExchange();
             o.RegisterScopes(Scopes.OpenId, Scopes.Profile, Scopes.Email, Scopes.OfflineAccess, McpScopes.Mcp);
-            o.AddDevelopmentEncryptionCertificate().AddDevelopmentSigningCertificate();
+            // Not AddDevelopment*Certificate: those write the generated certificate into the
+            // user's X509 store, i.e. to disk, and this container's root filesystem is read-only
+            // — the write throws on every request that reaches an OAuth endpoint. These come from
+            // Postgres instead, so they also outlive a restart and are shared across replicas.
+            o.AddSigningCertificate(mcpSigningCertificate)
+             .AddEncryptionCertificate(mcpEncryptionCertificate);
             // Self-contained signed (not encrypted) access tokens, so the resource server can
             // read them without a lookup and no token state needs persisting.
             o.DisableAccessTokenEncryption();
