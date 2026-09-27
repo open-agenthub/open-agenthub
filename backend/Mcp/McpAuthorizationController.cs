@@ -171,37 +171,41 @@ public sealed class McpAuthorizationController(
                 return ForbidOAuth(Errors.ConsentRequired, "The user has not approved this application yet.");
             }
 
-            var isFormPost = Request.HasFormContentType;
-            if (isFormPost && Request.Form.ContainsKey("submit.Deny"))
+            // A decision is only ever carried by a post from our own consent form. Anything
+            // else — including the initial authorize request, which OAuth permits as a POST —
+            // gets the form rendered.
+            var decision = Request.HasFormContentType
+                ? Request.Form.ContainsKey("submit.Deny") ? ConsentDecision.Deny
+                : Request.Form.ContainsKey("submit.Accept") ? ConsentDecision.Accept
+                : ConsentDecision.None
+                : ConsentDecision.None;
+
+            if (decision == ConsentDecision.None) return ConsentPage(request, userName);
+
+            // Verified before the decision is read, not after, so a cross-site post cannot
+            // approve a client — nor force a denial — on the user's behalf. The consent screen
+            // would otherwise be forgeable, since the browser already carries the session.
+            try
+            {
+                await antiforgery.ValidateRequestAsync(HttpContext);
+            }
+            catch (AntiforgeryValidationException)
+            {
+                logger.LogWarning("Rejected an MCP consent post with an invalid antiforgery token");
+                return ForbidOAuth(Errors.AccessDenied, "The consent request could not be verified.");
+            }
+
+            if (decision == ConsentDecision.Deny)
             {
                 return ForbidOAuth(Errors.AccessDenied, "The user denied the request.");
             }
 
-            if (isFormPost && Request.Form.ContainsKey("submit.Accept"))
+            if (!await clients.ApproveAsync(request.ClientId!, userName, ct))
             {
-                // Without this the consent screen itself would be forgeable: a cross-site form
-                // post could approve an attacker's client silently.
-                try
-                {
-                    await antiforgery.ValidateRequestAsync(HttpContext);
-                }
-                catch (AntiforgeryValidationException)
-                {
-                    logger.LogWarning("Rejected an MCP consent post with an invalid antiforgery token");
-                    return ForbidOAuth(Errors.AccessDenied, "The consent request could not be verified.");
-                }
-
-                if (!await clients.ApproveAsync(request.ClientId!, userName, ct))
-                {
-                    return ForbidOAuth(Errors.InvalidClient, "The application is not registered.");
-                }
-
-                logger.LogInformation("User {User} approved MCP client {ClientId}", userName, request.ClientId);
+                return ForbidOAuth(Errors.InvalidClient, "The application is not registered.");
             }
-            else
-            {
-                return ConsentPage(request, userName);
-            }
+
+            logger.LogInformation("User {User} approved MCP client {ClientId}", userName, request.ClientId);
         }
 
         var identity = new ClaimsIdentity(
@@ -343,6 +347,8 @@ public sealed class McpAuthorizationController(
         Claims.Name or Claims.Subject or "preferred_username" => [Destinations.AccessToken, Destinations.IdentityToken],
         _ => [Destinations.AccessToken]
     };
+
+    private enum ConsentDecision { None, Accept, Deny }
 
     private static bool TryAcceptRegistration()
     {
