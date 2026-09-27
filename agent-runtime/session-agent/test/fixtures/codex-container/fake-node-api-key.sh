@@ -12,8 +12,13 @@ fi
 if [ "$1" = "/opt/session-agent/codex/auth-watcher.js" ]; then
   touch /tmp/watcher-called
 fi
-# The shared entrypoint always enables the files MCP, so every start runs this.
+# The shared entrypoint always enables the files MCP, so every start runs these two —
+# even here, where the session itself brings no MCP config (AGENTHUB_HAS_MCP=0).
 if [ "$1" = "/opt/session-agent/files/configure.mjs" ]; then
   exec /usr/local/bin/node "$@"
 fi
+if [ "$1" = "/opt/session-agent/codex/mcp-config.js" ]; then
+  exec /usr/local/bin/node "$@"
+fi
+echo "unhandled node invocation in fixture: $*" >&2
 exit 2

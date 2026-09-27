@@ -15,9 +15,18 @@ function Invoke-Docker {
     }
 }
 
+# Read the expectation from the Dockerfile's pin rather than repeating the number here:
+# update-agent-runtimes.yml rewrites that ARG, and a literal version in this script would
+# turn every routine bump into a red build.
+$codexDockerfile = Get-Content (Join-Path $PSScriptRoot "../../codex/Dockerfile") -Raw
+if ($codexDockerfile -notmatch 'ARG CODEX_VERSION=([0-9]+\.[0-9]+\.[0-9]+)') {
+    throw "could not read ARG CODEX_VERSION from the Codex Dockerfile"
+}
+$expectedVersion = $Matches[1]
+
 $version = & docker run --rm --entrypoint codex $Image --version
-if ($LASTEXITCODE -ne 0 -or $version -notmatch 'codex-cli 0\.144\.5') {
-    throw "unexpected Codex CLI version: $version"
+if ($LASTEXITCODE -ne 0 -or $version -notmatch [regex]::Escape("codex-cli $expectedVersion")) {
+    throw "unexpected Codex CLI version: $version (expected $expectedVersion)"
 }
 
 Invoke-Docker @(

@@ -86,8 +86,11 @@ async function main() {
               {
                 type: 'response.output_item.done',
                 item: {
+                  // Codex renamed its shell tool to exec_command (cmd, not command).
+                  // The hook payload still normalises it to tool "Bash" — that
+                  // normalisation is the contract asserted below.
                   type: 'function_call', call_id: 'policy-smoke-call',
-                  name: 'shell_command', arguments: JSON.stringify({ command })
+                  name: 'exec_command', arguments: JSON.stringify({ cmd: command })
                 }
               },
               responseCompleted('resp-1')
@@ -120,7 +123,17 @@ async function main() {
   const child = spawn('codex', [
     'exec', '--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust',
     '--disable', 'enable_request_compression',
-    '-c', `openai_base_url="http://127.0.0.1:${port}/v1"`,
+    // Codex now prefers a WebSocket transport for /v1/responses. This fixture's server
+    // speaks plain HTTP, and the failed upgrade burned the first canned response before
+    // the fallback kicked in — the tool call never arrived and the hook never ran.
+    // Declaring the endpoint as a provider that does not support WebSockets keeps the
+    // exchange on HTTP.
+    '-c', `model_provider="smoke"`,
+    '-c', `model_providers.smoke.name="smoke"`,
+    '-c', `model_providers.smoke.base_url="http://127.0.0.1:${port}/v1"`,
+    '-c', `model_providers.smoke.wire_api="responses"`,
+    '-c', `model_providers.smoke.env_key="CODEX_API_KEY"`,
+    '-c', 'model_providers.smoke.supports_websockets=false',
     '-m', 'gpt-5.4', 'Run the requested policy smoke command.'
   ], {
     cwd: workspace,

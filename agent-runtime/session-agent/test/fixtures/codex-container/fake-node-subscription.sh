@@ -27,13 +27,13 @@ if [ "$1" = "/opt/session-agent/common/server.js" ]; then
   # Runtime-owned MCP servers must forward the backend callback variables,
   # because Codex spawns MCP subprocesses with a cleared environment.
   grep -Fx '[mcp_servers.agenthub_browser]' "$CODEX_HOME/config.toml" >/dev/null
-  grep -Fx 'env_vars = ["AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN"]' \
+  grep -Fx 'env_vars = ["PATH", "RUNTIME", "AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN"]' \
     "$CODEX_HOME/config.toml" >/dev/null
   grep -Fx '[mcp_servers.agenthub_sessions]' "$CODEX_HOME/config.toml" >/dev/null
-  grep -Fx 'env_vars = ["AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_SESSION_ID"]' \
+  grep -Fx 'env_vars = ["PATH", "RUNTIME", "AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_SESSION_ID"]' \
     "$CODEX_HOME/config.toml" >/dev/null
   grep -Fx '[mcp_servers.agenthub_files]' "$CODEX_HOME/config.toml" >/dev/null
-  grep -Fx 'env_vars = ["AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_WORKDIR", "AGENTHUB_FILE_ROOT", "RUNTIME"]' \
+  grep -Fx 'env_vars = ["PATH", "RUNTIME", "AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_WORKDIR", "AGENTHUB_FILE_ROOT"]' \
     "$CODEX_HOME/config.toml" >/dev/null
   mcp_list=$(/usr/local/bin/node \
     /usr/local/lib/node_modules/@openai/codex/bin/codex.js mcp list)

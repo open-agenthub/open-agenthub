@@ -39,15 +39,36 @@ report its version. Cursor is current by construction; nothing needs bumping.
 auth-profile store directly, and its layout is documented per version in the Dockerfile.
 The nightly job reports a new OpenClaw release but does not rewrite the pin.
 
+The nightly job runs the **smoke tests**, not just the build, because a newer CLI that
+installs cleanly can still have dropped a guarantee AgentHub relies on — and only the
+smoke tests would notice.
+
+Two things about `fixtures/codex-policy-hook-smoke.js`, which pins the PreToolUse deny
+contract by driving the real CLI against a fake model endpoint. Both bit during the
+0.144.5 → 0.157.1 bump and will bite again:
+
+- Codex renamed its shell tool from `shell_command` to `exec_command`, and its argument
+  from `command` to `cmd`. The hook payload still normalises this to tool `Bash` with
+  `input.command` — that normalisation is the contract, and it survived the rename.
+- Codex now prefers a WebSocket transport for `/v1/responses`. The fixture's server only
+  speaks HTTP, and the failed upgrade consumed the first canned response before the
+  fallback engaged, so no tool call ever reached the hook. The fixture pins the endpoint
+  to a provider with `supports_websockets = false`.
+
+Both looked exactly like "the policy hook stopped firing". If this smoke test fails after
+a bump, check the advertised tool names and the transport before concluding that
+enforcement broke.
+
 ## The nightly job
 
 [`update-agent-runtimes.yml`](../.github/workflows/update-agent-runtimes.yml) runs at
 04:00 UTC and on demand. It resolves the newest version of each CLI plus `gh` and `glab`,
-rewrites the `ARG` lines, **builds every changed runtime to prove the new pins install**,
-and opens/updates a single PR on `chore/agent-runtime-versions`.
+rewrites the `ARG` lines, **builds and smoke-tests every changed runtime**, and
+opens/updates a single PR on `chore/agent-runtime-versions`.
 
-The build step is the part that matters: it is what turns a stale Cursor pin into a failed
-nightly job instead of a failed release build.
+That verification step is the part that matters: it turns a stale pin into a failed nightly
+job instead of a failed release build, and a silently dropped guarantee (the Codex hook
+above) into a failed bump instead of a merged regression.
 
 Because PRs opened with `GITHUB_TOKEN` do not trigger other workflows, that PR shows no
 image-build check of its own — the job's own build is the evidence. Merging runs the real

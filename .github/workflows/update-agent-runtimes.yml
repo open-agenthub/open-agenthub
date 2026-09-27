@@ -74,17 +74,33 @@ jobs:
             echo "runtimes=$(git diff --name-only | sed 's|agent-runtime/\([^/]*\)/Dockerfile|\1|' | tr '\n' ' ')" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build the changed runtimes
+      - name: Build and smoke the changed runtimes
         if: steps.bump.outputs.changed == 'true'
-        # Proves the new pins actually install before a human is asked to look at the PR —
-        # this is the check that would have caught the stale Cursor pin.
+        shell: pwsh
+        # Building only proves the CLI installs. The smoke tests prove it still honours the
+        # contracts AgentHub depends on — Codex 0.157.1 installs cleanly but never fires the
+        # PreToolUse hook, so a denied shell command would run. A bump must clear both before
+        # anyone is asked to look at a PR.
         run: |
-          set -euo pipefail
-          for runtime in ${{ steps.bump.outputs.runtimes }}; do
-            echo "::group::build $runtime"
-            docker build -f "agent-runtime/$runtime/Dockerfile" -t "runtime-$runtime:verify" agent-runtime
-            echo "::endgroup::"
-          done
+          $ErrorActionPreference = "Stop"
+          foreach ($runtime in ("${{ steps.bump.outputs.runtimes }}".Trim() -split '\s+')) {
+            if (-not $runtime) { continue }
+            Write-Output "::group::build $runtime"
+            $image = "open-agenthub-dev/agent-runtime-${runtime}:verify"
+            docker build --file "agent-runtime/$runtime/Dockerfile" --tag $image agent-runtime
+            if ($LASTEXITCODE -ne 0) { throw "build failed for $runtime" }
+            Write-Output "::endgroup::"
+
+            Write-Output "::group::smoke $runtime"
+            switch ($runtime) {
+              "codex"  { ./agent-runtime/session-agent/test/codex-container-smoke.ps1 -Image $image }
+              "claude" { docker run --rm --entrypoint claude $image --version }
+              "cursor" { docker run --rm --entrypoint agent $image --version }
+              default  { docker run --rm --entrypoint $runtime $image --version }
+            }
+            if ($LASTEXITCODE -ne 0) { throw "smoke test failed for $runtime" }
+            Write-Output "::endgroup::"
+          }
 
       - name: Open the pull request
         if: steps.bump.outputs.changed == 'true'
@@ -97,7 +113,7 @@ jobs:
           git commit -am "chore(agent-runtime): update pinned CLI versions"
           git push -f origin "$branch"
 
-          body="$(printf 'Nightly upstream check. Every changed runtime image was built successfully before this PR was opened.\n\n%s\n' "$(cat "$RUNNER_TEMP/bump-notes.md")")"
+          body="$(printf 'Nightly upstream check. Every changed runtime was built **and smoke-tested** before this PR was opened.\n\n%s\n' "$(cat "$RUNNER_TEMP/bump-notes.md")")"
           gh pr create --title "chore(agent-runtime): update pinned CLI versions" \
                        --body "$body" --base main --head "$branch" \
             || gh pr edit "$branch" --body "$body"
