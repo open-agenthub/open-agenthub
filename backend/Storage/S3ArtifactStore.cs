@@ -22,8 +22,15 @@ public interface IArtifactStore
     bool CanServeBrowsersDirectly => false;
     string PresignPut(string key, TimeSpan ttl);
     string PresignGet(string key, TimeSpan ttl);
-    /// <summary>Streams content in. Returns false when no object storage is configured.</summary>
-    Task<bool> TryPutStreamAsync(string key, Stream content, string? contentType, CancellationToken ct = default)
+    /// <summary>Streams content in. Returns false when no object storage is configured.
+    /// <paramref name="contentLength"/> is required for streams that cannot report their own
+    /// length (a Kestrel request body); without it the content has to be buffered first.</summary>
+    Task<bool> TryPutStreamAsync(
+        string key,
+        Stream content,
+        string? contentType,
+        long? contentLength = null,
+        CancellationToken ct = default)
         => Task.FromResult(false);
     Task<string?> GetTextAsync(string key, CancellationToken ct = default);
     /// <summary>Writes text content. Returns false when no object storage is configured
@@ -192,18 +199,43 @@ public sealed class S3ArtifactStore : IArtifactStore
     }
 
     public async Task<bool> TryPutStreamAsync(
-        string key, Stream content, string? contentType, CancellationToken ct = default)
+        string key,
+        Stream content,
+        string? contentType,
+        long? contentLength = null,
+        CancellationToken ct = default)
     {
-        var request = new PutObjectRequest
+        var length = contentLength ?? (content.CanSeek ? content.Length - content.Position : null);
+        // S3 signs the body, so the length has to be known up front. A request body stream
+        // reports neither Length nor CanSeek, so the caller passes the wire length; when even
+        // that is missing (a chunked upload) the bytes have to be buffered to learn it.
+        MemoryStream? buffered = null;
+        if (length is null)
         {
-            BucketName = _bucket,
-            Key = key,
-            InputStream = content,
-            AutoCloseStream = false
-        };
-        if (!string.IsNullOrWhiteSpace(contentType)) request.ContentType = contentType;
-        await _s3.PutObjectAsync(request, ct);
-        return true;
+            buffered = new MemoryStream();
+            await content.CopyToAsync(buffered, ct);
+            buffered.Position = 0;
+            length = buffered.Length;
+        }
+
+        try
+        {
+            var request = new PutObjectRequest
+            {
+                BucketName = _bucket,
+                Key = key,
+                InputStream = buffered ?? content,
+                AutoCloseStream = false
+            };
+            request.Headers.ContentLength = length.Value;
+            if (!string.IsNullOrWhiteSpace(contentType)) request.ContentType = contentType;
+            await _s3.PutObjectAsync(request, ct);
+            return true;
+        }
+        finally
+        {
+            if (buffered is not null) await buffered.DisposeAsync();
+        }
     }
 
     public async Task DeleteAsync(string key, CancellationToken ct = default)
