@@ -93,6 +93,9 @@ public sealed class S3ArtifactStore : IArtifactStore
     // which is what makes CanServeBrowsersDirectly false.
     private readonly IAmazonS3? _publicS3;
     private readonly string _bucket;
+    // Kept so a presigned url can be forced back onto the endpoint's own scheme.
+    private readonly string? _serviceUrl;
+    private readonly string? _publicServiceUrl;
 
     public bool IsConfigured => true;
     public bool CanServeBrowsersDirectly => _publicS3 is not null;
@@ -102,18 +105,17 @@ public sealed class S3ArtifactStore : IArtifactStore
         var s = cfg.GetSection("S3");
         _bucket = s["Bucket"] ?? throw new InvalidOperationException("S3:Bucket is missing.");
 
+        // Presigned urls default to the legacy SigV2 scheme, which S3-compatible servers no
+        // longer accept — Garage answers such a request with "Forbidden: does not support
+        // anonymous access", because it cannot read the signature at all and falls back to
+        // treating the caller as anonymous. This global toggle is the only thing that switches
+        // presigning to SigV4; AmazonS3Config.SignatureVersion does not (verified against a
+        // running Garage).
+        Amazon.AWSConfigsS3.UseSignatureVersion4 = true;
+
         var s3cfg = new AmazonS3Config { ForcePathStyle = true }; // path-style for S3-compatible servers
-        if (!string.IsNullOrEmpty(s["ServiceUrl"]))
-        {
-            s3cfg.ServiceURL = s["ServiceUrl"];
-            // UseHttp is what decides the scheme of a PRESIGNED url; it does not follow from
-            // ServiceURL and defaults to false. Left unset, an endpoint configured as http://
-            // still gets signed as https://, and whoever follows that url — the session pod
-            // fetching its own state tarball — fails the TLS handshake against a plain-HTTP
-            // port. The request never reaches storage, so the session starts without history
-            // and never writes any back.
-            s3cfg.UseHttp = IsPlainHttp(s["ServiceUrl"]);
-        }
+        _serviceUrl = s["ServiceUrl"];
+        if (!string.IsNullOrEmpty(_serviceUrl)) s3cfg.ServiceURL = _serviceUrl;
         if (!string.IsNullOrEmpty(s["Region"])) s3cfg.AuthenticationRegion = s["Region"];
         // Internal MinIO endpoints often use a self-signed certificate. Opt-in only.
         if (s.GetValue("InsecureTls", false)) s3cfg.HttpClientFactory = new InsecureHttpClientFactory();
@@ -126,15 +128,30 @@ public sealed class S3ArtifactStore : IArtifactStore
         var publicUrl = s["PublicUrl"];
         if (!string.IsNullOrWhiteSpace(publicUrl))
         {
-            var publicCfg = new AmazonS3Config
-            {
-                ForcePathStyle = true,
-                ServiceURL = publicUrl.Trim(),
-                UseHttp = IsPlainHttp(publicUrl)
-            };
+            var publicCfg = new AmazonS3Config { ForcePathStyle = true, ServiceURL = publicUrl.Trim() };
             if (!string.IsNullOrEmpty(s["Region"])) publicCfg.AuthenticationRegion = s["Region"];
             _publicS3 = new AmazonS3Client(s["AccessKey"], s["SecretKey"], publicCfg);
+            _publicServiceUrl = publicUrl.Trim();
         }
+    }
+
+    /// <summary>
+    /// Forces a presigned url back onto the endpoint's own scheme. The SDK signs https even for
+    /// an endpoint configured as http://, and no configuration property changes that (UseHttp
+    /// and SignatureVersion were both verified to have no effect). Following such a url means a
+    /// TLS handshake against a plain-HTTP port — the session pod fetching its state tarball gets
+    /// "SSL routines::wrong version number" from curl, reports no saved state, and never writes
+    /// any back, leaving object storage silently empty.
+    ///
+    /// Safe because the scheme is not part of a SigV4 signature: only the host is, through
+    /// SignedHeaders=host. Verified against a running Garage — the rewritten url returns 200.
+    /// </summary>
+    private static string MatchEndpointScheme(string signedUrl, string? serviceUrl)
+    {
+        if (!IsPlainHttp(serviceUrl)) return signedUrl;
+        return signedUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+            ? string.Concat("http://", signedUrl.AsSpan("https://".Length))
+            : signedUrl;
     }
 
     /// <summary>True for an endpoint served over plain HTTP, which presigned urls must match.</summary>
@@ -154,14 +171,18 @@ public sealed class S3ArtifactStore : IArtifactStore
     public string PresignPut(string key, TimeSpan ttl) => Presign(key, HttpVerb.PUT, ttl);
     public string PresignGet(string key, TimeSpan ttl) => Presign(key, HttpVerb.GET, ttl);
 
-    private string Presign(string key, HttpVerb verb, TimeSpan ttl) =>
-        (_publicS3 ?? _s3).GetPreSignedURL(new GetPreSignedUrlRequest
+    private string Presign(string key, HttpVerb verb, TimeSpan ttl)
+    {
+        var usingPublic = _publicS3 is not null;
+        var signed = (_publicS3 ?? _s3).GetPreSignedURL(new GetPreSignedUrlRequest
         {
             BucketName = _bucket,
             Key = key,
             Verb = verb,
             Expires = DateTime.UtcNow.Add(ttl)
         });
+        return MatchEndpointScheme(signed, usingPublic ? _publicServiceUrl : _serviceUrl);
+    }
 
     public async Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default)
     {
