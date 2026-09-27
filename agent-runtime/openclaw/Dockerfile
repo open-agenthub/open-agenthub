@@ -1,5 +1,5 @@
 # ---- builder: compile node-pty natively ----
-FROM node:22-bookworm AS builder
+FROM node:26-bookworm AS builder
 WORKDIR /opt/session-agent
 COPY session-agent/package.json session-agent/package-lock.json ./
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
  && apt-get purge -y python3 make g++ && apt-get autoremove -y
 
 # ---- runtime (non-root) ----
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 # Pin discovered from npm registry (stable non-beta) at Task 5 authoring time.
 # Auth store (OpenClaw 2026.7.1-2):
 #   ~/.openclaw/agents/<agentId>/agent/auth-profiles.json  (logical JSON name)

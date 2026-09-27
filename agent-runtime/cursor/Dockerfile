@@ -1,5 +1,5 @@
 # ---- builder: compile node-pty natively ----
-FROM node:22-bookworm AS builder
+FROM node:26-bookworm AS builder
 WORKDIR /opt/session-agent
 COPY session-agent/package.json session-agent/package-lock.json ./
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
  && apt-get purge -y python3 make g++ && apt-get autoremove -y
 
 # ---- runtime (non-root) ----
-FROM node:22-bookworm-slim
+FROM node:26-bookworm-slim
 # https://cursor.com/install has no version selector — it always serves the newest build,
 # so this image cannot pin the Cursor CLI the way the other runtimes pin theirs. Asserting
 # an expected version here only converted "not reproducible" into "build broken" every
