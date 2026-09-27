@@ -31,8 +31,13 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
 
-  # Base images (node:22-bookworm-slim, the .NET SDK/runtime images, …).
+  # Base images (node:22-bookworm-slim, the .NET SDK/runtime images, …). Grouped so a
+  # base-image bump arrives as one reviewable PR instead of one per Dockerfile — the
+  # runtimes must move together anyway, since image.tag selects all of them at once.
   - package-ecosystem: docker
     directories:
       - /backend
@@ -45,3 +50,6 @@ updates:
       - /agent-runtime/openclaw
     schedule:
       interval: weekly
+    groups:
+      base-images:
+        patterns: ["*"]
