@@ -50,6 +50,7 @@ public interface ISessionFileService
         SessionFileActor actor,
         string fileId,
         Stream content,
+        long? contentLength = null,
         CancellationToken ct = default);
     Task<SessionFileRecord> CompleteAsync(
         SessionFileActor actor,
@@ -181,8 +182,11 @@ public sealed class SessionFileService : ISessionFileService
         SessionFileActor actor,
         string fileId,
         Stream content,
+        long? contentLength = null,
         CancellationToken ct = default)
     {
+        // Resolve before wrapping: SizeLimitedReadStream reports neither Length nor CanSeek.
+        var length = contentLength ?? (content.CanSeek ? content.Length - content.Position : null);
         RequireWrite(actor);
         var file = await RequireFileAsync(actor.SessionId, fileId, ct);
         if (file.State != SessionFileState.Reserved)
@@ -198,7 +202,7 @@ public sealed class SessionFileService : ISessionFileService
             try
             {
                 await _artifacts.TryPutStreamAsync(
-                    file.StorageLocator, limitedS3, file.DeclaredMimeType, ct);
+                    file.StorageLocator, limitedS3, file.DeclaredMimeType, length, ct);
             }
             catch (InvalidDataException)
             {

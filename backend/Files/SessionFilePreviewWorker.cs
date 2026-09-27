@@ -70,7 +70,7 @@ public sealed class SessionFilePreviewWorker(
         await using var content = new MemoryStream(pdf, writable: false);
         if (reserved.File.StorageKind == SessionFileStorageKind.Pod)
         {
-            await files.PutPodContentAsync(actor, reserved.File.Id, content, ct);
+            await files.PutPodContentAsync(actor, reserved.File.Id, content, content.Length, ct);
             return;
         }
         using var request = new HttpRequestMessage(HttpMethod.Put, reserved.Upload.Url)

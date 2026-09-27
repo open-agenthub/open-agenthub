@@ -125,7 +125,7 @@ public sealed class InternalSessionFilesController(
                 new FileApiError("file_too_large", "file_too_large"));
         try
         {
-            await files.PutPodContentAsync(actor, fileId, Request.Body, ct);
+            await files.PutPodContentAsync(actor, fileId, Request.Body, Request.ContentLength, ct);
             return NoContent();
         }
         catch (SessionFileException exception)
