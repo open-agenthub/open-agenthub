@@ -68,6 +68,43 @@ public sealed class SessionFileServiceTests
     }
 
     [Fact]
+    public async Task Proxied_upload_passes_the_wire_length_for_an_unseekable_request_body()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        var file = Reserved("f1", SessionFileStorageKind.S3);
+        await harness.Registry.InsertAsync(file);
+        // A Kestrel request body reports neither Length nor CanSeek; without the wire length
+        // the S3 SDK fails with "Could not determine content length".
+        await using var body = new UnseekableStream([1, 2, 3, 4]);
+
+        await harness.Service.PutPodContentAsync(Actor, "f1", body, 4);
+
+        Assert.Equal([1, 2, 3, 4], harness.Artifacts.Objects[file.StorageLocator]);
+        Assert.Equal(4, harness.Artifacts.PutContentLengths[file.StorageLocator]);
+    }
+
+    private sealed class UnseekableStream(byte[] bytes) : Stream
+    {
+        private readonly MemoryStream _inner = new(bytes, writable: false);
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => _inner.Read(buffer, offset, count);
+        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken ct = default) =>
+            _inner.ReadAsync(buffer, ct);
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
+
+    [Fact]
     public async Task Reserve_without_s3_or_a_live_pod_does_not_create_a_row()
     {
         var harness = Harness(s3Configured: false, podPhase: "Paused");
@@ -336,13 +373,22 @@ public sealed class SessionFileServiceTests
         public bool IsConfigured => configured;
         public bool CanServeBrowsersDirectly { get; set; }
         public async Task<bool> TryPutStreamAsync(
-            string key, Stream content, string? contentType, CancellationToken ct = default)
+            string key,
+            Stream content,
+            string? contentType,
+            long? contentLength = null,
+            CancellationToken ct = default)
         {
+            // Mirrors the S3 SDK, which refuses a body whose length it cannot determine.
+            if (contentLength is null && !content.CanSeek)
+                throw new InvalidOperationException("Could not determine content length");
+            PutContentLengths[key] = contentLength;
             using var buffer = new MemoryStream();
             await content.CopyToAsync(buffer, ct);
             Objects[key] = buffer.ToArray();
             return true;
         }
+        public Dictionary<string, long?> PutContentLengths { get; } = new();
         public Dictionary<string, byte[]> Objects { get; } = new();
         public List<string> Deleted { get; } = new();
         public bool FailDelete { get; set; }

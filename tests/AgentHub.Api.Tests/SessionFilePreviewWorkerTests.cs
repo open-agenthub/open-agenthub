@@ -76,7 +76,7 @@ public sealed class SessionFilePreviewWorkerTests
             return Task.FromResult(new ReserveFileResult(Preview(request.Size),
                 new FileUploadDescriptor("proxy", "/upload", new Dictionary<string, string>())));
         }
-        public async Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, CancellationToken ct = default)
+        public async Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, long? contentLength = null, CancellationToken ct = default)
         {
             using var output = new MemoryStream();
             await content.CopyToAsync(output, ct);

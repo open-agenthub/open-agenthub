@@ -84,7 +84,7 @@ public sealed class InternalSessionFilesTests
         }
         public Task<IReadOnlyList<SessionFileRecord>> ListAsync(SessionFileActor actor, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionFileRecord>>([File()]);
-        public Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, CancellationToken ct = default) => Task.CompletedTask;
+        public Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, long? contentLength = null, CancellationToken ct = default) => Task.CompletedTask;
         public Task<SessionFileRecord> CompleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => Task.FromResult(File());
         public Task<AgentHub.Api.Files.FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task DeleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();

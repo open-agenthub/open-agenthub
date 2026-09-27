@@ -93,7 +93,7 @@ public sealed class SessionFilesController(
 
         try
         {
-            await files.PutPodContentAsync(actor, fileId, Request.Body, ct);
+            await files.PutPodContentAsync(actor, fileId, Request.Body, Request.ContentLength, ct);
             return NoContent();
         }
         catch (SessionFileException exception)
