@@ -34,6 +34,34 @@ spec:
             pathType: Prefix
             backend:
               service: { name: agenthub-backend, port: { number: 80 } }
+          {{- if .Values.mcp.enabled }}
+          # Remote MCP endpoint and its OAuth server. These live outside /api because the
+          # paths are fixed by the specs MCP clients discover them with: the resource
+          # identifier is <origin>/mcp (RFC 8707), and the metadata documents must sit under
+          # /.well-known (RFC 9728). Routed to the backend explicitly — otherwise they fall
+          # through to the SPA below, which answers every discovery request with index.html
+          # and every POST with 405.
+          - path: /mcp
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-backend, port: { number: 80 } }
+          - path: /connect
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-backend, port: { number: 80 } }
+          - path: /.well-known/oauth-protected-resource
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-backend, port: { number: 80 } }
+          - path: /.well-known/oauth-authorization-server
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-backend, port: { number: 80 } }
+          - path: /.well-known/openid-configuration
+            pathType: Prefix
+            backend:
+              service: { name: agenthub-backend, port: { number: 80 } }
+          {{- end }}
           # Everything else: SPA
           - path: /
             pathType: Prefix
