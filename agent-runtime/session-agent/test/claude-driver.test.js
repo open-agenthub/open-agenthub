@@ -225,6 +225,10 @@ test('Claude image preserves runtime and custom-image injection paths', () => {
   assert.match(dockerfile, /COPY common\s+\/opt\/session-agent\/common/);
   assert.match(dockerfile, /COPY claude\s+\/opt\/session-agent\/claude/);
   assert.match(dockerfile, /COPY claude\/entrypoint\.sh\s+\/usr\/local\/bin\/entrypoint\.sh/);
-  assert.match(dockerfile, /npm install -g @anthropic-ai\/claude-code/);
+  // Asserts the pinning mechanism, not the number — update-agent-runtimes.yml rewrites
+  // the ARG, and a literal version here would fail on every bump.
+  assert.match(dockerfile, /ARG CLAUDE_CODE_VERSION=\d+\.\d+\.\d+/);
+  assert.match(dockerfile, /npm install -g @anthropic-ai\/claude-code@\$\{CLAUDE_CODE_VERSION\}/);
+  assert.match(dockerfile, /claude --version 2>&1 \| grep -Fq "\$CLAUDE_CODE_VERSION"/);
   assert.match(dockerfile, /\/usr\/local\/bin\/claude/);
 });

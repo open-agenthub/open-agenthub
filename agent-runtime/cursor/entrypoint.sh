@@ -8,6 +8,14 @@ if [ -f /opt/agenthub/session-agent/common/entrypoint-common.sh ]; then
 fi
 source "$COMMON_ENTRYPOINT"
 
+# The image cannot pin the CLI (the installer only ever serves latest), so the version
+# that actually shipped is recorded at build time — surface it for anyone asking what
+# this session is running.
+if [ -z "${CURSOR_AGENT_VERSION:-}" ] && [ -f /usr/local/share/cursor-agent/INSTALLED_VERSION ]; then
+  CURSOR_AGENT_VERSION="$(cat /usr/local/share/cursor-agent/INSTALLED_VERSION)"
+  export CURSOR_AGENT_VERSION
+fi
+
 # CURSOR_CONFIG_DIR holds cli-config.json + mcp.json (official docs).
 export CURSOR_CONFIG_DIR="${CURSOR_CONFIG_DIR:-$HOME/.cursor}"
 mkdir -p "$CURSOR_CONFIG_DIR"

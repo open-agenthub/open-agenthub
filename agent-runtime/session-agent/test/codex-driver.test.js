@@ -136,7 +136,11 @@ test('Codex image pins CLI and preserves custom-image injection paths', () => {
   assert.match(dockerfile, /COPY common\s+\/opt\/session-agent\/common/);
   assert.match(dockerfile, /COPY codex\s+\/opt\/session-agent\/codex/);
   assert.match(dockerfile, /COPY codex\/entrypoint\.sh\s+\/usr\/local\/bin\/entrypoint\.sh/);
-  assert.match(dockerfile, /npm install -g @openai\/codex@0\.144\.5/);
+  // Asserts the pinning mechanism, not the number — update-agent-runtimes.yml rewrites
+  // the ARG, and a literal version here would fail on every bump.
+  assert.match(dockerfile, /ARG CODEX_VERSION=\d+\.\d+\.\d+/);
+  assert.match(dockerfile, /npm install -g @openai\/codex@\$\{CODEX_VERSION\}/);
+  assert.match(dockerfile, /codex --version 2>&1 \| grep -Fq "\$CODEX_VERSION"/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/node/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/codex/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai/);
