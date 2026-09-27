@@ -123,7 +123,10 @@ public sealed class AdminController : ControllerBase
     /// makes the portal work with zero configuration once a license is active.
     /// </summary>
     [HttpPost("billing-portal")]
-    public async Task<IActionResult> OpenBillingPortal([FromServices] IHttpClientFactory httpFactory, CancellationToken ct)
+    public async Task<IActionResult> OpenBillingPortal(
+        [FromServices] IHttpClientFactory httpFactory,
+        [FromServices] AgentHub.Api.Licensing.ILicenseStore licenseStore,
+        CancellationToken ct)
     {
         if (!await IsAdminAsync(ct)) return Forbid();
         var serviceUrl = _cfg["Ee:License:ServiceUrl"]?.TrimEnd('/');
@@ -131,12 +134,16 @@ public sealed class AdminController : ControllerBase
             return StatusCode(StatusCodes.Status501NotImplemented,
                 new { error = "No license service configured (Ee:License:ServiceUrl)." });
 
-        var email = _license.Status.Email;
-        if (!_license.Status.Valid || string.IsNullOrWhiteSpace(email))
+        if (!_license.Status.Valid)
             return BadRequest(new { error = "No active license — activate one to manage billing." });
 
+        // Send the license token, not just the billing address: the service only hands the
+        // portal URL back to a caller that can prove the subscription is theirs, and an email
+        // address is not proof. Without the token it would only mail the link to the customer.
+        var licenseToken = await licenseStore.GetTokenAsync(ct);
         using var client = httpFactory.CreateClient();
-        using var resp = await client.PostAsJsonAsync($"{serviceUrl}/api/portal", new { email }, ct);
+        using var resp = await client.PostAsJsonAsync($"{serviceUrl}/api/portal",
+            new { licenseToken, email = _license.Status.Email }, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);
         return new ContentResult { Content = body, ContentType = "application/json", StatusCode = (int)resp.StatusCode };
     }
