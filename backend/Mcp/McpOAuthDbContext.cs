@@ -47,10 +47,10 @@ public static class McpClientDescriptor
             Requirements = { OpenIddictConstants.Requirements.Features.ProofKeyForCodeExchange }
         };
 
-        foreach (var uri in redirectUris)
-        {
-            if (Uri.TryCreate(uri, UriKind.Absolute, out var parsed)) descriptor.RedirectUris.Add(parsed);
-        }
+        var parsed = redirectUris
+            .Select(uri => Uri.TryCreate(uri, UriKind.Absolute, out var value) ? value : null)
+            .Where(uri => uri is not null);
+        foreach (var uri in parsed) descriptor.RedirectUris.Add(uri!);
 
         return descriptor;
     }
