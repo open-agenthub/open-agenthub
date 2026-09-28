@@ -90,11 +90,22 @@ The same surface as the stdio server:
 |---|---|
 | `session_create` | Create and start a session (defaults to Autonomous) |
 | `session_get` | Fetch one session by id |
+| `session_logs` | Read a session's transcript — what the agent actually printed |
 | `session_list` | List your sessions, optionally filtered by parent or phase |
 | `session_wait` | Poll until a session reaches Succeeded or Failed |
 | `session_delete` | Delete a session; does not cascade to children |
 | `agents_list` | Your agents with title, description and phase |
 | `agent_send` | Send a message/task to an agent by id or unique title |
+
+`session_logs` is the only way to see what a session did. `kubectl logs` on the pod shows the
+entrypoint and the launch command but not the agent's output, which goes to the PTY; and once a
+session finishes its pod is gone. The transcript is read from object storage, falling back to
+the database copy, so it outlives the pod. It returns the tail by default — a long session's
+transcript runs to megabytes, and the part that says how it ended is at the end.
+
+`session_create` takes `runAsRoot` for tasks that need tooling the runtime image does not ship
+(it has `node` and `npm`, but no `dotnet`, `docker` or `trivy`). It is off by default because a
+root session gives up the read-only root filesystem; the pod stays unprivileged either way.
 
 Every call runs as the user who approved the client, and the session service enforces that
 user's ownership exactly as it does for the REST API.

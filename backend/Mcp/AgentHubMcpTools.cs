@@ -57,6 +57,15 @@ public sealed class AgentHubMcpTools(
         [Description("CPU request, e.g. \"500m\". Lower it on a small cluster where the default "
                      + "would leave the pod unschedulable.")] string? cpu = null,
         [Description("Memory request, e.g. \"1Gi\".")] string? memory = null,
+        [Description("Approve tool-permission requests automatically. Defaults to on for "
+                     + "Autonomous and Scheduled sessions, where nobody is watching to answer a "
+                     + "prompt; pass false to keep such a session gated anyway.")]
+        bool? autoApprove = null,
+        [Description("Run the container as root so the agent can install packages (apt, npm -g). "
+                     + "Off by default: it gives up the read-only root filesystem, so only turn it "
+                     + "on for a task that genuinely needs tooling the image does not ship. The pod "
+                     + "stays unprivileged either way.")]
+        bool runAsRoot = false,
         CancellationToken ct = default)
     {
         var request = new CreateSessionRequest
@@ -71,7 +80,9 @@ public sealed class AgentHubMcpTools(
             RepoBranch = repoBranch,
             ProjectId = projectId,
             ParentSessionId = parentSessionId,
-            Schedule = schedule
+            Schedule = schedule,
+            AutoApprove = autoApprove,
+            RunAsRoot = runAsRoot
         };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
         // Only override the record's own defaults when a value was actually supplied; passing
@@ -88,6 +99,30 @@ public sealed class AgentHubMcpTools(
     [Description("Get one of your sessions by id.")]
     public async Task<SessionInfo> GetSession([Description("Session id.")] string id, CancellationToken ct = default)
         => await sessions.GetSessionAsync(Owner, id, ct) ?? throw new McpException("session_not_found");
+
+    [McpServerTool(Name = "session_logs")]
+    [Description("Read a session's transcript — everything the agent printed. This is the only "
+                 + "place its actual output lives: the pod log shows just the launch command, and "
+                 + "a finished session's pod is gone. Returns the tail by default.")]
+    public async Task<string> GetSessionLogs(
+        [Description("Session id.")] string id,
+        [Description("Return at most this many characters from the end. Default 20000, max 200000. "
+                     + "Pass 0 for the whole transcript.")] int? maxChars = null,
+        CancellationToken ct = default)
+    {
+        var transcript = await sessions.GetTranscriptAsync(Owner, id, ct)
+                         ?? throw new McpException("session_not_found");
+        if (transcript.Length == 0) return "(the session has not written any output yet)";
+
+        var limit = maxChars ?? 20_000;
+        // A transcript of a long session runs to megabytes; returning it whole would blow up the
+        // caller's context for the sake of a few lines at the end, which is the part that says
+        // how the session finished.
+        if (limit <= 0 || transcript.Length <= limit) return transcript;
+        limit = Math.Min(limit, 200_000);
+        return "… truncated, showing the last " + limit + " characters …\n"
+               + transcript[^limit..];
+    }
 
     [McpServerTool(Name = "session_list")]
     [Description("List your sessions. Optionally filter by parentSessionId and/or phase.")]
