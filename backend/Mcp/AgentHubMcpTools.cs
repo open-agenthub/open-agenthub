@@ -57,15 +57,15 @@ public sealed class AgentHubMcpTools(
         [Description("CPU request, e.g. \"500m\". Lower it on a small cluster where the default "
                      + "would leave the pod unschedulable.")] string? cpu = null,
         [Description("Memory request, e.g. \"1Gi\".")] string? memory = null,
-        [Description("Approve tool-permission requests automatically. Defaults to on for "
-                     + "Autonomous and Scheduled sessions, where nobody is watching to answer a "
-                     + "prompt; pass false to keep such a session gated anyway.")]
-        bool? autoApprove = null,
-        [Description("Run the container as root so the agent can install packages (apt, npm -g). "
-                     + "Off by default: it gives up the read-only root filesystem, so only turn it "
-                     + "on for a task that genuinely needs tooling the image does not ship. The pod "
-                     + "stays unprivileged either way.")]
-        bool runAsRoot = false,
+        [Description("\"true\" or \"false\". Approve tool-permission requests automatically. "
+                     + "Defaults to on for Autonomous and Scheduled sessions, where nobody is "
+                     + "watching to answer a prompt; pass false to keep such a session gated.")]
+        string? autoApprove = null,
+        [Description("\"true\" or \"false\". Run the container as root so the agent can install "
+                     + "packages (apt, npm -g). Off by default: it gives up the read-only root "
+                     + "filesystem, so only turn it on for a task that genuinely needs tooling the "
+                     + "image does not ship. The pod stays unprivileged either way.")]
+        string? runAsRoot = null,
         CancellationToken ct = default)
     {
         var request = new CreateSessionRequest
@@ -81,8 +81,8 @@ public sealed class AgentHubMcpTools(
             ProjectId = projectId,
             ParentSessionId = parentSessionId,
             Schedule = schedule,
-            AutoApprove = autoApprove,
-            RunAsRoot = runAsRoot
+            AutoApprove = ParseFlag(autoApprove),
+            RunAsRoot = ParseFlag(runAsRoot) ?? false
         };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
         // Only override the record's own defaults when a value was actually supplied; passing
@@ -229,6 +229,22 @@ public sealed class AgentHubMcpTools(
 
     private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback) where TEnum : struct, Enum
         => Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed) ? parsed : fallback;
+
+    /// <summary>
+    /// Reads a boolean flag that arrives as text. These are declared as strings rather than bools
+    /// on purpose: an MCP client caches the tool schema when it connects, so a parameter added
+    /// afterwards is sent as a string by every already-connected client. Declaring bool made the
+    /// whole call fail with "The JSON value could not be converted to System.Nullable`1[Boolean]"
+    /// until the client reconnected — an unhelpful error for something the caller got right.
+    ///
+    /// Null or unrecognised means "not specified", which lets the mode decide.
+    /// </summary>
+    private static bool? ParseFlag(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        "true" or "yes" or "1" or "on" => true,
+        "false" or "no" or "0" or "off" => false,
+        _ => null
+    };
 }
 
 public record AgentSummary(string Id, string Title, string? Description, string Phase, string? ProjectId);
