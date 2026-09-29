@@ -246,13 +246,23 @@ public sealed class SessionFileService : ISessionFileService
     {
         RequireWrite(actor);
         var file = await RequireFileAsync(actor.SessionId, fileId, ct);
-        var expected = file.StorageKind == SessionFileStorageKind.Pod
-            ? SessionFileState.Uploading
-            : SessionFileState.Reserved;
-        if (file.State != expected)
+        // An S3 file reaches this point in one of two states, depending on how the bytes got
+        // there. A presigned upload goes straight from the browser to storage, so the record is
+        // still Reserved — the backend never saw it happen. A proxied upload streams through
+        // PutPodContentAsync, which moves it to Uploading. Accepting only Reserved made every
+        // proxied upload fail here with a 409 after the bytes had already been stored, which is
+        // the only path available whenever storage is not reachable from the browser.
+        var expected = file.StorageKind switch
+        {
+            SessionFileStorageKind.Pod => [SessionFileState.Uploading],
+            _ => new[] { SessionFileState.Reserved, SessionFileState.Uploading }
+        };
+        if (Array.IndexOf(expected, file.State) < 0)
         {
             throw new SessionFileException("file_state_conflict");
         }
+        // Transitions out of here have to start from the state the record is actually in.
+        var current = file.State;
 
         Stream? source;
         if (file.StorageKind == SessionFileStorageKind.S3)
@@ -262,7 +272,7 @@ public sealed class SessionFileService : ISessionFileService
                 (!string.IsNullOrWhiteSpace(metadata.ContentType) &&
                  !string.Equals(metadata.ContentType, file.DeclaredMimeType, StringComparison.OrdinalIgnoreCase)))
             {
-                await FailAsync(file, expected, ct);
+                await FailAsync(file, current, ct);
                 throw new SessionFileException("storage_verification_failed");
             }
 
@@ -273,7 +283,7 @@ public sealed class SessionFileService : ISessionFileService
             var liveSession = await GetLiveSessionAsync(actor, ct);
             if (!await _agentFiles.ExistsAsync(liveSession, file, ct))
             {
-                await FailAsync(file, expected, ct);
+                await FailAsync(file, current, ct);
                 throw new SessionFileException("storage_verification_failed");
             }
 
@@ -282,7 +292,7 @@ public sealed class SessionFileService : ISessionFileService
 
         if (source is null)
         {
-            await FailAsync(file, expected, ct);
+            await FailAsync(file, current, ct);
             throw new SessionFileException("storage_verification_failed");
         }
 
@@ -291,7 +301,7 @@ public sealed class SessionFileService : ISessionFileService
             var buffered = await BufferAsync(source, _options.MaxDocumentBytes, ct);
             if (buffered is null || buffered.Length != file.Size)
             {
-                await FailAsync(file, expected, ct);
+                await FailAsync(file, current, ct);
                 throw new SessionFileException("storage_verification_failed");
             }
 
@@ -300,11 +310,11 @@ public sealed class SessionFileService : ISessionFileService
                 file.Name, detectionStream, _options, ct);
             if (!detected.Allowed)
             {
-                await FailAsync(file, expected, ct);
+                await FailAsync(file, current, ct);
                 throw new SessionFileException(detected.Code!);
             }
 
-            if (!await _registry.TransitionAsync(actor.SessionId, file.Id, expected,
+            if (!await _registry.TransitionAsync(actor.SessionId, file.Id, current,
                     SessionFileState.Ready, detected.DetectedMimeType, buffered.Length, ct))
             {
                 throw new SessionFileException("file_state_conflict");

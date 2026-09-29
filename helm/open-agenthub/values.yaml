@@ -87,7 +87,7 @@ agent:
   # Requires PSA "baseline" (instead of "restricted") on the sessionsNamespace.
   allowRootSessions: true
   # Extra TCP egress ports allowed from session pods (besides 53/80/443/22),
-  # e.g. [9000] for a self-hosted S3/MinIO on a non-standard port.
+  # e.g. [3900] for self-hosted object storage on a non-standard port.
   extraEgressPorts: []
   # Runtime port requests: an agent may ask (via the built-in agenthub_network MCP
   # server) to open additional ports while the session runs — egress (e.g. Postgres
@@ -171,12 +171,14 @@ skillLibrary:
     model: ""
     apiKey: ""
 
-# S3/MinIO for session state, scrollback, and artifacts. Empty serviceUrl = AWS endpoints.
+# S3-compatible object storage for session state, scrollback, and artifacts.
+# Empty serviceUrl = AWS endpoints. Any S3-compatible server works; Garage and SeaweedFS are
+# both small enough for a single-node cluster.
 s3:
   # Where the backend reaches object storage. Usually a cluster-internal address.
   serviceUrl: ""
   # Where a *browser* reaches the same storage, if it can at all — e.g. an ingress in
-  # front of MinIO. Leave empty (the default) and file uploads and downloads are streamed
+  # front of it. Leave empty (the default) and file uploads and downloads are streamed
   # through the API instead, which is the only thing that works with an internal endpoint.
   # Setting it hands out presigned URLs again and keeps the traffic off the backend.
   publicUrl: ""
@@ -184,7 +186,7 @@ s3:
   bucket: agenthub
   accessKey: ""
   secretKey: ""
-  # Skip TLS certificate validation — only for internal MinIO with a self-signed cert.
+  # Skip TLS certificate validation — only for an internal endpoint with a self-signed cert.
   insecureTls: false
 
 n8n:
