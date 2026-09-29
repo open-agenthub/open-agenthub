@@ -151,8 +151,8 @@ curl -fsSL https://open-agenthub.github.io/install.sh | sh
    `agent login`, and OpenClaw uses `openclaw models auth add`.
 
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
-[`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3/MinIO
-credentials enable session resume, history of finished sessions, and artifact uploads.
+[`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3-compatible object
+storage enables session resume, history of finished sessions, and artifact uploads.
 
 ### Configuring OAuth/OIDC login
 
@@ -518,7 +518,7 @@ No PVCs. Results flow back via `git push` or as artifacts to S3. What is persist
 - **Postgres** = registry/status (source of truth for the session list), including the
   selected agent, authentication mode, agent conversation identifier, status, policy,
   and callback metadata.
-- **S3/MinIO** = provider-separated state (`claude-state.tgz`, `codex-state.tgz`,
+- **Object storage** = provider-separated state (`claude-state.tgz`, `codex-state.tgz`,
   `cursor-state.tgz`, or `openclaw-state.tgz`), `scrollback.log`, `browser-cookies.json`, and
   `artifacts/...`. State archives exclude provider authentication files; authentication restore
   happens after state restore so stale state cannot replace the current per-user login.
@@ -599,7 +599,7 @@ instance runs itself. Off by default. See [Remote MCP server](docs/mcp-server.md
   they do not replace it.
 - **Provider CLI contracts** are pinned and tested by the separate runtime images. A
   provider CLI upgrade may require corresponding driver, hook, and resume changes.
-- **S3 path-style** (MinIO). On real AWS, drop `ForcePathStyle`.
+- **S3 path-style** is forced, which self-hosted servers expect. On real AWS, drop `ForcePathStyle`.
 
 ## Known limitations / next steps
 

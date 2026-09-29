@@ -19,7 +19,7 @@
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
     <!-- Persistenz -->
     <PackageReference Include="Npgsql" Version="10.0.0" />
-    <!-- S3 / MinIO (Presigned URLs, Transkript) -->
+    <!-- S3-compatible object storage (presigned URLs, transcript) -->
     <PackageReference Include="AWSSDK.S3" Version="3.7.405.1" />
     <!-- Remote MCP endpoint (Streamable HTTP) and the OAuth 2.1 server that guards it.
          The OpenIddict store is in-memory: only dynamically registered clients need to

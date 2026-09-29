@@ -49,7 +49,7 @@ spec:
         # Port 80 for package mirrors (apt/apk partly use HTTP)
         - { protocol: TCP, port: 80 }
         {{- range .Values.agent.extraEgressPorts }}
-        # Extra egress ports (e.g. a self-hosted S3/MinIO on a non-standard port)
+        # Extra egress ports (e.g. self-hosted object storage on a non-standard port)
         - { protocol: TCP, port: {{ . }} }
         {{- end }}
 ---

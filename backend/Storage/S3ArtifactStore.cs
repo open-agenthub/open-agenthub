@@ -7,7 +7,7 @@ namespace AgentHub.Api.Storage;
 public sealed record ArtifactObjectInfo(long Size, string? ContentType);
 
 /// <summary>
-/// Storage in S3 (or MinIO). The agent pod never receives S3 credentials,
+/// Storage in S3 or any S3-compatible server. The agent pod never receives S3 credentials,
 /// only time-limited presigned URLs.
 /// Key layout: sessions/{owner}/{sessionId}/{state.tgz|scrollback.log|artifacts/...}
 /// </summary>
@@ -117,7 +117,7 @@ public sealed class S3ArtifactStore : IArtifactStore
         _serviceUrl = s["ServiceUrl"];
         if (!string.IsNullOrEmpty(_serviceUrl)) s3cfg.ServiceURL = _serviceUrl;
         if (!string.IsNullOrEmpty(s["Region"])) s3cfg.AuthenticationRegion = s["Region"];
-        // Internal MinIO endpoints often use a self-signed certificate. Opt-in only.
+        // Internal endpoints often use a self-signed certificate. Opt-in only.
         if (s.GetValue("InsecureTls", false)) s3cfg.HttpClientFactory = new InsecureHttpClientFactory();
 
         _s3 = new AmazonS3Client(s["AccessKey"], s["SecretKey"], s3cfg);
@@ -160,7 +160,7 @@ public sealed class S3ArtifactStore : IArtifactStore
         serviceUrl.Trim().StartsWith("http://", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>Produces HttpClients that skip TLS server-certificate validation
-    /// (for internal S3/MinIO endpoints with a self-signed certificate). Opt-in.</summary>
+    /// (for internal S3 endpoints with a self-signed certificate). Opt-in.</summary>
     private sealed class InsecureHttpClientFactory : Amazon.Runtime.HttpClientFactory
     {
         public override HttpClient CreateHttpClient(Amazon.Runtime.IClientConfig config) =>
