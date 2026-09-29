@@ -68,6 +68,27 @@ public sealed class SessionFileServiceTests
     }
 
     [Fact]
+    public async Task A_proxied_s3_upload_can_be_completed()
+    {
+        // The whole point of the proxied path: reserve, stream the bytes through the API, then
+        // complete. PutPodContentAsync moves an S3 record to Uploading, and CompleteAsync used
+        // to accept only Reserved — so every proxied upload failed with a 409 after its bytes
+        // were already stored. That is the only path available whenever object storage is not
+        // reachable from the browser, which is the normal cluster-internal setup.
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        var reserved = await harness.Service.ReserveAsync(Actor,
+            new ReserveSessionFileCommand("shot.png", "image/png", 8, null, "user"));
+        var png = new byte[] { 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a };
+        await using var body = new UnseekableStream(png);
+
+        await harness.Service.PutPodContentAsync(Actor, reserved.File.Id, body, png.Length);
+        var completed = await harness.Service.CompleteAsync(Actor, reserved.File.Id);
+
+        Assert.Equal(SessionFileState.Ready, completed.State);
+        Assert.Equal("image/png", completed.DetectedMimeType);
+    }
+
+    [Fact]
     public async Task Proxied_upload_passes_the_wire_length_for_an_unseekable_request_body()
     {
         var harness = Harness(s3Configured: true, podPhase: "Paused");
@@ -387,6 +408,7 @@ public sealed class SessionFileServiceTests
             if (contentLength is null && !content.CanSeek)
                 throw new InvalidOperationException("Could not determine content length");
             PutContentLengths[key] = contentLength;
+            ContentTypes[key] = contentType;
             using var buffer = new MemoryStream();
             // Reads through the byte[] overload on purpose, because that is the one the AWS SDK
             // uses. CopyToAsync goes through the Memory overload instead, so it never exercised
@@ -405,8 +427,14 @@ public sealed class SessionFileServiceTests
         public string PresignPut(string key, TimeSpan ttl) => $"https://storage.test/{key}?put";
         public string PresignGet(string key, TimeSpan ttl) => $"https://storage.test/{key}?get";
         public Task<string?> GetTextAsync(string key, CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Dictionary<string, string?> ContentTypes { get; } = new();
+        // Real object storage reports back the content type it was given, and CompleteAsync
+        // compares it against the declared one. A double that always answered null skipped that
+        // comparison entirely, so the check went untested.
         public Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default) =>
-            Task.FromResult(Objects.TryGetValue(key, out var bytes) ? new ArtifactObjectInfo(bytes.Length, null) : null);
+            Task.FromResult(Objects.TryGetValue(key, out var bytes)
+                ? new ArtifactObjectInfo(bytes.Length, ContentTypes.GetValueOrDefault(key))
+                : null);
         public Task<Stream?> OpenReadAsync(string key, CancellationToken ct = default) =>
             Task.FromResult<Stream?>(Objects.TryGetValue(key, out var bytes) ? new MemoryStream(bytes) : null);
         public Task DeleteAsync(string key, CancellationToken ct = default)

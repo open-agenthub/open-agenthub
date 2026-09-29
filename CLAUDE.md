@@ -2,21 +2,21 @@
 
 ## Identity: this is an independent project
 
-Open AgentHub is a private open-source project by Maik Boltze. Nothing in this repository may
-associate it with any employer, past or present.
+Open AgentHub is a private open-source project by Maik Boltze. It stands on its own and is not
+connected to any other organisation.
 
 Concretely:
 
-- **No employer name, brand, or derivative of one** — not in code, comments, commit messages,
-  READMEs, configuration, example domains, e-mail addresses, test fixtures, or documentation.
-  This rule includes any text stating the rule itself: do not write the forbidden name down in
-  order to explain it. If you need to check the repository is clean, ask the owner for the term
-  rather than guessing at one and committing the guess.
+- **No third-party organisation names, brands, or derivatives of one** — not in code, comments,
+  commit messages, READMEs, configuration, example domains, e-mail addresses, test fixtures, or
+  documentation. The rule covers any text stating the rule itself: never write such a name down
+  in order to explain why it is not allowed. The owner keeps the specific list outside this
+  repository — ask, rather than guessing at a name and committing the guess.
 - **Author and contact are always** Maik Boltze (trading as MB Company), the project address
   `open-agenthub@mail.on-mb.com`, and the GitHub organisation `open-agenthub`.
-- **Company-internal environment values** — clusters, registries, hostnames, credentials —
-  belong only in the gitignored `deploy/` directory, never in a versioned file. If you find
-  such a value in a tracked file, treat it as a bug and say so.
+- **Internal environment values** — clusters, registries, hostnames, credentials — belong only
+  in the gitignored `deploy/` directory, never in a versioned file. If you find such a value in
+  a tracked file, treat it as a bug and say so.
 
 Use `example.com` or `your-org.example` for illustrative hosts.
 
