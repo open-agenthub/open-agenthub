@@ -23,16 +23,18 @@ export class FilesBackendClient {
   dismiss() { return this.#json('PUT', '/files/presentation', { fileId: null }); }
 
   /**
-   * Downloads a file's bytes through the API.
+   * Opens a file's content as a stream, through the API.
    *
    * Deliberately not the presigned url that materialize returns: that url expires after
    * PresignMinutes, so a read that happened any later than the listing failed with a signature
    * error the agent could only report as a missing file. This route has no deadline and keeps the
    * storage credential out of the agent's hands.
    *
-   * @param {number} maxBytes refuse anything larger, so a huge file cannot exhaust memory
+   * Returns a stream rather than a buffer so the caller can write straight to disk — a document
+   * belongs in the pod's filesystem where the agent can grep it, not in memory on its way into a
+   * reply.
    */
-  async content(fileId, maxBytes) {
+  async contentStream(fileId) {
     const url = `${this.baseUrl}/files/${encodeURIComponent(fileId)}/content`;
     const response = await this.fetchImpl(url, {
       method: 'GET',
@@ -40,11 +42,8 @@ export class FilesBackendClient {
       signal: AbortSignal.timeout(300_000)
     });
     if (!response.ok) throw new Error(`files_backend_http_${response.status}`);
-    const declared = Number(response.headers.get('content-length'));
-    if (Number.isFinite(declared) && declared > maxBytes) throw new Error('file_too_large');
-    const data = Buffer.from(await response.arrayBuffer());
-    if (data.length > maxBytes) throw new Error('file_too_large');
-    return data;
+    if (!response.body) throw new Error('file_not_found');
+    return response.body;
   }
 
   async upload(descriptor, body, mimeType) {

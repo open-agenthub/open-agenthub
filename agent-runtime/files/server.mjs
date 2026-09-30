@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { createRequire } from 'node:module';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -12,6 +13,7 @@ const runtimeRequire = createRequire(path.join(runtimeRoot, 'package.json'));
 const { McpServer } = runtimeRequire('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = runtimeRequire('@modelcontextprotocol/sdk/server/stdio.js');
 const { z } = runtimeRequire('zod');
+const { LocalFileStore } = runtimeRequire('../files/local-store.js');
 
 const id = z.string().regex(/^[a-f0-9]{32}$/);
 const empty = z.object({}).strict();
@@ -40,9 +42,6 @@ const MIME = new Map([
 ]);
 const IMAGE = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const TEXT = new Set(['text/plain', 'text/markdown']);
-// Returned as an embedded resource: models read these directly, so describing them instead
-// leaves the agent unable to use a file the user just uploaded.
-const DOCUMENT = new Set(['application/pdf']);
 
 function metadata(value) {
   const structuredContent = value;
@@ -55,9 +54,9 @@ export function createFilesToolHandlers(options = {}) {
   const managedRoot = options.managedRoot ?? process.env.AGENTHUB_FILE_ROOT ?? '/workspace/.agenthub/files';
   const maxTextBytes = options.maxTextBytes ?? 1024 * 1024;
   const maxImageBytes = options.maxImageBytes ?? 20 * 1024 * 1024;
-  // A document is base64-encoded into the reply, so this bounds what lands in the model's
-  // context, not just what is transferred. Well below the 50 MB a session file may be.
-  const maxDocumentBytes = options.maxDocumentBytes ?? 10 * 1024 * 1024;
+  // Where a downloaded file lands so the agent can grep it. Same store the message-attachment
+  // path uses, so a file fetched either way is cached once.
+  const store = options.store ?? new LocalFileStore({ root: managedRoot });
   const schemas = {
     list_display_capabilities: empty, list_files: empty,
     read_file: z.object({ fileId: id }).strict(), upload_file: upload,
@@ -99,25 +98,52 @@ export function createFilesToolHandlers(options = {}) {
   }
 
   /**
-   * Returns a file's bytes.
+   * Makes sure a file exists on the pod's disk and returns its path.
    *
-   * materialize reports a localPath only for pod-backed files; an S3-backed one has no local
-   * copy, and requiring localPath made every such file unreadable — the agent reported
-   * file_not_found for a file its own session listed as Ready.
+   * materialize reports a localPath only for pod-backed files; an S3-backed one has no local copy,
+   * and requiring localPath made every such file unreadable — the agent reported file_not_found
+   * for a file its own session listed as Ready.
    *
-   * The bytes come through the API rather than from the presigned url materialize also returns.
-   * That url expires after PresignMinutes, so a read that happened any later than the listing
-   * failed with a signature error — which the agent could only report as a missing file, and
-   * plausibly blamed on the file having expired. Going through the API has no deadline and keeps
-   * the storage credential out of the agent's reach.
+   * A path rather than the bytes, deliberately. The agent can then grep it, read ranges of it, or
+   * hand it to a tool, and a large document never lands in the model's context. The bytes come
+   * through the API rather than from the presigned url materialize also returns: that url expires
+   * after PresignMinutes, so a read later than the listing failed with a signature error the agent
+   * could only report as a missing file.
    */
-  async function readBytes(file, maxBytes) {
-    if (file.localPath) return fs.promises.readFile(file.localPath);
-    const data = await client.content(file.id, maxBytes);
+  async function localise(file) {
+    if (file.localPath) return file.localPath;
+
+    const existing = await store.head(file.id);
+    if (existing) {
+      // A cached copy of the wrong size means the stored object changed since it was fetched;
+      // start over rather than serve a stale file.
+      if (existing.name === file.name && existing.size === file.size) return existing.path;
+      await store.remove(file.id).catch(() => {});
+    }
+
+    const body = await client.contentStream(file.id);
+    const stream = typeof Readable.fromWeb === 'function'
+      ? Readable.fromWeb(body)
+      : Readable.from(body);
+    const stored = await store.put(file.id, file.name, stream, file.size);
     // The record's size is what the quota was charged for and what completion verified, so a
-    // mismatch means the stored object changed underneath us rather than a harmless rounding.
-    if (data.length !== file.size) throw new Error('file_not_found');
-    return data;
+    // mismatch means the object changed underneath us rather than a harmless rounding.
+    if (stored.size !== file.size) {
+      await store.remove(file.id).catch(() => {});
+      throw new Error('file_not_found');
+    }
+    // put reports what it wrote but not where; head resolves the real path, having checked it did
+    // not escape the managed root.
+    const ready = await store.head(file.id);
+    if (!ready) throw new Error('file_not_found');
+    return ready.path;
+  }
+
+  async function readBytes(file, maxBytes) {
+    const localPath = await localise(file);
+    const stat = await fs.promises.stat(localPath);
+    if (stat.size > maxBytes) throw new Error('file_too_large');
+    return fs.promises.readFile(localPath);
   }
 
   const handlers = {
@@ -138,29 +164,17 @@ export function createFilesToolHandlers(options = {}) {
         if (data.length > maxTextBytes) throw new Error('file_text_too_large');
         return { content: [{ type: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(data) }] };
       }
-      if (DOCUMENT.has(file.mimeType) && file.size <= maxDocumentBytes) {
-        // Handed back as an embedded resource rather than described. Models read PDFs directly,
-        // so answering with metadata and readable:false made a file the user had just uploaded
-        // useless to the agent — it could see the name and nothing else.
-        const data = await readBytes(file, maxDocumentBytes);
-        return {
-          content: [{
-            type: 'resource',
-            resource: {
-              uri: `agenthub://sessions/${file.sessionId ?? 'session'}/files/${file.id}`,
-              mimeType: file.mimeType,
-              blob: data.toString('base64')
-            }
-          }]
-        };
-      }
-      // Anything left over — an Office document, or a PDF past the limit — is described. This
-      // needs no bytes at all, so it must not depend on the file being local: that is why the
-      // check above stops at "does the record exist" rather than "is it on disk".
+      // Everything else — a PDF, an Office document, a large text file — is put on disk and
+      // reported by path. Returning the bytes would fill the model's context with something it
+      // should be reading selectively: with a path it can grep, read a range, or hand the file to
+      // a tool. Previously these answered readable:false with no path at all, which left a file
+      // the user had just uploaded unusable.
+      const localPath = await localise(file);
       return metadata({
         file: { id: file.id, name: file.name, mimeType: file.mimeType, size: file.size },
-        readable: false,
-        reason: DOCUMENT.has(file.mimeType) ? 'file_too_large_to_read' : 'unsupported_file_type'
+        localPath,
+        readable: true,
+        hint: 'The file is on disk at localPath — read or search it with your own file tools.'
       });
     },
     upload_file: async input => metadata(await uploadPath(input)),

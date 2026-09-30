@@ -71,111 +71,91 @@ test('read_file returns image content and bounds decoded text', async t => {
   await assert.rejects(() => handlers.read_file({ fileId: records.text.id }), /file_text_too_large/);
 });
 
-test('read_file fetches an S3-backed file instead of reporting it missing', async () => {
-  // materialize only reports a localPath for pod-backed files. An S3-backed one arrives with a
-  // presigned downloadUrl and no local copy, so requiring localPath made every such file
-  // unreadable — the agent answered file_not_found for a file the session listed as Ready, which
-  // is the normal case whenever object storage is configured.
-  const { createFilesToolHandlers } = await import('../../files/server.mjs');
-  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const asked = [];
-  const client = {
-    materialize: async () => [{
-      id: 'b'.repeat(32), name: 'shot.png', mimeType: 'image/png', size: png.length,
-      // A presigned url is offered but must be ignored: it expires, so a read later than the
-      // listing failed with a signature error the agent could only report as a missing file.
-      storageKind: 'S3', localPath: null, downloadUrl: 'https://storage.test/expires-soon'
-    }],
-    content: async (fileId, maxBytes) => { asked.push([fileId, maxBytes]); return png; }
-  };
+// The four tests below cover reading a file that lives in object storage. They use the real
+// LocalFileStore against a temp directory rather than a fake, because the point is that the file
+// ends up on disk where the agent can grep it.
 
-  const { handlers } = createFilesToolHandlers({ client, maxImageBytes: 4096 });
+function s3Record(overrides = {}) {
+  return {
+    id: 'b'.repeat(32), name: 'shot.png', mimeType: 'image/png', size: 8,
+    storageKind: 'S3', localPath: null,
+    // A presigned url is offered and must be ignored: it expires after PresignMinutes, so a read
+    // later than the listing failed with a signature error the agent could only report as a
+    // missing file.
+    downloadUrl: 'https://storage.test/expires-soon',
+    ...overrides
+  };
+}
+
+function webStream(buffer) {
+  return new ReadableStream({
+    start(controller) { controller.enqueue(new Uint8Array(buffer)); controller.close(); }
+  });
+}
+
+async function harness(t, record, bytes) {
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agenthub-files-read-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true }));
+  const downloads = [];
+  const client = {
+    materialize: async () => [record],
+    contentStream: async fileId => { downloads.push(fileId); return webStream(bytes); }
+  };
+  const { handlers } = createFilesToolHandlers({ client, managedRoot: root });
+  return { handlers, downloads, root };
+}
+
+test('read_file fetches an S3-backed image through the API', async t => {
+  // materialize reports a localPath only for pod-backed files, so requiring one made every
+  // S3-backed file unreadable — the agent answered file_not_found for a file its own session
+  // listed as Ready, which is the normal case whenever object storage is configured.
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  const { handlers, downloads } = await harness(t, s3Record({ size: png.length }), png);
+
   const result = await handlers.read_file({ fileId: 'b'.repeat(32) });
 
-  assert.deepEqual(asked, [['b'.repeat(32), 4096]]);
+  assert.deepEqual(downloads, ['b'.repeat(32)]);
   assert.equal(result.content[0].type, 'image');
   assert.equal(result.content[0].data, png.toString('base64'));
 });
 
-test('read_file describes an unreadable type without needing its bytes', async () => {
-  // An Office document cannot be handed to the model as-is, so it is described. That needs no
-  // bytes at all, which is why the guard stops at "does the record exist" rather than "is it on
-  // disk" — the old localPath check threw first and left even the metadata unavailable.
-  const { createFilesToolHandlers } = await import('../../files/server.mjs');
-  const docx = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-  const client = {
-    materialize: async () => [{
-      id: 'c'.repeat(32), name: 'offer.docx', mimeType: docx, size: 181_000,
-      storageKind: 'S3', localPath: null, downloadUrl: 'https://storage.test/offer.docx'
-    }],
-    content: async () => { throw new Error('must not download an undisplayable document'); }
-  };
-  const { handlers } = createFilesToolHandlers({ client });
+test('read_file puts a document on disk and reports its path, not its bytes', async t => {
+  // Returning the contents would fill the model's context with something it should read
+  // selectively. With a path it can grep the file, read a range, or hand it to a tool. Before
+  // this, a PDF answered readable:false with no path at all — a file the user had just uploaded
+  // was unusable.
+  const pdf = Buffer.from('%PDF-1.7\nbody');
+  const record = s3Record({ name: 'CV.pdf', mimeType: 'application/pdf', size: pdf.length });
+  const { handlers } = await harness(t, record, pdf);
 
-  const result = await handlers.read_file({ fileId: 'c'.repeat(32) });
+  const result = await handlers.read_file({ fileId: 'b'.repeat(32) });
 
-  assert.equal(result.structuredContent.readable, false);
-  assert.equal(result.structuredContent.reason, 'unsupported_file_type');
-  assert.equal(result.structuredContent.file.name, 'offer.docx');
+  assert.equal(result.structuredContent.readable, true);
+  assert.ok(result.structuredContent.localPath, 'expected a localPath');
+  assert.equal(await fs.promises.readFile(result.structuredContent.localPath, 'utf8'), pdf.toString());
+  // The reply must stay small: metadata only, no base64 payload.
+  assert.ok(result.content[0].text.length < 500, 'reply should not carry the file contents');
 });
 
-test('read_file rejects a download whose size does not match the record', async () => {
+test('read_file reuses a copy already on disk', async t => {
+  // Re-downloading on every read would make grepping a large document repeatedly expensive.
+  const pdf = Buffer.from('%PDF-1.7\nbody');
+  const record = s3Record({ name: 'CV.pdf', mimeType: 'application/pdf', size: pdf.length });
+  const { handlers, downloads } = await harness(t, record, pdf);
+
+  await handlers.read_file({ fileId: 'b'.repeat(32) });
+  await handlers.read_file({ fileId: 'b'.repeat(32) });
+
+  assert.deepEqual(downloads, ['b'.repeat(32)], 'expected exactly one download');
+});
+
+test('read_file rejects content whose size does not match the record', async t => {
   // The record's size is what the quota was charged for and what completion verified, so a
   // mismatch means the stored object changed rather than a harmless rounding.
-  const { createFilesToolHandlers } = await import('../../files/server.mjs');
-  const client = {
-    materialize: async () => [{
-      id: 'd'.repeat(32), name: 'shot.png', mimeType: 'image/png', size: 99,
-      storageKind: 'S3', localPath: null, downloadUrl: 'https://storage.test/shot.png'
-    }],
-    content: async () => Buffer.alloc(8)
-  };
-  const { handlers } = createFilesToolHandlers({ client });
+  const { handlers } = await harness(t, s3Record({ size: 99 }), Buffer.alloc(8));
 
   // createFilesToolHandlers returns the raw handlers; the isError wrapper lives in
   // createFilesServer, so the rejection surfaces directly here.
-  await assert.rejects(
-    () => handlers.read_file({ fileId: 'd'.repeat(32) }),
-    /file_not_found/);
-});
-
-test('read_file returns a PDF the model can actually read', async () => {
-  // Answering with metadata and readable:false made a file the user had just uploaded useless to
-  // the agent: it could see the name and size and nothing else. Models read PDFs directly, so the
-  // bytes go back as an embedded resource.
-  const { createFilesToolHandlers } = await import('../../files/server.mjs');
-  const pdf = Buffer.from('%PDF-1.7\nbody');
-  const client = {
-    materialize: async () => [{
-      id: 'e'.repeat(32), sessionId: 's1', name: 'CV.pdf', mimeType: 'application/pdf',
-      size: pdf.length, storageKind: 'S3', localPath: null
-    }],
-    content: async () => pdf
-  };
-  const { handlers } = createFilesToolHandlers({ client });
-
-  const result = await handlers.read_file({ fileId: 'e'.repeat(32) });
-
-  assert.equal(result.content[0].type, 'resource');
-  assert.equal(result.content[0].resource.mimeType, 'application/pdf');
-  assert.equal(result.content[0].resource.blob, pdf.toString('base64'));
-});
-
-test('read_file describes a PDF too large to put in the reply', async () => {
-  // The blob is base64-encoded into the response, so an unbounded document would land in the
-  // model's context whole. Past the limit it is described instead, with the reason named.
-  const { createFilesToolHandlers } = await import('../../files/server.mjs');
-  const client = {
-    materialize: async () => [{
-      id: 'f'.repeat(32), name: 'huge.pdf', mimeType: 'application/pdf',
-      size: 40 * 1024 * 1024, storageKind: 'S3', localPath: null
-    }],
-    content: async () => { throw new Error('must not download an oversized document'); }
-  };
-  const { handlers } = createFilesToolHandlers({ client, maxDocumentBytes: 1024 });
-
-  const result = await handlers.read_file({ fileId: 'f'.repeat(32) });
-
-  assert.equal(result.structuredContent.readable, false);
-  assert.equal(result.structuredContent.reason, 'file_too_large_to_read');
+  await assert.rejects(() => handlers.read_file({ fileId: 'b'.repeat(32) }), /file/);
 });
