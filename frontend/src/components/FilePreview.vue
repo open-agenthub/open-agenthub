@@ -21,6 +21,10 @@ const text = ref('')
 const truncated = ref(false)
 let generation = 0
 const kind = computed(() => previewKind(props.file, props.capabilities))
+// The backend already reports why a type cannot be shown; without surfacing it, an Office
+// document looked simply unsupported, when in fact one setting away from working.
+const officePreviewDisabled = computed(() =>
+  props.capabilities?.unavailableReasons?.[props.file?.mimeType] === 'office_preview_disabled')
 
 function releaseUrl() {
   if (objectUrl.value) URL.revokeObjectURL(objectUrl.value)
@@ -79,6 +83,14 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
     </div>
     <div v-else-if="kind === 'text'" class="document" data-file-preview="text">
       <pre>{{ text }}</pre><p v-if="truncated" class="truncated">Preview limited to the first 1 MiB.</p>
+    </div>
+    <div v-else-if="officePreviewDisabled" class="preview-state" data-preview-office-disabled>
+      <strong>Preview for Office documents is switched off</strong>
+      <span>An administrator can enable it for this instance; it converts documents to PDF in a
+        separate renderer.</span>
+      <a href="https://github.com/open-agenthub/open-agenthub/blob/main/README.md#office-document-previews"
+         target="_blank" rel="noopener noreferrer" data-office-preview-docs>How to enable it</a>
+      <a v-if="objectUrl" :href="objectUrl" :download="file.name" data-file-download>Download {{ file.name }}</a>
     </div>
     <div v-else class="preview-state" data-preview-unsupported>
       <strong>No safe inline preview is available</strong>

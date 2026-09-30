@@ -22,6 +22,31 @@ export class FilesBackendClient {
   present(fileId) { return this.#json('PUT', '/files/presentation', { fileId }); }
   dismiss() { return this.#json('PUT', '/files/presentation', { fileId: null }); }
 
+  /**
+   * Downloads a file's bytes through the API.
+   *
+   * Deliberately not the presigned url that materialize returns: that url expires after
+   * PresignMinutes, so a read that happened any later than the listing failed with a signature
+   * error the agent could only report as a missing file. This route has no deadline and keeps the
+   * storage credential out of the agent's hands.
+   *
+   * @param {number} maxBytes refuse anything larger, so a huge file cannot exhaust memory
+   */
+  async content(fileId, maxBytes) {
+    const url = `${this.baseUrl}/files/${encodeURIComponent(fileId)}/content`;
+    const response = await this.fetchImpl(url, {
+      method: 'GET',
+      headers: { 'X-Agent-Token': this.token },
+      signal: AbortSignal.timeout(300_000)
+    });
+    if (!response.ok) throw new Error(`files_backend_http_${response.status}`);
+    const declared = Number(response.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) throw new Error('file_too_large');
+    const data = Buffer.from(await response.arrayBuffer());
+    if (data.length > maxBytes) throw new Error('file_too_large');
+    return data;
+  }
+
   async upload(descriptor, body, mimeType) {
     if (!descriptor || !['proxy', 'presigned'].includes(descriptor.kind) || !descriptor.url)
       throw new Error('files_upload_descriptor_invalid');

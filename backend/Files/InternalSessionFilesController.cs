@@ -134,6 +134,31 @@ public sealed class InternalSessionFilesController(
         }
     }
 
+    /// <summary>
+    /// Streams a file's content to the agent through the API.
+    ///
+    /// The agent used to read S3-backed files straight from the presigned url that materialize
+    /// hands out. That url lives for PresignMinutes, so anything that did not fetch it within
+    /// that window — an agent that listed files first and read one later, or one that kept the
+    /// url in its context — got a signature error and reported the file as missing. This route
+    /// has no deadline, keeps the storage credential out of the agent's reach entirely, and works
+    /// even where the pod cannot reach object storage directly.
+    /// </summary>
+    [HttpGet("{fileId}/content")]
+    public async Task<IActionResult> Content(string id, string fileId, CancellationToken ct)
+    {
+        var actor = await ActorAsync(id, ct);
+        if (actor is null) return Unauthorized();
+        try
+        {
+            return SessionFileApi.Content(this, await files.OpenContentAsync(actor, fileId, ct));
+        }
+        catch (SessionFileException exception)
+        {
+            return SessionFileApi.Error(this, exception);
+        }
+    }
+
     [HttpPost("{fileId}/complete")]
     public async Task<IActionResult> Complete(
         string id, string fileId, CancellationToken ct)

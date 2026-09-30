@@ -545,13 +545,20 @@ the running agent pod and expires when that pod is gone; the capabilities endpoi
 the active storage mode and every format that can be displayed graphically. Limits default
 to five files per message, 20 MiB per image, and 50 MiB per document/message.
 
-DOCX, PPTX, and XLSX previews are optional. Enable the isolated LibreOffice renderer with:
+#### Office document previews
+
+DOCX, PPTX, and XLSX previews are optional, because they need a separate renderer pod that
+converts the document to PDF. Off by default; enable it with:
 
 ```yaml
 files:
   officePreview:
     enabled: true
 ```
+
+Until it is enabled the UI offers those documents as a download and says so, rather than
+appearing to have no opinion about them. PDFs, images, Markdown and plain text are previewed
+without the renderer, and an agent can read them through its `agenthub_files` MCP tools.
 
 The supplied NGINX Ingress allows upload bodies up to `55m` via
 `nginx.ingress.kubernetes.io/proxy-body-size`. Override it through

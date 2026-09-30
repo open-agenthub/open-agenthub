@@ -40,6 +40,9 @@ const MIME = new Map([
 ]);
 const IMAGE = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const TEXT = new Set(['text/plain', 'text/markdown']);
+// Returned as an embedded resource: models read these directly, so describing them instead
+// leaves the agent unable to use a file the user just uploaded.
+const DOCUMENT = new Set(['application/pdf']);
 
 function metadata(value) {
   const structuredContent = value;
@@ -51,8 +54,10 @@ export function createFilesToolHandlers(options = {}) {
   const workspace = options.workspace ?? process.env.AGENTHUB_WORKDIR ?? '/workspace';
   const managedRoot = options.managedRoot ?? process.env.AGENTHUB_FILE_ROOT ?? '/workspace/.agenthub/files';
   const maxTextBytes = options.maxTextBytes ?? 1024 * 1024;
-  // Injectable so a test can serve a presigned download without a network.
-  const fetchImpl = options.fetch ?? globalThis.fetch;
+  const maxImageBytes = options.maxImageBytes ?? 20 * 1024 * 1024;
+  // A document is base64-encoded into the reply, so this bounds what lands in the model's
+  // context, not just what is transferred. Well below the 50 MB a session file may be.
+  const maxDocumentBytes = options.maxDocumentBytes ?? 10 * 1024 * 1024;
   const schemas = {
     list_display_capabilities: empty, list_files: empty,
     read_file: z.object({ fileId: id }).strict(), upload_file: upload,
@@ -94,31 +99,23 @@ export function createFilesToolHandlers(options = {}) {
   }
 
   /**
-   * Returns a file's bytes, fetching them when they are not already on the pod's disk.
+   * Returns a file's bytes.
    *
-   * materialize only reports a localPath for pod-backed files. An S3-backed one comes back with
-   * a presigned downloadUrl instead and no local copy, so requiring localPath made every such
-   * file unreadable — the agent reported file_not_found for a file the session listed as Ready.
-   * That is the normal case whenever object storage is configured, which is most installations.
+   * materialize reports a localPath only for pod-backed files; an S3-backed one has no local
+   * copy, and requiring localPath made every such file unreadable — the agent reported
+   * file_not_found for a file its own session listed as Ready.
+   *
+   * The bytes come through the API rather than from the presigned url materialize also returns.
+   * That url expires after PresignMinutes, so a read that happened any later than the listing
+   * failed with a signature error — which the agent could only report as a missing file, and
+   * plausibly blamed on the file having expired. Going through the API has no deadline and keeps
+   * the storage credential out of the agent's reach.
    */
-  async function readBytes(file) {
+  async function readBytes(file, maxBytes) {
     if (file.localPath) return fs.promises.readFile(file.localPath);
-    if (typeof file.downloadUrl !== 'string') throw new Error('file_not_found');
-
-    let url;
-    try { url = new URL(file.downloadUrl); } catch { throw new Error('file_not_found'); }
-    // The url comes from our own backend, but it ends up driving a request from inside the pod;
-    // refuse anything that is not a plain http(s) fetch without embedded credentials.
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
-      throw new Error('file_not_found');
-
-    const response = await fetchImpl(url.toString(), {
-      method: 'GET', signal: AbortSignal.timeout(300_000)
-    });
-    if (!response.ok) throw new Error(`files_backend_http_${response.status}`);
-    const data = Buffer.from(await response.arrayBuffer());
+    const data = await client.content(file.id, maxBytes);
     // The record's size is what the quota was charged for and what completion verified, so a
-    // mismatch means the object changed underneath us rather than a harmless rounding.
+    // mismatch means the stored object changed underneath us rather than a harmless rounding.
     if (data.length !== file.size) throw new Error('file_not_found');
     return data;
   }
@@ -130,19 +127,41 @@ export function createFilesToolHandlers(options = {}) {
       const [file] = await client.materialize([fileId]);
       if (!file) throw new Error('file_not_found');
       if (IMAGE.has(file.mimeType)) {
-        const data = await readBytes(file);
+        // Images get their own ceiling: they are returned base64-encoded rather than as text, so
+        // the text limit has nothing to do with them.
+        const data = await readBytes(file, maxImageBytes);
         return { content: [{ type: 'image', data: data.toString('base64'), mimeType: file.mimeType }] };
       }
       if (TEXT.has(file.mimeType)) {
         if (file.size > maxTextBytes) throw new Error('file_text_too_large');
-        const data = await readBytes(file);
+        const data = await readBytes(file, maxTextBytes);
         if (data.length > maxTextBytes) throw new Error('file_text_too_large');
         return { content: [{ type: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(data) }] };
       }
-      // Everything else — a PDF, an Office document — is described rather than returned. This
+      if (DOCUMENT.has(file.mimeType) && file.size <= maxDocumentBytes) {
+        // Handed back as an embedded resource rather than described. Models read PDFs directly,
+        // so answering with metadata and readable:false made a file the user had just uploaded
+        // useless to the agent — it could see the name and nothing else.
+        const data = await readBytes(file, maxDocumentBytes);
+        return {
+          content: [{
+            type: 'resource',
+            resource: {
+              uri: `agenthub://sessions/${file.sessionId ?? 'session'}/files/${file.id}`,
+              mimeType: file.mimeType,
+              blob: data.toString('base64')
+            }
+          }]
+        };
+      }
+      // Anything left over — an Office document, or a PDF past the limit — is described. This
       // needs no bytes at all, so it must not depend on the file being local: that is why the
       // check above stops at "does the record exist" rather than "is it on disk".
-      return metadata({ file: { id: file.id, name: file.name, mimeType: file.mimeType, size: file.size }, readable: false });
+      return metadata({
+        file: { id: file.id, name: file.name, mimeType: file.mimeType, size: file.size },
+        readable: false,
+        reason: DOCUMENT.has(file.mimeType) ? 'file_too_large_to_read' : 'unsupported_file_type'
+      });
     },
     upload_file: async input => metadata(await uploadPath(input)),
     present_file: async input => {

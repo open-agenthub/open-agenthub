@@ -78,47 +78,45 @@ test('read_file fetches an S3-backed file instead of reporting it missing', asyn
   // is the normal case whenever object storage is configured.
   const { createFilesToolHandlers } = await import('../../files/server.mjs');
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
-  const fetched = [];
+  const asked = [];
   const client = {
     materialize: async () => [{
       id: 'b'.repeat(32), name: 'shot.png', mimeType: 'image/png', size: png.length,
-      storageKind: 'S3', localPath: null, downloadUrl: 'https://storage.test/shot.png'
-    }]
-  };
-  const fetchImpl = async url => {
-    fetched.push(url);
-    // Slice to the view's own range: Buffer allocations are pooled, so .buffer is usually
-    // larger than the data and a naive slice(0) hands back the whole pool.
-    return { ok: true, status: 200,
-      arrayBuffer: async () => png.buffer.slice(png.byteOffset, png.byteOffset + png.byteLength) };
+      // A presigned url is offered but must be ignored: it expires, so a read later than the
+      // listing failed with a signature error the agent could only report as a missing file.
+      storageKind: 'S3', localPath: null, downloadUrl: 'https://storage.test/expires-soon'
+    }],
+    content: async (fileId, maxBytes) => { asked.push([fileId, maxBytes]); return png; }
   };
 
-  const { handlers } = createFilesToolHandlers({ client, fetch: fetchImpl });
+  const { handlers } = createFilesToolHandlers({ client, maxImageBytes: 4096 });
   const result = await handlers.read_file({ fileId: 'b'.repeat(32) });
 
-  assert.deepEqual(fetched, ['https://storage.test/shot.png']);
+  assert.deepEqual(asked, [['b'.repeat(32), 4096]]);
   assert.equal(result.content[0].type, 'image');
   assert.equal(result.content[0].data, png.toString('base64'));
 });
 
-test('read_file describes a document without needing its bytes', async () => {
-  // A PDF is described, never returned, so it needs no local copy at all. The old localPath
-  // guard threw before reaching this branch, which left even the metadata unavailable.
+test('read_file describes an unreadable type without needing its bytes', async () => {
+  // An Office document cannot be handed to the model as-is, so it is described. That needs no
+  // bytes at all, which is why the guard stops at "does the record exist" rather than "is it on
+  // disk" — the old localPath check threw first and left even the metadata unavailable.
   const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const docx = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   const client = {
     materialize: async () => [{
-      id: 'c'.repeat(32), name: 'CV.pdf', mimeType: 'application/pdf', size: 181_000,
-      storageKind: 'S3', localPath: null, downloadUrl: 'https://storage.test/CV.pdf'
-    }]
+      id: 'c'.repeat(32), name: 'offer.docx', mimeType: docx, size: 181_000,
+      storageKind: 'S3', localPath: null, downloadUrl: 'https://storage.test/offer.docx'
+    }],
+    content: async () => { throw new Error('must not download an undisplayable document'); }
   };
-  const { handlers } = createFilesToolHandlers({
-    client, fetch: async () => { throw new Error('must not download a document'); }
-  });
+  const { handlers } = createFilesToolHandlers({ client });
 
   const result = await handlers.read_file({ fileId: 'c'.repeat(32) });
 
   assert.equal(result.structuredContent.readable, false);
-  assert.equal(result.structuredContent.file.name, 'CV.pdf');
+  assert.equal(result.structuredContent.reason, 'unsupported_file_type');
+  assert.equal(result.structuredContent.file.name, 'offer.docx');
 });
 
 test('read_file rejects a download whose size does not match the record', async () => {
@@ -129,16 +127,55 @@ test('read_file rejects a download whose size does not match the record', async 
     materialize: async () => [{
       id: 'd'.repeat(32), name: 'shot.png', mimeType: 'image/png', size: 99,
       storageKind: 'S3', localPath: null, downloadUrl: 'https://storage.test/shot.png'
-    }]
+    }],
+    content: async () => Buffer.alloc(8)
   };
-  const { handlers } = createFilesToolHandlers({
-    client,
-    fetch: async () => ({ ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(8) })
-  });
+  const { handlers } = createFilesToolHandlers({ client });
 
   // createFilesToolHandlers returns the raw handlers; the isError wrapper lives in
   // createFilesServer, so the rejection surfaces directly here.
   await assert.rejects(
     () => handlers.read_file({ fileId: 'd'.repeat(32) }),
     /file_not_found/);
+});
+
+test('read_file returns a PDF the model can actually read', async () => {
+  // Answering with metadata and readable:false made a file the user had just uploaded useless to
+  // the agent: it could see the name and size and nothing else. Models read PDFs directly, so the
+  // bytes go back as an embedded resource.
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const pdf = Buffer.from('%PDF-1.7\nbody');
+  const client = {
+    materialize: async () => [{
+      id: 'e'.repeat(32), sessionId: 's1', name: 'CV.pdf', mimeType: 'application/pdf',
+      size: pdf.length, storageKind: 'S3', localPath: null
+    }],
+    content: async () => pdf
+  };
+  const { handlers } = createFilesToolHandlers({ client });
+
+  const result = await handlers.read_file({ fileId: 'e'.repeat(32) });
+
+  assert.equal(result.content[0].type, 'resource');
+  assert.equal(result.content[0].resource.mimeType, 'application/pdf');
+  assert.equal(result.content[0].resource.blob, pdf.toString('base64'));
+});
+
+test('read_file describes a PDF too large to put in the reply', async () => {
+  // The blob is base64-encoded into the response, so an unbounded document would land in the
+  // model's context whole. Past the limit it is described instead, with the reason named.
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const client = {
+    materialize: async () => [{
+      id: 'f'.repeat(32), name: 'huge.pdf', mimeType: 'application/pdf',
+      size: 40 * 1024 * 1024, storageKind: 'S3', localPath: null
+    }],
+    content: async () => { throw new Error('must not download an oversized document'); }
+  };
+  const { handlers } = createFilesToolHandlers({ client, maxDocumentBytes: 1024 });
+
+  const result = await handlers.read_file({ fileId: 'f'.repeat(32) });
+
+  assert.equal(result.structuredContent.readable, false);
+  assert.equal(result.structuredContent.reason, 'file_too_large_to_read');
 });
