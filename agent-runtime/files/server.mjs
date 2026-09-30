@@ -51,6 +51,8 @@ export function createFilesToolHandlers(options = {}) {
   const workspace = options.workspace ?? process.env.AGENTHUB_WORKDIR ?? '/workspace';
   const managedRoot = options.managedRoot ?? process.env.AGENTHUB_FILE_ROOT ?? '/workspace/.agenthub/files';
   const maxTextBytes = options.maxTextBytes ?? 1024 * 1024;
+  // Injectable so a test can serve a presigned download without a network.
+  const fetchImpl = options.fetch ?? globalThis.fetch;
   const schemas = {
     list_display_capabilities: empty, list_files: empty,
     read_file: z.object({ fileId: id }).strict(), upload_file: upload,
@@ -91,22 +93,55 @@ export function createFilesToolHandlers(options = {}) {
     }
   }
 
+  /**
+   * Returns a file's bytes, fetching them when they are not already on the pod's disk.
+   *
+   * materialize only reports a localPath for pod-backed files. An S3-backed one comes back with
+   * a presigned downloadUrl instead and no local copy, so requiring localPath made every such
+   * file unreadable — the agent reported file_not_found for a file the session listed as Ready.
+   * That is the normal case whenever object storage is configured, which is most installations.
+   */
+  async function readBytes(file) {
+    if (file.localPath) return fs.promises.readFile(file.localPath);
+    if (typeof file.downloadUrl !== 'string') throw new Error('file_not_found');
+
+    let url;
+    try { url = new URL(file.downloadUrl); } catch { throw new Error('file_not_found'); }
+    // The url comes from our own backend, but it ends up driving a request from inside the pod;
+    // refuse anything that is not a plain http(s) fetch without embedded credentials.
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
+      throw new Error('file_not_found');
+
+    const response = await fetchImpl(url.toString(), {
+      method: 'GET', signal: AbortSignal.timeout(300_000)
+    });
+    if (!response.ok) throw new Error(`files_backend_http_${response.status}`);
+    const data = Buffer.from(await response.arrayBuffer());
+    // The record's size is what the quota was charged for and what completion verified, so a
+    // mismatch means the object changed underneath us rather than a harmless rounding.
+    if (data.length !== file.size) throw new Error('file_not_found');
+    return data;
+  }
+
   const handlers = {
     list_display_capabilities: async () => metadata(await client.capabilities()),
     list_files: async () => metadata({ files: await client.list() }),
     read_file: async ({ fileId }) => {
       const [file] = await client.materialize([fileId]);
-      if (!file || !file.localPath) throw new Error('file_not_found');
+      if (!file) throw new Error('file_not_found');
       if (IMAGE.has(file.mimeType)) {
-        const data = await fs.promises.readFile(file.localPath);
+        const data = await readBytes(file);
         return { content: [{ type: 'image', data: data.toString('base64'), mimeType: file.mimeType }] };
       }
       if (TEXT.has(file.mimeType)) {
         if (file.size > maxTextBytes) throw new Error('file_text_too_large');
-        const data = await fs.promises.readFile(file.localPath);
+        const data = await readBytes(file);
         if (data.length > maxTextBytes) throw new Error('file_text_too_large');
         return { content: [{ type: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(data) }] };
       }
+      // Everything else — a PDF, an Office document — is described rather than returned. This
+      // needs no bytes at all, so it must not depend on the file being local: that is why the
+      // check above stops at "does the record exist" rather than "is it on disk".
       return metadata({ file: { id: file.id, name: file.name, mimeType: file.mimeType, size: file.size }, readable: false });
     },
     upload_file: async input => metadata(await uploadPath(input)),
