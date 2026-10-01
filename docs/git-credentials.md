@@ -142,11 +142,6 @@ between the two MCP servers and the REST API.
 
 ## Still open, and deliberately untouched here
 
-`entrypoint-common.sh` copies `.mcp.json` into the working directory, which with a single repository
-is the clone itself. That is the same class of problem the Cursor rule file solves with
-`.git/info/exclude` (see [`api-created-sessions.md`](api-created-sessions.md)): an agent running
-`git add -A` can commit AgentHub's plumbing into the user's branch.
-
 The state tar does not carry git credentials out, but only incidentally: it archives the agent's
 state directory, and `~/.git-credentials`, `~/.ssh/id` and the `gh`/`glab` configs all sit outside
 it. A driver that widened `stateDir` to `$HOME` would start uploading git tokens to object storage

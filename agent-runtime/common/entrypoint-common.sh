@@ -60,12 +60,6 @@ if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; th
   fi
 fi
 
-if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
-  TARGET="${AGENTHUB_WORKDIR:-/workspace}"
-  [ -d "$TARGET" ] || TARGET="/workspace"
-  cp /secrets/mcp/mcp.json "$TARGET/.mcp.json" || true
-fi
-
 MCP_SOURCE=""
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   MCP_SOURCE=/secrets/mcp/mcp.json
@@ -98,9 +92,12 @@ if [ "$MERGED_MCP" = "1" ]; then
 elif [ -n "$MCP_SOURCE" ]; then
   export AGENTHUB_MCP_CONFIG="$MCP_SOURCE"
 fi
-if [ -n "${AGENTHUB_MCP_CONFIG:-}" ]; then
-  TARGET="${AGENTHUB_WORKDIR:-/workspace}"
-  [ -d "$TARGET" ] || TARGET="/workspace"
-  cp "$AGENTHUB_MCP_CONFIG" "$TARGET/.mcp.json"
-  chmod 600 "$TARGET/.mcp.json"
-fi
+# AGENTHUB_MCP_CONFIG stays outside the workspace on purpose. This used to be copied to
+# $AGENTHUB_WORKDIR/.mcp.json, which with a single repository is the clone itself — an
+# untracked file in a tree the agent is about to commit. It did not even work: measured
+# against Claude Code 2.1.283, a project .mcp.json server reports "⏸ Pending approval
+# (run `claude` to approve)" and is never connected to, so an unattended session got
+# nothing from it. Codex and Cursor ignore the file outright — each reads its own config,
+# which its entrypoint writes under $HOME (verified with `codex mcp list` and
+# `cursor-agent mcp list`, the latter naming its locations in the error itself).
+# Claude's central equivalent is written by claude/mcp-config.mjs.

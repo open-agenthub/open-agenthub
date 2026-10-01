@@ -120,6 +120,43 @@ The stdio MCP server returns sessions through an allowlist, so `url` had to be n
 explicitly — a field the backend starts returning is dropped until it is listed, and without it a
 caller would be left holding an id it could not turn into a link.
 
+## Where a runtime's MCP configuration lives
+
+Each CLI reads its own, and all four locations are outside the workspace:
+
+| Runtime | Central location | Written by |
+|---|---|---|
+| Claude | `mcpServers` in `~/.claude.json` (user scope) | `claude/mcp-config.mjs` |
+| Codex | `[mcp_servers.*]` in `$CODEX_HOME/config.toml` | `codex/mcp-config.js` |
+| Cursor | `$CURSOR_CONFIG_DIR/mcp.json` | `cursor/mcp-config.js` |
+| OpenClaw | — not wired yet | — |
+
+The effective config used to be copied to `$AGENTHUB_WORKDIR/.mcp.json` as well, which was wrong
+on both counts. With a single repository the working directory *is* the clone, so it left an
+untracked file in a tree the agent is about to commit. And the file did nothing: measured against
+Claude Code 2.1.283, a server declared in a project `.mcp.json` reports
+
+```
+probe: node -e 0 - ⏸ Pending approval (run `claude` to approve)
+```
+
+and is never connected to — exactly what an unattended session cannot provide. The same server in
+the user scope is health-checked and connected immediately, from any working directory. Codex and
+Cursor ignore `.mcp.json` outright; `cursor-agent mcp list` even names its own locations in the
+error it prints when none is configured, and `codex mcp list` reports nothing until a
+`config.toml` entry exists. The copy dated from the initial commit, when Claude was the only
+runtime, and was carried into the shared entrypoint unexamined when the others were added.
+
+The agent is still launched with `--mcp-config`, unchanged; the user scope is what anything *else*
+running `claude` inside the session sees, where no flag is passed. A name present in both is not a
+conflict — the CLI gets past configuration parsing to the auth check, while a malformed config
+fails before it with "Invalid MCP configuration".
+
+Managed server names are recorded under a private key rather than `mcpServers` being replaced
+wholesale: `~/.claude.json` is restored from the session's own state tar, so a server dropped from
+the config has to disappear instead of lingering from an earlier start — and a custom image's own
+user-scoped servers must survive.
+
 ## Following a session without a websocket
 
 `GET /api/remote/sessions/{id}/transcript` and the `session_transcript` MCP tool page the transcript
