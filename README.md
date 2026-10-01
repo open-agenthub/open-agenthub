@@ -70,9 +70,13 @@ shift.
   save keeps the previous versions restorable. Sessions materialize the matching
   skills automatically, and the agent itself can search (full-text, optionally
   semantic via a configurable embeddings endpoint), read, upload, and roll back
-  skills through the injected `skill-library` MCP server. Skills the agent creates
-  locally under `~/.claude/skills` are picked up and imported into the library
-  automatically — so agents grow a shared, versioned knowledge base as they work.
+  skills through the injected `skill-library` MCP server. Helper scripts move by path,
+  not by value: `upload_skill` reads a directory, a file or a `.tar.gz` off the session's
+  disk and `get_skill` writes a skill back to an `out_dir`, so a large script costs the
+  agent no context in either direction. Skills the agent creates locally under
+  `~/.claude/skills` are picked up and imported into the library automatically, and an
+  end-of-turn hook asks the agent whether what it just worked out belongs in the library —
+  so agents grow a shared, versioned knowledge base as they work.
 - **Visible browser on demand** — the built-in `agenthub_browser` MCP starts one isolated
   Chromium only when the agent needs it. The same desktop appears beside the chat through
   noVNC, while idle sessions consume no browser CPU or memory.
@@ -153,6 +157,14 @@ curl -fsSL https://open-agenthub.github.io/install.sh | sh
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
 [`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3-compatible object
 storage enables session resume, history of finished sessions, and artifact uploads.
+
+Point `s3.*` at a provider you already run, or let the chart deploy one: with
+`objectStorage.enabled=true` it brings up a single-node [Garage](https://garagehq.deuxfleurs.fr/)
+and wires `s3.serviceUrl`, `s3.accessKey` and `s3.secretKey` to it. Garage creates neither a
+layout nor a bucket nor a key by itself, so that one-time bootstrap is a step of its own —
+`setup-dev.sh` / `setup-dev.ps1` offer the whole thing (`--with-object-storage`,
+`-WithObjectStorage`), generate the credentials, and skip whatever is already in place on a
+redeploy.
 
 ### Configuring OAuth/OIDC login
 
@@ -545,13 +557,20 @@ the running agent pod and expires when that pod is gone; the capabilities endpoi
 the active storage mode and every format that can be displayed graphically. Limits default
 to five files per message, 20 MiB per image, and 50 MiB per document/message.
 
-DOCX, PPTX, and XLSX previews are optional. Enable the isolated LibreOffice renderer with:
+#### Office document previews
+
+DOCX, PPTX, and XLSX previews are optional, because they need a separate renderer pod that
+converts the document to PDF. Off by default; enable it with:
 
 ```yaml
 files:
   officePreview:
     enabled: true
 ```
+
+Until it is enabled the UI offers those documents as a download and says so, rather than
+appearing to have no opinion about them. PDFs, images, Markdown and plain text are previewed
+without the renderer, and an agent can read them through its `agenthub_files` MCP tools.
 
 The supplied NGINX Ingress allows upload bodies up to `55m` via
 `nginx.ingress.kubernetes.io/proxy-body-size`. Override it through

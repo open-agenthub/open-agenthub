@@ -67,7 +67,7 @@ public sealed class SessionFilePreviewWorkerTests
     {
         public byte[] Uploaded { get; private set; } = [];
         public string? ReservedName { get; private set; }
-        public Task<FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) =>
+        public Task<FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, bool allowRedirect = true, CancellationToken ct = default) =>
             Task.FromResult(new FileContentResult(new MemoryStream([1, 2, 3, 4]), null,
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx", 4));
         public Task<ReserveFileResult> ReserveAsync(SessionFileActor actor, ReserveSessionFileCommand request, CancellationToken ct = default)

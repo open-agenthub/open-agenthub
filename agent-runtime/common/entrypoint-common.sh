@@ -8,6 +8,11 @@ if [ -d /opt/agenthub/session-agent ]; then
 fi
 export RUNTIME
 export AGENTHUB_FILES_MCP_ENABLED=1
+# The local skills proxy in front of the hub's skill-library server, so uploads and
+# downloads can name a path instead of quoting file content into the agent's context.
+# It only takes over an entry the hub actually injected; set to 0 to keep the plain
+# HTTP entry instead.
+export AGENTHUB_SKILLS_MCP_ENABLED="${AGENTHUB_SKILLS_MCP_ENABLED:-1}"
 
 : "${AGENTHUB_STATE_DIR:?AGENTHUB_STATE_DIR is required}"
 mkdir -p "$HOME/.ssh" "$HOME/$AGENTHUB_STATE_DIR"
@@ -91,6 +96,13 @@ fi
 
 if [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
   node "$RUNTIME/files/configure.mjs" "$MCP_SOURCE"
+  MCP_SOURCE=/tmp/agenthub-mcp.json
+  MERGED_MCP=1
+fi
+# Only ever rewrites an existing skill-library entry, so there is nothing to do without a
+# config — and writing one here would hand the agent an empty .mcp.json it never had.
+if [ "${AGENTHUB_SKILLS_MCP_ENABLED:-0}" = "1" ] && [ -n "$MCP_SOURCE" ]; then
+  node "$RUNTIME/skills/configure.mjs" "$MCP_SOURCE"
   MCP_SOURCE=/tmp/agenthub-mcp.json
   MERGED_MCP=1
 fi

@@ -27,4 +27,11 @@ public static class SessionStatus
     /// <summary>A running or starting interactive/autonomous session can be paused (pod removed, state kept).</summary>
     public static bool CanPause(SessionMode mode, string phase)
         => mode != SessionMode.Scheduled && phase is Running or Pending;
+
+    /// <summary>
+    /// Whether saved state may be overwritten from outside. Only while no pod is live: a pod
+    /// writes its own state over the same key when it stops, so an upload accepted next to a
+    /// Running or Pending session is silently discarded at the next pause.
+    /// </summary>
+    public static bool CanReplaceState(string phase) => phase is not (Running or Pending);
 }

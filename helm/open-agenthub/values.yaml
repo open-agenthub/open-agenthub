@@ -96,9 +96,29 @@ agent:
   # NetworkPolicies that are deleted with the session. Only ports listed here can be
   # requested — anything else is rejected without asking. Entries are single ports
   # or "from-to" ranges; [] disallows requests entirely.
+  #
+  # Keep these in step with NetworkPortOptions.RequestablePorts, which documents what each
+  # range is for. Being listed is permission to ask, not access — the owner still approves
+  # every request — so the defaults are generous enough that a framework's own dev server
+  # and the usual backing services can be asked for. A port that is missing is refused
+  # before the owner sees it, which an agent reads as the platform being unable to do it.
   portRequests:
     enabled: true
-    requestablePorts: ["5432", "3306", "6379", "27017", "9000-9100"]
+    requestablePorts:
+      - "3000-3010"   # React, Next.js, Nuxt, Node
+      - "3306"        # MariaDB / MySQL
+      - "3900"        # Garage S3 API
+      - "4173"        # Vite preview
+      - "4200-4210"   # Angular
+      - "5000-5300"   # ASP.NET Core http, Flask, Vite dev (5173)
+      - "5432"        # PostgreSQL
+      - "6379"        # Redis
+      - "6443"        # Kubernetes API — session pods mount no service account token
+      - "7000-7300"   # ASP.NET Core https
+      - "8000-8010"   # Django, FastAPI, Laravel, PHP built-in server
+      - "8080-8090"   # generic http
+      - "9000-9100"   # MinIO, php-fpm
+      - "27017"       # MongoDB
 
 files:
   maxImageBytes: 20971520
@@ -188,6 +208,38 @@ s3:
   secretKey: ""
   # Skip TLS certificate validation — only for an internal endpoint with a self-signed cert.
   insecureTls: false
+
+# Roll out that object storage inside the cluster (Garage) instead of pointing s3.* at an
+# external provider. The setup scripts offer this; they generate the credentials and run the
+# one-time bootstrap (layout, bucket, key) that Garage needs afterwards.
+#
+# When enabled, s3.serviceUrl, s3.accessKey and s3.secretKey default to this instance, so
+# nothing else has to be configured. Setting any of them explicitly still wins — that is how
+# you point an existing deployment at something else without tearing this down first.
+objectStorage:
+  enabled: false
+  image: dxflrs/garage:v1.0.1
+  persistence: true
+  # Empty = the cluster's default StorageClass.
+  storageClass: ""
+  metaStorage: 2Gi
+  dataStorage: 20Gi
+  # What the node reports as usable. Garage's own notation — the suffixes it accepts are
+  # B, KB, MB, GB, TB and PB. Deliberately under dataStorage: Garage refuses writes once a
+  # node is full, and the metadata it writes alongside the data has to fit as well.
+  capacity: 18GB
+  # Credentials the hub signs with. Garage imports exactly these rather than generating its
+  # own, so the chart and the store agree without reading anything back out of the cluster.
+  # Access key IDs must look like Garage's own: "GK" plus 24 hex characters.
+  accessKey: ""
+  secretKey: ""
+  # Node-to-node RPC secret (32 bytes, hex) and admin API token. Garage will not start
+  # without the RPC secret even as a single node.
+  rpcSecret: ""
+  adminToken: ""
+  resources:
+    requests: { cpu: 50m, memory: 192Mi }
+    limits: { cpu: "1", memory: 768Mi }
 
 n8n:
   webhookUrl: ""

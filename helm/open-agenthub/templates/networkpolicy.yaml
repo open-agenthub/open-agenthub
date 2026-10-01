@@ -52,6 +52,12 @@ spec:
         # Extra egress ports (e.g. self-hosted object storage on a non-standard port)
         - { protocol: TCP, port: {{ . }} }
         {{- end }}
+        {{- if and .Values.objectStorage.enabled (not (has 3900 .Values.agent.extraEgressPorts)) }}
+        # The in-cluster store's S3 port. A session restores its state by fetching the
+        # presigned url itself, so without this every resumed session starts empty — and
+        # the entrypoint reports that as "no saved state" rather than as a blocked egress.
+        - { protocol: TCP, port: 3900 }
+        {{- end }}
 ---
 # Agent -> backend (status/notify/artifact URL callbacks).
 # Scoped to the backend PODS (namespaceSelector AND podSelector), not the whole

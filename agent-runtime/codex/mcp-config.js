@@ -132,7 +132,16 @@ function convertServer(name, input) {
   return lines.join('\n');
 }
 
-function convertMcp(agentHubJson, reservedServers = []) {
+const SKILL_LIBRARY = 'skill-library';
+
+/** True for the http entry the hub injects for its skill-library server. */
+function isHubSkillLibrary(entry) {
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false;
+  if (typeof entry.url !== 'string' || entry.command !== undefined) return false;
+  return entry.type === undefined || entry.type === 'http' || entry.type === 'streamable-http';
+}
+
+function convertMcp(agentHubJson, reservedServers = [], env = process.env, nodeBin = process.execPath) {
   let parsed = agentHubJson;
   if (typeof agentHubJson === 'string') {
     try { parsed = JSON.parse(agentHubJson); } catch { throw new Error('MCP configuration must be valid JSON'); }
@@ -143,8 +152,26 @@ function convertMcp(agentHubJson, reservedServers = []) {
   const servers = record(root.mcpServers, 'mcpServers');
   const reserved = new Set(reservedServers);
   const names = Object.keys(servers).filter(name => !reserved.has(name)).sort();
-  return names.map(name => convertServer(name, servers[name])).join('\n\n') +
-    (names.length ? '\n' : '');
+  // The hub's skill-library server is replaced by the local stdio proxy, which adds the
+  // path and out_dir arguments and forwards everything else to that same url. Keyed off
+  // the injected entry, so it follows the hub's own switch for the feature.
+  const useSkillProxy = env.AGENTHUB_SKILLS_MCP_ENABLED === '1';
+  const blocks = names.map(name =>
+    useSkillProxy && name === SKILL_LIBRARY && isHubSkillLibrary(servers[name])
+      ? skillProxyToml(env, nodeBin)
+      : convertServer(name, servers[name]));
+  return blocks.join('\n\n') + (blocks.length ? '\n' : '');
+}
+
+/** Codex needs an absolute interpreter and an explicit list of variables to forward. */
+function skillProxyToml(env = process.env, nodeBin = process.execPath) {
+  const runtime = env.RUNTIME || '/opt/session-agent';
+  return [
+    '[mcp_servers.' + SKILL_LIBRARY + ']',
+    'command = ' + quoted(nodeBin),
+    'args = ' + array([runtime + '/skills/server.mjs']),
+    'env_vars = ' + array(['PATH', 'RUNTIME', 'TMPDIR', 'AGENTHUB_CALLBACK_URL', 'AGENTHUB_CALLBACK_TOKEN'])
+  ].join('\n');
 }
 
 // Codex starts MCP subprocesses with a cleared environment and forwards only the
@@ -186,4 +213,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { convertMcp, builtinToml };
+module.exports = { convertMcp, builtinToml, skillProxyToml };

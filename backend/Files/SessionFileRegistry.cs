@@ -256,7 +256,12 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
             SET state = @next,
                 detected_mime_type = COALESCE(@detectedMime, detected_mime_type),
                 size = COALESCE(@actualSize, size),
-                completed_at = CASE WHEN @next = 'Ready' THEN now() ELSE completed_at END
+                completed_at = CASE WHEN @next = 'Ready' THEN now() ELSE completed_at END,
+                -- expires_at is the deadline for finishing the upload, not a lifetime for the
+                -- file. Leaving it set on a Ready file made a permanent file look time-limited:
+                -- an agent read the listing, saw a past deadline, and reported the file as
+                -- expired when it was still there.
+                expires_at = CASE WHEN @next = 'Ready' THEN NULL ELSE expires_at END
             WHERE session_id = @session AND id = @id AND state = @expected
             """);
         command.Parameters.AddWithValue("session", sessionId);

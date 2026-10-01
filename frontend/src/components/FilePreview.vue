@@ -21,6 +21,10 @@ const text = ref('')
 const truncated = ref(false)
 let generation = 0
 const kind = computed(() => previewKind(props.file, props.capabilities))
+// The backend already reports why a type cannot be shown; without surfacing it, an Office
+// document looked simply unsupported, when in fact one setting away from working.
+const officePreviewDisabled = computed(() =>
+  props.capabilities?.unavailableReasons?.[props.file?.mimeType] === 'office_preview_disabled')
 
 function releaseUrl() {
   if (objectUrl.value) URL.revokeObjectURL(objectUrl.value)
@@ -44,6 +48,13 @@ async function load() {
     if (kind.value === 'markdown' || kind.value === 'text') {
       truncated.value = blob.size > MAX_TEXT_BYTES
       text.value = await blob.slice(0, MAX_TEXT_BYTES).text()
+    } else if (['pdf', 'office-pdf'].includes(kind.value)) {
+      // slice() relabels the blob without copying it. A blob: URL is served with the blob's own
+      // type, so this is what decides what the frame below becomes: labelled application/pdf it
+      // can only resolve to a PDF viewer document, and bytes that are really HTML fail to parse
+      // instead of running as a document on our origin. Passing the response blob through
+      // unchanged would make that depend on a response header we no longer control at this point.
+      objectUrl.value = URL.createObjectURL(blob.slice(0, blob.size, 'application/pdf'))
     } else {
       objectUrl.value = URL.createObjectURL(blob)
     }
@@ -71,7 +82,16 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
       <strong>This temporary file has expired</strong><span>Ask the agent to create or upload it again.</span>
     </div>
     <img v-else-if="kind === 'image' && objectUrl" :src="objectUrl" :alt="file.name" data-file-preview="image">
-    <iframe v-else-if="['pdf', 'office-pdf'].includes(kind) && objectUrl" :src="objectUrl" sandbox
+    <!-- Deliberately no sandbox attribute. Chrome refuses to instantiate its PDF viewer inside a
+         sandboxed frame under every token combination tried, including allow-scripts and
+         allow-same-origin, so any sandbox here replaces the document with the grey "blocked
+         content" placeholder. The attribute was never what kept an upload off our origin anyway:
+         allow-scripts with allow-same-origin would let a blob: frame drop its own sandbox, since
+         a blob inherits the creating document's origin. What holds the line is the
+         application/pdf label load() puts on the blob — the frame can only become a PDF viewer
+         document, which is cross-origin to this app and ignores an /OpenAction or embedded
+         /JavaScript in the file. -->
+    <iframe v-else-if="['pdf', 'office-pdf'].includes(kind) && objectUrl" :src="objectUrl"
       :title="`Preview of ${file.name}`" data-file-preview="pdf"></iframe>
     <div v-else-if="kind === 'markdown'" class="document markdown" data-file-preview="markdown">
       <div ref="markdownEl" class="md" v-html="renderMarkdown(text)"></div>
@@ -79,6 +99,14 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
     </div>
     <div v-else-if="kind === 'text'" class="document" data-file-preview="text">
       <pre>{{ text }}</pre><p v-if="truncated" class="truncated">Preview limited to the first 1 MiB.</p>
+    </div>
+    <div v-else-if="officePreviewDisabled" class="preview-state" data-preview-office-disabled>
+      <strong>Preview for Office documents is switched off</strong>
+      <span>An administrator can enable it for this instance; it converts documents to PDF in a
+        separate renderer.</span>
+      <a href="https://github.com/open-agenthub/open-agenthub/blob/main/README.md#office-document-previews"
+         target="_blank" rel="noopener noreferrer" data-office-preview-docs>How to enable it</a>
+      <a v-if="objectUrl" :href="objectUrl" :download="file.name" data-file-download>Download {{ file.name }}</a>
     </div>
     <div v-else class="preview-state" data-preview-unsupported>
       <strong>No safe inline preview is available</strong>

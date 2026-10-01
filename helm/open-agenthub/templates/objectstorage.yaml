@@ -1,0 +1,142 @@
+{{- if .Values.objectStorage.enabled }}
+# S3-compatible object storage inside the cluster (Garage), for installations without an
+# external provider. Without any object storage the hub still runs — skill content falls
+# back to a database column — but session state archives, uploads and rendered artifacts
+# have nowhere to live, so a session cannot be resumed in a fresh pod.
+#
+# One node, so one copy of everything. The layout, bucket and key are created once after
+# the pod is ready: Garage generates nothing on its own, and its image has no shell for a
+# bootstrap Job to use. The setup scripts do it with `kubectl exec`, and the credentials
+# here are imported rather than generated so both sides agree without a lookup.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-config
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+data:
+  garage.toml: |
+    metadata_dir = "/var/lib/garage/meta"
+    data_dir = "/var/lib/garage/data"
+    db_engine = "lmdb"
+
+    # One node, so one copy. Garage refuses to start with a replication factor it cannot
+    # satisfy, and a higher value on a single node would leave every write degraded.
+    replication_factor = 1
+
+    rpc_bind_addr = "[::]:3901"
+    # Loopback: the only RPC client is the bootstrap, which runs inside this pod.
+    rpc_public_addr = "127.0.0.1:3901"
+
+    [s3_api]
+    # Must match the region the hub signs its requests with (s3.region). A mismatch fails
+    # every request with a signature error, which reads like bad credentials rather than a
+    # misconfigured region.
+    s3_region = {{ .Values.s3.region | quote }}
+    api_bind_addr = "[::]:3900"
+    root_domain = ".s3.garage.local"
+
+    [admin]
+    api_bind_addr = "[::]:3903"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: garage-secrets
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  rpc_secret: {{ required "objectStorage.rpcSecret is required when objectStorage.enabled=true" .Values.objectStorage.rpcSecret | quote }}
+  admin_token: {{ required "objectStorage.adminToken is required when objectStorage.enabled=true" .Values.objectStorage.adminToken | quote }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: garage
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  serviceName: garage
+  replicas: 1
+  selector: { matchLabels: { app: garage } }
+  template:
+    metadata: { labels: { app: garage } }
+    spec:
+      securityContext:
+        fsGroup: 1000
+        runAsGroup: 1000
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: garage
+          image: {{ .Values.objectStorage.image }}
+          command: ["/garage"]
+          args: ["server"]
+          env:
+            - name: GARAGE_RPC_SECRET
+              valueFrom: { secretKeyRef: { name: garage-secrets, key: rpc_secret } }
+            - name: GARAGE_ADMIN_TOKEN
+              valueFrom: { secretKeyRef: { name: garage-secrets, key: admin_token } }
+          ports:
+            - { containerPort: 3900, name: s3 }
+            - { containerPort: 3901, name: rpc }
+            - { containerPort: 3903, name: admin }
+          readinessProbe:
+            httpGet: { path: /health, port: 3903 }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 3903 }
+            initialDelaySeconds: 20
+            periodSeconds: 20
+          resources: {{- toYaml .Values.objectStorage.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - { name: config, mountPath: /etc/garage.toml, subPath: garage.toml, readOnly: true }
+            - { name: meta, mountPath: /var/lib/garage/meta }
+            - { name: data, mountPath: /var/lib/garage/data }
+            # Read-only root filesystem: without this the server cannot write its temp files.
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          configMap: { name: garage-config }
+        - name: tmp
+          emptyDir: {}
+{{- if not .Values.objectStorage.persistence }}
+        - name: meta
+          emptyDir: {}
+        - name: data
+          emptyDir: {}
+{{- end }}
+{{- if .Values.objectStorage.persistence }}
+  volumeClaimTemplates:
+    - metadata: { name: meta }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.objectStorage.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.objectStorage.metaStorage }} } }
+    - metadata: { name: data }
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        {{- with .Values.objectStorage.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+        resources: { requests: { storage: {{ .Values.objectStorage.dataStorage }} } }
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  selector: { app: garage }
+  ports:
+    - { port: 3900, targetPort: 3900, name: s3 }
+    - { port: 3901, targetPort: 3901, name: rpc }
+    - { port: 3903, targetPort: 3903, name: admin }
+{{- end }}

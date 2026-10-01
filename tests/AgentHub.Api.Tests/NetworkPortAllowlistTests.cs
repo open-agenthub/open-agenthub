@@ -70,16 +70,35 @@ public class NetworkPortAllowlistTests
     }
 
     [Fact]
-    public void Options_DefaultsCoverCommonDatabasesAndDevRange()
+    public void Options_DefaultsCoverBackingServicesAndTheUsualDevServers()
     {
         var options = new NetworkPortOptions();
         var allowlist = NetworkPortAllowlist.Parse(options.RequestablePorts);
 
         Assert.True(options.Enabled);
-        foreach (var port in new[] { 5432, 3306, 6379, 27017, 9000, 9100 })
-            Assert.True(allowlist.IsAllowed(port));
+        // Backing services, including self-hosted object storage: without 3900 an agent
+        // cannot ask to reach Garage, and the refusal never reaches the owner.
+        foreach (var port in new[] { 3306, 3900, 5432, 6379, 9000, 9100, 27017 })
+            Assert.True(allowlist.IsAllowed(port), $"backing service port {port}");
+        // The dev server each framework starts by itself. 5173 is deliberately covered by
+        // the ASP.NET Core http range rather than listed again.
+        foreach (var port in new[] { 3000, 3010, 4173, 4200, 5000, 5173, 5300, 7000, 7300, 8000, 8080, 8090 })
+            Assert.True(allowlist.IsAllowed(port), $"dev server port {port}");
         Assert.False(allowlist.IsAllowed(22));
-        Assert.False(allowlist.IsAllowed(6443));
+        Assert.False(allowlist.IsAllowed(2999));
+        Assert.False(allowlist.IsAllowed(9101));
+    }
+
+    [Fact]
+    public void Options_DefaultsOfferTheKubernetesApiPort()
+    {
+        // 6443 was deliberately absent, on the reasoning that an agent reaching the API
+        // server is an escalation. It is not one here: both pod specs set
+        // AutomountServiceAccountToken = false and so does the service account, so a pod
+        // carries no cluster credential and the request still needs the owner's approval.
+        // Leaving it off meant a session asked to run kubectl against a cluster it has a
+        // kubeconfig for was refused before anyone could decide.
+        Assert.True(NetworkPortAllowlist.Parse(new NetworkPortOptions().RequestablePorts).IsAllowed(6443));
     }
 
     [Fact]

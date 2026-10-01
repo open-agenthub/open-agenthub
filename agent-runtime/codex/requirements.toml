@@ -23,3 +23,24 @@ type = "command"
 command = "node /opt/session-agent/codex/policy-hook.js"
 timeout = 250
 statusMessage = "Waiting for session approval"
+
+# Records that the turn changed something, so the reminder below stays off a turn that only
+# answered a question.
+[[hooks.PostToolUse]]
+matcher = "*"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/skill-reminder-hook.js --mark work"
+timeout = 10
+
+# Asks at the end of a turn that did real work whether anything in it belongs in the skill
+# library. Codex ignores a matcher on Stop, and stop_hook_active keeps it from firing on the
+# continuation it caused.
+[[hooks.Stop]]
+
+[[hooks.Stop.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/skill-reminder-hook.js"
+timeout = 10
+statusMessage = "Checking for reusable knowledge"

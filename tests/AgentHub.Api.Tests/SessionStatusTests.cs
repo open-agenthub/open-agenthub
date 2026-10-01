@@ -40,6 +40,29 @@ public class SessionStatusTests
         Assert.True(SessionStatus.CanResume(SessionMode.Interactive, SessionStatus.Paused));
     }
 
+    [Theory]
+    [InlineData(SessionStatus.Paused, true)]
+    [InlineData(SessionStatus.Succeeded, true)]
+    [InlineData(SessionStatus.Failed, true)]
+    [InlineData(SessionStatus.Scheduled, true)]
+    [InlineData(SessionStatus.Running, false)]   // key: the pod would overwrite the upload on exit
+    [InlineData(SessionStatus.Pending, false)]
+    public void CanReplaceState_OnlyWhileNoPodIsLive(string phase, bool expected)
+        => Assert.Equal(expected, SessionStatus.CanReplaceState(phase));
+
+    [Fact]
+    public void CanReplaceState_AcceptsEveryPhaseAResumeCanStartFrom()
+    {
+        // Uploading state is only useful if the session can then be resumed from it, so the
+        // two predicates must not disagree about any phase.
+        foreach (var phase in new[]
+                 { SessionStatus.Paused, SessionStatus.Succeeded, SessionStatus.Failed })
+        {
+            Assert.True(SessionStatus.CanResume(SessionMode.Interactive, phase));
+            Assert.True(SessionStatus.CanReplaceState(phase));
+        }
+    }
+
     [Fact]
     public void ResolvePhase_PrefersLivePodPhaseOverStoredStatus()
     {
