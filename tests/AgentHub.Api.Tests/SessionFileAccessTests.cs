@@ -175,7 +175,7 @@ public sealed class SessionFileAccessTests
             LastActor = actor;
             return Task.FromResult<IReadOnlyList<SessionFileRecord>>([File()]);
         }
-        public Task<AgentHub.Api.Files.FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, CancellationToken ct = default)
+        public Task<AgentHub.Api.Files.FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, bool allowRedirect = true, CancellationToken ct = default)
         {
             LastActor = actor;
             var name = ContentMimeType == "application/pdf" ? "report.pdf" : "shot.png";

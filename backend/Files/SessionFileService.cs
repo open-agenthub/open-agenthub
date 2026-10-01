@@ -62,6 +62,7 @@ public interface ISessionFileService
     Task<FileContentResult> OpenContentAsync(
         SessionFileActor actor,
         string fileId,
+        bool allowRedirect = true,
         CancellationToken ct = default);
     Task DeleteAsync(
         SessionFileActor actor,
@@ -331,14 +332,18 @@ public sealed class SessionFileService : ISessionFileService
     public async Task<FileContentResult> OpenContentAsync(
         SessionFileActor actor,
         string fileId,
+        bool allowRedirect = true,
         CancellationToken ct = default)
     {
         var file = await RequireReadyFileAsync(actor.SessionId, fileId, ct);
         var mimeType = file.DetectedMimeType ?? file.DeclaredMimeType;
         if (file.StorageKind == SessionFileStorageKind.S3)
         {
-            // Redirecting is cheaper, but only works if the client can reach storage.
-            if (_artifacts.CanServeBrowsersDirectly)
+            // Redirecting is cheaper, but only works if the client can reach storage, and the
+            // presigned url it points at is browser-facing. A session pod is neither: it may have
+            // no route to that host at all, and its fetch would follow the redirect carrying
+            // X-Agent-Token, handing the session's callback token to the storage endpoint.
+            if (allowRedirect && _artifacts.CanServeBrowsersDirectly)
             {
                 return new FileContentResult(
                     null,

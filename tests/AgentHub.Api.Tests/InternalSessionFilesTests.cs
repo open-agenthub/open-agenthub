@@ -49,10 +49,45 @@ public sealed class InternalSessionFilesTests
         Assert.Null(payload[0].DownloadUrl);
     }
 
+    [Fact]
+    public async Task Content_streams_the_bytes_and_never_redirects_the_agent()
+    {
+        // This route exists so a pod that cannot reach object storage can still read its files. It
+        // had no test at all, and a redirect here is silently wrong rather than visibly broken: the
+        // agent's fetch follows it, so it looks like it works wherever storage happens to be
+        // reachable from the pod.
+        var files = new RecordingFiles();
+        var controller = Controller(new FixedAuthorizer(Session()), files);
+
+        var result = Assert.IsType<FileStreamResult>(await controller.Content("s1", "f1", default));
+
+        Assert.False(files.LastAllowRedirect);
+        Assert.Equal("image/png", result.ContentType);
+        using var buffer = new MemoryStream();
+        await result.FileStream.CopyToAsync(buffer);
+        Assert.Equal([1, 2, 3], buffer.ToArray());
+        Assert.Equal("nosniff", controller.Response.Headers.XContentTypeOptions);
+    }
+
+    [Fact]
+    public async Task Content_requires_the_session_s_own_callback_token()
+    {
+        var controller = Controller(new FixedAuthorizer(null), new RecordingFiles());
+
+        Assert.IsType<UnauthorizedResult>(await controller.Content("s1", "f1", default));
+    }
+
     private static InternalSessionFilesController Controller(
         IAgentCallbackAuthorizer authorizer,
         RecordingFiles files) => new(
-            authorizer, files, new NullArtifactStore(), new SessionFileOptions());
+            authorizer, files, new NullArtifactStore(), new SessionFileOptions())
+        {
+            // Content writes response headers, so it needs a real HttpContext to write them to.
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext(),
+            },
+        };
 
     private static SessionRecord Session() => new()
     {
@@ -86,7 +121,13 @@ public sealed class InternalSessionFilesTests
             Task.FromResult<IReadOnlyList<SessionFileRecord>>([File()]);
         public Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, long? contentLength = null, CancellationToken ct = default) => Task.CompletedTask;
         public Task<SessionFileRecord> CompleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => Task.FromResult(File());
-        public Task<AgentHub.Api.Files.FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
+        public bool? LastAllowRedirect { get; private set; }
+        public Task<AgentHub.Api.Files.FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, bool allowRedirect = true, CancellationToken ct = default)
+        {
+            LastActor = actor; LastAllowRedirect = allowRedirect;
+            return Task.FromResult(new AgentHub.Api.Files.FileContentResult(
+                new MemoryStream([1, 2, 3]), null, "image/png", "out.png", 3));
+        }
         public Task DeleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionFilePresentation?> GetPresentationAsync(SessionFileActor actor, CancellationToken ct = default) => Task.FromResult<SessionFilePresentation?>(null);
         public Task<SessionFilePresentation> SetPresentationAsync(SessionFileActor actor, string? fileId, CancellationToken ct = default) => throw new NotSupportedException();

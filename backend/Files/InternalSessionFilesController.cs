@@ -151,7 +151,8 @@ public sealed class InternalSessionFilesController(
         if (actor is null) return Unauthorized();
         try
         {
-            return SessionFileApi.Content(this, await files.OpenContentAsync(actor, fileId, ct));
+            return SessionFileApi.Content(
+                this, await files.OpenContentAsync(actor, fileId, allowRedirect: false, ct));
         }
         catch (SessionFileException exception)
         {

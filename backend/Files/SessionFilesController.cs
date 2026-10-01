@@ -146,7 +146,7 @@ public sealed class SessionFilesController(
 
         try
         {
-            return SessionFileApi.Content(this, await files.OpenContentAsync(actor, fileId, ct));
+            return SessionFileApi.Content(this, await files.OpenContentAsync(actor, fileId, ct: ct));
         }
         catch (SessionFileException exception)
         {
