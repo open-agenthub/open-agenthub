@@ -1,1 +1,1 @@
-{"mcpServers":{"fixture":{"command":"fixture-command","args":["safe"]}}}
+{"mcpServers":{"fixture":{"command":"fixture-command","args":["safe"]},"skill-library":{"type":"http","url":"http://hub.invalid/internal/sessions/s1/mcp","headers":{"X-Agent-Token":"fixture-token"}}}}
