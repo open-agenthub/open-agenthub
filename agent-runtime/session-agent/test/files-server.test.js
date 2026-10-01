@@ -102,6 +102,33 @@ test('read_file reports a path for text that is not valid UTF-8', async t => {
   assert.equal(result.structuredContent.readable, true);
 });
 
+test('the default inline ceiling keeps a large text file out of the reply', async t => {
+  // Pins the default rather than an injected limit. Inlining is the exception now: a file the
+  // agent would grep belongs on disk, and a ceiling generous enough to swallow a long document
+  // puts it back in the model's context without anyone noticing.
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agenthub-files-ceiling-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true }));
+  const big = path.join(root, 'log.txt');
+  const small = path.join(root, 'note.txt');
+  await fs.promises.writeFile(big, 'x'.repeat(200 * 1024));
+  await fs.promises.writeFile(small, 'readable');
+  const records = {
+    big: { id: 'd'.repeat(32), name: 'log.txt', mimeType: 'text/plain', size: 200 * 1024, localPath: big },
+    small: { id: 'e'.repeat(32), name: 'note.txt', mimeType: 'text/plain', size: 8, localPath: small }
+  };
+  const client = { materialize: async ([id]) => [Object.values(records).find(r => r.id === id)] };
+  const { handlers } = createFilesToolHandlers({ client });
+
+  const large = await handlers.read_file({ fileId: records.big.id });
+  const brief = await handlers.read_file({ fileId: records.small.id });
+
+  assert.equal(large.structuredContent.localPath, big);
+  assert.ok(!large.content.some(block => block.text?.includes('xxx')), 'large text must not be inlined');
+  assert.ok(brief.content.some(block => block.text === 'readable'), 'a small file still comes back inline');
+  assert.equal(brief.structuredContent.localPath, small);
+});
+
 // The four tests below cover reading a file that lives in object storage. They use the real
 // LocalFileStore against a temp directory rather than a fake, because the point is that the file
 // ends up on disk where the agent can grep it.

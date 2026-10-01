@@ -52,7 +52,10 @@ export function createFilesToolHandlers(options = {}) {
   const client = options.client ?? new FilesBackendClient();
   const workspace = options.workspace ?? process.env.AGENTHUB_WORKDIR ?? '/workspace';
   const managedRoot = options.managedRoot ?? process.env.AGENTHUB_FILE_ROOT ?? '/workspace/.agenthub/files';
-  const maxTextBytes = options.maxTextBytes ?? 1024 * 1024;
+  // What counts as small enough to be worth spending context on. A megabyte of text is not: the
+  // agent holds the path either way, and inlining a file it would otherwise grep is the thing
+  // read_file was changed to stop doing. An ordinary source file or README still fits.
+  const maxTextBytes = options.maxTextBytes ?? 64 * 1024;
   const maxImageBytes = options.maxImageBytes ?? 20 * 1024 * 1024;
   // Where a downloaded file lands so the agent can grep it. Same store the message-attachment
   // path uses, so a file fetched either way is cached once.
