@@ -55,6 +55,9 @@ public static class CredentialSecretFactory
             if (TryCredentialKey(field, out var key))
                 data.Remove(key);
 
+        RequireHostForTouchedPat(data, credentials, "gitlab", "GitLab", "gitlab.example.com");
+        RequireHostForTouchedPat(data, credentials, "github", "GitHub", "github.com");
+
         return Secret(name, @namespace, ownerLabelValue, data);
     }
 
@@ -111,12 +114,40 @@ public static class CredentialSecretFactory
             throw new ArgumentException(
                 $"The {providerName} token must not contain whitespace or control characters and is "
                 + $"limited to {ManualGitCredentials.MaxTokenLength} characters.");
-        // The host is checked even without a token, so clearing one and keeping the other cannot
-        // leave an unusable host behind that silently disables the credential later.
         if (!string.IsNullOrWhiteSpace(host) && !ManualGitCredentials.IsValidHost(host.Trim()))
             throw new ArgumentException(
                 $"The {providerName} host must be a hostname with an optional port, without a "
                 + "scheme or path.");
+    }
+
+    /// <summary>
+    /// A token the caller just touched must name its host.
+    ///
+    /// The host is what the credential is scoped to, and <see cref="ManualGitCredentials"/> falls
+    /// back to the public instance without one. For a self-hosted GitLab or GitHub that fallback is
+    /// silently wrong twice over: the clone gets no credential for the host it actually uses, and
+    /// `glab`/`gh` are configured for a host the user never named. The predecessor of this
+    /// mechanism — a host-less credential helper plus a GITLAB_TOKEN export — worked against any
+    /// host, so defaulting would have turned a working self-hosted setup into a broken one.
+    ///
+    /// Checked against the merged result and only when the request touched either field, so
+    /// rotating a token whose host is already stored still works, and a token stored before hosts
+    /// existed does not block an unrelated credential update.
+    /// </summary>
+    private static void RequireHostForTouchedPat(
+        IDictionary<string, byte[]> data, UserCredentials credentials, string prefix,
+        string providerName, string hostExample)
+    {
+        var touched = credentials.Clear.Any(f =>
+                          TryCredentialKey(f, out var k) && (k == $"{prefix}_token" || k == $"{prefix}_host"))
+                      || (prefix == "gitlab"
+                          ? !string.IsNullOrEmpty(credentials.GitlabToken) || !string.IsNullOrWhiteSpace(credentials.GitlabHost)
+                          : !string.IsNullOrEmpty(credentials.GithubToken) || !string.IsNullOrWhiteSpace(credentials.GithubHost));
+        if (!touched) return;
+        if (!data.ContainsKey($"{prefix}_token") || data.ContainsKey($"{prefix}_host")) return;
+        throw new ArgumentException(
+            $"Storing a {providerName} token also needs the host it belongs to (e.g. {hostExample}). "
+            + "The token is only ever sent to that host.");
     }
 
     private static bool TryCredentialKey(string field, out string key) =>

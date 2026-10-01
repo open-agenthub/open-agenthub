@@ -38,8 +38,14 @@ a host.
 
 Consequences worth knowing:
 
-- **A PAT needs a host.** `gitlabHost` and `githubHost` default to `gitlab.com` and `github.com`.
-  The host is what scopes the credential, so it is not cosmetic.
+- **A PAT needs a host, and storing one without it is refused.** The host is what the credential is
+  scoped to. Defaulting to the public instance would be silently wrong twice for a self-hosted
+  GitLab or GitHub: the clone gets no credential for the host it actually uses, and `glab`/`gh` end
+  up configured for a host the user never named. The mechanism this replaced worked against any
+  host, so a quiet default would have turned a working self-hosted setup into a broken one. Rotating
+  a token whose host is already stored does not need the host restated, and a token stored before
+  hosts existed still falls back to the public instance rather than blocking unrelated credential
+  updates.
 - **The raw token no longer reaches the pod.** `gitlab_token` and `github_token` are not projected
   into `/secrets/creds` any more. The only form a PAT takes inside a session is a store line, so
   there is no file the agent can read and replay against a server of its choosing.

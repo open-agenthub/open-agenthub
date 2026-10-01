@@ -144,19 +144,73 @@ public class ManualGitCredentialsTests
             new UserCredentials
             {
                 GithubToken = "ghp_secret", GithubHost = " github.example.com ",
-                GitlabToken = "glpat-secret"
+                GitlabToken = "glpat-secret", GitlabHost = "gitlab.example.com"
             });
 
         Assert.Equal("ghp_secret", Encoding.UTF8.GetString(secret.Data["github_token"]));
         // Trimmed, so a pasted host with stray whitespace does not fail host validation later.
         Assert.Equal("github.example.com", Encoding.UTF8.GetString(secret.Data["github_host"]));
-        Assert.False(secret.Data.ContainsKey("gitlab_host"));
 
         var status = CredentialSecretFactory.CredentialStatus(secret.Data);
         Assert.True(status.GithubToken);
         Assert.True(status.GithubHost);
         Assert.True(status.GitlabToken);
-        Assert.False(status.GitlabHost);
+        Assert.True(status.GitlabHost);
+    }
+
+    [Fact]
+    public void StoringAPatWithoutItsHost_IsRefusedRatherThanDefaultedToThePublicInstance()
+    {
+        // Defaulting would be silently wrong twice for a self-hosted instance: the clone gets no
+        // credential for the host it uses, and glab/gh are configured for a host nobody named.
+        // The mechanism this replaced worked against any host, so a default would have broken a
+        // working self-hosted setup.
+        var error = Assert.Throws<ArgumentException>(() =>
+            CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", null,
+                new UserCredentials { GitlabToken = "glpat-secret" }));
+        Assert.Contains("host it belongs to", error.Message);
+
+        Assert.Throws<ArgumentException>(() =>
+            CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", null,
+                new UserCredentials { GithubToken = "ghp_secret" }));
+    }
+
+    [Fact]
+    public void RotatingAToken_DoesNotRequireRestatingAHostThatIsAlreadyStored()
+    {
+        var existing = Secret(
+            ("github_token", "ghp_old"), ("github_host", "github.example.com"));
+
+        var secret = CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", existing,
+            new UserCredentials { GithubToken = "ghp_new" });
+
+        Assert.Equal("ghp_new", Encoding.UTF8.GetString(secret.Data["github_token"]));
+        Assert.Equal("github.example.com", Encoding.UTF8.GetString(secret.Data["github_host"]));
+    }
+
+    [Fact]
+    public void ClearingOnlyTheHost_CannotLeaveATokenBoundToNothing()
+    {
+        var existing = Secret(
+            ("github_token", "ghp_secret"), ("github_host", "github.example.com"));
+
+        Assert.Throws<ArgumentException>(() =>
+            CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", existing,
+                new UserCredentials { Clear = ["githubHost"] }));
+    }
+
+    [Fact]
+    public void AnUnrelatedCredentialUpdate_IsNotBlockedByATokenStoredBeforeHostsExisted()
+    {
+        // Pre-existing rows have no host. Refusing every later save would make such an account
+        // unable to store anything until it noticed a field it was not editing.
+        var legacy = Secret(("gitlab_token", "glpat-old"));
+
+        var secret = CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", legacy,
+            new UserCredentials { AnthropicApiKey = "sk-ant-x" });
+
+        Assert.Equal("sk-ant-x", Encoding.UTF8.GetString(secret.Data["anthropic_api_key"]));
+        Assert.Equal("glpat-old", Encoding.UTF8.GetString(secret.Data["gitlab_token"]));
     }
 
     [Fact]
