@@ -23,7 +23,8 @@ test('all runtime entrypoints own and enable agenthub_files', () => {
   const codex = fs.readFileSync(path.join(runtimeRoot, 'codex', 'entrypoint.sh'), 'utf8');
   const cursor = fs.readFileSync(path.join(runtimeRoot, 'cursor', 'entrypoint.sh'), 'utf8');
   assert.match(common, /AGENTHUB_FILES_MCP_ENABLED/);
-  assert.match(common, /files\/configure\.mjs/);
+  // Guarded on module presence, so a runtime whose image lacks it skips instead of aborting.
+  assert.match(common, /merge_builtin_mcp files configure\.mjs/);
   assert.match(codex, /agenthub_files/);
   // The effective config is still resolved and exported here; only its destination moved out of
   // the workspace — see claude-mcp-config.test.js.

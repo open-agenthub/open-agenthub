@@ -44,7 +44,8 @@ test('runtime wiring owns the network server for Claude, Codex, and Cursor', () 
   const cursor = fs.readFileSync(path.join(runtime, 'cursor', 'entrypoint.sh'), 'utf8');
 
   assert.match(common, /AGENTHUB_NETWORK_MCP_ENABLED/);
-  assert.match(common, /network\/configure\.mjs/);
+  // Guarded on module presence, so a runtime whose image lacks it skips instead of aborting.
+  assert.match(common, /merge_builtin_mcp network configure\.mjs/);
   // Codex: user config may not spoof the reserved name; builtin block appended after.
   assert.match(codex, /agenthub_network/);
   assert.ok(codex.indexOf('agenthub_network') < codex.indexOf('--builtin'));

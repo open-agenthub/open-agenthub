@@ -31,6 +31,13 @@ node "$RUNTIME/openclaw/session-prompt.mjs" "$OPENCLAW_AGENT_DIR"
 export OPENCLAW_AUTH_FILE="$OPENCLAW_STATE_DIR/auth-profiles.json"
 export NO_OPEN_BROWSER=1
 
+# MCP servers in OpenClaw's own config. Unlike the other three runtimes nothing configured these
+# before, so a session's MCP servers did not exist for OpenClaw at all. Runtime-owned names are
+# passed as reserved so a user config cannot shadow them with a server of its own.
+export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_STATE_DIR/openclaw.json}"
+node "$RUNTIME/openclaw/mcp-config.js" "$OPENCLAW_CONFIG_PATH" "${AGENTHUB_MCP_CONFIG:-}" \
+  agenthub_browser agenthub_sessions agenthub_files agenthub_network
+
 # State restore always precedes authentication, and archived credentials are never trusted.
 # Scrub AgentHub root auth file and every nested agent-store credential path.
 rm -f "$OPENCLAW_AUTH_FILE" \

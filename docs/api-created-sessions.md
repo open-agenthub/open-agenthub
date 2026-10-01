@@ -129,7 +129,7 @@ Each CLI reads its own, and all four locations are outside the workspace:
 | Claude | `mcpServers` in `~/.claude.json` (user scope) | `claude/mcp-config.mjs` |
 | Codex | `[mcp_servers.*]` in `$CODEX_HOME/config.toml` | `codex/mcp-config.js` |
 | Cursor | `$CURSOR_CONFIG_DIR/mcp.json` | `cursor/mcp-config.js` |
-| OpenClaw | — not wired yet | — |
+| OpenClaw | `mcp.servers` in `$OPENCLAW_CONFIG_PATH` | `openclaw/mcp-config.js` |
 
 The effective config used to be copied to `$AGENTHUB_WORKDIR/.mcp.json` as well, which was wrong
 on both counts. With a single repository the working directory *is* the clone, so it left an
@@ -156,6 +156,50 @@ Managed server names are recorded under a private key rather than `mcpServers` b
 wholesale: `~/.claude.json` is restored from the session's own state tar, so a server dropped from
 the config has to disappear instead of lingering from an earlier start — and a custom image's own
 user-scoped servers must survive.
+
+### OpenClaw, which had no MCP wiring at all
+
+Its entrypoint configured nothing and its driver passes no config flag, so a session's MCP servers
+simply did not exist for OpenClaw. `openclaw/mcp-config.js` now writes them into `mcp.servers`,
+converting the AgentHub document the same way the Codex and Cursor converters do, including dropping
+runtime-owned names so a user config cannot shadow a builtin with a server of its own.
+
+Three things about OpenClaw forced decisions the other runtimes did not:
+
+- **It clears the environment for an MCP child.** A probe child saw two variables, with neither
+  `RUNTIME` nor `AGENTHUB_CALLBACK_TOKEN` among them — the same behaviour as Codex, and the reason
+  every variable a builtin needs has to be stated in its entry.
+- **Those variables are written as `${NAME}` references, not values.** OpenClaw interpolates them
+  from its own environment (verified: a `${AGENTHUB_CALLBACK_TOKEN}` reference reached the child as
+  the real token, a literal passed through unchanged). This matters because `~/.openclaw` is the
+  state directory and is archived into the session's state tar and uploaded — a literal token in
+  that file would be a credential leaving the pod. Only variables that are actually set are
+  referenced, because OpenClaw reports an unresolvable one as `Missing env var "X"` on every command.
+- **The managed marker sits on each server entry, not at the config root.** An unknown root key makes
+  OpenClaw reject the whole file (`<root>: Invalid input` from `openclaw config validate`), while an
+  unknown key inside a server entry validates cleanly. The bookkeeping is needed for the same reason
+  as Claude's: the config returns from the state tar, so a withdrawn server has to disappear while a
+  server the agent added itself with `openclaw mcp add` has to survive.
+
+Only `agenthub_files` and `agenthub_network` are rendered, because those are the only builtins the
+OpenClaw image ships — it carries neither `browser/` nor `sessions/`.
+
+### A builtin that is enabled but not in the image
+
+The enabling flags (`AGENTHUB_BROWSER_ENABLED`, `AGENTHUB_SPAWN_MCP_ENABLED`, …) are instance-wide
+and not gated per agent, while the images do not all ship all builtins. The shared entrypoint ran
+`node "$RUNTIME/<builtin>/configure.mjs"` unconditionally, which for OpenClaw meant a missing module:
+`node` exited `MODULE_NOT_FOUND`, and under `set -e` in a sourced script that killed the entrypoint
+before the agent ever started. On an instance with the browser or the spawn MCP switched on, an
+OpenClaw session could therefore not start at all.
+
+`merge_builtin_mcp` now checks the module exists and logs a skip instead. Reproduced before the fix
+and confirmed after it: with both flags on and an OpenClaw image layout, the entrypoint runs to the
+end and configures the two builtins it does have.
+
+Whether the OpenClaw image *should* ship `sessions/` (orchestration) or `browser/` is a separate
+decision — `browser/` additionally depends on the browser-runtime sidecar — and is deliberately not
+settled here.
 
 ## Following a session without a websocket
 

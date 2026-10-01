@@ -66,26 +66,34 @@ if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
 fi
 
 MERGED_MCP=0
-if [ "${AGENTHUB_BROWSER_ENABLED:-0}" = "1" ]; then
-  node "$RUNTIME/browser/configure-claude.mjs" "$MCP_SOURCE"
+# A builtin is only merged when this image actually ships it. The runtimes do not all carry all of
+# them — the OpenClaw image has files/ and network/ but neither browser/ nor sessions/ — while the
+# enabling flags are instance-wide and not gated per agent. An unconditional `node` on a missing
+# module exits non-zero, and under `set -e` in a sourced script that aborts the entrypoint: on an
+# instance with the browser or the spawn MCP switched on, an OpenClaw session died with
+# MODULE_NOT_FOUND before the agent ever started.
+merge_builtin_mcp() {
+  module="$RUNTIME/$1/$2"
+  if [ ! -f "$module" ]; then
+    echo "[entrypoint] builtin MCP '$1' is enabled but not shipped in this image; skipping."
+    return 0
+  fi
+  node "$module" "$MCP_SOURCE"
   MCP_SOURCE=/tmp/agenthub-mcp.json
   MERGED_MCP=1
+}
+
+if [ "${AGENTHUB_BROWSER_ENABLED:-0}" = "1" ]; then
+  merge_builtin_mcp browser configure-claude.mjs
 fi
 if [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ]; then
-  node "$RUNTIME/sessions/configure.mjs" "$MCP_SOURCE"
-  MCP_SOURCE=/tmp/agenthub-mcp.json
-  MERGED_MCP=1
+  merge_builtin_mcp sessions configure.mjs
 fi
 if [ "${AGENTHUB_NETWORK_MCP_ENABLED:-0}" = "1" ]; then
-  node "$RUNTIME/network/configure.mjs" "$MCP_SOURCE"
-  MCP_SOURCE=/tmp/agenthub-mcp.json
-  MERGED_MCP=1
+  merge_builtin_mcp network configure.mjs
 fi
-
 if [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
-  node "$RUNTIME/files/configure.mjs" "$MCP_SOURCE"
-  MCP_SOURCE=/tmp/agenthub-mcp.json
-  MERGED_MCP=1
+  merge_builtin_mcp files configure.mjs
 fi
 if [ "$MERGED_MCP" = "1" ]; then
   export AGENTHUB_MCP_CONFIG=/tmp/agenthub-mcp.json
