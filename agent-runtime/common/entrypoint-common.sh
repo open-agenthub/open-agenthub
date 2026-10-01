@@ -30,22 +30,21 @@ if [ -f /secrets/creds/ssh_key ]; then
   git config --global core.sshCommand "$GIT_SSH_COMMAND"
 fi
 
+# One credential store holds both connected-provider OAuth tokens and manually stored
+# PATs, every entry bound to its own host. There is deliberately no second, host-less
+# credential helper: the one that used to serve a stored GitLab PAT was registered
+# globally and answered with the user's token for any host that returned 401.
 git config --global --unset-all credential.helper 2>/dev/null || true
 if [ -f /secrets/gitcreds/credentials ]; then
   cp /secrets/gitcreds/credentials "$HOME/.git-credentials" && chmod 600 "$HOME/.git-credentials"
   git config --global credential.helper store
 fi
-if [ -f /secrets/creds/gitlab_token ]; then
-  git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
-fi
 
+# Derives gh/glab config from that same store, so a manual PAT authenticates the CLIs
+# exactly like a connected provider does. That is what retired the GITLAB_TOKEN export
+# this used to fall back to — which also keeps the token out of the session environment,
+# where `env` and every subprocess could read it.
 "$RUNTIME/common/setup-cli-auth.sh" || echo "[entrypoint] WARN: gh/glab auth setup failed"
-if [ -f /secrets/creds/gitlab_token ] && [ ! -f "$HOME/.config/glab-cli/config.yml" ]; then
-  # Manual PAT without an OAuth GitLab host: glab resolves the host from the
-  # repo remote and picks the token up from the environment.
-  GITLAB_TOKEN="$(cat /secrets/creds/gitlab_token)"
-  export GITLAB_TOKEN
-fi
 
 export AGENTHUB_STATE_RESTORED=0
 if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; then

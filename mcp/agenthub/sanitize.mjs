@@ -38,6 +38,10 @@ function pickRepos(info) {
       if (!repo || typeof repo !== 'object' || typeof repo.url !== 'string') continue;
       const entry = { url: repo.url };
       if (typeof repo.branch === 'string') entry.branch = repo.branch;
+      // The provider id is the one thing that says *how* a repo is authenticated. Dropping it
+      // meant a caller could send it but never read it back, so it could not confirm the session
+      // was created the way it asked. It is an id, not a secret — the token stays server-side.
+      if (typeof repo.providerId === 'string') entry.providerId = repo.providerId;
       repos.push(entry);
     }
     return repos;

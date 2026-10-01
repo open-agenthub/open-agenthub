@@ -47,9 +47,12 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(expectedEnv == "CURSOR_API_KEY", container.Env.Any(e => e.Name == "CURSOR_API_KEY"));
         Assert.Contains("ssh_key", projectedCredentialKeys);
         Assert.Contains("known_hosts", projectedCredentialKeys);
-        Assert.Contains("gitlab_token", projectedCredentialKeys);
         Assert.Contains("git_user_name", projectedCredentialKeys);
         Assert.Contains("git_user_email", projectedCredentialKeys);
+        // A PAT reaches the pod only as a host-bound line in the gitcreds store. Projecting the
+        // raw token put it in a file the session could read and offer to any host.
+        Assert.DoesNotContain("gitlab_token", projectedCredentialKeys);
+        Assert.DoesNotContain("github_token", projectedCredentialKeys);
         Assert.DoesNotContain("anthropic_api_key", projectedCredentialKeys);
         Assert.DoesNotContain("openai_api_key", projectedCredentialKeys);
         Assert.DoesNotContain("cursor_api_key", projectedCredentialKeys);
@@ -84,6 +87,24 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(new[] { "workspace", "home", "tmp", "creds" }, clone.VolumeMounts.Select(m => m.Name));
         Assert.DoesNotContain(clone.VolumeMounts, m => m.Name is "claude" or "codex" or "cursor" or "openclaw" or "mcp" or "runtime");
         Assert.DoesNotContain(clone.Env, e => e.ValueFrom?.SecretKeyRef is not null);
+    }
+
+    [Fact]
+    public void Build_GitCloneInstallsNoCredentialHelperThatIsNotBoundToAHost()
+    {
+        var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription,
+            request => request with { RepoUrl = "https://example.test/repo.git" });
+        var script = Assert.Single(
+            Assert.Single(pod.InitContainers, c => c.Name == "git-clone").Command,
+            c => c.Contains("git clone"));
+
+        // The store is the only credential source, and each of its entries names one host. The
+        // helper that used to serve a stored GitLab PAT had no host and answered for any server
+        // that returned 401 — including one an injected prompt chose.
+        Assert.Contains("credential.helper store", script);
+        Assert.DoesNotContain("credential.helper '!f()", script);
+        Assert.DoesNotContain("gitlab_token", script);
+        Assert.DoesNotContain("github_token", script);
     }
 
 

@@ -169,6 +169,8 @@ public sealed class KubernetesSessionService : ISessionService
         await SessionSoftLimit.EnsureCanCreateAsync(_store, owner, _maxRunningSessionsPerOwner, ct);
 
         var repos = NormalizeRepos(req);
+        SessionRepos.Validate(repos);
+        await ValidateRepoCredentialsAsync(owner, repos, ct);
         var mcp = string.IsNullOrWhiteSpace(req.McpConfigJson) ? null : req.McpConfigJson;
         // Strict resolve + assemble before Upsert so invalid inline shape or bad catalog
         // config fails closed — no half-created session row.
@@ -227,6 +229,55 @@ public sealed class KubernetesSessionService : ISessionService
         var copy = SessionDuplication.CopyableRequest(source, request);
         var allowMigratedClaudeAuto = copy.Agent == AgentKind.Claude && copy.AuthMode == AgentAuthMode.Auto;
         return await CreateSessionCoreAsync(owner, copy, allowMigratedClaudeAuto, ct);
+    }
+
+    /// <summary>
+    /// Fails a create whose repositories could not possibly be cloned, while the caller is still
+    /// there to be told.
+    ///
+    /// Both checks replace the same failure: a credential that silently never materializes. An
+    /// unknown or unconnected <c>ProviderId</c> is skipped by <c>BuildCredentialStoreAsync</c>, and
+    /// an SSH remote without a stored known_hosts entry meets
+    /// <c>StrictHostKeyChecking=yes</c>. Either way the clone fails with an authentication or host
+    /// verification error inside an init container whose log an API caller never sees, leaving a
+    /// session that is simply broken for no stated reason.
+    /// </summary>
+    private async Task ValidateRepoCredentialsAsync(
+        string owner, IReadOnlyList<RepoRef> repos, CancellationToken ct)
+    {
+        foreach (var providerId in repos
+                     .Select(r => r.ProviderId)
+                     .Where(p => !string.IsNullOrWhiteSpace(p))
+                     .Select(p => p!.Trim())
+                     .Distinct())
+        {
+            if (!_gitAuth.IsConfigured(providerId))
+                throw new ArgumentException($"Unknown Git provider '{providerId}'.");
+            if (!await _gitAuth.IsConnectedAsync(owner, providerId, ct))
+                throw new ArgumentException(
+                    $"Git provider '{providerId}' is not connected for this account. Connect it "
+                    + "first, or omit providerId to clone without credentials.");
+        }
+
+        if (!repos.Any(r => IsSshRemote(r.Url))) return;
+        var creds = (await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data;
+        if (creds?.ContainsKey("ssh_key") != true)
+            throw new ArgumentException(
+                "An SSH repository URL needs a stored SSH private key. Store one, or use an HTTPS "
+                + "URL with a connected provider or a personal access token.");
+        if (!creds.ContainsKey("known_hosts"))
+            throw new ArgumentException(
+                "An SSH repository URL needs a stored known_hosts entry — host key checking is "
+                + "enforced, so the clone would fail without it.");
+    }
+
+    private static bool IsSshRemote(string? url)
+    {
+        var value = url?.Trim() ?? "";
+        if (value.StartsWith("ssh://", StringComparison.OrdinalIgnoreCase)) return true;
+        // scp-style user@host:path. Anything with a scheme is already handled above.
+        var at = value.IndexOf('@');
+        return at > 0 && value.IndexOf(':') > at + 1 && !value.Contains("://", StringComparison.Ordinal);
     }
 
     // Effective repo list: explicit Repos win; otherwise fold the legacy single-repo fields.
@@ -563,6 +614,11 @@ public sealed class KubernetesSessionService : ISessionService
         if (req.Repos is not null)
         {
             var repos = req.Repos.Where(r => !string.IsNullOrWhiteSpace(r.Url)).ToList();
+            // Same checks as on create: an edited list takes effect on the next start, so an
+            // unconnected provider or an SSH URL without a known_hosts entry would otherwise turn
+            // a working session into one that fails to come back.
+            SessionRepos.Validate(repos);
+            await ValidateRepoCredentialsAsync(owner, repos, ct);
             rec.ReposJson = SerializeRepos(repos);
             rec.RepoUrl = repos.FirstOrDefault()?.Url;
         }
@@ -703,8 +759,17 @@ public sealed class KubernetesSessionService : ISessionService
 
                 // Connected Git-provider credentials are session-scoped and must only be
                 // materialized after credential preflight succeeds.
-                var credentialStore = await _gitAuth.BuildCredentialStoreAsync(
+                //
+                // Manually stored PATs join the same store. They used to be installed in the pod as
+                // a global credential helper, which offered the token to any host that answered
+                // 401; a store entry is bound to one host. It also means the raw token no longer
+                // has to be projected into the pod at all — see ManualGitCredentials.
+                var oauthStore = await _gitAuth.BuildCredentialStoreAsync(
                     owner, NormalizeRepos(req), resourceCt);
+                var manualCredentials = (await ReadSecretOrNullAsync(
+                    CredsSecretName(owner), resourceCt))?.Data;
+                var credentialStore = ManualGitCredentials.ComposeStore(
+                    oauthStore, ManualGitCredentials.Lines(manualCredentials));
                 if (credentialStore is null) return false;
 
                 await UpsertSecretAsync(new V1Secret

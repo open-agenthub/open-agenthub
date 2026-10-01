@@ -173,6 +173,72 @@ public static class SessionSystemPrompt
     }
 }
 
+/// <summary>
+/// Validates the repository list a caller asked for.
+///
+/// None of this was checked before, which was tolerable while the only producers were a picker in
+/// the browser and a chat command. An API or MCP caller composes the list itself, so the limits
+/// have to live in the backend — the one cap that existed was <c>.max(32)</c> in the stdio server's
+/// schema, which the REST API does not go through.
+/// </summary>
+public static class SessionRepos
+{
+    /// <summary>
+    /// Each repository is one clone in a single init container, run in sequence. The cap is about
+    /// the failure beyond it: a list of several hundred either runs for hours or is rejected by the
+    /// Kubernetes API for pod-spec size, and both surface as a session that never starts for no
+    /// visible reason.
+    /// </summary>
+    public const int MaxCount = 16;
+
+    public const int MaxUrlLength = 2048;
+    public const int MaxBranchLength = 256;
+
+    /// <summary>
+    /// Transports git can be asked for over the wire. <c>file://</c> and <c>ext::</c> are the
+    /// notable omissions: <c>ext::</c> runs an arbitrary command as a transport helper, and
+    /// <c>file://</c> would read paths inside the pod rather than a repository. Neither is
+    /// something a caller naming a repository needs.
+    /// </summary>
+    private static readonly string[] AllowedSchemes = ["https://", "http://", "ssh://", "git://"];
+
+    public static void Validate(IReadOnlyList<RepoRef> repos)
+    {
+        if (repos.Count > MaxCount)
+            throw new ArgumentException($"A session is limited to {MaxCount} repositories.");
+
+        foreach (var repo in repos)
+        {
+            var url = repo.Url?.Trim() ?? "";
+            if (url.Length > MaxUrlLength)
+                throw new ArgumentException($"A repository URL is limited to {MaxUrlLength} characters.");
+            if ((repo.Branch?.Length ?? 0) > MaxBranchLength)
+                throw new ArgumentException($"A branch name is limited to {MaxBranchLength} characters.");
+            // A leading dash would reach `git clone` as an option rather than a URL. The script
+            // quotes it, so this is not shell injection — but `--upload-pack=` is git's own.
+            if (url.StartsWith('-'))
+                throw new ArgumentException("A repository URL must not start with '-'.");
+            if (!IsAcceptable(url))
+                throw new ArgumentException(
+                    $"Unsupported repository URL '{Truncate(url)}'. Use https, http, ssh or git, "
+                    + "or scp-style user@host:path.");
+        }
+    }
+
+    private static bool IsAcceptable(string url)
+    {
+        if (AllowedSchemes.Any(s => url.StartsWith(s, StringComparison.OrdinalIgnoreCase))) return true;
+        // scp-style: user@host:path, which is how an SSH remote is usually written and what the
+        // credentials dialog's own help text suggests. Rejecting a scheme-less string outright
+        // would turn a working configuration into an error.
+        var at = url.IndexOf('@');
+        var colon = url.IndexOf(':');
+        return at > 0 && colon > at + 1 && !url.Contains("://", StringComparison.Ordinal);
+    }
+
+    private static string Truncate(string url) => url.Length <= 80 ? url : url[..80] + "…";
+}
+
 /// <summary>A repository to check out into the session workspace.</summary>
 public record RepoRef
 {
@@ -464,10 +530,25 @@ public record UserCredentials
 {
     public string? SshPrivateKey { get; init; }
     public string? GitlabToken { get; init; }
+    /// <summary>
+    /// Host the stored GitLab token belongs to, e.g. <c>gitlab.example.com</c>. Hostname and
+    /// optional port only. Defaults to <c>gitlab.com</c>.
+    ///
+    /// The host is what scopes the token: it becomes one git-credential-store entry, so the token
+    /// is only ever offered to this server. Before it existed the PAT was installed as a global
+    /// credential helper and any host answering 401 could ask for it.
+    /// </summary>
+    public string? GitlabHost { get; init; }
+    /// <summary>Personal access token for GitHub, for users whose instance has no OAuth app
+    /// configured. Previously only GitLab had this, leaving no HTTPS route to GitHub.</summary>
+    public string? GithubToken { get; init; }
+    /// <summary>Host the stored GitHub token belongs to. Defaults to <c>github.com</c>. See
+    /// <see cref="GitlabHost"/> for why it is required rather than cosmetic.</summary>
+    public string? GithubHost { get; init; }
     public string? AnthropicApiKey { get; init; }
     public string? OpenAiApiKey { get; init; }
     public string? CursorApiKey { get; init; }
-    /// <summary>known_hosts entry of the GitLab server (protects against MITM on the first clone).</summary>
+    /// <summary>known_hosts entry of the git server (protects against MITM on the first clone).</summary>
     public string? GitKnownHosts { get; init; }
     public string? GitUserName { get; init; }
     public string? GitUserEmail { get; init; }
@@ -481,6 +562,9 @@ public record CredentialStatus
 {
     public bool SshPrivateKey { get; init; }
     public bool GitlabToken { get; init; }
+    public bool GitlabHost { get; init; }
+    public bool GithubToken { get; init; }
+    public bool GithubHost { get; init; }
     public bool AnthropicApiKey { get; init; }
     public bool GitKnownHosts { get; init; }
     public bool OpenAiApiKey { get; init; }

@@ -21,6 +21,10 @@ public interface IGitAuthService
     Task<string?> HandleCallbackAsync(string providerId, string code, string state, string redirectUri, CancellationToken ct = default);
     Task DisconnectAsync(string owner, string providerId, CancellationToken ct = default);
     Task<IReadOnlyList<GitProject>> SearchProjectsAsync(string owner, string providerId, string? query, CancellationToken ct = default);
+    /// <summary>Whether this instance has a provider of that id configured at all.</summary>
+    bool IsConfigured(string providerId);
+    /// <summary>Whether the owner has completed the OAuth flow for that provider.</summary>
+    Task<bool> IsConnectedAsync(string owner, string providerId, CancellationToken ct = default);
     /// <summary>git-credentials file content (one line per provider host) for the repos'
     /// providers, or null if none of them use a connected OAuth provider.</summary>
     Task<string?> BuildCredentialStoreAsync(string owner, IEnumerable<RepoRef> repos, CancellationToken ct = default);
@@ -67,6 +71,15 @@ public sealed class GitAuthService : IGitAuthService
     public bool AnyConfigured => _providers.Count > 0;
 
     private GitProviderConfig? Provider(string id) => _providers.FirstOrDefault(p => p.Id == id);
+
+    public bool IsConfigured(string providerId) => Provider(providerId) is not null;
+
+    public async Task<bool> IsConnectedAsync(string owner, string providerId, CancellationToken ct = default)
+    {
+        if (Provider(providerId) is null) return false;
+        var secret = await ReadSecretOrNullAsync(SecretName(owner), ct);
+        return secret?.Data?.ContainsKey($"{providerId}.access") == true;
+    }
 
     public async Task<IReadOnlyList<GitProviderInfo>> ListProvidersAsync(string owner, CancellationToken ct = default)
     {

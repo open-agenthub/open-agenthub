@@ -33,8 +33,14 @@ const createSchema = z.object({
   authMode: z.enum(['Auto', 'Subscription', 'ApiKey']).optional(),
   repos: z.array(z.object({
     url: z.string().max(2048),
-    branch: z.string().max(256).optional()
-  })).max(32).optional(),
+    branch: z.string().max(256).optional(),
+    // Names a Git provider this account has connected; its OAuth token then authenticates the
+    // clone and any push. Without it here the field was dropped before the HTTP call, so the
+    // stdio server could only ever clone public repositories.
+    providerId: z.string().max(128).optional()
+    // 16 to match the backend's own cap. The old 32 was the only limit anywhere and did not
+    // apply to the REST API, so it described nothing the server actually enforced.
+  })).max(16).optional(),
   projectId: z.string().max(128).optional(),
   parentSessionId: z.string().max(128).optional(),
   schedule: z.string().max(128).optional(),

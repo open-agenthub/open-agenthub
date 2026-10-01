@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Security.Claims;
+using System.Text.Json;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
@@ -55,8 +56,17 @@ public sealed class AgentHubMcpTools(
                      + "them.")] string? systemPrompt = null,
         [Description("Interactive, Autonomous or Scheduled. Defaults to Autonomous.")] string? mode = null,
         [Description("Claude, Codex, Cursor or OpenClaw.")] string? agent = null,
-        [Description("Repository URL to clone into the workspace.")] string? repoUrl = null,
+        [Description("Repository URL to clone into the workspace. For more than one repository, or "
+                     + "to clone with a connected provider's credentials, use `repos`.")] string? repoUrl = null,
         [Description("Branch for repoUrl.")] string? repoBranch = null,
+        [Description("Repositories to clone, as a JSON array: "
+                     + "[{\"url\":\"https://host/org/thing.git\",\"branch\":\"main\","
+                     + "\"providerId\":\"github\"}]. providerId names a Git provider this account "
+                     + "has connected, and its OAuth token then authenticates the clone and any "
+                     + "push; omit it for a public repository. One repository is checked out at "
+                     + "/workspace/repo, several at /workspace/<name>. Takes precedence over "
+                     + "repoUrl.")]
+        string? repos = null,
         [Description("Project that groups the session.")] string? projectId = null,
         [Description("Parent session id for orchestration.")] string? parentSessionId = null,
         [Description("Cron expression; only for Scheduled sessions.")] string? schedule = null,
@@ -91,6 +101,7 @@ public sealed class AgentHubMcpTools(
             AutoApprove = ParseFlag(autoApprove),
             RunAsRoot = ParseFlag(runAsRoot) ?? false
         };
+        if (ParseRepos(repos) is { Count: > 0 } parsedRepos) request = request with { Repos = parsedRepos };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
         // Only override the record's own defaults when a value was actually supplied; passing
         // null through would blank them and produce a pod spec with no resource request.
@@ -262,6 +273,33 @@ public sealed class AgentHubMcpTools(
 
     private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback) where TEnum : struct, Enum
         => Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed) ? parsed : fallback;
+
+    /// <summary>
+    /// Reads the repository list, which arrives as JSON text for the same reason the boolean flags
+    /// do — see <see cref="ParseFlag"/>. A declared array type would make every already-connected
+    /// client's call fail until it reconnected.
+    ///
+    /// Malformed JSON is reported rather than ignored: silently creating a session with no
+    /// repository would leave the agent looking at an empty workspace and the caller wondering why.
+    /// Everything about the entries themselves — count, URL shape, whether the provider is actually
+    /// connected — is checked by the session service, so the rules cannot drift between the two
+    /// MCP servers and the REST API.
+    /// </summary>
+    private static List<RepoRef>? ParseRepos(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<List<RepoRef>>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        catch (JsonException e)
+        {
+            throw new McpException($"repos is not a valid JSON array of repositories: {e.Message}");
+        }
+    }
 
     /// <summary>
     /// Reads a boolean flag that arrives as text. These are declared as strings rather than bools
