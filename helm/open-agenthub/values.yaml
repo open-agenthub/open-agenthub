@@ -96,9 +96,29 @@ agent:
   # NetworkPolicies that are deleted with the session. Only ports listed here can be
   # requested — anything else is rejected without asking. Entries are single ports
   # or "from-to" ranges; [] disallows requests entirely.
+  #
+  # Keep these in step with NetworkPortOptions.RequestablePorts, which documents what each
+  # range is for. Being listed is permission to ask, not access — the owner still approves
+  # every request — so the defaults are generous enough that a framework's own dev server
+  # and the usual backing services can be asked for. A port that is missing is refused
+  # before the owner sees it, which an agent reads as the platform being unable to do it.
   portRequests:
     enabled: true
-    requestablePorts: ["5432", "3306", "6379", "27017", "9000-9100"]
+    requestablePorts:
+      - "3000-3010"   # React, Next.js, Nuxt, Node
+      - "3306"        # MariaDB / MySQL
+      - "3900"        # Garage S3 API
+      - "4173"        # Vite preview
+      - "4200-4210"   # Angular
+      - "5000-5300"   # ASP.NET Core http, Flask, Vite dev (5173)
+      - "5432"        # PostgreSQL
+      - "6379"        # Redis
+      - "6443"        # Kubernetes API — session pods mount no service account token
+      - "7000-7300"   # ASP.NET Core https
+      - "8000-8010"   # Django, FastAPI, Laravel, PHP built-in server
+      - "8080-8090"   # generic http
+      - "9000-9100"   # MinIO, php-fpm
+      - "27017"       # MongoDB
 
 files:
   maxImageBytes: 20971520

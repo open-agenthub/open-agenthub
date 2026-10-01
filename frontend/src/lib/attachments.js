@@ -199,6 +199,25 @@ export function createAttachmentQueue({ sessionId, api, onChange = () => {} }) {
     await cleanup(item)
   }
 
+  // Dropping a row without touching the server. A ready item is no longer the queue's to
+  // delete: the bytes are stored and the record belongs to the session, so removing it here
+  // would destroy a file the user had just added.
+  function release(key) {
+    const index = items.findIndex(candidate => candidate.key === key)
+    if (index < 0) return
+    items.splice(index, 1)
+    changed()
+  }
+
+  // What tearing a row down means depends on how far it got. An upload still in flight owns a
+  // reservation nobody else will clean up, so it has to be cancelled; a finished one is only
+  // released.
+  async function dismiss(key) {
+    const item = items.find(candidate => candidate.key === key)
+    if (item?.state === 'ready') return release(key)
+    return remove(key)
+  }
+
   function clearReady() {
     for (let index = items.length - 1; index >= 0; index -= 1) {
       if (items[index].state === 'ready') items.splice(index, 1)
@@ -206,9 +225,14 @@ export function createAttachmentQueue({ sessionId, api, onChange = () => {} }) {
     changed()
   }
 
+  // Called on unmount and when the session changes — neither is the user asking for a file to
+  // go away, so finished uploads are only released. It used to delete them, which is how a file
+  // uploaded in the Files pane vanished from the session as soon as the pane closed.
   async function cancelAll() {
-    await Promise.all(items.map(item => remove(item.key)))
+    // Over a copy: remove() splices from items, and iterating the live array skips every
+    // second entry, leaving half the reservations uncancelled.
+    await Promise.all(items.slice().map(item => dismiss(item.key)))
   }
 
-  return { items, add, retry, remove, clearReady, cancelAll }
+  return { items, add, retry, remove, dismiss, release, clearReady, cancelAll }
 }

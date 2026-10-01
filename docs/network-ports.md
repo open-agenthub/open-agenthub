@@ -62,13 +62,39 @@ create-conflict no-op instead of duplicates.
   agent:
     portRequests:
       enabled: true
-      requestablePorts: ["5432", "3306", "6379", "27017", "9000-9100"]
+      requestablePorts:
+        - "3000-3010"   # React, Next.js, Nuxt, Node
+        - "3306"        # MariaDB / MySQL
+        - "3900"        # Garage S3 API
+        - "4173"        # Vite preview
+        - "4200-4210"   # Angular
+        - "5000-5300"   # ASP.NET Core http, Flask, Vite dev (5173)
+        - "5432"        # PostgreSQL
+        - "6379"        # Redis
+        - "6443"        # Kubernetes API
+        - "7000-7300"   # ASP.NET Core https
+        - "8000-8010"   # Django, FastAPI, Laravel, PHP built-in server
+        - "8080-8090"   # generic http
+        - "9000-9100"   # MinIO, php-fpm
+        - "27017"       # MongoDB
   ```
 
   Entries are single ports or `from-to` ranges; `[]` disables requests entirely (as
   does `enabled: false`). The list is rendered into the backend config as a single
   string (`Network__RequestablePorts`), so clearing it really clears it. Invalid
   entries are dropped, never widened.
+
+  **Why the defaults are broad.** Being on the list is permission to *ask*; the owner
+  still approves each request. A port that is missing is refused before the owner sees
+  the question, and an agent cannot tell that apart from the platform being unable to do
+  it — so it stops asking and works around the gap. The defaults therefore cover the
+  backing services an agent plausibly needs and the dev server each framework starts on
+  its own, rather than the minimum.
+
+  `6443` is on the list and is not the escalation it looks like: session pods set
+  `automountServiceAccountToken: false`, as does the service account, so a pod holds no
+  cluster credential. Reaching an API server needs a kubeconfig the session was given
+  deliberately.
 - **User approval.** Requests inside the allowlist still require the session owner's
   decision (unless the session runs with auto-approve, which the owner opted into).
   "Allow (don't ask again)" is scoped to the exact direction + port + protocol of one
