@@ -9,6 +9,57 @@ when the fake in the test is more forgiving than production.
 
 ---
 
+## 2026-10-01 — The skill library's two silent failures were both about context
+
+Two things went wrong in the same test, and neither looked like a bug.
+
+**Files travelled as text, so large ones never travelled at all.** `upload_skill` took file
+content inline, which meant an 18 KB helper script was quoted into a tool call on the way up and
+quoted back out on the way down — paid for twice, in a context the agent needs for the task. The
+agent's response to that cost was rational: it stopped uploading scripts. Nothing failed, nothing
+was logged, the library just quietly only ever held prose.
+
+The fix is a filesystem path on both ends, and the reason it needed a new component is worth
+remembering: **the skill-library MCP server runs in the backend, not in the pod.** It cannot read
+or write the agent's disk. `agent-runtime/skills/` is now a local stdio proxy that takes over the
+hub's injected `skill-library` entry, adds `path` to `upload_skill` and `out_dir` to `get_skill`,
+and forwards everything else untouched — so a tool added to the hub later works through it without
+being mentioned in it. For the curl case the hub serves the files itself, at a plain
+token-authenticated route rather than a presigned storage url: those expire while the agent is
+still working with them, which is the same trap `InternalSessionFilesController` documents.
+
+**The server instruction to upload gotchas was read, then forgotten.** It arrives at
+`initialize` — tens of thousands of tokens before the end of the task that produced something
+worth saving. An instruction at the start cannot survive a long turn. `common/skill-reminder-hook.mjs`
+asks at the end instead, through each agent's own end-of-turn hook (Claude `Stop`, Codex
+`[[hooks.Stop]]`, Cursor `stop`), all three of which take the same "block with a reason" shape.
+
+Two details that the obvious implementation gets wrong:
+
+- **Fire only after a turn that changed something.** A reminder after a plain question is pure
+  noise, and noise is what gets hooks switched off. There is no transcript to inspect in Cursor's
+  payload and no tool name in it either, so a `PostToolUse` / `afterFileEdit` marker file is what
+  separates work from an answer. No marker, no reminder — being quiet when unsure is the cheaper
+  mistake.
+- **Honour the loop guard.** `stop_hook_active` (Claude, Codex) and `loop_count` (Cursor) exist
+  because the reminder's own continuation ends in another stop.
+
+**Also: JSON results cost six tokens per umlaut.** `System.Text.Json` escapes `ö` to `ö`,
+and the library is full of German runbooks. The tool results are plain text now; the service test
+asserts the result is *not* parseable as JSON, because that is the only way the escapes cannot
+creep back in.
+
+**Verifying it needs a pod.** `agent-runtime/skills/probe.sh` runs the whole path from inside a
+session — upload from a path, download to a directory, both download urls with `curl`, and the
+same urls without the token. Unit tests against fakes cannot see an egress policy or a service
+that only resolves in the control namespace.
+
+Windows aside: `tar` was given `-C <absolute path>` and MSYS tar mangled it (`C\:\\Users\\…`),
+while bsdtar on the same machine was fine. The archive now goes in on stdin and the destination
+is the child's working directory — no path argument for any tar implementation to reinterpret.
+
+---
+
 ## 2026-10-01 — Chrome renders no PDF in a sandboxed frame, under any token
 
 The preview pane showed Chrome's grey blocked-content placeholder for every PDF. The frame carried

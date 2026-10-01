@@ -70,6 +70,34 @@ helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version }}
 {{- printf "%s:%s" $repository $tag -}}
 {{- end }}
 
+{{- /* The effective S3 settings. With objectStorage.enabled the in-cluster Garage service is
+       the default for the three values that would otherwise have to be repeated by hand, but
+       an explicit s3.* value still wins: that is how an existing deployment is pointed
+       somewhere else without first tearing the store down. */ -}}
+{{- define "agenthub.s3ServiceUrl" -}}
+{{- if .Values.s3.serviceUrl -}}
+{{ .Values.s3.serviceUrl }}
+{{- else if .Values.objectStorage.enabled -}}
+http://garage.{{ .Release.Namespace }}.svc.cluster.local:3900
+{{- end -}}
+{{- end }}
+
+{{- define "agenthub.s3AccessKey" -}}
+{{- if .Values.s3.accessKey -}}
+{{ .Values.s3.accessKey }}
+{{- else if .Values.objectStorage.enabled -}}
+{{ required "objectStorage.accessKey is required when objectStorage.enabled=true" .Values.objectStorage.accessKey }}
+{{- end -}}
+{{- end }}
+
+{{- define "agenthub.s3SecretKey" -}}
+{{- if .Values.s3.secretKey -}}
+{{ .Values.s3.secretKey }}
+{{- else if .Values.objectStorage.enabled -}}
+{{ required "objectStorage.secretKey is required when objectStorage.enabled=true" .Values.objectStorage.secretKey }}
+{{- end -}}
+{{- end }}
+
 {{- define "agenthub.postgresConnectionString" -}}
 {{- if .Values.postgres.enabled -}}
 Host=postgres.{{ .Release.Namespace }}.svc.cluster.local;Database=agenthub;Username=agenthub;Password={{ required "postgres.password is required when postgres.enabled=true" .Values.postgres.password }}

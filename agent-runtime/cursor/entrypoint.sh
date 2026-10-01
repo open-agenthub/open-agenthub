@@ -48,6 +48,10 @@ export CURSOR_AUTH_FILE
 node "$RUNTIME/cursor/cli-config.js" > "$CURSOR_CONFIG_DIR/cli-config.json"
 chmod 600 "$CURSOR_CONFIG_DIR/cli-config.json"
 
+# End-of-turn reminder to save reusable knowledge in the skill library.
+node "$RUNTIME/cursor/hooks-config.js" > "$CURSOR_CONFIG_DIR/hooks.json"
+chmod 600 "$CURSOR_CONFIG_DIR/hooks.json"
+
 # Always omit runtime-owned server names from user MCP so they cannot be spoofed.
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   node "$RUNTIME/cursor/mcp-config.js" /secrets/mcp/mcp.json agenthub_sessions agenthub_files agenthub_network > "$CURSOR_CONFIG_DIR/mcp.json"
@@ -67,6 +71,11 @@ fi
 
 if [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
   node "$RUNTIME/files/configure.mjs" "$CURSOR_CONFIG_DIR/mcp.json" "$CURSOR_CONFIG_DIR/mcp.json"
+  chmod 600 "$CURSOR_CONFIG_DIR/mcp.json"
+fi
+# Takes over the hub's skill-library entry so uploads and downloads can name a local path.
+if [ "${AGENTHUB_SKILLS_MCP_ENABLED:-0}" = "1" ] && [ -f "$CURSOR_CONFIG_DIR/mcp.json" ]; then
+  node "$RUNTIME/skills/configure.mjs" "$CURSOR_CONFIG_DIR/mcp.json" "$CURSOR_CONFIG_DIR/mcp.json"
   chmod 600 "$CURSOR_CONFIG_DIR/mcp.json"
 fi
 # State restore always precedes authentication, and archived credentials are never trusted.

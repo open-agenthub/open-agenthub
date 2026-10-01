@@ -1,6 +1,9 @@
 [CmdletBinding()]
 param(
-    [switch]$NoPortForward
+    [switch]$NoPortForward,
+    # Unset asks; the switches answer without a prompt so the script stays usable from CI.
+    [switch]$WithObjectStorage,
+    [switch]$WithoutObjectStorage
 )
 
 $ErrorActionPreference = 'Stop'
@@ -75,6 +78,62 @@ if ($LASTEXITCODE -eq 0 -and -not [string]::IsNullOrWhiteSpace($encodedPassword)
     $postgresPassword = [Convert]::ToHexString($passwordBytes).ToLowerInvariant()
 }
 
+function New-HexSecret([int]$Bytes) {
+    $buffer = New-Object byte[] $Bytes
+    [System.Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
+    return [Convert]::ToHexString($buffer).ToLowerInvariant()
+}
+
+# Reads a value out of an existing secret; empty when the secret, the key, or the value
+# itself is absent. Credentials are never regenerated on a redeploy: a new access key would
+# leave every object already in the bucket unreachable, and the hub would report that as
+# missing session state rather than as a credential it no longer has.
+function Get-ExistingSecretValue([string]$Secret, [string]$Key) {
+    $encoded = kubectl -n $controlNamespace get secret $Secret -o "jsonpath={.data.$Key}" 2>$null
+    if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($encoded)) { return '' }
+    try { return [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($encoded)) } catch { return '' }
+}
+
+# Object storage: offered rather than assumed. Without it the hub runs, but a session
+# cannot be resumed in a fresh pod — its state archive has nowhere to live.
+if ($WithObjectStorage -and $WithoutObjectStorage) {
+    throw 'Pass either -WithObjectStorage or -WithoutObjectStorage, not both.'
+}
+$objectStorage = $null
+if ($WithObjectStorage) { $objectStorage = $true }
+if ($WithoutObjectStorage) { $objectStorage = $false }
+if ($null -eq $objectStorage) {
+    kubectl -n $controlNamespace get statefulset garage *> $null
+    if ($LASTEXITCODE -eq 0) {
+        $objectStorage = $true
+    } else {
+        Write-Host 'Deploy object storage (Garage) into the cluster as well?'
+        Write-Host 'Without it, session state, uploads and artifacts have nowhere to be stored.'
+        $answer = Read-Host 'Deploy it? [Y/n]'
+        $objectStorage = $answer -notmatch '^[nN]'
+    }
+}
+
+$objectStorageArgs = @()
+if ($objectStorage) {
+    $garageAccessKey = Get-ExistingSecretValue 'agenthub-secrets' 'S3__AccessKey'
+    $garageSecretKey = Get-ExistingSecretValue 'agenthub-secrets' 'S3__SecretKey'
+    $garageRpcSecret = Get-ExistingSecretValue 'garage-secrets' 'rpc_secret'
+    $garageAdminToken = Get-ExistingSecretValue 'garage-secrets' 'admin_token'
+    # Garage only accepts an access key id shaped like its own: GK plus 24 hex characters.
+    if (-not $garageAccessKey) { $garageAccessKey = "GK$(New-HexSecret 12)" }
+    if (-not $garageSecretKey) { $garageSecretKey = New-HexSecret 32 }
+    if (-not $garageRpcSecret) { $garageRpcSecret = New-HexSecret 32 }
+    if (-not $garageAdminToken) { $garageAdminToken = New-HexSecret 16 }
+    $objectStorageArgs = @(
+        '--set', 'objectStorage.enabled=true',
+        '--set-string', "objectStorage.accessKey=$garageAccessKey",
+        '--set-string', "objectStorage.secretKey=$garageSecretKey",
+        '--set-string', "objectStorage.rpcSecret=$garageRpcSecret",
+        '--set-string', "objectStorage.adminToken=$garageAdminToken"
+    )
+}
+
 try {
     Write-Host 'Deploying the development release...'
     $helmArgs = @(
@@ -87,6 +146,7 @@ try {
         Write-Host "Applying local overrides from $localValuesPath"
         $helmArgs += @('--values', $localValuesPath)
     }
+    $helmArgs += $objectStorageArgs
     $helmArgs += @(
         '--set', "sessionsNamespace=$sessionsNamespace",
         '--set-string', "postgres.password=$postgresPassword"
@@ -96,6 +156,44 @@ try {
 
     kubectl -n $controlNamespace rollout status statefulset/postgres --timeout=180s
     Assert-NativeSuccess 'Postgres rollout'
+
+    # Garage creates nothing by itself: a fresh node has no layout, no bucket and no key,
+    # and its image has no shell for a bootstrap job to use. Each step is skipped when it
+    # is already done, so a redeploy costs nothing.
+    if ($objectStorage) {
+        kubectl -n $controlNamespace rollout status statefulset/garage --timeout=180s
+        Assert-NativeSuccess 'Garage rollout'
+        function Invoke-Garage { kubectl -n $controlNamespace exec garage-0 -- /garage @args }
+
+        $buckets = (Invoke-Garage bucket list 2>$null) -join "`n"
+        if ($buckets -match '\sagenthub\s') {
+            Write-Host 'Object storage already initialised.'
+        } else {
+            Write-Host 'Initialising object storage...'
+            $layout = ((Invoke-Garage layout show 2>$null) -join "`n")
+            $currentVersion = 0
+            if ($layout -match 'Current cluster layout version: (\d+)') {
+                $currentVersion = [int]$Matches[1]
+            }
+            if ($currentVersion -lt 1) {
+                $nodeId = ((Invoke-Garage node id -q 2>$null) -join '').Trim().Split('@')[0]
+                if (-not $nodeId) { throw 'Could not read the Garage node id; object storage is not initialised.' }
+                Invoke-Garage layout assign -z dc1 -c 18GB $nodeId
+                Assert-NativeSuccess 'Garage layout assign'
+                # The version to apply is always one past the current one; parsing it out of
+                # the hint Garage prints would tie this to that sentence's wording.
+                Invoke-Garage layout apply --version ($currentVersion + 1)
+                Assert-NativeSuccess 'Garage layout apply'
+            }
+            Invoke-Garage bucket create agenthub
+            Assert-NativeSuccess 'Garage bucket create'
+            Invoke-Garage key import --yes $garageAccessKey $garageSecretKey -n agenthub-key
+            Assert-NativeSuccess 'Garage key import'
+            Invoke-Garage bucket allow --read --write --owner agenthub --key agenthub-key
+            Assert-NativeSuccess 'Garage bucket allow'
+            Write-Host "Object storage ready: bucket agenthub on garage.$controlNamespace.svc.cluster.local:3900"
+        }
+    }
     kubectl -n $controlNamespace rollout restart deployment/agenthub-backend deployment/agenthub-frontend
     Assert-NativeSuccess 'Backend rollout restart'
     kubectl -n $controlNamespace rollout status deployment/agenthub-backend --timeout=180s

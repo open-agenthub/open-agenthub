@@ -3,12 +3,15 @@ using System.Text.Json.Nodes;
 using AgentHub.Api.Ee.Library;
 using AgentHub.Api.Library;
 using AgentHub.Api.Persistence;
+using Microsoft.Extensions.Configuration;
 using Xunit;
 
 namespace AgentHub.Api.Tests;
 
 public class SkillLibraryMcpServiceTests
 {
+    private const string HubUrl = "https://hub.example.com";
+
     private static (SkillLibraryMcpService Service, InMemorySkillStore Skills, InMemoryLibraryShareStore Shares)
         Build(bool licensed = true)
     {
@@ -16,7 +19,10 @@ public class SkillLibraryMcpServiceTests
         var shares = new InMemoryLibraryShareStore();
         var access = new LibraryAccessService(
             new InMemoryMcpServerStore(), skills, shares, new FakeEnterpriseLicense(licensed));
-        var service = new SkillLibraryMcpService(access, skills, LibraryTest.SearchService(skills));
+        var cfg = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?> { ["AgentHub:CallbackBaseUrl"] = HubUrl })
+            .Build();
+        var service = new SkillLibraryMcpService(access, skills, LibraryTest.SearchService(skills), cfg);
         return (service, skills, shares);
     }
 
@@ -36,11 +42,12 @@ public class SkillLibraryMcpServiceTests
         return await service.HandleAsync(doc.RootElement, session, CancellationToken.None);
     }
 
-    private static JsonObject ToolPayload(JsonObject? response)
-    {
-        var text = response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
-        return JsonNode.Parse(text)!.AsObject();
-    }
+    /// <summary>The tool result text — plain text, not JSON.</summary>
+    private static string ToolText(JsonObject? response) =>
+        response!["result"]!["content"]![0]!["text"]!.GetValue<string>();
+
+    private static bool IsError(JsonObject? response) =>
+        response!["result"]!["isError"]?.GetValue<bool>() ?? false;
 
     [Fact]
     public async Task Initialize_EchoesKnownProtocol_AndAdvertisesTools()
@@ -79,16 +86,16 @@ public class SkillLibraryMcpServiceTests
         var (service, skills, _) = Build();
         var session = Session(projectId: "project-1");
 
-        var created = ToolPayload(await CallAsync(service, session,
+        var created = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"deploy","description":"Deploy helper","content":"# v1"}}}"""));
-        Assert.True(created["created"]!.GetValue<bool>());
-        Assert.Equal("project", created["scope"]!.GetValue<string>());
-        Assert.Equal(1, created["version"]!.GetValue<int>());
+        Assert.Contains("created", created);
+        Assert.Contains("project library", created);
+        Assert.Contains("v1", created);
 
-        var updated = ToolPayload(await CallAsync(service, session,
+        var updated = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"deploy","content":"# v2","comment":"tweak"}}}"""));
-        Assert.False(updated["created"]!.GetValue<bool>());
-        Assert.Equal(2, updated["version"]!.GetValue<int>());
+        Assert.Contains("updated", updated);
+        Assert.Contains("v2", updated);
 
         var record = (await skills.ListByOwnerAsync("alice")).Single();
         Assert.Equal("project-1", record.ProjectId);
@@ -101,8 +108,9 @@ public class SkillLibraryMcpServiceTests
     public async Task UploadSkill_WithoutProject_LandsInPersonalLibrary()
     {
         var (service, skills, _) = Build();
-        ToolPayload(await CallAsync(service, Session(),
+        var text = ToolText(await CallAsync(service, Session(),
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"notes","content":"# n"}}}"""));
+        Assert.Contains("personal library", text);
         Assert.Null((await skills.ListByOwnerAsync("alice")).Single().ProjectId);
     }
 
@@ -117,20 +125,29 @@ public class SkillLibraryMcpServiceTests
         await shares.SetSharesAsync(LibraryItemTypes.Skill, foreign.Id, all: true, null, null, "bob");
 
         var session = Session(projectId: "project-1");
-        var results = ToolPayload(await CallAsync(service, session,
+        var results = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_skills","arguments":{"query":"kubernetes"}}}"""));
 
-        var scopes = results["results"]!.AsArray()
-            .ToDictionary(r => r!["name"]!.GetValue<string>(), r => r!["scope"]!.GetValue<string>());
-        Assert.Equal(3, results["total"]!.GetValue<int>());
-        Assert.Equal("personal", scopes["own-notes"]);
-        Assert.Equal("project", scopes["project-notes"]);
-        Assert.Equal("shared", scopes["shared-notes"]);
-        Assert.DoesNotContain("other-project", scopes.Keys);
+        Assert.Contains("3 skill(s) match", results);
+        Assert.Contains("own-notes (v1, personal", results);
+        Assert.Contains("project-notes (v1, project", results);
+        Assert.Contains("shared-notes (v1, shared", results);
+        Assert.DoesNotContain("other-project", results);
 
-        var detail = ToolPayload(await CallAsync(service, session,
+        var detail = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"shared-notes"}}}"""));
-        Assert.Equal("# shared kubernetes guide", detail["content"]!.GetValue<string>());
+        Assert.Contains("# shared kubernetes guide", detail);
+        Assert.Contains("SKILL.md:", detail);
+    }
+
+    [Fact]
+    public async Task Search_WithoutHits_SaysSoAndInvitesAnUpload()
+    {
+        var (service, _, _) = Build();
+        var text = ToolText(await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_skills","arguments":{"query":"nothing here"}}}"""));
+        Assert.Contains("No skill matches", text);
+        Assert.Contains("upload_skill", text);
     }
 
     [Fact]
@@ -141,21 +158,20 @@ public class SkillLibraryMcpServiceTests
         var record = skills.Add("alice", "deploy", "# v1");
         await skills.UpdateAsync("alice", record.Id, new SaveSkillRequest("deploy", null, "# v2"));
 
-        var versions = ToolPayload(await CallAsync(service, session,
+        var versions = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_skill_versions","arguments":{"name":"deploy"}}}"""));
-        Assert.Equal(2, versions["latest"]!.GetValue<int>());
-        Assert.Equal(2, versions["versions"]!.AsArray().Count);
+        Assert.Contains("latest v2, 2 version(s)", versions);
 
-        var restored = ToolPayload(await CallAsync(service, session,
+        var restored = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"restore_skill_version","arguments":{"name":"deploy","version":1}}}"""));
-        Assert.Equal(3, restored["version"]!.GetValue<int>());
+        Assert.Contains("Restored deploy v1 as the new v3", restored);
         Assert.Equal("# v1", await skills.GetContentAsync((await skills.GetManyAsync([record.Id])).Single()));
 
         var foreign = skills.Add("bob", "borrowed", "# b");
         await shares.SetSharesAsync(LibraryItemTypes.Skill, foreign.Id, all: true, null, null, "bob");
         var denied = await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"restore_skill_version","arguments":{"name":"borrowed","version":1}}}""");
-        Assert.True(denied!["result"]!["isError"]!.GetValue<bool>());
+        Assert.True(IsError(denied));
     }
 
     [Fact]
@@ -164,29 +180,87 @@ public class SkillLibraryMcpServiceTests
         var (service, skills, _) = Build();
         var session = Session();
 
-        var uploaded = ToolPayload(await CallAsync(service, session,
+        var uploaded = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"deploy","content":"# skill","files":[{"path":"scripts/check.sh","content":"#!/bin/sh\ntrue"},{"path":"reference.md","content":"# docs"}]}}}"""));
-        Assert.Equal(["scripts/check.sh", "reference.md"],
-            uploaded["files"]!.AsArray().Select(f => f!.GetValue<string>()));
+        Assert.Contains("extra files (2): scripts/check.sh, reference.md", uploaded);
 
-        var detail = ToolPayload(await CallAsync(service, session,
+        var detail = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy"}}}"""));
-        Assert.Equal(2, detail["files"]!.AsArray().Count);
+        Assert.Contains("extra files (2)", detail);
+        // The content of an extra file never shows up in a plain get_skill.
+        Assert.DoesNotContain("#!/bin/sh", detail);
 
-        var file = ToolPayload(await CallAsync(service, session,
+        var file = ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy","file":"scripts/check.sh"}}}"""));
-        Assert.Equal("#!/bin/sh\ntrue", file["content"]!.GetValue<string>());
+        Assert.Contains("#!/bin/sh\ntrue", file);
 
         // Update without files keeps them; missing file paths list the alternatives.
-        ToolPayload(await CallAsync(service, session,
+        ToolText(await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"deploy","content":"# v2"}}}"""));
         var record = (await skills.ListByOwnerAsync("alice")).Single();
         Assert.Equal(2, (await skills.GetFilesAsync(record.Id, record.Version)).Count);
 
         var missing = await CallAsync(service, session,
             """{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy","file":"nope.sh"}}}""");
-        Assert.True(missing!["result"]!["isError"]!.GetValue<bool>());
-        Assert.Contains("scripts/check.sh", missing["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.True(IsError(missing));
+        Assert.Contains("scripts/check.sh", ToolText(missing));
+    }
+
+    [Fact]
+    public async Task GetSkill_OffersCurlDownloadsInsteadOfInliningFiles()
+    {
+        var (service, skills, _) = Build();
+        skills.Add("alice", "deploy", "# skill", files:
+            [new SkillFile("scripts/check.sh", "#!/bin/sh\ntrue"), new SkillFile("reference.md", "# docs")]);
+
+        var detail = ToolText(await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy"}}}"""));
+
+        Assert.Contains("X-Agent-Token: $AGENTHUB_CALLBACK_TOKEN", detail);
+        Assert.Contains($"{HubUrl}/internal/sessions/s1/skills/skill-1/files.tar.gz?version=1", detail);
+        Assert.Contains("tar xzf", detail);
+    }
+
+    [Fact]
+    public async Task GetSkill_WithASingleFile_PointsStraightAtIt()
+    {
+        var (service, skills, _) = Build();
+        skills.Add("alice", "deploy", "# skill", files: [new SkillFile("scripts/check.sh", "x")]);
+
+        var detail = ToolText(await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy"}}}"""));
+
+        Assert.Contains(
+            $"{HubUrl}/internal/sessions/s1/skills/skill-1/files/scripts/check.sh?version=1", detail);
+    }
+
+    [Fact]
+    public async Task GetSkill_WithoutFiles_MentionsNoDownload()
+    {
+        var (service, skills, _) = Build();
+        skills.Add("alice", "notes", "# just text");
+
+        var detail = ToolText(await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"notes"}}}"""));
+
+        Assert.DoesNotContain("curl", detail);
+        Assert.Contains("# just text", detail);
+    }
+
+    [Fact]
+    public async Task Results_ArePlainText_WithoutEscapedUmlautsOrEmoji()
+    {
+        // The reason the results are text at all: JSON-encoding "ö" costs six tokens
+        // instead of one, and a German runbook is full of them.
+        var (service, skills, _) = Build();
+        skills.Add("alice", "größe", "# Größe prüfen 🚀", projectId: null);
+
+        var detail = ToolText(await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"größe"}}}"""));
+        Assert.Contains("# Größe prüfen 🚀", detail);
+
+        // Not JSON — parsing it as such has to fail, or the escapes are back.
+        Assert.ThrowsAny<JsonException>(() => JsonNode.Parse(detail));
     }
 
     [Fact]
@@ -195,7 +269,26 @@ public class SkillLibraryMcpServiceTests
         var (service, _, _) = Build();
         var response = await CallAsync(service, Session(),
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"bad","content":"# x","files":[{"path":"../escape.sh","content":"x"}]}}}""");
-        Assert.True(response!["result"]!["isError"]!.GetValue<bool>());
+        Assert.True(IsError(response));
+    }
+
+    [Fact]
+    public async Task RuntimeOnlyArguments_FailLoudlyWhenNoProxyIsInFront()
+    {
+        // Silently ignoring them is the dangerous outcome: the agent reports files as
+        // written to disk that were never written.
+        var (service, skills, _) = Build();
+        skills.Add("alice", "deploy", "# skill", files: [new SkillFile("scripts/check.sh", "x")]);
+
+        var upload = await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"upload_skill","arguments":{"name":"deploy","content":"# x","path":"/workspace/skill"}}}""");
+        Assert.True(IsError(upload));
+        Assert.Contains("session runtime", ToolText(upload));
+
+        var get = await CallAsync(service, Session(),
+            """{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"deploy","out_dir":"/tmp/x"}}}""");
+        Assert.True(IsError(get));
+        Assert.Contains("session runtime", ToolText(get));
     }
 
     [Fact]
@@ -208,6 +301,8 @@ public class SkillLibraryMcpServiceTests
         Assert.Contains("proactively", instructions);
         Assert.Contains("upload_skill", instructions);
         Assert.Contains("search_skills", instructions);
+        // A large script was the reason uploads were skipped; the instructions say it is not one.
+        Assert.Contains("never have to travel through your context", instructions);
     }
 
     [Fact]
@@ -216,7 +311,7 @@ public class SkillLibraryMcpServiceTests
         var (service, _, _) = Build();
         var response = await CallAsync(service, Session(),
             """{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_skill","arguments":{"name":"missing"}}}""");
-        Assert.True(response!["result"]!["isError"]!.GetValue<bool>());
-        Assert.Contains("missing", response["result"]!["content"]![0]!["text"]!.GetValue<string>());
+        Assert.True(IsError(response));
+        Assert.Contains("missing", ToolText(response));
     }
 }
