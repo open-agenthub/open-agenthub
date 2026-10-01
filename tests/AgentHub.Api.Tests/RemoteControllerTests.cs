@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using AgentHub.Api.Agents;
 using AgentHub.Api.Controllers;
 using AgentHub.Api.Models;
 using AgentHub.Api.Services;
@@ -101,6 +102,126 @@ public class RemoteControllerTests
         Assert.IsType<ConflictObjectResult>(result.Result);
     }
 
+    [Fact]
+    public async Task PauseAndResume_PassTheTokenOwnerToTheService()
+    {
+        // Taking a conversation off the cluster and handing it back needs both steps on the token
+        // surface; without them a client has to stop the pod through the web app, and the state it
+        // downloads keeps moving underneath it.
+        var svc = new RecordingSessionService();
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken);
+
+        Assert.IsType<OkObjectResult>((await controller.Pause("session-1", CancellationToken.None)).Result);
+        Assert.IsType<OkObjectResult>((await controller.Resume("session-1", CancellationToken.None)).Result);
+
+        Assert.Equal([("alice", "session-1")], svc.PauseCalls);
+        Assert.Equal([("alice", "session-1")], svc.ResumeCalls);
+    }
+
+    [Fact]
+    public async Task PauseAndResume_WithoutAValidToken_AreUnauthorizedAndNeverReachTheService()
+    {
+        var svc = new RecordingSessionService();
+        var controller = Remote((_, _) => Task.FromResult<string?>(null), svc, "oah_unknown");
+
+        Assert.IsType<UnauthorizedResult>((await controller.Pause("session-1", CancellationToken.None)).Result);
+        Assert.IsType<UnauthorizedResult>((await controller.Resume("session-1", CancellationToken.None)).Result);
+        Assert.Empty(svc.PauseCalls);
+        Assert.Empty(svc.ResumeCalls);
+    }
+
+    [Fact]
+    public async Task Pause_MapsTheServiceOutcomesToStatusCodes()
+    {
+        var owner = (string _, CancellationToken _) => Task.FromResult<string?>("alice");
+
+        Assert.IsType<NotFoundResult>((await Remote(owner,
+            new RecordingSessionService { PauseException = new KeyNotFoundException() }, ValidToken)
+            .Pause("session-1", CancellationToken.None)).Result);
+
+        // A scheduled session runs on its schedule and has nothing to pause.
+        var badRequest = Assert.IsType<BadRequestObjectResult>((await Remote(owner,
+            new RecordingSessionService { PauseException = new ArgumentException("Scheduled sessions cannot be paused.") },
+            ValidToken).Pause("session-1", CancellationToken.None)).Result);
+        Assert.Equal("Scheduled sessions cannot be paused.", badRequest.Value);
+    }
+
+    [Fact]
+    public async Task Resume_MapsTheServiceOutcomesToStatusCodes()
+    {
+        var owner = (string _, CancellationToken _) => Task.FromResult<string?>("alice");
+        async Task<IActionResult?> Act(Exception thrown) => (await Remote(owner,
+            new RecordingSessionService { ResumeException = thrown }, ValidToken)
+            .Resume("session-1", CancellationToken.None)).Result;
+
+        Assert.IsType<NotFoundResult>(await Act(new KeyNotFoundException()));
+        Assert.IsType<BadRequestObjectResult>(await Act(new ArgumentException("Scheduled sessions are not resumed.")));
+        Assert.IsType<ConflictObjectResult>(await Act(new InvalidOperationException("already running")));
+
+        // The same 403 the in-app surface gives when the agent was removed from the allowlist
+        // after the session was created.
+        var forbidden = Assert.IsType<ObjectResult>(await Act(new AgentNotAllowedException("Codex is not allowed.")));
+        Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+    }
+
+    [Fact]
+    public async Task State_WithoutAValidToken_IsUnauthorizedAndNeverTouchesTheArchive()
+    {
+        // The state archive is the whole conversation. An unauthenticated caller must not reach
+        // the service at all, in either direction.
+        var svc = new RecordingSessionService();
+        var controller = Remote((_, _) => Task.FromResult<string?>(null), svc, "oah_unknown");
+
+        Assert.IsType<UnauthorizedResult>(await controller.DownloadState("session-1", CancellationToken.None));
+        Assert.IsType<UnauthorizedResult>(await controller.UploadState("session-1", CancellationToken.None));
+        Assert.Equal(0, svc.StateReads);
+        Assert.Equal(0, svc.StateWrites);
+    }
+
+    [Fact]
+    public async Task DownloadState_PassesTheTokenOwnerAndStreamsTheArchive()
+    {
+        var svc = new RecordingSessionService { StateArchive = [1, 2, 3] };
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken);
+
+        var file = Assert.IsType<FileStreamResult>(
+            await controller.DownloadState("session-1", CancellationToken.None));
+
+        Assert.Equal("alice", svc.StateOwner);
+        Assert.Equal("application/gzip", file.ContentType);
+        Assert.Equal("session-1-state.tgz", file.FileDownloadName);
+    }
+
+    [Fact]
+    public async Task DownloadState_NotFoundWhenNothingIsStored()
+    {
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), new RecordingSessionService(), ValidToken);
+
+        Assert.IsType<NotFoundResult>(await controller.DownloadState("session-1", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task UploadState_MapsTheServiceOutcomesToStatusCodes()
+    {
+        var owner = (string _, CancellationToken _) => Task.FromResult<string?>("alice");
+
+        Assert.IsType<NoContentResult>(await Remote(owner, new RecordingSessionService(), ValidToken)
+            .UploadState("session-1", CancellationToken.None));
+
+        Assert.IsType<NotFoundResult>(await Remote(owner,
+            new RecordingSessionService { StateWriteException = new KeyNotFoundException() }, ValidToken)
+            .UploadState("session-1", CancellationToken.None));
+
+        Assert.IsType<ConflictObjectResult>(await Remote(owner,
+            new RecordingSessionService { StateWriteException = new InvalidOperationException("still running") },
+            ValidToken).UploadState("session-1", CancellationToken.None));
+
+        var unavailable = Assert.IsType<ObjectResult>(await Remote(owner,
+            new RecordingSessionService { StateWriteStored = false }, ValidToken)
+            .UploadState("session-1", CancellationToken.None));
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, unavailable.StatusCode);
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private static RemoteController Remote(
@@ -135,6 +256,28 @@ public class RemoteControllerTests
         public string? DeleteId { get; private set; }
         public Exception? CreateException { get; init; }
         public Exception? DuplicateException { get; init; }
+        public byte[]? StateArchive { get; init; }
+        public Exception? StateWriteException { get; init; }
+        public bool StateWriteStored { get; init; } = true;
+        public int StateReads { get; private set; }
+        public int StateWrites { get; private set; }
+        public string? StateOwner { get; private set; }
+
+        public Task<Stream?> OpenStateArchiveAsync(string owner, string id, CancellationToken ct = default)
+        {
+            StateReads++;
+            StateOwner = owner;
+            return Task.FromResult<Stream?>(StateArchive is null ? null : new MemoryStream(StateArchive));
+        }
+
+        public Task<bool> ReplaceStateArchiveAsync(string owner, string id, Stream content,
+            long? contentLength, CancellationToken ct = default)
+        {
+            StateWrites++;
+            StateOwner = owner;
+            if (StateWriteException is not null) throw StateWriteException;
+            return Task.FromResult(StateWriteStored);
+        }
 
         public Task StoreCredentialsAsync(string owner, UserCredentials creds, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -155,10 +298,29 @@ public class RemoteControllerTests
             return Task.FromResult(new SessionInfo { Id = "dup", Title = "t", Owner = owner, Mode = SessionMode.Interactive, Phase = "Pending" });
         }
 
-        public Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default) =>
-            throw new NotSupportedException();
-        public Task<SessionInfo> PauseSessionAsync(string owner, string id, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Exception? PauseException { get; init; }
+        public Exception? ResumeException { get; init; }
+        public List<(string Owner, string Id)> PauseCalls { get; } = [];
+        public List<(string Owner, string Id)> ResumeCalls { get; } = [];
+
+        public Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default)
+        {
+            ResumeCalls.Add((owner, id));
+            if (ResumeException is not null) throw ResumeException;
+            return Task.FromResult(Info(owner, id, SessionStatus.Pending));
+        }
+
+        public Task<SessionInfo> PauseSessionAsync(string owner, string id, CancellationToken ct = default)
+        {
+            PauseCalls.Add((owner, id));
+            if (PauseException is not null) throw PauseException;
+            return Task.FromResult(Info(owner, id, SessionStatus.Paused));
+        }
+
+        private static SessionInfo Info(string owner, string id, string phase) => new()
+        {
+            Id = id, Title = "t", Owner = owner, Mode = SessionMode.Interactive, Phase = phase
+        };
         public Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default) =>

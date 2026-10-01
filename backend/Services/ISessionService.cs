@@ -23,6 +23,15 @@ public interface ISessionService
     /// <summary>Clears the "waiting for reply" flag (e.g. once the user opens the terminal).</summary>
     Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default);
     Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default);
+    /// <summary>Opens the stored provider state archive — the same tar.gz a resuming pod unpacks
+    /// into its home directory, and therefore the conversation history an agent CLI needs to
+    /// continue the session off-cluster. Null when the session is unknown or nothing is stored.</summary>
+    Task<Stream?> OpenStateArchiveAsync(string owner, string id, CancellationToken ct = default)
+        => Task.FromResult<Stream?>(null);
+    /// <summary>Overwrites the stored state archive so the next resume continues a conversation
+    /// that ran elsewhere. False when no object storage is configured.</summary>
+    Task<bool> ReplaceStateArchiveAsync(string owner, string id, Stream content,
+        long? contentLength, CancellationToken ct = default) => Task.FromResult(false);
     Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default);
     Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Deletes every per-user Kubernetes secret (credentials, provider logins,

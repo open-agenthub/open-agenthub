@@ -813,6 +813,36 @@ public sealed class KubernetesSessionService : ISessionService
             ct);
     }
 
+    public async Task<Stream?> OpenStateArchiveAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (await _store.GetAsync(owner, id, ct) is not { } rec) return null;
+        return await _artifacts.OpenReadAsync(
+            IArtifactStore.StateKey(Sanitize(owner), rec.Id, rec.Agent), ct);
+    }
+
+    /// <summary>
+    /// Replaces the saved state a resume unpacks into the pod. Refused while a pod is live:
+    /// that pod writes its own state over the same key when it stops, so an upload accepted
+    /// now would vanish at the next pause with nothing to show that it had been lost.
+    /// </summary>
+    public async Task<bool> ReplaceStateArchiveAsync(string owner, string id, Stream content,
+        long? contentLength, CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        var phase = SessionStatus.ResolvePhase(pod?.Status?.Phase, rec.Status);
+        if (!SessionStatus.CanReplaceState(phase))
+            throw new InvalidOperationException(
+                "Pause the session before uploading its state; a running pod overwrites it on exit.");
+
+        var stored = await _artifacts.TryPutStreamAsync(
+            IArtifactStore.StateKey(Sanitize(owner), rec.Id, rec.Agent),
+            content, "application/gzip", contentLength, ct);
+        if (stored) _log.LogInformation("Replaced stored state of session {Id} from an upload", id);
+        return stored;
+    }
+
     public async Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default)
     {
         var rec = await _store.GetByCallbackTokenAsync(token, ct);

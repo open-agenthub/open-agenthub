@@ -104,6 +104,69 @@ public sealed class RemoteController : ControllerBase
         return Ok(new { id = message.Id, to = target.Id });
     }
 
+    /// <summary>
+    /// Pauses a session: the pod is removed after uploading its state, and the session stays
+    /// resumable. Needed on this surface because a client that takes a conversation off the
+    /// cluster has to stop the pod first — otherwise the agent keeps working on the same
+    /// conversation and keeps overwriting the archive, and one of the two branches is lost at
+    /// the next upload.
+    /// </summary>
+    [HttpPost("sessions/{id}/pause")]
+    public async Task<ActionResult<SessionInfo>> Pause(string id, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        try { return Ok(await _svc.PauseSessionAsync(owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
+    /// <summary>Starts a paused or finished session again from its saved state — the step that
+    /// hands a conversation back after it continued elsewhere.</summary>
+    [HttpPost("sessions/{id}/resume")]
+    public async Task<ActionResult<SessionInfo>> Resume(string id, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        try { return Ok(await _svc.ResumeSessionAsync(owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (AgentNotAllowedException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Message); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+    }
+
+    /// <summary>
+    /// The session's provider state archive, so a client outside the cluster can continue the
+    /// conversation in its own agent CLI. Same archive the resume path unpacks into the pod.
+    /// </summary>
+    [HttpGet("sessions/{id}/state")]
+    public async Task<IActionResult> DownloadState(string id, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        if (await _svc.OpenStateArchiveAsync(owner, id, ct) is not { } archive) return NotFound();
+        return File(archive, "application/gzip", $"{id}-state.tgz");
+    }
+
+    /// <summary>Hands a conversation that continued elsewhere back to the session: the next
+    /// resume unpacks this archive instead of the one the pod left behind.</summary>
+    [HttpPut("sessions/{id}/state")]
+    [RequestSizeLimit(SessionStateTransfer.MaxArchiveBytes)]
+    public async Task<IActionResult> UploadState(string id, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        try
+        {
+            return await _svc.ReplaceStateArchiveAsync(owner, id, Request.Body, Request.ContentLength, ct)
+                ? NoContent()
+                : StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    "Object storage is not configured, so session state cannot be stored.");
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+    }
+
     [HttpDelete("sessions/{id}")]
     public async Task<IActionResult> Delete(string id, CancellationToken ct)
     {

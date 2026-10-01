@@ -115,6 +115,33 @@ public sealed class SessionsController : ControllerBase
         return text is null ? NotFound() : Content(text, "text/plain");
     }
 
+    /// <summary>
+    /// The session's provider state archive: the agent CLI's own history files, so a session
+    /// can be continued on a workstation. Deliberately the raw archive rather than a curated
+    /// export — the resume path already defines this format, and a second one would drift.
+    /// </summary>
+    [HttpGet("{id}/state")]
+    public async Task<IActionResult> DownloadState(string id, CancellationToken ct)
+    {
+        if (await _svc.OpenStateArchiveAsync(Owner, id, ct) is not { } archive) return NotFound();
+        return File(archive, "application/gzip", $"{id}-state.tgz");
+    }
+
+    [HttpPut("{id}/state")]
+    [RequestSizeLimit(SessionStateTransfer.MaxArchiveBytes)]
+    public async Task<IActionResult> UploadState(string id, CancellationToken ct)
+    {
+        try
+        {
+            return await _svc.ReplaceStateArchiveAsync(Owner, id, Request.Body, Request.ContentLength, ct)
+                ? NoContent()
+                : StatusCode(StatusCodes.Status503ServiceUnavailable,
+                    "Object storage is not configured, so session state cannot be stored.");
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+    }
+
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id, CancellationToken ct)
     {
