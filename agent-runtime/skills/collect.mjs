@@ -49,14 +49,34 @@ function run(file, args, options = {}) {
   });
 }
 
+/**
+ * Reads a file's bytes through a single handle, or null when it is absent, not a regular
+ * file, or larger than the ceiling.
+ *
+ * One handle for the size check and the read, rather than stat-then-read on the path: in
+ * between those two the path can point at something else, and the ceiling would then be
+ * enforced against a file other than the one whose bytes are returned.
+ */
+function readBytes(file, fsImpl, maxBytes) {
+  let fd;
+  try { fd = fsImpl.openSync(file, 'r'); } catch { return null; }
+  try {
+    const stat = fsImpl.fstatSync(fd);
+    if (!stat.isFile() || stat.size > maxBytes) return null;
+    return fsImpl.readFileSync(fd);
+  } catch {
+    return null;
+  } finally {
+    try { fsImpl.closeSync(fd); } catch { /* already gone */ }
+  }
+}
+
 /** Reads a text file, or null when it is absent, too large, or not text. */
 function readText(file, fsImpl) {
-  let stat;
-  try { stat = fsImpl.statSync(file); } catch { return null; }
   // A byte count is the only cheap pre-check; the character count is what the backend
   // limits, and multi-byte text can only ever be shorter than its bytes.
-  if (!stat.isFile() || stat.size > MAX_CONTENT * 4) return null;
-  const bytes = fsImpl.readFileSync(file);
+  const bytes = readBytes(file, fsImpl, MAX_CONTENT * 4);
+  if (bytes === null) return null;
   if (bytes.includes(0)) return null; // binary
   const text = bytes.toString('utf8');
   return text.length > MAX_CONTENT ? null : text;
@@ -139,15 +159,22 @@ export async function collectSource(source, deps = {}) {
   if (!stat.isFile()) throw new Error(`skills_path_not_a_file: ${source}`);
 
   if (isArchive(resolved)) {
-    if (stat.size > MAX_ARCHIVE_BYTES) throw new Error(`skills_archive_too_large: ${source}`);
+    // Read through one handle, so the size this was checked against is the size of the
+    // bytes actually handed to tar.
+    const archive = readBytes(resolved, fsImpl, MAX_ARCHIVE_BYTES);
+    if (archive === null) {
+      // stat only decides which of the two it was; the read itself never trusted it.
+      throw new Error(stat.size > MAX_ARCHIVE_BYTES
+        ? `skills_archive_too_large: ${source}`
+        : `skills_archive_unreadable: ${source}`);
+    }
     const temp = fsImpl.mkdtempSync(path.join(deps.tmpdir || os.tmpdir(), 'agenthub-skill-'));
     try {
       // No path reaches tar: the archive comes in on stdin and the destination is the
       // child's working directory. tar implementations differ in how they read a path
       // argument (one takes "host:path" for a remote archive, another rewrites the
       // separators), and none of them has an opinion about cwd.
-      await (deps.run || run)('tar', ['xzf', '-'],
-        { cwd: temp, input: fsImpl.readFileSync(resolved) });
+      await (deps.run || run)('tar', ['xzf', '-'], { cwd: temp, input: archive });
       // An archive made from the skill directory itself unpacks into a single directory;
       // one made with `tar czf x.tgz -C skill .` unpacks flat. Both are normal.
       const entries = fsImpl.readdirSync(temp, { withFileTypes: true });

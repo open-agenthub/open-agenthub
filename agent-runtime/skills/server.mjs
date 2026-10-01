@@ -57,10 +57,6 @@ export function augmentInstructions(initializeResult) {
   return initializeResult;
 }
 
-function textResult(text) {
-  return { content: [{ type: 'text', text }] };
-}
-
 function errorResult(text) {
   return { content: [{ type: 'text', text }], isError: true };
 }
