@@ -23,6 +23,12 @@ function buildCommand(env, allowResume) {
     env.AGENTHUB_STATE_RESTORED === '1';
   if (mode === 'interactive') {
     const args = restoredResume ? ['resume', '--last'] : [];
+    // `codex [OPTIONS] [PROMPT]` — the CLI's own help calls the positional the "optional user
+    // prompt to start the session", and it keeps the TUI, so an API-created session is already
+    // working when a person opens it. Left out on a resume: `resume` is a subcommand there and a
+    // trailing prompt would both fail to parse and restate a task the thread already contains.
+    const initialPrompt = env.AGENTHUB_PROMPT || '';
+    if (initialPrompt && !restoredResume) args.push(initialPrompt);
     if (env.AGENTHUB_CODEX_DEVICE_AUTH === '1') {
       return { cmd: 'bash', args: [path.join(__dirname, 'device-login.sh'), ...args] };
     }

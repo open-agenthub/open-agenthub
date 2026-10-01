@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Security.Claims;
+using System.Text.Json;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
@@ -46,11 +47,26 @@ public sealed class AgentHubMcpTools(
     public async Task<SessionInfo> CreateSession(
         [Description("Session title; also the agent name other agents address it by.")] string? title = null,
         [Description("What this agent is for.")] string? description = null,
-        [Description("Initial prompt. Required for Autonomous and Scheduled sessions.")] string? prompt = null,
+        [Description("Initial prompt. Required for Autonomous and Scheduled sessions. An "
+                     + "Interactive session starts working on it too and then stays live, so you "
+                     + "can create a session with a task and hand its url to a person.")] string? prompt = null,
+        [Description("Extra instructions appended to the agent's own system prompt — standing rules "
+                     + "for the session, as opposed to the task. Supported on every agent; it is "
+                     + "always appended, so it adds to the agent's instructions and never replaces "
+                     + "them.")] string? systemPrompt = null,
         [Description("Interactive, Autonomous or Scheduled. Defaults to Autonomous.")] string? mode = null,
         [Description("Claude, Codex, Cursor or OpenClaw.")] string? agent = null,
-        [Description("Repository URL to clone into the workspace.")] string? repoUrl = null,
+        [Description("Repository URL to clone into the workspace. For more than one repository, or "
+                     + "to clone with a connected provider's credentials, use `repos`.")] string? repoUrl = null,
         [Description("Branch for repoUrl.")] string? repoBranch = null,
+        [Description("Repositories to clone, as a JSON array: "
+                     + "[{\"url\":\"https://host/org/thing.git\",\"branch\":\"main\","
+                     + "\"providerId\":\"github\"}]. providerId names a Git provider this account "
+                     + "has connected, and its OAuth token then authenticates the clone and any "
+                     + "push; omit it for a public repository. One repository is checked out at "
+                     + "/workspace/repo, several at /workspace/<name>. Takes precedence over "
+                     + "repoUrl.")]
+        string? repos = null,
         [Description("Project that groups the session.")] string? projectId = null,
         [Description("Parent session id for orchestration.")] string? parentSessionId = null,
         [Description("Cron expression; only for Scheduled sessions.")] string? schedule = null,
@@ -73,6 +89,7 @@ public sealed class AgentHubMcpTools(
             Title = string.IsNullOrWhiteSpace(title) ? "Untitled" : title,
             Description = description,
             Prompt = prompt,
+            SystemPrompt = systemPrompt,
             // The stdio server defaults to Autonomous, because a caller driving sessions through
             // a tool has no terminal to interact with. Keep both servers consistent.
             Mode = ParseEnum(mode, SessionMode.Autonomous),
@@ -84,6 +101,7 @@ public sealed class AgentHubMcpTools(
             AutoApprove = ParseFlag(autoApprove),
             RunAsRoot = ParseFlag(runAsRoot) ?? false
         };
+        if (ParseRepos(repos) is { Count: > 0 } parsedRepos) request = request with { Repos = parsedRepos };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
         // Only override the record's own defaults when a value was actually supplied; passing
         // null through would blank them and produce a pod spec with no resource request.
@@ -92,6 +110,8 @@ public sealed class AgentHubMcpTools(
 
         var created = await sessions.CreateSessionAsync(Owner, request, ct);
         logger.LogInformation("MCP client created session {SessionId} for {Owner}", created.Id, created.Owner);
+        // The response carries `url`: the page a person opens to take this session over. It is null
+        // on an instance with no FrontendOrigin configured — see SessionUrl.
         return created;
     }
 
@@ -122,6 +142,30 @@ public sealed class AgentHubMcpTools(
         limit = Math.Min(limit, 200_000);
         return "… truncated, showing the last " + limit + " characters …\n"
                + transcript[^limit..];
+    }
+
+    [McpServerTool(Name = "session_transcript")]
+    [Description("Poll a session's transcript for what is new. Pass the previous call's nextOffset "
+                 + "as offset and only the output since then comes back, so following a long "
+                 + "session does not mean re-reading megabytes. `running` is false once the session "
+                 + "has finished — that is when to stop polling. Prefer this over session_logs when "
+                 + "you are watching a session you started.")]
+    public async Task<TranscriptPage> GetSessionTranscript(
+        [Description("Session id.")] string id,
+        [Description("Start here. Use the previous response's nextOffset; omit to start at 0.")]
+        int? offset = null,
+        [Description("Return at most this many characters. Default 100000, max 1000000.")]
+        int? maxChars = null,
+        CancellationToken ct = default)
+    {
+        // Phase before text, so a session that finishes mid-call is reported as still running with
+        // its final output already present — one extra poll, rather than output arriving after a
+        // "finished" the caller already acted on.
+        var session = await sessions.GetSessionAsync(Owner, id, ct)
+                      ?? throw new McpException("session_not_found");
+        var transcript = await sessions.GetTranscriptAsync(Owner, id, ct)
+                         ?? throw new McpException("session_not_found");
+        return TranscriptPage.From(session.Id, session.Phase, transcript, offset, maxChars);
     }
 
     [McpServerTool(Name = "session_list")]
@@ -229,6 +273,33 @@ public sealed class AgentHubMcpTools(
 
     private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback) where TEnum : struct, Enum
         => Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed) ? parsed : fallback;
+
+    /// <summary>
+    /// Reads the repository list, which arrives as JSON text for the same reason the boolean flags
+    /// do — see <see cref="ParseFlag"/>. A declared array type would make every already-connected
+    /// client's call fail until it reconnected.
+    ///
+    /// Malformed JSON is reported rather than ignored: silently creating a session with no
+    /// repository would leave the agent looking at an empty workspace and the caller wondering why.
+    /// Everything about the entries themselves — count, URL shape, whether the provider is actually
+    /// connected — is checked by the session service, so the rules cannot drift between the two
+    /// MCP servers and the REST API.
+    /// </summary>
+    private static List<RepoRef>? ParseRepos(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<List<RepoRef>>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+        }
+        catch (JsonException e)
+        {
+            throw new McpException($"repos is not a valid JSON array of repositories: {e.Message}");
+        }
+    }
 
     /// <summary>
     /// Reads a boolean flag that arrives as text. These are declared as strings rather than bools

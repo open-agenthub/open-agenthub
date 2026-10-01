@@ -30,22 +30,21 @@ if [ -f /secrets/creds/ssh_key ]; then
   git config --global core.sshCommand "$GIT_SSH_COMMAND"
 fi
 
+# One credential store holds both connected-provider OAuth tokens and manually stored
+# PATs, every entry bound to its own host. There is deliberately no second, host-less
+# credential helper: the one that used to serve a stored GitLab PAT was registered
+# globally and answered with the user's token for any host that returned 401.
 git config --global --unset-all credential.helper 2>/dev/null || true
 if [ -f /secrets/gitcreds/credentials ]; then
   cp /secrets/gitcreds/credentials "$HOME/.git-credentials" && chmod 600 "$HOME/.git-credentials"
   git config --global credential.helper store
 fi
-if [ -f /secrets/creds/gitlab_token ]; then
-  git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
-fi
 
+# Derives gh/glab config from that same store, so a manual PAT authenticates the CLIs
+# exactly like a connected provider does. That is what retired the GITLAB_TOKEN export
+# this used to fall back to — which also keeps the token out of the session environment,
+# where `env` and every subprocess could read it.
 "$RUNTIME/common/setup-cli-auth.sh" || echo "[entrypoint] WARN: gh/glab auth setup failed"
-if [ -f /secrets/creds/gitlab_token ] && [ ! -f "$HOME/.config/glab-cli/config.yml" ]; then
-  # Manual PAT without an OAuth GitLab host: glab resolves the host from the
-  # repo remote and picks the token up from the environment.
-  GITLAB_TOKEN="$(cat /secrets/creds/gitlab_token)"
-  export GITLAB_TOKEN
-fi
 
 export AGENTHUB_STATE_RESTORED=0
 if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; then
@@ -61,47 +60,52 @@ if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; th
   fi
 fi
 
-if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
-  TARGET="${AGENTHUB_WORKDIR:-/workspace}"
-  [ -d "$TARGET" ] || TARGET="/workspace"
-  cp /secrets/mcp/mcp.json "$TARGET/.mcp.json" || true
-fi
-
 MCP_SOURCE=""
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   MCP_SOURCE=/secrets/mcp/mcp.json
 fi
 
 MERGED_MCP=0
-if [ "${AGENTHUB_BROWSER_ENABLED:-0}" = "1" ]; then
-  node "$RUNTIME/browser/configure-claude.mjs" "$MCP_SOURCE"
+# A builtin is only merged when this image actually ships it. The runtimes do not all carry all of
+# them — the OpenClaw image has files/ and network/ but neither browser/ nor sessions/ — while the
+# enabling flags are instance-wide and not gated per agent. An unconditional `node` on a missing
+# module exits non-zero, and under `set -e` in a sourced script that aborts the entrypoint: on an
+# instance with the browser or the spawn MCP switched on, an OpenClaw session died with
+# MODULE_NOT_FOUND before the agent ever started.
+merge_builtin_mcp() {
+  module="$RUNTIME/$1/$2"
+  if [ ! -f "$module" ]; then
+    echo "[entrypoint] builtin MCP '$1' is enabled but not shipped in this image; skipping."
+    return 0
+  fi
+  node "$module" "$MCP_SOURCE"
   MCP_SOURCE=/tmp/agenthub-mcp.json
   MERGED_MCP=1
+}
+
+if [ "${AGENTHUB_BROWSER_ENABLED:-0}" = "1" ]; then
+  merge_builtin_mcp browser configure-claude.mjs
 fi
 if [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ]; then
-  node "$RUNTIME/sessions/configure.mjs" "$MCP_SOURCE"
-  MCP_SOURCE=/tmp/agenthub-mcp.json
-  MERGED_MCP=1
+  merge_builtin_mcp sessions configure.mjs
 fi
 if [ "${AGENTHUB_NETWORK_MCP_ENABLED:-0}" = "1" ]; then
-  node "$RUNTIME/network/configure.mjs" "$MCP_SOURCE"
-  MCP_SOURCE=/tmp/agenthub-mcp.json
-  MERGED_MCP=1
+  merge_builtin_mcp network configure.mjs
 fi
-
 if [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
-  node "$RUNTIME/files/configure.mjs" "$MCP_SOURCE"
-  MCP_SOURCE=/tmp/agenthub-mcp.json
-  MERGED_MCP=1
+  merge_builtin_mcp files configure.mjs
 fi
 if [ "$MERGED_MCP" = "1" ]; then
   export AGENTHUB_MCP_CONFIG=/tmp/agenthub-mcp.json
 elif [ -n "$MCP_SOURCE" ]; then
   export AGENTHUB_MCP_CONFIG="$MCP_SOURCE"
 fi
-if [ -n "${AGENTHUB_MCP_CONFIG:-}" ]; then
-  TARGET="${AGENTHUB_WORKDIR:-/workspace}"
-  [ -d "$TARGET" ] || TARGET="/workspace"
-  cp "$AGENTHUB_MCP_CONFIG" "$TARGET/.mcp.json"
-  chmod 600 "$TARGET/.mcp.json"
-fi
+# AGENTHUB_MCP_CONFIG stays outside the workspace on purpose. This used to be copied to
+# $AGENTHUB_WORKDIR/.mcp.json, which with a single repository is the clone itself — an
+# untracked file in a tree the agent is about to commit. It did not even work: measured
+# against Claude Code 2.1.283, a project .mcp.json server reports "⏸ Pending approval
+# (run `claude` to approve)" and is never connected to, so an unattended session got
+# nothing from it. Codex and Cursor ignore the file outright — each reads its own config,
+# which its entrypoint writes under $HOME (verified with `codex mcp list` and
+# `cursor-agent mcp list`, the latter naming its locations in the error itself).
+# Claude's central equivalent is written by claude/mcp-config.mjs.

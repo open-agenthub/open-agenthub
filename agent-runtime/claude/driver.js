@@ -80,18 +80,25 @@ function buildCommand(env, allowResume) {
   const mode = (env.AGENTHUB_MODE || 'interactive').toLowerCase();
   const uiMode = (env.AGENTHUB_UI_MODE || 'terminal').toLowerCase();
   const prompt = env.AGENTHUB_PROMPT || '';
+  const systemPrompt = env.AGENTHUB_SYSTEM_PROMPT || '';
   const sessionId = env.AGENTHUB_CLAUDE_SESSION_ID || '';
   const args = [];
 
   if (env.AGENTHUB_MCP_CONFIG) args.push('--mcp-config', env.AGENTHUB_MCP_CONFIG);
   else if (env.AGENTHUB_HAS_MCP === '1') args.push('--mcp-config', '/secrets/mcp/mcp.json');
 
-  if (allowResume && env.AGENTHUB_RESUME === '1' && sessionId &&
-      env.AGENTHUB_STATE_RESTORED === '1') {
+  const resuming = allowResume && env.AGENTHUB_RESUME === '1' && sessionId &&
+    env.AGENTHUB_STATE_RESTORED === '1';
+  if (resuming) {
     args.push('--resume', sessionId);
   } else if (sessionId) {
     args.push('--session-id', sessionId);
   }
+
+  // --append-system-prompt, not --system-prompt: the latter *replaces* Claude Code's own system
+  // prompt, taking its tool and environment instructions with it, so a caller adding one line of
+  // persona would silently disable the agent.
+  if (systemPrompt) args.push('--append-system-prompt', systemPrompt);
 
   if (mode === 'interactive' && uiMode === 'chat') {
     // Print mode with streaming JSON on both ends keeps the process alive for
@@ -105,7 +112,18 @@ function buildCommand(env, allowResume) {
     args.push('-p', prompt, '--permission-mode', 'acceptEdits');
     const allowed = nativeAllowedTools(env);
     if (allowed.length) args.push('--allowedTools', allowed.join(','));
+    return { cmd: 'claude', args };
   }
+
+  // A trailing positional argument is the initial prompt of an *interactive* session: the CLI
+  // submits it at startup and then keeps the live REPL, so the session is already working when a
+  // person opens its terminal. Verified against 2.1.283 — the request goes out with no keystroke
+  // and the input box stays there afterwards. Using -p instead would answer once and exit, and
+  // there would be nothing left to take over.
+  //
+  // Never on a resume: the conversation already holds the task, and re-submitting it would make
+  // a resumed session start its work from the top.
+  if (prompt && !resuming) args.push(prompt);
 
   return { cmd: 'claude', args };
 }

@@ -6,7 +6,8 @@ import { docsUrl } from '../lib/docs.js'
 const emit = defineEmits(['close', 'accounts'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
 const c = ref({
-  sshPrivateKey: '', gitlabToken: '', anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '',
+  sshPrivateKey: '', gitlabToken: '', gitlabHost: '', githubToken: '', githubHost: '',
+  anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
 })
 // Which fields already have a stored value (values are never sent back).
@@ -74,12 +75,12 @@ async function save() {
         <textarea v-model="c.sshPrivateKey" :placeholder="placeholderFor('sshPrivateKey', '-----BEGIN OPENSSH PRIVATE KEY-----')"></textarea>
       </div>
       <div class="field">
-        <label>known_hosts entry (GitLab host)
+        <label>known_hosts entry (git host)
           <button v-if="stored.gitKnownHosts" type="button" class="chip" :class="{ del: clear.has('gitKnownHosts') }"
             data-clear="gitKnownHosts" :aria-label="clear.has('gitKnownHosts') ? 'Keep stored known_hosts entry' : 'Remove stored known_hosts entry'"
             @click="toggleClear('gitKnownHosts')">{{ clear.has('gitKnownHosts') ? 'remove ✕' : 'stored ✓ — click to remove' }}</button>
         </label>
-        <textarea v-model="c.gitKnownHosts" :placeholder="placeholderFor('gitKnownHosts', 'gitlab.example.com ssh-ed25519 AAAA…')"></textarea>
+        <textarea v-model="c.gitKnownHosts" :placeholder="placeholderFor('gitKnownHosts', 'git.example.com ssh-ed25519 AAAA…')"></textarea>
       </div>
       <div class="field">
         <label>GitLab token (for HTTPS remotes, optional)
@@ -88,6 +89,23 @@ async function save() {
             @click="toggleClear('gitlabToken')">{{ clear.has('gitlabToken') ? 'remove ✕' : 'stored ✓ — click to remove' }}</button>
         </label>
         <input v-model="c.gitlabToken" type="password" :placeholder="placeholderFor('gitlabToken', 'glpat-…')" />
+        <input v-model="c.gitlabHost" data-credential="gitlabHost" type="text"
+          :placeholder="placeholderFor('gitlabHost', 'gitlab.com (host this token is for)')" />
+        <small data-credential-hint="gitlabHost">The token is only ever sent to this host. Write-only.</small>
+      </div>
+      <div class="field">
+        <label>GitHub token (for HTTPS remotes, optional)
+          <button v-if="stored.githubToken" type="button" class="chip" :class="{ del: clear.has('githubToken') }"
+            data-clear="githubToken" :aria-label="clear.has('githubToken') ? 'Keep stored GitHub token' : 'Remove stored GitHub token'"
+            @click="toggleClear('githubToken')">{{ clear.has('githubToken') ? 'remove ✕' : 'stored ✓ — click to remove' }}</button>
+        </label>
+        <input v-model="c.githubToken" data-credential="githubToken" type="password" autocomplete="off"
+          :placeholder="placeholderFor('githubToken', 'ghp_…')" />
+        <input v-model="c.githubHost" data-credential="githubHost" type="text"
+          :placeholder="placeholderFor('githubHost', 'github.com (host this token is for)')" />
+        <small data-credential-hint="githubToken">Only needed when no GitHub provider is connected — a
+          connected provider is refreshed automatically and scoped to the repositories you pick. The
+          token is only ever sent to the host named above, and also authorizes the gh CLI.</small>
       </div>
       <div class="field">
         <label>Anthropic API key

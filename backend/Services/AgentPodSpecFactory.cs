@@ -126,7 +126,9 @@ public static class AgentPodSpecFactory
         {
             ProjectCredential("ssh_key"),
             ProjectCredential("known_hosts"),
-            ProjectCredential("gitlab_token"),
+            // No gitlab_token/github_token here on purpose. A PAT now reaches the pod only as a
+            // host-bound line in the gitcreds store, so the raw token never lands in a file the
+            // session can read and offer to an arbitrary host.
             ProjectCredential("git_user_name"),
             ProjectCredential("git_user_email")
         };
@@ -172,6 +174,7 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_NETWORK_MCP_ENABLED", Value = context.Runtime.NetworkMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_RESUME", Value = string.IsNullOrEmpty(context.StateGetUrl) ? "0" : "1" },
             new() { Name = "AGENTHUB_PROMPT", Value = request.Prompt ?? "" },
+            new() { Name = "AGENTHUB_SYSTEM_PROMPT", Value = request.SystemPrompt ?? "" },
             new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedTools) },
             new() { Name = "AGENTHUB_ALLOWED_MCP_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedMcpTools) },
             new() { Name = "AGENTHUB_ALLOWED_COMMANDS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedCommands) },
@@ -392,18 +395,16 @@ public static class AgentPodSpecFactory
                   cp /secrets/creds/ssh_key /tmp/id && chmod 600 /tmp/id
                   export GIT_SSH_COMMAND="ssh -i /tmp/id -o IdentitiesOnly=yes -o UserKnownHostsFile=/secrets/creds/known_hosts -o StrictHostKeyChecking=yes"
                 fi
-                # HTTPS remotes: connected-provider OAuth tokens (credential store) win;
-                # otherwise fall back to a manually stored GitLab PAT. Copy the store to a
-                # writable path — the secret mount is read-only, so git's credential store
-                # cannot take its lock there. $HOME is shared with the agent container, so
-                # rebuild the helper list idempotently (unset first).
+                # HTTPS remotes: one credential store holds both connected-provider OAuth tokens
+                # and manually stored PATs, each entry bound to its own host. There is deliberately
+                # no second, host-less credential helper — the one that used to serve a stored
+                # GitLab PAT answered for any host that returned 401. Copy the store to a writable
+                # path: the secret mount is read-only, so git cannot take its lock there. $HOME is
+                # shared with the agent container, so rebuild the helper list idempotently.
                 git config --global --unset-all credential.helper 2>/dev/null || true
                 if [ -f /secrets/gitcreds/credentials ]; then
                   cp /secrets/gitcreds/credentials "$HOME/.git-credentials" && chmod 600 "$HOME/.git-credentials"
                   git config --global credential.helper store
-                fi
-                if [ -f /secrets/creds/gitlab_token ]; then
-                  git config --global --add credential.helper '!f() { echo "username=oauth2"; echo "password=$(cat /secrets/creds/gitlab_token)"; }; f'
                 fi
                 TAB=$(printf '\t')
                 printf '%s\n' "$REPOS" | while IFS="$TAB" read -r dest branch url; do

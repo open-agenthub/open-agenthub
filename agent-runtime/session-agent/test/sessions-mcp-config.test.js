@@ -42,7 +42,8 @@ test('runtime wiring owns the sessions server for Claude, Codex, and Cursor', ()
   const server = fs.readFileSync(path.join(runtime, 'sessions', 'server.mjs'), 'utf8');
 
   assert.match(common, /AGENTHUB_SPAWN_MCP_ENABLED/);
-  assert.match(common, /sessions\/configure\.mjs/);
+  // Guarded on module presence, so a runtime whose image lacks it skips instead of aborting.
+  assert.match(common, /merge_builtin_mcp sessions configure\.mjs/);
   assert.ok(codex.indexOf('/secrets/mcp/mcp.json') < codex.indexOf('--builtin'));
   assert.match(codex, /agenthub_sessions >> "\$CODEX_HOME\/config\.toml"|agenthub_sessions/);
   assert.match(require('../../codex/mcp-config').builtinToml(

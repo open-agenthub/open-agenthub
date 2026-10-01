@@ -20,3 +20,12 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   assert.match(server, /mode:\s*body\.mode\s*\?\?\s*'Autonomous'|mode:\s*z\.[\s\S]*?\.default\('Autonomous'\)/);
   assert.match(server, /sanitizeSession/);
 });
+
+test('agenthub MCP exposes transcript polling and the caller system prompt', () => {
+  const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
+  assert.match(server, /register\('session_transcript'/);
+  // The page is not a session record; sanitizeSession's allowlist would strip all of it.
+  assert.doesNotMatch(server, /sanitizeSession\(await client\.transcript/);
+  assert.match(server, /offset: z\.number\(\)\.int\(\)\.min\(0\)\.optional\(\)/);
+  assert.match(server, /systemPrompt: z\.string\(\)\.max\(20_000\)\.optional\(\)/);
+});

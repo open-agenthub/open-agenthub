@@ -14,7 +14,15 @@ if [ -f /secrets/claude/credentials.json ]; then
   chmod 600 "$HOME/.claude/.credentials.json"
   echo "[entrypoint] Claude login restored from secret."
 fi
-[ -f "$HOME/.claude.json" ] || printf '{"hasCompletedOnboarding": true}\n' > "$HOME/.claude.json"
+CLAUDE_WORKDIR="${AGENTHUB_WORKDIR:-/workspace}"
+[ -d "$CLAUDE_WORKDIR" ] || CLAUDE_WORKDIR="/workspace"
+node "$RUNTIME/claude/workspace-trust.mjs" "$HOME/.claude.json" "$CLAUDE_WORKDIR"
+
+# The session's MCP servers in Claude's user scope — central, outside the workspace, and usable
+# from any directory. Runs after workspace-trust, which writes the same file. The agent itself is
+# still launched with --mcp-config; this is what anything else running `claude` in the session sees,
+# and unlike a project .mcp.json it needs no interactive approval.
+node "$RUNTIME/claude/mcp-config.mjs" "$HOME/.claude.json" "${AGENTHUB_MCP_CONFIG:-}"
 
 if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
   (

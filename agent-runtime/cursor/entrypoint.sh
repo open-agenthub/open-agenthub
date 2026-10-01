@@ -111,6 +111,13 @@ process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.
   ;;
 esac
 
+# Cursor reads standing instructions only from the workspace, so the caller's system prompt has to
+# be a rule file there. Runs after the common entrypoint has cloned the repositories, otherwise the
+# rule would be written into a directory the clone then replaces.
+CURSOR_WORKDIR="${AGENTHUB_WORKDIR:-/workspace}"
+[ -d "$CURSOR_WORKDIR" ] || CURSOR_WORKDIR="/workspace"
+node "$RUNTIME/cursor/session-prompt.mjs" "$CURSOR_WORKDIR"
+
 export AGENTHUB_DRIVER="$RUNTIME/cursor/driver.js"
 echo "[entrypoint] Starting session-agent (mode=${AGENTHUB_MODE:-interactive}, resume=${AGENTHUB_RESUME:-0}, runtime=$RUNTIME)"
 exec node "$RUNTIME/common/server.js"

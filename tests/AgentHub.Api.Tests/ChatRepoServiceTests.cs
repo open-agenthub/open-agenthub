@@ -25,6 +25,14 @@ public class ChatRepoServiceTests
                 all.Where(p => q.Length == 0 || p.FullName.Contains(q, StringComparison.OrdinalIgnoreCase)).ToList());
         }
 
+        // Answered from the same Providers list the real service reads its configuration from,
+        // rather than returning true: a fake that accepts every provider id would hide exactly
+        // the silent-skip this validation exists to catch.
+        public bool IsConfigured(string providerId) => Providers.Any(p => p.Id == providerId);
+
+        public Task<bool> IsConnectedAsync(string owner, string providerId, CancellationToken ct = default)
+            => Task.FromResult(Providers.Any(p => p.Id == providerId && p.Connected));
+
         public string CreateAuthorizeUrl(string providerId, string owner, string redirectUri) => throw new NotSupportedException();
         public Task<string?> HandleCallbackAsync(string providerId, string code, string state, string redirectUri, CancellationToken ct = default) => throw new NotSupportedException();
         public Task DisconnectAsync(string owner, string providerId, CancellationToken ct = default) => throw new NotSupportedException();

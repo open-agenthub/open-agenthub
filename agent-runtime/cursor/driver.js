@@ -28,7 +28,16 @@ function buildCommand(env, allowResume) {
     env.AGENTHUB_STATE_RESTORED === '1' && chatId;
 
   if (mode === 'interactive') {
-    const args = restoredResume ? ['--resume', chatId] : [];
+    // --trust first, and before the positional: `[prompt...]` is variadic and swallows every
+    // remaining argument. Without it the TUI stops on its workspace-trust question, so a session
+    // created with a task would sit on a dialog instead of working — the non-interactive branch
+    // below has passed it for the same reason since it was written.
+    const args = ['--trust'];
+    if (restoredResume) args.push('--resume', chatId);
+    // `agent [options] [prompt...]` — the CLI documents the positional as the agent's initial
+    // prompt and stays interactive with it, so a session created by an API arrives with its task
+    // under way. Not on a resume, where the chat already holds it.
+    if (prompt && !restoredResume) args.push(prompt);
     // Subscription login must run in the session PTY, then exec into the TUI
     // (entrypoint only sets the flag; mirrors Codex device-login.sh).
     if (env.AGENTHUB_CURSOR_LOGIN === '1') {
@@ -47,11 +56,11 @@ function buildCommand(env, allowResume) {
 function isResumeCommand(command) {
   if (!command || !Array.isArray(command.args)) return false;
   const args = command.args;
-  if (command.cmd === 'bash') {
-    return args.length === 3 && args[0] === path.join(__dirname, 'login.sh') &&
-      args[1] === '--resume' && typeof args[2] === 'string' && args[2].length > 0;
-  }
-  if (command.cmd !== 'agent') return false;
+  // Both forms are matched by looking for --resume and its value rather than by argument count:
+  // the interactive command now also carries --trust and may carry an initial prompt, and a
+  // position-counting check would call a resumed session fresh and silently restart its work.
+  if (command.cmd !== 'bash' && command.cmd !== 'agent') return false;
+  if (command.cmd === 'bash' && args[0] !== path.join(__dirname, 'login.sh')) return false;
   const index = args.indexOf('--resume');
   return index >= 0 && typeof args[index + 1] === 'string' &&
     args[index + 1].length > 0;
