@@ -52,6 +52,36 @@ describe('FilesPane', () => {
     expect(wrapper.emitted('uploaded')?.length).toBeGreaterThan(0)
   })
 
+  it('keeps a finished upload when the pane goes away', async () => {
+    mocks.api.reserveSessionFile.mockResolvedValue({
+      file: { id: 'f-new' }, upload: { kind: 'proxy', url: '/upload' }
+    })
+    mocks.api.uploadSessionFile.mockResolvedValue({})
+    mocks.api.completeSessionFile.mockResolvedValue({
+      id: 'f-new', name: 'notes.txt', mimeType: 'text/plain', size: 4
+    })
+
+    mocks.api.deleteSessionFile.mockClear()
+
+    const wrapper = mount(FilesPane, {
+      props: { sessionId: 's1', files: [], capabilities: {}, canWrite: true },
+      global: { stubs: { FilePreview: true } }
+    })
+    const file = new File(['note'], 'notes.txt', { type: 'text/plain' })
+    await wrapper.get('[data-files-pane]').trigger('drop', { dataTransfer: { files: [file] } })
+    await flushPromises()
+
+    // Once the listing carries the file the upload row hands over to it, so the pane shows the
+    // file once and the queue no longer holds something it does not own.
+    await wrapper.setProps({ files: [{ id: 'f-new', name: 'notes.txt', mimeType: 'text/plain', size: 4 }] })
+    await flushPromises()
+    expect(wrapper.find('[data-files-uploads]').exists()).toBe(false)
+
+    wrapper.unmount()
+    await flushPromises()
+    expect(mocks.api.deleteSessionFile).not.toHaveBeenCalled()
+  })
+
   it('offers no upload affordance in a shared read-only view', () => {
     const wrapper = mount(FilesPane, {
       props: { sessionId: 's1', files: [], capabilities: {}, canWrite: false, sharedToken: 'tok' },

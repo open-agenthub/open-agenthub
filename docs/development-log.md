@@ -9,6 +9,36 @@ when the fake in the test is more forgiving than production.
 
 ---
 
+## 2026-10-01 — The upload queue deleted the files it had just uploaded
+
+Reported as "uploaded files are not remembered; after a session restart they are gone". The listing
+was right and object storage was fine — the rows really were `Deleted`, and the `DELETE` came from
+the browser.
+
+`createAttachmentQueue` has one teardown path, `cancelAll()`, and it called `remove()` on every
+row. For a row still uploading that is correct: it owns a reservation nobody else will clean up.
+For a finished row it deleted a completed session file. `cancelAll()` runs on unmount and on a
+session change, and in the Files pane closing the pane clears `filesOpen`/`selectedId`, which makes
+`companionVisible` false and unmounts the whole workspace shell — so uploading a file and then
+closing the pane destroyed it. `clearReady()` had the distinction right all along; the teardown
+path did not.
+
+A second defect sat in the same four lines: `cancelAll()` mapped over the live `items` array while
+`remove()` spliced from it, so every second row was skipped and its reservation never cancelled.
+
+**Why the suite missed it:** the existing test removed a *ready* item and asserted the delete — the
+behaviour was pinned as intended, because nothing distinguished "the user withdrew this attachment"
+from "the component went away". Tests now cover both meanings, including the full chain through
+`SessionWorkspace`.
+
+**Diagnosis note:** three plausible server-side theories (storage kind falling back to pod-backed
+because of a Helm key mismatch, the pause-time pod-file expiry, a stale `expires_at`) were all
+wrong, and one `SELECT` settled it. Every row was `S3`; one was `Ready` with an `expires_at` a day
+in the past and untouched; one was `Deleted` while its session was still running. Read the rows
+before theorising about the code that writes them.
+
+---
+
 ## 2026-09-30 — File reads: four bugs stacked in one path
 
 A user uploaded a PDF, the agent said `file_not_found`, and the first three "fixes" were each

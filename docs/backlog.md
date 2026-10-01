@@ -40,8 +40,14 @@ session created with a task sits idle until somebody types. Needed:
 ## Waiting on the owner
 
 - **Functional acceptance of the file path** — upload, preview, and an agent read through the UI.
-  Six bugs in this path were each "fixed" before being confirmed; the last one was found by a user
-  report, not by the suite.
+  Seven bugs in this path were each "fixed" before being confirmed; the last two were found by
+  user reports, not by the suite.
+- **A session file has no delete affordance.** The listing in the Files pane offers no way to
+  remove a file; the only delete the UI ever issued was the upload queue's teardown, which is the
+  bug fixed on 2026-10-01. If files are meant to be deletable, that belongs on a listed row.
+  Related: `SessionFileService.DeleteAsync` accepts any state, so "cancel my half-finished
+  reservation" and "destroy a completed file" are the same request — worth splitting if the
+  affordance arrives.
 - **`v0.10.0`** — 54+ commits since `v0.9.0`, CI green. Cut it once acceptance passes.
 - **Node 22 → 26** — evaluated, recommendation is HOLD. Note
   `.github/workflows/test.yml` still pins `node-version: 22` in two places; the Dependabot PRs do
