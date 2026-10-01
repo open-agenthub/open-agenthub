@@ -6,20 +6,6 @@ matters. Newest first within each section. Delete an item when it ships; move th
 
 ## In flight
 
-### Files: hand the model a path, not the contents
-**PR #34 needs revising.** It currently returns a PDF as an embedded base64 resource, which fills
-the model's context with something it should be reading selectively.
-
-Wanted instead:
-- `read_file` materialises the file into the pod's managed directory and returns the **path**, so
-  the agent can grep it, read ranges, and use PDF tooling. `LocalFileStore`
-  (`agent-runtime/files/local-store.js`) and `AttachmentMaterializer` already do exactly this for
-  message attachments — reuse them rather than writing a second downloader.
-- Inline content stays only where it is small *and* directly useful: images, short text.
-- Bytes travel through the API (`GET internal/sessions/{id}/files/{fileId}/content`), never from
-  the presigned url, which expires after `PresignMinutes` and stranded reads that happened later
-  than the listing.
-
 ### Files shared across a project's sessions
 Today a file belongs to one session: `SessionFileKey` is
 `sessions/{owner}/{sessionId}/files/{fileId}/{name}` and every lookup is session-scoped. Sharing
@@ -41,7 +27,11 @@ session created with a task sits idle until somebody types. Needed:
 
 - **Functional acceptance of the file path** — upload, preview, and an agent read through the UI.
   Six bugs in this path were each "fixed" before being confirmed; the last one was found by a user
-  report, not by the suite.
+  report, not by the suite. What to check now that `read_file` returns a path: ask a session to copy
+  an uploaded PDF into its working directory and grep it, and confirm it reports a `localPath` under
+  `/workspace/.agenthub/files` rather than only a name. Worth checking with object storage both
+  reachable and unreachable from the pod — the two cases diverged in the backend until the agent
+  content route stopped redirecting.
 - **`v0.10.0`** — 54+ commits since `v0.9.0`, CI green. Cut it once acceptance passes.
 - **Node 22 → 26** — evaluated, recommendation is HOLD. Note
   `.github/workflows/test.yml` still pins `node-version: 22` in two places; the Dependabot PRs do

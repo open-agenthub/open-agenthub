@@ -51,7 +51,7 @@ public sealed class SessionFilePreviewWorker(
     private async Task<Stream> OpenSourceAsync(
         SessionFileActor actor, SessionFileRecord source, CancellationToken ct)
     {
-        var opened = await files.OpenContentAsync(actor, source.Id, ct);
+        var opened = await files.OpenContentAsync(actor, source.Id, ct: ct);
         if (opened.Content is not null) return opened.Content;
         if (opened.RedirectUrl is null) throw new SessionFileException("file_content_expired");
         var response = await httpFactory.CreateClient("session-file-storage")

@@ -9,6 +9,37 @@ when the fake in the test is more forgiving than production.
 
 ---
 
+## 2026-10-01 — The agent content route redirected the pod to object storage
+
+The route added so a pod with no path to object storage could still read its files answered a
+**redirect** to a presigned url whenever `CanServeBrowsersDirectly` was set — the one configuration
+where it mattered. Two reasons that is wrong, neither visible in a test:
+
+- The pod's `fetch` follows redirects, so it looked like it worked wherever storage happened to be
+  reachable from the pod. Where it was not, the route failed for the exact case it was built for.
+- A followed redirect carries custom headers, so `X-Agent-Token` — the session's callback token —
+  went to the storage host.
+
+`OpenContentAsync` now takes `allowRedirect`; the agent route passes `false` and always streams.
+The browser route still redirects, which is the point of having it.
+
+**Why it was hard to see:** the route had no test at all. The fake in `InternalSessionFilesTests`
+threw `NotSupportedException` for `OpenContentAsync`, so every test passed without ever calling it.
+A fake that throws is not coverage — it hides the absence of it.
+
+**Also found, same path:** `safeError`'s allowlist in `agent-runtime/files/server.mjs` is what
+decides whether a code reaches the agent intact. `file_too_large` was missing, so the one condition
+worth retrying arrived as `files_operation_failed`. Any new throw needs an entry there, or it
+degrades silently.
+
+And `read_file` refused a file for being large — `file_text_too_large`, with no path — while the
+comment three lines below claimed large text was reported by path. The bytes are on disk by then,
+so there was nothing to gain by failing. Over-limit and undecodable files now return the path, and
+every reply carries `localPath` alongside any inline content: without it the agent can look at an
+image but cannot put it in its working directory, which is usually what it was asked to do.
+
+---
+
 ## 2026-09-30 — File reads: four bugs stacked in one path
 
 A user uploaded a PDF, the agent said `file_not_found`, and the first three "fixes" were each

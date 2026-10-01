@@ -227,6 +227,31 @@ public sealed class SessionFileServiceTests
     }
 
     [Fact]
+    public async Task S3_read_for_the_agent_streams_even_when_a_browser_could_be_redirected()
+    {
+        // The agent route must never be answered with a redirect. A session pod may have no route
+        // to the browser-facing storage host, and its fetch follows redirects carrying
+        // X-Agent-Token — which would hand the session's callback token to that host.
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        harness.Artifacts.CanServeBrowsersDirectly = true;
+        var file = Reserved("f1", SessionFileStorageKind.S3) with
+        {
+            State = SessionFileState.Ready,
+            DetectedMimeType = "image/png",
+        };
+        await harness.Registry.InsertAsync(file);
+        harness.Artifacts.Objects[file.StorageLocator] = [4, 2];
+
+        var opened = await harness.Service.OpenContentAsync(Actor, "f1", allowRedirect: false);
+
+        Assert.Null(opened.RedirectUrl);
+        Assert.NotNull(opened.Content);
+        using var buffer = new MemoryStream();
+        await opened.Content!.CopyToAsync(buffer);
+        Assert.Equal([4, 2], buffer.ToArray());
+    }
+
+    [Fact]
     public async Task S3_read_streams_through_the_api_when_storage_is_internal_only()
     {
         var harness = Harness(s3Configured: true, podPhase: "Paused");

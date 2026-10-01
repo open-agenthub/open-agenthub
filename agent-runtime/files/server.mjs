@@ -139,43 +139,63 @@ export function createFilesToolHandlers(options = {}) {
     return ready.path;
   }
 
-  async function readBytes(file, maxBytes) {
-    const localPath = await localise(file);
-    const stat = await fs.promises.stat(localPath);
-    if (stat.size > maxBytes) throw new Error('file_too_large');
-    return fs.promises.readFile(localPath);
+  /**
+   * Returns the inline block for a file small enough to be worth putting in the reply, or null.
+   *
+   * Null is a routing decision, not a failure: the caller already holds a path, so a file that is
+   * too large or not decodable is reported by path instead of refused. Returning an error here is
+   * what made a 2 MB Markdown file unreadable — `file_text_too_large` with no path, for a file the
+   * agent could have grepped.
+   */
+  async function inlineContent(file, localPath) {
+    const { size } = await fs.promises.stat(localPath);
+    if (IMAGE.has(file.mimeType)) {
+      // Images get their own ceiling: they are returned base64-encoded rather than as text, so
+      // the text limit has nothing to do with them.
+      if (size > maxImageBytes) return null;
+      const data = await fs.promises.readFile(localPath);
+      return { type: 'image', data: data.toString('base64'), mimeType: file.mimeType };
+    }
+    if (!TEXT.has(file.mimeType) || size > maxTextBytes) return null;
+    const data = await fs.promises.readFile(localPath);
+    try {
+      return { type: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(data) };
+    } catch {
+      // A .txt whose bytes are not valid UTF-8 used to fail the whole call with an opaque code.
+      // The path is still good, so hand that over and let the agent choose an encoding.
+      return null;
+    }
   }
 
   const handlers = {
     list_display_capabilities: async () => metadata(await client.capabilities()),
-    list_files: async () => metadata({ files: await client.list() }),
+    // The listing is metadata only, and a file id on its own does not tell the agent how to get
+    // the bytes. One hint for the whole listing rather than a field per entry: a per-file url
+    // would be both repetitive and unusable, since the agent must not hold the callback token.
+    list_files: async () => metadata({
+      files: await client.list(),
+      hint: 'Call read_file with a fileId to put that file on this pod\'s disk and get its path.'
+    }),
     read_file: async ({ fileId }) => {
       const [file] = await client.materialize([fileId]);
       if (!file) throw new Error('file_not_found');
-      if (IMAGE.has(file.mimeType)) {
-        // Images get their own ceiling: they are returned base64-encoded rather than as text, so
-        // the text limit has nothing to do with them.
-        const data = await readBytes(file, maxImageBytes);
-        return { content: [{ type: 'image', data: data.toString('base64'), mimeType: file.mimeType }] };
-      }
-      if (TEXT.has(file.mimeType)) {
-        if (file.size > maxTextBytes) throw new Error('file_text_too_large');
-        const data = await readBytes(file, maxTextBytes);
-        if (data.length > maxTextBytes) throw new Error('file_text_too_large');
-        return { content: [{ type: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(data) }] };
-      }
-      // Everything else — a PDF, an Office document, a large text file — is put on disk and
-      // reported by path. Returning the bytes would fill the model's context with something it
-      // should be reading selectively: with a path it can grep, read a range, or hand the file to
-      // a tool. Previously these answered readable:false with no path at all, which left a file
-      // the user had just uploaded unusable.
+      // Every file is put on disk and reported by path, including the ones whose contents also
+      // come back inline. The bytes are already being written on their way through, so the path
+      // costs nothing — and without it the agent cannot copy an image or a Markdown file into its
+      // working directory, which is the whole reason it asked.
       const localPath = await localise(file);
-      return metadata({
+      const descriptor = {
         file: { id: file.id, name: file.name, mimeType: file.mimeType, size: file.size },
         localPath,
         readable: true,
-        hint: 'The file is on disk at localPath — read or search it with your own file tools.'
-      });
+        hint: 'The file is on disk at localPath — read, search, or copy it with your own file tools.'
+      };
+      // Returning a large document's bytes would fill the model's context with something it should
+      // be reading selectively; with a path it can grep it, read a range, or hand it to a tool.
+      const inline = await inlineContent(file, localPath);
+      return inline
+        ? { content: [inline, { type: 'text', text: JSON.stringify(descriptor) }], structuredContent: descriptor }
+        : metadata(descriptor);
     },
     upload_file: async input => metadata(await uploadPath(input)),
     present_file: async input => {
@@ -192,8 +212,14 @@ export function createFilesServer(options = {}) {
   const { handlers, schemas } = createFilesToolHandlers(options);
   const descriptions = {
     list_display_capabilities: 'Report which file types and previews can be displayed.',
-    list_files: 'List ready files in this session.',
-    read_file: 'Read an image or bounded text file, or return safe document metadata.',
+    list_files: 'List ready files in this session: id, name, type and size. Use read_file to get the bytes.',
+    // The description is what the model reads to decide whether to call the tool, so it has to say
+    // that a path comes back — otherwise a model wanting a file on disk looks for another way and
+    // concludes there is none. Only the input schema is cached by a connected client, so changing
+    // the wording here takes effect for the next session without the stale-schema problem that
+    // adding a parameter would hit (docs/development-log.md, 2026-09-29).
+    read_file: 'Fetch a session file onto this pod\'s disk and return its path, so you can read, '
+      + 'search or copy it. Small images and text files also come back inline.',
     upload_file: 'Upload a file from the workspace or managed output directory.',
     present_file: 'Present an existing session file or upload and present a local file.',
     dismiss_presentation: 'Dismiss the shared file presentation.'
@@ -214,7 +240,11 @@ function safeError(error) {
   const message = error instanceof Error ? error.message : '';
   const stable = ['files_backend_not_configured', 'files_backend_invalid_url', 'files_backend_response_too_large',
     'files_backend_invalid_json', 'files_upload_descriptor_invalid', 'file_source_not_allowed', 'invalid_file_name',
-    'unsupported_file_type', 'file_not_found', 'file_text_too_large'];
+    // file_too_large is what LocalFileStore raises when a download runs past the size the record
+    // was completed with. Absent from this list it degraded to files_operation_failed, which tells
+    // the agent nothing it can act on. file_text_too_large is gone because read_file no longer
+    // refuses a file for being large — it reports the path instead.
+    'unsupported_file_type', 'file_not_found', 'file_too_large'];
   return stable.find(code => message.includes(code)) ?? (/files_backend_http_\d{3}/.exec(message)?.[0]) ?? 'files_operation_failed';
 }
 
