@@ -1,4 +1,7 @@
 const MAX_RESPONSE_BYTES = 64 * 1024;
+// A transcript page is sized by the caller (maxChars, up to 1M characters); UTF-8 needs headroom
+// above that before the guard would reject a page that was asked for.
+const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
 
 export class AgentHubClient {
   constructor(env = process.env, fetchImpl = globalThis.fetch) {
@@ -23,6 +26,24 @@ export class AgentHubClient {
 
   get(id) {
     return this.#request('GET', `/api/remote/sessions/${encodeURIComponent(id)}`);
+  }
+
+  /**
+   * One page of a session's transcript. `offset` is the previous page's `nextOffset`, so a poller
+   * transfers only what is new instead of the whole transcript on every call.
+   *
+   * Allowed a larger response than the other calls: a transcript page is the one reply whose size
+   * the caller chooses, and the 64 KB ceiling meant for small JSON objects would reject a page the
+   * caller explicitly asked for.
+   */
+  transcript(id, { offset, maxChars } = {}) {
+    const query = new URLSearchParams();
+    if (offset !== undefined) query.set('offset', String(offset));
+    if (maxChars !== undefined) query.set('maxChars', String(maxChars));
+    const suffix = query.size === 0 ? '' : `?${query}`;
+    return this.#request(
+      'GET', `/api/remote/sessions/${encodeURIComponent(id)}/transcript${suffix}`,
+      undefined, MAX_TRANSCRIPT_BYTES);
   }
 
   async list(filters = {}) {
@@ -55,7 +76,7 @@ export class AgentHubClient {
     return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(sessionId)}/messages`, { body: message });
   }
 
-  async #request(method, path, body) {
+  async #request(method, path, body, maxBytes = MAX_RESPONSE_BYTES) {
     const headers = {
       Authorization: `Bearer ${this.token}`,
       Accept: 'application/json'
@@ -66,7 +87,7 @@ export class AgentHubClient {
       init.body = JSON.stringify(body);
     }
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, init);
-    const bytes = await readBounded(response, MAX_RESPONSE_BYTES);
+    const bytes = await readBounded(response, maxBytes);
     if (!response.ok) throw new Error(`agenthub_http_${response.status}`);
     if (response.status === 204 || bytes.length === 0) return null;
     try { return JSON.parse(new TextDecoder().decode(bytes)); }

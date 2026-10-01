@@ -47,6 +47,42 @@ test('OpenClaw interactive starts local TUI without resume flags', () => {
   }), false), { cmd: 'openclaw', args: ['tui', '--local'] });
 });
 
+test('OpenClaw interactive session starts on its prompt, except when resuming', () => {
+  // `tui --message` submits the task once the TUI is up and keeps it live, so an API-created
+  // session is already working when a person opens it. `agent --message` would answer and exit,
+  // leaving nothing to take over.
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_PROMPT: 'triage the failing build'
+  }), true), {
+    cmd: 'openclaw', args: ['tui', '--local', '--message', 'triage the failing build']
+  });
+
+  // The restored session already holds the task; sending it again would restart the work.
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1',
+    AGENTHUB_CLAUDE_SESSION_ID: 'sess-1'
+  }), true), { cmd: 'openclaw', args: ['tui', '--local', '--session', 'sess-1'] });
+
+  // A resume that was asked for but has no restored state is a fresh start, so the prompt applies.
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '0',
+    AGENTHUB_CLAUDE_SESSION_ID: 'sess-1'
+  }), true).args, ['tui', '--local', '--message', 'triage the failing build']);
+
+  const loginSh = path.join(runtimeDir, 'openclaw', 'login.sh');
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_OPENCLAW_LOGIN: '1', AGENTHUB_PROMPT: 'triage the failing build'
+  }), true), {
+    cmd: 'bash', args: [loginSh, 'tui', '--local', '--message', 'triage the failing build']
+  });
+  // --message must not be mistaken for a resume: that would skip the fresh-start path entirely.
+  assert.equal(driver.isResumeCommand({
+    cmd: 'openclaw', args: ['tui', '--local', '--message', 'triage the failing build']
+  }), false);
+});
+
 test('OpenClaw subscription login runs inside the agent PTY before the interactive TUI', () => {
   const loginSh = path.join(runtimeDir, 'openclaw', 'login.sh');
   assert.deepEqual(driver.buildCommand(environment({

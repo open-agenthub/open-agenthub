@@ -14,7 +14,9 @@ if [ -f /secrets/claude/credentials.json ]; then
   chmod 600 "$HOME/.claude/.credentials.json"
   echo "[entrypoint] Claude login restored from secret."
 fi
-[ -f "$HOME/.claude.json" ] || printf '{"hasCompletedOnboarding": true}\n' > "$HOME/.claude.json"
+CLAUDE_WORKDIR="${AGENTHUB_WORKDIR:-/workspace}"
+[ -d "$CLAUDE_WORKDIR" ] || CLAUDE_WORKDIR="/workspace"
+node "$RUNTIME/claude/workspace-trust.mjs" "$HOME/.claude.json" "$CLAUDE_WORKDIR"
 
 if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
   (

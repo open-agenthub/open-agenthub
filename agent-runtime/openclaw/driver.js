@@ -40,6 +40,14 @@ function buildCommand(env, allowResume) {
   if (mode === 'interactive') {
     const args = ['tui', '--local'];
     if (restoredResume) args.push('--session', sid);
+    // `--message <text>` is documented as "Send an initial message after connecting": the TUI
+    // comes up and submits the task itself, so an API-created session is already working when a
+    // person opens its terminal. OpenClaw has no positional prompt on `tui`, unlike the other
+    // runtimes, and `agent --message` would answer once and exit with nothing to take over.
+    //
+    // Never on a resume: the restored session already holds the task, and sending it again would
+    // make the agent start its work from the top.
+    if (prompt && !restoredResume) args.push('--message', prompt);
     if (env.AGENTHUB_OPENCLAW_LOGIN === '1') {
       return { cmd: 'bash', args: [path.join(__dirname, 'login.sh'), ...args] };
     }

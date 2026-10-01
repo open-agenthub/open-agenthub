@@ -152,6 +152,27 @@ public static class SessionDescription
     }
 }
 
+/// <summary>
+/// Normalizes the optional extra system prompt (trimmed, empty → null, length-capped).
+///
+/// The cap is there because the value travels to the agent as a pod environment variable: a
+/// megabyte of instructions would not be rejected by validation but by the Kubernetes API when it
+/// refused the oversized pod spec, which surfaces as an opaque session that never starts.
+/// </summary>
+public static class SessionSystemPrompt
+{
+    public const int MaxLength = 20_000;
+
+    public static string? Normalize(string? systemPrompt)
+    {
+        var trimmed = systemPrompt?.Trim();
+        if (string.IsNullOrEmpty(trimmed)) return null;
+        if (trimmed.Length > MaxLength)
+            throw new ArgumentException($"The system prompt is limited to {MaxLength} characters.");
+        return trimmed;
+    }
+}
+
 /// <summary>A repository to check out into the session workspace.</summary>
 public record RepoRef
 {
@@ -183,8 +204,21 @@ public record CreateSessionRequest
     public string? RepoUrl { get; init; }
     public string? RepoBranch { get; init; }
 
-    /// <summary>Initial prompt – required for Autonomous/Scheduled.</summary>
+    /// <summary>Initial prompt – required for Autonomous/Scheduled. An Interactive session is
+    /// started on it too and then stays live, so a caller can create a session that is already
+    /// working and hand its URL to a person later.</summary>
     public string? Prompt { get; init; }
+
+    /// <summary>
+    /// Extra instructions appended to the agent's own system prompt — the caller's standing rules
+    /// for the session, as opposed to the task in <see cref="Prompt"/>.
+    ///
+    /// Appended, never substituted: every one of the four agent CLIs also offers a way to *replace*
+    /// its system prompt, and each of those takes the CLI's own tool and environment instructions
+    /// with it, so one line of persona would disable the agent. Each runtime reaches the appending
+    /// path differently — see the <c>session-prompt</c> module under the runtime in question.
+    /// </summary>
+    public string? SystemPrompt { get; init; }
 
     /// <summary>Optional personal project that owns the session grouping.</summary>
     public string? ProjectId { get; init; }
@@ -390,6 +424,18 @@ public record SessionInfo
     public string? PodIp { get; init; }
     public DateTime CreatedAt { get; init; }
     public string? Prompt { get; init; }
+    /// <summary>Extra system-prompt text this session runs with (null = none).</summary>
+    public string? SystemPrompt { get; init; }
+    /// <summary>
+    /// Where a person opens this session in the web app, e.g.
+    /// <c>https://agenthub.example.com/s/ab12cd</c> — what an API or MCP caller hands over when a
+    /// human is meant to take the session on.
+    ///
+    /// Null when <c>FrontendOrigin</c> is not configured. Deliberately not derived from the
+    /// request: the link is handed to a user, and a forwarded Host header would point them at
+    /// whatever host the forwarder claimed to be.
+    /// </summary>
+    public string? Url { get; init; }
     public IReadOnlyList<string> AllowedTools { get; init; } = Array.Empty<string>();
     public AgentKind Agent { get; init; } = AgentKind.Claude;
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Auto;

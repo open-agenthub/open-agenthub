@@ -23,6 +23,13 @@ fi
 node "$RUNTIME/codex/mcp-config.js" --builtin >> "$CODEX_HOME/config.toml"
 chmod 600 "$CODEX_HOME/config.toml"
 
+# Appends the project-trust table and writes the caller's system prompt, after config.toml is
+# complete so the MCP tables above survive. Without pre-accepted trust the interactive TUI stops
+# on its folder-trust question and a session created with a task never starts it.
+CODEX_WORKDIR="${AGENTHUB_WORKDIR:-/workspace}"
+[ -d "$CODEX_WORKDIR" ] || CODEX_WORKDIR="/workspace"
+node "$RUNTIME/codex/session-prompt.mjs" "$CODEX_HOME" "$CODEX_HOME/config.toml" "$CODEX_WORKDIR"
+
 # State restore always precedes authentication, and archived credentials are never trusted.
 rm -f "$CODEX_HOME/auth.json"
 case "${AGENTHUB_AUTH_MODE:-}" in

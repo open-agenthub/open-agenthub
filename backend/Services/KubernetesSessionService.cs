@@ -47,6 +47,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly bool _spawnMcpEnabled;
     private readonly bool _networkMcpEnabled;
     private readonly int _maxRunningSessionsPerOwner;
+    private readonly string? _frontendOrigin;
 
     private const string OwnerLabel = "agenthub.dev/owner";
     private const string SessionLabel = "agenthub.dev/session";
@@ -89,6 +90,9 @@ public sealed class KubernetesSessionService : ISessionService
         _networkMcpEnabled = cfg.GetValue("Network:Enabled", true);
         _maxRunningSessionsPerOwner = SessionSoftLimit.NormalizeMax(
             cfg.GetValue("AgentHub:MaxRunningSessionsPerOwner", SessionSoftLimit.DefaultMax));
+        // Origin of the session link returned to an API or MCP caller. See SessionUrl for why this
+        // and not the request host.
+        _frontendOrigin = cfg["FrontendOrigin"];
 
         var config = KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
@@ -184,6 +188,7 @@ public sealed class KubernetesSessionService : ISessionService
             Schedule = req.Schedule, McpConfigJson = mcp,
             McpServerIdsJson = mcpServerIds.Count == 0 ? null : JsonSerializer.Serialize(mcpServerIds),
             ProjectId = req.ProjectId, ParentSessionId = req.ParentSessionId, Prompt = req.Prompt,
+            SystemPrompt = SessionSystemPrompt.Normalize(req.SystemPrompt),
             Agent = req.Agent, AuthMode = req.AuthMode,
             OpenClawApiKeySource = req.Agent == AgentKind.OpenClaw && req.AuthMode == AgentAuthMode.ApiKey
                 ? req.OpenClawApiKeySource
@@ -472,7 +477,7 @@ public sealed class KubernetesSessionService : ISessionService
             Title = rec.Title, Description = rec.Description, Mode = rec.Mode, UiMode = rec.UiMode,
             Repos = ParseRepos(rec), McpConfigJson = rec.McpConfigJson,
             McpServerIds = ParseMcpServerIds(rec),
-            ProjectId = rec.ProjectId, Prompt = rec.Prompt,
+            ProjectId = rec.ProjectId, Prompt = rec.Prompt, SystemPrompt = rec.SystemPrompt,
             Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
             Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
@@ -941,9 +946,10 @@ public sealed class KubernetesSessionService : ISessionService
         SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, CancellationToken ct = default) =>
         ToInfo(r, phase, podIp, browser, await SessionHasEphemeralMcpAsync(r.Id, ct));
 
-    private static SessionInfo ToInfo(
+    private SessionInfo ToInfo(
         SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, bool hasEphemeralMcp = false) => new()
     {
+        Url = SessionUrl.For(_frontendOrigin, r.Id), SystemPrompt = r.SystemPrompt,
         Id = r.Id, Title = r.Title, Description = r.Description, Owner = r.Owner,
         Mode = r.Mode, UiMode = r.UiMode, RepoUrl = r.RepoUrl,
         Repos = ParseRepos(r),

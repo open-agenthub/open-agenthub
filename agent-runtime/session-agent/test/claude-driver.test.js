@@ -54,6 +54,63 @@ test('Claude interactive fresh command retains fixed session id', () => {
   });
 });
 
+test('Claude interactive session starts on its prompt and stays a live REPL', () => {
+  // The positional prompt is what makes an API-created session already be working when a person
+  // takes it over; -p would answer once and exit, leaving nothing to take over.
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true), {
+    cmd: 'claude', args: ['--session-id', 'fixed-session', 'triage the failing build']
+  });
+
+  const bare = driver.buildCommand(environment({ AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session' }), true);
+  assert.deepEqual(bare.args, ['--session-id', 'fixed-session']);
+  assert.ok(!bare.args.includes('-p'));
+});
+
+test('Claude appends a caller system prompt in every mode without replacing its own', () => {
+  const interactive = driver.buildCommand(environment({
+    AGENTHUB_SYSTEM_PROMPT: 'You review, you do not commit.',
+    AGENTHUB_PROMPT: 'look at the diff'
+  }), true);
+  assert.deepEqual(interactive.args,
+    ['--append-system-prompt', 'You review, you do not commit.', 'look at the diff']);
+  // --system-prompt would drop Claude Code's own instructions along with its tool guidance.
+  assert.ok(!interactive.args.includes('--system-prompt'));
+
+  const chat = driver.buildCommand(environment({
+    AGENTHUB_UI_MODE: 'chat', AGENTHUB_SYSTEM_PROMPT: 'be terse'
+  }), true);
+  assert.deepEqual(chat.args.slice(0, 2), ['--append-system-prompt', 'be terse']);
+
+  const autonomous = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'autonomous', AGENTHUB_SYSTEM_PROMPT: 'be terse', AGENTHUB_PROMPT: 'fix it'
+  }), true);
+  assert.deepEqual(autonomous.args,
+    ['--append-system-prompt', 'be terse', '-p', 'fix it', '--permission-mode', 'acceptEdits']);
+});
+
+test('Claude does not re-submit the prompt when resuming an interactive session', () => {
+  // The restored conversation already contains the task; repeating it would start the work over.
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1',
+    AGENTHUB_STATE_RESTORED: '1',
+    AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true), {
+    cmd: 'claude', args: ['--resume', 'fixed-session']
+  });
+
+  // A resume that was requested but has no restored state is a fresh start, so the prompt applies.
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1',
+    AGENTHUB_STATE_RESTORED: '0',
+    AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true).args, ['--session-id', 'fixed-session', 'triage the failing build']);
+});
+
 test('Claude resume command requires requested resume, restored state, and fixed id', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1',
@@ -212,6 +269,9 @@ test('Claude entrypoint keeps auth restore and watcher provider-specific', () =>
   assert.match(entrypoint, /\/secrets\/claude\/credentials\.json/);
   assert.match(entrypoint, /\$HOME\/\.claude\/\.credentials\.json/);
   assert.match(entrypoint, /\/claude-credentials/);
+  // Without pre-accepted trust the interactive TUI stops on its safety dialog and an
+  // API-created session never starts the task it was given.
+  assert.match(entrypoint, /claude\/workspace-trust\.mjs" "\$HOME\/\.claude\.json" "\$CLAUDE_WORKDIR"/);
   assert.match(entrypoint, /claude\/hooks\/mcp-policy-hook\.sh/);
   assert.match(entrypoint, /AGENTHUB_DRIVER="\$RUNTIME\/claude\/driver\.js"/);
   assert.match(entrypoint, /exec node "\$RUNTIME\/common\/server\.js"/);

@@ -190,3 +190,41 @@ test('requires AGENTHUB_URL and AGENTHUB_TOKEN', async () => {
     /agenthub_invalid_url/
   );
 });
+
+test('transcript polls with a cursor and allows a page larger than the small-JSON ceiling', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const calls = [];
+  const big = 'x'.repeat(200_000);
+
+  await withFakeServer((req, body, res) => {
+    calls.push({ method: req.method, url: req.url, authorization: req.headers.authorization });
+    json(res, 200, {
+      sessionId: 'sess-1', phase: 'Running', running: true,
+      offset: 1000, nextOffset: 201_000, length: 201_000, truncated: false, text: big
+    });
+  }, async (baseUrl) => {
+    const client = new AgentHubClient({ AGENTHUB_URL: baseUrl, AGENTHUB_TOKEN: TOKEN });
+    const page = await client.transcript('sess-1', { offset: 1000, maxChars: 500_000 });
+
+    assert.equal(calls[0].method, 'GET');
+    assert.equal(calls[0].url, '/api/remote/sessions/sess-1/transcript?offset=1000&maxChars=500000');
+    assert.equal(calls[0].authorization, `Bearer ${TOKEN}`);
+    assert.equal(page.text.length, 200_000);
+    assert.equal(page.nextOffset, 201_000);
+    assert.equal(page.running, true);
+  });
+});
+
+test('transcript omits query parameters that were not asked for', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const urls = [];
+
+  await withFakeServer((req, body, res) => {
+    urls.push(req.url);
+    json(res, 200, { sessionId: 'sess-1', phase: 'Succeeded', running: false, text: '' });
+  }, async (baseUrl) => {
+    const client = new AgentHubClient({ AGENTHUB_URL: baseUrl, AGENTHUB_TOKEN: TOKEN });
+    await client.transcript('sess-1');
+    assert.equal(urls[0], '/api/remote/sessions/sess-1/transcript');
+  });
+});

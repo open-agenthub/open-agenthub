@@ -418,6 +418,32 @@ public class AgentPodSpecFactoryTests
         Assert.Null(AgentPodSpecFactory.TryOpenClawApiKeySecretKey(null));
     }
 
+    [Fact]
+    public void Build_PassesTheInitialAndSystemPromptToTheRuntime()
+    {
+        var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription, request => request with
+        {
+            Prompt = "triage the failing build",
+            SystemPrompt = "You review, you do not commit."
+        });
+        var container = Assert.Single(pod.Containers);
+
+        Assert.Equal("triage the failing build",
+            Assert.Single(container.Env, e => e.Name == "AGENTHUB_PROMPT").Value);
+        Assert.Equal("You review, you do not commit.",
+            Assert.Single(container.Env, e => e.Name == "AGENTHUB_SYSTEM_PROMPT").Value);
+    }
+
+    [Fact]
+    public void Build_WithoutASystemPrompt_SetsTheVariableEmptyRatherThanOmittingIt()
+    {
+        // The driver reads AGENTHUB_SYSTEM_PROMPT unconditionally; an absent variable and an empty
+        // one have to mean the same thing, or a session created before this existed would differ
+        // from one created without the field.
+        var container = Assert.Single(Build(AgentKind.Claude, AgentAuthMode.Subscription).Containers);
+        Assert.Equal("", Assert.Single(container.Env, e => e.Name == "AGENTHUB_SYSTEM_PROMPT").Value);
+    }
+
     private static V1PodSpec Build(AgentKind agent, AgentAuthMode auth,
         Func<CreateSessionRequest, CreateSessionRequest>? customize = null,
         OpenClawApiKeySource? openClawApiKeySource = null)

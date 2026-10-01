@@ -1,8 +1,12 @@
 /** Orchestration-safe SessionInfo fields for MCP tool responses. Never includes secrets. */
 const SAFE_KEYS = [
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
-  'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
-  'createdAt', 'hasMcp'
+  'parentSessionId', 'projectId', 'prompt', 'systemPrompt', 'schedule', 'questionPending',
+  'createdAt', 'hasMcp',
+  // The page a person opens to take the session over. An allowlist means a field the backend
+  // starts returning is dropped here until it is named, so leaving this out would have made
+  // session_create answer without the one thing a caller handing over a session needs.
+  'url'
 ];
 
 /**

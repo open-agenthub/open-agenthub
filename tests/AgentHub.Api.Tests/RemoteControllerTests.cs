@@ -101,6 +101,77 @@ public class RemoteControllerTests
         Assert.IsType<ConflictObjectResult>(result.Result);
     }
 
+    [Fact]
+    public async Task Transcript_WithoutOffset_ReturnsWholePageAndRunningFlag()
+    {
+        var svc = new RecordingSessionService
+        {
+            Session = new SessionInfo
+            {
+                Id = "session-1", Title = "t", Owner = "alice",
+                Mode = SessionMode.Interactive, Phase = "Running"
+            },
+            Transcript = "hello world"
+        };
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken);
+
+        var result = await controller.Transcript("session-1", null, null, CancellationToken.None);
+
+        var page = Assert.IsType<TranscriptPage>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal("hello world", page.Text);
+        Assert.Equal(0, page.Offset);
+        Assert.Equal(11, page.NextOffset);
+        Assert.Equal(11, page.Length);
+        Assert.True(page.Running);
+        Assert.False(page.Truncated);
+    }
+
+    [Fact]
+    public async Task Transcript_WithCursor_ReturnsOnlyWhatIsNewAndStopsPollingWhenFinished()
+    {
+        var svc = new RecordingSessionService
+        {
+            Session = new SessionInfo
+            {
+                Id = "session-1", Title = "t", Owner = "alice",
+                Mode = SessionMode.Autonomous, Phase = "Succeeded"
+            },
+            Transcript = "first chunk|second chunk"
+        };
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken);
+
+        var result = await controller.Transcript("session-1", 12, null, CancellationToken.None);
+
+        var page = Assert.IsType<TranscriptPage>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal("second chunk", page.Text);
+        Assert.Equal(24, page.NextOffset);
+        Assert.False(page.Running);
+    }
+
+    [Fact]
+    public async Task Transcript_ForAnotherOwnersSession_Returns404_WithoutReadingTheTranscript()
+    {
+        var svc = new RecordingSessionService { Session = null, Transcript = "leak me" };
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken);
+
+        var result = await controller.Transcript("session-1", null, null, CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result.Result);
+        Assert.Equal(0, svc.TranscriptCalls);
+    }
+
+    [Fact]
+    public async Task Transcript_WithInvalidToken_ReturnsUnauthorized()
+    {
+        var svc = new RecordingSessionService { Transcript = "secret" };
+        var controller = Remote((_, _) => Task.FromResult<string?>(null), svc, "oah_unknown");
+
+        var result = await controller.Transcript("session-1", null, null, CancellationToken.None);
+
+        Assert.IsType<UnauthorizedResult>(result.Result);
+        Assert.Equal(0, svc.TranscriptCalls);
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private static RemoteController Remote(
@@ -135,6 +206,9 @@ public class RemoteControllerTests
         public string? DeleteId { get; private set; }
         public Exception? CreateException { get; init; }
         public Exception? DuplicateException { get; init; }
+        public SessionInfo? Session { get; init; }
+        public string? Transcript { get; init; }
+        public int TranscriptCalls { get; private set; }
 
         public Task StoreCredentialsAsync(string owner, UserCredentials creds, CancellationToken ct = default) =>
             throw new NotSupportedException();
@@ -164,11 +238,19 @@ public class RemoteControllerTests
         public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+            Task.FromResult(Session);
         public Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default) =>
             throw new NotSupportedException();
-        public Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+
+        /// <summary>
+        /// Mirrors production: the real service returns null for a session the owner cannot see, so
+        /// the double must not hand out a transcript just because one was configured.
+        /// </summary>
+        public Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default)
+        {
+            TranscriptCalls++;
+            return Task.FromResult(Session is null ? null : Transcript);
+        }
         public Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default) =>
             throw new NotSupportedException();
 

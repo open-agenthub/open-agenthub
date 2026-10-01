@@ -46,7 +46,13 @@ public sealed class AgentHubMcpTools(
     public async Task<SessionInfo> CreateSession(
         [Description("Session title; also the agent name other agents address it by.")] string? title = null,
         [Description("What this agent is for.")] string? description = null,
-        [Description("Initial prompt. Required for Autonomous and Scheduled sessions.")] string? prompt = null,
+        [Description("Initial prompt. Required for Autonomous and Scheduled sessions. An "
+                     + "Interactive session starts working on it too and then stays live, so you "
+                     + "can create a session with a task and hand its url to a person.")] string? prompt = null,
+        [Description("Extra instructions appended to the agent's own system prompt — standing rules "
+                     + "for the session, as opposed to the task. Supported on every agent; it is "
+                     + "always appended, so it adds to the agent's instructions and never replaces "
+                     + "them.")] string? systemPrompt = null,
         [Description("Interactive, Autonomous or Scheduled. Defaults to Autonomous.")] string? mode = null,
         [Description("Claude, Codex, Cursor or OpenClaw.")] string? agent = null,
         [Description("Repository URL to clone into the workspace.")] string? repoUrl = null,
@@ -73,6 +79,7 @@ public sealed class AgentHubMcpTools(
             Title = string.IsNullOrWhiteSpace(title) ? "Untitled" : title,
             Description = description,
             Prompt = prompt,
+            SystemPrompt = systemPrompt,
             // The stdio server defaults to Autonomous, because a caller driving sessions through
             // a tool has no terminal to interact with. Keep both servers consistent.
             Mode = ParseEnum(mode, SessionMode.Autonomous),
@@ -92,6 +99,8 @@ public sealed class AgentHubMcpTools(
 
         var created = await sessions.CreateSessionAsync(Owner, request, ct);
         logger.LogInformation("MCP client created session {SessionId} for {Owner}", created.Id, created.Owner);
+        // The response carries `url`: the page a person opens to take this session over. It is null
+        // on an instance with no FrontendOrigin configured — see SessionUrl.
         return created;
     }
 
@@ -122,6 +131,30 @@ public sealed class AgentHubMcpTools(
         limit = Math.Min(limit, 200_000);
         return "… truncated, showing the last " + limit + " characters …\n"
                + transcript[^limit..];
+    }
+
+    [McpServerTool(Name = "session_transcript")]
+    [Description("Poll a session's transcript for what is new. Pass the previous call's nextOffset "
+                 + "as offset and only the output since then comes back, so following a long "
+                 + "session does not mean re-reading megabytes. `running` is false once the session "
+                 + "has finished — that is when to stop polling. Prefer this over session_logs when "
+                 + "you are watching a session you started.")]
+    public async Task<TranscriptPage> GetSessionTranscript(
+        [Description("Session id.")] string id,
+        [Description("Start here. Use the previous response's nextOffset; omit to start at 0.")]
+        int? offset = null,
+        [Description("Return at most this many characters. Default 100000, max 1000000.")]
+        int? maxChars = null,
+        CancellationToken ct = default)
+    {
+        // Phase before text, so a session that finishes mid-call is reported as still running with
+        // its final output already present — one extra poll, rather than output arriving after a
+        // "finished" the caller already acted on.
+        var session = await sessions.GetSessionAsync(Owner, id, ct)
+                      ?? throw new McpException("session_not_found");
+        var transcript = await sessions.GetTranscriptAsync(Owner, id, ct)
+                         ?? throw new McpException("session_not_found");
+        return TranscriptPage.From(session.Id, session.Phase, transcript, offset, maxChars);
     }
 
     [McpServerTool(Name = "session_list")]

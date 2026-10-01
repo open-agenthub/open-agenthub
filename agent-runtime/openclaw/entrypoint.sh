@@ -20,6 +20,11 @@ export OPENCLAW_AGENT_DIR="${OPENCLAW_AGENT_DIR:-$OPENCLAW_STATE_DIR/agents/$OPE
 mkdir -p "$OPENCLAW_AGENT_DIR"
 chmod 700 "$OPENCLAW_AGENT_DIR"
 
+# The caller's system prompt, appended to OpenClaw's own. Written after the agent directory exists
+# and after the common entrypoint restored state, so an APPEND_SYSTEM.md from an earlier run of
+# this session cannot outlive the request that created it.
+node "$RUNTIME/openclaw/session-prompt.mjs" "$OPENCLAW_AGENT_DIR"
+
 # AgentHub-managed Secret/watch file (also excluded from state tar via authFilename).
 # OpenClaw runtime loads credentials from OPENCLAW_AGENT_DIR (SQLite store_json);
 # sync-auth-profiles.js bridges that store and this JSON file.
