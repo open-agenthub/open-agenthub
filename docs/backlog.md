@@ -26,12 +26,25 @@ session created with a task sits idle until somebody types. Needed:
 ## Waiting on the owner
 
 - **Functional acceptance of the file path** — upload, preview, and an agent read through the UI.
-  Six bugs in this path were each "fixed" before being confirmed; the last one was found by a user
-  report, not by the suite. What to check now that `read_file` returns a path: ask a session to copy
-  an uploaded PDF into its working directory and grep it, and confirm it reports a `localPath` under
-  `/workspace/.agenthub/files` rather than only a name. Worth checking with object storage both
-  reachable and unreachable from the pod — the two cases diverged in the backend until the agent
-  content route stopped redirecting.
+  Eight bugs in this path were each "fixed" before being confirmed; the last three were found by
+  user reports, not by the suite. What to check now:
+  - `read_file` on an uploaded PDF reports a `localPath` under `/workspace/.agenthub/files` rather
+    than only a name, and the session can copy that file into its working directory and grep it.
+    Worth checking with object storage both reachable and unreachable from the pod — the two cases
+    diverged in the backend until the agent content route stopped redirecting.
+  - a PDF renders in the preview pane instead of Chrome's blocked-content placeholder.
+  - an upload survives closing the Files pane and switching sessions.
+- **A session file has no delete affordance.** The listing in the Files pane offers no way to
+  remove a file; the only delete the UI ever issued was the upload queue's teardown, which is the
+  bug fixed on 2026-10-01. If files are meant to be deletable, that belongs on a listed row.
+  Related: `SessionFileService.DeleteAsync` accepts any state, so "cancel my half-finished
+  reservation" and "destroy a completed file" are the same request — worth splitting if the
+  affordance arrives.
+- **The 2026-08-01 files plan and design record no longer describe the code.** Both say the preview
+  frame carries a `sandbox` attribute; it cannot, and the blob's MIME label replaced it. The design
+  record also credits an "application content-security policy" that was never built — the only CSP
+  header in the repo is the per-file one in `SessionFilesController`. Dated records, so left for a
+  decision on whether to annotate them.
 - **`v0.10.0`** — 54+ commits since `v0.9.0`, CI green. Cut it once acceptance passes.
 - **Node 22 → 26** — evaluated, recommendation is HOLD. Note
   `.github/workflows/test.yml` still pins `node-version: 22` in two places; the Dependabot PRs do

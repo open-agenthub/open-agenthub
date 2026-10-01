@@ -56,6 +56,35 @@ describe('chat attachments', () => {
     expect(deleted).toEqual([['s1', 'late-id']])
   })
 
+  it('lets go of a finished upload when the queue is torn down, and still cancels one in flight', async () => {
+    const deleted = []
+    let finishUpload
+    const api = {
+      reserveSessionFile: async (_session, request) => ({
+        file: { id: `f-${request.name}` }, upload: { kind: 'proxy', url: '/upload' }
+      }),
+      uploadSessionFile: async (_upload, file) => {
+        if (file.name === 'slow.png') await new Promise(resolve => { finishUpload = resolve })
+      },
+      completeSessionFile: async (_session, id) =>
+        ({ id, name: 'done.png', mimeType: 'image/png', size: 12, state: 'Ready' }),
+      deleteSessionFile: async (...args) => deleted.push(args)
+    }
+    const queue = createAttachmentQueue({ sessionId: 's1', api })
+    const [done] = queue.add([png('done.png')])
+    await done.promise
+    expect(done.state).toBe('ready')
+
+    const [slow] = queue.add([png('slow.png', 12, 2)])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(slow.id).toBe('f-slow.png')
+
+    await queue.cancelAll()
+    expect(deleted).toEqual([['s1', 'f-slow.png']])
+    finishUpload?.()
+    await slow.promise
+  })
+
   it('maps stable backend errors to useful copy', () => {
     expect(attachmentErrorMessage({ code: 'content_type_mismatch' }))
       .toBe('File content does not match its type.')

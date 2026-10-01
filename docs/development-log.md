@@ -9,6 +9,36 @@ when the fake in the test is more forgiving than production.
 
 ---
 
+## 2026-10-01 — Chrome renders no PDF in a sandboxed frame, under any token
+
+The preview pane showed Chrome's grey blocked-content placeholder for every PDF. The frame carried
+a bare `sandbox`, and the obvious reading — that the PDF viewer needs `allow-scripts` — is wrong.
+Measured across Chrome 154: bare, `allow-scripts`, `allow-same-origin`, `allow-scripts
+allow-same-origin`, `allow-downloads allow-scripts` all produce the placeholder. **No combination
+renders.** Without the attribute it renders; so does `<embed>`.
+
+That attribute was never the control it looked like, either. `allow-scripts` with
+`allow-same-origin` would have let the frame drop its own sandbox, because a `blob:` URL inherits
+the creating document's origin — the one combination that could have worked is the one that must
+not be used.
+
+What holds the line instead is the **blob's MIME label**. A `blob:` URL is served with the blob's
+own type, so `blob.slice(0, blob.size, 'application/pdf')` before `createObjectURL` decides what the
+frame can become: a PDF-viewer document, cross-origin to us and out-of-process, never an HTML
+document on our origin. Verified: a blob typed `application/pdf` whose bytes are HTML-with-script
+fails to parse and runs nothing; a PDF carrying `/OpenAction /URI` and a `/Names /JavaScript`
+action produced no request, no navigation, no popup.
+
+`<object type="application/pdf">` was rejected for the opposite reason — given HTML bytes it
+ignores the declared type and executes them. And pdf.js was rejected because it would parse
+untrusted bytes *in our own renderer*, turning a parser bug into XSS on the app origin; the
+browser's viewer is the stronger isolation here, not the weaker one.
+
+**Left behind:** the 2026-08-01 plan and design records still describe the `sandbox` attribute as
+the protection, and credit an application-level CSP that does not exist anywhere in the repo.
+
+---
+
 ## 2026-10-01 — The agent content route redirected the pod to object storage
 
 The route added so a pod with no path to object storage could still read its files answered a
@@ -37,6 +67,35 @@ comment three lines below claimed large text was reported by path. The bytes are
 so there was nothing to gain by failing. Over-limit and undecodable files now return the path, and
 every reply carries `localPath` alongside any inline content: without it the agent can look at an
 image but cannot put it in its working directory, which is usually what it was asked to do.
+---
+
+## 2026-10-01 — The upload queue deleted the files it had just uploaded
+
+Reported as "uploaded files are not remembered; after a session restart they are gone". The listing
+was right and object storage was fine — the rows really were `Deleted`, and the `DELETE` came from
+the browser.
+
+`createAttachmentQueue` has one teardown path, `cancelAll()`, and it called `remove()` on every
+row. For a row still uploading that is correct: it owns a reservation nobody else will clean up.
+For a finished row it deleted a completed session file. `cancelAll()` runs on unmount and on a
+session change, and in the Files pane closing the pane clears `filesOpen`/`selectedId`, which makes
+`companionVisible` false and unmounts the whole workspace shell — so uploading a file and then
+closing the pane destroyed it. `clearReady()` had the distinction right all along; the teardown
+path did not.
+
+A second defect sat in the same four lines: `cancelAll()` mapped over the live `items` array while
+`remove()` spliced from it, so every second row was skipped and its reservation never cancelled.
+
+**Why the suite missed it:** the existing test removed a *ready* item and asserted the delete — the
+behaviour was pinned as intended, because nothing distinguished "the user withdrew this attachment"
+from "the component went away". Tests now cover both meanings, including the full chain through
+`SessionWorkspace`.
+
+**Diagnosis note:** three plausible server-side theories (storage kind falling back to pod-backed
+because of a Helm key mismatch, the pause-time pod-file expiry, a stale `expires_at`) were all
+wrong, and one `SELECT` settled it. Every row was `S3`; one was `Ready` with an `expires_at` a day
+in the past and untouched; one was `Deleted` while its session was still running. Read the rows
+before theorising about the code that writes them.
 
 ---
 

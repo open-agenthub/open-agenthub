@@ -62,6 +62,14 @@ function clearFinished() {
   uploadVersion.value += 1
 }
 
+// Hand the row over to the listing as soon as the file appears there, so the same file is never
+// shown twice and the queue stops holding a reference to something it no longer owns.
+watch(() => props.files, listed => {
+  for (const item of queue.items.slice()) {
+    if (item.state === 'ready' && listed.some(file => file.id === item.id)) queue.release(item.key)
+  }
+})
+
 watch(() => props.sessionId, () => {
   void queue.cancelAll()
   queue = makeQueue()
@@ -88,7 +96,9 @@ onBeforeUnmount(() => { void queue.cancelAll() })
         Images and documents created by the agent appear here.<template v-if="canUpload"> Drop files anywhere in this pane to add your own.</template>
       </div>
       <div v-if="uploadItems.length" class="uploads" data-files-uploads>
-        <ChatAttachments :items="uploadItems" :retry="queue.retry" :remove="queue.remove" />
+        <!-- dismiss, not remove: here the × cancels an upload in flight, but a finished one is
+             already a session file and this list offers no other way to delete anything. -->
+        <ChatAttachments :items="uploadItems" :retry="queue.retry" :remove="queue.dismiss" />
         <button type="button" class="clear-done" data-files-clear @click="clearFinished">Clear finished</button>
       </div>
       <button v-for="file in files" :key="file.id" type="button" class="file-row"
