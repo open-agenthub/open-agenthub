@@ -55,7 +55,15 @@ session created with a task sits idle until somebody types. Needed:
 ## Known limits, accepted for now
 
 - **Presigned URLs live 10 minutes** (`files.presignMinutes`). Fine for an immediate fetch; a
-  transfer slower than that fails. Agent reads no longer depend on it.
+  transfer slower than that fails. `read_file` no longer depends on it — but **message attachments
+  still do**: `AttachmentMaterializer` (`agent-runtime/files/materialize.js:100`) fetches the
+  presigned `downloadUrl` rather than the agent content route. The window is short, since the url
+  is minted in the same response, so this is about reachability rather than expiry: the fetch needs
+  egress from the session pod to object storage, and the chart's `agent.extraEgressPorts` defaults
+  to `[]` while the agent policy opens only 53/80/443/22. Object storage on a non-standard port
+  therefore breaks attachments on a default install until that port is added. Moving it to the
+  content route would remove the dependency entirely; it needs verifying with egress actually
+  blocked, which is not something the suite can show.
 - **Office previews need the renderer pod** (`files.officePreview.enabled`, off by default). The UI
   now says so and links to the README instead of implying the format is unsupported.
 - **Plain SQL in the existing stores.** Parameterised, so not injectable, but new persistence code
