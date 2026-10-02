@@ -66,6 +66,31 @@ public sealed class RemoteController : ControllerBase
         return await _svc.GetSessionAsync(owner, id, ct) is { } s ? Ok(s) : NotFound();
     }
 
+    /// <summary>
+    /// One page of the session transcript, for a caller following a session it created without
+    /// holding a websocket open.
+    ///
+    /// <paramref name="offset"/> is a cursor: pass back the <c>nextOffset</c> of the previous page
+    /// and only new output comes over the wire. Re-fetching from zero each time would mean
+    /// downloading a transcript that grows into the megabytes to read the few lines that changed.
+    /// <c>running</c> says whether to poll again.
+    /// </summary>
+    [HttpGet("sessions/{id}/transcript")]
+    public async Task<ActionResult<TranscriptPage>> Transcript(
+        string id, [FromQuery] int? offset, [FromQuery] int? maxChars, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        // The phase is read first: a session that finishes between the two reads is then reported
+        // as still running with the final output already included, so the caller polls once more
+        // and sees the terminal phase. The other order could report "finished" with output missing.
+        var session = await _svc.GetSessionAsync(owner, id, ct);
+        if (session is null) return NotFound();
+        var transcript = await _svc.GetTranscriptAsync(owner, id, ct);
+        if (transcript is null) return NotFound();
+        return Ok(TranscriptPage.From(session.Id, session.Phase, transcript, offset, maxChars));
+    }
+
     [HttpGet("sessions")]
     public async Task<ActionResult<IReadOnlyList<SessionInfo>>> List(CancellationToken ct)
     {

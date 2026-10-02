@@ -25,13 +25,22 @@ const register = (name, config, handler) => server.registerTool(name, config, as
 const createSchema = z.object({
   title: z.string().max(256).optional(),
   prompt: z.string().max(100_000).optional(),
+  systemPrompt: z.string().max(20_000).optional(),
   mode: z.enum(['Interactive', 'Autonomous', 'Scheduled']).optional().default('Autonomous'),
-  agent: z.enum(['Claude', 'Codex', 'Cursor']).optional(),
+  // OpenClaw was missing here while the backend accepted it, so the stdio server was the one
+  // client that could not create an OpenClaw session. The enum is the whole AgentKind set.
+  agent: z.enum(['Claude', 'Codex', 'Cursor', 'OpenClaw']).optional(),
   authMode: z.enum(['Auto', 'Subscription', 'ApiKey']).optional(),
   repos: z.array(z.object({
     url: z.string().max(2048),
-    branch: z.string().max(256).optional()
-  })).max(32).optional(),
+    branch: z.string().max(256).optional(),
+    // Names a Git provider this account has connected; its OAuth token then authenticates the
+    // clone and any push. Without it here the field was dropped before the HTTP call, so the
+    // stdio server could only ever clone public repositories.
+    providerId: z.string().max(128).optional()
+    // 16 to match the backend's own cap. The old 32 was the only limit anywhere and did not
+    // apply to the REST API, so it described nothing the server actually enforced.
+  })).max(16).optional(),
   projectId: z.string().max(128).optional(),
   parentSessionId: z.string().max(128).optional(),
   schedule: z.string().max(128).optional(),
@@ -44,7 +53,9 @@ const createSchema = z.object({
 });
 
 register('session_create', {
-  description: 'Create and start an AgentHub session. Default mode is Autonomous.',
+  description: 'Create and start an AgentHub session. Default mode is Autonomous. An Interactive '
+    + 'session starts working on its prompt and stays live, and the response carries "url" — the '
+    + 'page to hand to a person who should take the session over.',
   inputSchema: createSchema
 }, async (body) => text(sanitizeSession(await client.create(body))));
 
@@ -52,6 +63,19 @@ register('session_get', {
   description: 'Get a session by id.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
 }, async ({ id }) => text(sanitizeSession(await client.get(id))));
+
+register('session_transcript', {
+  description: 'Poll a session transcript for what is new. Pass the previous response\'s nextOffset '
+    + 'as offset, so following a long-running session does not re-transfer the whole transcript. '
+    + '"running" is false once the session has finished — stop polling then.',
+  inputSchema: z.object({
+    id: z.string().min(1).max(128),
+    offset: z.number().int().min(0).optional(),
+    maxChars: z.number().int().min(1).max(1_000_000).optional()
+  })
+  // Not passed through sanitizeSession: this is a transcript page, not a session record, and the
+  // allowlist there would strip every field of it.
+}, async ({ id, offset, maxChars }) => text(await client.transcript(id, { offset, maxChars })));
 
 register('session_list', {
   description: 'List sessions for the token owner. Optional filters: parentSessionId, phase.',

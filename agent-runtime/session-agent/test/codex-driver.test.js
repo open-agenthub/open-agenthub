@@ -37,6 +37,27 @@ test('Codex interactive fresh and restored commands use only explicit resume sha
   }), false), { cmd: 'codex', args: [] });
 });
 
+test('Codex interactive session starts on its prompt, except when resuming', () => {
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_PROMPT: 'triage the failing build'
+  }), true), { cmd: 'codex', args: ['triage the failing build'] });
+
+  // `resume` is a subcommand, so a trailing prompt there would not parse — and the restored
+  // thread already contains the task.
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
+  }), true), { cmd: 'codex', args: ['resume', '--last'] });
+
+  const deviceLogin = path.join(runtimeDir, 'codex', 'device-login.sh');
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_CODEX_DEVICE_AUTH: '1', AGENTHUB_PROMPT: 'triage the failing build'
+  }), true), { cmd: 'bash', args: [deviceLogin, 'triage the failing build'] });
+  assert.equal(driver.isResumeCommand({
+    cmd: 'bash', args: [deviceLogin, 'triage the failing build']
+  }), false);
+});
+
 test('Codex device login runs inside the agent PTY before the interactive CLI', () => {
   const deviceLogin = path.join(runtimeDir, 'codex', 'device-login.sh');
   assert.deepEqual(driver.buildCommand(environment({

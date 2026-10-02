@@ -41,3 +41,17 @@ test('sanitizeSession maps lists and delete results', () => {
   ]);
   assert.equal(list[0].mcpConfigJson, undefined);
 });
+
+test('sanitizeSession keeps the session url a caller hands to a person', () => {
+  // The allowlist silently drops anything it does not name, so a create response without `url`
+  // would leave an MCP caller with an id it cannot turn into a link.
+  const safe = sanitizeSession({
+    id: 's1', phase: 'Pending',
+    url: 'https://agenthub.example.com/s/s1',
+    systemPrompt: 'You review, you do not commit.',
+    callbackToken: 'tok'
+  });
+  assert.equal(safe.url, 'https://agenthub.example.com/s/s1');
+  assert.equal(safe.systemPrompt, 'You review, you do not commit.');
+  assert.equal(safe.callbackToken, undefined);
+});
