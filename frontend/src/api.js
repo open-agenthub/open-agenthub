@@ -243,6 +243,10 @@ async function wsUrl(id, kind) {
 export const terminalUrl = (id) => wsUrl(id, 'terminal')
 export const resizeBrowserViewport = (id, width, height) => req('PUT', `/sessions/${encodeURIComponent(id)}/browser/viewport`, { width, height })
 export const browserUrl = (id) => wsUrl(id, 'browser')
+// Server push for "something about this session changed". Async like the other session sockets
+// because the access token travels in the query string.
+export const sessionEventsUrl = (id) => wsUrl(id, 'events')
+export const sharedSessionEventsUrl = (token) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/shared/${encodeURIComponent(token)}/events`
 export const sharedBrowserUrl = (token) => `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/shared/${encodeURIComponent(token)}/browser`
 export async function getSharedSession(token) {
   const res = await fetch(`/api/shared/${encodeURIComponent(token)}/session`)

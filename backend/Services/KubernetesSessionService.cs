@@ -836,8 +836,15 @@ public sealed class KubernetesSessionService : ISessionService
     public async Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default)
     {
         var records = await _store.ListAsync(owner, ct);
+        // resourceVersion "0" answers from the apiserver's watch cache. Left unset this is a
+        // quorum read against etcd, and because etcd cannot index labels the apiserver fetches
+        // every pod in the namespace before applying the selector — so the dashboard poll, which
+        // repeats this every five seconds per open tab, scaled with the total pod count rather
+        // than with the caller's sessions. The staleness that buys is milliseconds, and the phase
+        // is already treated as advisory below: a missing pod falls back to the stored status.
         var pods = await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace,
-            labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}=agent", cancellationToken: ct);
+            labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}=agent",
+            resourceVersion: "0", cancellationToken: ct);
         var byId = new Dictionary<string, V1Pod>();
         foreach (var p in pods.Items)
             if (p.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var sid))
@@ -845,14 +852,13 @@ public sealed class KubernetesSessionService : ISessionService
 
         var browserSummaries = await _browsers.GetSummariesAsync(
             records.Select(record => record.Id).ToArray(), ct);
-        var ephemeralFlags = await Task.WhenAll(records.Select(async r =>
-            (r.Id, Has: await SessionHasEphemeralMcpAsync(r.Id, ct))));
-        var ephemeralById = ephemeralFlags.ToDictionary(x => x.Id, x => x.Has);
+        var withEphemeralMcp = await _ephemeralApiMcps.ListSessionsWithEntriesAsync(
+            records.Select(record => record.Id).ToArray(), ct);
         return records.Select(r =>
         {
             byId.TryGetValue(r.Id, out var pod);
             return ToInfo(r, pod?.Status?.Phase ?? r.Status, pod?.Status?.PodIP, browserSummaries[r.Id],
-                ephemeralById.GetValueOrDefault(r.Id));
+                withEphemeralMcp.Contains(r.Id));
         }).ToList();
     }
 

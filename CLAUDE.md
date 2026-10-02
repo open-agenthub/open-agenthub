@@ -36,6 +36,28 @@ Use `example.com` or `your-org.example` for illustrative hosts.
 Sibling repositories, each with its own checkout: `license-service` (proprietary licence and
 shop backend, .NET 8) and `pages` (the landing page, GitHub Pages).
 
+## Work in a worktree, always
+
+Every task gets its own `git worktree` on its own branch — never the shared checkout, never
+`main`:
+
+```bash
+git worktree add -b feat/your-task ../open-agenthub-wt-your-task main
+```
+
+This is not a style preference. Several agents and people work this one repository at the same
+time, and the shared checkout moves underneath you: a branch switch and a `pull` landed
+mid-task once, and uncommitted work had to be recovered by hand. A worktree gives the task its
+own working directory, so nobody else's checkout can touch it.
+
+Two consequences worth stating, because both have already cost time here:
+
+- **Never use `git stash` to test a hypothesis** ("does this test fail without my fix?").
+  Another process may be mid-operation in the same tree. Copy the file aside, edit it in place,
+  and restore the copy.
+- **Remove the worktree when the branch is merged** (`git worktree remove <path>`); a stale one
+  keeps its branch alive and confuses the next `git worktree list`.
+
 ## Before you push
 
 `main` is protected: seven required status checks and a pull request. Work on a branch and open

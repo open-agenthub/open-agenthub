@@ -121,14 +121,19 @@ internal sealed class SessionFilePostgresFixture : IAsyncDisposable
     private SessionFilePostgresFixture(
         string baseConnectionString,
         string schema,
+        string schemaConnectionString,
         PostgresSessionFileRegistry registry)
     {
         _baseConnectionString = baseConnectionString;
         _schema = schema;
+        ConnectionString = schemaConnectionString;
         Registry = registry;
     }
 
     public PostgresSessionFileRegistry Registry { get; }
+
+    /// <summary>Scoped to this fixture's schema, for collaborators that open their own connection.</summary>
+    public string ConnectionString { get; }
 
     public static async Task<SessionFilePostgresFixture> CreateAsync()
     {
@@ -163,7 +168,8 @@ internal sealed class SessionFilePostgresFixture : IAsyncDisposable
         try
         {
             await registry.InitializeAsync();
-            return new SessionFilePostgresFixture(baseConnectionString, schema, registry);
+            return new SessionFilePostgresFixture(
+                baseConnectionString, schema, builder.ConnectionString, registry);
         }
         catch
         {

@@ -80,4 +80,22 @@ describe('FilePreview', () => {
     expect(wrapper.get('[data-preview-unsupported]').text()).toContain('Download')
     expect(wrapper.get('[data-file-download]').attributes('href')).toBe('blob:preview')
   })
+
+  // The workspace repolls the file list every ~1.5s and passes down a new object each time. Keyed
+  // on the object, the preview refetched on that cadence and flashed its loading state.
+  it('does not refetch when the poll hands down an equal file object', async () => {
+    const file = { id: 'f1', name: 'notes.md', mimeType: 'text/markdown', size: 12, state: 'Ready' }
+    const wrapper = mount(FilePreview, { props: { sessionId: 's1', file, capabilities: {} } })
+    await flushPromises()
+    expect(mocks.content).toHaveBeenCalledTimes(1)
+
+    await wrapper.setProps({ file: { ...file } })
+    await flushPromises()
+    expect(mocks.content).toHaveBeenCalledTimes(1)
+    expect(wrapper.get('[data-file-preview="markdown"]').html()).toContain('Safe title')
+
+    await wrapper.setProps({ file: { ...file, id: 'f2' } })
+    await flushPromises()
+    expect(mocks.content).toHaveBeenCalledTimes(2)
+  })
 })

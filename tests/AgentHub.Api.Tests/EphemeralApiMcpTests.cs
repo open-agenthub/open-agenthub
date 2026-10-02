@@ -48,6 +48,36 @@ public class EphemeralApiMcpTests
         Assert.NotNull(await store.GetAsync("sess-2", "other"));
     }
 
+    /// <summary>
+    /// The session listing asks this once for every session the caller owns. Both the default
+    /// implementation and the Postgres override have to agree, or the dashboard's "has MCP"
+    /// badge changes meaning depending on which store is configured.
+    /// </summary>
+    [Fact]
+    public async Task ListSessionsWithEntries_ReportsOnlySessionsThatHaveOne()
+    {
+        // Through the interface on purpose: the in-memory store inherits the default
+        // implementation, and that is the one this has to pin down.
+        IEphemeralApiMcpStore store = new InMemoryEphemeralApiMcpStore();
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "books", "alice",
+            """{"specType":"openapi","specUrl":"https://api.example.test/openapi.json"}""",
+            null));
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "pets", "alice",
+            """{"specType":"openapi","specUrl":"https://petstore.example.test/openapi.json"}""",
+            null));
+        await store.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-2", "other", "bob",
+            """{"specType":"openapi","specUrl":"https://other.example.test/openapi.json"}""",
+            null));
+
+        var withEntries = await store.ListSessionsWithEntriesAsync(["sess-1", "sess-2", "sess-3"]);
+
+        Assert.Equal(["sess-1", "sess-2"], withEntries.OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Empty(await store.ListSessionsWithEntriesAsync([]));
+    }
+
     [Fact]
     public void EphemeralToken_BindsSessionIdAndName()
     {
