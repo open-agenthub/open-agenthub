@@ -32,6 +32,14 @@ builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserClusterClient, AgentH
 builder.Services.AddHttpClient<AgentHub.Api.Browser.IBrowserRuntimeClient, AgentHub.Api.Browser.BrowserRuntimeClient>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserService, AgentHub.Api.Browser.KubernetesBrowserService>();
 builder.Services.AddHostedService<AgentHub.Api.Browser.BrowserReconcileService>();
+// One instance serves both roles: the hosted service owns the LISTEN connection that the
+// publisher's notifications come back through, so registering it twice would leave half the
+// subscribers attached to a bus that never listens.
+builder.Services.AddSingleton<AgentHub.Api.Events.PostgresSessionEventBus>();
+builder.Services.AddSingleton<AgentHub.Api.Events.ISessionEventBus>(
+    sp => sp.GetRequiredService<AgentHub.Api.Events.PostgresSessionEventBus>());
+builder.Services.AddHostedService(
+    sp => sp.GetRequiredService<AgentHub.Api.Events.PostgresSessionEventBus>());
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
 // Library: MCP catalog (raw/api + org) + skills (community: personal, enterprise: shareable).
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpSecretProtector, AgentHub.Api.Library.McpSecretProtector>();
@@ -710,6 +718,39 @@ app.Map("/ws/shared/{token}/browser", (HttpContext ctx, string token,
 app.Map("/ws/sessions/{id}/shell", (HttpContext ctx, string id,
         ISessionService sessions, ILoggerFactory lf) => ProxyWs(ctx, id, sessions, lf, "/shell"))
     .RequireAuthorization();
+
+// --- Session events: server push replacing the workspace's poll loops ---
+// Unlike the terminal and browser routes this proxies nothing to the pod; the backend is the
+// source, so access is resolved here and re-checked for as long as the socket is held.
+async Task SessionEventsWs(HttpContext ctx, string id, ISessionAccessService access,
+    AgentHub.Api.Events.ISessionEventBus eventBus, ILoggerFactory lf)
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    var principal = WsOwner(ctx);
+    if (principal is null) { ctx.Response.StatusCode = 401; return; }
+    var resolved = await access.ResolveUserAsync(principal, id, ctx.RequestAborted);
+    if (resolved is null) { ctx.Response.StatusCode = 404; return; }
+    await SessionEventSocket.HandleAsync(ctx, resolved.Session.Id, eventBus, lf,
+        async ct => (await access.ResolveUserAsync(principal, id, ct))?.Session.Id == resolved.Session.Id);
+}
+
+async Task SharedSessionEventsWs(HttpContext ctx, string token, ISessionAccessService access,
+    AgentHub.Api.Events.ISessionEventBus eventBus, ILoggerFactory lf)
+{
+    if (!ctx.WebSockets.IsWebSocketRequest) { ctx.Response.StatusCode = 400; return; }
+    var resolved = await access.ResolveTokenAsync(token, ctx.RequestAborted);
+    if (resolved is null) { ctx.Response.StatusCode = 404; return; }
+    await SessionEventSocket.HandleAsync(ctx, resolved.Session.Id, eventBus, lf,
+        async ct => (await access.ResolveTokenReadOnlyAsync(token, ct))?.Session.Id == resolved.Session.Id);
+}
+
+app.Map("/ws/sessions/{id}/events", (HttpContext ctx, string id, ISessionAccessService access,
+        AgentHub.Api.Events.ISessionEventBus eventBus, ILoggerFactory lf) =>
+        SessionEventsWs(ctx, id, access, eventBus, lf))
+    .RequireAuthorization();
+app.Map("/ws/shared/{token}/events", (HttpContext ctx, string token, ISessionAccessService access,
+    AgentHub.Api.Events.ISessionEventBus eventBus, ILoggerFactory lf) =>
+    SharedSessionEventsWs(ctx, token, access, eventBus, lf));
 
 app.Run();
 

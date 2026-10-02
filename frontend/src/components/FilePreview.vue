@@ -65,7 +65,14 @@ async function load() {
   }
 }
 
-watch(() => [props.file?.id, props.file?.previewFileId, props.file?.state, props.file?.previewState, props.sharedToken], load, { immediate: true })
+// Joined into one string on purpose. A getter returning an array is compared by identity, so a
+// fresh array — which this builds on every evaluation — always counts as changed. The workspace
+// repolls the file list roughly every 1.5s and hands down a newly deserialised object each time,
+// which re-ran load() on that cadence: the preview flashed back to "Loading …" and refetched a
+// file whose identity and state had not moved. A primitive key only changes when a field does.
+const previewKey = computed(() =>
+  [props.file?.id, props.file?.previewFileId, props.file?.state, props.file?.previewState, props.sharedToken].join('|'))
+watch(previewKey, load, { immediate: true })
 watch(text, () => nextTick(() => { if (markdownEl.value) void renderMermaidBlocks(markdownEl.value) }))
 onBeforeUnmount(() => { generation += 1; releaseUrl() })
 </script>

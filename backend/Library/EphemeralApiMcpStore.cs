@@ -17,6 +17,27 @@ public interface IEphemeralApiMcpStore
     Task RegisterAsync(EphemeralApiMcpEntry entry, CancellationToken ct = default);
     Task<EphemeralApiMcpEntry?> GetAsync(string sessionId, string name, CancellationToken ct = default);
     Task<IReadOnlyList<EphemeralApiMcpEntry>> ListBySessionAsync(string sessionId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Which of these sessions carry at least one registration. The session listing needs only
+    /// that flag, and asking per session made the listing cost one query per session the user
+    /// owns — re-run every five seconds by the dashboard poll, so an owner of a few hundred
+    /// sessions produced a sustained double-digit query rate from a single open tab.
+    /// The default walks the sessions one by one so in-memory stores stay correct unchanged;
+    /// the Postgres store answers in one round trip.
+    /// </summary>
+    async Task<IReadOnlySet<string>> ListSessionsWithEntriesAsync(
+        IReadOnlyCollection<string> sessionIds, CancellationToken ct = default)
+    {
+        var withEntries = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var sessionId in sessionIds)
+        {
+            if ((await ListBySessionAsync(sessionId, ct)).Count > 0) withEntries.Add(sessionId);
+        }
+
+        return withEntries;
+    }
+
     Task DeleteBySessionAsync(string sessionId, CancellationToken ct = default);
 }
 
@@ -172,6 +193,26 @@ public sealed class EphemeralApiMcpStore : IEphemeralApiMcpStore
         while (await reader.ReadAsync(ct))
             list.Add(ReadEntry(reader));
         return list;
+    }
+
+    public async Task<IReadOnlySet<string>> ListSessionsWithEntriesAsync(
+        IReadOnlyCollection<string> sessionIds, CancellationToken ct = default)
+    {
+        var ids = sessionIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        var withEntries = new HashSet<string>(StringComparer.Ordinal);
+        if (ids.Length == 0) return withEntries;
+
+        await using var cmd = _db.CreateCommand("""
+            SELECT DISTINCT session_id FROM ephemeral_api_mcp WHERE session_id = ANY(@session_ids)
+            """);
+        cmd.Parameters.AddWithValue("session_ids", ids);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct)) withEntries.Add(reader.GetString(0));
+        return withEntries;
     }
 
     public async Task DeleteBySessionAsync(string sessionId, CancellationToken ct = default)

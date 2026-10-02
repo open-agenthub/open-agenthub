@@ -4,8 +4,11 @@ import {
   api,
   getSharedFileCapabilities,
   getSharedFilePresentation,
-  listSharedSessionFiles
+  listSharedSessionFiles,
+  sessionEventsUrl,
+  sharedSessionEventsUrl
 } from '../api.js'
+import { openSessionEvents } from '../lib/live.js'
 import BrowserPane from './BrowserPane.vue'
 import FilesPane from './FilesPane.vue'
 
@@ -27,6 +30,12 @@ const presentation = ref(null)
 let presentationRevision = -1
 let presentationTimer
 let loadGeneration = 0
+let eventStream
+// The poll is the fallback now, not the mechanism. While the socket is up it only has to catch
+// an event the backend never managed to send — a replica restarting mid-notification, say — so
+// it runs two orders of magnitude slower than it used to.
+const LIVE_FALLBACK_POLL_MS = 30_000
+const liveConnected = ref(false)
 const selectedFile = computed(() => files.value.find(file => file.id === selectedId.value) || null)
 const companionVisible = computed(() => browserVisible.value || filesOpen.value || Boolean(selectedFile.value))
 const isPresented = computed(() => Boolean(selectedId.value && presentation.value?.fileId === selectedId.value))
@@ -65,23 +74,50 @@ async function refreshPresentation(generation = loadGeneration) {
     }
   } catch { /* presentation is optional */ }
 }
+function pollDelay() {
+  if (liveConnected.value) return LIVE_FALLBACK_POLL_MS
+  const configured = Number(fileCapabilities.value?.limits?.presentationPollMilliseconds)
+  return Math.max(500, configured || 1500)
+}
 function schedulePresentationPoll(generation) {
   clearTimeout(presentationTimer)
-  const delay = Math.max(500, Number(fileCapabilities.value?.limits?.presentationPollMilliseconds) || 1500)
   presentationTimer = setTimeout(async () => {
     if (generation !== loadGeneration) return
     if (filesOpen.value) await refreshFiles(generation)
     await refreshPresentation(generation)
     if (generation === loadGeneration) schedulePresentationPoll(generation)
-  }, delay)
+  }, pollDelay())
+}
+async function onSessionEvent(generation) {
+  if (generation !== loadGeneration) return
+  if (filesOpen.value) await refreshFiles(generation)
+  await refreshPresentation(generation)
+}
+function openEventStream(generation) {
+  eventStream?.close()
+  eventStream = openSessionEvents(
+    () => props.sharedToken ? sharedSessionEventsUrl(props.sharedToken) : sessionEventsUrl(props.session.id),
+    () => { void onSessionEvent(generation) },
+    connected => {
+      if (generation !== loadGeneration) return
+      liveConnected.value = connected
+      // The poll's cadence depends on this flag, and a timer already waiting out the slow
+      // fallback would keep the pane stale for half a minute after the socket dropped.
+      schedulePresentationPoll(generation)
+    })
 }
 async function initializeFiles() {
   const generation = ++loadGeneration
   clearTimeout(presentationTimer)
+  eventStream?.close()
+  eventStream = undefined
+  liveConnected.value = false
   try { fileCapabilities.value = await capabilitiesRequest() } catch { fileCapabilities.value = {} }
   if (generation !== loadGeneration) return
   await Promise.all([refreshFiles(generation), refreshPresentation(generation)])
-  if (generation === loadGeneration) schedulePresentationPoll(generation)
+  if (generation !== loadGeneration) return
+  openEventStream(generation)
+  schedulePresentationPoll(generation)
 }
 function selectFile(id) {
   selectedId.value = id; filesOpen.value = true; activeCompanion.value = 'files'; mobilePane.value = 'files'
@@ -141,7 +177,13 @@ watch(browserVisible, visible => {
   if (visible && !filesOpen.value && !selectedFile.value) { activeCompanion.value = 'browser'; mobilePane.value = 'browser' }
   else if (!visible && activeCompanion.value === 'browser') activeCompanion.value = 'files'
 })
-onBeforeUnmount(() => { stopDragging(); loadGeneration += 1; clearTimeout(presentationTimer) })
+onBeforeUnmount(() => {
+  stopDragging()
+  loadGeneration += 1
+  clearTimeout(presentationTimer)
+  eventStream?.close()
+  eventStream = undefined
+})
 </script>
 
 <template>

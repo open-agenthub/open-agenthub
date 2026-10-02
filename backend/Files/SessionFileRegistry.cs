@@ -118,6 +118,36 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
                 presenter TEXT NOT NULL,
                 updated_at TIMESTAMPTZ NOT NULL
             );
+
+            -- Wakes the browser instead of letting it poll. A trigger rather than a publish call
+            -- next to each write: uploads, agent callbacks, the preview worker and the expiry
+            -- sweep all mutate these tables from four different files, and a write path that
+            -- forgets to publish does not fail anything — it just leaves one user's pane stale
+            -- until they reload, which is exactly the kind of bug that survives a green suite.
+            -- Postgres collapses identical (channel, payload) notifications raised in the same
+            -- transaction, so marking a whole session's files deleted still wakes a client once.
+            CREATE OR REPLACE FUNCTION agenthub_notify_session_files() RETURNS trigger AS $$
+            DECLARE
+                changed TEXT;
+            BEGIN
+                changed := COALESCE(NEW.session_id, OLD.session_id);
+                IF changed IS NOT NULL THEN
+                    PERFORM pg_notify('agenthub_session_events', changed || E'\n' || 'files');
+                END IF;
+                RETURN NULL;
+            END;
+            $$ LANGUAGE plpgsql;
+
+            DROP TRIGGER IF EXISTS trg_session_files_notify ON session_files;
+            CREATE TRIGGER trg_session_files_notify
+                AFTER INSERT OR UPDATE OR DELETE ON session_files
+                FOR EACH ROW EXECUTE FUNCTION agenthub_notify_session_files();
+
+            DROP TRIGGER IF EXISTS trg_session_file_presentations_notify
+                ON session_file_presentations;
+            CREATE TRIGGER trg_session_file_presentations_notify
+                AFTER INSERT OR UPDATE OR DELETE ON session_file_presentations
+                FOR EACH ROW EXECUTE FUNCTION agenthub_notify_session_files();
             """;
 
         await using var command = _db.CreateCommand(ddl);

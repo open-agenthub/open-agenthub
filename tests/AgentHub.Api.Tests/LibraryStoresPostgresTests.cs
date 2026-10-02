@@ -328,6 +328,36 @@ public class LibraryStoresPostgresTests
         Assert.NotNull(await db.EphemeralApiMcps.GetAsync("sess-2", "other"));
     }
 
+    /// <summary>
+    /// Mirrors the in-memory contract test. The listing calls this once per request instead of
+    /// once per session, so the batched SQL has to produce the same answer as walking the
+    /// sessions — including for ids that carry no registration at all.
+    /// </summary>
+    [PostgreSqlFact]
+    public async Task EphemeralApiMcpStore_ListSessionsWithEntries_AnswersInOneQuery()
+    {
+        await using var db = await PostgresLibraryDatabase.CreateAsync();
+        await db.EphemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "books", "alice",
+            """{"specType":"openapi","specUrl":"https://api.example.test/openapi.json"}""",
+            null));
+        await db.EphemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-1", "pets", "alice",
+            """{"specType":"openapi","specUrl":"https://petstore.example.test/openapi.json"}""",
+            null));
+        await db.EphemeralApiMcps.RegisterAsync(new EphemeralApiMcpEntry(
+            "sess-2", "other", "bob",
+            """{"specType":"openapi","specUrl":"https://other.example.test/openapi.json"}""",
+            null));
+
+        var withEntries = await db.EphemeralApiMcps.ListSessionsWithEntriesAsync(
+            ["sess-1", "sess-2", "sess-3"]);
+
+        Assert.Equal(["sess-1", "sess-2"], withEntries.OrderBy(id => id, StringComparer.Ordinal));
+        Assert.Empty(await db.EphemeralApiMcps.ListSessionsWithEntriesAsync([]));
+        Assert.Empty(await db.EphemeralApiMcps.ListSessionsWithEntriesAsync(["sess-3"]));
+    }
+
     [PostgreSqlFact]
     public async Task SkillStore_FallsBackToPostgres_WithoutObjectStorage()
     {
