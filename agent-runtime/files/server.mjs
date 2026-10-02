@@ -13,7 +13,11 @@ const runtimeRequire = createRequire(path.join(runtimeRoot, 'package.json'));
 const { McpServer } = runtimeRequire('@modelcontextprotocol/sdk/server/mcp.js');
 const { StdioServerTransport } = runtimeRequire('@modelcontextprotocol/sdk/server/stdio.js');
 const { z } = runtimeRequire('zod');
-const { LocalFileStore } = runtimeRequire('../files/local-store.js');
+// A sibling file resolves against this module, never against the runtime root. The two are
+// the same directory in the image and a level apart in the checkout, so a path relative to
+// the root is correct in exactly one of them — and the one it was wrong in was production.
+const localRequire = createRequire(import.meta.url);
+const { LocalFileStore } = localRequire('./local-store.js');
 
 const id = z.string().regex(/^[a-f0-9]{32}$/);
 const empty = z.object({}).strict();
