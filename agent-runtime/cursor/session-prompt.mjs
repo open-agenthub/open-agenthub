@@ -48,7 +48,9 @@ function excludeFromGit(workdir, relativePath) {
   const excludePath = path.join(gitDir, 'info', 'exclude');
   const entry = `/${relativePath.split(path.sep).join('/')}`;
   let current = '';
-  if (fs.existsSync(excludePath)) current = fs.readFileSync(excludePath, 'utf8');
+  // Read straight away rather than checking first: between an existence check and the read
+  // the path can be something else, and what gets appended below is based on this content.
+  try { current = fs.readFileSync(excludePath, 'utf8'); } catch { current = ''; }
   if (current.split(/\r?\n/).includes(entry)) return true;
   fs.mkdirSync(path.dirname(excludePath), { recursive: true });
   fs.appendFileSync(excludePath, `${current.endsWith('\n') || current === '' ? '' : '\n'}${entry}\n`);

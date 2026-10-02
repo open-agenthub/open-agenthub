@@ -29,11 +29,11 @@ export function trustWorkspace(config, dir) {
 export function writeWorkspaceTrust(configPath, dir) {
   let config = {};
   // A merge rather than a fresh write: a custom image may ship its own ~/.claude.json, and
-  // overwriting it would drop settings the image deliberately set.
-  if (fs.existsSync(configPath)) {
-    try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); }
-    catch { config = {}; }
-  }
+  // overwriting it would drop settings the image deliberately set. Read straight away and
+  // treat a failure as "nothing to merge" — an existence check first would describe a
+  // different file than the one that is then read.
+  try { config = JSON.parse(fs.readFileSync(configPath, 'utf8')); }
+  catch { config = {}; }
   if (!config || typeof config !== 'object' || Array.isArray(config)) config = {};
   fs.writeFileSync(configPath, `${JSON.stringify(trustWorkspace(config, dir))}\n`, { mode: 0o600 });
   return configPath;

@@ -13,6 +13,10 @@ fi
 if [ "$1" = "/opt/session-agent/skills/configure.mjs" ]; then
   exec /usr/local/bin/node "$@"
 fi
+# Writes the global AGENTS.md and the project-trust table; runs on every start.
+if [ "$1" = "/opt/session-agent/codex/session-prompt.mjs" ]; then
+  exec /usr/local/bin/node "$@"
+fi
 if [ "$1" = "/opt/session-agent/browser/configure-claude.mjs" ]; then
   exec /usr/local/bin/node "$@"
 fi
@@ -62,6 +66,10 @@ if [ "$1" = "/opt/session-agent/common/server.js" ]; then
   printf '%s\n' "$mcp_list" | grep -F agenthub_files >/dev/null
   # Also proves the pinned CLI accepts a hyphenated server name in a table header.
   printf '%s\n' "$mcp_list" | grep -F skill-library >/dev/null
+  # The trust table is appended after the MCP tables, and `codex mcp list` above only
+  # succeeds if that append left the file parseable — without the pre-accepted trust the
+  # interactive TUI stops on its folder-trust question and a session with a task never runs.
+  grep -Fx 'trust_level = "trusted"' "$CODEX_HOME/config.toml" >/dev/null
   echo subscription-config-auth-fixture-ok
   exit 0
 fi

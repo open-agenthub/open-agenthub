@@ -22,6 +22,9 @@ fi
 if [ "$1" = "/opt/session-agent/skills/configure.mjs" ]; then
   exec /usr/local/bin/node "$@"
 fi
+if [ "$1" = "/opt/session-agent/codex/session-prompt.mjs" ]; then
+  exec /usr/local/bin/node "$@"
+fi
 if [ "$1" = "/opt/session-agent/codex/mcp-config.js" ]; then
   exec /usr/local/bin/node "$@"
 fi
