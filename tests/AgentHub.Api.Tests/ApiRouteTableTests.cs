@@ -142,6 +142,30 @@ public class ApiRouteTableTests
             $"{SessionStateTransfer.MaxArchiveBytes} does not exceed Kestrel's {kestrelDefault}");
     }
 
+    [Fact]
+    public void EveryController_CanBeConstructedByTheActivator()
+    {
+        // A controller is built by ActivatorUtilities with no explicit arguments, so two public
+        // constructors that both match — the usual shape being a DI one beside a test seam — make
+        // the choice ambiguous. It throws on the first request rather than at startup, every route
+        // on that controller answers 500 with an empty body, and the suite stays green because the
+        // tests call the seam directly and never go through activation. One such mistake shipped
+        // and took the whole api/remote surface, and with it the session-transfer plugin, offline.
+        var failures = new List<string>();
+        foreach (var controller in Actions().OfType<ControllerActionDescriptor>()
+                     .Select(action => action.ControllerTypeInfo.AsType())
+                     .Distinct())
+        {
+            // The ambiguity, and a controller with no usable constructor at all, both arrive as
+            // InvalidOperationException. Anything else is not a wiring problem this test can
+            // describe, so it is left to fail the run on its own terms.
+            try { ActivatorUtilities.CreateFactory(controller, Type.EmptyTypes); }
+            catch (InvalidOperationException e) { failures.Add($"{controller.Name}: {e.Message}"); }
+        }
+
+        Assert.Empty(failures);
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private sealed record Route(string Template, IReadOnlySet<string> Methods, string Action);

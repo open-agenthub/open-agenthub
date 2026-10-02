@@ -4,6 +4,7 @@ using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AgentHub.Api.Controllers;
 
@@ -22,6 +23,14 @@ public sealed class RemoteController : ControllerBase
     private readonly ISessionService _svc;
     private readonly ISessionMessageStore? _messages;
 
+    /// <remarks>
+    /// Marked as the one to construct from the container. MVC builds a controller through
+    /// <see cref="ActivatorUtilities"/> with no explicit arguments, and the test seam below is
+    /// just as good a match: without the attribute the choice is ambiguous and activation throws
+    /// before any action runs, so every route on this controller answers 500 — including an
+    /// unauthenticated one, which makes it look like an auth problem rather than a wiring one.
+    /// </remarks>
+    [ActivatorUtilitiesConstructor]
     public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null)
         : this(tokens.FindOwnerByTokenAsync, svc, messages) { }
 
