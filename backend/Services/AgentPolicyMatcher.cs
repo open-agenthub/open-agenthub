@@ -7,6 +7,11 @@ public sealed record PolicyDecision(string Decision, string Reason);
 
 public static class AgentPolicyMatcher
 {
+    /// <summary>
+    /// Decides whether a session's stored policy covers one tool call: "allow" when the allow
+    /// list names it, "deny" when it does not or the input cannot be read, and "ask" when the
+    /// call is uncovered but the session auto-approves and the approval endpoint should answer.
+    /// </summary>
     /// <param name="autoApprove">
     /// The session approves tool requests on its own. A tool the allow list does not cover is
     /// then "ask" rather than "deny", so the runtime hook goes on to the permission endpoint
