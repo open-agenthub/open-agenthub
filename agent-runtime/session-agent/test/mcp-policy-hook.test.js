@@ -392,3 +392,25 @@ test('MCP policy hook is copied into the Claude runtime image and made executabl
   assert.ok(dockerfile.includes('COPY claude /opt/session-agent/claude'));
   assert.ok(dockerfile.includes('/opt/session-agent/claude/hooks/mcp-policy-hook.sh'));
 });
+
+// The policy hook execs the approval hook directly, so the approval hook has to carry the
+// executable bit in the repository and not only via the Dockerfile's chmod. Windows does not
+// model the bit at all, so a checkout there cannot catch this: it surfaced as
+// "pretooluse-hook.sh: Permission denied" on Linux CI only.
+test('both Claude hooks are executable in the repository, not just in the image', () => {
+  const listed = require('node:child_process').spawnSync(
+    'git', ['ls-files', '-s', 'agent-runtime/claude/hooks'],
+    { encoding: 'utf8', cwd: path.join(runtimeDir, '..') }
+  );
+  if (listed.status !== 0) {
+    assert.fail(`cannot read git file modes: ${listed.stderr || listed.error}`);
+  }
+
+  const modes = Object.fromEntries(listed.stdout.trim().split('\n').map(line => {
+    const [mode, , , file] = line.split(/[\s\t]+/);
+    return [path.basename(file), mode];
+  }));
+
+  assert.equal(modes['mcp-policy-hook.sh'], '100755');
+  assert.equal(modes['pretooluse-hook.sh'], '100755');
+});
