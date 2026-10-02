@@ -13,8 +13,8 @@ FROM node:22-bookworm-slim
 # an expected version here only converted "not reproducible" into "build broken" every
 # time Cursor shipped, which blocked the whole image set. The installed version is
 # recorded instead (INSTALLED_VERSION, exported as CURSOR_AGENT_VERSION by the entrypoint).
-ARG GH_VERSION=2.101.0
-ARG GLAB_VERSION=1.119.0
+ARG GH_VERSION=2.102.0
+ARG GLAB_VERSION=1.120.0
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates bash curl tar \
  && curl https://cursor.com/install -fsS | bash \
