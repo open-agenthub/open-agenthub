@@ -101,11 +101,11 @@ if [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ]; then
   merge_builtin_mcp files configure.mjs
 fi
 # Only ever rewrites an existing skill-library entry, so there is nothing to do without a
-# config — and writing one here would hand the agent an empty .mcp.json it never had.
+# config — and writing one here would hand the agent an empty .mcp.json it never had. Goes
+# through merge_builtin_mcp for the same reason the others do: an image that does not ship
+# skills/ must skip the step, not abort the entrypoint on MODULE_NOT_FOUND.
 if [ "${AGENTHUB_SKILLS_MCP_ENABLED:-0}" = "1" ] && [ -n "$MCP_SOURCE" ]; then
-  node "$RUNTIME/skills/configure.mjs" "$MCP_SOURCE"
-  MCP_SOURCE=/tmp/agenthub-mcp.json
-  MERGED_MCP=1
+  merge_builtin_mcp skills configure.mjs
 fi
 if [ "$MERGED_MCP" = "1" ]; then
   export AGENTHUB_MCP_CONFIG=/tmp/agenthub-mcp.json

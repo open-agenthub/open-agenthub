@@ -75,7 +75,9 @@ test('every runtime ships the proxy and wires it up', () => {
   const common = fs.readFileSync(path.join(runtimeRoot, 'common', 'entrypoint-common.sh'), 'utf8');
   const cursor = fs.readFileSync(path.join(runtimeRoot, 'cursor', 'entrypoint.sh'), 'utf8');
   assert.match(common, /AGENTHUB_SKILLS_MCP_ENABLED/);
-  assert.match(common, /skills\/configure\.mjs/);
+  // Through merge_builtin_mcp like every other builtin, so an image that does not ship
+  // skills/ skips the step instead of aborting the entrypoint on MODULE_NOT_FOUND.
+  assert.match(common, /merge_builtin_mcp skills configure\.mjs/);
   assert.match(cursor, /skills\/configure\.mjs/);
   for (const provider of ['claude', 'codex', 'cursor', 'openclaw']) {
     const dockerfile = fs.readFileSync(path.join(runtimeRoot, provider, 'Dockerfile'), 'utf8');
