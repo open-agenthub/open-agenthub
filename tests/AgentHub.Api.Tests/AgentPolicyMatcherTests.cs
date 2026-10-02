@@ -92,4 +92,86 @@ public class AgentPolicyMatcherTests
 
         Assert.Equal("deny", AgentPolicyMatcher.Decide(policy, "mcp__docs__search", input.RootElement).Decision);
     }
+
+    // An auto-approving session is one the owner asked to run unattended, so a tool outside the
+    // allow list is a question for the approval endpoint rather than a refusal here. Deciding it
+    // here is what made auto-approve unreachable: the flag lives behind /permission, and an
+    // unattended session that never got there was stopped by its own empty allow list.
+    [Theory]
+    [InlineData("Read", "allow")]
+    [InlineData("WebFetch", "ask")]
+    [InlineData("mcp__docs__search", "allow")]
+    [InlineData("mcp__other__search", "ask")]
+    public void Decide_LeavesUncoveredToolsToApprovalWhenTheSessionAutoApproves(
+        string tool, string expected)
+    {
+        using var input = JsonDocument.Parse("{}");
+
+        Assert.Equal(expected,
+            AgentPolicyMatcher.Decide(Policy, tool, input.RootElement, autoApprove: true).Decision);
+    }
+
+    [Theory]
+    [InlineData("git status", "allow")]
+    [InlineData("git push", "ask")]
+    public void Decide_LeavesUncoveredCommandsToApprovalWhenTheSessionAutoApproves(
+        string command, string expected)
+    {
+        using var input = JsonDocument.Parse(JsonSerializer.Serialize(new { command }));
+
+        Assert.Equal(expected,
+            AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement, autoApprove: true).Decision);
+    }
+
+    [Fact]
+    public void Decide_EmptyCommandPolicyIsStillOpenToApproval()
+    {
+        using var input = JsonDocument.Parse(JsonSerializer.Serialize(new { command = "curl https://example.com" }));
+
+        Assert.Equal("ask", AgentPolicyMatcher
+            .Decide(new AgentPolicy(), "Bash", input.RootElement, autoApprove: true).Decision);
+    }
+
+    // Auto-approve answers questions; it does not make an unreadable command safe. A shell string
+    // the parser cannot take apart is not something anyone could be asked to approve, and the same
+    // holds for a missing tool name. Note what is *not* in this list: a chained command parses
+    // fine, so it is asked rather than denied — one of its components simply is not covered.
+    [Theory]
+    [InlineData("{\"command\":\"echo $(id)\"}")]
+    [InlineData("{\"command\":\"echo `id`\"}")]
+    [InlineData("{\"command\":\"git status \\\"unterminated\"}")]
+    [InlineData("{\"command\":\"HOME=/tmp git status\"}")]
+    [InlineData("{\"command\":17}")]
+    [InlineData("[]")]
+    public void Decide_NeverSoftensMalformedInputForAnAutoApprovingSession(string json)
+    {
+        using var input = JsonDocument.Parse(json);
+
+        Assert.Equal("deny",
+            AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement, autoApprove: true).Decision);
+    }
+
+    // The consequence of the choice above, written down so it cannot change by accident: under
+    // auto-approve a chain whose components are not all covered reaches the approval endpoint,
+    // exactly as a human clicking "allow" would have let it through.
+    [Fact]
+    public void Decide_AsksRatherThanDeniesAChainedCommandUnderAutoApprove()
+    {
+        using var input = JsonDocument.Parse(
+            JsonSerializer.Serialize(new { command = "git status && git push" }));
+
+        Assert.Equal("ask",
+            AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement, autoApprove: true).Decision);
+        Assert.Equal("deny",
+            AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement).Decision);
+    }
+
+    [Fact]
+    public void Decide_DeniesAMissingToolNameEvenWhenTheSessionAutoApproves()
+    {
+        using var input = JsonDocument.Parse("{}");
+
+        Assert.Equal("deny",
+            AgentPolicyMatcher.Decide(Policy, "  ", input.RootElement, autoApprove: true).Decision);
+    }
 }

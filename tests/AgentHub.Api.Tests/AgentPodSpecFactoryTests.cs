@@ -215,6 +215,29 @@ public class AgentPodSpecFactoryTests
             env["AGENTHUB_ALLOWED_COMMANDS"].Value);
     }
 
+    // Cursor and OpenClaw have no per-call hook to ask the backend through: their permission
+    // settings are decided when the process starts, from this variable. Before it existed the
+    // flag could not reach them at all, so switching auto-approve off left both running
+    // everything regardless.
+    [Theory]
+    [InlineData(AgentKind.Cursor)]
+    [InlineData(AgentKind.OpenClaw)]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    public void Build_PassesTheAutoApproveFlagToEveryRuntime(AgentKind agent)
+    {
+        var on = Build(agent, AgentAuthMode.ApiKey,
+            request => request with { Mode = SessionMode.Autonomous, Prompt = "work" },
+            autoApprove: true);
+        var off = Build(agent, AgentAuthMode.ApiKey,
+            request => request with { Mode = SessionMode.Autonomous, Prompt = "work" });
+
+        Assert.Equal("1", Assert.Single(on.Containers).Env
+            .Single(item => item.Name == "AGENTHUB_AUTO_APPROVE").Value);
+        Assert.Equal("0", Assert.Single(off.Containers).Env
+            .Single(item => item.Name == "AGENTHUB_AUTO_APPROVE").Value);
+    }
+
 
     [Fact]
     public void Build_ClaudeAutoPreservesLegacyPodShape()
@@ -467,7 +490,8 @@ public class AgentPodSpecFactoryTests
 
     private static V1PodSpec Build(AgentKind agent, AgentAuthMode auth,
         Func<CreateSessionRequest, CreateSessionRequest>? customize = null,
-        OpenClawApiKeySource? openClawApiKeySource = null)
+        OpenClawApiKeySource? openClawApiKeySource = null,
+        bool autoApprove = false)
     {
         openClawApiKeySource ??= agent == AgentKind.OpenClaw && auth == AgentAuthMode.ApiKey
             ? OpenClawApiKeySource.Anthropic
@@ -481,11 +505,11 @@ public class AgentPodSpecFactoryTests
         };
         if (customize is not null) request = customize(request);
         return AgentPodSpecFactory.Build(
-            Record(agent, auth, request.Mode, openClawApiKeySource), request, Context());
+            Record(agent, auth, request.Mode, openClawApiKeySource, autoApprove), request, Context());
     }
 
     private static SessionRecord Record(AgentKind agent, AgentAuthMode auth, SessionMode mode,
-        OpenClawApiKeySource? openClawApiKeySource = null) => new()
+        OpenClawApiKeySource? openClawApiKeySource = null, bool autoApprove = false) => new()
     {
         Id = "session-id",
         Owner = "owner",
@@ -493,6 +517,7 @@ public class AgentPodSpecFactoryTests
         Mode = mode,
         Agent = agent,
         AuthMode = auth,
+        AutoApprove = autoApprove,
         OpenClawApiKeySource = openClawApiKeySource,
         AgentSessionId = "agent-session-id",
         CallbackToken = "callback-token"

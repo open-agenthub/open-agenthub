@@ -143,6 +143,9 @@ async function emitApproved(tool, input) {
   }
 }
 
+// Leaving a PermissionRequest unanswered is only safe where a person can still answer it. In an
+// unattended session the absence of a decision is Codex's own approval policy deciding instead,
+// so every path out of here that has no answer ends in failClosed.
 async function handlePermissionRequest(tool, input) {
   const initial = await requestJson('/permission', {
     method: 'POST', body: { tool, input: approvalDescriptor(tool) }
@@ -151,9 +154,13 @@ async function handlePermissionRequest(tool, input) {
     const decision = parseDecision(initial, ['allow', 'allowAlways', 'deny', 'ask']);
     if (decision === 'allow' || decision === 'allowAlways') await emitApproved(tool, input);
     else if (decision === 'deny') emitDecision('PermissionRequest', 'deny');
+    else failClosed('PermissionRequest');
     return;
   }
-  if (typeof initial.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(initial.id)) return;
+  if (typeof initial.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(initial.id)) {
+    failClosed('PermissionRequest');
+    return;
+  }
 
   const polls = boundedInteger(process.env.AGENTHUB_APPROVAL_POLLS, 120, 1, 120);
   const interval = boundedInteger(process.env.AGENTHUB_APPROVAL_INTERVAL_MS, 2000, 10, 2000);
@@ -166,6 +173,8 @@ async function handlePermissionRequest(tool, input) {
     else await emitApproved(tool, input);
     return;
   }
+  // Nobody answered inside the poll budget.
+  failClosed('PermissionRequest');
 }
 
 async function main() {
@@ -200,19 +209,19 @@ async function main() {
     emitDecision(eventName, 'deny');
     return;
   }
-  if (eventName === 'PreToolUse') {
-    if (policy === 'ask' && !isInteractive()) emitDecision(eventName, 'deny');
-    return;
-  }
-  if (!isInteractive()) {
-    emitDecision(eventName, policy === 'ask' ? 'deny' : 'allow');
-    return;
-  }
+  // "ask" now reaches unattended sessions too: the backend returns it for a tool the allow list
+  // does not cover once the session auto-approves, and the answer lives behind /permission. The
+  // PreToolUse pass stays silent so Codex raises the PermissionRequest that carries it there;
+  // denying here instead is what made auto-approve unreachable for an unattended session, which
+  // was then held to its allow list and stopped on its first uncovered call.
+  if (eventName === 'PreToolUse') return;
 
   try {
     await handlePermissionRequest(tool, input);
   } catch {
-    // Interactive callback failures deliberately leave the normal Codex prompt available.
+    // Interactive callback failures deliberately leave the normal Codex prompt available;
+    // unattended there is no prompt to fall back on, so the call must not slip through.
+    failClosed(eventName);
   }
 }
 

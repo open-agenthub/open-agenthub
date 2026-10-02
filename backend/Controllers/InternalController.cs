@@ -296,7 +296,10 @@ public sealed class InternalController : ControllerBase
             policy = new AgentPolicy();
         }
 
-        var result = AgentPolicyMatcher.Decide(policy, body.Tool ?? string.Empty, body.Input);
+        // Read off the record on every request, like the permission endpoint does, so toggling
+        // auto-approve reaches a running session without a restart.
+        var result = AgentPolicyMatcher.Decide(policy, body.Tool ?? string.Empty, body.Input,
+            rec.AutoApprove);
         return Ok(new { decision = result.Decision, reason = result.Reason });
     }
 

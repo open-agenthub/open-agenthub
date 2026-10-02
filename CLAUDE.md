@@ -83,7 +83,16 @@ Do not add a comment that restates the code. Do not leave commented-out code beh
   session asked to run the .NET suite cannot, unless it is started with `runAsRoot` so it can
   install what it needs, or with a custom image.
 - **Autonomous and scheduled sessions auto-approve tool requests**, because nobody is there to
-  answer a prompt. An interactive session still asks.
+  answer a prompt. An interactive session still asks. Where the flag is *enforced* differs per
+  runtime, and it matters: Claude and Codex ask the backend on every call through a hook, so the
+  flag can be toggled while they run. Cursor (`--force`) and OpenClaw (`tools.exec`) are configured
+  once at process start from `AGENTHUB_AUTO_APPROVE`, so changing it needs a restart. OpenClaw has
+  no per-call hook at all, so its approvals cannot reach the chat relay — an interactive OpenClaw
+  session asks in its own terminal only.
+- **The session allow list is a head start, not a boundary, whenever auto-approve is on.** An
+  uncovered tool becomes an approval question that auto-approve then answers. With auto-approve off
+  the allow list is the boundary and an uncovered tool is denied. The MCP sharing policy is a hard
+  deny either way.
 - **Agent CLI versions are pinned per runtime** and verified after install; see
   `docs/agent-runtime-updates.md` before changing one. Cursor is deliberately unpinned and
   OpenClaw deliberately held back — both for reasons documented there.

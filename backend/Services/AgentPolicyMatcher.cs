@@ -7,17 +7,39 @@ public sealed record PolicyDecision(string Decision, string Reason);
 
 public static class AgentPolicyMatcher
 {
-    public static PolicyDecision Decide(AgentPolicy policy, string tool, JsonElement input)
+    /// <summary>
+    /// Decides whether a session's stored policy covers one tool call: "allow" when the allow
+    /// list names it, "deny" when it does not or the input cannot be read, and "ask" when the
+    /// call is uncovered but the session auto-approves and the approval endpoint should answer.
+    /// </summary>
+    /// <param name="autoApprove">
+    /// The session approves tool requests on its own. A tool the allow list does not cover is
+    /// then "ask" rather than "deny", so the runtime hook goes on to the permission endpoint
+    /// where auto-approve answers it — the allow list is a head start, not the boundary, which
+    /// is how the Claude runtime has always treated it. Without this an unattended session was
+    /// held to its allow list no matter what its auto-approve flag said, and an empty list meant
+    /// the agent was denied its first tool call and finished having done nothing.
+    ///
+    /// Malformed input is never softened this way: an unparseable shell command stays a hard
+    /// deny, because "we could not tell what this command does" is not a question anyone can be
+    /// asked. The live MCP sharing policy is enforced before this matcher runs and also stays
+    /// hard.
+    /// </param>
+    public static PolicyDecision Decide(AgentPolicy policy, string tool, JsonElement input,
+        bool autoApprove = false)
     {
         if (string.IsNullOrWhiteSpace(tool)) return Deny("Blocked by tool policy.");
         if (string.Equals(tool, "Bash", StringComparison.Ordinal))
-            return DecideCommand(policy.AllowedCommands, input);
+            return DecideCommand(policy.AllowedCommands, input, autoApprove);
         if (tool.StartsWith("mcp__", StringComparison.Ordinal))
-            return Match(policy.AllowedMcpTools, tool, true) ? Allow() : Deny("Blocked by MCP policy.");
-        return Match(policy.AllowedTools, tool, false) ? Allow() : Deny("Blocked by tool policy.");
+            return Match(policy.AllowedMcpTools, tool, true)
+                ? Allow() : NotCovered("MCP policy", autoApprove);
+        return Match(policy.AllowedTools, tool, false)
+            ? Allow() : NotCovered("tool policy", autoApprove);
     }
 
-    private static PolicyDecision DecideCommand(IReadOnlyList<string>? allowed, JsonElement input)
+    private static PolicyDecision DecideCommand(IReadOnlyList<string>? allowed, JsonElement input,
+        bool autoApprove)
     {
         if (input.ValueKind != JsonValueKind.Object
             || !input.TryGetProperty("command", out var element)
@@ -29,10 +51,10 @@ public static class AgentPolicyMatcher
         var prefixes = new List<IReadOnlyList<string>>();
         foreach (var configured in allowed ?? [])
             if (TryParse(configured, out var parsed) && parsed.Count == 1) prefixes.Add(parsed[0]);
-        if (prefixes.Count == 0) return Deny("Blocked by command policy.");
+        if (prefixes.Count == 0) return NotCovered("command policy", autoApprove);
         return components.All(component => prefixes.Any(prefix => IsPrefix(prefix, component)))
             ? Allow()
-            : Deny("Blocked by command policy.");
+            : NotCovered("command policy", autoApprove);
     }
 
     private static bool Match(IReadOnlyList<string>? patterns, string value, bool mcp)
@@ -144,4 +166,8 @@ public static class AgentPolicyMatcher
 
     private static PolicyDecision Allow() => new("allow", "Allowed by session policy.");
     private static PolicyDecision Deny(string reason) => new("deny", reason);
+
+    private static PolicyDecision NotCovered(string policyName, bool autoApprove) => autoApprove
+        ? new("ask", $"Not covered by the session {policyName}; left to approval.")
+        : new("deny", $"Blocked by {policyName}.");
 }

@@ -14,8 +14,18 @@ render_settings() {
   # Quoted: the local fallback interpreter above resolves to a path with a space in it,
   # and the hook command is handed to a shell.
   SKILL_REMINDER="'$NODE_BIN' '${RUNTIME:-/opt/session-agent}/common/skill-reminder-hook.mjs'"
-  if [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
-    cat <<JSON
+  # Every mode gets the same PreToolUse pair. Unattended modes used to register only the
+  # MCP matcher, which left auto-approve unreachable for them: the session flag is read in
+  # the backend's /permission endpoint, and that endpoint is called by nothing but
+  # pretooluse-hook.sh. An autonomous session therefore ran under --permission-mode
+  # acceptEdits alone and stalled on the first Bash, WebFetch or WebSearch call with
+  # "requires approval" — no prompt reaching anyone, no auto-approve answering it.
+  #
+  # The MCP timeout is 1900 for the same reason as the interactive one: this script
+  # delegates to the approval hook, whose poll window (AGENTHUB_PERMISSION_POLL_SECONDS,
+  # default 1740s) has to fit inside it. With auto-approve on, /permission answers "allow"
+  # on the first POST and nothing polls at all.
+  cat <<JSON
 {
   "hooks": {
     "Notification": [
@@ -35,27 +45,6 @@ render_settings() {
   }
 }
 JSON
-  else
-    cat <<JSON
-{
-  "hooks": {
-    "Notification": [
-      { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/notify-hook.sh" } ] }
-    ],
-    "PreToolUse": [
-      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 5 } ] }
-    ],
-    "PostToolUse": [
-      { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit|Bash)$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark work", "timeout": 10 } ] },
-      { "matcher": ".*upload_skill$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark uploaded", "timeout": 10 } ] }
-    ],
-    "Stop": [
-      { "hooks": [ { "type": "command", "command": "$SKILL_REMINDER", "timeout": 10 } ] }
-    ]
-  }
-}
-JSON
-  fi
 }
 
 if [ "${1:-}" = "--settings" ]; then
@@ -71,12 +60,12 @@ emit_deny() {
 }
 
 continue_flow() {
-  if [ "${AGENTHUB_MODE:-}" = "interactive" ]; then
-    printf '%s' "$payload" | "$APPROVAL_HOOK"
-    exit $?
-  fi
-  printf '{}\n'
-  exit 0
+  # The sharing policy said nothing against this call, so the ordinary approval decides it
+  # — in every mode. Returning "{}" instead (as unattended modes did) hands the call back
+  # to the CLI's own permission flow, which in a -p run with no terminal is a refusal that
+  # auto-approve never gets the chance to overrule.
+  printf '%s' "$payload" | "$APPROVAL_HOOK"
+  exit $?
 }
 
 tool="$(printf '%s' "$payload" | "$NODE_BIN" -e '

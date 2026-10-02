@@ -55,6 +55,35 @@ public class InternalAgentPolicyTests
             "session-1", Body("Bash", new { command = "git push" }), CancellationToken.None)));
     }
 
+    // The flag has to be read here, not only at /permission: the runtime hook asks this endpoint
+    // first, and a "deny" settles the call before the approval endpoint is ever reached. That is
+    // what made auto-approve do nothing for an unattended Codex session.
+    [Theory]
+    [InlineData(SessionMode.Autonomous)]
+    [InlineData(SessionMode.Scheduled)]
+    public async Task AgentPolicy_AutoApproveLeavesUncoveredCallsToTheApprovalEndpoint(SessionMode mode)
+    {
+        var controller = Controller(Session(mode, autoApprove: true), new FakeMcpPolicyReader(null));
+
+        Assert.Equal("allow", Decision(await controller.AgentPolicy(
+            "session-1", Body("Read"), CancellationToken.None)));
+        Assert.Equal("ask", Decision(await controller.AgentPolicy(
+            "session-1", Body("WebFetch"), CancellationToken.None)));
+        Assert.Equal("ask", Decision(await controller.AgentPolicy(
+            "session-1", Body("Bash", new { command = "git push" }), CancellationToken.None)));
+    }
+
+    [Fact]
+    public async Task AgentPolicy_AutoApproveDoesNotOverrideTheSharingDeny()
+    {
+        var sharing = new FakeMcpPolicyReader(new SessionMcpPolicy([], ["mcp__docs__search"], DateTime.UtcNow));
+        var controller = Controller(Session(SessionMode.Autonomous, autoApprove: true), sharing);
+
+        var result = await controller.AgentPolicy("session-1", Body("mcp__docs__search"), CancellationToken.None);
+
+        Assert.Equal("deny", Decision(result));
+    }
+
     [Fact]
     public async Task AgentPolicy_MalformedPersistedPolicyFailsClosed()
     {
@@ -77,12 +106,13 @@ public class InternalAgentPolicyTests
         return json.RootElement.GetProperty("decision").GetString()!;
     }
 
-    private static SessionRecord Session(SessionMode mode) => new()
+    private static SessionRecord Session(SessionMode mode, bool autoApprove = false) => new()
     {
         Id = "session-1",
         Owner = "alice",
         CallbackToken = "callback-token",
         Mode = mode,
+        AutoApprove = autoApprove,
         Agent = AgentKind.Codex,
         AuthMode = AgentAuthMode.ApiKey,
         AgentPolicyJson = "{\"allowedTools\":[\"Read\"],\"allowedMcpTools\":[],\"allowedCommands\":[\"git status\"]}"
