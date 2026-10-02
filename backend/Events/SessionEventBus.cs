@@ -109,7 +109,17 @@ public sealed class PostgresSessionEventBus : ISessionEventBus, IHostedService, 
         await _listening.CancelAsync();
         if (_listener is not null)
         {
-            try { await _listener.WaitAsync(ct); } catch (OperationCanceledException) { }
+            try
+            {
+                await _listener.WaitAsync(ct);
+            }
+            catch (OperationCanceledException)
+            {
+                // Shutdown ran out of time before the loop unwound. The connection goes with the
+                // process either way, so this does not block stopping — but a host that reaches
+                // this on every shutdown has a loop that is not observing its token.
+                _log.LogDebug("Session event listener did not stop within the shutdown timeout");
+            }
         }
     }
 

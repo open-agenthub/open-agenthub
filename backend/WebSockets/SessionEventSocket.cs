@@ -39,8 +39,8 @@ public static class SessionEventSocket
         using var client = await context.WebSockets.AcceptWebSocketAsync();
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
 
-        var pushing = PushAsync(client, subscription, cts.Token);
-        var draining = DrainAsync(client, cts.Token);
+        var pushing = PushAsync(client, subscription, log, cts.Token);
+        var draining = DrainAsync(client, log, cts.Token);
         var authorization = remainsAuthorized is null
             ? null
             : BrowserProxy.MonitorAuthorizationAsync(remainsAuthorized, cts.Token, AuthorizationInterval);
@@ -52,7 +52,17 @@ public static class SessionEventSocket
         var revoked = authorization is not null &&
             ReferenceEquals(completed, authorization) && !await authorization;
         await cts.CancelAsync();
-        try { await Task.WhenAll(running); } catch (OperationCanceledException) { } catch (WebSocketException) { }
+        try
+        {
+            await Task.WhenAll(running);
+        }
+        catch (Exception error) when (error is OperationCanceledException or WebSocketException)
+        {
+            // Expected: we just cancelled them. Recorded rather than dropped because a socket
+            // that keeps tearing down this way is how a proxy silently killing connections
+            // first becomes visible.
+            log.LogDebug(error, "Session event socket for {SessionId} wound down", sessionId);
+        }
 
         if (revoked && client.State == WebSocketState.Open)
         {
@@ -63,7 +73,7 @@ public static class SessionEventSocket
     }
 
     private static async Task PushAsync(
-        WebSocket client, ISessionEventSubscription subscription, CancellationToken ct)
+        WebSocket client, ISessionEventSubscription subscription, ILogger log, CancellationToken ct)
     {
         // An immediate first event closes the window between the client's initial REST read and
         // the subscription: anything that changed in between is picked up by the resulting
@@ -98,8 +108,12 @@ public static class SessionEventSocket
                 await SendAsync(client, events.Current, ct);
             }
         }
-        catch (OperationCanceledException) { }
-        catch (WebSocketException) { }
+        catch (Exception error) when (error is OperationCanceledException or WebSocketException)
+        {
+            // The client went away or the request was aborted. Not an error, but worth a trace:
+            // a push loop ending for any other reason would surface here as an unhandled throw.
+            log.LogDebug(error, "Session event push loop ended");
+        }
         finally { await events.DisposeAsync(); }
     }
 
@@ -108,7 +122,7 @@ public static class SessionEventSocket
     /// receive a close from the browser is never observed and the socket lingers until the
     /// request is aborted.
     /// </summary>
-    private static async Task DrainAsync(WebSocket client, CancellationToken ct)
+    private static async Task DrainAsync(WebSocket client, ILogger log, CancellationToken ct)
     {
         var buffer = new byte[256];
         try
@@ -119,8 +133,12 @@ public static class SessionEventSocket
                 if (message.MessageType == WebSocketMessageType.Close) return;
             }
         }
-        catch (OperationCanceledException) { }
-        catch (WebSocketException) { }
+        catch (Exception error) when (error is OperationCanceledException or WebSocketException)
+        {
+            // A browser that vanishes mid-connection raises this rather than sending a close
+            // frame; it is the normal end of the read, not a failure to report upwards.
+            log.LogDebug(error, "Session event socket read ended");
+        }
     }
 
     // Explicit: SerializeToUtf8Bytes does not pick up the MVC pipeline's camelCase policy, and

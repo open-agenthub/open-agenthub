@@ -125,8 +125,10 @@ public sealed class SessionEventBusPostgresTests
         Assert.False(ReferenceEquals(winner, extra),
             "a write to an unrelated session must not wake this subscriber");
 
+        // Asserted rather than swallowed: the pending read has to end by cancellation, and a read
+        // that completed instead would be the leaked event this test exists to catch.
         await cts.CancelAsync();
-        try { await extra; } catch (OperationCanceledException) { }
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => extra);
         await events.DisposeAsync();
         await bus.StopAsync(CancellationToken.None);
     }
