@@ -156,8 +156,11 @@ public class ApiRouteTableTests
                      .Select(action => action.ControllerTypeInfo.AsType())
                      .Distinct())
         {
+            // The ambiguity, and a controller with no usable constructor at all, both arrive as
+            // InvalidOperationException. Anything else is not a wiring problem this test can
+            // describe, so it is left to fail the run on its own terms.
             try { ActivatorUtilities.CreateFactory(controller, Type.EmptyTypes); }
-            catch (Exception e) { failures.Add($"{controller.Name}: {e.Message}"); }
+            catch (InvalidOperationException e) { failures.Add($"{controller.Name}: {e.Message}"); }
         }
 
         Assert.Empty(failures);
