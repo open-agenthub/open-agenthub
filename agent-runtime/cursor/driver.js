@@ -46,7 +46,18 @@ function buildCommand(env, allowResume) {
     return { cmd: 'agent', args };
   }
 
-  const args = ['-p', '--force', '--trust'];
+  // `--force` is documented by the CLI as "Force allow commands unless explicitly denied", which
+  // is auto-approve and nothing else — so it belongs to the flag, not to the mode. It used to be
+  // unconditional, which meant switching auto-approve off on an unattended Cursor session changed
+  // nothing at all: the agent kept running everything the deny list did not name. Without it the
+  // session is held to `approvalMode: allowlist` and the policy's allow entries, and a call outside
+  // them has nobody to approve it in a -p run.
+  const args = ['-p'];
+  if (env.AGENTHUB_AUTO_APPROVE === '1') args.push('--force');
+  args.push('--trust');
+  // Unconditional: this approves the MCP *servers* the hub configured, which is a startup
+  // question, not a per-call permission. Gating it would leave the session stuck on a trust
+  // prompt rather than asking anyone anything.
   if (env.AGENTHUB_HAS_MCP === '1') args.push('--approve-mcps');
   if (restoredResume) args.push('--resume', chatId);
   args.push(prompt);

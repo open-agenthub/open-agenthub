@@ -38,6 +38,14 @@ export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_STATE_DIR/opencla
 node "$RUNTIME/openclaw/mcp-config.js" "$OPENCLAW_CONFIG_PATH" "${AGENTHUB_MCP_CONFIG:-}" \
   agenthub_browser agenthub_sessions agenthub_files agenthub_network
 
+# The session's auto-approve flag and command policy, as OpenClaw's exec policy. Runs after
+# mcp-config.js because both write openclaw.json, and before the state restore below is trusted:
+# the approvals file is rewritten from the session every start so an allow-list entry from an
+# earlier incarnation cannot grant a permission the hub never did.
+EXEC_POLICY_SUMMARY="$(node "$RUNTIME/openclaw/exec-policy.js" \
+  "$OPENCLAW_CONFIG_PATH" "$OPENCLAW_STATE_DIR/exec-approvals.json")"
+echo "[entrypoint] OpenClaw exec policy: $EXEC_POLICY_SUMMARY"
+
 # State restore always precedes authentication, and archived credentials are never trusted.
 # Scrub AgentHub root auth file and every nested agent-store credential path.
 rm -f "$OPENCLAW_AUTH_FILE" \

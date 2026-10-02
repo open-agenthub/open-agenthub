@@ -9,6 +9,109 @@ when the fake in the test is more forgiving than production.
 
 ---
 
+## 2026-10-02 — Auto-approve was switched on, stored, defaulted, tested — and never asked
+
+An autonomous session was told to research something on the web. It came back having fetched
+nothing, with three refusals: `WebFetch` → "Claude requested permissions to use WebFetch, but you
+haven't granted it yet", `WebSearch` → the same, `curl` through Bash → "This command requires
+approval". Auto-approve was on. It had been on by default since the day unattended modes got the
+flag.
+
+**The flag was never reachable from an unattended session.** `AutoApprove` is answered in one
+place, `InternalController.RequestPermission`, and exactly one caller reaches that endpoint:
+`agent-runtime/claude/hooks/pretooluse-hook.sh`. The settings renderer in `mcp-policy-hook.sh`
+registered that hook only in its interactive branch — the unattended branch registered the
+`mcp__.*` matcher alone, and even that path returned `{}` for anything it did not deny. So an
+autonomous run leaned on `--permission-mode acceptEdits` by itself, which auto-approves file edits
+and nothing else. Every non-edit tool fell back to the CLI's own permission flow, where a `-p` run
+with no terminal is simply a refusal.
+
+**Why no test caught it.** `AutoApproveDefaultTests` asserts the default is `true` per mode, which
+it is. `claude-driver.test.js` asserts the autonomous command contains `acceptEdits`, which it
+does. `mcp-policy-hook.test.js` asserted that unattended modes register *only* the MCP matcher —
+the bug was written down as the expectation. Three green tests around a feature that did not work:
+none of them crossed the seam between the backend flag and the runtime that had to ask about it.
+
+The fix is to register both matchers in every mode and let `continue_flow` delegate to the approval
+hook unconditionally. The MCP matcher's timeout goes from 5s to 1900s because it now has to outlast
+the poll window of the hook it delegates to. With auto-approve on, `/permission` answers "allow" on
+the first POST and nothing ever polls — the cost is one request per tool call.
+
+**The alternative was `--permission-mode bypassPermissions`** in the driver, which is one line.
+Rejected: it bakes the decision into argv at launch, so toggling auto-approve on a running session
+would not take effect, an explicit `AutoApprove = false` would need a second code path anyway, and
+it would hand an unattended session a blanket bypass that also skips the MCP sharing policy. The
+hook keeps one decision point for every mode.
+
+**What proving it took.** Two things had to be true, and neither followed from the other: that the
+hook chain reaches `/permission` in unattended mode, and that the CLI honours an `allow` from a
+hook in `-p` mode *despite* `acceptEdits`. The first is a node test against a stub backend. The
+second needed the real CLI: `claude -p` on `example.com` reproduced the exact refusal text with no
+hook registered, and fetched the page with an always-allow hook registered — the hook's own log
+proving it ran and saw `WebFetch`. Worth keeping: the negative-lookahead matcher `^(?!mcp__).*`
+does match built-in tools, which is the assumption the whole fix rests on.
+
+### The same flag was broken three more ways, each differently
+
+Checking the other runtimes turned up four different behaviours behind one checkbox. Claude was the
+only one that failed closed; the rest failed open, and none of them actually read the flag.
+
+| Runtime | What an unattended session did | `AutoApprove` honoured? |
+|---|---|---|
+| Claude | `acceptEdits` only — stalled on the first non-edit call | neither value |
+| Codex | `/agent-policy` answered `deny` for anything outside the allow list, never `ask` | neither value |
+| Cursor | `-p --force` — "force allow commands unless explicitly denied", unconditionally | only `true`, by accident |
+| OpenClaw | nothing configured; the documented baseline for an unconfigured host is `full` / `off` | neither value |
+
+**The decision underneath.** `AgentPolicyMatcher` only ever returned `allow` or `deny`, so for an
+unattended session the allow list *was* the boundary and `/permission` — the only place the flag is
+read — was unreachable. Two readings of the product were both written down in this repo: CLAUDE.md
+said unattended sessions auto-approve, the Cursor design doc said automation stays default-deny.
+They cannot both hold. The owner chose auto-approve as the boundary, so an uncovered tool now
+returns `ask` *when the session auto-approves* and the approval endpoint answers it. With
+auto-approve off, every runtime keeps exactly today's strict allow list — the flag is the switch
+between the two, so nothing widens for anyone who turned it off. Malformed input is never softened:
+a shell string the parser cannot take apart stays a hard deny, as does the MCP sharing policy.
+
+**Codex** needed the `ask` verdict to stop being a local `deny`, and every no-decision path to fail
+closed instead — an unanswered `PermissionRequest` in an unattended session is Codex's own approval
+policy deciding, not a safe no-op.
+
+**Cursor** needed one line: `--force` is auto-approve expressed as a flag (the CLI says so), so it
+belongs to the flag rather than to the mode. Hooks were the alternative and were not needed.
+
+**OpenClaw could not use a hook at all.** Its `hooks` are plugin packs for lifecycle events, not a
+command asked about each tool call, so there is nowhere to put a callback. What it has is an exec
+policy, and `agent-runtime/openclaw/exec-policy.js` writes it: `tools.exec` in `openclaw.json` plus
+`defaults`/`agents.<id>.allowlist` in `exec-approvals.json`. Three things learned the hard way and
+worth not rediscovering:
+
+- **Both files are consulted, and the stricter wins.** The docs put it as "approvals can only
+  tighten config-derived security/ask, never loosen them", so writing one and not the other
+  silently does nothing.
+- **The approvals file is written whole, never merged.** `~/.openclaw` is the state directory and
+  comes back from the session's own archive, so a merge would let an entry an earlier incarnation
+  accumulated — including one the agent added itself with `openclaw approvals allowlist add` —
+  grant a permission the hub never did.
+- **The two allow lists are not the same shape.** AgentHub stores command prefixes, OpenClaw
+  matches a glob against the resolved binary, so `git status` can only become `**/git`. The
+  argument half has nowhere to go; narrowing it would need `argPattern`, which AgentHub does not
+  store. The test says this out loud because it means a policy allowing one careful `rm` grants
+  every `rm`.
+
+**Verification, and what is still open.** Neither the Cursor nor the OpenClaw CLI is installed
+locally, so both were probed in containers at the pinned versions. Cursor's `--force` semantics
+come from the CLI's own `--help`. For OpenClaw, `openclaw config validate` accepts the generated
+config, `openclaw exec-policy show` reports the intended effective policy for all three cases, and
+`openclaw approvals get` ingests the approvals file and assigns ids to its entries — so the shapes
+are right, not merely plausible JSON. What a container cannot show is a tool call being matched at
+exec time, which needs a model turn and credentials: **whether a `**/git` pattern matches a
+resolved `/usr/bin/git` is the one piece still to confirm in a pod.** The docs note that "bare
+executable names ... still require a human", which reads as being about remote node dispatch rather
+than the pattern form, but that is an interpretation and not a test.
+
+---
+
 ## 2026-10-01 — The skill library's two silent failures were both about context
 
 Two things went wrong in the same test, and neither looked like a bug.

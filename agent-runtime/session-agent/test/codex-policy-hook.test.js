@@ -245,8 +245,12 @@ test('permission request sends a fixed MCP descriptor without tool input', async
   }
 });
 
-test('non-interactive PermissionRequest emits allow after policy approval', async () => {
-  const server = await startServer([{ body: '{"decision":"allow"}' }]);
+test('non-interactive PermissionRequest still asks approval after policy approval', async () => {
+  const server = await startServer([
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"allow"}' }
+  ]);
   try {
     const result = await runHook({
       hook_event_name: 'PermissionRequest', tool_name: 'Bash',
@@ -257,7 +261,121 @@ test('non-interactive PermissionRequest emits allow after policy approval', asyn
         hookEventName: 'PermissionRequest', decision: { behavior: 'allow' }
       }
     });
-    assert.deepEqual(server.requests.map(request => request.path), ['/agent-policy']);
+    // Deciding this locally is what it used to do, and it is why switching auto-approve off
+    // on an unattended session changed nothing: the endpoint that reads the flag was skipped.
+    assert.deepEqual(server.requests.map(request => request.path),
+      ['/agent-policy', '/permission', '/agent-policy']);
+  } finally {
+    await server.close();
+  }
+});
+
+// The reported failure, on the Codex side: /agent-policy answers "ask" for a tool the allow list
+// does not cover once the session auto-approves, and the answer has to come from /permission.
+// Denying "ask" unattended -- the old behaviour -- held the session to its allow list and left an
+// empty one unable to call anything at all.
+test('an uncovered unattended call is auto-approved through the permission endpoint', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask","reason":"Not covered by the session tool policy."}' },
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"ask"}' }
+  ]);
+  try {
+    const result = await runHook({
+      hook_event_name: 'PermissionRequest', tool_name: 'WebFetch',
+      tool_input: { url: 'https://example.com' }
+    }, { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous' });
+    assert.deepEqual(result.output, {
+      hookSpecificOutput: {
+        hookEventName: 'PermissionRequest', decision: { behavior: 'allow' }
+      }
+    });
+    assert.deepEqual(server.requests.map(request => request.path),
+      ['/agent-policy', '/permission', '/agent-policy']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('an uncovered unattended PreToolUse stays silent so the request can be raised', async () => {
+  const server = await startServer([{ body: '{"decision":"ask"}' }]);
+  try {
+    const result = await runHook(preTool('WebFetch', { url: 'https://example.com' }), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous'
+    });
+    // Denying here would settle the call before Codex ever raises the PermissionRequest that
+    // carries it to the approval endpoint.
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
+  } finally {
+    await server.close();
+  }
+});
+
+test('an unanswered unattended approval fails closed instead of running', async () => {
+  // Four shapes that each leave the hook without a decision: the endpoint refusing an "ask"
+  // answer, an unusable request id, an exhausted poll budget, and an unreachable endpoint.
+  const cases = [
+    { name: 'ask answer', responses: [{ body: '{"decision":"ask"}' }, { body: '{"decision":"ask"}' }] },
+    { name: 'unusable id', responses: [{ body: '{"decision":"ask"}' }, { body: '{"id":"not a valid id"}' }] },
+    {
+      name: 'poll budget',
+      responses: [
+        { body: '{"decision":"ask"}' }, { body: '{"id":"request-9"}' },
+        { body: '{"decision":"pending"}' }, { body: '{"decision":"pending"}' }
+      ]
+    }
+  ];
+
+  for (const { name, responses } of cases) {
+    const server = await startServer(responses);
+    try {
+      const result = await runHook({
+        hook_event_name: 'PermissionRequest', tool_name: 'WebFetch',
+        tool_input: { url: 'https://example.com' }
+      }, {
+        AGENTHUB_CALLBACK_URL: server.url,
+        AGENTHUB_MODE: 'autonomous',
+        AGENTHUB_APPROVAL_POLLS: '2',
+        AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+      });
+      assert.deepEqual(result.output, {
+        hookSpecificOutput: {
+          hookEventName: 'PermissionRequest',
+          decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+        }
+      }, name);
+    } finally {
+      await server.close();
+    }
+  }
+
+  const unreachable = await runHook({
+    hook_event_name: 'PermissionRequest', tool_name: 'WebFetch',
+    tool_input: { url: 'https://example.com' }
+  }, { AGENTHUB_CALLBACK_URL: 'http://127.0.0.1:1', AGENTHUB_MODE: 'autonomous' });
+  assert.equal(unreachable.output.hookSpecificOutput.decision.behavior, 'deny');
+});
+
+test('an unanswered interactive approval leaves the Codex prompt in place', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"id":"request-8"}' },
+    { body: '{"decision":"pending"}' },
+    { body: '{"decision":"pending"}' }
+  ]);
+  try {
+    const result = await runHook({
+      hook_event_name: 'PermissionRequest', tool_name: 'WebFetch',
+      tool_input: { url: 'https://example.com' }
+    }, {
+      AGENTHUB_CALLBACK_URL: server.url,
+      AGENTHUB_MODE: 'interactive',
+      AGENTHUB_APPROVAL_POLLS: '2',
+      AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.stdout, '');
+    assert.equal(result.stderr, '');
   } finally {
     await server.close();
   }

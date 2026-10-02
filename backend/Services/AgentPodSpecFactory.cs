@@ -175,6 +175,11 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_RESUME", Value = string.IsNullOrEmpty(context.StateGetUrl) ? "0" : "1" },
             new() { Name = "AGENTHUB_PROMPT", Value = request.Prompt ?? "" },
             new() { Name = "AGENTHUB_SYSTEM_PROMPT", Value = request.SystemPrompt ?? "" },
+            // Claude and Codex read the flag off the session record on every tool call, so it can
+            // be toggled while they run. Cursor and OpenClaw have no per-call hook to ask through:
+            // their permission settings are fixed when the process starts, which is what this is
+            // for. A session that changes the flag has to be restarted for those two.
+            new() { Name = "AGENTHUB_AUTO_APPROVE", Value = record.AutoApprove ? "1" : "0" },
             new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedTools) },
             new() { Name = "AGENTHUB_ALLOWED_MCP_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedMcpTools) },
             new() { Name = "AGENTHUB_ALLOWED_COMMANDS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedCommands) },

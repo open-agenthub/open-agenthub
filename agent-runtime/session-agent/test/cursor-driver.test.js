@@ -11,7 +11,9 @@ const driver = require('../../cursor/driver');
 function environment(overrides = {}) {
   return {
     AGENTHUB_MODE: 'interactive', AGENTHUB_PROMPT: '', AGENTHUB_RESUME: '0',
-    AGENTHUB_STATE_RESTORED: '0', AGENTHUB_HAS_MCP: '0', ...overrides
+    AGENTHUB_STATE_RESTORED: '0', AGENTHUB_HAS_MCP: '0',
+    // Unattended sessions default to auto-approve, so that is the baseline the cases below vary.
+    AGENTHUB_AUTO_APPROVE: '1', ...overrides
   };
 }
 
@@ -120,6 +122,25 @@ test('Cursor autonomous uses print, force, and trust', () => {
     cmd: 'agent',
     args: ['-p', '--force', '--trust', '--approve-mcps', 'report']
   });
+});
+
+// The CLI documents --force as "Force allow commands unless explicitly denied", so it is
+// auto-approve expressed as a flag. Passing it regardless of the session's setting is what made
+// switching auto-approve off on an unattended Cursor session change nothing.
+test('Cursor drops --force when the session does not auto-approve', () => {
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'fix it', AGENTHUB_AUTO_APPROVE: '0'
+  }), true), { cmd: 'agent', args: ['-p', '--trust', 'fix it'] });
+  // Absent is not "on": a pod from before the variable existed must not be read as auto-approving.
+  const legacy = environment({ AGENTHUB_MODE: 'scheduled', AGENTHUB_PROMPT: 'report' });
+  delete legacy.AGENTHUB_AUTO_APPROVE;
+  assert.deepEqual(driver.buildCommand(legacy, true),
+    { cmd: 'agent', args: ['-p', '--trust', 'report'] });
+  // MCP server trust is a startup question, not a per-call approval, so it stays either way.
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'fix it',
+    AGENTHUB_AUTO_APPROVE: '0', AGENTHUB_HAS_MCP: '1'
+  }), true), { cmd: 'agent', args: ['-p', '--trust', '--approve-mcps', 'fix it'] });
 });
 
 test('Cursor autonomous resume keeps print flags before --resume', () => {

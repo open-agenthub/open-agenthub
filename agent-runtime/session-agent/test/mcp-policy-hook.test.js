@@ -74,7 +74,11 @@ function startPolicyServer(response) {
         body: JSON.parse(body)
       });
       responseStream.writeHead(response.status || 200, { 'Content-Type': 'application/json' });
-      responseStream.end(request.url === '/mcp-policy' ? response.body : '{}');
+      if (request.url === '/mcp-policy') responseStream.end(response.body);
+      // What the backend answers a permission request with. "allow" is what an
+      // auto-approving session returns on the first POST, without creating a request row.
+      else if (request.url === '/permission') responseStream.end(response.permission || '{}');
+      else responseStream.end('{}');
     });
   });
 
@@ -157,7 +161,7 @@ test('MCP policy denies a blocked MCP tool', async () => {
   }
 });
 
-test('MCP policy preserves normal flow for an unrestricted response', async () => {
+test('MCP policy hands an unrestricted response to the approval hook', async () => {
   const server = await startPolicyServer({
     body: JSON.stringify({ restricted: false, decision: 'allow' })
   });
@@ -165,11 +169,16 @@ test('MCP policy preserves normal flow for an unrestricted response', async () =
   try {
     const result = await runHook(
       { tool_name: 'mcp__server__tool' },
-      { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_CALLBACK_TOKEN: 'callback-token' }
+      {
+        AGENTHUB_CALLBACK_URL: server.url,
+        AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+        AGENTHUB_APPROVAL_HOOK: createApprovalHook()
+      }
     );
 
-    assert.equal(result.output.hookSpecificOutput, undefined);
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'ask');
     assert.equal(server.requests[0].body.tool, 'mcp__server__tool');
+    assert.deepEqual(server.requests.map(request => request.path), ['/mcp-policy', '/permission']);
   } finally {
     await server.close();
   }
@@ -190,29 +199,41 @@ test('MCP policy fails closed when the endpoint fails and a policy is configured
     'Blocked by the session MCP sharing policy');
 });
 
-test('MCP policy preserves normal flow when the endpoint fails without a policy', async () => {
+test('MCP policy falls through to approval when the endpoint fails without a policy', async () => {
   const result = await runHook(
     { tool_name: 'mcp__server__tool' },
     {
       AGENTHUB_CALLBACK_URL: await closedServerUrl(),
-      AGENTHUB_CALLBACK_TOKEN: 'callback-token'
+      AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+      AGENTHUB_APPROVAL_HOOK: createApprovalHook()
     }
   );
 
-  assert.equal(result.output.hookSpecificOutput, undefined);
+  assert.equal(result.output.hookSpecificOutput.permissionDecision, 'ask');
 });
 
-test('MCP policy ignores non-MCP tools', async () => {
-  const result = await runHook(
-    { tool_name: 'Read' },
-    {
-      AGENTHUB_CALLBACK_URL: 'http://127.0.0.1:1',
-      AGENTHUB_CALLBACK_TOKEN: 'callback-token',
-      AGENTHUB_MCP_POLICY: '1'
-    }
-  );
+test('MCP policy leaves non-MCP tools to the approval hook without a policy check', async () => {
+  const server = await startPolicyServer({
+    body: JSON.stringify({ restricted: true, decision: 'deny' })
+  });
 
-  assert.deepEqual(result.output, {});
+  try {
+    const result = await runHook(
+      { tool_name: 'Read' },
+      {
+        AGENTHUB_CALLBACK_URL: server.url,
+        AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+        AGENTHUB_MCP_POLICY: '1',
+        AGENTHUB_APPROVAL_HOOK: createApprovalHook()
+      }
+    );
+
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'ask');
+    // The sharing policy covers MCP tools only; a built-in must not be routed past it.
+    assert.deepEqual(server.requests.map(request => request.path), ['/permission']);
+  } finally {
+    await server.close();
+  }
 });
 
 test('MCP policy denies before interactive approval can be requested', async () => {
@@ -261,41 +282,107 @@ test('MCP policy delegates allowed interactive calls to approval after policy', 
   }
 });
 
-test('MCP policy settings use deterministic MCP and built-in matchers interactively', () => {
-  const settings = renderSettings('interactive');
+// Unattended modes used to register the MCP matcher alone. Auto-approve is answered by the
+// backend's /permission endpoint and nothing but pretooluse-hook.sh calls it, so leaving the
+// built-in matcher out made the session flag unreachable: an autonomous run stalled on its
+// first Bash, WebFetch or WebSearch call with "requires approval" and nobody to ask.
+test('MCP policy settings register both matchers in every mode', () => {
+  for (const mode of ['interactive', 'autonomous', 'scheduled']) {
+    const settings = renderSettings(mode);
 
-  assert.equal(settings.hooks.Notification.length, 1);
-  assert.deepEqual(settings.hooks.PreToolUse, [
-    {
-      matcher: 'mcp__.*',
-      hooks: [{
-        type: 'command',
-        command: '/opt/session-agent/claude/hooks/mcp-policy-hook.sh',
-        timeout: 1900
-      }]
-    },
-    {
-      matcher: '^(?!mcp__).*',
-      hooks: [{
-        type: 'command',
-        command: '/opt/session-agent/claude/hooks/pretooluse-hook.sh',
-        timeout: 1900
-      }]
-    }
-  ]);
+    assert.equal(settings.hooks.Notification.length, 1);
+    assert.deepEqual(settings.hooks.PreToolUse, [
+      {
+        matcher: 'mcp__.*',
+        hooks: [{
+          type: 'command',
+          command: '/opt/session-agent/claude/hooks/mcp-policy-hook.sh',
+          // Has to outlast the approval hook's poll window, which this script delegates to.
+          timeout: 1900
+        }]
+      },
+      {
+        matcher: '^(?!mcp__).*',
+        hooks: [{
+          type: 'command',
+          command: '/opt/session-agent/claude/hooks/pretooluse-hook.sh',
+          timeout: 1900
+        }]
+      }
+    ], mode);
+  }
 });
 
-test('MCP policy settings register only MCP tools for non-interactive modes', () => {
-  for (const mode of ['autonomous', 'scheduled']) {
-    const settings = renderSettings(mode);
-    assert.deepEqual(settings.hooks.PreToolUse, [{
-      matcher: 'mcp__.*',
-      hooks: [{
-        type: 'command',
-        command: '/opt/session-agent/claude/hooks/mcp-policy-hook.sh',
-        timeout: 5
-      }]
-    }]);
+test('an unattended built-in call is auto-approved through the real approval hook', async () => {
+  const server = await startPolicyServer({
+    body: JSON.stringify({ restricted: false, decision: 'allow' }),
+    permission: JSON.stringify({ decision: 'allow' })
+  });
+
+  try {
+    // No AGENTHUB_APPROVAL_HOOK: this exercises pretooluse-hook.sh itself, so the chain the
+    // bug ran through end to end -- settings matcher, policy hook, approval hook, backend.
+    const result = await runHook(
+      { tool_name: 'WebFetch', tool_input: { url: 'https://example.com' } },
+      {
+        AGENTHUB_CALLBACK_URL: server.url,
+        AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+        AGENTHUB_MODE: 'autonomous'
+      }
+    );
+
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'allow');
+    assert.deepEqual(server.requests.map(request => request.path), ['/permission']);
+    assert.equal(server.requests[0].body.tool, 'WebFetch');
+  } finally {
+    await server.close();
+  }
+});
+
+test('an unattended MCP call is auto-approved after the sharing policy allows it', async () => {
+  const server = await startPolicyServer({
+    body: JSON.stringify({ restricted: true, decision: 'allow' }),
+    permission: JSON.stringify({ decision: 'allow' })
+  });
+
+  try {
+    const result = await runHook(
+      { tool_name: 'mcp__server__tool' },
+      {
+        AGENTHUB_CALLBACK_URL: server.url,
+        AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+        AGENTHUB_MODE: 'autonomous'
+      }
+    );
+
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'allow');
+    assert.deepEqual(server.requests.map(request => request.path), ['/mcp-policy', '/permission']);
+  } finally {
+    await server.close();
+  }
+});
+
+test('an unattended call stays blocked when the sharing policy denies it', async () => {
+  const server = await startPolicyServer({
+    body: JSON.stringify({ restricted: true, decision: 'deny' }),
+    permission: JSON.stringify({ decision: 'allow' })
+  });
+
+  try {
+    const result = await runHook(
+      { tool_name: 'mcp__server__tool' },
+      {
+        AGENTHUB_CALLBACK_URL: server.url,
+        AGENTHUB_CALLBACK_TOKEN: 'callback-token',
+        AGENTHUB_MODE: 'autonomous'
+      }
+    );
+
+    // Auto-approve answers permission requests; it does not widen the MCP sharing policy.
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.deepEqual(server.requests.map(request => request.path), ['/mcp-policy']);
+  } finally {
+    await server.close();
   }
 });
 
