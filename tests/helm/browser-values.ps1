@@ -61,7 +61,13 @@ $noTag = Render @(
     '--set-string', 'agent.images.cursor=example/cursor:test',
     '--set-string', 'agent.images.openclaw=example/openclaw:test'
 )
-Assert-Contains $noTag 'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:0.9.0"'
+# Read the expectation from Chart.yaml rather than repeating the number here: this is the
+# appVersion the fallback resolves to, and a literal version in this script turns every
+# release bump into a red build for no reason (the Codex smoke script does the same with
+# the pinned CLI version).
+$appVersion = (Select-String -Path (Join-Path $chartPath 'Chart.yaml') -Pattern '^appVersion:\s*"?([^"\s]+)"?').Matches[0].Groups[1].Value
+if (-not $appVersion) { throw 'could not read appVersion from Chart.yaml' }
+Assert-Contains $noTag "Browser__Image: `"ghcr.io/open-agenthub/open-agenthub/browser:$appVersion`""
 Assert-Contains $custom 'Browser__ExtraEgressPorts__0: "8443"'
 
 $disabled = Render @('--set', 'browser.enabled=false')
