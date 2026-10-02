@@ -12,9 +12,14 @@ fi
 if [ "$1" = "/opt/session-agent/codex/auth-watcher.js" ]; then
   touch /tmp/watcher-called
 fi
-# The shared entrypoint always enables the files MCP, so every start runs these two —
-# even here, where the session itself brings no MCP config (AGENTHUB_HAS_MCP=0).
+# The shared entrypoint always enables the files MCP, so every start runs these three —
+# even here, where the session itself brings no MCP config (AGENTHUB_HAS_MCP=0). The
+# skills step runs too and finds nothing to take over, which is the point: it only ever
+# replaces an entry the hub injected.
 if [ "$1" = "/opt/session-agent/files/configure.mjs" ]; then
+  exec /usr/local/bin/node "$@"
+fi
+if [ "$1" = "/opt/session-agent/skills/configure.mjs" ]; then
   exec /usr/local/bin/node "$@"
 fi
 if [ "$1" = "/opt/session-agent/codex/mcp-config.js" ]; then

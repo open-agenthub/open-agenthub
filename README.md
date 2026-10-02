@@ -70,9 +70,13 @@ shift.
   save keeps the previous versions restorable. Sessions materialize the matching
   skills automatically, and the agent itself can search (full-text, optionally
   semantic via a configurable embeddings endpoint), read, upload, and roll back
-  skills through the injected `skill-library` MCP server. Skills the agent creates
-  locally under `~/.claude/skills` are picked up and imported into the library
-  automatically — so agents grow a shared, versioned knowledge base as they work.
+  skills through the injected `skill-library` MCP server. Helper scripts move by path,
+  not by value: `upload_skill` reads a directory, a file or a `.tar.gz` off the session's
+  disk and `get_skill` writes a skill back to an `out_dir`, so a large script costs the
+  agent no context in either direction. Skills the agent creates locally under
+  `~/.claude/skills` are picked up and imported into the library automatically, and an
+  end-of-turn hook asks the agent whether what it just worked out belongs in the library —
+  so agents grow a shared, versioned knowledge base as they work.
 - **Visible browser on demand** — the built-in `agenthub_browser` MCP starts one isolated
   Chromium only when the agent needs it. The same desktop appears beside the chat through
   noVNC, while idle sessions consume no browser CPU or memory.
@@ -153,6 +157,14 @@ curl -fsSL https://open-agenthub.github.io/install.sh | sh
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
 [`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3-compatible object
 storage enables session resume, history of finished sessions, and artifact uploads.
+
+Point `s3.*` at a provider you already run, or let the chart deploy one: with
+`objectStorage.enabled=true` it brings up a single-node [Garage](https://garagehq.deuxfleurs.fr/)
+and wires `s3.serviceUrl`, `s3.accessKey` and `s3.secretKey` to it. Garage creates neither a
+layout nor a bucket nor a key by itself, so that one-time bootstrap is a step of its own —
+`setup-dev.sh` / `setup-dev.ps1` offer the whole thing (`--with-object-storage`,
+`-WithObjectStorage`), generate the credentials, and skip whatever is already in place on a
+redeploy.
 
 ### Configuring OAuth/OIDC login
 

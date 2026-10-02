@@ -6,14 +6,20 @@ control_namespace='agenthub-dev'
 sessions_namespace='agenthub-dev-sessions'
 required_context='docker-desktop'
 no_port_forward=false
+object_storage=''
 
-if [[ $# -gt 1 || ( $# -eq 1 && "$1" != '--no-port-forward' ) ]]; then
-  printf 'Usage: %s [--no-port-forward]\n' "$0" >&2
-  exit 2
-fi
-if [[ $# -eq 1 ]]; then
-  no_port_forward=true
-fi
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-port-forward) no_port_forward=true ;;
+    --with-object-storage) object_storage=true ;;
+    --without-object-storage) object_storage=false ;;
+    *)
+      printf 'Usage: %s [--no-port-forward] [--with-object-storage|--without-object-storage]\n' "$0" >&2
+      exit 2
+      ;;
+  esac
+  shift
+done
 
 require_command() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -73,6 +79,60 @@ else
   fi
   postgres_password="$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
 fi
+random_hex() {
+  head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'
+}
+
+# Reads a value out of an existing secret; empty when the secret, the key, or the value
+# itself is absent. Credentials are never regenerated on a redeploy: a new access key would
+# leave every object already in the bucket unreachable, and the hub would report that as
+# missing session state rather than as a credential it no longer has.
+existing_secret_value() {
+  local secret="$1" key="$2" encoded
+  encoded="$(kubectl -n "$control_namespace" get secret "$secret" -o "jsonpath={.data.$key}" 2>/dev/null || true)"
+  [[ -n "$encoded" ]] || return 0
+  decode_base64 "$encoded"
+}
+
+# Object storage: offered rather than assumed. Without it the hub runs, but a session
+# cannot be resumed in a fresh pod — its state archive has nowhere to live.
+if [[ -z "$object_storage" ]]; then
+  if kubectl -n "$control_namespace" get statefulset garage >/dev/null 2>&1; then
+    object_storage=true
+  elif [[ -t 0 ]]; then
+    printf 'Deploy object storage (Garage) into the cluster as well?\n'
+    printf 'Without it, session state, uploads and artifacts have nowhere to be stored.\n'
+    read -r -p 'Deploy it? [Y/n] ' answer
+    case "${answer:-y}" in
+      [nN]*) object_storage=false ;;
+      *)     object_storage=true ;;
+    esac
+  else
+    printf 'Object storage not requested; pass --with-object-storage to deploy it.\n'
+    object_storage=false
+  fi
+fi
+
+object_storage_values=()
+if [[ "$object_storage" == true ]]; then
+  garage_access_key="$(existing_secret_value agenthub-secrets S3__AccessKey)"
+  garage_secret_key="$(existing_secret_value agenthub-secrets S3__SecretKey)"
+  garage_rpc_secret="$(existing_secret_value garage-secrets rpc_secret)"
+  garage_admin_token="$(existing_secret_value garage-secrets admin_token)"
+  # Garage only accepts an access key id shaped like its own: GK plus 24 hex characters.
+  [[ -n "$garage_access_key" ]] || garage_access_key="GK$(random_hex 12)"
+  [[ -n "$garage_secret_key" ]] || garage_secret_key="$(random_hex 32)"
+  [[ -n "$garage_rpc_secret" ]] || garage_rpc_secret="$(random_hex 32)"
+  [[ -n "$garage_admin_token" ]] || garage_admin_token="$(random_hex 16)"
+  object_storage_values=(
+    --set 'objectStorage.enabled=true'
+    --set-string "objectStorage.accessKey=$garage_access_key"
+    --set-string "objectStorage.secretKey=$garage_secret_key"
+    --set-string "objectStorage.rpcSecret=$garage_rpc_secret"
+    --set-string "objectStorage.adminToken=$garage_admin_token"
+  )
+fi
+
 backend_forward_pid=''
 frontend_forward_pid=''
 
@@ -98,10 +158,43 @@ helm upgrade --install "$release_name" "$chart_path" \
   --namespace "$control_namespace" \
   --create-namespace \
   "${helm_values[@]}" \
+  "${object_storage_values[@]+"${object_storage_values[@]}"}" \
   --set "sessionsNamespace=$sessions_namespace" \
   --set-string "postgres.password=$postgres_password"
 
 kubectl -n "$control_namespace" rollout status statefulset/postgres --timeout=180s
+
+# Garage creates nothing by itself: a fresh node has no layout, no bucket and no key, and
+# its image has no shell for a bootstrap job to use. Each step below is skipped when it is
+# already done, so a redeploy costs nothing.
+if [[ "$object_storage" == true ]]; then
+  kubectl -n "$control_namespace" rollout status statefulset/garage --timeout=180s
+  garage() { kubectl -n "$control_namespace" exec garage-0 -- /garage "$@"; }
+
+  if garage bucket list 2>/dev/null | grep -qE "[[:space:]]agenthub[[:space:]]"; then
+    printf 'Object storage already initialised.\n'
+  else
+    printf 'Initialising object storage...\n'
+    layout="$(garage layout show 2>/dev/null || true)"
+    current_version="$(printf '%s' "$layout" | sed -n 's/.*Current cluster layout version: \([0-9]*\).*/\1/p' | tail -1)"
+    if [[ "${current_version:-0}" -lt 1 ]]; then
+      node_id="$(garage node id -q 2>/dev/null | tr -d '\r' | cut -d@ -f1)"
+      if [[ -z "$node_id" ]]; then
+        printf 'Could not read the Garage node id; object storage is not initialised.\n' >&2
+        exit 1
+      fi
+      garage layout assign -z dc1 -c 18GB "$node_id"
+      # The version to apply is always one past the current one; parsing it out of the
+      # hint Garage prints would tie this to that sentence's wording.
+      garage layout apply --version "$(( ${current_version:-0} + 1 ))"
+    fi
+    garage bucket create agenthub
+    garage key import --yes "$garage_access_key" "$garage_secret_key" -n agenthub-key
+    garage bucket allow --read --write --owner agenthub --key agenthub-key
+    printf 'Object storage ready: bucket agenthub on garage.%s.svc.cluster.local:3900\n' "$control_namespace"
+  fi
+  unset -f garage
+fi
 kubectl -n "$control_namespace" rollout restart deployment/agenthub-backend deployment/agenthub-frontend
 kubectl -n "$control_namespace" rollout status deployment/agenthub-backend --timeout=180s
 kubectl -n "$control_namespace" rollout status deployment/agenthub-frontend --timeout=180s

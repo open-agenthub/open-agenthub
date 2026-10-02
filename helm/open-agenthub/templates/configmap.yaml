@@ -75,7 +75,7 @@ data:
   AgentHub__SkillLibraryMcp: {{ .Values.skillLibrary.mcp | default true | quote }}
   Embeddings__Endpoint: {{ .Values.skillLibrary.embeddings.endpoint | quote }}
   Embeddings__Model: {{ .Values.skillLibrary.embeddings.model | quote }}
-  S3__ServiceUrl: {{ .Values.s3.serviceUrl | quote }}
+  S3__ServiceUrl: {{ include "agenthub.s3ServiceUrl" . | quote }}
   {{- if .Values.s3.publicUrl }}
   S3__PublicUrl: {{ .Values.s3.publicUrl | quote }}
   {{- end }}

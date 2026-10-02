@@ -37,6 +37,7 @@ COPY files /opt/session-agent/files
 COPY browser /opt/session-agent/browser
 COPY sessions /opt/session-agent/sessions
 COPY network /opt/session-agent/network
+COPY skills /opt/session-agent/skills
 COPY claude /opt/session-agent/claude
 COPY claude/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh \

@@ -151,22 +151,30 @@ export function createFilesToolHandlers(options = {}) {
    * agent could have grepped.
    */
   async function inlineContent(file, localPath) {
-    const { size } = await fs.promises.stat(localPath);
-    if (IMAGE.has(file.mimeType)) {
-      // Images get their own ceiling: they are returned base64-encoded rather than as text, so
-      // the text limit has nothing to do with them.
-      if (size > maxImageBytes) return null;
-      const data = await fs.promises.readFile(localPath);
-      return { type: 'image', data: data.toString('base64'), mimeType: file.mimeType };
-    }
-    if (!TEXT.has(file.mimeType) || size > maxTextBytes) return null;
-    const data = await fs.promises.readFile(localPath);
+    // One handle for the size check and the read, rather than stat-then-read on the path:
+    // in between those two the path can point at something else, and the ceiling would
+    // then be enforced against a file other than the one whose bytes end up in the reply.
+    const handle = await fs.promises.open(localPath, 'r');
     try {
-      return { type: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(data) };
-    } catch {
-      // A .txt whose bytes are not valid UTF-8 used to fail the whole call with an opaque code.
-      // The path is still good, so hand that over and let the agent choose an encoding.
-      return null;
+      const { size } = await handle.stat();
+      if (IMAGE.has(file.mimeType)) {
+        // Images get their own ceiling: they are returned base64-encoded rather than as text, so
+        // the text limit has nothing to do with them.
+        if (size > maxImageBytes) return null;
+        const data = await handle.readFile();
+        return { type: 'image', data: data.toString('base64'), mimeType: file.mimeType };
+      }
+      if (!TEXT.has(file.mimeType) || size > maxTextBytes) return null;
+      const data = await handle.readFile();
+      try {
+        return { type: 'text', text: new TextDecoder('utf-8', { fatal: true }).decode(data) };
+      } catch {
+        // A .txt whose bytes are not valid UTF-8 used to fail the whole call with an opaque code.
+        // The path is still good, so hand that over and let the agent choose an encoding.
+        return null;
+      }
+    } finally {
+      await handle.close();
     }
   }
 

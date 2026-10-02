@@ -9,6 +9,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 APPROVAL_HOOK="${AGENTHUB_APPROVAL_HOOK:-$SCRIPT_DIR/pretooluse-hook.sh}"
 
 render_settings() {
+  # The skill reminder needs the runtime root, not the hooks directory AGENTHUB_RUNTIME
+  # points at here; common/ sits one level above it.
+  # Quoted: the local fallback interpreter above resolves to a path with a space in it,
+  # and the hook command is handed to a shell.
+  SKILL_REMINDER="'$NODE_BIN' '${RUNTIME:-/opt/session-agent}/common/skill-reminder-hook.mjs'"
   if [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
     cat <<JSON
 {
@@ -19,6 +24,13 @@ render_settings() {
     "PreToolUse": [
       { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 1900 } ] },
       { "matcher": "^(?!mcp__).*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/pretooluse-hook.sh", "timeout": 1900 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit|Bash)$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark work", "timeout": 10 } ] },
+      { "matcher": ".*upload_skill$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark uploaded", "timeout": 10 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "$SKILL_REMINDER", "timeout": 10 } ] }
     ]
   }
 }
@@ -32,6 +44,13 @@ JSON
     ],
     "PreToolUse": [
       { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 5 } ] }
+    ],
+    "PostToolUse": [
+      { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit|Bash)$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark work", "timeout": 10 } ] },
+      { "matcher": ".*upload_skill$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark uploaded", "timeout": 10 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "$SKILL_REMINDER", "timeout": 10 } ] }
     ]
   }
 }
