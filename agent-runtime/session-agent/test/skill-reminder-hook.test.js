@@ -73,6 +73,79 @@ test('an upload is recognised even when the hook only says --mark work', async (
   assert.equal(decide(claudeStop, env), null);
 });
 
+test('a shell command that only looks does not count as work', async () => {
+  // The case that found this: answering "is it deployed?" ran three kubectl gets, and the
+  // turn earned a reminder for having changed nothing.
+  const { decide, mark, isReadOnlyCommand } = await import('../../common/skill-reminder-hook.mjs');
+  const env = markerHome();
+
+  const readOnly = [
+    'kubectl --context kube01 -n agenthub get pods -o custom-columns=NAME:.metadata.name',
+    'helm --kube-context kube01 list -n agenthub -o json',
+    'git status --porcelain',
+    'git log --oneline -3',
+    'git diff --stat origin/main..HEAD | tail -5',
+    'grep -n "tag:" deploy/values.yaml',
+    'docker manifest inspect ghcr.io/example/backend:1.0.0',
+    'gh pr checks 35',
+    'TMPDIR=/tmp ls -la',
+    'cd /repo && git status',
+    'sed -n "40,54p" values.yaml',
+    'git tag --list',
+    'git config --get remote.origin.url',
+    'kubectl config get-contexts',
+    'docker manifest inspect ghcr.io/example/x:1 >/dev/null 2>&1',  // discarded, not written
+    'npm test',
+    'node --test test/unit.test.js',
+    'Get-ChildItem -Recurse | Measure-Object'
+  ];
+  for (const command of readOnly) {
+    assert.equal(isReadOnlyCommand(command), true, command);
+    assert.equal(mark({ ...claudeStop, tool_name: 'Bash', tool_input: { command } }, 'work', env),
+      null, command);
+  }
+  assert.equal(decide(claudeStop, env), null, 'a turn of pure lookups gets no reminder');
+});
+
+test('a shell command that changes something still counts', async () => {
+  const { mark, isReadOnlyCommand } = await import('../../common/skill-reminder-hook.mjs');
+  const env = markerHome();
+
+  const changing = [
+    'git commit -q -m "release: 0.11.0"',
+    'git push origin refs/tags/v0.11.0',
+    'git status && git commit -m x',          // one writing step makes the line count
+    'git tag -a v0.11.0 -m "..."',            // `git tag` alone lists, with -a it creates
+    'git commit -m "fix: report status correctly"', // the subcommand is a position, not a word
+    'git config --global user.name Someone',  // --get reports, this one sets
+    'helm upgrade agenthub ./helm/open-agenthub -n agenthub -f deploy/values.yaml',
+    'kubectl --context kube01 -n agenthub rollout restart deployment/agenthub-backend',
+    'gh api graphql -f query="mutation{...}"', // gh api is how the review threads were resolved
+    'npm install',
+    './deploy.sh',                             // unrecognised, so it counts — the safe side
+    'echo hi > /tmp/out.txt',                  // a redirection writes, whatever precedes it
+    'cat template.yaml | tee /etc/config.yaml'
+  ];
+  for (const command of changing) {
+    assert.equal(isReadOnlyCommand(command), false, command);
+    assert.ok(mark({ ...claudeStop, tool_name: 'Bash', tool_input: { command } }, 'work', env),
+      command);
+  }
+});
+
+test('the command is found wherever the agent puts it', async () => {
+  const { mark } = await import('../../common/skill-reminder-hook.mjs');
+  const env = markerHome();
+
+  // Codex passes an argv array; Cursor's beforeShellExecution has it at the top level.
+  assert.equal(mark({ session_id: 'a', tool_name: 'shell', tool_input: { command: ['git', 'status'] } }, 'work', env), null);
+  assert.equal(mark({ session_id: 'b', tool_name: 'shell', command: 'ls -la' }, 'work', env), null);
+  assert.ok(mark({ session_id: 'c', tool_name: 'shell', tool_input: { command: ['git', 'commit', '-m', 'x'] } }, 'work', env));
+  // No command at all: a shell call whose payload says nothing counts as work rather than
+  // being silently dropped.
+  assert.ok(mark({ session_id: 'd', tool_name: 'Bash' }, 'work', env));
+});
+
 test('read-only tools do not count as work', async () => {
   const { decide, mark } = await import('../../common/skill-reminder-hook.mjs');
   const env = markerHome();

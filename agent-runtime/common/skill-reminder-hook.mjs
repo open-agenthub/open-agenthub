@@ -101,8 +101,149 @@ export function decide(payload, env = process.env, fsImpl = fs) {
 // directory or searching does not make a turn worth a reminder; editing one or running a
 // command does. Codex's managed hooks cannot express a matcher per tool, so the filter has
 // to be here as well as in the hook configuration.
-const CHANGING_TOOLS = /^(edit|write|multiedit|notebookedit|bash|shell|local_shell|apply_patch|exec_command|write_file|run_terminal_cmd|create_file|str_replace.*)$/i;
+const CHANGING_TOOLS = /^(edit|write|multiedit|notebookedit|bash|powershell|shell|local_shell|apply_patch|exec_command|write_file|run_terminal_cmd|create_file|str_replace.*)$/i;
 const UPLOAD_TOOL = /upload_skill$/;
+
+// The shell tools, whose name says nothing about whether the turn changed anything: `git
+// status` and `git commit` arrive as the same tool. Answering "is it deployed?" with three
+// kubectl gets used to count as work and earn a reminder, which is the noise this hook was
+// supposed to stay out of.
+const SHELL_TOOLS = /^(bash|powershell|shell|local_shell|exec_command|run_terminal_cmd)$/i;
+
+// Programs that only ever report.
+const READ_ONLY_PROGRAMS = new Set([
+  'ls', 'cat', 'head', 'tail', 'wc', 'grep', 'rg', 'egrep', 'fgrep', 'find', 'file', 'stat',
+  'du', 'df', 'pwd', 'cd', 'which', 'whoami', 'date', 'env', 'printenv', 'echo', 'printf',
+  'sort', 'uniq', 'cut', 'tr', 'column', 'basename', 'dirname', 'realpath', 'readlink',
+  'true', 'false', 'sleep', 'cmp', 'diff', 'jq', 'yq', 'od', 'xxd', 'type', 'command', 'test'
+]);
+
+// Programs whose first subcommand decides it. The nested sets are the second level, for the
+// ones where it takes two words to tell `gh pr view` from `gh pr create`.
+const READ_ONLY_SUBCOMMANDS = {
+  git: {
+    status: true, log: true, diff: true, show: true, branch: true, remote: true,
+    describe: true, 'rev-parse': true, 'rev-list': true, 'ls-files': true, 'ls-remote': true,
+    'merge-base': true, 'cat-file': true, blame: true, shortlog: true, fetch: true,
+    worktree: new Set(['list'])
+  },
+  kubectl: {
+    get: true, describe: true, logs: true, top: true, version: true, explain: true,
+    'api-resources': true, 'api-versions': true, 'cluster-info': true,
+    config: new Set(['view', 'current-context', 'get-contexts', 'get-clusters', 'get-users'])
+  },
+  helm: {
+    list: true, status: true, show: true, search: true, version: true, template: true,
+    history: true, diff: true, get: true
+  },
+  docker: {
+    ps: true, images: true, version: true, info: true, history: true, logs: true,
+    inspect: true, manifest: new Set(['inspect']), image: new Set(['inspect', 'ls'])
+  },
+  gh: {
+    pr: new Set(['list', 'view', 'checks', 'diff', 'status']),
+    run: new Set(['list', 'view', 'watch']),
+    release: new Set(['list', 'view']),
+    repo: new Set(['view']),
+    issue: new Set(['list', 'view']),
+    auth: new Set(['status'])
+  }
+};
+
+// Test runs write into obj/ and node_modules/.cache, never into the work itself.
+const TEST_RUNNERS = new Set(['dotnet', 'npm', 'npx', 'node', 'pnpm', 'yarn', 'pwsh']);
+const TEST_FLAGS = new Set(['--test', '--version', '-v', '-V']);
+// PowerShell's reporting verbs.
+const READ_ONLY_CMDLET = /^(?:Get|Select|Measure|Compare|Resolve|Test|Format|Out|Where|Sort|ConvertFrom|Write)-\w+$/i;
+
+// Flags whose value is a separate token, so the value is not mistaken for the subcommand:
+// in `kubectl --context kube01 -n agenthub get pods`, kube01 and agenthub are not it.
+const VALUE_FLAGS = new Set([
+  '-C', '-c', '--git-dir', '--work-tree',
+  '--context', '--kube-context', '-n', '--namespace', '--kubeconfig', '-o', '--output',
+  '--server', '--token', '--as', '-H', '--host', '--config', '-R', '--repo', '-f', '--file'
+]);
+
+/** First token that is neither a flag nor a flag's value, from `from` onwards. */
+function firstWord(tokens, from) {
+  for (let i = from; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (!token.startsWith('-')) return token;
+    // `--flag=value` carries its own value; a bare one consumes the next token.
+    if (!token.includes('=') && VALUE_FLAGS.has(token)) i++;
+  }
+  return null;
+}
+
+/**
+ * True when this one command only reports.
+ *
+ * Tokenised rather than matched as a whole, because the subcommand is a position, not a
+ * substring: `git commit -m "fix status"` has the word status in it and is emphatically not
+ * read-only. Recognising the reporting commands rather than listing the writing ones is also
+ * deliberate — an unrecognised command counts as work, so a `./deploy.sh` nobody anticipated
+ * still earns its reminder, and a gap here costs one reminder too many, not a lost lesson.
+ */
+function isReadOnlySegment(segment) {
+  const tokens = segment.split(/\s+/).filter(t => t.length > 0);
+  if (tokens.length === 0) return false;
+  const program = tokens[0].replace(/^.*[/\\]/, '').replace(/\.(?:exe|cmd|sh)$/i, '');
+
+  if (READ_ONLY_PROGRAMS.has(program)) return true;
+  if (READ_ONLY_CMDLET.test(program)) return true;
+  // -n prints; without it sed takes -i and edits in place.
+  if (program === 'sed') return tokens.includes('-n');
+  if (TEST_RUNNERS.has(program)) {
+    return firstWord(tokens, 1) === 'test' || tokens.slice(1).some(t => TEST_FLAGS.has(t));
+  }
+  // `git tag` lists; `git tag -a` creates one. Same for anything else that reports until
+  // given a flag, so a non-listing flag disqualifies it.
+  if (program === 'git' && firstWord(tokens, 1) === 'tag') {
+    return tokens.slice(2).every(t => !t.startsWith('-') || t === '-l' || t === '--list');
+  }
+  if (program === 'git' && firstWord(tokens, 1) === 'config') {
+    return tokens.some(t => t.startsWith('--get'));
+  }
+
+  const rules = READ_ONLY_SUBCOMMANDS[program];
+  if (!rules) return false;
+  const sub = firstWord(tokens, 1);
+  if (sub === null) return false;
+  const rule = rules[sub];
+  if (rule === true) return true;
+  if (rule instanceof Set) {
+    const second = firstWord(tokens, tokens.indexOf(sub) + 1);
+    return second !== null && rule.has(second);
+  }
+  return false;
+}
+
+/** The command behind a shell tool call, whatever the agent calls that field. */
+function commandOf(payload) {
+  const input = payload.tool_input ?? payload.toolInput ?? payload.input ?? payload;
+  const value = input?.command ?? input?.cmd ?? input?.script ?? payload.command;
+  if (Array.isArray(value)) return value.map(String).join(' ');
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * True when every part of the command only reports. Split on the separators, because one
+ * writing step anywhere makes the whole line count — `git status && git commit` is work.
+ * A redirection writes a file whatever the command before it does.
+ */
+export function isReadOnlyCommand(command) {
+  if (typeof command !== 'string' || command.trim().length === 0) return false;
+  // A redirection writes a file whatever the command in front of it does. `2>&1` and `>/dev/null`
+  // do not, and are too common in a plain lookup to disqualify it.
+  if (/>\s*(?!&\d|\/dev\/null)\S/.test(command.replace(/\d>/g, '>')) || /\btee\b/.test(command))
+    return false;
+  const segments = command.split(/\|\||&&|[|;\n]/).map(s => s.trim()).filter(s => s.length > 0);
+  if (segments.length === 0) return false;
+  // Every part has to report: one writing step anywhere makes the whole line count.
+  return segments.every(segment => isReadOnlySegment(
+    // Drop a leading subshell paren and env assignments, so `TMPDIR=x ls` reads as `ls`.
+    segment.replace(/^[({\s]*/, '').replace(/^(?:[A-Za-z_][A-Za-z0-9_]*=\S*\s+)+/, '')));
+}
 
 function toolName(payload) {
   const name = payload.tool_name ?? payload.toolName ?? payload.tool ?? payload.name;
@@ -115,6 +256,8 @@ export function mark(payload, kind = 'work', env = process.env, fsImpl = fs) {
   // is never asked about it.
   const uploaded = kind === 'uploaded' || (tool !== null && UPLOAD_TOOL.test(tool));
   if (!uploaded && tool !== null && !CHANGING_TOOLS.test(tool)) return null;
+  if (!uploaded && tool !== null && SHELL_TOOLS.test(tool) && isReadOnlyCommand(commandOf(payload)))
+    return null;
 
   const file = markerPath(payload, env, uploaded ? 'uploaded' : 'work');
   try {
