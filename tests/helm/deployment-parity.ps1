@@ -108,8 +108,13 @@ foreach ($staticPolicy in @((Read-RepoFile 'helm/open-agenthub/templates/network
 }
 
 $buildWorkflow = Read-RepoFile '.github/workflows/build-images.yml'
+# Two matrices now, and a component has to appear in both. The build job produces one image
+# per architecture and pushes it by digest only, so a component built but left out of the merge
+# job yields no manifest and therefore no usable tag — a deploy would find nothing to pull.
+# Checking only the build side would not catch that.
 foreach ($component in @('backend', 'frontend', 'agent-runtime-claude', 'agent-runtime-codex', 'agent-runtime-cursor', 'agent-runtime-openclaw', 'browser')) {
-    Assert-Matches $buildWorkflow ([regex]::Escape("component: $component")) "Image workflow is missing the $component matrix entry."
+    Assert-Matches $buildWorkflow ([regex]::Escape("- name: $component")) "Image workflow is missing the $component build matrix entry."
+    Assert-Matches $buildWorkflow "(?m)^\s+- $([regex]::Escape($component))\s*$" "Image workflow is missing the $component manifest merge entry."
 }
 Assert-Matches $buildWorkflow 'context:\s*\./agent-runtime[\s\S]*dockerfile:\s*\./agent-runtime/claude/Dockerfile' 'Image workflow must map Claude to the shared runtime context and Claude Dockerfile.'
 Assert-Matches $buildWorkflow 'context:\s*\./agent-runtime[\s\S]*dockerfile:\s*\./agent-runtime/codex/Dockerfile' 'Image workflow must map Codex to the shared runtime context and Codex Dockerfile.'

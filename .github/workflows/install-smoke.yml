@@ -1,0 +1,56 @@
+name: Quickstart install
+
+# Runs the published quickstart (install.sh from open-agenthub.github.io) with the chart
+# from this checkout, so a chart change cannot silently break the one-command install.
+# The scripts themselves are tested in the open-agenthub.github.io repository.
+on:
+  pull_request:
+    paths: ["helm/**"]
+  push:
+    branches: [main]
+    paths: ["helm/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AGENTHUB_CHART: ./helm/open-agenthub
+      SCRIPTS: https://raw.githubusercontent.com/open-agenthub/open-agenthub.github.io/main
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch the quickstart and its smoke test
+        run: |
+          curl -fsSL https://open-agenthub.github.io/install.sh -o /tmp/install.sh
+          curl -fsSL "$SCRIPTS/.github/scripts/install-smoke.sh" -o /tmp/install-smoke.sh
+
+      - name: Install
+        run: sh /tmp/install.sh
+
+      - name: Smoke test
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: bash /tmp/install-smoke.sh default
+
+      - name: Upgrade in place keeps the release healthy
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: |
+          sh /tmp/install.sh
+          bash /tmp/install-smoke.sh default
+
+      - name: Diagnostics
+        if: failure()
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: |
+          kubectl -n agenthub get all,pvc,events || true
+          for p in $(kubectl -n agenthub get pods -o name 2>/dev/null); do
+            echo "::group::$p"; kubectl -n agenthub describe "$p" | tail -30
+            kubectl -n agenthub logs "$p" --all-containers --tail=100 || true; echo "::endgroup::"
+          done
