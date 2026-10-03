@@ -4,12 +4,13 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { api, getSharedTranscript, sharedTerminalUrl, shellUrl, terminalUrl } from '../api.js'
 import { submitToAgent } from '../lib/terminal-input.js'
+import { attachTerminalClipboard } from '../lib/terminal-clipboard.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null } })
 const emit = defineEmits(['status'])
 const host = ref(null)
 const mobileInput = ref('')
-let term, fit, ws, ro, reconnectTimer
+let term, fit, clipboard, ws, ro, reconnectTimer
 let disposed = false
 let inputRegistered = false
 let connectionGeneration = 0
@@ -137,6 +138,8 @@ onMounted(() => {
   term = new Terminal({ fontFamily: "'JetBrains Mono', monospace", fontSize: 13, cursorBlink: canSend.value, disableStdin: !canSend.value, theme: { background: '#0e0d0b', foreground: '#c9c4bb' } })
   fit = new FitAddon()
   term.loadAddon(fit)
+  // A shared link's viewer did not start the session, so its output may not write their clipboard.
+  clipboard = attachTerminalClipboard(term, { allowOsc52: !props.sharedToken })
   term.open(host.value)
   fitNow()
   ro = new ResizeObserver(scheduleFit)
@@ -179,6 +182,8 @@ onBeforeUnmount(() => {
   }
   ro?.disconnect()
   ro = undefined
+  clipboard?.dispose()
+  clipboard = undefined
   term?.dispose()
   term = undefined
   fit = undefined
