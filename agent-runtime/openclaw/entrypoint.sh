@@ -60,6 +60,44 @@ apikey)
     exit 1
   fi
   # API-key auth is env-driven; driver.prepare scopes keys to the agent child.
+  #
+  # The key alone is not enough. OpenClaw's default model is openai/gpt-5.5 and it stays there
+  # whatever credentials exist, so a session mounting an Anthropic key came up on OpenAI, failed
+  # auth on its first turn and then reported "no models available". Point the default at a model
+  # of the provider whose key is actually mounted.
+  OPENCLAW_PROVIDER=""
+  OPENCLAW_PROVIDER_ENV=""
+  for candidate in ANTHROPIC_API_KEY:anthropic OPENAI_API_KEY:openai CURSOR_API_KEY:cursor; do
+    if [ -n "$(eval "echo \${${candidate%%:*}:-}")" ]; then
+      OPENCLAW_PROVIDER_ENV="${candidate%%:*}"
+      OPENCLAW_PROVIDER="${candidate##*:}"
+      break
+    fi
+  done
+  # --all because the catalogue is filtered to what is already configured otherwise, which on a
+  # fresh state directory is just the OpenAI default we are trying to move away from.
+  if ! OPENCLAW_MODEL="$(openclaw models list --all --plain --provider "$OPENCLAW_PROVIDER" 2>/dev/null \
+      | node "$RUNTIME/openclaw/select-model.js" "$OPENCLAW_PROVIDER")"; then
+    echo "[entrypoint] ERROR: no OpenClaw model is available for the mounted $OPENCLAW_PROVIDER key." >&2
+    exit 1
+  fi
+  openclaw models set "$OPENCLAW_MODEL" >/dev/null
+  # Also register the key as an auth profile. The env var alone already resolves
+  # ("effective=env: ANTHROPIC_API_KEY" in `models status`), but it resolves for every provider
+  # route that reads the same variable — anthropic, anthropic-openai and claude-cli all claimed
+  # it — whereas a profile pins the one we mean to "effective=profiles:".
+  #
+  # Best-effort on purpose: paste-api-key validates the key's shape and rejects anything that
+  # does not look like that provider's format. Failing the start on that would turn a session
+  # whose key works through the env path into one that does not come up at all. The SQLite store
+  # it writes is in stateExcludes, so the key never reaches the saved state tar.
+  if printf '%s' "$(eval "echo \${${OPENCLAW_PROVIDER_ENV}}")" \
+      | openclaw models auth paste-api-key --provider "$OPENCLAW_PROVIDER" >/dev/null 2>&1; then
+    echo "[entrypoint] OpenClaw auth profile: ${OPENCLAW_PROVIDER}:manual"
+  else
+    echo "[entrypoint] OpenClaw auth profile not written; falling back to ${OPENCLAW_PROVIDER_ENV}."
+  fi
+  echo "[entrypoint] OpenClaw default model: $OPENCLAW_MODEL (provider $OPENCLAW_PROVIDER)"
   ;;
 subscription)
   AUTH_EXPECT_CREATE=1
