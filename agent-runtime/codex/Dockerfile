@@ -10,14 +10,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 FROM node:22-bookworm-slim
 # Pinned so a rebuild of this commit yields the same CLI. update-agent-runtimes.yml
 # opens a PR when a newer version ships.
-ARG CODEX_VERSION=0.157.1
-ARG GH_VERSION=2.101.0
-ARG GLAB_VERSION=1.119.0
+ARG CODEX_VERSION=0.160.0
+ARG GH_VERSION=2.102.0
+ARG GLAB_VERSION=1.120.0
 # Set by BuildKit per target platform (amd64, arm64); gh and glab use the same names.
 ARG TARGETARCH
 ENV CODEX_VERSION=${CODEX_VERSION}
+# procps provides `ps`: since 0.157 `codex resume` starts its app-server as a daemon and
+# records the daemon's pid through `ps`. The slim base lacks it, so every resumed session
+# exited with "failed to invoke ps for pid-managed app server".
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git openssh-client ca-certificates bash curl tar bubblewrap \
+      git openssh-client ca-certificates bash curl tar bubblewrap procps \
  && npm install -g @openai/codex@${CODEX_VERSION} \
  && codex --version 2>&1 | grep -Fq "$CODEX_VERSION" \
  && mkdir -p /tmp/gh /tmp/glab \

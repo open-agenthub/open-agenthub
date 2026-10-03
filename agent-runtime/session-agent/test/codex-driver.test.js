@@ -164,5 +164,7 @@ test('Codex image pins CLI and preserves custom-image injection paths', () => {
   assert.match(dockerfile, /codex --version 2>&1 \| grep -Fq "\$CODEX_VERSION"/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/node/);
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/codex/);
+  // The app-server daemon behind `codex resume` needs `ps`; the slim base does not ship it.
+  assert.match(dockerfile, /apt-get install[^&]*\bprocps\b/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai/);
 });

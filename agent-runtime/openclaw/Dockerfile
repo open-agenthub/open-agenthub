@@ -19,8 +19,8 @@ FROM node:22-bookworm-slim
 # to be verified by hand — update-agent-runtimes.yml proposes it in a PR but does not
 # merge it. Hence this pin trails the other runtimes on purpose.
 ARG OPENCLAW_VERSION=2026.7.1-2
-ARG GH_VERSION=2.101.0
-ARG GLAB_VERSION=1.119.0
+ARG GH_VERSION=2.102.0
+ARG GLAB_VERSION=1.120.0
 # Set by BuildKit per target platform (amd64, arm64); gh and glab use the same names.
 ARG TARGETARCH
 ENV OPENCLAW_VERSION=${OPENCLAW_VERSION}
