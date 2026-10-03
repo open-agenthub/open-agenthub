@@ -14,8 +14,11 @@ ARG CODEX_VERSION=0.157.1
 ARG GH_VERSION=2.101.0
 ARG GLAB_VERSION=1.119.0
 ENV CODEX_VERSION=${CODEX_VERSION}
+# procps provides `ps`: since 0.157 `codex resume` starts its app-server as a daemon and
+# records the daemon's pid through `ps`. The slim base lacks it, so every resumed session
+# exited with "failed to invoke ps for pid-managed app server".
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git openssh-client ca-certificates bash curl tar bubblewrap \
+      git openssh-client ca-certificates bash curl tar bubblewrap procps \
  && npm install -g @openai/codex@${CODEX_VERSION} \
  && codex --version 2>&1 | grep -Fq "$CODEX_VERSION" \
  && mkdir -p /tmp/gh /tmp/glab \
