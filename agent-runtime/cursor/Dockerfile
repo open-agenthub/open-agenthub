@@ -15,6 +15,8 @@ FROM node:22-bookworm-slim
 # recorded instead (INSTALLED_VERSION, exported as CURSOR_AGENT_VERSION by the entrypoint).
 ARG GH_VERSION=2.101.0
 ARG GLAB_VERSION=1.119.0
+# Set by BuildKit per target platform (amd64, arm64); gh and glab use the same names.
+ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates bash curl tar \
  && curl https://cursor.com/install -fsS | bash \
@@ -28,9 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && echo "$AGENT_VER" > /usr/local/share/cursor-agent/INSTALLED_VERSION \
  && agent --version 2>&1 | grep -Fq "$AGENT_VER" \
  && mkdir -p /tmp/gh /tmp/glab \
- && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp/gh \
+ && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${TARGETARCH}.tar.gz" | tar xz -C /tmp/gh \
  && install -m0755 "$(find /tmp/gh -type f -name gh | head -1)" /usr/local/bin/gh \
- && curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.tar.gz" | tar xz -C /tmp/glab \
+ && curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${TARGETARCH}.tar.gz" | tar xz -C /tmp/glab \
  && install -m0755 "$(find /tmp/glab -type f -name glab | head -1)" /usr/local/bin/glab \
  && rm -rf /tmp/gh /tmp/glab /root/.local /var/lib/apt/lists/* \
  && userdel -r node \
