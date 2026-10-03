@@ -10,9 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 FROM node:22-bookworm-slim
 # Pinned so a rebuild of this commit yields the same CLI. update-agent-runtimes.yml
 # opens a PR when a newer version ships.
-ARG CLAUDE_CODE_VERSION=2.1.283
-ARG GH_VERSION=2.101.0
-ARG GLAB_VERSION=1.119.0
+ARG CLAUDE_CODE_VERSION=2.1.287
+ARG GH_VERSION=2.102.0
+ARG GLAB_VERSION=1.120.0
 ENV CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git openssh-client ca-certificates bash curl tar \
