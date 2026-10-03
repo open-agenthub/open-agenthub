@@ -122,19 +122,38 @@ helm install agenthub agenthub/open-agenthub -n agenthub --create-namespace \
   --set ingress.host=hub.your-org.example
 ```
 
+Keep the generated Postgres password: on a later `helm upgrade` pass `--reuse-values` (or
+the same password) — Postgres keeps the password it was initialised with.
+
+> **Object storage is strongly recommended.** Without it the hub runs, but sessions cannot
+> be resumed in a fresh pod, finished sessions keep no history, and uploaded session files
+> and artifacts disappear with the agent pod. Either point `s3.*` at a provider you already
+> run, or let the chart deploy Garage — see [object storage](#object-storage) below. The
+> quickstart scripts of Option B set this up automatically.
+
 ### Option B — you don't have Kubernetes
 
-The all-in-one quickstart installs k3s (single node) + Open AgentHub on a Linux host
-(recommended: 4 vCPU / 6 GB RAM — good for up to ~6 users):
+The all-in-one quickstart sets up a single-node cluster and deploys Open AgentHub with
+persistent Postgres **and** object storage (recommended: 4 vCPU / 6 GB RAM — good for up
+to ~6 users):
 
-```bash
-curl -fsSL https://open-agenthub.github.io/install.sh | sh
-```
+| Platform | Command | Cluster |
+|---|---|---|
+| Linux | `curl -fsSL https://open-agenthub.github.io/install.sh \| sh` | installs k3s |
+| macOS | `curl -fsSL https://open-agenthub.github.io/install.sh \| sh` | k3d in Docker Desktop |
+| Windows | `iwr -useb https://open-agenthub.github.io/install.ps1 \| iex` | k3d in Docker Desktop |
+
+The scripts are safe to re-run (generated passwords and storage keys are kept) and never
+deploy into whatever cluster your current kubectl context points at. To deploy into an
+existing cluster instead, set `AGENTHUB_KUBE_CONTEXT=<context>` (Linux/macOS). Object
+storage can be skipped with `AGENTHUB_OBJECT_STORAGE=0` — not recommended.
 
 ### First steps after installation
 
-1. **Open the UI.** With an ingress: `https://<your-host>`. Without one:
-   `kubectl -n agenthub port-forward svc/agenthub-frontend 8080:80` → http://localhost:8080.
+1. **Open the UI.** With an ingress: `https://<your-host>`. Without one (the quickstart
+   default): `kubectl -n agenthub port-forward svc/agenthub-frontend 8080:80` →
+   http://localhost:8080 (the quickstart prints the command with the right `--context`).
+   The frontend proxies `/api` and `/ws` to the backend, so one port-forward is enough.
 2. **Enable authentication** (auth is *disabled* by default — fine for a first test, not
    for anything reachable by others). See the
    [provider examples below](#configuring-oauthoidc-login), then:
@@ -155,14 +174,37 @@ curl -fsSL https://open-agenthub.github.io/install.sh | sh
    `agent login`, and OpenClaw uses `openclaw models auth add`.
 
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
-[`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml). Optional S3-compatible object
-storage enables session resume, history of finished sessions, and artifact uploads.
+[`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml).
+
+### Object storage
+
+S3-compatible object storage is **recommended for every installation**: it enables session
+resume, history of finished sessions, persistent session files and artifact uploads. The
+quickstart scripts (Option B) deploy and bootstrap it automatically.
 
 Point `s3.*` at a provider you already run, or let the chart deploy one: with
 `objectStorage.enabled=true` it brings up a single-node [Garage](https://garagehq.deuxfleurs.fr/)
-and wires `s3.serviceUrl`, `s3.accessKey` and `s3.secretKey` to it. Garage creates neither a
-layout nor a bucket nor a key by itself, so that one-time bootstrap is a step of its own —
-`setup-dev.sh` / `setup-dev.ps1` offer the whole thing (`--with-object-storage`,
+(with PVCs) and wires `s3.serviceUrl`, `s3.accessKey` and `s3.secretKey` to it. Garage creates
+neither a layout nor a bucket nor a key by itself, so that one-time bootstrap is a step of its
+own:
+
+```bash
+AK=GK$(openssl rand -hex 12); SK=$(openssl rand -hex 32)   # keep these for later upgrades
+helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+  --set objectStorage.enabled=true \
+  --set-string objectStorage.accessKey=$AK,objectStorage.secretKey=$SK \
+  --set-string objectStorage.rpcSecret=$(openssl rand -hex 32),objectStorage.adminToken=$(openssl rand -hex 16)
+kubectl -n agenthub rollout status statefulset/garage
+garage() { kubectl -n agenthub exec garage-0 -- /garage "$@"; }
+garage layout assign -z dc1 -c 18GB "$(garage node id -q | cut -d@ -f1)"
+garage layout apply --version 1
+garage bucket create agenthub
+garage key import --yes "$AK" "$SK" -n agenthub-key
+garage bucket allow --read --write --owner agenthub --key agenthub-key
+kubectl -n agenthub rollout restart deployment/agenthub-backend
+```
+
+`setup-dev.sh` / `setup-dev.ps1` do the same for development (`--with-object-storage`,
 `-WithObjectStorage`), generate the credentials, and skip whatever is already in place on a
 redeploy.
 
@@ -525,7 +567,8 @@ isolation. Subscription authentication changes the billing source, not this limi
 
 ## Persistence, resume & notifications
 
-No PVCs. Results flow back via `git push` or as artifacts to S3. What is persisted:
+Agent session pods use no PVCs (only the bundled Postgres and the optional Garage do).
+Results flow back via `git push` or as artifacts to S3. What is persisted:
 
 - **Postgres** = registry/status (source of truth for the session list), including the
   selected agent, authentication mode, agent conversation identifier, status, policy,

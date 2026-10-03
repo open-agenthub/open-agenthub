@@ -29,3 +29,19 @@ jobs:
           skip_existing: true
         env:
           CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
+
+      # chart-releaser only updates the gh-pages branch; the install scripts and the
+      # README need the index actually served. Fails when Pages is off or stale.
+      - name: Verify the published Helm repository
+        run: |
+          version="$(sed -n 's/^version:[[:space:]]*//p' helm/open-agenthub/Chart.yaml)"
+          url="https://open-agenthub.github.io/open-agenthub/index.yaml"
+          for i in $(seq 1 30); do
+            if curl -fsSL "$url" | grep -qE "^[[:space:]]+version: ${version}\$"; then
+              echo "chart ${version} is served at ${url}"
+              exit 0
+            fi
+            sleep 20
+          done
+          echo "::error::chart ${version} is not served at ${url} — is GitHub Pages enabled for the gh-pages branch?"
+          exit 1
