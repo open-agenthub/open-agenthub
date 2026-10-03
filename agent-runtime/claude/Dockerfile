@@ -10,7 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 FROM node:22-bookworm-slim
 # Pinned so a rebuild of this commit yields the same CLI. update-agent-runtimes.yml
 # opens a PR when a newer version ships.
-ARG CLAUDE_CODE_VERSION=2.1.287
+ARG CLAUDE_CODE_VERSION=2.1.288
 ARG GH_VERSION=2.102.0
 ARG GLAB_VERSION=1.120.0
 # Set by BuildKit per target platform (amd64, arm64); gh and glab use the same names.
