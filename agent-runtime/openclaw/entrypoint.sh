@@ -31,6 +31,11 @@ node "$RUNTIME/openclaw/session-prompt.mjs" "$OPENCLAW_AGENT_DIR"
 export OPENCLAW_AUTH_FILE="$OPENCLAW_STATE_DIR/auth-profiles.json"
 export NO_OPEN_BROWSER=1
 
+# Shared by both auth modes; login.sh needs it too, so its location travels in the environment
+# rather than being re-derived from a path relative to whichever script sourced it.
+export AGENTHUB_SELECT_MODEL="$RUNTIME/openclaw/select-model.js"
+source "$RUNTIME/openclaw/apply-default-model.sh"
+
 # MCP servers in OpenClaw's own config. Unlike the other three runtimes nothing configured these
 # before, so a session's MCP servers did not exist for OpenClaw at all. Runtime-owned names are
 # passed as reserved so a user config cannot shadow them with a server of its own.
@@ -74,14 +79,10 @@ apikey)
       break
     fi
   done
-  # --all because the catalogue is filtered to what is already configured otherwise, which on a
-  # fresh state directory is just the OpenAI default we are trying to move away from.
-  if ! OPENCLAW_MODEL="$(openclaw models list --all --plain --provider "$OPENCLAW_PROVIDER" 2>/dev/null \
-      | node "$RUNTIME/openclaw/select-model.js" "$OPENCLAW_PROVIDER")"; then
+  if ! apply_default_model "$OPENCLAW_PROVIDER"; then
     echo "[entrypoint] ERROR: no OpenClaw model is available for the mounted $OPENCLAW_PROVIDER key." >&2
     exit 1
   fi
-  openclaw models set "$OPENCLAW_MODEL" >/dev/null
   # Also register the key as an auth profile. The env var alone already resolves
   # ("effective=env: ANTHROPIC_API_KEY" in `models status`), but it resolves for every provider
   # route that reads the same variable — anthropic, anthropic-openai and claude-cli all claimed
@@ -97,7 +98,6 @@ apikey)
   else
     echo "[entrypoint] OpenClaw auth profile not written; falling back to ${OPENCLAW_PROVIDER_ENV}."
   fi
-  echo "[entrypoint] OpenClaw default model: $OPENCLAW_MODEL (provider $OPENCLAW_PROVIDER)"
   ;;
 subscription)
   AUTH_EXPECT_CREATE=1
@@ -116,6 +116,10 @@ process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.
 ' "$OPENCLAW_AUTH_FILE")"
     AUTH_EXPECT_CREATE=0
     echo "[entrypoint] OpenClaw login restored from secret into agents/${OPENCLAW_AGENT_ID}/agent."
+    # A restored login already names its provider, so the model can be chosen here. Without this
+    # a returning subscription session came up on openai/gpt-5.5 holding an Anthropic token and
+    # failed on its first turn exactly like a fresh one.
+    apply_default_model || true
   fi
 
   if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then

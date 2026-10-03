@@ -46,6 +46,21 @@ function providerFor(env) {
   return null;
 }
 
+/**
+ * Subscription mode has no key in the environment — the provider is whichever one the login
+ * wrote a profile for. `openclaw models auth list` prints them as:
+ *
+ *   Profiles:
+ *   - anthropic:manual [anthropic/token]
+ *
+ * First profile wins: a session authenticates against one provider, and preferring a later
+ * entry would silently change which account a returning session talks to.
+ */
+function providerFromProfiles(text) {
+  const match = /^-\s+\S+\s+\[([a-z0-9-]+)\//m.exec(String(text || ''));
+  return match ? match[1] : null;
+}
+
 /** Catalogue lines as printed by `openclaw models list --plain --provider <p>`. */
 function parseCatalog(text, provider) {
   return String(text || '')
@@ -95,4 +110,6 @@ if (require.main === module) {
   });
 }
 
-module.exports = { PROVIDER_BY_ENV, PREFERRED, providerFor, parseCatalog, selectModel, main };
+module.exports = {
+  PROVIDER_BY_ENV, PREFERRED, providerFor, providerFromProfiles, parseCatalog, selectModel, main
+};

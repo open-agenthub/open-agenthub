@@ -92,15 +92,51 @@ test('main prints the model and reports a provider with no models', () => {
   assert.match(err.join(''), /no provider API key is present/);
 });
 
+test('subscription mode reads the provider off the login it just performed', () => {
+  // Verbatim from `openclaw models auth list` in the pinned image.
+  const listing = [
+    'Agent: main',
+    'Auth state store: ~/.openclaw/agents/main/agent/openclaw-agent.sqlite',
+    'Profiles:',
+    '- anthropic:manual [anthropic/token]'
+  ].join('\n');
+  assert.equal(selectModel.providerFromProfiles(listing), 'anthropic');
+
+  // First profile wins: a session authenticates against one provider, and preferring a later
+  // entry would silently change which account a returning session talks to.
+  assert.equal(selectModel.providerFromProfiles(
+    `${listing}\n- openai:manual [openai/api_key]`), 'anthropic');
+
+  assert.equal(selectModel.providerFromProfiles('Profiles: (none)'), null);
+  assert.equal(selectModel.providerFromProfiles(''), null);
+});
+
+test('both auth modes apply a default model, not just ApiKey', () => {
+  const runtime = path.join(__dirname, '..', '..', 'openclaw');
+  const entrypoint = fs.readFileSync(path.join(runtime, 'entrypoint.sh'), 'utf8');
+  const login = fs.readFileSync(path.join(runtime, 'login.sh'), 'utf8');
+
+  // The original fix only touched the ApiKey branch, which left a subscription session holding
+  // an Anthropic token sitting on openai/gpt-5.5 — the failure that was actually reported.
+  assert.match(entrypoint, /source "\$RUNTIME\/openclaw\/apply-default-model\.sh"/);
+  const subscription = entrypoint.slice(entrypoint.indexOf('\nsubscription)'));
+  assert.match(subscription, /apply_default_model/,
+    'a restored subscription login must still pick a model for its provider');
+  assert.match(login, /apply_default_model/,
+    'an interactive login must pick a model for the provider it just authenticated');
+});
+
 test('the entrypoint selects the model before starting the agent', () => {
   const entrypoint = fs.readFileSync(
     path.join(__dirname, '..', '..', 'openclaw', 'entrypoint.sh'), 'utf8');
+  const helper = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'openclaw', 'apply-default-model.sh'), 'utf8');
   // --all matters: without it the catalogue is limited to already-configured models, which on a
   // fresh state directory is only the OpenAI default this is meant to move away from.
-  assert.match(entrypoint, /openclaw models list --all --plain --provider/);
-  assert.match(entrypoint, /select-model\.js/);
-  assert.match(entrypoint, /openclaw models set "\$OPENCLAW_MODEL"/);
+  assert.match(helper, /openclaw models list --all --plain --provider/);
+  assert.match(helper, /openclaw models set "\$model"/);
+  assert.match(entrypoint, /apply_default_model "\$OPENCLAW_PROVIDER"/);
   // Best-effort: paste-api-key validates the key's shape, and a rejection must not stop a
   // session whose key works through the environment.
-  assert.match(entrypoint, /paste-api-key[^\n]*\|\| *$|paste-api-key[\s\S]{0,400}falling back/);
+  assert.match(entrypoint, /paste-api-key[\s\S]{0,400}falling back/);
 });
