@@ -31,6 +31,11 @@ node "$RUNTIME/openclaw/session-prompt.mjs" "$OPENCLAW_AGENT_DIR"
 export OPENCLAW_AUTH_FILE="$OPENCLAW_STATE_DIR/auth-profiles.json"
 export NO_OPEN_BROWSER=1
 
+# Shared by both auth modes; login.sh needs it too, so its location travels in the environment
+# rather than being re-derived from a path relative to whichever script sourced it.
+export AGENTHUB_SELECT_MODEL="$RUNTIME/openclaw/select-model.js"
+source "$RUNTIME/openclaw/apply-default-model.sh"
+
 # MCP servers in OpenClaw's own config. Unlike the other three runtimes nothing configured these
 # before, so a session's MCP servers did not exist for OpenClaw at all. Runtime-owned names are
 # passed as reserved so a user config cannot shadow them with a server of its own.
@@ -60,6 +65,39 @@ apikey)
     exit 1
   fi
   # API-key auth is env-driven; driver.prepare scopes keys to the agent child.
+  #
+  # The key alone is not enough. OpenClaw's default model is openai/gpt-5.5 and it stays there
+  # whatever credentials exist, so a session mounting an Anthropic key came up on OpenAI, failed
+  # auth on its first turn and then reported "no models available". Point the default at a model
+  # of the provider whose key is actually mounted.
+  OPENCLAW_PROVIDER=""
+  OPENCLAW_PROVIDER_ENV=""
+  for candidate in ANTHROPIC_API_KEY:anthropic OPENAI_API_KEY:openai CURSOR_API_KEY:cursor; do
+    if [ -n "$(eval "echo \${${candidate%%:*}:-}")" ]; then
+      OPENCLAW_PROVIDER_ENV="${candidate%%:*}"
+      OPENCLAW_PROVIDER="${candidate##*:}"
+      break
+    fi
+  done
+  if ! apply_default_model "$OPENCLAW_PROVIDER"; then
+    echo "[entrypoint] ERROR: no OpenClaw model is available for the mounted $OPENCLAW_PROVIDER key." >&2
+    exit 1
+  fi
+  # Also register the key as an auth profile. The env var alone already resolves
+  # ("effective=env: ANTHROPIC_API_KEY" in `models status`), but it resolves for every provider
+  # route that reads the same variable — anthropic, anthropic-openai and claude-cli all claimed
+  # it — whereas a profile pins the one we mean to "effective=profiles:".
+  #
+  # Best-effort on purpose: paste-api-key validates the key's shape and rejects anything that
+  # does not look like that provider's format. Failing the start on that would turn a session
+  # whose key works through the env path into one that does not come up at all. The SQLite store
+  # it writes is in stateExcludes, so the key never reaches the saved state tar.
+  if printf '%s' "$(eval "echo \${${OPENCLAW_PROVIDER_ENV}}")" \
+      | openclaw models auth paste-api-key --provider "$OPENCLAW_PROVIDER" >/dev/null 2>&1; then
+    echo "[entrypoint] OpenClaw auth profile: ${OPENCLAW_PROVIDER}:manual"
+  else
+    echo "[entrypoint] OpenClaw auth profile not written; falling back to ${OPENCLAW_PROVIDER_ENV}."
+  fi
   ;;
 subscription)
   AUTH_EXPECT_CREATE=1
@@ -78,6 +116,10 @@ process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.
 ' "$OPENCLAW_AUTH_FILE")"
     AUTH_EXPECT_CREATE=0
     echo "[entrypoint] OpenClaw login restored from secret into agents/${OPENCLAW_AGENT_ID}/agent."
+    # A restored login already names its provider, so the model can be chosen here. Without this
+    # a returning subscription session came up on openai/gpt-5.5 holding an Anthropic token and
+    # failed on its first turn exactly like a fresh one.
+    apply_default_model || true
   fi
 
   if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then

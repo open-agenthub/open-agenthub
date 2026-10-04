@@ -105,7 +105,15 @@ test('OpenClaw subscription login runs inside the agent PTY before the interacti
   }), false);
 
   const script = fs.readFileSync(loginSh, 'utf8');
-  assert.match(script, /if \[ ! -f "\$\{OPENCLAW_AUTH_FILE:-\}" \]; then\s+openclaw models auth add\s+node "\$SCRIPT_DIR\/sync-auth-profiles\.js" export\s+fi/);
+  // Ordering is the point, not the exact body: the login prompt comes first, the export of what
+  // it wrote second, and the model that matches the provider it just chose third — all inside
+  // the "no auth file yet" branch, and all before the TUI is exec'd below.
+  assert.match(script, new RegExp(
+    'if \\[ ! -f "\\$\\{OPENCLAW_AUTH_FILE:-\\}" \\]; then' +
+    '[\\s\\S]*?openclaw models auth add' +
+    '[\\s\\S]*?sync-auth-profiles\\.js" export' +
+    '[\\s\\S]*?apply_default_model' +
+    '[\\s\\S]*?\\nfi'));
   assert.match(script, /sync-auth-profiles\.js" export/);
   assert.match(script, /^exec openclaw "\$@"$/m);
   const entrypoint = fs.readFileSync(path.join(runtimeDir, 'openclaw', 'entrypoint.sh'), 'utf8');
