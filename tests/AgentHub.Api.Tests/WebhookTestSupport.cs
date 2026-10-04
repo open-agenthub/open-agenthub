@@ -81,6 +81,8 @@ internal sealed class RecordingWebhookSessionService : ISessionService
         throw new NotSupportedException();
     public Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default) =>
         throw new NotSupportedException();
+    public Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default) =>
+        throw new NotSupportedException();
     public Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default) =>
         throw new NotSupportedException();
     public Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default) =>

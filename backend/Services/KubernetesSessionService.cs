@@ -136,6 +136,23 @@ public sealed class KubernetesSessionService : ISessionService
         _log.LogInformation("Saved {Agent} login for {Owner}", agent, owner);
     }
 
+    public async Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default)
+    {
+        try
+        {
+            await _k8s.CoreV1.DeleteNamespacedSecretAsync(
+                ProviderSecretName(owner, agent), _opts.Namespace, cancellationToken: ct);
+            _log.LogInformation("Deleted {Agent} login for {Owner}", agent, owner);
+        }
+        catch (k8s.Autorest.HttpOperationException error)
+            when (error.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Already gone. Swallowed rather than surfaced so the endpoint stays idempotent and
+            // a caller cannot probe which logins exist by watching the status code.
+            _log.LogDebug("No {Agent} login stored for {Owner}", agent, owner);
+        }
+    }
+
     // ---------------------------------------------------------------- Create / Resume
 
     public Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default)

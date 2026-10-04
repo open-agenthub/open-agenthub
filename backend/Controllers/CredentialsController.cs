@@ -34,4 +34,22 @@ public sealed class CredentialsController : ControllerBase
     [HttpGet]
     public async Task<ActionResult<CredentialStatus>> Status(CancellationToken ct)
         => Ok(await _svc.GetCredentialStatusAsync(Owner, ct));
+
+    /// <summary>
+    /// Forgets a stored provider login.
+    ///
+    /// These are not typed in here — a runtime captures them from the session the user signed in
+    /// to and uploads them, so until now a login that stopped working was restored into every new
+    /// session with nothing in the product able to clear it.
+    ///
+    /// Always 204, whether or not a login was stored: the endpoint is idempotent, and a 404 would
+    /// let a caller enumerate which providers an account has signed in to.
+    /// </summary>
+    [HttpDelete("subscription/{agent}")]
+    public async Task<IActionResult> DeleteSubscription(AgentKind agent, CancellationToken ct)
+    {
+        if (!Enum.IsDefined(agent)) return BadRequest("Unknown agent.");
+        await _svc.DeleteProviderCredentialsAsync(Owner, agent, ct);
+        return NoContent();
+    }
 }
