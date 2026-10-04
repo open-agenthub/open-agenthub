@@ -10,6 +10,18 @@ public interface ISessionService
     /// <summary>Persists a user's provider CLI subscription credentials so new sessions
     /// can start without another login.</summary>
     Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default);
+
+    /// <summary>
+    /// Forgets a stored provider login. Nothing else could: the runtimes capture these from a
+    /// session's own state and upload them, so a credential that stopped working — a truncated
+    /// paste, an expired token — was restored into every new session with no way to clear it
+    /// short of deleting the Secret by hand.
+    ///
+    /// Idempotent: a caller should not have to check first, and the status code must not reveal
+    /// whether a login existed.
+    /// </summary>
+    Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default);
+
     Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default);
     Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);
     Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default);

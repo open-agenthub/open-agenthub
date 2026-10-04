@@ -126,6 +126,10 @@ export const api = {
   storeCredentials: (data) => req('PUT', '/credentials', data),
   // Which credential fields have a stored value (booleans only, never values).
   getCredentialStatus: () => req('GET', '/credentials'),
+  // A subscription login is captured from a session by its runtime rather than typed in here,
+  // so this is the only way to get rid of one that stopped working.
+  deleteSubscriptionCredential: (agent) =>
+    req('DELETE', `/credentials/subscription/${encodeURIComponent(agent)}`),
   // GDPR: irreversibly deletes the caller's account and all its data.
   deleteAccount: (confirm) => req('DELETE', `/account?confirm=${encodeURIComponent(confirm)}`),
   // Personal API tokens for driving sessions remotely.

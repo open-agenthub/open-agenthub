@@ -173,6 +173,8 @@ public class PermissionFlowControllerTests
 
         public Task StoreCredentialsAsync(string o, UserCredentials creds, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<CredentialStatus> GetCredentialStatusAsync(string o, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default) =>
+            throw new NotSupportedException();
         public Task StoreProviderCredentialsAsync(string o, AgentKind agent, string json, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionInfo> CreateSessionAsync(string o, CreateSessionRequest req, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionInfo> DuplicateSessionAsync(string o, string id, DuplicateSessionRequest request, CancellationToken ct = default) => throw new NotSupportedException();

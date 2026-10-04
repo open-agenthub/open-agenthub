@@ -60,6 +60,8 @@ public class AccountDeletionServiceTests
 
         public Task StoreCredentialsAsync(string owner, UserCredentials creds, CancellationToken ct = default) => Task.CompletedTask;
         public Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default) => Task.FromResult(new CredentialStatus());
+        public Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default) =>
+            throw new NotSupportedException();
         public Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default) => Task.CompletedTask;
         public Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default) => throw new NotSupportedException();

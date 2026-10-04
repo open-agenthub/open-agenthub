@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   api: {
     createSession: vi.fn(), updateSession: vi.fn(), duplicateSession: vi.fn(),
     getCredentialStatus: vi.fn(), storeCredentials: vi.fn(),
+    deleteSubscriptionCredential: vi.fn(),
     getAllowedAgents: vi.fn()
   },
   config: { gitEnabled: false }
@@ -455,6 +456,39 @@ describe('OpenClaw credentials', () => {
     expect(wrapper.find('[data-credential-status="openclawSubscription"]').text()).toContain('OpenClaw subscription')
     expect(wrapper.find('[data-credential="openclawApiKey"]').exists()).toBe(false)
     expect(wrapper.text()).not.toMatch(/OpenClaw API key/i)
+  })
+
+  /// A subscription login is never typed in here — a runtime captured it from a session and
+  /// uploaded it — so removing it is the one action the dialog can offer for it.
+  it('removes a stored subscription login immediately and refreshes what is stored', async () => {
+    mocks.api.deleteSubscriptionCredential.mockResolvedValue(null)
+    mocks.api.getCredentialStatus
+      .mockResolvedValueOnce({ openclawSubscription: true })
+      .mockResolvedValueOnce({ openclawSubscription: false })
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+
+    await wrapper.get('[data-remove-subscription="OpenClaw"]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.deleteSubscriptionCredential).toHaveBeenCalledWith('OpenClaw')
+    // Re-read rather than assumed: the delete is immediate, so the dialog must not keep
+    // claiming a login is stored.
+    expect(wrapper.find('[data-remove-subscription="OpenClaw"]').exists()).toBe(false)
+    // Unlike the API key fields, this is not staged for save.
+    expect(mocks.api.storeCredentials).not.toHaveBeenCalled()
+  })
+
+  it('keeps the login visible and reports why when the removal fails', async () => {
+    mocks.api.deleteSubscriptionCredential.mockRejectedValue(new Error('backend said no'))
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+
+    await wrapper.get('[data-remove-subscription="OpenClaw"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-remove-subscription="OpenClaw"]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('backend said no')
   })
 
   it('notes that Anthropic, OpenAI, and Cursor keys can be reused by OpenClaw', async () => {
