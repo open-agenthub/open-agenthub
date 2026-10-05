@@ -8,10 +8,19 @@ if [ -f /opt/agenthub/session-agent/common/entrypoint-common.sh ]; then
 fi
 source "$COMMON_ENTRYPOINT"
 
+AUTH_EXPECT_CREATE=1
+AUTH_BASELINE_SHA256=""
 if [ -f /secrets/claude/credentials.json ]; then
   mkdir -p "$HOME/.claude"
   cp /secrets/claude/credentials.json "$HOME/.claude/.credentials.json"
   chmod 600 "$HOME/.claude/.credentials.json"
+  # The watcher compares against this instead of re-uploading what it just restored.
+  AUTH_BASELINE_SHA256="$(node -e '
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.argv[1])).digest("hex"));
+' "$HOME/.claude/.credentials.json")"
+  AUTH_EXPECT_CREATE=0
   echo "[entrypoint] Claude login restored from secret."
 fi
 CLAUDE_WORKDIR="${AGENTHUB_WORKDIR:-/workspace}"
@@ -25,22 +34,9 @@ node "$RUNTIME/claude/workspace-trust.mjs" "$HOME/.claude.json" "$CLAUDE_WORKDIR
 node "$RUNTIME/claude/mcp-config.mjs" "$HOME/.claude.json" "${AGENTHUB_MCP_CONFIG:-}"
 
 if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
-  (
-    CREDS="$HOME/.claude/.credentials.json"
-    CACHE=/tmp/.claude-creds-uploaded
-    [ -f "$CREDS" ] && cp "$CREDS" "$CACHE" 2>/dev/null || true
-    while true; do
-      if [ -f "$CREDS" ] && ! cmp -s "$CREDS" "$CACHE" 2>/dev/null; then
-        if curl -fsS -X PUT -H "X-Agent-Token: $AGENTHUB_CALLBACK_TOKEN" \
-             -H "Content-Type: application/json" \
-             --data-binary @"$CREDS" "$AGENTHUB_CALLBACK_URL/claude-credentials"; then
-          cp "$CREDS" "$CACHE"
-          echo "[entrypoint] Claude login backed up."
-        fi
-      fi
-      sleep 30
-    done
-  ) &
+  AGENTHUB_CLAUDE_AUTH_EXPECT_CREATE="$AUTH_EXPECT_CREATE" \
+    AGENTHUB_CLAUDE_AUTH_BASELINE_SHA256="$AUTH_BASELINE_SHA256" \
+    node "$RUNTIME/claude/auth-watcher.js" &
 fi
 
 AGENTHUB_RUNTIME="$RUNTIME/claude/hooks" \
