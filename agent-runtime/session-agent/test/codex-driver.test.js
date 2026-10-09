@@ -27,34 +27,41 @@ test('Codex driver exposes the provider state contract', () => {
   assert.equal(typeof driver.prepare, 'function');
 });
 
+test('Codex state archive leaves out the growing TUI log and scratch dirs, but keeps the transcripts', () => {
+  const { validateDriver } = require('../../common/driver-contract');
+  assert.doesNotThrow(() => validateDriver(driver));
+  assert.deepEqual(driver.stateExcludes, ['.codex/log', '.codex/tmp', '.codex/.tmp']);
+  assert.ok(!driver.stateExcludes.some(entry => entry.startsWith('.codex/sessions')));
+});
+
 test('Codex interactive fresh and restored commands use only explicit resume shapes', () => {
-  assert.deepEqual(driver.buildCommand(environment(), true), { cmd: 'codex', args: [] });
+  assert.deepEqual(driver.buildCommand(environment(), true), { cmd: 'codex', args: ['--no-alt-screen'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
-  }), true), { cmd: 'codex', args: ['resume', '--last'] });
+  }), true), { cmd: 'codex', args: ['--no-alt-screen', 'resume', '--last'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
-  }), false), { cmd: 'codex', args: [] });
+  }), false), { cmd: 'codex', args: ['--no-alt-screen'] });
 });
 
 test('Codex interactive session starts on its prompt, except when resuming', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_PROMPT: 'triage the failing build'
-  }), true), { cmd: 'codex', args: ['triage the failing build'] });
+  }), true), { cmd: 'codex', args: ['--no-alt-screen', 'triage the failing build'] });
 
   // `resume` is a subcommand, so a trailing prompt there would not parse — and the restored
   // thread already contains the task.
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_PROMPT: 'triage the failing build',
     AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
-  }), true), { cmd: 'codex', args: ['resume', '--last'] });
+  }), true), { cmd: 'codex', args: ['--no-alt-screen', 'resume', '--last'] });
 
   const deviceLogin = path.join(runtimeDir, 'codex', 'device-login.sh');
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CODEX_DEVICE_AUTH: '1', AGENTHUB_PROMPT: 'triage the failing build'
-  }), true), { cmd: 'bash', args: [deviceLogin, 'triage the failing build'] });
+  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen', 'triage the failing build'] });
   assert.equal(driver.isResumeCommand({
-    cmd: 'bash', args: [deviceLogin, 'triage the failing build']
+    cmd: 'bash', args: [deviceLogin, '--no-alt-screen', 'triage the failing build']
   }), false);
 });
 
@@ -62,14 +69,14 @@ test('Codex device login runs inside the agent PTY before the interactive CLI', 
   const deviceLogin = path.join(runtimeDir, 'codex', 'device-login.sh');
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CODEX_DEVICE_AUTH: '1'
-  }), true), { cmd: 'bash', args: [deviceLogin] });
+  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CODEX_DEVICE_AUTH: '1',
     AGENTHUB_RESUME: '1',
     AGENTHUB_STATE_RESTORED: '1'
-  }), true), { cmd: 'bash', args: [deviceLogin, 'resume', '--last'] });
+  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen', 'resume', '--last'] });
   assert.equal(driver.isResumeCommand({
-    cmd: 'bash', args: [deviceLogin, 'resume', '--last']
+    cmd: 'bash', args: [deviceLogin, '--no-alt-screen', 'resume', '--last']
   }), true);
 
   const script = fs.readFileSync(deviceLogin, 'utf8');
@@ -92,7 +99,8 @@ test('Codex autonomous and scheduled commands use pinned exec flags and valid re
 });
 
 test('Codex resume recognition rejects fresh and merely resume-like commands', () => {
-  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['resume', '--last'] }), true);
+  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', 'resume', '--last'] }), true);
+  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', 'resume later'] }), false);
   assert.equal(driver.isResumeCommand({
     cmd: 'codex', args: ['exec', '--sandbox', 'workspace-write', '--json',
       '--dangerously-bypass-hook-trust', 'resume', '--last', 'prompt']
@@ -102,7 +110,7 @@ test('Codex resume recognition rejects fresh and merely resume-like commands', (
     cmd: 'bash', args: [path.join(runtimeDir, 'codex', 'device-login.sh')]
   }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['resume', '--last'] }), false);
-  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: [] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen'] }), false);
 });
 
 test('Codex missing-resume fallback requires representative missing-state output', () => {

@@ -77,6 +77,8 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
   const pipeSpawns = [];
   const requests = [];
   const commands = [];
+  const pendingExec = [];
+  const signals = {};
   const writes = [];
   const intervals = [];
   const exits = [];
@@ -122,7 +124,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
   const exists = new Set(['/workspace/repo']);
   const processLike = {
     env: {},
-    on() {},
+    on(signal, handler) { signals[signal] = handler; },
     exit(code) { exits.push(code); }
   };
   const runtime = createCommonServer({
@@ -153,7 +155,8 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       WebSocketServer: FakeWebSocketServer,
       execFile(file, args, callback) {
         commands.push({ file, args });
-        callback();
+        if (harnessOptions.deferExec) pendingExec.push(callback);
+        else callback();
       },
       fs: {
         existsSync(file) { return exists.has(file); },
@@ -188,7 +191,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
     }
   });
 
-  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits, fileCalls, materializer };
+  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits, fileCalls, materializer, pendingExec, signals };
 }
 
 function requestHttp(harness, method, url, headers = {}, body = '') {
@@ -475,7 +478,7 @@ test('common transport archives driver state without its subscription credential
 
   assert.deepEqual(harness.writes, [{ file: '/tmp/scrollback.log', data: 'saved output' }]);
   assert.equal(harness.commands.length, 2);
-  assert.match(harness.commands[0].args[1], /curl -fsS -k -T \/tmp\/scrollback\.log/);
+  assert.match(harness.commands[0].args[1], /curl -fsS --max-time 120 -k -T \/tmp\/scrollback\.log/);
   assert.match(harness.commands[1].args[1], /tar czf \/tmp\/state\.tgz/);
   assert.match(harness.commands[1].args[1], /"\.test-agent"/);
   assert.match(harness.commands[1].args[1], /--exclude="\.test-agent\/auth\.json"/);
@@ -498,6 +501,46 @@ test('common transport applies optional stateExcludes as extra tar excludes', ()
   assert.match(command, /--exclude="\.openclaw\/auth-profiles\.json"/);
   assert.match(command, /--exclude="\.openclaw\/agents\/main\/agent\/auth-profiles\.json"/);
   assert.match(command, /--exclude="\.openclaw\/agents\/\*\/agent\/openclaw-agent\.sqlite"/);
+});
+
+test('common transport keeps the last archive unless tar finished, accepting files changed while read', () => {
+  const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' });
+  harness.intervals[0].callback();
+  const command = harness.commands[0].args[1];
+  assert.match(command, /^nice -n 10 timeout 120 tar czf \/tmp\/state\.tgz\.part /);
+  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f \/tmp\/state\.tgz\.part \/tmp\/state\.tgz && curl -fsS --max-time 120 -T \/tmp\/state\.tgz/);
+  assert.match(command, /else rm -f \/tmp\/state\.tgz\.part; exit 1; fi$/);
+});
+
+test('common transport skips a persistence tick while the previous run is still archiving', () => {
+  const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' },
+    {}, { deferExec: true });
+  harness.intervals[0].callback();
+  harness.intervals[0].callback();
+  harness.intervals[0].callback();
+  assert.equal(harness.commands.length, 1);
+
+  harness.pendingExec.shift()();
+  harness.intervals[0].callback();
+  assert.equal(harness.commands.length, 2);
+});
+
+test('common transport runs one final persistence after an in-flight run on SIGTERM', () => {
+  const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' },
+    {}, { deferExec: true });
+  harness.intervals[0].callback();
+  harness.signals.SIGTERM();
+  harness.signals.SIGTERM();
+  assert.equal(harness.commands.length, 1);
+  assert.deepEqual(harness.exits, []);
+
+  harness.pendingExec.shift()();
+  assert.equal(harness.commands.length, 2, 'the state written since the tick is archived once more');
+  assert.deepEqual(harness.exits, []);
+
+  harness.pendingExec.shift()();
+  assert.deepEqual(harness.exits, [0, 0]);
+  assert.equal(harness.commands.length, 2);
 });
 
 test('common transport backs up scrollback and posts Running and terminal status', async () => {
@@ -609,12 +652,12 @@ test('Codex device-auth resume retries fresh exactly once without repeating logi
   }, codexDriver);
 
   const wrapper = path.join(__dirname, '..', '..', 'codex', 'device-login.sh');
-  assert.deepEqual(harness.spawns[0].args, [wrapper, 'resume', '--last']);
+  assert.deepEqual(harness.spawns[0].args, [wrapper, '--no-alt-screen', 'resume', '--last']);
   harness.terminals[0].emitData('No saved session found to resume');
   harness.terminals[0].emitExit({ exitCode: 1, signal: 0 });
 
   assert.equal(harness.terminals.length, 2);
-  assert.deepEqual(harness.spawns[1].args, [wrapper]);
+  assert.deepEqual(harness.spawns[1].args, [wrapper, '--no-alt-screen']);
   harness.terminals[1].emitData('No saved session found to resume');
   harness.terminals[1].emitExit({ exitCode: 1, signal: 0 });
   assert.equal(harness.terminals.length, 2);
