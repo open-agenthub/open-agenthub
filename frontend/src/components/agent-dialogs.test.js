@@ -348,6 +348,68 @@ describe('agent-aware session dialogs', () => {
     })
   })
 
+  it('offers the system prompt in Interactive too and sends it on create', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    // Unlike the task, the standing rules are not tied to automation, so no mode toggle is needed.
+    expect(wrapper.find('[data-system-prompt]').exists()).toBe(true)
+    await wrapper.get('[data-system-prompt]').setValue('  You review, you do not commit.  ')
+    expect(wrapper.get('[data-system-prompt-count]').text()).toMatch(/^34 \/ 20[,.  ]?000$/)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: 'You review, you do not commit.'
+    }))
+  })
+
+  it('sends no system prompt when the field is left blank on create', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].systemPrompt).toBeNull()
+  })
+
+  it('prefills the system prompt on edit and sends an empty string to clear it', async () => {
+    const wrapper = mount(EditSessionDialog, {
+      props: { session: { ...baseSession, systemPrompt: 'be terse' }, projects: [] },
+      ...mountOptions
+    })
+    expect(wrapper.get('[data-system-prompt]').element.value).toBe('be terse')
+    await wrapper.get('[data-system-prompt]').setValue('be precise')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession).toHaveBeenCalledWith('s1', expect.objectContaining({ systemPrompt: 'be precise' }))
+
+    mocks.api.updateSession.mockClear()
+    await wrapper.get('[data-system-prompt]').setValue('')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[0][1].systemPrompt).toBe('')
+  })
+
+  it('shows a scheduled session’s system prompt read-only and leaves it out of the payload', async () => {
+    const wrapper = mount(EditSessionDialog, {
+      props: { session: { ...baseSession, mode: 'Scheduled', systemPrompt: 'be terse' }, projects: [] },
+      ...mountOptions
+    })
+    const field = wrapper.get('[data-system-prompt]')
+    expect(field.element.value).toBe('be terse')
+    expect(field.attributes('readonly')).toBeDefined()
+    expect(wrapper.text()).toContain('Fixed by the CronJob spec')
+    await wrapper.get('[data-submit]').trigger('click')
+    // The backend rejects the field for scheduled sessions; sending it would turn a rename into a 400.
+    expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('systemPrompt')
+  })
+
+  it('carries the system prompt into a duplicate and lets it be edited first', async () => {
+    const wrapper = mount(DuplicateSessionDialog, {
+      props: { session: { ...baseSession, systemPrompt: 'be terse' }, projects: [] }
+    })
+    expect(wrapper.get('[data-system-prompt]').element.value).toBe('be terse')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({ systemPrompt: 'be terse' }))
+
+    mocks.api.duplicateSession.mockClear()
+    await wrapper.get('[data-system-prompt]').setValue('new rules')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({ systemPrompt: 'new rules' }))
+  })
+
   it('shows non-blocking Interactive subscription login guidance and automation readiness', async () => {
     const interactive = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await flushPromises()

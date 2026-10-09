@@ -7,6 +7,7 @@ import {
 } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import SystemPromptField from './SystemPromptField.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'updated'])
@@ -33,6 +34,7 @@ function reset(session) {
   f.value = {
     title: session.title,
     description: session.description || '',
+    systemPrompt: session.systemPrompt || '',
     image: session.image || '',
     runAsRoot: !!session.runAsRoot,
     autoApprove: !!session.autoApprove,
@@ -87,6 +89,7 @@ async function save() {
       : {
           title: f.value.title,
           description: f.value.description,  // "" clears it
+          systemPrompt: f.value.systemPrompt, // "" clears it; a scheduled session never sends it
           policy: policyPayload(f.value),
           image: f.value.image.trim(),          // empty = default agent image
           runAsRoot: f.value.runAsRoot,
@@ -115,7 +118,7 @@ async function save() {
     <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3 class="form-title">Edit session</h3>
       <p class="note" v-if="scheduled">Scheduled sessions run from a fixed CronJob spec — delete and recreate the session to change its agent, billing, policy, or runtime settings.</p>
-      <p class="note" v-else>The title and auto approve apply immediately. Image, root mode and resources take effect the next time the session is resumed.</p>
+      <p class="note" v-else>The title and auto approve apply immediately. Image, root mode, resources and the system prompt take effect the next time the session is resumed.</p>
 
       <div class="card sect">
         <div class="field">
@@ -126,6 +129,8 @@ async function save() {
           <label>Description <span class="dim">— what is this agent for? Shown to the other agents of the project.</span></label>
           <input v-model="f.description" data-description maxlength="500" placeholder="e.g. Reviews merge requests and hands findings to the coder" />
         </div>
+        <SystemPromptField v-model="f.systemPrompt" :readonly="scheduled"
+          readonly-hint="Fixed by the CronJob spec — delete and recreate the session to change it." />
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
         <div class="field last toggle-field">
           <label>Auto approve <span class="dim">— run tools without asking</span></label>

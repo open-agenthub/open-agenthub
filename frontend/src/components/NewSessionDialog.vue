@@ -7,6 +7,7 @@ import {
 } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import SystemPromptField from './SystemPromptField.vue'
 
 const emit = defineEmits(['close', 'created'])
 const props = defineProps({ embedded: { type: Boolean, default: false }, projects: { type: Array, default: () => [] } })
@@ -36,6 +37,7 @@ const form = ref({
   mode: 'Interactive',
   uiMode: 'terminal',
   prompt: '',
+  systemPrompt: '',
   schedule: '0 6 * * 1-5',
   projectId: '',
   mcpConfigJson: '',
@@ -102,6 +104,7 @@ async function submit() {
       ...agentPayload(form.value),
       repos: repos.value,
       prompt: form.value.prompt || null,
+      systemPrompt: form.value.systemPrompt.trim() || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
       projectId: form.value.projectId || null,
       mcpConfigJson: form.value.mcpConfigJson || null,
@@ -168,6 +171,7 @@ async function submit() {
           <label>Task <span class="dim">— {{ isChatUi ? 'optional first message' : 'what should the agent do?' }}</span></label>
           <textarea v-model="form.prompt" class="task" placeholder="Describe the task in plain language — the agent figures out the rest."></textarea>
         </div>
+        <SystemPromptField v-model="form.systemPrompt" />
         <div class="field last">
           <label>Project</label>
           <select v-model="form.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select>
