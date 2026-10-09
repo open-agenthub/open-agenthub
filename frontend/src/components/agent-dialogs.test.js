@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     createSession: vi.fn(), updateSession: vi.fn(), duplicateSession: vi.fn(),
     getCredentialStatus: vi.fn(), storeCredentials: vi.fn(),
     deleteSubscriptionCredential: vi.fn(),
+    addGitPat: vi.fn(), deleteGitPat: vi.fn(),
     getAllowedAgents: vi.fn()
   },
   config: { gitEnabled: false }
@@ -388,36 +389,164 @@ describe('Git credentials', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.getCredentialStatus.mockResolvedValue({
-      gitlabToken: true, sshPrivateKey: true, gitKnownHosts: true, gitUserName: true, gitUserEmail: true
+      sshPrivateKey: true, gitKnownHosts: true, gitUserName: true, gitUserEmail: true
     })
     mocks.api.storeCredentials.mockResolvedValue(null)
   })
 
-  it('removes a stored GitLab token via the clear control', async () => {
+  it('removes a stored SSH key via the clear control', async () => {
     const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
     await flushPromises()
-    const chip = wrapper.get('[data-clear="gitlabToken"]')
+    const chip = wrapper.get('[data-clear="sshPrivateKey"]')
     expect(chip.text()).toContain('stored')
     await chip.trigger('click')
-    expect(wrapper.get('[data-clear="gitlabToken"]').text()).toContain('remove')
+    expect(wrapper.get('[data-clear="sshPrivateKey"]').text()).toContain('remove')
     await wrapper.get('[data-save-credentials]').trigger('click')
-    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['gitlabToken'] })
+    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['sshPrivateKey'] })
   })
 
   it('offers a clear control for every stored git credential', async () => {
     const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
     await flushPromises()
-    for (const field of ['gitlabToken', 'sshPrivateKey', 'gitKnownHosts', 'gitUserName', 'gitUserEmail'])
+    for (const field of ['sshPrivateKey', 'gitKnownHosts', 'gitUserName', 'gitUserEmail'])
       expect(wrapper.find(`[data-clear="${field}"]`).exists()).toBe(true)
   })
 
-  it('toggling the clear control twice keeps the stored token', async () => {
+  it('toggling the clear control twice keeps the stored key', async () => {
     const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
     await flushPromises()
-    await wrapper.get('[data-clear="gitlabToken"]').trigger('click')
-    await wrapper.get('[data-clear="gitlabToken"]').trigger('click')
+    await wrapper.get('[data-clear="sshPrivateKey"]').trigger('click')
+    await wrapper.get('[data-clear="sshPrivateKey"]').trigger('click')
     await wrapper.get('[data-save-credentials]').trigger('click')
     expect(mocks.api.storeCredentials).toHaveBeenCalledWith({})
+  })
+
+  it('groups the page into git, API key and provider login cards with labelled inputs', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    expect(wrapper.find('[data-card="git"]').exists()).toBe(true)
+    expect(wrapper.find('[data-card="api-keys"]').exists()).toBe(true)
+    expect(wrapper.find('[data-card="logins"]').exists()).toBe(true)
+    // Every input is reachable through a label, so nothing is two unlabelled boxes glued together.
+    for (const input of wrapper.findAll('input, textarea, select')) {
+      const id = input.attributes('id')
+      expect(id, `input ${input.attributes('data-credential') || input.attributes('data-git-pat-host') || ''} has an id`).toBeTruthy()
+      expect(wrapper.find(`label[for="${id}"]`).exists(), `label for ${id}`).toBe(true)
+    }
+  })
+})
+
+/// Git tokens are a list keyed by host, not fixed per-provider slots: a company GitLab and the
+/// public one can both be stored. Each add and remove is applied immediately, not on Save.
+describe('Git personal access tokens', () => {
+  const two = [
+    { id: 'a', kind: 'gitlab', host: 'gitlab.example.com' },
+    { id: 'b', kind: 'github', host: 'github.com' }
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.storeCredentials.mockResolvedValue(null)
+  })
+
+  it('renders one row per stored token with its kind and host, never a token', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: two })
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    const rows = wrapper.findAll('[data-git-pat]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('GitLab')
+    expect(rows[0].text()).toContain('gitlab.example.com')
+    expect(rows[1].text()).toContain('GitHub')
+    expect(rows[1].text()).toContain('github.com')
+    expect(wrapper.find('[data-git-pat-empty]').exists()).toBe(false)
+    // There is no password field with a value anywhere in the list.
+    expect(wrapper.get('[data-git-pat-token]').element.value).toBe('')
+  })
+
+  it('shows an empty state and a disabled Add until host and token are filled in', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({})
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    expect(wrapper.find('[data-git-pat-empty]').exists()).toBe(true)
+    expect(wrapper.get('[data-git-pat-add]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-git-pat-host]').setValue('gitlab.example.com')
+    expect(wrapper.get('[data-git-pat-add]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-git-pat-token]').setValue('glpat-x')
+    expect(wrapper.get('[data-git-pat-add]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('posts a new token immediately and re-reads the list', async () => {
+    mocks.api.getCredentialStatus
+      .mockResolvedValueOnce({ gitPats: [] })
+      .mockResolvedValueOnce({ gitPats: [two[1]] })
+    mocks.api.addGitPat.mockResolvedValue({ id: 'b', kind: 'github', host: 'github.com' })
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+
+    await wrapper.get('[data-git-pat-kind]').setValue('github')
+    await wrapper.get('[data-git-pat-host]').setValue(' github.com ')
+    await wrapper.get('[data-git-pat-token]').setValue('ghp_secret')
+    await wrapper.get('[data-git-pat-add]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.addGitPat).toHaveBeenCalledWith({ kind: 'github', host: 'github.com', token: 'ghp_secret' })
+    expect(wrapper.findAll('[data-git-pat]')).toHaveLength(1)
+    // The token field is emptied so it cannot be re-submitted or left on screen.
+    expect(wrapper.get('[data-git-pat-token]').element.value).toBe('')
+    expect(wrapper.get('[data-git-pat-host]').element.value).toBe('')
+    // Not part of the staged Save payload.
+    expect(mocks.api.storeCredentials).not.toHaveBeenCalled()
+  })
+
+  it('shows the backend validation message inline when adding fails', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: [] })
+    mocks.api.addGitPat.mockRejectedValue(new Error('A token needs the host it belongs to'))
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    await wrapper.get('[data-git-pat-host]').setValue('bad host')
+    await wrapper.get('[data-git-pat-token]').setValue('glpat-x')
+    await wrapper.get('[data-git-pat-add]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-git-pat-error]').text()).toContain('needs the host')
+    // The input keeps what the user typed so they can fix it.
+    expect(wrapper.get('[data-git-pat-host]').element.value).toBe('bad host')
+  })
+
+  it('removes a token only after an inline confirmation, without a popup', async () => {
+    mocks.api.getCredentialStatus
+      .mockResolvedValueOnce({ gitPats: two })
+      .mockResolvedValueOnce({ gitPats: [two[1]] })
+    mocks.api.deleteGitPat.mockResolvedValue(null)
+    const confirmSpy = vi.spyOn(window, 'confirm')
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+
+    const remove = wrapper.get('[data-git-pat="gitlab.example.com"] [data-git-pat-remove]')
+    await remove.trigger('click')
+    expect(mocks.api.deleteGitPat).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-git-pat="gitlab.example.com"] [data-git-pat-remove]').text()).toContain('Really remove')
+    expect(wrapper.find('[data-git-pat="gitlab.example.com"] [data-git-pat-keep]').exists()).toBe(true)
+
+    await wrapper.get('[data-git-pat="gitlab.example.com"] [data-git-pat-remove]').trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(mocks.api.deleteGitPat).toHaveBeenCalledWith('a')
+    expect(wrapper.findAll('[data-git-pat]')).toHaveLength(1)
+    expect(wrapper.find('[data-git-pat="gitlab.example.com"]').exists()).toBe(false)
+    confirmSpy.mockRestore()
+  })
+
+  it('Keep disarms the pending removal', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: two })
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    await wrapper.get('[data-git-pat="github.com"] [data-git-pat-remove]').trigger('click')
+    await wrapper.get('[data-git-pat="github.com"] [data-git-pat-keep]').trigger('click')
+    expect(wrapper.get('[data-git-pat="github.com"] [data-git-pat-remove]').text()).toBe('Remove')
+    expect(wrapper.find('[data-git-pat-keep]').exists()).toBe(false)
+    expect(mocks.api.deleteGitPat).not.toHaveBeenCalled()
   })
 })
 

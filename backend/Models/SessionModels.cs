@@ -529,22 +529,9 @@ public record SessionInfo
 public record UserCredentials
 {
     public string? SshPrivateKey { get; init; }
-    public string? GitlabToken { get; init; }
-    /// <summary>
-    /// Host the stored GitLab token belongs to, e.g. <c>gitlab.example.com</c>. Hostname and
-    /// optional port only. Defaults to <c>gitlab.com</c>.
-    ///
-    /// The host is what scopes the token: it becomes one git-credential-store entry, so the token
-    /// is only ever offered to this server. Before it existed the PAT was installed as a global
-    /// credential helper and any host answering 401 could ask for it.
-    /// </summary>
-    public string? GitlabHost { get; init; }
-    /// <summary>Personal access token for GitHub, for users whose instance has no OAuth app
-    /// configured. Previously only GitLab had this, leaving no HTTPS route to GitHub.</summary>
-    public string? GithubToken { get; init; }
-    /// <summary>Host the stored GitHub token belongs to. Defaults to <c>github.com</c>. See
-    /// <see cref="GitlabHost"/> for why it is required rather than cosmetic.</summary>
-    public string? GithubHost { get; init; }
+    // Git personal access tokens are not part of this record. They live in a list keyed by host
+    // (see GitPatStore) and have their own endpoints, because a merge-style PUT with one fixed
+    // slot per provider cannot express "a second GitLab host".
     public string? AnthropicApiKey { get; init; }
     public string? OpenAiApiKey { get; init; }
     public string? CursorApiKey { get; init; }
@@ -561,10 +548,8 @@ public record UserCredentials
 public record CredentialStatus
 {
     public bool SshPrivateKey { get; init; }
-    public bool GitlabToken { get; init; }
-    public bool GitlabHost { get; init; }
-    public bool GithubToken { get; init; }
-    public bool GithubHost { get; init; }
+    /// <summary>Stored git personal access tokens — kind and host only, never the token.</summary>
+    public IReadOnlyList<GitPatInfo> GitPats { get; init; } = Array.Empty<GitPatInfo>();
     public bool AnthropicApiKey { get; init; }
     public bool GitKnownHosts { get; init; }
     public bool OpenAiApiKey { get; init; }
@@ -575,4 +560,37 @@ public record CredentialStatus
     public bool CodexSubscription { get; init; }
     public bool CursorSubscription { get; init; }
     public bool OpenclawSubscription { get; init; }
+}
+
+/// <summary>
+/// One stored git personal access token as the API reports it. <c>Kind</c> is
+/// <c>gitlab</c> or <c>github</c> (see <see cref="GitPatKind"/>); the token itself is never
+/// included.
+/// </summary>
+public record GitPatInfo(string Id, string Kind, string Host);
+
+/// <summary>The two kinds of PAT a session knows how to use; the kind decides the user part of
+/// the store line and therefore which CLI (<c>glab</c> or <c>gh</c>) is configured.</summary>
+public static class GitPatKind
+{
+    public const string GitLab = "gitlab";
+    public const string GitHub = "github";
+
+    public static bool IsValid(string? kind) => kind is GitLab or GitHub;
+}
+
+/// <summary>
+/// Stores or rotates a PAT. The host is the identity: a second request for a host that is
+/// already stored replaces that entry's token rather than adding a line, because git's store
+/// helper answers with the first entry matching the host and a stale one in front would keep
+/// winning after a rotation.
+/// </summary>
+public record UpsertGitPatRequest
+{
+    public string? Kind { get; init; }
+    /// <summary>Hostname with an optional port, e.g. <c>gitlab.example.com</c>. Required: the
+    /// token is only ever sent to this host, and defaulting to the public instance would be
+    /// silently wrong for a self-hosted one.</summary>
+    public string? Host { get; init; }
+    public string? Token { get; init; }
 }

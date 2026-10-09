@@ -30,6 +30,34 @@ public sealed class CredentialsController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>
+    /// Stores a git personal access token for one host, or rotates the token already stored for
+    /// that host. The list has no fixed slots, so a second GitLab or GitHub host is just another
+    /// entry. Answers with id, kind and host — never the token.
+    /// </summary>
+    [HttpPost("git-pats")]
+    public async Task<ActionResult<GitPatInfo>> UpsertGitPat([FromBody] UpsertGitPatRequest request, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await _svc.UpsertGitPatAsync(Owner, request, ct));
+        }
+        catch (ArgumentException e)
+        {
+            // The message names the field the user got wrong; a bare 400 would send them guessing.
+            return BadRequest(e.Message);
+        }
+    }
+
+    /// <summary>Removes a stored git token. Always 204, so the status code cannot be used to
+    /// probe which ids exist.</summary>
+    [HttpDelete("git-pats/{id}")]
+    public async Task<IActionResult> DeleteGitPat(string id, CancellationToken ct)
+    {
+        await _svc.DeleteGitPatAsync(Owner, id, ct);
+        return NoContent();
+    }
+
     /// <summary>Which fields currently have a stored value — never the values themselves.</summary>
     [HttpGet]
     public async Task<ActionResult<CredentialStatus>> Status(CancellationToken ct)

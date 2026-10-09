@@ -114,6 +114,27 @@ public sealed class KubernetesSessionService : ISessionService
         _log.LogInformation("Stored credentials for {Owner} ({Keys} keys)", owner, secret.Data.Count);
     }
 
+    public async Task<GitPatInfo> UpsertGitPatAsync(string owner, UpsertGitPatRequest request, CancellationToken ct = default)
+    {
+        var name = CredsSecretName(owner);
+        var existing = (await ReadSecretOrNullAsync(name, ct))?.Data;
+        var (secret, info) = CredentialSecretFactory.UpsertGitPat(name, _opts.Namespace, Sanitize(owner), existing, request);
+        await UpsertSecretAsync(secret, ct);
+        _log.LogInformation("Stored {Kind} token for {Host} for {Owner}", info.Kind, info.Host, owner);
+        return info;
+    }
+
+    public async Task DeleteGitPatAsync(string owner, string id, CancellationToken ct = default)
+    {
+        var name = CredsSecretName(owner);
+        var existing = (await ReadSecretOrNullAsync(name, ct))?.Data;
+        // Nothing stored at all: writing an empty secret would only create one for a user who has
+        // never saved a credential.
+        if (existing is null) return;
+        await UpsertSecretAsync(CredentialSecretFactory.RemoveGitPat(name, _opts.Namespace, Sanitize(owner), existing, id), ct);
+        _log.LogInformation("Removed git token {Id} for {Owner}", id, owner);
+    }
+
     /// <summary>Which credential fields have a stored value. Values are never returned.</summary>
     public async Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default)
     {

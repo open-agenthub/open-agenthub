@@ -126,103 +126,35 @@ public class ManualGitCredentialsTests
     }
 
     [Fact]
-    public void StoringAPat_RejectsAValueThatWouldCorruptTheStore()
+    public void SeveralHostsOfOneKind_EachGetTheirOwnLine()
     {
-        var bad = new UserCredentials { GitlabToken = "glpat\nhttps://oauth2:x@evil.example" };
-        var badHost = new UserCredentials { GithubToken = "ghp_ok", GithubHost = "https://github.com" };
+        // The fixed per-kind slots could not hold this at all: a company GitLab and a personal
+        // one meant choosing. The list emits one host-bound line per entry, in stored order.
+        var data = Secret();
+        GitPatStore.Upsert(data, new UpsertGitPatRequest { Kind = "gitlab", Host = "gitlab.example.com", Token = "glpat-work" });
+        GitPatStore.Upsert(data, new UpsertGitPatRequest { Kind = "gitlab", Host = "gitlab.com", Token = "glpat-personal" });
+        GitPatStore.Upsert(data, new UpsertGitPatRequest { Kind = "github", Host = "github.your-org.example", Token = "ghp_ent" });
 
-        Assert.Throws<ArgumentException>(() =>
-            CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", null, bad));
-        Assert.Throws<ArgumentException>(() =>
-            CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", null, badHost));
+        Assert.Equal(
+        [
+            "https://oauth2:glpat-work@gitlab.example.com",
+            "https://oauth2:glpat-personal@gitlab.com",
+            "https://x-access-token:ghp_ent@github.your-org.example"
+        ], ManualGitCredentials.Lines(data));
     }
 
     [Fact]
-    public void StoringAPat_KeepsTokenAndHostTogetherAndReportsThemAsStored()
+    public void LegacySlotsAndListEntries_AreBothEmitted()
     {
-        var secret = CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", null,
-            new UserCredentials
-            {
-                GithubToken = "ghp_secret", GithubHost = " github.example.com ",
-                GitlabToken = "glpat-secret", GitlabHost = "gitlab.example.com"
-            });
+        // A secret written before the list existed, plus one entry added since: the session must
+        // see both until a write folds the legacy slots in.
+        var data = Secret(("gitlab_token", "glpat-old"), ("gitlab_host", "gitlab.example.com"));
+        GitPatStore.Upsert(data, new UpsertGitPatRequest { Kind = "github", Host = "github.com", Token = "ghp_new" });
 
-        Assert.Equal("ghp_secret", Encoding.UTF8.GetString(secret.Data["github_token"]));
-        // Trimmed, so a pasted host with stray whitespace does not fail host validation later.
-        Assert.Equal("github.example.com", Encoding.UTF8.GetString(secret.Data["github_host"]));
-
-        var status = CredentialSecretFactory.CredentialStatus(secret.Data);
-        Assert.True(status.GithubToken);
-        Assert.True(status.GithubHost);
-        Assert.True(status.GitlabToken);
-        Assert.True(status.GitlabHost);
-    }
-
-    [Fact]
-    public void StoringAPatWithoutItsHost_IsRefusedRatherThanDefaultedToThePublicInstance()
-    {
-        // Defaulting would be silently wrong twice for a self-hosted instance: the clone gets no
-        // credential for the host it uses, and glab/gh are configured for a host nobody named.
-        // The mechanism this replaced worked against any host, so a default would have broken a
-        // working self-hosted setup.
-        var error = Assert.Throws<ArgumentException>(() =>
-            CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", null,
-                new UserCredentials { GitlabToken = "glpat-secret" }));
-        Assert.Contains("host it belongs to", error.Message);
-
-        Assert.Throws<ArgumentException>(() =>
-            CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", null,
-                new UserCredentials { GithubToken = "ghp_secret" }));
-    }
-
-    [Fact]
-    public void RotatingAToken_DoesNotRequireRestatingAHostThatIsAlreadyStored()
-    {
-        var existing = Secret(
-            ("github_token", "ghp_old"), ("github_host", "github.example.com"));
-
-        var secret = CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", existing,
-            new UserCredentials { GithubToken = "ghp_new" });
-
-        Assert.Equal("ghp_new", Encoding.UTF8.GetString(secret.Data["github_token"]));
-        Assert.Equal("github.example.com", Encoding.UTF8.GetString(secret.Data["github_host"]));
-    }
-
-    [Fact]
-    public void ClearingOnlyTheHost_CannotLeaveATokenBoundToNothing()
-    {
-        var existing = Secret(
-            ("github_token", "ghp_secret"), ("github_host", "github.example.com"));
-
-        Assert.Throws<ArgumentException>(() =>
-            CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", existing,
-                new UserCredentials { Clear = ["githubHost"] }));
-    }
-
-    [Fact]
-    public void AnUnrelatedCredentialUpdate_IsNotBlockedByATokenStoredBeforeHostsExisted()
-    {
-        // Pre-existing rows have no host. Refusing every later save would make such an account
-        // unable to store anything until it noticed a field it was not editing.
-        var legacy = Secret(("gitlab_token", "glpat-old"));
-
-        var secret = CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", legacy,
-            new UserCredentials { AnthropicApiKey = "sk-ant-x" });
-
-        Assert.Equal("sk-ant-x", Encoding.UTF8.GetString(secret.Data["anthropic_api_key"]));
-        Assert.Equal("glpat-old", Encoding.UTF8.GetString(secret.Data["gitlab_token"]));
-    }
-
-    [Fact]
-    public void ClearingAPat_RemovesTokenAndHostIndependently()
-    {
-        var existing = Secret(
-            ("github_token", "ghp_secret"), ("github_host", "github.example.com"));
-
-        var secret = CredentialSecretFactory.CreateGeneralSecret("creds", "ns", "u", existing,
-            new UserCredentials { Clear = ["githubToken", "githubHost"] });
-
-        Assert.False(secret.Data.ContainsKey("github_token"));
-        Assert.False(secret.Data.ContainsKey("github_host"));
+        Assert.Equal(
+        [
+            "https://oauth2:glpat-old@gitlab.example.com",
+            "https://x-access-token:ghp_new@github.com"
+        ], ManualGitCredentials.Lines(data));
     }
 }
