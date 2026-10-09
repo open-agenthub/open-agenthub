@@ -6,11 +6,13 @@ import {
   policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import SystemPromptField from './SystemPromptField.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'duplicated'])
 const title = ref('')
 const projectId = ref('')
+const systemPrompt = ref('')
 const includeMcp = ref(true)
 const agentForm = ref({})
 const advOpen = ref(false)
@@ -25,6 +27,7 @@ const automated = computed(() => props.session.mode !== 'Interactive')
 function reset(session) {
   title.value = `Copy of ${session.title}`
   projectId.value = session.projectId || ''
+  systemPrompt.value = session.systemPrompt || ''
   includeMcp.value = true
   agentForm.value = defaultAgentForm(session)
   selectedMcpIds.value = [...(session.mcpServerIds || [])]
@@ -48,6 +51,8 @@ async function submit() {
     emit('duplicated', await api.duplicateSession(props.session.id, {
       title: title.value.trim() || `Copy of ${props.session.title}`,
       projectId: projectId.value || null,
+      // Always sent, so a prompt cleared in the dialog is dropped rather than copied back in.
+      systemPrompt: systemPrompt.value,
       includeMcp: includeMcp.value,   // inline JSON config copy only
       mcpServerIds: selectedMcpIds.value,
       ...agentPayload(agentForm.value),
@@ -64,6 +69,7 @@ async function submit() {
     <div class="card sect">
       <div class="field"><label>Title</label><input v-model="title" /></div>
       <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
+      <SystemPromptField v-model="systemPrompt" />
       <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration <span class="dim">— inline JSON config</span></span></label>
       <div v-if="savedMcpServers.length" class="field mcp-field" data-mcp-picker>
         <label>Saved MCP servers <span class="dim">— from your library</span></label>

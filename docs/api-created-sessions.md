@@ -78,6 +78,35 @@ start. If an empty `AGENTHUB_SYSTEM_PROMPT` left the file alone, instructions fr
 incarnation of the session would keep applying, which looks like the agent inventing rules nobody
 gave it. Writing or removing on every start makes the file say exactly what the request said.
 
+### Changing it later, and copying it
+
+The system prompt started as a create-only field: an API caller set it once and the web app did
+not show it at all, so a person taking over a session could neither see the rules the caller had
+given nor correct them. It is now a field of the New, Edit and Duplicate dialogs, which needed two
+decisions on the backend.
+
+`PATCH /api/sessions/{id}` takes `systemPrompt` with the convention the other optional text fields
+use — omitted means unchanged, an empty string clears, anything else replaces, with the same
+trimming and 20 000-character cap as on create. The alternative, a dedicated endpoint or a
+`clearSystemPrompt` flag, was rejected because the description had already set the pattern and the
+edit dialog composes one PATCH body for everything; a second convention in the same body would be
+the kind of thing that gets one of them wrong. The change applies on the next start or resume and
+not to the running pod, and nothing else was needed to make that true: the value reaches the agent
+as a pod environment variable, and the resume path already rebuilds the create request from the
+stored record. For a **scheduled** session the field is rejected like the other runtime fields,
+because the CronJob carries the prompt in its pod template — accepting the update would change the
+record while every scheduled run kept the old text, which is the worst of both. The edit dialog
+shows the prompt read-only there and leaves it out of the body, so renaming a scheduled session is
+not turned into a 400.
+
+Duplication copies the prompt. The standing rules are part of the configuration being copied,
+unlike the conversation they shaped; copying `Prompt` but not `SystemPrompt` had been an oversight
+from when the field was added after the duplicate path. The duplicate request may also carry its
+own `systemPrompt`: `null` copies the source's, a string replaces it, and an empty string yields a
+copy without one (create-side normalization turns it into `null`). The dialog always sends the
+field, prefilled from the source, so a prompt the person deletes there is dropped and not quietly
+copied back in.
+
 ## Folder-trust dialogs, which are what actually blocked this
 
 Three of the four CLIs stop an interactive session on a trust question before running anything.
