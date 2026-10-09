@@ -268,7 +268,11 @@ test('Claude entrypoint keeps auth restore and watcher provider-specific', () =>
   assert.match(entrypoint, /source "\$COMMON_ENTRYPOINT"/);
   assert.match(entrypoint, /\/secrets\/claude\/credentials\.json/);
   assert.match(entrypoint, /\$HOME\/\.claude\/\.credentials\.json/);
-  assert.match(entrypoint, /\/claude-credentials/);
+  // The upload itself moved into the watcher; the entrypoint only launches it, and has to
+  // hand over the baseline so the credential it just restored is not echoed straight back.
+  assert.match(entrypoint, /node "\$RUNTIME\/claude\/auth-watcher\.js"/);
+  assert.match(entrypoint, /AGENTHUB_CLAUDE_AUTH_BASELINE_SHA256="\$AUTH_BASELINE_SHA256"/);
+  assert.match(entrypoint, /AGENTHUB_CLAUDE_AUTH_EXPECT_CREATE="\$AUTH_EXPECT_CREATE"/);
   // Without pre-accepted trust the interactive TUI stops on its safety dialog and an
   // API-created session never starts the task it was given.
   assert.match(entrypoint, /claude\/workspace-trust\.mjs" "\$HOME\/\.claude\.json" "\$CLAUDE_WORKDIR"/);

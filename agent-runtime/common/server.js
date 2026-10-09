@@ -8,6 +8,11 @@ const { AttachmentMaterializer } = require('../files/materialize');
 const MAX_BUFFER = 1_000_000;
 // Upper bound for each archive/upload step of a persistence run.
 const PERSIST_STEP_SECONDS = 120;
+// Where an entrypoint records the pid of its credential watcher, and how long the server waits
+// for that watcher's last upload: a little over the watcher's own 5s flush bound.
+const DEFAULT_WATCHER_PIDFILE = '/tmp/agenthub-auth-watcher.pid';
+const WATCHER_FLUSH_WAIT_MS = 6_000;
+const WATCHER_POLL_MS = 100;
 // Protocol chatter that the chat UI only needs live, never on replay.
 const TRANSIENT_CHAT_EVENTS = new Set(['stream_event', 'control_response', 'control_request']);
 
@@ -214,6 +219,43 @@ function createCommonServer(options = {}) {
     }))));
   }
 
+  // The credential watcher runs beside this server, not under it: on pod stop only PID 1 — this
+  // server — gets SIGTERM, and once it exits the kernel kills the watcher before its own SIGTERM
+  // handler can upload a token the CLI rotated since the last poll. A provider that spends the
+  // old refresh token on rotation then leaves a dead credential in the secret. So the watcher is
+  // signalled here and given a bounded moment to finish, alongside the state persistence.
+  function flushCredentialWatcher(done) {
+    let pid;
+    try {
+      pid = Number.parseInt(String(fs.readFileSync(
+        env.AGENTHUB_AUTH_WATCHER_PIDFILE || DEFAULT_WATCHER_PIDFILE, 'utf8')).trim(), 10);
+    } catch {
+      return done();
+    }
+    if (!Number.isSafeInteger(pid) || pid <= 1) return done();
+    try { processLike.kill(pid, 'SIGTERM'); } catch { return done(); }
+    const deadline = now() + WATCHER_FLUSH_WAIT_MS;
+    (function wait() {
+      let alive = true;
+      try { processLike.kill(pid, 0); } catch { alive = false; }
+      if (!alive || now() >= deadline) return done();
+      setTimeoutImpl(wait, WATCHER_POLL_MS);
+    })();
+  }
+
+  let exitCallbacks = null;
+  function beforeExit(done) {
+    if (exitCallbacks) return void exitCallbacks.push(done);
+    exitCallbacks = [done];
+    let pending = 2;
+    const finish = () => {
+      if (--pending > 0) return;
+      for (const callback of exitCallbacks) callback();
+    };
+    flushCredentialWatcher(finish);
+    persistAll(finish);
+  }
+
   // ---- Pod resource snapshot (CPU/memory from the cgroup, network from /proc/net/dev) ----
 
   function readNumberFile(file) {
@@ -315,7 +357,7 @@ function createCommonServer(options = {}) {
       safeSend(socket, message);
       try { socket.close(1000); } catch {}
     }
-    persistAll(() => {
+    beforeExit(() => {
       postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
         setTimeoutImpl(() => processLike.exit(exitCode || 0), mode === 'interactive' ? 1500 : 200));
     });
@@ -695,7 +737,7 @@ function createCommonServer(options = {}) {
 
   for (const signal of ['SIGTERM', 'SIGINT']) {
     processLike.on(signal, () => {
-      persistAll(() => {
+      beforeExit(() => {
         try { term.kill(); } catch {}
         processLike.exit(0);
       });
