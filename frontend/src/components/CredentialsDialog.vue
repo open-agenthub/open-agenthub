@@ -2,6 +2,7 @@
 import { computed, ref, onMounted } from 'vue'
 import { api, config } from '../api.js'
 import { docsUrl } from '../lib/docs.js'
+import ProviderAccountsPane from './ProviderAccountsPane.vue'
 
 const emit = defineEmits(['close', 'accounts'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
@@ -19,8 +20,6 @@ const clear = ref(new Set())
 const busy = ref(false)
 const error = ref('')
 const saved = ref(false)
-// Which provider login is being removed, so only that row shows progress.
-const removing = ref('')
 
 // One row per API-key provider. The field name doubles as the data-* hook the tests use.
 const apiKeys = [
@@ -36,15 +35,6 @@ const apiKeys = [
     field: 'cursorApiKey', label: 'Cursor API key', placeholder: 'key_…',
     hint: 'Cursor with API key billing, or OpenClaw with Cursor as the API key source.'
   }
-]
-
-// Provider logins are captured by a runtime during an Interactive session, never typed in here.
-// Package C replaces these rows with its own component; until then they are only grouped here.
-const providerLogins = [
-  { agent: 'Claude', field: 'claudeSubscription' },
-  { agent: 'Codex', field: 'codexSubscription' },
-  { agent: 'Cursor', field: 'cursorSubscription' },
-  { agent: 'OpenClaw', field: 'openclawSubscription' }
 ]
 
 // --- Git personal access tokens -------------------------------------------------------------
@@ -96,26 +86,6 @@ async function removePat(pat) {
     patError.value = e?.message || `Could not remove the token for ${pat.host}.`
   } finally {
     patBusy.value = false
-  }
-}
-
-/**
- * Removes a stored provider login immediately, unlike the API key fields, which are staged and
- * applied on save. These are not edited here at all — a runtime captured them from a session —
- * so there is nothing to stage alongside, and a credential the user has decided is broken should
- * not survive them closing the dialog without saving.
- */
-async function removeSubscription(agent) {
-  if (removing.value) return
-  removing.value = agent
-  error.value = ''
-  try {
-    await api.deleteSubscriptionCredential(agent)
-    await refreshStatus()
-  } catch (e) {
-    error.value = e?.message || `Could not remove the ${agent} login.`
-  } finally {
-    removing.value = ''
   }
 }
 
@@ -292,18 +262,9 @@ async function save() {
           <h4>Provider logins</h4>
           <p class="card-sub">Captured when you sign in during an Interactive session and reused by later sessions.</p>
         </div>
-        <div v-for="p in providerLogins" :key="p.agent" class="login-row" :data-openclaw-credentials="p.agent === 'OpenClaw' ? '' : null">
-          <span class="login-name">{{ p.agent }}</span>
-          <small v-if="stored[p.field]" :data-credential-status="p.field">
-            {{ p.agent }} subscription login is stored.
-          </small>
-          <small v-else :data-credential-status="p.field" class="login-none">
-            No {{ p.agent }} subscription login is stored yet. Sign in during an Interactive {{ p.agent }} session.
-          </small>
-          <button v-if="stored[p.field]" type="button" class="chip del" :data-remove-subscription="p.agent"
-            :disabled="removing === p.agent" :aria-label="`Remove stored ${p.agent} subscription login`"
-            @click="removeSubscription(p.agent)">{{ removing === p.agent ? 'removing…' : 'remove ✕' }}</button>
-        </div>
+        <!-- Captured from sessions, never typed in here, and there can be several per provider
+             (docs/provider-accounts.md); the pane owns listing, default and removal. -->
+        <ProviderAccountsPane :status="stored" @changed="refreshStatus" />
       </section>
 
       <p v-if="error" class="err">{{ error }}</p>
@@ -379,11 +340,6 @@ small code { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .pat-add-btn button { width: 100%; }
 
 /* Provider login rows (grouped here; a dedicated component replaces them later). */
-.login-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--border); }
-.login-row:first-of-type { border-top: none; padding-top: 0; }
-.login-row small { margin: 0; flex: 1; min-width: 160px; }
-.login-name { font-weight: 600; font-size: 13px; width: 72px; }
-.login-none { color: var(--muted-3); }
 
 @media (max-width: 760px) {
   .grid { grid-template-columns: 1fr; }

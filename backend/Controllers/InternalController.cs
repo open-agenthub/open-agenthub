@@ -155,7 +155,15 @@ public sealed class InternalController : ControllerBase
         var json = await ReadProviderCredentialBodyAsync(ct);
         if (json is null || !ProviderCredentialValidator.Validate(parsedAgent, json)) return BadRequest();
 
-        await _svc.StoreProviderCredentialsAsync(rec.Owner, parsedAgent, json, ct);
+        // The Claude watcher sends who the login belongs to in a header, since its file does not
+        // say; the other providers' files carry it themselves. Display only, never authorised on.
+        var identity = ProviderAccountIdentityReader.FromHeader(Request.Headers[ProviderAccountIdentityReader.HeaderName])
+            ?? ProviderAccountIdentityReader.FromFile(parsedAgent, json);
+        var accountId = await _svc.StoreProviderLoginAsync(rec.Owner, parsedAgent, json, identity, rec.CredentialId, ct);
+        // A login that turned out to be a different account than the one mounted, or the first
+        // login of a session that had none, re-points the session so later rotations land there.
+        if (accountId is not null && accountId != rec.CredentialId)
+            await _store.SetCredentialIdAsync(rec.Id, accountId, ct);
         return NoContent();
     }
 

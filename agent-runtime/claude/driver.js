@@ -166,5 +166,8 @@ module.exports = {
   isResumeCommand,
   isMissingResume,
   findTranscript,
-  prepare
+  prepare,
+  // Same shape check the watcher applies before uploading, so a swap never installs a file the
+  // watcher would then refuse to back up.
+  validCredential: require('./auth-watcher').validCredential
 };

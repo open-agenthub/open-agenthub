@@ -30,6 +30,41 @@ public interface ISessionService
     Task DeleteGitPatAsync(string owner, string id, CancellationToken ct = default)
         => throw new NotSupportedException();
 
+    /// <summary>
+    /// Stores a login a session pod uploaded, into the account it belongs to — the one the session
+    /// had mounted, one with the same identity, or a new one (docs/provider-accounts.md). Returns
+    /// the account id the session should be attached to from now on. The default forwards to
+    /// <see cref="StoreProviderCredentialsAsync"/> so a test double without accounts keeps working.
+    /// </summary>
+    async Task<string?> StoreProviderLoginAsync(string owner, AgentKind agent, string json,
+        ProviderAccountIdentity? identity, string? mountedCredentialId, CancellationToken ct = default)
+    {
+        await StoreProviderCredentialsAsync(owner, agent, json, ct);
+        return mountedCredentialId;
+    }
+
+    /// <summary>Every stored provider account of the owner, keyed by agent name. Never the files.</summary>
+    Task<IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>>> ListProviderAccountsAsync(
+        string owner, CancellationToken ct = default) => throw new NotSupportedException();
+
+    /// <summary>Renames an account or makes it the default. Null when the account does not exist.</summary>
+    Task<ProviderAccountInfo?> UpdateProviderAccountAsync(string owner, AgentKind agent, string id,
+        UpdateProviderAccountRequest req, CancellationToken ct = default) => throw new NotSupportedException();
+
+    /// <summary>Forgets one account. Idempotent, like <see cref="DeleteProviderCredentialsAsync"/>.</summary>
+    Task DeleteProviderAccountAsync(string owner, AgentKind agent, string id, CancellationToken ct = default)
+        => throw new NotSupportedException();
+
+    /// <summary>
+    /// Moves a running Subscription session to another of the owner's accounts: records the choice
+    /// and hands the file to the pod, which restarts its agent with resume. Throws
+    /// <see cref="KeyNotFoundException"/> (no such session), <see cref="ArgumentException"/> (no
+    /// such account, or a session this does not apply to), <see cref="InvalidOperationException"/>
+    /// (not running) or <see cref="HttpRequestException"/> (the pod did not take the file).
+    /// </summary>
+    Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
+        CancellationToken ct = default) => throw new NotSupportedException();
+
     Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default);
     Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);
     Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default);

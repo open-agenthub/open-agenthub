@@ -3,7 +3,32 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { writeCredentialFile } = require('../common/credential-install');
+const { importToSqlite, validStore } = require('./sync-auth-profiles');
+
 const API_KEY_ENVS = ['ANTHROPIC_API_KEY', 'OPENAI_API_KEY', 'CURSOR_API_KEY'];
+
+// The hub-managed JSON the entrypoint exports; the default is what the entrypoint sets when
+// nothing overrides OPENCLAW_STATE_DIR.
+function credentialPath(env) {
+  return env.OPENCLAW_AUTH_FILE || null;
+}
+
+function validCredential(buffer) {
+  try {
+    return validStore(JSON.parse(buffer.toString('utf8')));
+  } catch {
+    return false;
+  }
+}
+
+// OpenClaw reads its credentials from the agent's SQLite store, not from the JSON the hub
+// manages, so a swapped file has to be imported the same way the entrypoint and login.sh do —
+// otherwise the restarted agent would keep running on the previous login.
+function installCredential(env, body, target, fsImpl = fs) {
+  writeCredentialFile(target, body, fsImpl);
+  importToSqlite({ ...env, OPENCLAW_AUTH_FILE: target });
+}
 
 function prepare(env) {
   if (env.AGENTHUB_STATE_RESTORED === undefined) {
@@ -105,5 +130,6 @@ module.exports = {
     '.openclaw/agents/*/agent/openclaw-agent.sqlite-wal',
     '.openclaw/agents/*/agent/openclaw-agent.sqlite-shm'
   ],
-  buildCommand, isResumeCommand, isMissingResume, prepare
+  buildCommand, isResumeCommand, isMissingResume, prepare,
+  credentialPath, validCredential, installCredential
 };

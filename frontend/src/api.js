@@ -135,6 +135,16 @@ export const api = {
   // so this is the only way to get rid of one that stopped working.
   deleteSubscriptionCredential: (agent) =>
     req('DELETE', `/credentials/subscription/${encodeURIComponent(agent)}`),
+  // Stored provider logins as accounts, keyed by agent name ({ Claude: [...], Codex: [...] }):
+  // label, identity and default marker — never the credential files themselves.
+  listProviderAccounts: () => req('GET', '/credentials/accounts'),
+  updateProviderAccount: (agent, id, data) =>
+    req('PATCH', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`, data),
+  deleteProviderAccount: (agent, id) =>
+    req('DELETE', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`),
+  // Moves a running Subscription session to another account; the pod restarts its agent with resume.
+  switchSessionCredential: (id, credentialId) =>
+    req('PATCH', `/sessions/${encodeURIComponent(id)}/credential`, { credentialId }),
   // GDPR: irreversibly deletes the caller's account and all its data.
   deleteAccount: (confirm) => req('DELETE', `/account?confirm=${encodeURIComponent(confirm)}`),
   // Personal API tokens for driving sessions remotely.

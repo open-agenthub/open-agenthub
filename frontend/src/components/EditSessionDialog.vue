@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import {
-  agentPayload, buildEphemeralApiSources, defaultAgentForm, ephemeralNameFromUrl,
+  accountsFor, agentPayload, buildEphemeralApiSources, defaultAccountId, defaultAgentForm, ephemeralNameFromUrl,
   filterAgentOptions, mcpBadgeLabel, policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
@@ -18,6 +18,7 @@ const advOpen = ref(false)
 const busy = ref(false)
 const error = ref('')
 const credentialStatus = ref({})
+const providerAccounts = ref({})
 const allowedAgents = ref([])
 const agentChoices = computed(() => filterAgentOptions(allowedAgents.value, { include: props.session?.agent }))
 // Saved MCP servers from the personal library (own + org + shared with me).
@@ -42,7 +43,8 @@ function reset(session) {
     memory: session.memory || '1Gi',
     mcpConfigJson: session.mcpConfigJson || '',
     projectId: session.projectId || '',
-    ...defaultAgentForm(session)
+    ...defaultAgentForm(session),
+    credentialId: session.credentialId || ''
   }
   repos.value = (session.repos || []).map(repo => ({ ...repo }))
   selectedMcpIds.value = [...(session.mcpServerIds || [])]
@@ -58,6 +60,7 @@ watch(() => props.session.id, () => reset(props.session))
 
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
+  try { providerAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* one login needs no choice */ }
   try {
     const allowed = await api.getAllowedAgents()
     allowedAgents.value = allowed?.agents || []
@@ -68,6 +71,19 @@ onMounted(async () => {
 watch(ephemeralUrl, (url) => {
   ephemeralName.value = String(url || '').trim() ? ephemeralNameFromUrl(url) : ''
 })
+
+/**
+ * The account is sent only when the person changed it. A session without a pin shows the
+ * default preselected; sending that back would pin the session to today's default and detach
+ * it from a default changed later, which is not what leaving a field alone should do.
+ */
+function credentialChange() {
+  const chosen = f.value.credentialId || ''
+  const current = props.session.credentialId || ''
+  if (chosen === current) return {}
+  if (!current && chosen === defaultAccountId(accountsFor(providerAccounts.value, f.value.agent))) return {}
+  return { credentialId: chosen }
+}
 
 async function save() {
   busy.value = true; error.value = ''
@@ -106,6 +122,7 @@ async function save() {
     if (!scheduled.value && f.value.authMode !== 'Auto') {
       Object.assign(payload, agentPayload(f.value))
     }
+    if (!scheduled.value) Object.assign(payload, credentialChange())
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
   } catch (e) { error.value = String(e.message || e) }
@@ -148,7 +165,8 @@ async function save() {
       </div>
       <template v-if="!scheduled">
         <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode"
-          v-model:open-claw-api-key-source="f.openClawApiKeySource" :mode="session.mode"
+          v-model:open-claw-api-key-source="f.openClawApiKeySource" v-model:credential-id="f.credentialId"
+          :accounts="providerAccounts" :mode="session.mode"
           :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
         <div class="card sect">
           <label>Repositories</label>

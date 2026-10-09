@@ -312,6 +312,13 @@ public record CreateSessionRequest
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
     /// <summary>Which existing API key OpenClaw should use; required only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>
+    /// Which stored provider login (account) a Subscription session mounts. Null means the
+    /// default account, resolved at every start — so a default changed later applies to the next
+    /// resume — while an explicit id pins the session to that login. Checked against the user's
+    /// accounts when the session is created, so an unknown id fails the request, not the pod.
+    /// </summary>
+    public string? CredentialId { get; init; }
     /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
     public AgentPolicy? Policy { get; init; }
     /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
@@ -398,6 +405,9 @@ public record UpdateSessionRequest
     public AgentAuthMode? AuthMode { get; init; }
     /// <summary>Which existing API key OpenClaw should use; only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>Provider account for the next start; null = unchanged, empty string = back to the
+    /// default account. A running session is switched live through the credential endpoint instead.</summary>
+    public string? CredentialId { get; init; }
     public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
@@ -418,7 +428,7 @@ public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bo
     AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null,
     OpenClawApiKeySource? OpenClawApiKeySource = null,
     List<string>? McpServerIds = null,
-    string? SystemPrompt = null);
+    string? SystemPrompt = null, string? CredentialId = null);
 
 public static class SessionDuplication
 {
@@ -428,6 +438,12 @@ public static class SessionDuplication
         var authMode = request.AuthMode ?? source.AuthMode;
         return new()
         {
+            // An account belongs to one provider, so the source's choice only carries over while
+            // the copy keeps the agent; a copy switched to another agent falls back to its default.
+            // It is dropped for an API-key copy too: creation rejects any account on one, so
+            // carrying it over would turn "copy as API key" into a 400 about a field never shown.
+            CredentialId = request.CredentialId
+                ?? (agent == source.Agent && authMode != AgentAuthMode.ApiKey ? source.CredentialId : null),
             Title = request.Title,
             Description = source.Description,
             ProjectId = request.ProjectId,
@@ -522,6 +538,8 @@ public record SessionInfo
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Auto;
     /// <summary>Which existing API key OpenClaw uses; set only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>The provider account this session is pinned to; null = the default account.</summary>
+    public string? CredentialId { get; init; }
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }

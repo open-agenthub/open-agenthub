@@ -34,6 +34,13 @@ function validateDriver(driver) {
   if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
     throw new Error('Agent driver findTranscript must be a function');
   }
+  // Optional hooks for swapping the provider login of a running session; a driver without them
+  // gets the common behaviour (file under HOME/<stateDir>/<authFilename>, JSON-object check).
+  for (const key of ['credentialPath', 'validCredential', 'installCredential']) {
+    if (driver[key] !== undefined && typeof driver[key] !== 'function') {
+      throw new Error('Agent driver ' + key + ' must be a function when present');
+    }
+  }
   for (const key of ['stateDir', 'authFilename']) {
     if (typeof driver[key] !== 'string' || !SAFE_RELATIVE_NAME.test(driver[key])) {
       throw new Error('Agent driver ' + key + ' must be a safe single relative name');

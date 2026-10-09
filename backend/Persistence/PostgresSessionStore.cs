@@ -27,6 +27,9 @@ public sealed class SessionRecord
     public AgentAuthMode AuthMode { get; set; } = AgentAuthMode.Auto;
     /// <summary>Which existing API key OpenClaw should use; set only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; set; }
+    /// <summary>The provider account this session mounts (docs/provider-accounts.md); null = the
+    /// default account at each start. Also where a writeback from the pod lands.</summary>
+    public string? CredentialId { get; set; }
     public string? AgentPolicyJson { get; set; }
     public string? AllowedToolsJson { get; set; }
     /// <summary>Agent session ID assigned by us (used for --resume).</summary>
@@ -68,6 +71,12 @@ public interface ISessionStore
     Task<IReadOnlyList<SessionRecord>> ListAsync(string owner, CancellationToken ct = default);
     Task UpdateStatusAsync(string id, string status, CancellationToken ct = default);
     Task SetQuestionPendingAsync(string id, bool pending, CancellationToken ct = default);
+    /// <summary>
+    /// Attaches the session to a provider account. A column update rather than an Upsert of the
+    /// whole record: the caller is the pod's writeback, which runs while the owner may be editing
+    /// the session, and a full Upsert from a record read moments earlier would undo that edit.
+    /// </summary>
+    Task SetCredentialIdAsync(string id, string? credentialId, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>Stores the terminal scrollback so transcripts work without S3.</summary>
     Task SetScrollbackAsync(string id, string text, CancellationToken ct = default);
     Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default);
@@ -138,6 +147,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS transcript TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS description TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS system_prompt TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS credential_id TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -149,11 +159,11 @@ public sealed class PostgresSessionStore : ISessionStore
             INSERT INTO sessions (id, owner, title, description, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
                                   openclaw_api_key_source, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
-                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, created_at, updated_at)
+                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
-                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @created, now())
+                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, description = EXCLUDED.description,
                 mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
@@ -162,6 +172,7 @@ public sealed class PostgresSessionStore : ISessionStore
                 agent_session_id = EXCLUDED.agent_session_id,
                 agent = EXCLUDED.agent, auth_mode = EXCLUDED.auth_mode,
                 openclaw_api_key_source = EXCLUDED.openclaw_api_key_source,
+                credential_id = EXCLUDED.credential_id,
                 agent_policy = EXCLUDED.agent_policy,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
@@ -211,6 +222,14 @@ public sealed class PostgresSessionStore : ISessionStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task SetCredentialIdAsync(string id, string? credentialId, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET credential_id=@c, updated_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("c", (object?)credentialId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task SetScrollbackAsync(string id, string text, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("UPDATE sessions SET scrollback=@s, updated_at=now() WHERE id=@id");
@@ -252,7 +271,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -293,6 +312,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("prompt", (object?)r.Prompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("systemPrompt", (object?)r.SystemPrompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("allowedTools", (object?)r.AllowedToolsJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("credentialId", (object?)r.CredentialId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
     }
 
@@ -328,6 +348,7 @@ public sealed class PostgresSessionStore : ISessionStore
         McpServerIdsJson = r.IsDBNull(27) ? null : r.GetString(27),
         AutoApprove = r.GetBoolean(28),
         Description = r.IsDBNull(29) ? null : r.GetString(29),
-        SystemPrompt = r.IsDBNull(30) ? null : r.GetString(30)
+        SystemPrompt = r.IsDBNull(30) ? null : r.GetString(30),
+        CredentialId = r.IsDBNull(31) ? null : r.GetString(31)
     };
 }

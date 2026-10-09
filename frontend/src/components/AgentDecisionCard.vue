@@ -1,7 +1,8 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, watch } from 'vue'
 import {
-  agentOptions, authOptions, credentialReadiness, needsOpenClawApiKeySource, openClawApiKeySourceOptions
+  accountOptionLabel, accountsFor, agentOptions, authOptions, credentialReadiness, defaultAccountId,
+  needsOpenClawApiKeySource, openClawApiKeySourceOptions
 } from '../lib/agent.js'
 
 const props = defineProps({
@@ -11,14 +12,35 @@ const props = defineProps({
   mode: { type: String, required: true },
   legacyAuthMode: { type: String, default: null },
   credentialStatus: { type: Object, default: () => ({}) },
+  // Stored provider logins keyed by agent name, as the accounts endpoint returns them.
+  accounts: { type: Object, default: () => ({}) },
+  credentialId: { type: String, default: '' },
   options: { type: Array, default: null }
 })
-const emit = defineEmits(['update:agent', 'update:authMode', 'update:openClawApiKeySource'])
+const emit = defineEmits(['update:agent', 'update:authMode', 'update:openClawApiKeySource', 'update:credentialId'])
 const visibleAgents = computed(() => props.options || agentOptions)
 const billingOptions = computed(() => authOptions(props.agent, props.legacyAuthMode))
 const showOpenClawSource = computed(() => needsOpenClawApiKeySource(props.agent, props.authMode))
 const readiness = computed(() =>
   credentialReadiness(props.agent, props.authMode, props.mode, props.credentialStatus, props.openClawApiKeySource))
+const providerAccounts = computed(() => accountsFor(props.accounts, props.agent))
+// One login needs no choice and stays "the default, resolved at each start"; the dropdown only
+// appears once there is something to choose between, and then the default is preselected.
+const showAccounts = computed(() => props.authMode !== 'ApiKey' && providerAccounts.value.length >= 2)
+// The listing always carries every agent's key, so an empty object is "not loaded yet" (or an
+// older backend) rather than "no accounts". Until it arrives a pinned id must be left alone:
+// resetting it against an empty list would wipe the pin of a session being edited or copied.
+const accountsLoaded = computed(() => Object.keys(props.accounts || {}).length > 0)
+
+watch([() => props.agent, providerAccounts, showAccounts, () => props.credentialId], ([agent], [previousAgent] = []) => {
+  // An account belongs to one provider, so a pin never survives an agent change — loaded or not.
+  const agentChanged = previousAgent !== undefined && agent !== previousAgent
+  if (!agentChanged && !accountsLoaded.value) return
+  const known = !agentChanged && providerAccounts.value.some(account => account.id === props.credentialId)
+  if (known) return
+  const next = showAccounts.value ? defaultAccountId(providerAccounts.value) : ''
+  if (next !== props.credentialId) emit('update:credentialId', next)
+}, { immediate: true })
 
 function chooseAgent(agent) {
   emit('update:agent', agent)
@@ -57,6 +79,16 @@ function chooseAgent(agent) {
       </div>
       <small>{{ openClawApiKeySourceOptions.find(option => option.value === openClawApiKeySource)?.hint }}</small>
     </div>
+    <div v-if="showAccounts" class="decision-group source-group" data-account-choice>
+      <div class="decision-label">Account</div>
+      <select data-account-select :value="credentialId" aria-label="Provider account"
+        @change="$emit('update:credentialId', $event.target.value)">
+        <option v-for="account in providerAccounts" :key="account.id" :value="account.id" :data-account-option="account.id">
+          {{ accountOptionLabel(account) }}{{ account.isDefault ? ' (default)' : '' }}
+        </option>
+      </select>
+      <small>Which stored {{ agent }} login this session uses. A running session can be switched from its header.</small>
+    </div>
     <p class="readiness" :class="{ ready: readiness.ready }" data-readiness aria-live="polite">{{ readiness.text }}</p>
   </div>
 </template>
@@ -73,6 +105,7 @@ function chooseAgent(agent) {
 .chip.on { background: var(--border-2); color: var(--strong); }
 small { display: block; margin-top: 5px; color: var(--muted-3); font-size: 11px; }
 .source-group { grid-column: 1 / -1; }
+.source-group select { max-width: 100%; }
 .readiness { grid-column: 1 / -1; margin: 0; padding-top: 10px; border-top: 1px solid var(--border); color: var(--warn); font-size: 12px; line-height: 1.45; }
 .readiness.ready { color: var(--ok); }
 @media (max-width: 600px) {

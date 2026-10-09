@@ -129,6 +129,25 @@ export function commandsPlaceholder(agent) {
   return agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'
 }
 
+/** The accounts stored for one agent out of the `{ Claude: [...], ... }` listing. */
+export function accountsFor(accounts, agent) {
+  const list = accounts && typeof accounts === 'object' ? accounts[agent] : null
+  return Array.isArray(list) ? list : []
+}
+
+/** The account a session without an explicit choice runs on: the default, else the first. */
+export function defaultAccountId(list) {
+  const accounts = Array.isArray(list) ? list : []
+  return (accounts.find(account => account?.isDefault) || accounts[0])?.id || ''
+}
+
+/** "Work — me@example.com · Example Org": the label plus whatever identity the login carried. */
+export function accountOptionLabel(account) {
+  if (!account) return ''
+  const identity = [account.email, account.organization].filter(Boolean).join(' · ')
+  return identity ? `${account.label} — ${identity}` : account.label
+}
+
 export function authLabel(authMode) {
   return authMode === 'ApiKey' ? 'API key' : authMode === 'Auto' ? 'Auto (legacy)' : authMode || ''
 }

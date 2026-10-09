@@ -80,4 +80,37 @@ public sealed class CredentialsController : ControllerBase
         await _svc.DeleteProviderCredentialsAsync(Owner, agent, ct);
         return NoContent();
     }
+
+    /// <summary>
+    /// The caller's stored provider logins as accounts, keyed by agent name — labels, identity
+    /// and timestamps, never the files (docs/provider-accounts.md).
+    /// </summary>
+    [HttpGet("accounts")]
+    public async Task<ActionResult<IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>>>> Accounts(CancellationToken ct)
+        => Ok(await _svc.ListProviderAccountsAsync(Owner, ct));
+
+    /// <summary>Renames an account or makes it the default for new sessions.</summary>
+    [HttpPatch("accounts/{agent}/{id}")]
+    public async Task<ActionResult<ProviderAccountInfo>> UpdateAccount(AgentKind agent, string id,
+        [FromBody] UpdateProviderAccountRequest req, CancellationToken ct)
+    {
+        if (!Enum.IsDefined(agent)) return BadRequest("Unknown agent.");
+        if (!ProviderAccountSecret.IsValidId(id)) return BadRequest("Invalid account id.");
+        try
+        {
+            var updated = await _svc.UpdateProviderAccountAsync(Owner, agent, id, req, ct);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
+    /// <summary>Forgets one account. Always 204, for the same reason as <see cref="DeleteSubscription"/>.</summary>
+    [HttpDelete("accounts/{agent}/{id}")]
+    public async Task<IActionResult> DeleteAccount(AgentKind agent, string id, CancellationToken ct)
+    {
+        if (!Enum.IsDefined(agent)) return BadRequest("Unknown agent.");
+        if (!ProviderAccountSecret.IsValidId(id)) return BadRequest("Invalid account id.");
+        await _svc.DeleteProviderAccountAsync(Owner, agent, id, ct);
+        return NoContent();
+    }
 }

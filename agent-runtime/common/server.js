@@ -4,11 +4,15 @@ const crypto = require('node:crypto');
 const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
+const credentials = require('./credential-install');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
 // from the hub's copy comes back shorter than what this process uploaded.
 const MAX_BUFFER = 1_000_000;
+// How long a stopped agent gets to exit on its own before the restart forces it; long enough
+// for a CLI to flush its session file, short enough that a wedged one does not stall the swap.
+const RESTART_KILL_GRACE_MS = 8_000;
 // Protocol chatter that the chat UI only needs live, never on replay.
 const TRANSIENT_CHAT_EVENTS = new Set(['stream_event', 'control_response', 'control_request']);
 
@@ -75,6 +79,12 @@ function createCommonServer(options = {}) {
   let firstLaunchedAt = 0;
   let transcriptFile = null;
   let transcriptUploaded = { size: -1, mtimeMs: -1 };
+  // Set while the agent is being stopped on purpose so that its exit starts it again instead
+  // of ending the session.
+  let restartReason = null;
+  // The last size a client asked for, re-applied to a restarted PTY: the clients do not know
+  // the terminal was replaced and would not send a resize until their own window changes.
+  let lastSize = null;
 
   function remember(chunk) {
     scrollback += chunk;
@@ -332,7 +342,48 @@ function createCommonServer(options = {}) {
       (signal ? ', signal ' + signal : '') + ').\r\n';
   }
 
+  function restartMessage(reason) {
+    if (chatMode) return agenthubEvent('info', { text: reason + ' — restarting the agent and resuming the conversation.' });
+    return '\r\n[agent] ' + reason + ' — restarting the agent and resuming the conversation.\r\n';
+  }
+
+  /**
+   * Stops the agent so that handleAgentExit starts it again with the provider's resume command.
+   * The conversation this pod ran is on its own disk, which is what the resume flags describe;
+   * a session that started fresh in this pod therefore resumes exactly like one restored from
+   * the archive would.
+   */
+  function restartAgent(reason) {
+    if (exited || !term) return false;
+    // A provider that names its conversation itself does so only once it has written the file,
+    // and that name is what its resume command takes; looking now means the restarted agent
+    // resumes this conversation and not whichever one is newest on disk.
+    locateTranscript();
+    restartReason = reason;
+    env.AGENTHUB_RESUME = '1';
+    env.AGENTHUB_STATE_RESTORED = '1';
+    const stopping = term;
+    try { stopping.kill(); } catch {}
+    setTimeoutImpl(() => {
+      if (restartReason !== null && term === stopping) {
+        try { stopping.kill('SIGKILL'); } catch {}
+      }
+    }, RESTART_KILL_GRACE_MS);
+    return true;
+  }
+
   function handleAgentExit(exitCode, signal) {
+    if (restartReason !== null) {
+      const message = restartMessage(restartReason);
+      restartReason = null;
+      // The restart gets its own one-time fallback to a fresh start, as a cross-pod resume has.
+      retriedFresh = false;
+      remember(message);
+      broadcast(message);
+      startAgent(true);
+      return;
+    }
+
     const elapsedMs = now() - launchedAt;
     if (attemptedResume && !retriedFresh &&
         driver.isMissingResume(attemptOutput, exitCode, elapsedMs)) {
@@ -463,7 +514,8 @@ function createCommonServer(options = {}) {
     }
 
     term = pty.spawn(command.cmd, command.args, {
-      name: 'xterm-256color', cols: 120, rows: 32, cwd, env: agentEnv
+      name: 'xterm-256color', cols: lastSize ? lastSize.cols : 120, rows: lastSize ? lastSize.rows : 32,
+      cwd, env: agentEnv
     });
 
     term.onData(data => {
@@ -564,11 +616,82 @@ function createCommonServer(options = {}) {
       if (message.type === 'input' && typeof message.data === 'string') {
         term.write(message.data);
       } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
+        lastSize = { cols: message.cols, rows: message.rows };
         try { term.resize(message.cols, message.rows); } catch {}
       }
     });
     socket.on('close', () => clients.delete(socket));
     socket.on('error', () => clients.delete(socket));
+  }
+
+  async function readBoundedBody(request, maxBytes) {
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of request) {
+      total += chunk.length;
+      if (total > maxBytes) return null;
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+
+  /**
+   * PUT /agenthub/credentials: the hub hands over another of the owner's logins for this
+   * provider. The request names no path — the file goes where the driver says and nowhere else
+   * (docs/provider-accounts.md, "Switching the account"). The watcher baseline is written first
+   * so the poll that follows the install does not upload the file straight back.
+   */
+  async function handleCredentialRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    if (request.method !== 'PUT') {
+      response.setHeader('Allow', 'PUT');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const provider = String(request.headers['x-agent-provider'] || '').toLowerCase();
+    if (provider !== driver.name.toLowerCase()) {
+      fileError(response, 409, 'provider_mismatch');
+      return;
+    }
+    if (exited) {
+      fileError(response, 409, 'agent_exited');
+      return;
+    }
+    const declaredLength = Number.parseInt(request.headers['content-length'] || '', 10);
+    if (Number.isFinite(declaredLength) && declaredLength > credentials.MAX_CREDENTIAL_BYTES) {
+      fileError(response, 413, 'credential_too_large');
+      request.resume();
+      return;
+    }
+    const body = await readBoundedBody(request, credentials.MAX_CREDENTIAL_BYTES);
+    if (!body) {
+      fileError(response, 413, 'credential_too_large');
+      return;
+    }
+    const valid = typeof driver.validCredential === 'function'
+      ? driver.validCredential(body)
+      : credentials.looksLikeJsonObject(body);
+    if (!valid) {
+      fileError(response, 400, 'invalid_credential');
+      return;
+    }
+
+    const target = credentials.credentialTarget(env, driver);
+    credentials.writeBaselineHash(credentials.baselineFile(env), credentials.sha256(body), fs);
+    if (typeof driver.installCredential === 'function') driver.installCredential(env, body, target, fs);
+    else credentials.writeCredentialFile(target, body, fs);
+    const restarting = restartAgent('Provider account switched');
+    console.log('[agent] Provider credential replaced' + (restarting ? '; restarting with resume.' : '.'));
+    sendJson(response, 202, { installed: true, restarting });
+  }
+
+  function handleHttpRequest(request, response) {
+    const requestPath = (request.url || '').split('?')[0];
+    if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
+    return handleFileRequest(request, response);
   }
 
   function handleShell(socket) {
@@ -712,7 +835,7 @@ function createCommonServer(options = {}) {
   }, 30_000);
 
   const httpServer = http.createServer((request, response) => {
-    Promise.resolve(handleFileRequest(request, response)).catch(() => {
+    Promise.resolve(handleHttpRequest(request, response)).catch(() => {
       if (!response.headersSent) fileError(response, 500, 'file_io_failed');
       else response.destroy();
     });
@@ -725,7 +848,7 @@ function createCommonServer(options = {}) {
   });
 
   httpServer.listen(port);
-  console.log('[agent] Agent server listening on :' + port + ' (paths: /, /shell, /agenthub/files/:id)');
+  console.log('[agent] Agent server listening on :' + port + ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials)');
   postStatus('Running');
 
   for (const signal of ['SIGTERM', 'SIGINT']) {

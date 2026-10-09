@@ -78,6 +78,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
   const requests = [];
   const commands = [];
   const writes = [];
+  const renames = [];
   const intervals = [];
   const exits = [];
 
@@ -158,6 +159,8 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       fs: {
         existsSync(file) { return exists.has(file); },
         writeFileSync(file, data) { writes.push({ file, data }); },
+        mkdirSync() {},
+        renameSync(from, to) { renames.push({ from, to }); },
         readFileSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) return harnessOptions.files[file];
           throw new Error('ENOENT: ' + file);
@@ -194,7 +197,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
     }
   });
 
-  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, intervals, exits, fileCalls, materializer };
+  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, renames, intervals, exits, fileCalls, materializer };
 }
 
 function requestHttp(harness, method, url, headers = {}, body = '') {
@@ -970,4 +973,154 @@ test('common transport validates findTranscript when a driver declares one', () 
   assert.throws(() => validateDriver({ ...base, findTranscript: '/not/a/function' }),
     /findTranscript must be a function/);
   assert.equal(typeof validateDriver({ ...base, findTranscript: () => null }).findTranscript, 'function');
+});
+
+// ---- PUT /agenthub/credentials: another account for a running session ----------------------
+
+const credentialHeaders = { 'X-Agent-Token': 'correct-token', 'X-Agent-Provider': 'test', 'Content-Length': '7' };
+
+test('credential route rejects a bad token, another provider, a wrong method and a malformed body', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' });
+
+  const missing = await requestHttp(harness, 'PUT', '/agenthub/credentials', { 'X-Agent-Provider': 'test' }, '{"a":1}');
+  const wrongToken = await requestHttp(harness, 'PUT', '/agenthub/credentials',
+    { ...credentialHeaders, 'X-Agent-Token': 'wrong' }, '{"a":1}');
+  const otherProvider = await requestHttp(harness, 'PUT', '/agenthub/credentials',
+    { ...credentialHeaders, 'X-Agent-Provider': 'other' }, '{"a":1}');
+  const get = await requestHttp(harness, 'GET', '/agenthub/credentials', credentialHeaders);
+  const junk = await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, 'nope');
+  const array = await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, '[1,2,3]');
+  const oversized = await requestHttp(harness, 'PUT', '/agenthub/credentials',
+    { ...credentialHeaders, 'Content-Length': String(70 * 1024) }, '{}');
+
+  assert.deepEqual([missing.status, wrongToken.status, otherProvider.status, get.status, junk.status, array.status, oversized.status],
+    [401, 401, 409, 405, 400, 400, 413]);
+  assert.equal(harness.writes.length, 0);
+  assert.equal(harness.terminals[0].killed, false);
+});
+
+test('credential route writes the watcher baseline, installs the file under HOME and restarts with resume', async () => {
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_TOKEN: 'correct-token', AGENTHUB_CALLBACK_URL: 'http://hub.invalid/internal/sessions/s1',
+    AGENTHUB_RESUME: '0', AGENTHUB_STATE_RESTORED: '0'
+  });
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  socket.emit('message', JSON.stringify({ type: 'resize', cols: 200, rows: 50 }));
+  const body = '{"a":1}';
+
+  const response = await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, body);
+
+  assert.equal(response.status, 202);
+  assert.deepEqual(JSON.parse(response.body), { installed: true, restarting: true });
+  // Baseline before file, so a watcher poll in between never sees an unknown hash.
+  const expectedHash = require('node:crypto').createHash('sha256').update(body).digest('hex');
+  assert.equal(harness.writes[0].file, path.join('/home/agent', '.agenthub', 'credential-baseline'));
+  assert.equal(harness.writes[0].data, expectedHash + '\n');
+  const target = path.resolve('/home/agent', '.test-agent', 'auth.json');
+  assert.equal(harness.writes[1].data.toString(), body);
+  assert.equal(harness.renames.length, 1);
+  assert.equal(harness.renames[0].to, target);
+  assert.equal(path.dirname(harness.renames[0].from), path.dirname(target));
+  assert.equal(harness.terminals[0].killed, true);
+
+  // The old process exits; the replacement resumes, at the size the client last asked for.
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+  assert.equal(harness.terminals.length, 2);
+  assert.deepEqual(harness.spawns.map(spawn => spawn.args), [['resume'], ['resume']]);
+  assert.equal(harness.spawns[1].options.cols, 200);
+  assert.equal(harness.spawns[1].options.rows, 50);
+  assert.equal(harness.runtime.env.AGENTHUB_RESUME, '1');
+  assert.equal(harness.runtime.env.AGENTHUB_STATE_RESTORED, '1');
+  assert.match(socket.sent.at(-1), /Provider account switched — restarting the agent and resuming the conversation/);
+  assert.deepEqual(socket.closed, []);
+  assert.deepEqual(harness.exits, []);
+  // Only the initial "Running"; a restart is not an end of the session, so no terminal status.
+  const statuses = harness.requests.filter(request => request.url.endsWith('/status'))
+    .map(request => JSON.parse(request.options.body).status);
+  assert.deepEqual(statuses, ['Running']);
+});
+
+test('a restart whose resume is not recognised falls back to a fresh start once, like a cross-pod resume', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, {
+    isMissingResume: output => output.includes('missing')
+  });
+  await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, '{"a":1}');
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+  harness.terminals[1].emitData('missing state');
+  harness.terminals[1].emitExit({ exitCode: 1, signal: 0 });
+
+  assert.deepEqual(harness.spawns.map(spawn => spawn.args), [['resume'], ['resume'], ['fresh']]);
+  assert.deepEqual(harness.exits, []);
+});
+
+test('credential route uses the driver validator and install hook when the driver has them', async () => {
+  const installs = [];
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token', CUSTOM_AUTH: '/home/agent/.config/x/auth.json' }, {
+    credentialPath: env => env.CUSTOM_AUTH,
+    validCredential: buffer => buffer.toString().includes('"ok"'),
+    installCredential: (env, body, target) => { installs.push({ body: body.toString(), target }); }
+  });
+
+  const rejected = await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, '{"a":1}');
+  const accepted = await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, '{"ok":1}');
+
+  assert.equal(rejected.status, 400);
+  assert.equal(accepted.status, 202);
+  assert.deepEqual(installs, [{ body: '{"ok":1}', target: path.resolve('/home/agent/.config/x/auth.json') }]);
+  assert.equal(harness.renames.length, 0);
+});
+
+test('credential route refuses a path the driver points outside HOME', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, {
+    credentialPath: () => '/etc/shadow'
+  });
+
+  const response = await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, '{"a":1}');
+
+  assert.equal(response.status, 500);
+  assert.equal(harness.writes.length, 0);
+  assert.equal(harness.terminals[0].killed, false);
+});
+
+test('credential route answers 409 once the agent has ended for good', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, { isResumeCommand: () => false });
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+
+  const response = await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, '{"a":1}');
+
+  assert.equal(response.status, 409);
+  assert.equal(JSON.parse(response.body).error, 'agent_exited');
+});
+
+test('chat transport announces a credential restart as a durable info event and keeps the prompt unsent', async () => {
+  const harness = createChatHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token', AGENTHUB_PROMPT: 'do it' },
+    { isResumeCommand: () => false });
+  await tick();
+  assert.equal(harness.children[0].stdinWrites.length, 1);
+
+  const response = await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, '{"a":1}');
+  assert.equal(response.status, 202);
+  assert.equal(harness.children[0].killed, true);
+  harness.children[0].emitExit(0, null);
+  await tick();
+
+  assert.equal(harness.children.length, 2);
+  assert.equal(harness.children[1].stdinWrites.length, 0);
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  const events = socket.sent[0].trim().split('\n').map(line => JSON.parse(line));
+  assert.ok(events.some(event => event.type === 'agenthub' && event.subtype === 'info' && /Provider account switched/.test(event.text)));
+});
+
+test('driver contract rejects credential hooks that are not functions', () => {
+  const base = {
+    name: 'Test', stateDir: '.t', authFilename: 'a.json',
+    attachmentCapabilities: { nativeImages: false, localImagePaths: true, mcpImages: true },
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
+  };
+  assert.doesNotThrow(() => validateDriver({ ...base, credentialPath: () => null }));
+  assert.throws(() => validateDriver({ ...base, credentialPath: '/x' }), /credentialPath/);
+  assert.throws(() => validateDriver({ ...base, validCredential: true }), /validCredential/);
+  assert.throws(() => validateDriver({ ...base, installCredential: {} }), /installCredential/);
 });

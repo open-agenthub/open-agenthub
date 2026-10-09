@@ -79,6 +79,22 @@ public sealed class SessionsController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Moves a running Subscription session to another stored provider account; the pod swaps
+    /// the file and restarts its agent with resume. 409 when the session is not running (the
+    /// account then applies at the next start, via PATCH), 502 when the pod refused the file.
+    /// </summary>
+    [HttpPatch("{id}/credential")]
+    public async Task<ActionResult<SessionInfo>> SwitchCredential(string id,
+        [FromBody] SwitchSessionCredentialRequest body, CancellationToken ct)
+    {
+        try { return Ok(await _svc.SwitchSessionCredentialAsync(Owner, id, body.CredentialId, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (HttpRequestException e) { return StatusCode(StatusCodes.Status502BadGateway, e.Message); }
+    }
+
     [HttpPost("{id}/duplicate")]
     public async Task<ActionResult<SessionInfo>> Duplicate(string id, [FromBody] DuplicateSessionRequest request, CancellationToken ct)
     {
