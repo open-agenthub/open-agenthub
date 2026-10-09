@@ -6,6 +6,8 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 
 const MAX_BUFFER = 1_000_000;
+// Upper bound for each archive/upload step of a persistence run.
+const PERSIST_STEP_SECONDS = 120;
 // Protocol chatter that the chat UI only needs live, never on replay.
 const TRANSIENT_CHAT_EVENTS = new Set(['stream_event', 'control_response', 'control_request']);
 
@@ -68,6 +70,8 @@ function createCommonServer(options = {}) {
   let chatDelivery = Promise.resolve();
   let pendingChatDeliveries = 0;
   let promptSent = false;
+  let persisting = false;
+  let persistWaiters = null;
 
   function remember(chunk) {
     scrollback += chunk;
@@ -92,9 +96,17 @@ function createCommonServer(options = {}) {
       for (const entry of driver.stateExcludes) excludes.push(entry);
     }
     const excludeArgs = excludes.map(entry => '--exclude="' + entry + '"').join(' ');
+    // tar exits 1 when a file changed while it was read — the live transcript of a running
+    // agent always does — and the archive is still complete, so only >1 counts as a failure;
+    // treating 1 as one meant an active session never uploaded its state at all. It writes
+    // to a side file so an aborted run never replaces the last good archive, runs niced
+    // and bounded so a large state directory cannot starve the agent and its hooks.
     execFile('/bin/sh', ['-c',
-      'tar czf /tmp/state.tgz -C "' + home + '" ' + excludeArgs + ' "' + archive +
-      '" 2>/dev/null && curl -fsS ' + curlOption + '-T /tmp/state.tgz "' + statePut + '"'
+      'nice -n 10 timeout ' + PERSIST_STEP_SECONDS + ' tar czf /tmp/state.tgz.part -C "' + home +
+      '" ' + excludeArgs + ' "' + archive + '" 2>/dev/null; ' +
+      'if [ $? -le 1 ]; then mv -f /tmp/state.tgz.part /tmp/state.tgz && curl -fsS --max-time ' +
+      PERSIST_STEP_SECONDS + ' ' + curlOption + '-T /tmp/state.tgz "' + statePut + '"; ' +
+      'else rm -f /tmp/state.tgz.part; exit 1; fi'
     ], () => done && done());
   }
 
@@ -102,7 +114,8 @@ function createCommonServer(options = {}) {
     if (!scrollPut) return done && done();
     try { fs.writeFileSync('/tmp/scrollback.log', scrollback); } catch {}
     execFile('/bin/sh', ['-c',
-      'curl -fsS ' + curlOption + '-T /tmp/scrollback.log "' + scrollPut + '"'
+      'curl -fsS --max-time ' + PERSIST_STEP_SECONDS + ' ' + curlOption +
+      '-T /tmp/scrollback.log "' + scrollPut + '"'
     ], () => done && done());
   }
 
@@ -180,9 +193,25 @@ function createCommonServer(options = {}) {
     }
   }
 
+  // One run at a time. The 30s tick used to start a new run whether or not the previous one
+  // had finished, so once archiving a large state directory took longer than the tick, tar
+  // and gzip processes piled up by the thousand, all writing the same archive, and starved
+  // the pod until hooks timed out. A tick that finds a run in flight is skipped; a caller
+  // that needs the final state (exit, SIGTERM) gets one more run after the current one.
   function persistAll(done) {
+    if (persisting) {
+      if (done) (persistWaiters || (persistWaiters = [])).push(done);
+      return;
+    }
+    persisting = true;
     postResources();
-    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistState(done))));
+    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistState(() => {
+      persisting = false;
+      const waiters = persistWaiters;
+      persistWaiters = null;
+      if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); });
+      if (done) done();
+    }))));
   }
 
   // ---- Pod resource snapshot (CPU/memory from the cgroup, network from /proc/net/dev) ----

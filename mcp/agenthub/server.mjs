@@ -26,7 +26,7 @@ const createSchema = z.object({
   title: z.string().max(256).optional(),
   prompt: z.string().max(100_000).optional(),
   systemPrompt: z.string().max(20_000).optional(),
-  mode: z.enum(['Interactive', 'Autonomous', 'Scheduled']).optional().default('Autonomous'),
+  mode: z.enum(['Interactive', 'Autonomous', 'Scheduled']).optional().default('Interactive'),
   // OpenClaw was missing here while the backend accepted it, so the stdio server was the one
   // client that could not create an OpenClaw session. The enum is the whole AgentKind set.
   agent: z.enum(['Claude', 'Codex', 'Cursor', 'OpenClaw']).optional(),
@@ -53,9 +53,10 @@ const createSchema = z.object({
 });
 
 register('session_create', {
-  description: 'Create and start an AgentHub session. Default mode is Autonomous. An Interactive '
-    + 'session starts working on its prompt and stays live, and the response carries "url" — the '
-    + 'page to hand to a person who should take the session over.',
+  description: 'Create and start an AgentHub session. Default mode is Interactive: the session '
+    + 'starts working on its prompt and stays live, tool requests outside its allow list wait for '
+    + 'a person\'s approval, and the response carries "url" — the page to hand to that person. '
+    + 'Use Autonomous only for unattended work, where such requests are approved automatically.',
   inputSchema: createSchema
 }, async (body) => text(sanitizeSession(await client.create(body))));
 

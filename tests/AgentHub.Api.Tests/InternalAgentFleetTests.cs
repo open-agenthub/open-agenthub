@@ -129,6 +129,52 @@ public class InternalAgentFleetTests
     }
 
     [Theory]
+    [InlineData("rootless", "rootless-child")]
+    [InlineData("rootless-child", "rootless")]
+    [InlineData("coder", "legacy-child")]
+    [InlineData("legacy-child", "coder")]
+    public async Task Send_AlongTheParentChildLine_IsDeliveredWithoutASharedProject(string from, string to)
+    {
+        var world = World();
+        var controller = world.Controller(from);
+
+        var result = await controller.SendMessage(from,
+            new SendAgentMessageRequest(to, "status?"), CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        var stored = Assert.Single(world.Messages.Added);
+        Assert.Equal(from, stored.FromSessionId);
+        Assert.Equal(to, stored.ToSessionId);
+    }
+
+    [Fact]
+    public async Task Send_FromProjectlessChildToItsParentsProjectPeer_Returns404()
+    {
+        var world = World();
+        var controller = world.Controller("legacy-child");
+
+        var result = await controller.SendMessage("legacy-child",
+            new SendAgentMessageRequest("reviewer", "hi"), CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(world.Messages.Added);
+    }
+
+    [Fact]
+    public async Task ProjectAgents_IncludesOwnChildrenOutsideTheProject()
+    {
+        var world = World();
+        var controller = world.Controller("coder");
+
+        var ok = Assert.IsType<OkObjectResult>(await controller.ProjectAgents("coder", CancellationToken.None));
+        var ids = Assert.IsAssignableFrom<IEnumerable<ProjectAgentInfo>>(ok.Value).Select(a => a.Id).ToList();
+
+        Assert.Contains("legacy-child", ids);
+        Assert.Contains("reviewer", ids);
+        Assert.DoesNotContain("rootless-child", ids);
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
@@ -336,6 +382,7 @@ public class InternalAgentFleetTests
             Record("other-project", Owner, ProjectB, title: "Elsewhere"),
             Record("rootless", Owner, project: null, title: "Rootless"),
             Record("rootless-child", Owner, project: null, title: "Rootless child", parent: "rootless"),
+            Record("legacy-child", Owner, project: null, title: "Legacy child", parent: "coder"),
             Record("mallory-session", "mallory", ProjectA, title: "Mallory")
         };
         return new FleetWorld(sessions);

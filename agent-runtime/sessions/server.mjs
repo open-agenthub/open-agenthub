@@ -24,7 +24,7 @@ const register = (name, config, handler) => server.registerTool(name, config, as
 const createSchema = z.object({
   title: z.string().max(256).optional(),
   prompt: z.string().max(100_000).optional(),
-  mode: z.enum(['Interactive', 'Autonomous', 'Scheduled']).optional().default('Autonomous'),
+  mode: z.enum(['Interactive', 'Autonomous', 'Scheduled']).optional().default('Interactive'),
   agent: z.enum(['Claude', 'Codex', 'Cursor']).optional(),
   authMode: z.enum(['Auto', 'Subscription', 'ApiKey']).optional(),
   repos: z.array(z.object({
@@ -35,6 +35,7 @@ const createSchema = z.object({
   parentSessionId: z.string().max(128).optional(),
   schedule: z.string().max(128).optional(),
   mcpConfigJson: z.string().max(512_000).optional(),
+  mcpServerIds: z.array(z.string().max(128)).max(64).optional(),
   policy: z.record(z.string(), z.unknown()).optional(),
   image: z.string().max(512).optional(),
   runAsRoot: z.boolean().optional(),
@@ -43,7 +44,13 @@ const createSchema = z.object({
 });
 
 register('session_create', {
-  description: 'Create and start a child session under this agent session. Default mode is Autonomous.',
+  description: 'Create and start a child session under this agent session. It joins this session\'s '
+    + 'project and, unless mcpConfigJson or mcpServerIds are given, gets the same MCP servers — so it '
+    + 'shows up in agents_list and can be reached with agent_send, and has agent_inbox/agent_send '
+    + 'itself to report back. Default mode is Interactive: a person can watch and answer it, and '
+    + 'tool requests outside its allow list wait for their approval. Use Autonomous only for '
+    + 'unattended work, where such requests are approved automatically. hasMcp in the result counts '
+    + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled.',
   inputSchema: createSchema
 }, async (body) => text(sanitizeSession(await client.create(body))));
 
@@ -74,12 +81,13 @@ register('session_delete', {
 
 register('agents_list', {
   description: 'List the agents (sessions) of this session\'s project: id, title (= agent name), '
-    + 'description (what the agent is for), phase. Without a project: this session and its descendants.',
+    + 'description (what the agent is for), phase. Also lists this session\'s parent chain and the '
+    + 'children it created, whatever their project.',
   inputSchema: z.object({})
 }, async () => text(await client.listProjectAgents()));
 
 register('agent_send', {
-  description: 'Send a message/task to a peer agent of the same project. "to" is a session id or a '
+  description: 'Send a message/task to a peer agent (anyone in agents_list). "to" is a session id or a '
     + 'unique agent title (see agents_list); an ambiguous title fails with the candidate list. '
     + 'The peer reads it via its agent_inbox tool.',
   inputSchema: z.object({
