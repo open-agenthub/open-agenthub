@@ -111,6 +111,15 @@ Do not add a comment that restates the code. Do not leave commented-out code beh
   once at process start from `AGENTHUB_AUTO_APPROVE`, so changing it needs a restart. OpenClaw has
   no per-call hook at all, so its approvals cannot reach the chat relay — an interactive OpenClaw
   session asks in its own terminal only.
+- **A session exists in Slack/Telegram/Signal only once a hook has said "question".** The relays
+  open the thread on that event alone and drop "finished"/"failed" without one; the backend is
+  provider-neutral, the hook is not. Claude's `Notification` hook, Codex's managed `Stop` hook and
+  Cursor's `stop` hook (both via `common/turn-notify-hook.mjs`) send it — interactive sessions
+  only, because an autonomous turn's end is the process's end. **OpenClaw has no hook of any kind,
+  so OpenClaw sessions never appear in chat**; the README's runtime table says so. Codex's TUI
+  also runs a title-generation sub-session whose Stop fires the hook with the title as its
+  message — the hook recognises it by the missing `transcript_path`. `docs/chat-relay.md` has the
+  verified payloads.
 - **The session allow list is a head start, not a boundary, whenever auto-approve is on.** An
   uncovered tool becomes an approval question that auto-approve then answers. With auto-approve off
   the allow list is the boundary and an uncovered tool is denied. The MCP sharing policy is a hard

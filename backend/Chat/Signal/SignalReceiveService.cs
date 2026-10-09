@@ -306,7 +306,7 @@ public sealed class SignalReceiveService : BackgroundService
         var pendingTool = await _permissions.GetPendingBySessionAsync(binding.SessionId, ct);
         var link = _frontendOrigin.Length == 0 ? null : $"{_frontendOrigin}/s/{binding.SessionId}";
         await _signal.SendAsync(e.Sender, ChatFormatting.StatusText(
-            live?.Phase ?? "Unknown", live?.QuestionPending ?? false, pendingTool, link), ct);
+            live?.Phase ?? "Unknown", live?.QuestionPending ?? false, pendingTool, link, live?.Agent), ct);
     }
 
     // ---------------------------------------------------------------- plain input
@@ -344,7 +344,7 @@ public sealed class SignalReceiveService : BackgroundService
         // loop. Stop() is a cheap no-op here, just cross-platform defense.
         _indicator.Stop(binding.SessionId);
         if (binding.StatusRef is { } oldRef) await _signal.TryDeleteAsync(binding.ChatId, oldRef, ct);
-        var ts = await _signal.SendAsync(e.Sender, WorkingIndicator.Frames[0], ct);
+        var ts = await _signal.SendAsync(e.Sender, WorkingIndicator.FramesFor(info.Agent)[0], ct);
         if (ts is not null) await _bindings.SetStatusRefAsync("signal", binding.SessionId, ts, ct);
     }
 

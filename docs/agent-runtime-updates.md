@@ -59,6 +59,12 @@ Both looked exactly like "the policy hook stopped firing". If this smoke test fa
 a bump, check the advertised tool names and the transport before concluding that
 enforcement broke.
 
+`fixtures/codex-turn-notify-smoke.js` pins the second managed-hook contract the same way:
+the `Stop` hook's `last_assistant_message` and `transcript_path` fields, the hook process
+inheriting `AGENTHUB_*`, and silence in exec mode. It is what opens a Codex session's chat
+thread (`docs/chat-relay.md`), so a bump that renames either field turns every Codex
+session invisible in Slack/Telegram/Signal without any other symptom.
+
 ## The nightly job
 
 [`update-agent-runtimes.yml`](../.github/workflows/update-agent-runtimes.yml) runs at

@@ -157,12 +157,13 @@ public sealed class SlackSocketModeService : BackgroundService
         if (thread.StatusTs is { } oldTs) await _slack.DeleteMessageAsync(thread.Channel, oldTs, ct);
 
         // Show a lightweight "working…" indicator until the session's next event.
-        var statusTs = await _slack.PostMessageAsync(thread.Channel, WorkingIndicator.Frames[0], threadTs, ct);
+        var frames = WorkingIndicator.FramesFor(info.Agent);
+        var statusTs = await _slack.PostMessageAsync(thread.Channel, frames[0], threadTs, ct);
         if (statusTs is not null)
         {
             await _threads.SetStatusTsAsync(thread.SessionId, statusTs, ct);
             var channel = thread.Channel;
-            _indicator.Start(thread.SessionId, (text, c) => _slack.UpdateMessageAsync(channel, statusTs, text, null, c));
+            _indicator.Start(thread.SessionId, (text, c) => _slack.UpdateMessageAsync(channel, statusTs, text, null, c), frames);
         }
     }
 
@@ -263,7 +264,7 @@ public sealed class SlackSocketModeService : BackgroundService
         var link = _frontendOrigin.Length == 0 ? null : $"{_frontendOrigin}/s/{thread.SessionId}";
         var text = AgentHub.Api.Chat.ChatFormatting.StatusText(
             live?.Phase ?? "Unknown", live?.QuestionPending ?? false,
-            pendingTool is null ? null : Escape(pendingTool), link);
+            pendingTool is null ? null : Escape(pendingTool), link, live?.Agent);
         await _slack.PostMessageAsync(thread.Channel, text, threadTs, ct);
     }
 
