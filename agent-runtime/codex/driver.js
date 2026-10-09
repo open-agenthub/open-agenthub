@@ -61,9 +61,17 @@ function isMissingResume(output, exitCode) {
     /no session found with id\b/i.test(output);
 }
 
+// CODEX_HOME is where the entrypoint restores the secret to; it defaults to ~/.codex, which is
+// also what stateDir/authFilename name, so the override only matters when the image moved it.
+function credentialPath(env) {
+  return env.CODEX_HOME ? path.join(env.CODEX_HOME, 'auth.json') : null;
+}
+
 module.exports = {
   name: 'Codex', stateDir: '.codex', authFilename: 'auth.json',
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
-  buildCommand, isResumeCommand, isMissingResume, prepare
+  buildCommand, isResumeCommand, isMissingResume, prepare,
+  credentialPath,
+  validCredential: require('./auth-watcher').validCredential
 };

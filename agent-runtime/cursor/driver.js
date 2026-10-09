@@ -84,11 +84,18 @@ function isMissingResume(output, exitCode) {
     /no (?:saved )?(?:session|conversation|chat) (?:found|with id)/i.test(output);
 }
 
+// The canonical copy under CURSOR_CONFIG_DIR that the entrypoint symlinks the CLI's own path to.
+function credentialPath(env) {
+  return env.CURSOR_AUTH_FILE || null;
+}
+
 module.exports = {
   // authFilename: CLI file store (AGENT_CLI_CREDENTIAL_STORE=file, domain "cursor")
   // writes auth.json — confirmed from CLI package 2026.07.23-e383d2b source.
   name: 'Cursor', stateDir: '.cursor', authFilename: 'auth.json',
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
-  buildCommand, isResumeCommand, isMissingResume, prepare
+  buildCommand, isResumeCommand, isMissingResume, prepare,
+  credentialPath,
+  validCredential: require('./auth-watcher').validCredential
 };
