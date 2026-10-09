@@ -38,6 +38,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IMcpGatewayTokenService _mcpGatewayTokens;
     private readonly ISessionFileCleanup? _fileCleanup;
     private readonly Network.INetworkSessionCleanup? _networkCleanup;
+    private readonly IAgentCredentialPusher? _credentialPusher;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -59,9 +60,11 @@ public sealed class KubernetesSessionService : ISessionService
         Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
         ILibraryAccess library, IMcpServerStore mcpServers, IEphemeralApiMcpStore ephemeralApiMcps,
         IMcpGatewayTokenService mcpGatewayTokens, ILogger<KubernetesSessionService> log,
-        ISessionFileCleanup? fileCleanup = null, Network.INetworkSessionCleanup? networkCleanup = null)
+        ISessionFileCleanup? fileCleanup = null, Network.INetworkSessionCleanup? networkCleanup = null,
+        IAgentCredentialPusher? credentialPusher = null)
     {
         _log = log;
+        _credentialPusher = credentialPusher;
         _store = store;
         _projects = projects;
         _artifacts = artifacts;
@@ -129,11 +132,125 @@ public sealed class KubernetesSessionService : ISessionService
     /// Stores provider CLI subscription credentials in a dedicated secret.
     /// Separate secret so StoreCredentialsAsync (which fully replaces its secret) does not overwrite it.
     /// </summary>
-    public async Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default)
+    public Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default)
+        => StoreProviderLoginAsync(owner, agent, json, identity: null, mountedCredentialId: null, ct);
+
+    public async Task<string?> StoreProviderLoginAsync(string owner, AgentKind agent, string json,
+        ProviderAccountIdentity? identity, string? mountedCredentialId, CancellationToken ct = default)
     {
-        var secret = CredentialSecretFactory.CreateProviderSecret(ProviderSecretName(owner, agent), _opts.Namespace, Sanitize(owner), agent, json);
-        await UpsertSecretAsync(secret, ct);
-        _log.LogInformation("Saved {Agent} login for {Owner}", agent, owner);
+        if (!ProviderCredentialValidator.Validate(agent, json))
+            throw new ArgumentException("Invalid provider credential document.", nameof(json));
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        var attached = ProviderAccountSecret.Attach(set, Encoding.UTF8.GetBytes(json), identity, mountedCredentialId);
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        _log.LogInformation("Saved {Agent} login for {Owner} into account {Account} ({Outcome})",
+            agent, owner, attached.AccountId, attached.Created ? "new" : "updated");
+        return attached.AccountId;
+    }
+
+    public async Task<IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>>> ListProviderAccountsAsync(
+        string owner, CancellationToken ct = default)
+    {
+        var result = new Dictionary<string, IReadOnlyList<ProviderAccountInfo>>();
+        foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex, AgentKind.Cursor, AgentKind.OpenClaw })
+        {
+            var set = await ReadProviderAccountsAsync(owner, agent, ct);
+            result[agent.ToString()] = set.Accounts.Select(ProviderAccountInfo.From).ToList();
+        }
+        return result;
+    }
+
+    public async Task<ProviderAccountInfo?> UpdateProviderAccountAsync(string owner, AgentKind agent, string id,
+        UpdateProviderAccountRequest req, CancellationToken ct = default)
+    {
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        var account = set.Find(id);
+        if (account is null) return null;
+        if (req.Label is not null) { account.Label = ProviderAccountSecret.NormalizeLabel(req.Label); set.Dirty = true; }
+        if (req.IsDefault == true) ProviderAccountSecret.MakeDefault(set, id);
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        return ProviderAccountInfo.From(account);
+    }
+
+    public async Task DeleteProviderAccountAsync(string owner, AgentKind agent, string id, CancellationToken ct = default)
+    {
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        if (!ProviderAccountSecret.Remove(set, id)) return;
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        _log.LogInformation("Deleted {Agent} account for {Owner}", agent, owner);
+    }
+
+    /// <summary>
+    /// Reads the provider secret as accounts. Any read that had to normalise the layout — the
+    /// lazy migration of a single-file secret, a reconciled index — is written back straight
+    /// away, so a pod spec built a moment later projects a key that exists.
+    /// </summary>
+    private async Task<ProviderAccountSet> ReadProviderAccountsAsync(string owner, AgentKind agent, CancellationToken ct)
+    {
+        var data = (await ReadSecretOrNullAsync(ProviderSecretName(owner, agent), ct))?.Data;
+        var set = ProviderAccountSecret.Read(data, agent);
+        if (set.Dirty && data is not null)
+        {
+            await WriteProviderAccountsAsync(owner, agent, set, ct);
+            _log.LogInformation("Normalised the {Agent} login secret of {Owner} to the account layout", agent, owner);
+        }
+        return set;
+    }
+
+    private async Task WriteProviderAccountsAsync(string owner, AgentKind agent, ProviderAccountSet set, CancellationToken ct)
+    {
+        if (set.Accounts.Count == 0)
+        {
+            await DeleteProviderCredentialsAsync(owner, agent, ct);
+            return;
+        }
+        await UpsertSecretAsync(CredentialSecretFactory.ProviderSecret(
+            ProviderSecretName(owner, agent), _opts.Namespace, Sanitize(owner),
+            ProviderAccountSecret.Write(set, agent)), ct);
+        set.Dirty = false;
+    }
+
+    /// <summary>Checks that a requested account exists for the agent; null passes through as "default".</summary>
+    private async Task<string?> ValidateCredentialIdAsync(string owner, AgentKind agent, AgentAuthMode authMode,
+        string? credentialId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(credentialId)) return null;
+        if (authMode == AgentAuthMode.ApiKey)
+            throw new ArgumentException("A provider account only applies to Subscription sessions.");
+        if (!ProviderAccountSecret.IsValidId(credentialId))
+            throw new ArgumentException("Invalid provider account id.");
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        if (set.Find(credentialId) is null)
+            throw new ArgumentException($"No stored {agent} login with id '{credentialId}'.");
+        return credentialId;
+    }
+
+    public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
+        CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        SessionCredentialSwitch.Validate(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP, credentialId);
+        if (_credentialPusher is null)
+            throw new InvalidOperationException("Switching accounts on a running session is not available on this instance.");
+
+        var set = await ReadProviderAccountsAsync(owner, rec.Agent, ct);
+        var account = set.Find(credentialId)
+            ?? throw new ArgumentException($"No stored {rec.Agent} login with id '{credentialId}'.");
+        var file = set.Files[account.Id];
+
+        // Recorded before the push: the pod's watcher uploads the file it was just given as soon
+        // as it changes again, and that upload has to land on the new account, not the old one.
+        await _store.SetCredentialIdAsync(rec.Id, account.Id, ct);
+        rec.CredentialId = account.Id;
+        await _credentialPusher.PushAsync(pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, ct);
+
+        account.LastUsedAt = DateTime.UtcNow;
+        set.Dirty = true;
+        await WriteProviderAccountsAsync(owner, rec.Agent, set, ct);
+        _log.LogInformation("Switched session {Id} to {Agent} account {Account}", id, rec.Agent, account.Id);
+        return await ToInfoAsync(rec, pod.Status.Phase, pod.Status.PodIP, await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
     public async Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default)
@@ -184,6 +301,7 @@ public sealed class KubernetesSessionService : ISessionService
         await EnsureAgentAllowedAsync(req.Agent, ct);
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
         await SessionSoftLimit.EnsureCanCreateAsync(_store, owner, _maxRunningSessionsPerOwner, ct);
+        var credentialId = await ValidateCredentialIdAsync(owner, req.Agent, req.AuthMode, req.CredentialId, ct);
 
         var repos = NormalizeRepos(req);
         SessionRepos.Validate(repos);
@@ -212,6 +330,7 @@ public sealed class KubernetesSessionService : ISessionService
             OpenClawApiKeySource = req.Agent == AgentKind.OpenClaw && req.AuthMode == AgentAuthMode.ApiKey
                 ? req.OpenClawApiKeySource
                 : null,
+            CredentialId = credentialId,
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
             Image = image, RunAsRoot = req.RunAsRoot,
@@ -547,6 +666,7 @@ public sealed class KubernetesSessionService : ISessionService
             McpServerIds = ParseMcpServerIds(rec),
             ProjectId = rec.ProjectId, Prompt = rec.Prompt, SystemPrompt = rec.SystemPrompt,
             Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
+            CredentialId = rec.CredentialId,
             Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot, AutoApprove = rec.AutoApprove,
@@ -704,6 +824,7 @@ public sealed class KubernetesSessionService : ISessionService
                 throw;
             }
         }
+        var previousAgent = rec.Agent;
         if (req.Agent is { } agent)
             rec.Agent = agent;
         if (req.AuthMode is { } authMode)
@@ -717,6 +838,12 @@ public sealed class KubernetesSessionService : ISessionService
         {
             rec.OpenClawApiKeySource = null;
         }
+        // An account is bound to one provider: a change of agent drops the pin unless the
+        // request names an account of the new agent in the same breath.
+        if (req.CredentialId is not null)
+            rec.CredentialId = await ValidateCredentialIdAsync(owner, rec.Agent, rec.AuthMode, req.CredentialId, ct);
+        else if (rec.Agent != previousAgent || rec.AuthMode == AgentAuthMode.ApiKey)
+            rec.CredentialId = null;
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
@@ -987,19 +1114,28 @@ public sealed class KubernetesSessionService : ISessionService
     {
         var hasApiKey = false;
         var hasSubscription = false;
-        if (record.Mode is SessionMode.Autonomous or SessionMode.Scheduled)
+        string? accountId = null;
+        if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
         {
-            var (apiKey, providerKey) = record.Agent switch
+            // Resolved at every start, so a session without a pinned account follows the default
+            // and a pinned one that was removed since is reported, not silently swapped.
+            var accounts = await ReadProviderAccountsAsync(owner, record.Agent, ct);
+            accountId = record.CredentialId is not null
+                ? accounts.Find(record.CredentialId)?.Id
+                : ProviderAccountSecret.ResolveId(accounts, null);
+            hasSubscription = accountId is not null;
+        }
+        if (record.Mode is SessionMode.Autonomous or SessionMode.Scheduled
+            && record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
+        {
+            var apiKey = record.Agent switch
             {
-                AgentKind.Codex => ("openai_api_key", "auth.json"),
-                AgentKind.Cursor => ("cursor_api_key", "auth.json"),
-                AgentKind.OpenClaw => (AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource), "auth-profiles.json"),
-                _ => ("anthropic_api_key", "credentials.json")
+                AgentKind.Codex => "openai_api_key",
+                AgentKind.Cursor => "cursor_api_key",
+                AgentKind.OpenClaw => AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource),
+                _ => "anthropic_api_key"
             };
-            if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
-                hasApiKey = apiKey is not null && await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
-            if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
-                hasSubscription = await HasSecretKeyAsync(ProviderSecretName(owner, record.Agent), providerKey, ct);
+            hasApiKey = apiKey is not null && await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
         }
 
         var ownerKey = Sanitize(owner);
@@ -1016,6 +1152,7 @@ public sealed class KubernetesSessionService : ISessionService
             OpenClawCredentialSecretName = ProviderSecretName(owner, AgentKind.OpenClaw),
             HasSelectedApiKey = hasApiKey,
             HasSelectedSubscriptionCredential = hasSubscription,
+            SubscriptionAccountId = accountId,
             HasGitCredentials = hasGitCredentials,
             CallbackUrl = $"{_callbackBaseUrl}/internal/sessions/{record.Id}",
             StatePutUrl = artifactUrls.StatePutUrl,
@@ -1076,6 +1213,7 @@ public sealed class KubernetesSessionService : ISessionService
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
+        CredentialId = r.CredentialId,
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),

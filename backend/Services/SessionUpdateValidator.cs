@@ -29,5 +29,6 @@ public static class SessionUpdateValidator
         request.Agent is not null ||
         request.AuthMode is not null ||
         request.OpenClawApiKeySource is not null ||
+        request.CredentialId is not null ||
         request.Policy is not null;
 }

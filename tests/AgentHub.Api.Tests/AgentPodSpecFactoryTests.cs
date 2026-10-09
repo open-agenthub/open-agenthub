@@ -70,6 +70,47 @@ public class AgentPodSpecFactoryTests
         }
     }
 
+    /// <summary>
+    /// The provider secret holds every account of the user; the pod must see exactly the chosen
+    /// one, under the file name the entrypoint has always read (docs/provider-accounts.md).
+    /// </summary>
+    [Theory]
+    [InlineData(AgentKind.Claude, "claude", "credentials.json")]
+    [InlineData(AgentKind.Codex, "codex", "auth.json")]
+    [InlineData(AgentKind.Cursor, "cursor", "auth.json")]
+    [InlineData(AgentKind.OpenClaw, "openclaw", "auth-profiles.json")]
+    public void Build_ProjectsOnlyTheSelectedAccountUnderTheLegacyFileName(AgentKind agent, string volume, string file)
+    {
+        var record = Record(agent, AgentAuthMode.Subscription, SessionMode.Interactive);
+        var request = new CreateSessionRequest { Agent = agent, AuthMode = AgentAuthMode.Subscription };
+
+        var pod = AgentPodSpecFactory.Build(record, request, Context() with { SubscriptionAccountId = "3f9a1c2b" });
+
+        var source = Assert.Single(pod.Volumes, v => v.Name == volume).Secret;
+        Assert.True(source.Optional);
+        var item = Assert.Single(source.Items);
+        Assert.Equal($"3f9a1c2b.{file}", item.Key);
+        Assert.Equal(file, item.Path);
+    }
+
+    /// <summary>No account resolved: project a key that cannot exist, so the mount is empty and
+    /// the entrypoint runs its in-session login — not the whole secret, which would hand the pod
+    /// the index and every other account.</summary>
+    [Fact]
+    public void Build_WithoutAResolvedAccountProjectsAMissingKeyRatherThanTheWholeSecret()
+    {
+        var record = Record(AgentKind.Claude, AgentAuthMode.Subscription, SessionMode.Interactive);
+        var request = new CreateSessionRequest { Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription };
+
+        var pod = AgentPodSpecFactory.Build(record, request, Context() with { SubscriptionAccountId = null });
+
+        var source = Assert.Single(pod.Volumes, v => v.Name == "claude").Secret;
+        var item = Assert.Single(source.Items);
+        Assert.Equal("default.credentials.json", item.Key);
+        Assert.Equal("credentials.json", item.Path);
+        Assert.True(source.Optional);
+    }
+
     [Theory]
     [InlineData(AgentKind.Claude, AgentAuthMode.Subscription)]
     [InlineData(AgentKind.Claude, AgentAuthMode.ApiKey)]

@@ -27,6 +27,24 @@ public sealed class SessionDuplicationTests
         Assert.Null(source.McpConfigJson);
     }
 
+    /// <summary>An account belongs to one provider: it follows the copy only while the agent does.</summary>
+    [Fact]
+    public void DuplicateRequest_CopiesTheProviderAccountUnlessTheAgentChanges()
+    {
+        var source = new SessionRecord
+        {
+            Id = "s", Owner = "alice", Title = "Claude", Mode = SessionMode.Interactive,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription, CredentialId = "work0001",
+            AgentSessionId = "x", CallbackToken = "token"
+        };
+
+        Assert.Equal("work0001", SessionDuplication.CopyableRequest(source, new("Copy", null, false)).CredentialId);
+        Assert.Equal("other002", SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, CredentialId: "other002")).CredentialId);
+        Assert.Null(SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, Agent: AgentKind.Codex)).CredentialId);
+    }
+
     [Fact]
     public void DuplicateRequest_CopiesAgentAuthAndPolicy()
     {

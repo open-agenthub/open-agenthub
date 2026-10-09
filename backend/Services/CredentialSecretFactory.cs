@@ -78,35 +78,33 @@ public static class CredentialSecretFactory
         GitKnownHosts = data.ContainsKey("known_hosts"),
         GitUserName = data.ContainsKey("git_user_name"),
         GitUserEmail = data.ContainsKey("git_user_email"),
-        ClaudeSubscription = claudeSubscription?.ContainsKey("credentials.json") == true,
-        CodexSubscription = codexSubscription?.ContainsKey("auth.json") == true,
-        // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
-        CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true,
-        // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
-        OpenclawSubscription = openclawSubscription?.ContainsKey("auth-profiles.json") == true
+        // Either layout counts: the bare file a secret had before accounts existed, or any
+        // <accountId>.<file> key of the layout described in docs/provider-accounts.md.
+        ClaudeSubscription = ProviderAccountSecret.HasAnyAccount(claudeSubscription, AgentKind.Claude),
+        CodexSubscription = ProviderAccountSecret.HasAnyAccount(codexSubscription, AgentKind.Codex),
+        CursorSubscription = ProviderAccountSecret.HasAnyAccount(cursorSubscription, AgentKind.Cursor),
+        OpenclawSubscription = ProviderAccountSecret.HasAnyAccount(openclawSubscription, AgentKind.OpenClaw)
     };
 
+    /// <summary>
+    /// A provider secret holding exactly one account. Kept for callers that store a login without
+    /// knowing about accounts; the result is the migrated layout, not the legacy single file, so
+    /// a secret this writes never needs migrating.
+    /// </summary>
     public static V1Secret CreateProviderSecret(string name, string @namespace, string ownerLabelValue,
         AgentKind agent, string json)
     {
         if (!ProviderCredentialValidator.Validate(agent, json))
             throw new ArgumentException("Invalid provider credential document.", nameof(json));
 
-        var fileName = agent switch
-        {
-            AgentKind.Claude => "credentials.json",
-            AgentKind.Codex => "auth.json",
-            // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
-            AgentKind.Cursor => "auth.json",
-            // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
-            AgentKind.OpenClaw => "auth-profiles.json",
-            _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
-        };
-        return Secret(name, @namespace, ownerLabelValue, new Dictionary<string, byte[]>
-        {
-            [fileName] = Encoding.UTF8.GetBytes(json)
-        });
+        var set = new ProviderAccountSet();
+        ProviderAccountSecret.Attach(set, Encoding.UTF8.GetBytes(json), identity: null, mountedId: null);
+        return ProviderSecret(name, @namespace, ownerLabelValue, ProviderAccountSecret.Write(set, agent));
     }
+
+    /// <summary>A provider secret from already-encoded account data (see <see cref="ProviderAccountSecret.Write"/>).</summary>
+    public static V1Secret ProviderSecret(string name, string @namespace, string ownerLabelValue,
+        Dictionary<string, byte[]> data) => Secret(name, @namespace, ownerLabelValue, data);
 
     private static void ValidatePat(string? token, string? host, string providerName)
     {

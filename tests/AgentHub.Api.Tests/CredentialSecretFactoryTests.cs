@@ -45,10 +45,15 @@ public class CredentialSecretFactoryTests
 
         var secret = CredentialSecretFactory.CreateProviderSecret($"{agent}-owner", "sessions", "owner", agent, json);
 
+        // The account layout from the start (docs/provider-accounts.md): an index plus one
+        // <accountId>.<file> key, never the bare legacy file and never another provider's name.
         Assert.Equal($"{agent}-owner", secret.Metadata.Name);
-        Assert.True(secret.Data.ContainsKey(expectedKey));
-        Assert.False(secret.Data.ContainsKey(otherKey));
-        Assert.Single(secret.Data);
+        Assert.True(secret.Data.ContainsKey(ProviderAccountSecret.IndexKey));
+        var fileKey = Assert.Single(secret.Data.Keys.Where(k => k != ProviderAccountSecret.IndexKey));
+        Assert.EndsWith("." + expectedKey, fileKey);
+        Assert.False(secret.Data.ContainsKey(expectedKey));
+        Assert.DoesNotContain(secret.Data.Keys, k => k.EndsWith("." + otherKey, StringComparison.Ordinal) && !k.EndsWith("." + expectedKey, StringComparison.Ordinal));
+        Assert.Equal(2, secret.Data.Count);
     }
 
     [Fact]

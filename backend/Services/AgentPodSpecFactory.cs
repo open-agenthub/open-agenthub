@@ -34,6 +34,12 @@ public sealed record PodBuildContext
     public required string OpenClawCredentialSecretName { get; init; }
     public bool HasSelectedApiKey { get; init; }
     public bool HasSelectedSubscriptionCredential { get; init; }
+    /// <summary>
+    /// The account whose file the provider secret volume projects, or null for "no account could
+    /// be resolved". The volume then projects a key that does not exist — the mount comes up empty
+    /// and the entrypoint runs its in-session login path, exactly as for a user with no login.
+    /// </summary>
+    public string? SubscriptionAccountId { get; init; }
     public bool HasGitCredentials { get; init; }
     public required string CallbackUrl { get; init; }
     public required string StatePutUrl { get; init; }
@@ -193,10 +199,24 @@ public static class AgentPodSpecFactory
 
         void AddSubscriptionVolume(string name, string secretName)
         {
+            // The secret holds every account of the user (docs/provider-accounts.md); the pod gets
+            // exactly one, projected under the file name the entrypoint has always looked for, so
+            // /secrets/<provider>/<file> is unchanged and the index and the other accounts' files
+            // never enter the pod. `Optional` doubles as "a missing key is skipped": a user with
+            // no login yet, or an account removed since, yields an empty mount rather than a pod
+            // that fails to set up its volumes.
+            var accountId = context.SubscriptionAccountId ?? ProviderAccountSecret.LegacyId;
             volumes.Add(new V1Volume
             {
                 Name = name,
-                Secret = new V1SecretVolumeSource { SecretName = secretName, Optional = true, DefaultMode = 0x1A0 }
+                Secret = new V1SecretVolumeSource
+                {
+                    SecretName = secretName, Optional = true, DefaultMode = 0x1A0,
+                    Items = new List<V1KeyToPath>
+                    {
+                        new() { Key = ProviderAccountSecret.Key(accountId, record.Agent), Path = ProviderAccountSecret.FileName(record.Agent) }
+                    }
+                }
             });
             mounts.Add(new V1VolumeMount { Name = name, MountPath = $"/secrets/{name}", ReadOnlyProperty = true });
         }
