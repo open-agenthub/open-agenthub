@@ -699,12 +699,12 @@ test('Codex device-auth resume retries fresh exactly once without repeating logi
   }, codexDriver);
 
   const wrapper = path.join(__dirname, '..', '..', 'codex', 'device-login.sh');
-  assert.deepEqual(harness.spawns[0].args, [wrapper, '--no-alt-screen', 'resume', '--last']);
+  assert.deepEqual(harness.spawns[0].args, [wrapper, '--no-alt-screen', '--no-daemon', 'resume', '--last']);
   harness.terminals[0].emitData('No saved session found to resume');
   harness.terminals[0].emitExit({ exitCode: 1, signal: 0 });
 
   assert.equal(harness.terminals.length, 2);
-  assert.deepEqual(harness.spawns[1].args, [wrapper, '--no-alt-screen']);
+  assert.deepEqual(harness.spawns[1].args, [wrapper, '--no-alt-screen', '--no-daemon']);
   harness.terminals[1].emitData('No saved session found to resume');
   harness.terminals[1].emitExit({ exitCode: 1, signal: 0 });
   assert.equal(harness.terminals.length, 2);
