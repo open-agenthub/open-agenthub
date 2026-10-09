@@ -149,11 +149,18 @@ test('Claude names its transcript from the fixed session id and the cwd slug', (
   assert.equal(driver.findTranscript({ env: environment(), home, cwd: '/workspace/repo', fs: fakeFs }), null);
 });
 
-test('Claude resume falls back for the same output and quick-exit conditions', () => {
-  assert.equal(driver.isMissingResume('No conversation found for session', 1, 15_000), true);
-  assert.equal(driver.isMissingResume('unexpected failure', 1, 9_999), true);
-  assert.equal(driver.isMissingResume('unexpected failure', 1, 10_000), false);
+test('Claude resume falls back only on the CLI saying the conversation is gone', () => {
+  assert.equal(driver.isMissingResume('No conversation found with session ID: abc', 1, 15_000), true);
+  assert.equal(driver.isMissingResume('No conversation found to continue', 1, 500), true);
   assert.equal(driver.isMissingResume('No conversation found for session', 0, 1), false);
+});
+
+test('Claude keeps --resume through a fast crash that is not about the conversation', () => {
+  // An expired login or an unreachable API dies within a second or two; that used to count as
+  // "no saved conversation" and the next launch dropped --resume along with the history.
+  assert.equal(driver.isMissingResume('Invalid API key · Please run /login', 1, 1_200), false);
+  assert.equal(driver.isMissingResume('fetch failed: ECONNREFUSED', 1, 300), false);
+  assert.equal(driver.isMissingResume('', 1, 0), false);
 });
 
 test('Claude chat command streams JSON on both ends through a pipe', () => {

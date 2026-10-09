@@ -75,7 +75,7 @@ public sealed class SlackNotifier : INotifier
                              "_Your coding agent needs you. Reply in this thread to answer it._";
                 var ts = await _slack.PostMessageAsync(channel, header, null, ct);
                 if (ts is null) return;
-                thread = new SlackThread(s.Id, s.Owner, channel, ts, 0);
+                thread = new SlackThread(s.Id, s.Owner, channel, ts);
                 await _threads.UpsertAsync(thread, ct);
             }
 

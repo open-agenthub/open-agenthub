@@ -157,6 +157,23 @@ field (an older CLI) is matched against the one fixed phrase `Claude needs your 
 substring. The extraction itself is now under test with a fixture transcript: the last assistant
 line that has *text* wins, a trailing tool call or a half-written line does not.
 
+## Smaller things fixed on the way
+
+- **A fast crash no longer forfeits the resume.** The Claude driver treated any non-zero exit
+  within ten seconds of a `--resume` launch as "no saved conversation" and relaunched fresh,
+  dropping `--resume` for good. An expired login and an unreachable API are the two fastest ways
+  for a resume to die, and both used to cost the history. Only the CLI's own "No conversation
+  found" counts now; the Codex, Cursor and OpenClaw drivers already matched their CLIs' words.
+- **The ended-terminal replay sets `convertEol`.** The saved transcript comes back with control
+  sequences and carriage returns stripped, so its lines end in a bare `\n`, which xterm renders
+  as a staircase. The option is set only for the replay: a live PTY sends its own `\r\n`, and
+  converting there would alter raw-mode output.
+- **Dead code removed:** `AgentTerminal.ReadScrollbackAsync` (a websocket scrape of the pod
+  nothing called since transcripts moved to storage), `SlackThread.PostedLen` and
+  `SetPostedLenAsync` (from a design that streamed transcript into the thread; the column stays
+  in the table at its default), and the `model`/`lastResult` bookkeeping in the chat log that no
+  component displayed.
+
 **Compatibility.** Nothing changes for sessions created before this: no `transcript.jsonl` exists,
 `GetConversationAsync` returns null, and every surface serves what it served before. A runtime
 image older than the hub ignores `AGENTHUB_TRANSCRIPT_PUT_URL`; a hub older than the image answers

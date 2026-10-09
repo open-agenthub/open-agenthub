@@ -133,8 +133,13 @@ function isResumeCommand(command) {
   return command.args.includes('--resume');
 }
 
-function isMissingResume(output, exitCode, elapsedMs) {
-  return exitCode !== 0 && (output.includes('No conversation found') || elapsedMs < 10_000);
+// Only the CLI's own words ("No conversation found with session ID: …", "No conversation found
+// to continue") mean the saved conversation is gone. This used to treat any non-zero exit within
+// ten seconds the same way, so an expired login or an unreachable API — the two fastest ways
+// for a resume to die — restarted the session fresh and dropped --resume along with the whole
+// history, when a plain retry after the person fixed the cause would have kept it.
+function isMissingResume(output, exitCode) {
+  return exitCode !== 0 && output.includes('No conversation found');
 }
 
 // Claude Code files a conversation under the directory it was started in, with every character
