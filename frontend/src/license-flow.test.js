@@ -44,7 +44,10 @@ describe('license checkout return', () => {
     expect(mocks.api.activateLicense).toHaveBeenCalledWith('tok-123')
     expect(wrapper.get('.settings-tab').text()).toBe('users')
     expect(wrapper.get('.banner.ok').text()).toContain('activated')
-    expect(location.pathname).toBe('/')
+    // The checkout return lands on the users tab's own path, with the token stripped so a
+    // reload does not activate it a second time.
+    expect(location.pathname).toBe('/settings/users')
+    expect(location.search).toBe('')
   })
 
   it('shows a pending banner when payment is still settling', async () => {
@@ -54,6 +57,8 @@ describe('license checkout return', () => {
 
     expect(mocks.api.activateLicense).not.toHaveBeenCalled()
     expect(wrapper.get('.banner.warn').text()).toContain('email')
+    expect(wrapper.get('.settings-tab').text()).toBe('users')
+    expect(location.pathname).toBe('/settings/users')
   })
 
   it('surfaces activation failures', async () => {

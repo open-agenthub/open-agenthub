@@ -1,6 +1,7 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { api, auth, config } from '../api.js'
+import { SETTINGS_DEFAULT_TAB } from '../lib/routes.js'
 import AccountDialog from './AccountDialog.vue'
 import CredentialsDialog from './CredentialsDialog.vue'
 import SettingsDialog from './SettingsDialog.vue'
@@ -12,9 +13,9 @@ import GroupsPane from './GroupsPane.vue'
 import WebhooksPane from './WebhooksPane.vue'
 import { initials } from '../lib/text.js'
 
-defineEmits(['close'])
+const emit = defineEmits(['close', 'navigate'])
 const props = defineProps({
-  initialTab: { type: String, default: 'credentials' },
+  initialTab: { type: String, default: SETTINGS_DEFAULT_TAB },
   isAdmin: { type: Boolean, default: false }
 })
 
@@ -37,7 +38,19 @@ const adminTabs = [
   { key: 'billing', label: 'Billing & invoices' },
   { key: 'license', label: 'License' }
 ]
-const active = ref(props.initialTab)
+// `requested` is what the URL (via initialTab) or a subnav click asked for; `active` is what
+// can actually be shown. They differ for an admin tab while the admin check is still pending
+// or for a non-admin, and for `account` when no git provider is configured. The fallback is
+// display-only and is not emitted: rewriting the URL to the default tab before the admin
+// check resolves would strip `/settings/users` from a reload for an admin.
+const requested = ref(props.initialTab)
+watch(() => props.initialTab, tab => { requested.value = tab })
+const visibleTabs = computed(() => [
+  ...personalTabs.value.map(t => t.key),
+  ...(props.isAdmin ? adminTabs.map(t => t.key) : [])
+])
+const active = computed(() => visibleTabs.value.includes(requested.value) ? requested.value : SETTINGS_DEFAULT_TAB)
+function select(tab) { requested.value = tab; emit('navigate', tab) }
 
 // GDPR account deletion: type-to-confirm, no popup (inline card).
 const deleteConfirm = ref('')
@@ -66,10 +79,10 @@ async function deleteAccount() {
     <nav class="subnav">
       <div class="head">Settings</div>
       <div class="section">PERSONAL</div>
-      <button v-for="t in personalTabs" :key="t.key" class="tab" :class="{ on: active === t.key }" @click="active = t.key">{{ t.label }}</button>
+      <button v-for="t in personalTabs" :key="t.key" class="tab" :class="{ on: active === t.key }" :data-settings-tab="t.key" @click="select(t.key)">{{ t.label }}</button>
       <template v-if="isAdmin">
         <div class="section admin">ADMIN</div>
-        <button v-for="t in adminTabs" :key="t.key" class="tab" :class="{ on: active === t.key }" @click="active = t.key">{{ t.label }}</button>
+        <button v-for="t in adminTabs" :key="t.key" class="tab" :class="{ on: active === t.key }" :data-settings-tab="t.key" @click="select(t.key)">{{ t.label }}</button>
       </template>
     </nav>
     <div class="body">
@@ -109,7 +122,7 @@ async function deleteAccount() {
         </div>
       </div>
       <AccountDialog v-else-if="active === 'account'" embedded />
-      <CredentialsDialog v-else-if="active === 'credentials'" embedded @accounts="active = 'account'" />
+      <CredentialsDialog v-else-if="active === 'credentials'" embedded @accounts="select('account')" />
       <McpServersPane v-else-if="active === 'mcp'" :is-admin="isAdmin" mode="personal" />
       <SkillsPane v-else-if="active === 'skills'" :is-admin="isAdmin" />
       <GroupsPane v-else-if="active === 'groups'" />
