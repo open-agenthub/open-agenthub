@@ -17,7 +17,10 @@ public static class SessionUpdateValidator
             record.OpenClawApiKeySource, request.OpenClawApiKeySource);
     }
 
+    // The system prompt counts as a runtime field because a CronJob bakes it into its pod
+    // template; the stored record would change while every scheduled run kept the old text.
     private static bool HasRuntimeField(UpdateSessionRequest request) =>
+        request.SystemPrompt is not null ||
         request.Image is not null ||
         request.RunAsRoot is not null ||
         request.Cpu is not null ||

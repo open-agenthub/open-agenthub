@@ -604,6 +604,11 @@ public sealed class KubernetesSessionService : ISessionService
         // null = unchanged; an empty string clears the description.
         if (req.Description is not null)
             rec.Description = SessionDescription.Normalize(req.Description);
+        // Same convention: null leaves the prompt alone, an empty string removes it. Normalize
+        // applies the create-side cap, so an oversized prompt is a 400 here and not a pod spec
+        // the API server refuses on the next resume.
+        if (req.SystemPrompt is not null)
+            rec.SystemPrompt = SessionSystemPrompt.Normalize(req.SystemPrompt);
         if (req.Image is not null)
         {
             // Empty string resets to the default agent image.

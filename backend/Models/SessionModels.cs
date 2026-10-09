@@ -366,6 +366,15 @@ public record UpdateSessionRequest
     public string? Title { get; init; }
     /// <summary>Agent description; null = unchanged, empty string clears it. Applies immediately.</summary>
     public string? Description { get; init; }
+    /// <summary>
+    /// Extra system-prompt instructions (see <see cref="CreateSessionRequest.SystemPrompt"/>);
+    /// null = unchanged, empty string clears it. Same normalization and cap as on create.
+    ///
+    /// Takes effect on the next start or resume, not on the live pod: the value reaches the agent
+    /// as a pod environment variable, and the resume path rebuilds the create request from the
+    /// stored record, so the record is the only place that has to change.
+    /// </summary>
+    public string? SystemPrompt { get; init; }
     /// <summary>Custom container image; empty string resets to the default agent image.</summary>
     public string? Image { get; init; }
     public bool? RunAsRoot { get; init; }
@@ -403,10 +412,13 @@ public record UpdateSessionRequest
     }
 }
 
+/// <param name="SystemPrompt">Replaces the copied system prompt; null copies the source's, an
+/// empty string yields a copy without one (create-side normalization turns it into null).</param>
 public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
     AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null,
     OpenClawApiKeySource? OpenClawApiKeySource = null,
-    List<string>? McpServerIds = null);
+    List<string>? McpServerIds = null,
+    string? SystemPrompt = null);
 
 public static class SessionDuplication
 {
@@ -424,6 +436,9 @@ public static class SessionDuplication
             Repos = Deserialize<List<RepoRef>>(source.ReposJson),
             RepoUrl = source.RepoUrl,
             Prompt = source.Prompt,
+            // The standing rules belong to the configuration being copied, unlike the
+            // conversation they shaped; the duplicate dialog shows them so they can be edited.
+            SystemPrompt = request.SystemPrompt ?? source.SystemPrompt,
             Schedule = source.Schedule,
             McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
             // An explicit list (from the duplicate dialog's picker) wins; otherwise the
