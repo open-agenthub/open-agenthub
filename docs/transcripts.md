@@ -174,7 +174,9 @@ line that has *text* wins, a trailing tool call or a half-written line does not.
   in the table at its default), and the `model`/`lastResult` bookkeeping in the chat log that no
   component displayed.
 
-**Compatibility.** Nothing changes for sessions created before this: no `transcript.jsonl` exists,
+## Compatibility
+
+Nothing changes for sessions created before this: no `transcript.jsonl` exists,
 `GetConversationAsync` returns null, and every surface serves what it served before. A runtime
 image older than the hub ignores `AGENTHUB_TRANSCRIPT_PUT_URL`; a hub older than the image answers
 the new `PUT …/transcript` with 404, which the agent treats like any other failed best-effort
