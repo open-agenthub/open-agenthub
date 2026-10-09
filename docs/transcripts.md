@@ -141,6 +141,22 @@ offset, or the source switching from `scrollback` to `native` (the first upload 
 tab opened) all mean the cursor no longer points into the history the tab holds, and the tab
 reloads from the start. Stitching the two would show a conversation that never happened.
 
+## The notification hook filters by type, not by the word "permission"
+
+`agent-runtime/claude/hooks/notify-hook.sh` is the one place a real JSONL transcript was already
+read: it replaces the CLI's generic "waiting for your input" with the last assistant text from
+`transcript_path`, so the chat relays quote the actual question. It dropped notifications whose
+message matched `/permission/i`, meant to keep the permission prompt (handled by the PreToolUse
+hook) out of the messengers. The regex also swallowed every genuine question that contained the
+word — "do I have permission to force-push?" never reached anyone.
+
+The pinned CLI sends `notification_type` with every notification (verified in the 2.1.28x binary:
+`permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, …). The hook now drops
+`permission_prompt` and `auth_success` by type and forwards everything else; a payload without the
+field (an older CLI) is matched against the one fixed phrase `Claude needs your permission`, not a
+substring. The extraction itself is now under test with a fixture transcript: the last assistant
+line that has *text* wins, a trailing tool call or a half-written line does not.
+
 **Compatibility.** Nothing changes for sessions created before this: no `transcript.jsonl` exists,
 `GetConversationAsync` returns null, and every surface serves what it served before. A runtime
 image older than the hub ignores `AGENTHUB_TRANSCRIPT_PUT_URL`; a hub older than the image answers
