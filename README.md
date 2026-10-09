@@ -96,7 +96,8 @@ shift.
 - **Chat integrations** — session updates, replies, permission approvals, and starting
   new sessions (`/new <prompt>`) from your phone via **Telegram or Signal** (free,
   community) — Slack is part of the Enterprise edition — plus browser desktop
-  notifications. [Setup below.](#chat-integrations)
+  notifications. Claude, Codex and Cursor sessions take part; OpenClaw has no hook for
+  it. [Setup and per-runtime details below.](#chat-integrations)
 - **Auto approve** — let a session run its tools without asking, set when you create the
   session or flipped on a running one. [Details below.](#auto-approve)
 - **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
@@ -349,6 +350,20 @@ answers are split across several messages; permission prompts expire after ~30 m
 (answer in the web terminal then). Telegram and Signal require a **single backend
 replica** (`backend.replicas=1`) — Telegram `getUpdates` and the Signal receive socket
 allow only one consumer, and the chart refuses to render otherwise.
+
+What reaches the chat depends on the runtime, because the thread is opened by a hook inside
+the session and only **interactive** sessions wait for anyone:
+
+| Runtime | Waiting for input | Finished / failed | Replies from chat | Permission prompts |
+|---|---|---|---|---|
+| Claude | yes, with the agent's last message | yes | yes | yes |
+| Codex | yes, at the end of every turn, with the agent's last message | yes | yes | yes |
+| Cursor | yes, at the end of every turn (generic text — the CLI's stop hook carries no message) | yes | yes | no — Cursor decides approvals from its own allowlist, there is no hook to relay them |
+| OpenClaw | **no** — OpenClaw has no per-turn hook, so no thread is ever opened | no | no | no |
+
+Autonomous and scheduled sessions never open a thread themselves: nobody is asked anything,
+and "finished"/"failed" is posted only where a thread already exists. Details and what was
+verified against the pinned CLIs: [`docs/chat-relay.md`](docs/chat-relay.md).
 
 <details>
 <summary><b>Telegram</b></summary>
