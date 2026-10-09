@@ -95,7 +95,7 @@ public sealed class RemoteController : ControllerBase
         // and sees the terminal phase. The other order could report "finished" with output missing.
         var session = await _svc.GetSessionAsync(owner, id, ct);
         if (session is null) return NotFound();
-        var transcript = await _svc.GetTranscriptAsync(owner, id, ct);
+        var transcript = await SessionTranscripts.ReadableAsync(_svc, owner, id, ct);
         if (transcript is null) return NotFound();
         return Ok(TranscriptPage.From(session.Id, session.Phase, transcript, offset, maxChars));
     }

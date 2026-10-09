@@ -105,6 +105,79 @@ test('Codex resume recognition rejects fresh and merely resume-like commands', (
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: [] }), false);
 });
 
+function codexHomeFixture() {
+  const home = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agenthub-codex-'));
+  return { home, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
+}
+
+function writeRollout(home, id, mtimeMs, meta = true) {
+  const dir = path.join(home, 'sessions', '2026', '10', '10');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'rollout-2026-10-10T10-00-00-' + id + '.jsonl');
+  const first = meta
+    ? JSON.stringify({ timestamp: 't', type: 'session_meta', payload: { id, cwd: '/workspace/repo' } })
+    : '{"type":"response_item","payload":{}}';
+  fs.writeFileSync(file, first + '\n{"type":"response_item","payload":{"type":"message"}}\n');
+  fs.utimesSync(file, new Date(mtimeMs), new Date(mtimeMs));
+  return file;
+}
+
+const THREAD_A = '11111111-1111-4111-8111-111111111111';
+const THREAD_B = '22222222-2222-4222-8222-222222222222';
+
+test('Codex discovers the rollout written after launch and remembers its thread id', () => {
+  const { home, cleanup } = codexHomeFixture();
+  try {
+    const env = environment({ CODEX_HOME: home });
+    const launchedAt = 1_700_000_000_000;
+    // A thread left behind by a shell-tab `codex` before this launch is not the session.
+    writeRollout(home, THREAD_A, launchedAt - 60_000);
+    assert.equal(driver.findTranscript({ env, fs, launchedAt }), null);
+
+    const current = writeRollout(home, THREAD_B, launchedAt + 5_000);
+    assert.equal(driver.findTranscript({ env, fs, launchedAt }), current);
+    assert.equal(fs.readFileSync(path.join(home, driver.THREAD_ID_FILE), 'utf8').trim(), THREAD_B);
+
+    // A file without session_meta is not a thread, whatever its name says.
+    const bogus = writeRollout(home, '33333333-3333-4333-8333-333333333333', launchedAt + 9_000, false);
+    assert.notEqual(driver.findTranscript({ env, fs, launchedAt }), bogus);
+  } finally {
+    cleanup();
+  }
+});
+
+test('Codex resumes by the remembered thread id and finds that rollout again, newest-wins otherwise', () => {
+  const { home, cleanup } = codexHomeFixture();
+  try {
+    const env = environment({ CODEX_HOME: home, AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1' });
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['resume', '--last'] });
+
+    fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), THREAD_A + '\n');
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['resume', THREAD_A] });
+    assert.deepEqual(driver.buildCommand(environment({
+      CODEX_HOME: home, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'go',
+      AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
+    }), true), {
+      cmd: 'codex',
+      args: ['exec', '--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust',
+        'resume', THREAD_A, 'go']
+    });
+    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['resume', THREAD_A] }), true);
+    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['resume', 'not-an-id'] }), false);
+
+    // The remembered id wins over anything newer: that is the whole point of recording it.
+    const mine = writeRollout(home, THREAD_A, 1_000);
+    writeRollout(home, THREAD_B, 2_000);
+    assert.equal(driver.findTranscript({ env, fs, launchedAt: 3_000 }), mine);
+
+    // A corrupt id file is ignored rather than passed to the CLI.
+    fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), 'garbage; rm -rf /\n');
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['resume', '--last'] });
+  } finally {
+    cleanup();
+  }
+});
+
 test('Codex missing-resume fallback requires representative missing-state output', () => {
   assert.equal(driver.isMissingResume('No saved session found to resume', 1, 20_000), true);
   assert.equal(driver.isMissingResume('No session found with id abc', 1, 20_000), true);

@@ -128,3 +128,21 @@ export function toTranscriptBlocks(text) {
   const meaningful = baseTranscriptBlocks(text).filter(block => !isKnownTransient(block))
   return packBlocks(deduplicateAdjacent(suppressShortBursts(meaningful)))
 }
+
+const ROLE_LABELS = { user: 'User', assistant: 'Agent', tool: 'Tool', result: 'Result' }
+
+export function entryLabel(entry) {
+  if (entry.role === 'tool' && entry.tool) return `Tool · ${entry.tool}`
+  return ROLE_LABELS[entry.role] || entry.role
+}
+
+// What the Transcript tab renders from one conversation page. A native page carries the
+// provider's own turns and needs no guessing; the scrollback fallback goes through the
+// terminal heuristics above, which exist only because terminal output has no roles.
+export function toTranscriptItems(page) {
+  if (!page) return []
+  if (page.source === 'native') {
+    return (page.entries || []).map(entry => ({ role: entry.role, label: entryLabel(entry), text: entry.text }))
+  }
+  return toTranscriptBlocks(page.text).map(block => ({ role: 'terminal', label: 'Terminal', text: block }))
+}

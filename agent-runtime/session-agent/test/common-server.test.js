@@ -161,6 +161,12 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
         readFileSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) return harnessOptions.files[file];
           throw new Error('ENOENT: ' + file);
+        },
+        statSync(file) {
+          if (harnessOptions.files && file in harnessOptions.files) {
+            return { size: harnessOptions.files[file].length, mtimeMs: harnessOptions.mtimeMs || 1 };
+          }
+          throw new Error('ENOENT: ' + file);
         }
       },
       fetch(url, options = {}) {
@@ -880,4 +886,88 @@ test('common transport production archive includes Codex state but excludes auth
   assert.equal(harness.commands.length, 1);
   assert.match(harness.commands[0].args[1], /"\.codex"/);
   assert.match(harness.commands[0].args[1], /--exclude="\.codex\/auth\.json"/);
+});
+
+test('common transport uploads the native transcript next to the scrollback once the driver finds it', async () => {
+  const file = '/home/agent/.claude/projects/-workspace-repo/fixed.jsonl';
+  const files = {};
+  let visible = false;
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_URL: 'https://backend.invalid/internal/session',
+    AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback-token',
+    AGENTHUB_TRANSCRIPT_PUT_URL: 'https://storage.invalid/transcript',
+    AGENTHUB_S3_INSECURE: '1'
+  }, {
+    findTranscript: context => {
+      assert.equal(context.home, '/home/agent');
+      assert.equal(context.cwd, '/workspace/repo');
+      assert.equal(typeof context.launchedAt, 'number');
+      return visible ? file : null;
+    }
+  }, { files });
+
+  // Nothing exists yet: no upload, and the driver is asked again next time.
+  harness.intervals[0].callback();
+  await tick();
+  assert.equal(harness.commands.length, 0);
+  assert.equal(harness.requests.filter(r => r.url.endsWith('/transcript')).length, 0);
+
+  visible = true;
+  files[file] = '{"type":"user"}\n{"type":"assistant"}\n';
+  harness.intervals[0].callback();
+  await tick();
+  const s3 = harness.commands.find(c => /curl -fsS -k -T/.test(c.args[1]));
+  assert.ok(s3, 'the whole file goes to S3');
+  assert.match(s3.args[1], new RegExp('-T "' + file + '" "https://storage.invalid/transcript"'));
+  const hub = harness.requests.find(r => r.url.endsWith('/transcript'));
+  assert.ok(hub, 'and the hub gets a copy');
+  assert.equal(hub.options.method, 'PUT');
+  assert.equal(hub.options.headers['Content-Type'], 'application/x-ndjson');
+  assert.equal(hub.options.body, files[file]);
+
+  // Unchanged file: nothing is re-uploaded on the next tick.
+  harness.intervals[0].callback();
+  await tick();
+  assert.equal(harness.requests.filter(r => r.url.endsWith('/transcript')).length, 1);
+  assert.equal(harness.commands.filter(c => /-T "/.test(c.args[1])).length, 1);
+});
+
+test('common transport sends the hub the capped tail of the transcript cut at a line boundary', async () => {
+  const file = '/home/agent/.codex/sessions/2026/10/10/rollout-x-' + 'a'.repeat(8) + '.jsonl';
+  const line = '{"n":' + '1'.repeat(MAX_BUFFER / 2) + '}\n';
+  const files = { [file]: line + line + '{"last":true}\n' };
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_URL: 'https://backend.invalid/internal/session',
+    AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback-token'
+  }, { findTranscript: () => file }, { files });
+
+  harness.intervals[0].callback();
+  await tick();
+  const hub = harness.requests.find(r => r.url.endsWith('/transcript'));
+  assert.ok(hub.options.body.length <= MAX_BUFFER);
+  assert.ok(hub.options.body.startsWith('{"'), 'the first kept line is whole');
+  assert.ok(hub.options.body.endsWith('{"last":true}\n'));
+});
+
+test('common transport ignores a transcript path a driver could not have derived', async () => {
+  const hostile = '/home/agent/x"; rm -rf /; echo ".jsonl';
+  const harness = createHarness({
+    AGENTHUB_CALLBACK_URL: 'https://backend.invalid/internal/session',
+    AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback-token'
+  }, { findTranscript: () => hostile }, { files: { [hostile]: '{}' } });
+
+  harness.intervals[0].callback();
+  await tick();
+  assert.equal(harness.requests.filter(r => r.url.endsWith('/transcript')).length, 0);
+});
+
+test('common transport validates findTranscript when a driver declares one', () => {
+  const base = {
+    name: 'Example', stateDir: '.example', authFilename: 'auth.json',
+    attachmentCapabilities: { nativeImages: false, localImagePaths: true, mcpImages: true },
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
+  };
+  assert.throws(() => validateDriver({ ...base, findTranscript: '/not/a/function' }),
+    /findTranscript must be a function/);
+  assert.equal(typeof validateDriver({ ...base, findTranscript: () => null }).findTranscript, 'function');
 });

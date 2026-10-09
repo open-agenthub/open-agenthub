@@ -6,6 +6,7 @@ import TerminalView from './TerminalView.vue'
 const mocks = vi.hoisted(() => ({
   api: {
     getTranscript: vi.fn().mockResolvedValue(''),
+    getConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 }),
     listPermissions: vi.fn().mockResolvedValue([]),
     decidePermission: vi.fn().mockResolvedValue({ decision: 'allow' }),
     updateSession: vi.fn().mockResolvedValue({})
@@ -14,7 +15,8 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../api.js', () => ({
   api: mocks.api,
-  getSharedTranscript: vi.fn().mockResolvedValue('')
+  getSharedTranscript: vi.fn().mockResolvedValue(''),
+  getSharedConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 })
 }))
 
 const session = (extra = {}) => ({ id: 's1', title: 'One', phase: 'Running', mode: 'Interactive', ...extra })

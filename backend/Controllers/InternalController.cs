@@ -177,6 +177,24 @@ public sealed class InternalController : ControllerBase
     }
 
     /// <summary>
+    /// Receives the provider's own transcript file (JSONL) and keeps its capped tail in
+    /// Postgres; the whole file goes to S3 through a presigned URL. The role-based conversation
+    /// the web app, the remote API and the MCP tools show is read from this, not from the
+    /// scrollback — see docs/transcripts.md.
+    /// </summary>
+    [HttpPut("transcript")]
+    public async Task<IActionResult> Transcript(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        using var reader = new StreamReader(Request.Body);
+        var text = await reader.ReadToEndAsync(ct);
+        await _store.SetTranscriptAsync(id, NativeTranscript.TrimToLineCap(text, ScrollbackLimits.MaxChars), ct);
+        return NoContent();
+    }
+
+    /// <summary>
     /// Hands the stored scrollback back to a restarting agent. A resumed session runs in a
     /// fresh pod with an empty buffer, so without this everything said before the resume is
     /// missing from the replay every client gets on connect. Raw on purpose: the agent replays

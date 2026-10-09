@@ -6,10 +6,10 @@ import ChatPane from './ChatPane.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
-import { api, getSharedTranscript } from '../api.js'
+import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { authLabel } from '../lib/agent.js'
-import { toTranscriptBlocks } from '../lib/transcript.js'
+import { toTranscriptItems } from '../lib/transcript.js'
 import { permissionTitle } from '../lib/permissions.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
@@ -23,8 +23,11 @@ const activeTab = ref('agent')
 watch(isChat, chat => { if (chat && activeTab.value === 'transcript') activeTab.value = 'agent' })
 const shellOpened = ref(false)
 const shareOpen = ref(false)
-const transcriptText = ref(null)
-const transcriptBlocks = computed(() => toTranscriptBlocks(transcriptText.value))
+// The Transcript tab's page: null until first loaded. `source` is 'native' (role-tagged turns
+// from the provider's own transcript) or 'scrollback' (cleaned terminal text, rendered through
+// the heuristics in lib/transcript.js because terminal output has no roles).
+const conversation = ref(null)
+const transcriptItems = computed(() => toTranscriptItems(conversation.value))
 const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '', transcript: '' })
 
@@ -107,16 +110,28 @@ watch(() => props.session?.id, () => {
 
 const repoLabel = computed(() => repoShortName(props.session?.repoUrl || props.session?.repos?.[0]?.url || ''))
 
+async function fetchConversation(offset) {
+  return props.sharedToken
+    ? getSharedConversation(props.sharedToken, offset)
+    : api.getConversation(props.session.id, offset)
+}
+
+async function loadTranscript() {
+  try {
+    const page = await fetchConversation()
+    conversation.value = {
+      source: page.source, entries: page.entries || [], text: page.text || '',
+      nextOffset: page.nextOffset, length: page.length
+    }
+  } catch {
+    conversation.value = { source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 }
+  }
+}
+
 async function selectTab(tab) {
   if (tab === 'shell') shellOpened.value = true
   activeTab.value = tab
-  if (tab === 'transcript' && transcriptText.value === null) {
-    try {
-      transcriptText.value = props.sharedToken
-        ? await getSharedTranscript(props.sharedToken)
-        : await api.getTranscript(props.session.id)
-    } catch { transcriptText.value = '' }
-  }
+  if (tab === 'transcript' && conversation.value === null) await loadTranscript()
 }
 </script>
 <template>
@@ -203,12 +218,14 @@ async function selectTab(tab) {
         <section v-if="activeTab === 'transcript'" class="transcript" aria-labelledby="transcript-heading">
           <div class="transcript-inner">
             <h3 id="transcript-heading">What happened so far</h3>
-            <p v-if="transcriptText === null" class="transcript-state">Loading…</p>
-            <p v-else-if="!transcriptBlocks.length" class="transcript-state">[no saved transcript]</p>
-            <ol v-else class="transcript-list" aria-label="Terminal transcript">
-              <li v-for="(block, index) in transcriptBlocks" :key="index" class="transcript-bubble">
-                <span class="transcript-label">Terminal</span>
-                <pre>{{ block }}</pre>
+            <p v-if="conversation === null" class="transcript-state">Loading…</p>
+            <p v-else-if="!transcriptItems.length" class="transcript-state">[no saved transcript]</p>
+            <ol v-else class="transcript-list" :aria-label="conversation.source === 'native' ? 'Conversation' : 'Terminal transcript'"
+                :data-transcript-source="conversation.source">
+              <li v-for="(item, index) in transcriptItems" :key="index" class="transcript-bubble" :class="'role-' + item.role"
+                  :data-transcript-role="item.role">
+                <span class="transcript-label">{{ item.label }}</span>
+                <pre>{{ item.text }}</pre>
               </li>
             </ol>
           </div>
@@ -255,6 +272,9 @@ async function selectTab(tab) {
 .transcript-inner h3 { font-size: 20px; margin: 0 0 14px; }
 .transcript-list { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
 .transcript-bubble { padding: 12px 14px 14px; background: var(--panel); border: 1px solid var(--border-2); border-left: 3px solid var(--accent); border-radius: 12px; }
+.transcript-bubble.role-user { border-left-color: var(--accent-2); background: var(--panel-2); }
+.transcript-bubble.role-tool, .transcript-bubble.role-result { border-left-color: var(--border-3); }
+.transcript-bubble.role-tool pre, .transcript-bubble.role-result pre { color: var(--muted); font-size: 12px; }
 .transcript-label { display: block; color: var(--muted-2); font: 700 10px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
 .transcript-bubble pre { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); color: #c9c4bb; }
 .transcript-state { margin: 0; color: var(--muted-3); font: 13px/1.6 var(--mono); }

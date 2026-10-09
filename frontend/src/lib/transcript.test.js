@@ -1,7 +1,38 @@
 import { describe, expect, it } from 'vitest'
-import { toTranscriptBlocks } from './transcript.js'
+import { entryLabel, toTranscriptBlocks, toTranscriptItems } from './transcript.js'
 
 const separated = (...blocks) => blocks.join('\n\n\n')
+
+describe('toTranscriptItems', () => {
+  it('renders native entries one to one, labelled by role, with the tool name', () => {
+    const page = {
+      source: 'native',
+      entries: [
+        { role: 'user', text: 'go' },
+        { role: 'assistant', text: 'ok' },
+        { role: 'tool', text: '{"command":"ls"}', tool: 'Bash' },
+        { role: 'result', text: '·' },
+        { role: 'something_new', text: 'x' }
+      ]
+    }
+
+    expect(toTranscriptItems(page).map(item => [item.role, item.label, item.text])).toEqual([
+      ['user', 'User', 'go'],
+      ['assistant', 'Agent', 'ok'],
+      ['tool', 'Tool · Bash', '{"command":"ls"}'],
+      ['result', 'Result', '·'],
+      ['something_new', 'something_new', 'x']
+    ])
+    expect(entryLabel({ role: 'tool' })).toBe('Tool')
+  })
+
+  it('runs only the scrollback fallback through the terminal heuristics', () => {
+    const items = toTranscriptItems({ source: 'scrollback', text: separated('real output', '*', '·', '✶', '✻') })
+
+    expect(items).toEqual([{ role: 'terminal', label: 'Terminal', text: 'real output' }])
+    expect(toTranscriptItems(null)).toEqual([])
+  })
+})
 
 describe('toTranscriptBlocks', () => {
   it('forms base blocks, removes layout lines, and packs retained content', () => {

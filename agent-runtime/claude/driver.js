@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const path = require('node:path');
 
 function prepare(env) {
   const apiKey = env.ANTHROPIC_API_KEY;
@@ -136,6 +137,20 @@ function isMissingResume(output, exitCode, elapsedMs) {
   return exitCode !== 0 && (output.includes('No conversation found') || elapsedMs < 10_000);
 }
 
+// Claude Code files a conversation under the directory it was started in, with every character
+// outside [A-Za-z0-9] replaced by a dash, and names it after the session id. Both halves are
+// fixed by us — the id through --session-id/--resume, the directory through the PTY's cwd — so
+// the path is known in advance rather than discovered; it just does not exist until the first
+// turn has been written. Nothing is persisted from the archive on a resume here either: the
+// same file is appended to, because --resume keeps the id.
+function findTranscript({ env, home, cwd, fs: fileSystem }) {
+  const sessionId = env.AGENTHUB_CLAUDE_SESSION_ID || '';
+  if (!sessionId) return null;
+  const slug = cwd.replace(/[^A-Za-z0-9]/g, '-');
+  const file = path.join(home, '.claude', 'projects', slug, sessionId + '.jsonl');
+  return fileSystem.existsSync(file) ? file : null;
+}
+
 module.exports = {
   name: 'Claude',
   stateDir: '.claude',
@@ -145,5 +160,6 @@ module.exports = {
   buildCommand,
   isResumeCommand,
   isMissingResume,
+  findTranscript,
   prepare
 };

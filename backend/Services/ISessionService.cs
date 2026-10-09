@@ -44,6 +44,15 @@ public interface ISessionService
     /// </summary>
     Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
         => Task.FromResult<string?>(null);
+    /// <summary>
+    /// The conversation as the provider recorded it — user, assistant, tool turns — read from
+    /// the native transcript the session agent uploads. Null when the session is unknown or no
+    /// native transcript exists (a session older than this feature, or a runtime without one),
+    /// in which case callers fall back to <see cref="GetTranscriptAsync"/>. Default null for
+    /// test doubles.
+    /// </summary>
+    Task<IReadOnlyList<TranscriptEntry>?> GetConversationAsync(string owner, string id, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null);
     /// <summary>Opens the stored provider state archive — the same tar.gz a resuming pod unpacks
     /// into its home directory, and therefore the conversation history an agent CLI needs to
     /// continue the session off-cluster. Null when the session is unknown or nothing is stored.</summary>

@@ -42,6 +42,13 @@ public sealed record TranscriptPage(
         [SessionStatus.Succeeded, SessionStatus.Failed];
 
     /// <summary>
+    /// Whether a poller should come back. An unknown phase counts as running: telling a poller to
+    /// stop on a phase it does not recognise would abandon a session that is still working.
+    /// </summary>
+    public static bool StillRunning(string phase)
+        => !TerminalPhases.Contains(phase, StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Cuts the page a caller asked for out of the whole transcript.
     ///
     /// The offset is a position in the transcript *as it stands now*. The session agent keeps only
@@ -63,7 +70,7 @@ public sealed record TranscriptPage(
         return new TranscriptPage(
             SessionId: sessionId,
             Phase: phase,
-            Running: !TerminalPhases.Contains(phase, StringComparer.OrdinalIgnoreCase),
+            Running: StillRunning(phase),
             Offset: start,
             NextOffset: start + take,
             Length: length,
