@@ -124,8 +124,13 @@ export const api = {
   decidePermission: (id, reqId, decision) => req('POST', `/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(reqId)}`, { decision }),
   deleteSession: (id) => req('DELETE', `/sessions/${id}`),
   storeCredentials: (data) => req('PUT', '/credentials', data),
-  // Which credential fields have a stored value (booleans only, never values).
+  // Which credential fields have a stored value (booleans only, never values) plus the git
+  // token list as {id, kind, host} — never the tokens.
   getCredentialStatus: () => req('GET', '/credentials'),
+  // Git PATs are a list keyed by host, not merge fields of storeCredentials: adding one for a
+  // host that is already stored rotates that entry.
+  addGitPat: (data) => req('POST', '/credentials/git-pats', data),
+  deleteGitPat: (id) => req('DELETE', `/credentials/git-pats/${encodeURIComponent(id)}`),
   // A subscription login is captured from a session by its runtime rather than typed in here,
   // so this is the only way to get rid of one that stopped working.
   deleteSubscriptionCredential: (agent) =>

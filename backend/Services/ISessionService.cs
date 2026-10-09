@@ -22,6 +22,14 @@ public interface ISessionService
     /// </summary>
     Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default);
 
+    /// <summary>Stores a git PAT for a host, or rotates the one already stored for that host.
+    /// Throws <see cref="ArgumentException"/> for an invalid kind, host or token.</summary>
+    Task<GitPatInfo> UpsertGitPatAsync(string owner, UpsertGitPatRequest request, CancellationToken ct = default)
+        => throw new NotSupportedException();
+    /// <summary>Removes a stored git PAT by id. Idempotent: an unknown id is not an error.</summary>
+    Task DeleteGitPatAsync(string owner, string id, CancellationToken ct = default)
+        => throw new NotSupportedException();
+
     Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default);
     Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);
     Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default);
