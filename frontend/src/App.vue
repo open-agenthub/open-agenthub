@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { api, auth } from './api.js'
+import { api, auth, config } from './api.js'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TerminalView from './components/TerminalView.vue'
 import HomeView from './components/HomeView.vue'
@@ -14,6 +14,7 @@ import SettingsView from './components/SettingsView.vue'
 import AdminView from './components/AdminView.vue'
 import SharedSessionView from './components/SharedSessionView.vue'
 import SessionSearch from './components/SessionSearch.vue'
+import { REPO_URL, versionLabel } from './lib/docs.js'
 import { sharedTokenFromPath } from './lib/routes.js'
 import { initials } from './lib/text.js'
 import { detectAlerts, showAlert } from './lib/desktop-notify.js'
@@ -137,7 +138,7 @@ onBeforeUnmount(() => {
       </div>
       <ProjectSidebar class="side-sessions" :projects="projects" :sessions="sessions" :active="activeId" :query="query" @new="openPage('new')" @select="selectSession" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @share="openShare" @projects-changed="refresh" />
       <p v-if="error" class="err">{{ error }}</p>
-      <div class="side-foot">Open AgentHub · self-hosted</div>
+      <div class="side-foot" data-app-version>Open AgentHub {{ versionLabel(config.version) }} · <a :href="config.repoUrl || REPO_URL" target="_blank" rel="noopener" data-repo-link>GitHub ↗</a></div>
     </aside>
     <div class="main">
       <header class="topbar">
@@ -188,6 +189,8 @@ onBeforeUnmount(() => {
 .wait-badge { font-family: var(--mono); font-size: 11px; background: #33302a; color: var(--warn); padding: 1px 7px; border-radius: 9px; }
 .side-sessions { flex: 1; min-height: 0; overflow-y: auto; }
 .side-foot { padding: 10px 12px 2px; font-size: 11px; color: var(--faint); white-space: nowrap; }
+.side-foot a { color: var(--faint); text-decoration: none; }
+.side-foot a:hover { color: var(--text); }
 .err { color: var(--danger); padding: 6px 12px; font: 12px var(--mono); }
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }

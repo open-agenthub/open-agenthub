@@ -1,5 +1,6 @@
 import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
 import { reactive } from 'vue'
+import { DEV_VERSION, REPO_URL } from './lib/docs.js'
 
 // Generic OIDC sign-in (Authorization Code + PKCE) via oidc-client-ts.
 // The provider config is fetched at RUNTIME from the backend (GET /api/config), because
@@ -11,7 +12,14 @@ let user = null
 let enabled = false
 
 // Runtime backend config (e.g. whether Git OAuth providers / Slack are configured).
-export const config = reactive({ gitEnabled: false, slackEnabled: false, telegramEnabled: false, signalEnabled: false })
+// `version` starts as the value baked into this bundle so the footer has a label before
+// /api/config answers; the backend's version replaces it, since image.tag moves every
+// component together and the backend is the one that actually runs the deployment.
+export const config = reactive({
+  gitEnabled: false, slackEnabled: false, telegramEnabled: false, signalEnabled: false,
+  version: import.meta.env.VITE_APP_VERSION || DEV_VERSION,
+  repoUrl: REPO_URL
+})
 
 export async function initAuth() {
   let cfg = { authority: '' }
@@ -21,6 +29,8 @@ export async function initAuth() {
   config.slackEnabled = !!cfg.slackEnabled
   config.telegramEnabled = !!cfg.telegramEnabled
   config.signalEnabled = !!cfg.signalEnabled
+  if (cfg.version) config.version = String(cfg.version)
+  if (cfg.repoUrl) config.repoUrl = String(cfg.repoUrl)
   enabled = !!cfg.authority
   if (!enabled) return
 

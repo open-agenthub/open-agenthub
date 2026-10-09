@@ -11,11 +11,12 @@ const mocks = vi.hoisted(() => ({
     activateLicense: vi.fn(), adminOverview: vi.fn(), startLicenseCheckout: vi.fn(),
     setUserSeat: vi.fn(), deactivateLicense: vi.fn()
   },
-  auth: { enabled: false, isAuthenticated: true, user: 'tester', email: 'tester@example.dev', login: vi.fn(), logout: vi.fn() }
+  auth: { enabled: false, isAuthenticated: true, user: 'tester', email: 'tester@example.dev', login: vi.fn(), logout: vi.fn() },
+  config: { gitEnabled: false, version: 'dev', repoUrl: '' }
 }))
 
-vi.mock('./api.js', () => ({ api: mocks.api, auth: mocks.auth }))
-vi.mock('../api.js', () => ({ api: mocks.api, auth: mocks.auth }))
+vi.mock('./api.js', () => ({ api: mocks.api, auth: mocks.auth, config: mocks.config }))
+vi.mock('../api.js', () => ({ api: mocks.api, auth: mocks.auth, config: mocks.config }))
 
 const appStubs = {
   ProjectSidebar: true, TerminalView: true, AdminView: true, NewSessionDialog: true,

@@ -613,7 +613,11 @@ app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptio
     slackEnabled = slack.Enabled,
     // Same for the community Telegram/Signal integrations.
     telegramEnabled = telegramOpts.Enabled,
-    signalEnabled = signalOpts.Enabled
+    signalEnabled = signalOpts.Enabled,
+    // Shown in the sidebar footer and on the profile page so a deployment can be told apart
+    // from the release notes it is supposed to match.
+    version = AgentHub.Api.Services.AppVersion.Current,
+    repoUrl = AgentHub.Api.Services.AppVersion.RepoUrl
 })).AllowAnonymous();
 
 var agentPort = builder.Configuration.GetValue("AgentHub:AgentPort", 7681);

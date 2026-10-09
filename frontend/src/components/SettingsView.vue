@@ -11,6 +11,7 @@ import SkillsPane from './SkillsPane.vue'
 import GroupsPane from './GroupsPane.vue'
 import WebhooksPane from './WebhooksPane.vue'
 import { initials } from '../lib/text.js'
+import { REPO_URL, docsUrl, versionLabel } from '../lib/docs.js'
 
 defineEmits(['close'])
 const props = defineProps({
@@ -91,6 +92,14 @@ async function deleteAccount() {
             <button v-if="auth.enabled" class="danger" @click="auth.logout()">Sign out</button>
             <span v-else class="pmeta">Local development mode — authentication is disabled.</span>
           </div>
+          <div class="prow border about" data-about>
+            <div class="grow">
+              <div class="plabel">About</div>
+              <div class="pvalue" data-about-version>Open AgentHub {{ versionLabel(config.version) }}</div>
+            </div>
+            <a :href="config.repoUrl || REPO_URL" target="_blank" rel="noopener" data-about-repo>GitHub ↗</a>
+            <a :href="docsUrl('')" target="_blank" rel="noopener" data-about-docs>Docs ↗</a>
+          </div>
         </div>
         <div class="card danger-card" data-danger-zone>
           <div class="dz-title">Danger zone</div>
@@ -146,6 +155,8 @@ async function deleteAccount() {
 .pmeta { font-size: 13px; color: var(--muted-2); margin-top: 2px; }
 .plabel { font-size: 12px; color: var(--muted-2); margin-bottom: 4px; }
 .pvalue { font-family: var(--mono); font-size: 13px; }
+.about a { font-size: 13px; color: var(--muted); white-space: nowrap; }
+.about a:hover { color: var(--text); }
 .danger-card { margin-top: 18px; padding: 18px 20px; border-color: var(--danger); }
 .dz-title { font-weight: 700; color: var(--danger); margin-bottom: 6px; }
 .dz-label { display: block; font-size: 12px; color: var(--muted-2); margin: 12px 0 6px; }

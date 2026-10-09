@@ -70,6 +70,18 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ github.repository }}/${{ matrix.component.name }}
 
+      # The version the backend and frontend images report in the UI. A release tag gives
+      # its semver; everything else gets the 7-character commit, which is also the image tag
+      # the merge job publishes (type=sha below), so the footer names a pullable image.
+      - name: Determine the application version
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6
@@ -79,6 +91,8 @@ jobs:
           context: ${{ matrix.component.context }}
           file: ${{ matrix.component.dockerfile }}
           platforms: linux/${{ matrix.arch.name }}
+          build-args: |
+            APP_VERSION=${{ steps.version.outputs.value }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: ${{ github.event_name != 'pull_request' && format('type=image,name={0}/{1}/{2},push-by-digest=true,name-canonical=true,push=true', env.REGISTRY, github.repository, matrix.component.name) || 'type=cacheonly' }}
           cache-from: type=gha,scope=${{ matrix.component.name }}-${{ matrix.arch.name }}
