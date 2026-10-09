@@ -338,7 +338,18 @@ public sealed class InternalController : ControllerBase
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
 
-        var forced = req with { ParentSessionId = id };
+        // A child joins its parent's project and MCP servers unless the request names its own. The
+        // agent does not know its project id, so without this every spawned session landed outside
+        // the fleet: absent from agents_list, unreachable for agent_send, and without the MCP tools
+        // the parent works with.
+        var inheritMcp = string.IsNullOrWhiteSpace(req.McpConfigJson) && req.McpServerIds is null or { Count: 0 };
+        var forced = req with
+        {
+            ParentSessionId = id,
+            ProjectId = req.ProjectId ?? rec.ProjectId,
+            McpConfigJson = inheritMcp ? rec.McpConfigJson : req.McpConfigJson,
+            McpServerIds = inheritMcp ? await AccessibleParentServerIdsAsync(rec, ct) : req.McpServerIds
+        };
         try
         {
             return Ok(await _svc.CreateSessionAsync(rec.Owner, forced, ct));
@@ -409,7 +420,7 @@ public sealed class InternalController : ControllerBase
     /// <summary>
     /// Directory of the session's project fleet: every session of the same owner in the
     /// same project, as slim <see cref="ProjectAgentInfo"/> records (no MCP configs, no
-    /// runtime settings). A session without a project sees only itself and its descendants.
+    /// runtime settings), plus the session's own ancestors and descendants whatever their project.
     /// </summary>
     [HttpGet("project-agents")]
     public async Task<IActionResult> ProjectAgents(string id, CancellationToken ct)
@@ -418,28 +429,53 @@ public sealed class InternalController : ControllerBase
         if (rec is null) return Unauthorized();
 
         var all = await _svc.ListSessionsAsync(rec.Owner, ct);
-        IEnumerable<SessionInfo> scope;
-        if (rec.ProjectId is not null)
-        {
-            scope = all.Where(s => s.ProjectId == rec.ProjectId);
-        }
-        else
-        {
-            var byId = all.ToDictionary(s => s.Id, s => s.ParentSessionId);
-            byId.TryAdd(rec.Id, rec.ParentSessionId);
-            scope = all.Where(s => s.Id == rec.Id ||
-                SessionDescent.IsDescendant(s.Id, rec.Id, x => byId.GetValueOrDefault(x)));
-        }
+        var parentOf = ParentLookup(rec, all);
+        var scope = all.Where(s => s.Id == rec.Id || IsFleetPeer(rec, s.Id, s.ProjectId, parentOf));
         return Ok(scope
             .Select(s => new ProjectAgentInfo(s.Id, s.Title, s.Description, s.Phase, s.Mode,
                 s.Agent, s.QuestionPending, s.CreatedAt, Self: s.Id == rec.Id))
             .ToList());
     }
 
+    // Peers are the sessions of the same project plus the session's own line: its ancestors and
+    // descendants. The line is what session_create builds, and a child started outside any
+    // project — or before children inherited the project — had no way back to its parent.
+    private static bool IsFleetPeer(SessionRecord self, string otherId, string? otherProjectId,
+        Func<string, string?> parentOf) =>
+        otherId != self.Id &&
+        ((self.ProjectId is not null && otherProjectId == self.ProjectId) ||
+         SessionDescent.IsDescendant(otherId, self.Id, parentOf) ||
+         SessionDescent.IsDescendant(self.Id, otherId, parentOf));
+
+    private static Func<string, string?> ParentLookup(SessionRecord self, IEnumerable<SessionInfo> all)
+    {
+        var byId = all.ToDictionary(s => s.Id, s => s.ParentSessionId);
+        byId.TryAdd(self.Id, self.ParentSessionId);
+        return id => byId.GetValueOrDefault(id);
+    }
+
+    // Create resolves library servers strictly, so a server deleted or unshared since the parent
+    // started would fail every spawn that inherits it. The child gets what the parent still has.
+    private async Task<List<string>> AccessibleParentServerIdsAsync(SessionRecord parent, CancellationToken ct)
+    {
+        var ids = ParseServerIds(parent.McpServerIdsJson);
+        if (ids.Count == 0) return ids;
+        var accessible = (await _library.ResolveMcpServersAsync(parent.Owner, ids, strict: false, ct))
+            .Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        return ids.Where(accessible.Contains).ToList();
+    }
+
+    private static List<string> ParseServerIds(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<List<string>>(json) ?? new(); }
+        catch (JsonException) { return new(); }
+    }
+
     /// <summary>
-    /// Sends a message/task from this session to a peer agent. Peers exist only inside a
-    /// project: the target must belong to the same owner and the same (non-null) project —
-    /// anything else answers 404 so nothing about foreign sessions leaks.
+    /// Sends a message/task from this session to a peer agent: same owner, and either the same
+    /// (non-null) project or the session's own ancestor/descendant line — anything else answers
+    /// 404 so nothing about foreign sessions leaks.
     /// </summary>
     [HttpPost("messages")]
     public async Task<IActionResult> SendMessage(string id, [FromBody] SendAgentMessageRequest body, CancellationToken ct)
@@ -454,10 +490,10 @@ public sealed class InternalController : ControllerBase
         var to = body.To?.Trim();
         if (string.IsNullOrEmpty(to)) return BadRequest("A target session id is required.");
         if (to == id) return BadRequest("A session cannot message itself.");
-        if (rec.ProjectId is null) return NotFound();
-
         var target = await _store.GetAsync(rec.Owner, to, ct);
-        if (target is null || target.ProjectId != rec.ProjectId) return NotFound();
+        if (target is null) return NotFound();
+        var parentOf = ParentLookup(rec, await _svc.ListSessionsAsync(rec.Owner, ct));
+        if (!IsFleetPeer(rec, target.Id, target.ProjectId, parentOf)) return NotFound();
 
         var message = new SessionMessageRecord
         {

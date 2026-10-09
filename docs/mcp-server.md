@@ -88,7 +88,7 @@ The same surface as the stdio server:
 
 | Tool | Purpose |
 |---|---|
-| `session_create` | Create and start a session (defaults to Autonomous) |
+| `session_create` | Create and start a session (defaults to Interactive) |
 | `session_get` | Fetch one session by id |
 | `session_logs` | Read a session's transcript — what the agent actually printed |
 | `session_list` | List your sessions, optionally filtered by parent or phase |

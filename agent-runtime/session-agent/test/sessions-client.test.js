@@ -21,7 +21,7 @@ const sessionInfo = (overrides = {}) => ({
   ...overrides
 });
 
-test('create posts spawn with X-Agent-Token and defaults mode Autonomous', async () => {
+test('create posts spawn with X-Agent-Token and defaults mode Interactive', async () => {
   const { SessionsBackendClient } = await import('../../sessions/client.mjs');
   const calls = [];
   const client = new SessionsBackendClient(env(), async (url, init) => {
@@ -36,7 +36,7 @@ test('create posts spawn with X-Agent-Token and defaults mode Autonomous', async
   assert.equal(calls[0].init.headers['X-Agent-Token'], 'secret-token-never-leak');
   assert.doesNotMatch(calls[0].url, /secret/);
   const body = JSON.parse(calls[0].init.body);
-  assert.equal(body.mode, 'Autonomous');
+  assert.equal(body.mode, 'Interactive');
   assert.equal(body.title, 'Worker');
   assert.equal(body.prompt, 'do work');
   assert.equal(body.parentSessionId, 'session-1');

@@ -17,7 +17,9 @@ test('agenthub_sessions registers lifecycle and fleet tools', () => {
   ]) {
     assert.match(server, new RegExp(`register\\('${name}'`));
   }
-  assert.match(server, /mode:\s*body\.mode\s*\?\?\s*'Autonomous'|mode:\s*z\.[\s\S]*?\.default\('Autonomous'\)/);
+  // A child a person can watch and answer is the safe default; Autonomous auto-approves.
+  assert.match(server, /mode:\s*z\.[\s\S]*?\.default\('Interactive'\)/);
+  assert.match(server, /mcpServerIds:\s*z\.array\(/);
   assert.match(server, /sanitizeSession/);
   // Title resolution goes through the shared resolver and never targets the sender itself.
   assert.match(server, /resolveAgentTarget/);
