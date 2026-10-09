@@ -348,7 +348,7 @@ public sealed class InternalController : ControllerBase
             ParentSessionId = id,
             ProjectId = req.ProjectId ?? rec.ProjectId,
             McpConfigJson = inheritMcp ? rec.McpConfigJson : req.McpConfigJson,
-            McpServerIds = inheritMcp ? ParseServerIds(rec.McpServerIdsJson) : req.McpServerIds
+            McpServerIds = inheritMcp ? await AccessibleParentServerIdsAsync(rec, ct) : req.McpServerIds
         };
         try
         {
@@ -452,6 +452,17 @@ public sealed class InternalController : ControllerBase
         var byId = all.ToDictionary(s => s.Id, s => s.ParentSessionId);
         byId.TryAdd(self.Id, self.ParentSessionId);
         return id => byId.GetValueOrDefault(id);
+    }
+
+    // Create resolves library servers strictly, so a server deleted or unshared since the parent
+    // started would fail every spawn that inherits it. The child gets what the parent still has.
+    private async Task<List<string>> AccessibleParentServerIdsAsync(SessionRecord parent, CancellationToken ct)
+    {
+        var ids = ParseServerIds(parent.McpServerIdsJson);
+        if (ids.Count == 0) return ids;
+        var accessible = (await _library.ResolveMcpServersAsync(parent.Owner, ids, strict: false, ct))
+            .Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
+        return ids.Where(accessible.Contains).ToList();
     }
 
     private static List<string> ParseServerIds(string? json)
