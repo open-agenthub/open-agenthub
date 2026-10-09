@@ -33,10 +33,10 @@ public sealed record TranscriptPage(
     public const int DefaultMaxChars = 100_000;
 
     /// <summary>
-    /// The largest page. Matches the 1 MB scrollback the session agent keeps, so a caller that
-    /// polls after a long silence can still catch up in one request.
+    /// The largest page. Matches the scrollback the session agent keeps, so a caller that polls
+    /// after a long silence can still catch up in one request.
     /// </summary>
-    public const int MaxChars = 1_000_000;
+    public const int MaxChars = ScrollbackLimits.MaxChars;
 
     private static readonly string[] TerminalPhases =
         [SessionStatus.Succeeded, SessionStatus.Failed];

@@ -61,7 +61,7 @@ internal sealed class PlainWebhookSecretProtector : IWebhookSecretProtector
             : throw new InvalidOperationException("Payload was not protected.");
 }
 
-internal sealed class RecordingWebhookSessionService : ISessionService
+internal class RecordingWebhookSessionService : ISessionService
 {
     public List<(string Owner, CreateSessionRequest Request)> Created { get; } = new();
     public Exception? CreateException { get; init; }
@@ -100,6 +100,8 @@ internal sealed class RecordingWebhookSessionService : ISessionService
     public Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default) =>
         throw new NotSupportedException();
     public Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+    public virtual Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default) =>
         throw new NotSupportedException();
     public Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default) =>
         throw new NotSupportedException();

@@ -895,12 +895,15 @@ public sealed class KubernetesSessionService : ISessionService
     }
 
     public async Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default)
+        => AgentTerminal.CleanTranscript(await GetScrollbackAsync(owner, id, ct));
+
+    public async Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
     {
         if (await _store.GetAsync(owner, id, ct) is null) return null;
         // Prefer S3 (survives DB trimming); fall back to the Postgres-stored
         // scrollback so transcripts work on instances without S3.
         var key = IArtifactStore.ScrollbackKey(Sanitize(owner), id);
-        return await TranscriptReader.ReadAsync(
+        return await TranscriptReader.ReadRawAsync(
             token => _artifacts.GetTextAsync(key, token),
             token => _store.GetScrollbackAsync(id, token),
             ct);

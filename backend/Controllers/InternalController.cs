@@ -171,8 +171,7 @@ public sealed class InternalController : ControllerBase
 
         using var reader = new StreamReader(Request.Body);
         var text = await reader.ReadToEndAsync(ct);
-        // Cap: matches the agent's in-memory scrollback buffer.
-        if (text.Length > 400_000) text = text[^400_000..];
+        if (text.Length > ScrollbackLimits.MaxChars) text = text[^ScrollbackLimits.MaxChars..];
         await _store.SetScrollbackAsync(id, text, ct);
         return NoContent();
     }
@@ -180,14 +179,16 @@ public sealed class InternalController : ControllerBase
     /// <summary>
     /// Hands the stored scrollback back to a restarting agent. A resumed session runs in a
     /// fresh pod with an empty buffer, so without this everything said before the resume is
-    /// missing from the replay every client gets on connect.
+    /// missing from the replay every client gets on connect. Raw on purpose: the agent replays
+    /// these bytes into a terminal and persists them again as its own scrollback, so anything
+    /// stripped here is stripped from the history for good.
     /// </summary>
     [HttpGet("scrollback")]
     public async Task<IActionResult> GetScrollback(string id, CancellationToken ct)
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
-        return Content(await _svc.GetTranscriptAsync(rec.Owner, id, ct) ?? "", "text/plain");
+        return Content(await _svc.GetScrollbackAsync(rec.Owner, id, ct) ?? "", "text/plain");
     }
 
     public record PermissionBody(string Tool, string? Input);

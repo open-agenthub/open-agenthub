@@ -34,7 +34,16 @@ public interface ISessionService
     Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Clears the "waiting for reply" flag (e.g. once the user opens the terminal).</summary>
     Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default);
+    /// <summary>The terminal scrollback as plain text, control sequences stripped — what people read.</summary>
     Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default);
+    /// <summary>
+    /// The terminal scrollback exactly as the agent uploaded it, for a resuming pod to seed its
+    /// buffer with. Separate from <see cref="GetTranscriptAsync"/> because the resume used to be
+    /// fed the stripped text and re-persist it as raw, degrading the history on every restart.
+    /// Default null for test doubles that never resume anything.
+    /// </summary>
+    Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
     /// <summary>Opens the stored provider state archive — the same tar.gz a resuming pod unpacks
     /// into its home directory, and therefore the conversation history an agent CLI needs to
     /// continue the session off-cluster. Null when the session is unknown or nothing is stored.</summary>

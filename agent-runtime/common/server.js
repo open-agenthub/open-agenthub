@@ -5,6 +5,9 @@ const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 
+// The scrollback window, in characters. The hub stores and pages exactly this much
+// (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
+// from the hub's copy comes back shorter than what this process uploaded.
 const MAX_BUFFER = 1_000_000;
 // Protocol chatter that the chat UI only needs live, never on replay.
 const TRANSIENT_CHAT_EVENTS = new Set(['stream_event', 'control_response', 'control_request']);
