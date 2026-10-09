@@ -228,8 +228,17 @@ export const api = {
     const res = await fetch(`/api/sessions/${id}/transcript`, { headers: await authHeaders() })
     if (res.status === 401) handle401()
     return res.ok ? res.text() : ''
-  }
+  },
+  // The Transcript tab's page: role-tagged entries from the provider's own transcript, or the
+  // cleaned scrollback as text when there is none. `offset` is the previous page's nextOffset.
+  getConversation: (id, offset) =>
+    req('GET', `/sessions/${encodeURIComponent(id)}/conversation${conversationQuery(offset)}`)
 }
+function conversationQuery(offset) {
+  return offset ? `?offset=${encodeURIComponent(offset)}` : ''
+}
+export const getSharedConversation = (token, offset) =>
+  sharedReq(`/shared/${encodeURIComponent(token)}/conversation${conversationQuery(offset)}`)
 export const getSharedFileCapabilities = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/capabilities`)
 export const listSharedSessionFiles = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files`)
 export const getSharedFilePresentation = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/presentation`)

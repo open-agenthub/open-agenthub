@@ -234,7 +234,9 @@ settled here.
 
 `GET /api/remote/sessions/{id}/transcript` and the `session_transcript` MCP tool page the transcript
 with an offset cursor. Re-fetching from zero on every poll would mean downloading a transcript that
-grows into the megabytes to read the few lines that changed.
+grows into the megabytes to read the few lines that changed. The text is the provider's own
+conversation rendered as role sections where the runtime records one, the cleaned terminal
+scrollback otherwise — `docs/transcripts.md` says why and what that means for offsets.
 
 Two decisions inside it are worth keeping in mind:
 

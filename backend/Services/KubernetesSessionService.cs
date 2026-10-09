@@ -921,12 +921,33 @@ public sealed class KubernetesSessionService : ISessionService
     }
 
     public async Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default)
+        => AgentTerminal.CleanTranscript(await GetScrollbackAsync(owner, id, ct));
+
+    public async Task<IReadOnlyList<TranscriptEntry>?> GetConversationAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (await _store.GetAsync(owner, id, ct) is not { } rec) return null;
+        var key = IArtifactStore.TranscriptKey(Sanitize(owner), id);
+        var jsonl = await TranscriptReader.ReadRawAsync(
+            token => _artifacts.GetTextAsync(key, token),
+            token => _store.GetTranscriptAsync(id, token),
+            ct);
+        // A chat session's scrollback *is* stream-json — the same line shape the native file
+        // has — so a chat session from before native transcripts were uploaded still gets a
+        // readable conversation instead of raw JSON on the remote API and the MCP tools.
+        if (string.IsNullOrEmpty(jsonl) && string.Equals(rec.UiMode, "chat", StringComparison.OrdinalIgnoreCase))
+            jsonl = await GetScrollbackAsync(owner, id, ct);
+        if (string.IsNullOrEmpty(jsonl)) return null;
+        var entries = NativeTranscript.Parse(jsonl);
+        return entries.Count == 0 ? null : entries;
+    }
+
+    public async Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
     {
         if (await _store.GetAsync(owner, id, ct) is null) return null;
         // Prefer S3 (survives DB trimming); fall back to the Postgres-stored
         // scrollback so transcripts work on instances without S3.
         var key = IArtifactStore.ScrollbackKey(Sanitize(owner), id);
-        return await TranscriptReader.ReadAsync(
+        return await TranscriptReader.ReadRawAsync(
             token => _artifacts.GetTextAsync(key, token),
             token => _store.GetScrollbackAsync(id, token),
             ct);
@@ -1047,6 +1068,7 @@ public sealed class KubernetesSessionService : ISessionService
             StatePutUrl = artifactUrls.StatePutUrl,
             StateGetUrl = artifactUrls.StateGetUrl,
             ScrollbackPutUrl = artifactUrls.ScrollbackPutUrl,
+            TranscriptPutUrl = artifactUrls.TranscriptPutUrl,
             S3Insecure = _s3Insecure,
             RuntimeImages = new AgentRuntimeImages(
                 claudeImage, _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.OpenClawAgentImage,

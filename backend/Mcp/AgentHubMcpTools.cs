@@ -121,16 +121,17 @@ public sealed class AgentHubMcpTools(
         => await sessions.GetSessionAsync(Owner, id, ct) ?? throw new McpException("session_not_found");
 
     [McpServerTool(Name = "session_logs")]
-    [Description("Read a session's transcript — everything the agent printed. This is the only "
-                 + "place its actual output lives: the pod log shows just the launch command, and "
-                 + "a finished session's pod is gone. Returns the tail by default.")]
+    [Description("Read a session's transcript: the conversation as the agent recorded it (user, "
+                 + "assistant, tool turns), or the cleaned terminal output for sessions without "
+                 + "one. This is the only place its actual output lives: the pod log shows just "
+                 + "the launch command, and a finished session's pod is gone. Returns the tail by default.")]
     public async Task<string> GetSessionLogs(
         [Description("Session id.")] string id,
         [Description("Return at most this many characters from the end. Default 20000, max 200000. "
                      + "Pass 0 for the whole transcript.")] int? maxChars = null,
         CancellationToken ct = default)
     {
-        var transcript = await sessions.GetTranscriptAsync(Owner, id, ct)
+        var transcript = await SessionTranscripts.ReadableAsync(sessions, Owner, id, ct)
                          ?? throw new McpException("session_not_found");
         if (transcript.Length == 0) return "(the session has not written any output yet)";
 
@@ -163,7 +164,7 @@ public sealed class AgentHubMcpTools(
         // "finished" the caller already acted on.
         var session = await sessions.GetSessionAsync(Owner, id, ct)
                       ?? throw new McpException("session_not_found");
-        var transcript = await sessions.GetTranscriptAsync(Owner, id, ct)
+        var transcript = await SessionTranscripts.ReadableAsync(sessions, Owner, id, ct)
                          ?? throw new McpException("session_not_found");
         return TranscriptPage.From(session.Id, session.Phase, transcript, offset, maxChars);
     }

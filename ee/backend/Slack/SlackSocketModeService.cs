@@ -232,7 +232,7 @@ public sealed class SlackSocketModeService : BackgroundService
             _log.LogWarning("Slack header for session {Id} failed — the session runs without a thread", info.Id);
             return;
         }
-        await _threads.UpsertAsync(new SlackThread(info.Id, user.Owner, channel, ts, 0), ct);
+        await _threads.UpsertAsync(new SlackThread(info.Id, user.Owner, channel, ts), ct);
     }
 
     /// <summary>Answers "!repos [query]" with the sender's git projects — the same

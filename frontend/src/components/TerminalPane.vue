@@ -97,6 +97,7 @@ async function connect() {
 
   const socket = new WebSocket(url)
   ws = socket
+  if (term) term.options.convertEol = false
   socket.onopen = () => {
     if (disposed || ws !== socket) return
     emit('status', 'connected')
@@ -120,7 +121,13 @@ async function transcript() {
   const sessionId = props.session.id
   emit('status', 'history')
   const text = props.sharedToken ? await getSharedTranscript(props.sharedToken) : await api.getTranscript(sessionId)
-  if (!disposed && sessionId === props.session.id && term) term.write(text || '\r\n[no saved transcript]\r\n')
+  if (disposed || sessionId !== props.session.id || !term) return
+  // The saved transcript comes back with control sequences stripped, carriage returns
+  // included, so its lines end in a bare "\n". xterm moves the cursor down but not back on
+  // a bare line feed, and the replay rendered as a staircase. Only for the replay: a live
+  // PTY sends its own "\r\n", and converting there would alter raw-mode output.
+  term.options.convertEol = true
+  term.write(text || '\r\n[no saved transcript]\r\n')
 }
 
 function reconnectForCurrentSession() {

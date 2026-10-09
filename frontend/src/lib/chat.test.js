@@ -4,10 +4,9 @@ import { createChatLog } from './chat.js'
 const line = value => JSON.stringify(value) + '\n'
 
 describe('createChatLog', () => {
-  it('captures the model from the init event and skips unparseable lines', () => {
+  it('skips unparseable lines and renders nothing for the init event', () => {
     const log = createChatLog()
     log.feed('x"garbage{\n' + line({ type: 'system', subtype: 'init', model: 'claude-x' }))
-    expect(log.model).toBe('claude-x')
     expect(log.items).toEqual([])
   })
 
@@ -76,7 +75,6 @@ describe('createChatLog', () => {
     log.feed(line({ type: 'user', agenthub_echo: true, message: { content: [{ type: 'text', text: 'go' }] } }))
     log.feed(line({ type: 'result', is_error: false, total_cost_usd: 0.01, duration_api_ms: 1200 }))
     expect(log.busy).toBe(false)
-    expect(log.lastResult).toEqual({ isError: false, costUsd: 0.01, durationMs: 1200 })
     log.feed(line({ type: 'agenthub', subtype: 'exit', code: 0, signal: null }))
     expect(log.items.at(-1)).toEqual({ kind: 'exit', code: 0, text: 'Session ended (code 0).' })
   })
