@@ -53,7 +53,14 @@ async function refreshFiles(generation = loadGeneration) {
   try {
     const listed = await listRequest()
     if (generation === loadGeneration) files.value = Array.isArray(listed) ? listed : []
-  } catch { if (generation === loadGeneration) files.value = [] }
+  } catch {
+    // Keep the last listing. Emptying it dropped the selected file, so the preview fell back
+    // to "Select a file" and the next successful read handed the same file back as a new
+    // selection — refetched and reframed. Every refresh that failed (a backend rollout, a proxy
+    // hiccup, a reconnect storm on the event socket) became a visible preview reload. A
+    // session switch clears the list on its own, so stale entries cannot cross sessions, and a
+    // revoked share is handled where the session itself is fetched.
+  }
 }
 async function refreshPresentation(generation = loadGeneration) {
   try {
