@@ -33,13 +33,20 @@ public sealed record TranscriptPage(
     public const int DefaultMaxChars = 100_000;
 
     /// <summary>
-    /// The largest page. Matches the 1 MB scrollback the session agent keeps, so a caller that
-    /// polls after a long silence can still catch up in one request.
+    /// The largest page. Matches the scrollback the session agent keeps, so a caller that polls
+    /// after a long silence can still catch up in one request.
     /// </summary>
-    public const int MaxChars = 1_000_000;
+    public const int MaxChars = ScrollbackLimits.MaxChars;
 
     private static readonly string[] TerminalPhases =
         [SessionStatus.Succeeded, SessionStatus.Failed];
+
+    /// <summary>
+    /// Whether a poller should come back. An unknown phase counts as running: telling a poller to
+    /// stop on a phase it does not recognise would abandon a session that is still working.
+    /// </summary>
+    public static bool StillRunning(string phase)
+        => !TerminalPhases.Contains(phase, StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Cuts the page a caller asked for out of the whole transcript.
@@ -63,7 +70,7 @@ public sealed record TranscriptPage(
         return new TranscriptPage(
             SessionId: sessionId,
             Phase: phase,
-            Running: !TerminalPhases.Contains(phase, StringComparer.OrdinalIgnoreCase),
+            Running: StillRunning(phase),
             Offset: start,
             NextOffset: start + take,
             Length: length,

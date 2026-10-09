@@ -71,6 +71,13 @@ public interface ISessionStore
     /// <summary>Stores the terminal scrollback so transcripts work without S3.</summary>
     Task SetScrollbackAsync(string id, string text, CancellationToken ct = default);
     Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default);
+    /// <summary>
+    /// The provider's own transcript (JSONL), capped like the scrollback, so the role-based
+    /// conversation works without S3 too. Default no-ops for the many test doubles that never
+    /// see a transcript.
+    /// </summary>
+    Task SetTranscriptAsync(string id, string jsonl, CancellationToken ct = default) => Task.CompletedTask;
+    Task<string?> GetTranscriptAsync(string id, CancellationToken ct = default) => Task.FromResult<string?>(null);
     Task DeleteAsync(string id, CancellationToken ct = default);
 }
 
@@ -128,6 +135,7 @@ public sealed class PostgresSessionStore : ISessionStore
             CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(owner, parent_session_id);
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_server_ids TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_approve BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS transcript TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS description TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS system_prompt TEXT;
             """;
@@ -214,6 +222,22 @@ public sealed class PostgresSessionStore : ISessionStore
     public async Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("SELECT scrollback FROM sessions WHERE id=@id");
+        cmd.Parameters.AddWithValue("id", id);
+        var v = await cmd.ExecuteScalarAsync(ct);
+        return v is string s ? s : null;
+    }
+
+    public async Task SetTranscriptAsync(string id, string jsonl, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET transcript=@t, updated_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("t", jsonl);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<string?> GetTranscriptAsync(string id, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("SELECT transcript FROM sessions WHERE id=@id");
         cmd.Parameters.AddWithValue("id", id);
         var v = await cmd.ExecuteScalarAsync(ct);
         return v is string s ? s : null;

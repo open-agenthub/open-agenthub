@@ -20,7 +20,10 @@ vi.mock('../api.js', () => ({
 
 class MockSocket {
   static OPEN = 1
-  constructor(url) { this.url = url; this.readyState = MockSocket.OPEN; this.sent = []; mocks.sockets.push(this) }
+  constructor(url) {
+    this.url = url; this.readyState = MockSocket.OPEN; this.sent = []; mocks.sockets.push(this)
+    queueMicrotask(() => this.onopen?.())
+  }
   send(value) { this.sent.push(JSON.parse(value)) }
   close() {}
 }
@@ -175,5 +178,40 @@ describe('ChatPane', () => {
     await wrapper.get('[data-chat-input]').setValue('shared message')
     await wrapper.get('[data-chat-send]').trigger('click')
     expect(mocks.sockets[0].sent[0]).toMatchObject({ type: 'chat', text: 'shared message' })
+  })
+
+  it('renders the modern streaming activity and quotes a response without submitting IME input', async () => {
+    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running', agent: 'Claude' }, modern: true } })
+    await flushPromises()
+    mocks.sockets[0].onmessage({ data: line({ type: 'assistant', message: { id: 'm1', content: [
+      { type: 'text', text: 'Use this approach' },
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm test' } }
+    ] } }) })
+    await flushPromises()
+    expect(wrapper.get('[data-work-log]').text()).toContain('Bash')
+    await wrapper.get('[aria-label="Quote message"]').trigger('click')
+    expect(wrapper.get('textarea').element.value).toBe('> Use this approach\n\n')
+    await wrapper.get('textarea').trigger('keydown', { key: 'Enter', isComposing: true })
+    expect(mocks.sockets[0].sent).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('keeps an unconfirmed draft after disconnect and isolates drafts when switching sessions', async () => {
+    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' }, modern: true } })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('First draft')
+    await wrapper.get('[data-chat-send]').trigger('click')
+    mocks.sockets[0].onclose()
+    await flushPromises()
+    expect(wrapper.get('[data-chat-send]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[role=alert]').text()).toContain('before delivery was confirmed')
+    await wrapper.setProps({ session: { id: 's2', phase: 'Running' } })
+    await flushPromises()
+    expect(wrapper.get('textarea').element.value).toBe('')
+    await wrapper.get('textarea').setValue('Second draft')
+    await wrapper.setProps({ session: { id: 's1', phase: 'Running' } })
+    await flushPromises()
+    expect(wrapper.get('textarea').element.value).toBe('First draft')
+    wrapper.unmount()
   })
 })

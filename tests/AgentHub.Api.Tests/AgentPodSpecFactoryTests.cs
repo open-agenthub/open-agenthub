@@ -543,6 +543,7 @@ public class AgentPodSpecFactoryTests
         StatePutUrl = "http://s3/state-put",
         StateGetUrl = "",
         ScrollbackPutUrl = "http://s3/scroll-put",
+        TranscriptPutUrl = "http://s3/transcript-put",
         RuntimeImages = new AgentRuntimeImages(
             "runtime-claude", "runtime-codex", "runtime-cursor", "runtime-openclaw", "Always"),
         Runtime = new AgentPodRuntimeSettings

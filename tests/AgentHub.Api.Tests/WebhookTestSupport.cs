@@ -61,7 +61,7 @@ internal sealed class PlainWebhookSecretProtector : IWebhookSecretProtector
             : throw new InvalidOperationException("Payload was not protected.");
 }
 
-internal sealed class RecordingWebhookSessionService : ISessionService
+internal class RecordingWebhookSessionService : ISessionService
 {
     public List<(string Owner, CreateSessionRequest Request)> Created { get; } = new();
     public Exception? CreateException { get; init; }
@@ -95,12 +95,16 @@ internal sealed class RecordingWebhookSessionService : ISessionService
         throw new NotSupportedException();
     public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default) =>
         throw new NotSupportedException();
-    public Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default) =>
+    public virtual Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default) =>
         throw new NotSupportedException();
     public Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default) =>
         throw new NotSupportedException();
-    public Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default) =>
+    public virtual Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default) =>
         throw new NotSupportedException();
+    public virtual Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default) =>
+        throw new NotSupportedException();
+    public virtual Task<IReadOnlyList<TranscriptEntry>?> GetConversationAsync(string owner, string id, CancellationToken ct = default) =>
+        Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null);
     public Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default) =>
         throw new NotSupportedException();
     public Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default) =>

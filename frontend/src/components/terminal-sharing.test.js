@@ -15,13 +15,14 @@ vi.mock('@xterm/xterm', () => ({
 }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 vi.mock('../api.js', () => ({
-  api: { getTranscript: vi.fn().mockResolvedValue('') },
+  api: { getTranscript: vi.fn().mockResolvedValue(''), getConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 }) },
   terminalUrl: vi.fn().mockResolvedValue('ws://terminal'),
   shellUrl: vi.fn().mockResolvedValue('ws://shell'),
   sharedTerminalUrl: vi.fn().mockReturnValue('ws://shared'),
   browserUrl: vi.fn().mockResolvedValue('ws://browser'),
   sharedBrowserUrl: vi.fn().mockReturnValue('ws://shared-browser'),
-  getSharedTranscript: vi.fn().mockResolvedValue('')
+  getSharedTranscript: vi.fn().mockResolvedValue(''),
+  getSharedConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 })
 }))
 
 class MockSocket {
