@@ -69,14 +69,28 @@ function feed(data) {
   scrollToEnd()
 }
 
+// Follow new output only while the reader is already at the bottom. Every streamed frame
+// calls feed(), so pinning unconditionally yanked the view back down several times a second:
+// on a phone the user could neither read earlier output nor operate the chat. The flag is
+// updated from the reader's own scroll events, not measured at update time, so a large chunk
+// arriving in one frame cannot be mistaken for the reader having scrolled away.
+const STICK_THRESHOLD_PX = 48
+let stickToBottom = true
+function onScroll() {
+  const el = scroller.value
+  if (!el) return
+  stickToBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= STICK_THRESHOLD_PX
+}
+
 let scrollQueued = false
-function scrollToEnd() {
+function scrollToEnd({ force = false } = {}) {
+  if (force) stickToBottom = true
   if (scrollQueued) return
   scrollQueued = true
   nextTick(() => {
     scrollQueued = false
     const el = scroller.value
-    if (el) el.scrollTop = el.scrollHeight
+    if (el && stickToBottom) el.scrollTop = el.scrollHeight
     // Diagram placeholders may have (re)appeared with this update; cheap no-op otherwise.
     if (el) void renderMermaidBlocks(el)
   })
@@ -165,6 +179,8 @@ function submit() {
   try {
     ws.send(JSON.stringify(payload))
     pendingTurn.value = { id: clientTurnId, text: value }
+    // Sending asks to see the reply, so re-pin even from a scrolled-up position.
+    scrollToEnd({ force: true })
   } catch { /* retain the draft and attachments for retry */ }
 }
 
@@ -179,6 +195,7 @@ function reconnectForCurrentSession() {
   attachmentVersion.value += 1
   log.reset()
   version.value += 1
+  stickToBottom = true
   if (isLive.value) connect()
   else transcript()
 }
@@ -210,7 +227,7 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <div class="pane">
-    <div ref="scroller" class="chat-scroll">
+    <div ref="scroller" class="chat-scroll" data-chat-scroll @scroll.passive="onScroll">
       <div class="chat-inner">
         <div v-if="!items.length && !drafts.length" class="empty">
           {{ isLive ? 'Send a message to start the conversation.' : 'No saved conversation.' }}
