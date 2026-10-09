@@ -19,7 +19,7 @@ export class AgentHubClient {
   create(body = {}) {
     const payload = {
       ...body,
-      mode: body.mode ?? 'Autonomous'
+      mode: body.mode ?? 'Interactive'
     };
     return this.#request('POST', '/api/remote/sessions', payload);
   }

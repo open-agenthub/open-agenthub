@@ -17,7 +17,7 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   }
   assert.match(server, /resolveAgentTarget/);
   assert.match(server, /AGENTHUB_URL|AgentHubClient/);
-  assert.match(server, /mode:\s*body\.mode\s*\?\?\s*'Autonomous'|mode:\s*z\.[\s\S]*?\.default\('Autonomous'\)/);
+  assert.match(server, /mode:\s*z\.[\s\S]*?\.default\('Interactive'\)/);
   assert.match(server, /sanitizeSession/);
 });
 

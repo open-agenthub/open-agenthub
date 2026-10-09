@@ -39,6 +39,44 @@ public class InternalSessionSpawnTests
     }
 
     [Fact]
+    public async Task Spawn_WithoutProjectOrMcp_InheritsBothFromTheParent()
+    {
+        var svc = new RecordingSessionService();
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+        parent.McpConfigJson = """{"mcpServers":{"wiki":{"command":"wiki-mcp"}}}""";
+        parent.McpServerIdsJson = """["lib-1","lib-2"]""";
+        var controller = Controller(parent, svc);
+
+        await controller.Spawn(ParentId, new CreateSessionRequest { Title = "child", Prompt = "p" },
+            CancellationToken.None);
+
+        Assert.Equal("proj-a", svc.CreateRequest!.ProjectId);
+        Assert.Equal(parent.McpConfigJson, svc.CreateRequest.McpConfigJson);
+        Assert.Equal(["lib-1", "lib-2"], svc.CreateRequest.McpServerIds);
+    }
+
+    [Fact]
+    public async Task Spawn_WithOwnProjectAndMcp_KeepsThem()
+    {
+        var svc = new RecordingSessionService();
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+        parent.McpConfigJson = """{"mcpServers":{"wiki":{"command":"wiki-mcp"}}}""";
+        parent.McpServerIdsJson = """["lib-1"]""";
+        var controller = Controller(parent, svc);
+
+        await controller.Spawn(ParentId, new CreateSessionRequest
+        {
+            Title = "child", Prompt = "p", ProjectId = "proj-b", McpServerIds = ["lib-9"]
+        }, CancellationToken.None);
+
+        Assert.Equal("proj-b", svc.CreateRequest!.ProjectId);
+        Assert.Null(svc.CreateRequest.McpConfigJson);
+        Assert.Equal(["lib-9"], svc.CreateRequest.McpServerIds);
+    }
+
+    [Fact]
     public async Task Spawn_WithWrongToken_ReturnsUnauthorized()
     {
         var svc = new RecordingSessionService();

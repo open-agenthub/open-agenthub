@@ -18,7 +18,7 @@ export class SessionsBackendClient {
   create(body = {}) {
     const payload = {
       ...body,
-      mode: body.mode ?? 'Autonomous',
+      mode: body.mode ?? 'Interactive',
       parentSessionId: body.parentSessionId ?? this.sessionId
     };
     return this.#request('POST', '/spawn', payload);
