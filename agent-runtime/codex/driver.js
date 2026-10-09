@@ -3,6 +3,11 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+// Since 0.160 the TUI turns its mouse capture off again but stays on the alternate screen with
+// alternate-scroll set, so the web terminal turns the wheel into arrow keys: Codex reads those as
+// prompt history and nothing scrolls. Inline mode writes into the normal scrollback, which
+// xterm.js scrolls natively whatever the CLI does with the mouse.
+const TUI_FLAGS = ['--no-alt-screen'];
 const EXEC_FLAGS = ['--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust'];
 
 function prepare(env) {
@@ -22,7 +27,8 @@ function buildCommand(env, allowResume) {
   const restoredResume = allowResume && env.AGENTHUB_RESUME === '1' &&
     env.AGENTHUB_STATE_RESTORED === '1';
   if (mode === 'interactive') {
-    const args = restoredResume ? ['resume', '--last'] : [];
+    const args = [...TUI_FLAGS];
+    if (restoredResume) args.push('resume', '--last');
     // `codex [OPTIONS] [PROMPT]` — the CLI's own help calls the positional the "optional user
     // prompt to start the session", and it keeps the TUI, so an API-created session is already
     // working when a person opens it. Left out on a resume: `resume` is a subcommand there and a
@@ -45,11 +51,11 @@ function isResumeCommand(command) {
   if (!command || !Array.isArray(command.args)) return false;
   const args = command.args;
   if (command.cmd === 'bash') {
-    return args.length === 3 && args[0] === path.join(__dirname, 'device-login.sh') &&
-      args[1] === 'resume' && args[2] === '--last';
+    return args.length === 4 && args[0] === path.join(__dirname, 'device-login.sh') &&
+      args[1] === TUI_FLAGS[0] && args[2] === 'resume' && args[3] === '--last';
   }
   if (command.cmd !== 'codex') return false;
-  if (args.length === 2) return args[0] === 'resume' && args[1] === '--last';
+  if (args.length === 3 && args[0] === TUI_FLAGS[0]) return args[1] === 'resume' && args[2] === '--last';
   return args.length === 8 && args[0] === 'exec' && args[1] === '--sandbox' &&
     args[2] === 'workspace-write' && args[3] === '--json' &&
     args[4] === '--dangerously-bypass-hook-trust' && args[5] === 'resume' && args[6] === '--last';
@@ -63,6 +69,9 @@ function isMissingResume(output, exitCode) {
 
 module.exports = {
   name: 'Codex', stateDir: '.codex', authFilename: 'auth.json',
+  // The TUI log only grows and the tmp dirs are per-process scratch; neither is needed to
+  // resume, and every byte of them is re-compressed on each 30s persistence tick.
+  stateExcludes: ['.codex/log', '.codex/tmp', '.codex/.tmp'],
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand, isResumeCommand, isMissingResume, prepare
