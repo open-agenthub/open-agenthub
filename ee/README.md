@@ -42,7 +42,7 @@ subscription for production use.
   members of an **admin** group get admin access without listing each username in
   `Ee:Admins`. Sources under [`backend/Identity/`](./backend/Identity).
 - **Allowed agent kinds** ✅ — admins can optionally restrict which agent kinds
-  (Claude, Codex, Cursor, OpenClaw, …) may be used. An empty whitelist means no
+  (Claude, Codex, Cursor, OpenClaw, OpenCode, …) may be used. An empty whitelist means no
   restriction (all agents allowed); a non-empty list is an exact allowlist.
   Without a valid license every agent stays available. Sources under
   [`backend/Agents/`](./backend/Agents); managed via `GET`/`PUT`

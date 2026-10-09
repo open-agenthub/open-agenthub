@@ -7,7 +7,7 @@ const emit = defineEmits(['close', 'accounts'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
 const c = ref({
   sshPrivateKey: '', gitlabToken: '', gitlabHost: '', githubToken: '', githubHost: '',
-  anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '',
+  anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '', openCodeApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
 })
 // Which fields already have a stored value (values are never sent back).
@@ -187,6 +187,23 @@ async function save() {
         </small>
         <small v-else data-credential-status="openclawSubscription">
           No OpenClaw subscription login is stored yet. Sign in during an Interactive OpenClaw session.
+        </small>
+      </div>
+      <div class="field" data-opencode-credentials>
+        <label>OpenCode API key
+          <button v-if="stored.openCodeApiKey" type="button" class="chip" :class="{ del: clear.has('openCodeApiKey') }"
+            data-clear="openCodeApiKey" data-credential-status="openCodeApiKey"
+            :aria-label="clear.has('openCodeApiKey') ? 'Keep stored OpenCode API key' : 'Remove stored OpenCode API key'"
+            @click="toggleClear('openCodeApiKey')">{{ clear.has('openCodeApiKey') ? 'remove ✕' : 'stored ✓' }}</button>
+        </label>
+        <input v-model="c.openCodeApiKey" data-credential="openCodeApiKey" type="password" autocomplete="off"
+          :placeholder="placeholderFor('openCodeApiKey', 'sk-…')" />
+        <small data-credential-hint="openCodeApiKey">OpenCode Go subscription or Zen billing — the key from the opencode.ai console. Write-only.</small>
+        <small v-if="stored.opencodeSubscription" data-credential-status="opencodeSubscription">
+          OpenCode login is stored (sign-in happens in an Interactive session).
+          <button type="button" class="chip del" data-remove-subscription="OpenCode"
+            :disabled="removing === 'OpenCode'" aria-label="Remove stored OpenCode subscription login"
+            @click="removeSubscription('OpenCode')">{{ removing === 'OpenCode' ? 'removing…' : 'remove ✕' }}</button>
         </small>
       </div>
       <div class="grid">

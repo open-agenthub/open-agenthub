@@ -20,6 +20,7 @@ public class CredentialSelectionTests
         Assert.Equal("codex-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.Codex));
         Assert.Equal("cursor-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.Cursor));
         Assert.Equal("openclaw-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.OpenClaw));
+        Assert.Equal("opencode-u-2bd806c97f0e00af", KubernetesSessionService.ProviderSecretName("alice", AgentKind.OpenCode));
     }
 
     [Fact]

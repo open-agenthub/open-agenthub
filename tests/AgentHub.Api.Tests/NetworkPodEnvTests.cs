@@ -37,10 +37,11 @@ public class NetworkPodEnvTests
             CodexCredentialSecretName = "codex-owner",
             CursorCredentialSecretName = "cursor-owner",
             OpenClawCredentialSecretName = "openclaw-owner",
+            OpenCodeCredentialSecretName = "opencode-owner",
             HasSelectedApiKey = true,
             CallbackUrl = "http://callback/internal/sessions/session-id",
             StatePutUrl = "", StateGetUrl = "", ScrollbackPutUrl = "",
-            RuntimeImages = new AgentRuntimeImages("claude", "codex", "cursor", "openclaw", "Always"),
+            RuntimeImages = new AgentRuntimeImages("claude", "codex", "cursor", "openclaw", "opencode", "Always"),
             Runtime = new AgentPodRuntimeSettings { NetworkMcpEnabled = enabled }
         };
 

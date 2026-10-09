@@ -100,6 +100,10 @@ jobs:
         run: docker build --file agent-runtime/openclaw/Dockerfile --tag open-agenthub-dev/agent-runtime-openclaw:test agent-runtime
       - name: Smoke OpenClaw CLI
         run: docker run --rm --entrypoint openclaw open-agenthub-dev/agent-runtime-openclaw:test --version
+      - name: Build OpenCode runtime
+        run: docker build --file agent-runtime/opencode/Dockerfile --tag open-agenthub-dev/agent-runtime-opencode:test agent-runtime
+      - name: Smoke OpenCode CLI
+        run: docker run --rm --entrypoint opencode open-agenthub-dev/agent-runtime-opencode:test --version
 
   helm:
     runs-on: ubuntu-latest
@@ -117,6 +121,9 @@ jobs:
       - name: Verify OpenClaw runtime images
         shell: pwsh
         run: ./tests/helm/openclaw-runtime-values.ps1
+      - name: Verify OpenCode runtime images
+        shell: pwsh
+        run: ./tests/helm/opencode-runtime-values.ps1
       - name: Verify browser values and RBAC
         shell: pwsh
         run: ./tests/helm/browser-values.ps1

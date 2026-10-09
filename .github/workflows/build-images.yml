@@ -48,6 +48,9 @@ jobs:
           - name: agent-runtime-openclaw
             context: ./agent-runtime
             dockerfile: ./agent-runtime/openclaw/Dockerfile
+          - name: agent-runtime-opencode
+            context: ./agent-runtime
+            dockerfile: ./agent-runtime/opencode/Dockerfile
           - name: browser
             context: ./browser-runtime
             dockerfile: ./browser-runtime/Dockerfile
@@ -119,6 +122,7 @@ jobs:
           - agent-runtime-codex
           - agent-runtime-cursor
           - agent-runtime-openclaw
+          - agent-runtime-opencode
           - browser
     env:
       IMAGE: ghcr.io/${{ github.repository }}/${{ matrix.component }}

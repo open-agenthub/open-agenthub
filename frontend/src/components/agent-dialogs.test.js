@@ -33,7 +33,7 @@ describe('agent-aware session dialogs', () => {
     mocks.api.updateSession.mockResolvedValue({ id: 's1' })
     mocks.api.duplicateSession.mockResolvedValue({ id: 'copy' })
     mocks.api.storeCredentials.mockResolvedValue(null)
-    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex', 'Cursor', 'OpenClaw'] })
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode'] })
   })
 
   it('hides disallowed agents in New Session', async () => {
@@ -92,6 +92,25 @@ describe('agent-aware session dialogs', () => {
       agent: 'Cursor', authMode: 'ApiKey',
       policy: expect.objectContaining({ allowedCommands: [] })
     }))
+  })
+
+  it('creates an OpenCode API-key autonomous session with hub-named tools and commands', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="OpenCode"]').trigger('click')
+    await wrapper.get('[data-auth-option="ApiKey"]').trigger('click')
+    expect(wrapper.find('[data-openclaw-source]').exists()).toBe(false)
+    await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').attributes('placeholder')).toContain('Glob')
+    expect(wrapper.find('[data-policy="allowedCommands"]').exists()).toBe(true)
+    await wrapper.get('[data-submit]').trigger('click')
+
+    const payload = mocks.api.createSession.mock.calls[0][0]
+    expect(payload).toMatchObject({
+      agent: 'OpenCode', authMode: 'ApiKey',
+      policy: { allowedTools: ['Read', 'Edit', 'Glob', 'Grep'], allowedCommands: ['git status', 'npm test'] }
+    })
+    expect(payload).not.toHaveProperty('openClawApiKeySource')
   })
 
   it('creates an OpenClaw API-key session with a selected key source', async () => {
@@ -439,6 +458,28 @@ describe('Cursor credentials', () => {
     await wrapper.get('[data-clear="cursorApiKey"]').trigger('click')
     await wrapper.get('[data-save-credentials]').trigger('click')
     expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['cursorApiKey'] })
+  })
+})
+
+describe('OpenCode credentials', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.getCredentialStatus.mockResolvedValue({ openCodeApiKey: true, opencodeSubscription: true })
+    mocks.api.storeCredentials.mockResolvedValue(null)
+  })
+
+  it('stores and clears the OpenCode API key without reading it back', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    const input = wrapper.get('[data-credential="openCodeApiKey"]')
+    expect(input.attributes('type')).toBe('password')
+    expect(input.element.value).toBe('')
+    expect(wrapper.get('[data-credential-hint="openCodeApiKey"]').text()).toContain('OpenCode Go')
+    expect(wrapper.find('[data-credential-status="opencodeSubscription"]').exists()).toBe(true)
+    expect(wrapper.find('[data-remove-subscription="OpenCode"]').exists()).toBe(true)
+    await wrapper.get('[data-clear="openCodeApiKey"]').trigger('click')
+    await wrapper.get('[data-save-credentials]').trigger('click')
+    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['openCodeApiKey'] })
   })
 })
 

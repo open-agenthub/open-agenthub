@@ -17,7 +17,7 @@ prompt *and* keep the REPL.
 
 ## How each runtime is given its initial prompt
 
-Every one of the four CLIs can start interactively on a prompt, but no two spell it the same way.
+Every one of the five CLIs can start interactively on a prompt, but no two spell it the same way.
 
 | Runtime | Interactive initial prompt | Verified |
 |---|---|---|
@@ -25,8 +25,9 @@ Every one of the four CLIs can start interactively on a prompt, but no two spell
 | Codex | trailing positional argument | `codex [OPTIONS] [PROMPT]`, help calls it "Optional user prompt to start the session" |
 | Cursor | trailing positional argument | `agent [options] [command] [prompt...]`, "Initial prompt for the agent" |
 | OpenClaw | `tui --message <text>` | `tui` has no positional; `--message` is "Send an initial message after connecting" |
+| OpenCode | `--prompt <text>` | the TUI submits it once the model is ready (`packages/tui/src/routes/home.tsx`, 1.18.35) |
 
-Two rules hold for all four:
+Two rules hold for all five:
 
 - **Options come before the prompt.** Cursor's positional is variadic (`[prompt...]`), so any flag
   placed after it is swallowed as prompt text instead of parsed.
@@ -38,7 +39,7 @@ Two rules hold for all four:
 ## How each runtime is given the caller's system prompt
 
 `SystemPrompt` on the create request is the caller's standing rules for the session, as opposed to
-the task. Every one of the four CLIs offers a way to **replace** its system prompt, and every one of
+the task. Every one of the five CLIs offers a way to **replace** its system prompt, and every one of
 those is a trap: replacing takes the CLI's own tool, sandbox and environment instructions with it,
 so a caller adding one line of persona would get an agent that cannot use its tools. Each runtime
 therefore uses its *appending* path, and the replacing one is deliberately left alone.
@@ -49,13 +50,14 @@ therefore uses its *appending* path, and the replacing one is deliberately left 
 | Codex | `$CODEX_HOME/AGENTS.md`, the global project doc | `model.base_instructions` |
 | Cursor | `.cursor/rules/agenthub-session.mdc` with `alwaysApply: true` | — (no CLI option at all) |
 | OpenClaw | `<agentDir>/APPEND_SYSTEM.md` | `SYSTEM.md` |
+| OpenCode | `instructions` entry pointing at `~/.config/opencode/agenthub-session.md` | a custom agent `prompt` |
 
 Codex's global `AGENTS.md` is additive and provably so: `codex debug prompt-input` renders both docs
 inside one `<INSTRUCTIONS>` block — the global one first, then `--- project-doc ---`, then the
 checked-out repository's own `AGENTS.md`. A caller's instructions cannot silently drop the rules the
 repository ships.
 
-Codex and OpenClaw take the *global* location rather than a file in the workspace for the same
+Codex, OpenClaw and OpenCode take the *global* location rather than a file in the workspace for the same
 reason: with a single repository `AGENTHUB_WORKDIR` **is** the clone, so a file there would either
 overwrite the repository's own instructions or leave a stray in a tree the agent is about to commit.
 Leaving the project-scoped location free also means a repository that ships its own file still wins,
@@ -80,7 +82,7 @@ gave it. Writing or removing on every start makes the file say exactly what the 
 
 ## Folder-trust dialogs, which are what actually blocked this
 
-Three of the four CLIs stop an interactive session on a trust question before running anything.
+Three of the five CLIs stop an interactive session on a trust question before running anything.
 Print mode skips it, which is why autonomous sessions never hit this and why it only surfaced once
 interactive sessions were given work to do. With nobody at the terminal the session sits on a dialog
 instead of working, and the person who receives it an hour later finds no progress.
@@ -91,6 +93,7 @@ instead of working, and the person who receives it an hour later finds no progre
 | Codex | "Trust this folder? Codex can read, edit, and run files here" | `[projects."<dir>"] trust_level = "trusted"` in `$CODEX_HOME/config.toml` |
 | Cursor | workspace-trust prompt | `--trust`, which the non-interactive branch already passed |
 | OpenClaw | none | — |
+| OpenCode | none | — |
 
 Nothing is consented to on the user's behalf that they had not already chosen: the directory is the
 workspace of a session their own account asked for, holding the repositories they named.
@@ -122,7 +125,7 @@ caller would be left holding an id it could not turn into a link.
 
 ## Where a runtime's MCP configuration lives
 
-Each CLI reads its own, and all four locations are outside the workspace:
+Each CLI reads its own, and all five locations are outside the workspace:
 
 | Runtime | Central location | Written by |
 |---|---|---|
@@ -130,6 +133,7 @@ Each CLI reads its own, and all four locations are outside the workspace:
 | Codex | `[mcp_servers.*]` in `$CODEX_HOME/config.toml` | `codex/mcp-config.js` |
 | Cursor | `$CURSOR_CONFIG_DIR/mcp.json` | `cursor/mcp-config.js` |
 | OpenClaw | `mcp.servers` in `$OPENCLAW_CONFIG_PATH` | `openclaw/mcp-config.js` |
+| OpenCode | `mcp` in `~/.config/opencode/opencode.json` | `opencode/user-config.js` |
 
 The effective config used to be copied to `$AGENTHUB_WORKDIR/.mcp.json` as well, which was wrong
 on both counts. With a single repository the working directory *is* the clone, so it left an

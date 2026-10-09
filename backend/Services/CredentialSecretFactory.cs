@@ -20,6 +20,7 @@ public static class CredentialSecretFactory
         ["anthropicApiKey"] = "anthropic_api_key",
         ["openAiApiKey"] = "openai_api_key",
         ["cursorApiKey"] = "cursor_api_key",
+        ["openCodeApiKey"] = "opencode_api_key",
         ["gitKnownHosts"] = "known_hosts",
         ["gitUserName"] = "git_user_name",
         ["gitUserEmail"] = "git_user_email"
@@ -47,6 +48,7 @@ public static class CredentialSecretFactory
         Put(data, "anthropic_api_key", credentials.AnthropicApiKey);
         Put(data, "openai_api_key", credentials.OpenAiApiKey);
         Put(data, "cursor_api_key", credentials.CursorApiKey);
+        Put(data, "opencode_api_key", credentials.OpenCodeApiKey);
         Put(data, "known_hosts", credentials.GitKnownHosts);
         Put(data, "git_user_name", credentials.GitUserName);
         Put(data, "git_user_email", credentials.GitUserEmail);
@@ -65,7 +67,8 @@ public static class CredentialSecretFactory
         IDictionary<string, byte[]>? claudeSubscription = null,
         IDictionary<string, byte[]>? codexSubscription = null,
         IDictionary<string, byte[]>? cursorSubscription = null,
-        IDictionary<string, byte[]>? openclawSubscription = null) => new()
+        IDictionary<string, byte[]>? openclawSubscription = null,
+        IDictionary<string, byte[]>? opencodeSubscription = null) => new()
     {
         SshPrivateKey = data.ContainsKey("ssh_key"),
         GitlabToken = data.ContainsKey("gitlab_token"),
@@ -75,6 +78,7 @@ public static class CredentialSecretFactory
         AnthropicApiKey = data.ContainsKey("anthropic_api_key"),
         OpenAiApiKey = data.ContainsKey("openai_api_key"),
         CursorApiKey = data.ContainsKey("cursor_api_key"),
+        OpenCodeApiKey = data.ContainsKey("opencode_api_key"),
         GitKnownHosts = data.ContainsKey("known_hosts"),
         GitUserName = data.ContainsKey("git_user_name"),
         GitUserEmail = data.ContainsKey("git_user_email"),
@@ -83,7 +87,9 @@ public static class CredentialSecretFactory
         // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
         CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true,
         // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
-        OpenclawSubscription = openclawSubscription?.ContainsKey("auth-profiles.json") == true
+        OpenclawSubscription = openclawSubscription?.ContainsKey("auth-profiles.json") == true,
+        // Pinned from OpenCode 1.18.34: $XDG_DATA_HOME/opencode/auth.json.
+        OpencodeSubscription = opencodeSubscription?.ContainsKey("auth.json") == true
     };
 
     public static V1Secret CreateProviderSecret(string name, string @namespace, string ownerLabelValue,
@@ -100,6 +106,8 @@ public static class CredentialSecretFactory
             AgentKind.Cursor => "auth.json",
             // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
             AgentKind.OpenClaw => "auth-profiles.json",
+            // Pinned from OpenCode 1.18.34: $XDG_DATA_HOME/opencode/auth.json.
+            AgentKind.OpenCode => "auth.json",
             _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
         };
         return Secret(name, @namespace, ownerLabelValue, new Dictionary<string, byte[]>

@@ -26,7 +26,7 @@ Use `example.com` or `your-org.example` for illustrative hosts.
 |---|---|
 | `backend/` | ASP.NET Core (net10.0): REST, WebSocket proxy, Kubernetes orchestration |
 | `ee/` | Enterprise Edition sources — source-available under `ee/LICENSE`, **not** AGPL |
-| `agent-runtime/` | Per-provider images (claude, codex, cursor, openclaw) over a shared PTY/WS transport |
+| `agent-runtime/` | Per-provider images (claude, codex, cursor, openclaw, opencode) over a shared PTY/WS transport |
 | `browser-runtime/` | Hardened Chromium with VNC, for the built-in browser MCP |
 | `frontend/` | Vue 3 + Vite + xterm.js |
 | `helm/open-agenthub/` | The chart |
@@ -106,8 +106,8 @@ Do not add a comment that restates the code. Do not leave commented-out code beh
   install what it needs, or with a custom image.
 - **Autonomous and scheduled sessions auto-approve tool requests**, because nobody is there to
   answer a prompt. An interactive session still asks. Where the flag is *enforced* differs per
-  runtime, and it matters: Claude and Codex ask the backend on every call through a hook, so the
-  flag can be toggled while they run. Cursor (`--force`) and OpenClaw (`tools.exec`) are configured
+  runtime, and it matters: Claude, Codex and OpenCode ask the backend on every call (a hook; for
+  OpenCode a plugin in the read-only managed config), so the flag can be toggled while they run. Cursor (`--force`) and OpenClaw (`tools.exec`) are configured
   once at process start from `AGENTHUB_AUTO_APPROVE`, so changing it needs a restart. OpenClaw has
   no per-call hook at all, so its approvals cannot reach the chat relay — an interactive OpenClaw
   session asks in its own terminal only.
@@ -116,8 +116,8 @@ Do not add a comment that restates the code. Do not leave commented-out code beh
   the allow list is the boundary and an uncovered tool is denied. The MCP sharing policy is a hard
   deny either way.
 - **Agent CLI versions are pinned per runtime** and verified after install; see
-  `docs/agent-runtime-updates.md` before changing one. Cursor is deliberately unpinned and
-  OpenClaw deliberately held back — both for reasons documented there.
+  `docs/agent-runtime-updates.md` before changing one. Cursor is deliberately unpinned, and
+  OpenClaw and OpenCode deliberately held back — for reasons documented there.
 - **`image.tag` selects every component at once**, so the runtimes have to move together.
 
 ## Documentation

@@ -39,6 +39,27 @@ report its version. Cursor is current by construction; nothing needs bumping.
 auth-profile store directly, and its layout is documented per version in the Dockerfile.
 The nightly job reports a new OpenClaw release but does not rewrite the pin.
 
+**OpenCode is held back for the same kind of reason.** Its approval gate is a plugin hooked into
+`tool.execute.before`, and the credential watcher reads `auth.json` in the 1.18.x layout. A newer
+CLI that still installs and prints its version proves neither. Before raising
+`OPENCODE_VERSION`, check three things against the new release:
+
+1. **The gate still fires and still blocks.** Run `opencode run` against a fake OpenAI-compatible
+   endpoint that answers with one `bash` tool call, with the managed config pointing at
+   `policy-plugin.mjs` and a fake callback answering `/agent-policy` with `deny`. The call
+   must fail with "Blocked by the session policy." and the turn must still finish. In 1.18.x the
+   `permission.ask` hook is declared but never called, so do not switch the plugin to it
+   without first proving that it fires.
+2. **MCP tool names are still `<server>_<tool>`.** The gate maps them to `mcp__server__tool`. If
+   the separator changes, the MCP sharing policy stops matching.
+3. **`auth.json` still maps provider ids to `{ type: "api" | "oauth" | "wellknown", … }`.**
+   `ProviderCredentialValidator` and `opencode/auth-watcher.js` both pin that shape.
+
+The image also chooses the OpenCode binary itself rather than leaving it to the package's
+`postinstall`. That script probes the *build* machine for AVX2. On a runner that has AVX2 it
+installs a binary that dies with an illegal instruction on any node that lacks it. amd64 therefore
+always gets the `baseline` build.
+
 The nightly job runs the **smoke tests**, not just the build, because a newer CLI that
 installs cleanly can still have dropped a guarantee AgentHub relies on — and only the
 smoke tests would notice.

@@ -55,7 +55,7 @@ public sealed class AgentHubMcpTools(
                      + "always appended, so it adds to the agent's instructions and never replaces "
                      + "them.")] string? systemPrompt = null,
         [Description("Interactive, Autonomous or Scheduled. Defaults to Autonomous.")] string? mode = null,
-        [Description("Claude, Codex, Cursor or OpenClaw.")] string? agent = null,
+        [Description("Claude, Codex, Cursor, OpenClaw or OpenCode.")] string? agent = null,
         [Description("Repository URL to clone into the workspace. For more than one repository, or "
                      + "to clone with a connected provider's credentials, use `repos`.")] string? repoUrl = null,
         [Description("Branch for repoUrl.")] string? repoBranch = null,
