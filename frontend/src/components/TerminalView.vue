@@ -8,7 +8,7 @@ import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js
 import { sessionCapabilities } from '../lib/access.js'
 import { api, getSharedTranscript } from '../api.js'
 import { repoShortName } from '../lib/text.js'
-import { authLabel } from '../lib/agent.js'
+import { accountOptionLabel, accountsFor, authLabel, defaultAccountId } from '../lib/agent.js'
 import { toTranscriptBlocks } from '../lib/transcript.js'
 import { permissionTitle } from '../lib/permissions.js'
 
@@ -91,9 +91,57 @@ async function toggleAutoApprove() {
   }
 }
 
+// Provider account of a running Subscription session. The owner can move it to another of
+// their stored logins; the pod swaps the file and restarts the agent with resume, so the
+// conversation continues under the other account (docs/provider-accounts.md).
+const providerAccounts = ref({})
+const accountList = computed(() => accountsFor(providerAccounts.value, props.session?.agent))
+// What the session is known to run on right now. The parent's session object only picks the
+// new id up on its next refresh, so a switch made here is remembered until then.
+const switchedTo = ref('')
+const currentAccountId = computed(() =>
+  switchedTo.value || props.session?.credentialId || defaultAccountId(accountList.value))
+const pendingAccountId = ref('')
+const pendingAccount = computed(() =>
+  accountList.value.find(a => a.id === pendingAccountId.value && a.id !== currentAccountId.value) || null)
+const accountBusy = ref(false)
+const accountNote = ref('')
+const showAccountSwitch = computed(() => !props.sharedToken && capabilities.value.canManage
+  && props.session?.phase === 'Running' && props.session?.authMode === 'Subscription' && accountList.value.length >= 2)
+
+async function loadAccounts() {
+  if (props.sharedToken) return
+  try { providerAccounts.value = (await api.listProviderAccounts()) || {} } catch { providerAccounts.value = {} }
+}
+
+function chooseAccount(event) {
+  pendingAccountId.value = event.target.value
+  accountNote.value = ''
+}
+
+async function confirmAccountSwitch() {
+  const target = pendingAccount.value
+  if (!target || accountBusy.value) return
+  accountBusy.value = true
+  try {
+    await api.switchSessionCredential(props.session.id, target.id)
+    switchedTo.value = target.id
+    pendingAccountId.value = ''
+    accountNote.value = `Switched to “${target.label}” — the agent restarts and resumes the conversation.`
+  } catch (e) {
+    // The choice is dropped with the failure: the dropdown falls back to the account the session
+    // still runs on, and the reason is shown where the confirmation was instead of under it.
+    pendingAccountId.value = ''
+    accountNote.value = e?.message || 'The account could not be switched.'
+  } finally {
+    accountBusy.value = false
+  }
+}
+
 onMounted(() => {
   refreshPermissions()
   refreshMessages()
+  loadAccounts()
   permissionTimer = setInterval(() => { refreshPermissions(); refreshMessages() }, 4000)
 })
 onBeforeUnmount(() => clearInterval(permissionTimer))
@@ -101,9 +149,14 @@ watch(() => props.session?.id, () => {
   pendingPermissions.value = []
   agentMessages.value = []
   dismissedMessages.value = new Set()
+  switchedTo.value = ''
+  pendingAccountId.value = ''
+  accountNote.value = ''
   refreshPermissions()
   refreshMessages()
+  loadAccounts()
 })
+watch(() => props.session?.credentialId, id => { if (id && id === switchedTo.value) switchedTo.value = '' })
 
 const repoLabel = computed(() => repoShortName(props.session?.repoUrl || props.session?.repos?.[0]?.url || ''))
 
@@ -135,6 +188,13 @@ async function selectTab(tab) {
           <span v-if="session.sharedBy" class="shared">· shared by {{ session.sharedBy }}</span>
         </div>
       </div>
+      <label v-if="showAccountSwitch" class="acct" data-account-switch>
+        <span class="acct-label">Account</span>
+        <select data-account-select :value="pendingAccountId || currentAccountId" :disabled="accountBusy"
+          aria-label="Provider account of this session" @change="chooseAccount">
+          <option v-for="a in accountList" :key="a.id" :value="a.id" :data-account-option="a.id">{{ accountOptionLabel(a) }}</option>
+        </select>
+      </label>
       <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
       <nav class="tabs">
         <button :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">{{ tabLabel('agent') }}</button>
@@ -153,6 +213,23 @@ async function selectTab(tab) {
         <div class="share-head"><span>Share session</span><button class="ghost" @click="shareOpen = false">✕</button></div>
         <ShareSessionDialog embedded :session="session" @close="shareOpen = false" />
       </div>
+    </div>
+    <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
+      <span class="ask-dot"></span>
+      <div class="perm-text">
+        <strong>Switch this session to “{{ pendingAccount.label }}”?</strong>
+        <span class="perm-summary">The agent restarts with the other login and resumes the conversation.
+          <template v-if="pendingAccount.email || pendingAccount.organization"> {{ [pendingAccount.email, pendingAccount.organization].filter(Boolean).join(' · ') }}</template></span>
+      </div>
+      <div class="perm-actions">
+        <button class="bar-btn primary" data-account-confirm-switch :disabled="accountBusy" @click="confirmAccountSwitch">{{ accountBusy ? 'Switching…' : 'Switch' }}</button>
+        <button class="bar-btn" data-account-cancel :disabled="accountBusy" @click="pendingAccountId = ''">Cancel</button>
+      </div>
+    </div>
+    <div v-else-if="accountNote" class="perm acct-note" data-account-note>
+      <span class="ask-dot msg-dot"></span>
+      <div class="perm-text"><span class="msg-body">{{ accountNote }}</span></div>
+      <div class="perm-actions"><button class="bar-btn" data-account-note-dismiss @click="accountNote = ''">Dismiss</button></div>
     </div>
     <div v-if="session.questionPending && capabilities.canWrite" class="asking">
       <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ isChat ? 'below' : 'in the terminal below' }}.
@@ -235,6 +312,9 @@ async function selectTab(tab) {
 .tabs button:hover { color: var(--text); background: none; }
 .tabs button.on { background: var(--border-2); color: var(--strong); }
 .bar-btn { font-size: 12px; padding: 6px 14px; border-radius: 9px; white-space: nowrap; }
+.acct { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 11px; color: var(--muted-3); }
+.acct select { width: auto; max-width: 260px; padding: 5px 10px; font-size: 12px; }
+.acct-note { color: var(--accent-2); background: #121a24; border-bottom: 1px solid #24405c; }
 .readonly { font-size: 12px; }
 .status { color: var(--muted-3); font: 11px var(--mono); }
 .share-pop { position: absolute; top: 100%; right: 16px; margin-top: 8px; width: min(560px, calc(100vw - 48px)); max-height: 70vh; overflow-y: auto; background: var(--panel); border: 1px solid var(--border-3); border-radius: var(--radius-lg); box-shadow: 0 16px 48px rgba(0,0,0,0.5); z-index: 50; }

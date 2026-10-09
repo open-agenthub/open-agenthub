@@ -19,6 +19,8 @@ const MODES = [
 const repos = ref([])
 const advOpen = ref(false)
 const credentialStatus = ref({})
+// Stored provider logins per agent; the card shows a choice once there are two or more.
+const providerAccounts = ref({})
 const UI_MODES = [
   { key: 'terminal', label: 'Terminal', hint: 'the agent’s own console UI' },
   { key: 'chat', label: 'Chat', hint: 'a chat view like Claude Desktop (Claude only)' }
@@ -40,6 +42,7 @@ const form = ref({
   projectId: '',
   mcpConfigJson: '',
   ...defaultAgentForm(),
+  credentialId: '',
   image: '',
   runAsRoot: false,
   autoApprove: false,
@@ -60,6 +63,7 @@ watch(canChooseUi, allowed => { if (!allowed) form.value.uiMode = 'terminal' })
 
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* readiness stays advisory */ }
+  try { providerAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* one login needs no choice */ }
   try {
     const allowed = await api.getAllowedAgents()
     agentChoices.value = filterAgentOptions(allowed?.agents)
@@ -100,6 +104,8 @@ async function submit() {
       mode: form.value.mode,
       uiMode: form.value.uiMode,
       ...agentPayload(form.value),
+      // Null = the default account, resolved at each start; an id pins the session to that login.
+      credentialId: form.value.credentialId || null,
       repos: repos.value,
       prompt: form.value.prompt || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
@@ -150,7 +156,8 @@ async function submit() {
           <small class="hint">{{ modeHint }}</small>
         </div>
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
-          v-model:open-claw-api-key-source="form.openClawApiKeySource"
+          v-model:open-claw-api-key-source="form.openClawApiKeySource" v-model:credential-id="form.credentialId"
+          :accounts="providerAccounts"
           :mode="form.mode" :credential-status="credentialStatus" :options="agentChoices" />
         <div class="field" v-if="canChooseUi">
           <label>Interface</label>

@@ -428,7 +428,10 @@ public static class SessionDuplication
         {
             // An account belongs to one provider, so the source's choice only carries over while
             // the copy keeps the agent; a copy switched to another agent falls back to its default.
-            CredentialId = request.CredentialId ?? (agent == source.Agent ? source.CredentialId : null),
+            // It is dropped for an API-key copy too: creation rejects any account on one, so
+            // carrying it over would turn "copy as API key" into a 400 about a field never shown.
+            CredentialId = request.CredentialId
+                ?? (agent == source.Agent && authMode != AgentAuthMode.ApiKey ? source.CredentialId : null),
             Title = request.Title,
             Description = source.Description,
             ProjectId = request.ProjectId,

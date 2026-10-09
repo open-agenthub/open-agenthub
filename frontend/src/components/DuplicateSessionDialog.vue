@@ -15,6 +15,7 @@ const includeMcp = ref(true)
 const agentForm = ref({})
 const advOpen = ref(false)
 const credentialStatus = ref({})
+const providerAccounts = ref({})
 const allowedAgents = ref([])
 const agentChoices = computed(() => filterAgentOptions(allowedAgents.value, { include: props.session?.agent }))
 // Saved MCP servers; selection overrides the copied list independently of includeMcp.
@@ -26,7 +27,7 @@ function reset(session) {
   title.value = `Copy of ${session.title}`
   projectId.value = session.projectId || ''
   includeMcp.value = true
-  agentForm.value = defaultAgentForm(session)
+  agentForm.value = { ...defaultAgentForm(session), credentialId: session.credentialId || '' }
   selectedMcpIds.value = [...(session.mcpServerIds || [])]
   advOpen.value = false
   busy.value = false
@@ -36,6 +37,7 @@ reset(props.session)
 watch(() => props.session.id, () => reset(props.session))
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
+  try { providerAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* one login needs no choice */ }
   try {
     const allowed = await api.getAllowedAgents()
     allowedAgents.value = allowed?.agents || []
@@ -51,6 +53,8 @@ async function submit() {
       includeMcp: includeMcp.value,   // inline JSON config copy only
       mcpServerIds: selectedMcpIds.value,
       ...agentPayload(agentForm.value),
+      // Null lets the backend carry the source's account over (while the agent stays the same).
+      credentialId: agentForm.value.credentialId || null,
       policy: policyPayload(agentForm.value)
     }))
   }
@@ -74,7 +78,8 @@ async function submit() {
       </div>
     </div>
     <AgentDecisionCard v-model:agent="agentForm.agent" v-model:auth-mode="agentForm.authMode"
-      v-model:open-claw-api-key-source="agentForm.openClawApiKeySource" :mode="session.mode"
+      v-model:open-claw-api-key-source="agentForm.openClawApiKeySource" v-model:credential-id="agentForm.credentialId"
+      :accounts="providerAccounts" :mode="session.mode"
       :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
     <div v-if="automated" class="card adv">
       <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">

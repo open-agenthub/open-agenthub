@@ -43,6 +43,10 @@ public sealed class SessionDuplicationTests
             new("Copy", null, false, CredentialId: "other002")).CredentialId);
         Assert.Null(SessionDuplication.CopyableRequest(source,
             new("Copy", null, false, Agent: AgentKind.Codex)).CredentialId);
+        // Creation refuses an account on an API-key session, so a copy billed that way must not
+        // inherit the pin — the dialog never showed the field, so a 400 about it would be baffling.
+        Assert.Null(SessionDuplication.CopyableRequest(source,
+            new("Copy", null, false, AuthMode: AgentAuthMode.ApiKey)).CredentialId);
     }
 
     [Fact]

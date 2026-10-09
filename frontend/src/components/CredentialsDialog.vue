@@ -2,6 +2,7 @@
 import { ref, onMounted } from 'vue'
 import { api, config } from '../api.js'
 import { docsUrl } from '../lib/docs.js'
+import ProviderAccountsPane from './ProviderAccountsPane.vue'
 
 const emit = defineEmits(['close', 'accounts'])
 const props = defineProps({ embedded: { type: Boolean, default: false } })
@@ -17,32 +18,11 @@ const clear = ref(new Set())
 const busy = ref(false)
 const error = ref('')
 const saved = ref(false)
-// Which provider login is being removed, so only that row shows progress.
-const removing = ref('')
 
-onMounted(async () => {
+async function reloadStatus() {
   try { stored.value = await api.getCredentialStatus() } catch { /* older backend */ }
-})
-
-/**
- * Removes a stored provider login immediately, unlike the API key fields, which are staged and
- * applied on save. These are not edited here at all — a runtime captured them from a session —
- * so there is nothing to stage alongside, and a credential the user has decided is broken should
- * not survive them closing the dialog without saving.
- */
-async function removeSubscription(agent) {
-  if (removing.value) return
-  removing.value = agent
-  error.value = ''
-  try {
-    await api.deleteSubscriptionCredential(agent)
-    stored.value = await api.getCredentialStatus()
-  } catch (e) {
-    error.value = e?.message || `Could not remove the ${agent} login.`
-  } finally {
-    removing.value = ''
-  }
 }
+onMounted(reloadStatus)
 
 function toggleClear(field) {
   const s = new Set(clear.value)
@@ -138,12 +118,6 @@ async function save() {
         <input v-model="c.anthropicApiKey" data-credential="anthropicApiKey" type="password" autocomplete="off"
           :placeholder="placeholderFor('anthropicApiKey', 'sk-ant-…')" />
         <small data-credential-hint="anthropicApiKey">Claude API key billing, or OpenClaw with Anthropic as the API key source. Write-only.</small>
-        <small v-if="stored.claudeSubscription" data-credential-status="claudeSubscription">
-          Claude subscription login is stored (sign-in happens in an Interactive session).
-          <button type="button" class="chip del" data-remove-subscription="Claude"
-            :disabled="removing === 'Claude'" aria-label="Remove stored Claude subscription login"
-            @click="removeSubscription('Claude')">{{ removing === 'Claude' ? 'removing…' : 'remove ✕' }}</button>
-        </small>
       </div>
       <div class="field">
         <label>OpenAI API key
@@ -154,12 +128,6 @@ async function save() {
         <input v-model="c.openAiApiKey" data-credential="openAiApiKey" type="password" autocomplete="off"
           :placeholder="placeholderFor('openAiApiKey', 'sk-…')" />
         <small data-credential-hint="openAiApiKey">Codex API key billing, or OpenClaw with OpenAI as the API key source. Write-only.</small>
-        <small v-if="stored.codexSubscription" data-credential-status="codexSubscription">
-          Codex subscription login is stored (sign-in happens in an Interactive session).
-          <button type="button" class="chip del" data-remove-subscription="Codex"
-            :disabled="removing === 'Codex'" aria-label="Remove stored Codex subscription login"
-            @click="removeSubscription('Codex')">{{ removing === 'Codex' ? 'removing…' : 'remove ✕' }}</button>
-        </small>
       </div>
       <div class="field">
         <label>Cursor API key
@@ -171,24 +139,10 @@ async function save() {
         <input v-model="c.cursorApiKey" data-credential="cursorApiKey" type="password" autocomplete="off"
           :placeholder="placeholderFor('cursorApiKey', 'key_…')" />
         <small data-credential-hint="cursorApiKey">Cursor API key billing, or OpenClaw with Cursor as the API key source. Write-only.</small>
-        <small v-if="stored.cursorSubscription" data-credential-status="cursorSubscription">
-          Cursor subscription login is stored (sign-in happens in an Interactive session).
-          <button type="button" class="chip del" data-remove-subscription="Cursor"
-            :disabled="removing === 'Cursor'" aria-label="Remove stored Cursor subscription login"
-            @click="removeSubscription('Cursor')">{{ removing === 'Cursor' ? 'removing…' : 'remove ✕' }}</button>
-        </small>
       </div>
-      <div class="field" data-openclaw-credentials>
-        <small v-if="stored.openclawSubscription" data-credential-status="openclawSubscription">
-          OpenClaw subscription login is stored (sign-in happens in an Interactive session).
-          <button type="button" class="chip del" data-remove-subscription="OpenClaw"
-            :disabled="removing === 'OpenClaw'" aria-label="Remove stored OpenClaw subscription login"
-            @click="removeSubscription('OpenClaw')">{{ removing === 'OpenClaw' ? 'removing…' : 'remove ✕' }}</button>
-        </small>
-        <small v-else data-credential-status="openclawSubscription">
-          No OpenClaw subscription login is stored yet. Sign in during an Interactive OpenClaw session.
-        </small>
-      </div>
+      <!-- Provider logins live in their own component: they are captured from sessions, never
+           typed in here, and there can be several per provider (docs/provider-accounts.md). -->
+      <ProviderAccountsPane :status="stored" @changed="reloadStatus" />
       <div class="grid">
         <div class="field">
           <label>Git name
