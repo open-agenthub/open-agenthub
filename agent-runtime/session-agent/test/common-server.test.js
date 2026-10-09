@@ -125,7 +125,8 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
   const processLike = {
     env: {},
     on(signal, handler) { signals[signal] = handler; },
-    exit(code) { exits.push(code); }
+    exit(code) { exits.push(code); },
+    kill: harnessOptions.kill
   };
   const runtime = createCommonServer({
     env: {
@@ -541,6 +542,52 @@ test('common transport runs one final persistence after an in-flight run on SIGT
   harness.pendingExec.shift()();
   assert.deepEqual(harness.exits, [0, 0]);
   assert.equal(harness.commands.length, 2);
+});
+
+function watcherHarness(probesUntilGone, extra = {}) {
+  const events = [];
+  let probes = 0;
+  const harness = createHarness({}, {}, {
+    files: { '/tmp/agenthub-auth-watcher.pid': '4242\n' },
+    kill(pid, signal) {
+      events.push([pid, signal]);
+      if (signal === 0 && ++probes >= probesUntilGone) throw Object.assign(new Error('gone'), { code: 'ESRCH' });
+    },
+    ...extra
+  });
+  return { harness, events };
+}
+
+test('common transport lets the credential watcher flush before it exits on SIGTERM', () => {
+  const { harness, events } = watcherHarness(3);
+  harness.signals.SIGTERM();
+
+  assert.deepEqual(events[0], [4242, 'SIGTERM']);
+  assert.deepEqual(events.slice(1), [[4242, 0], [4242, 0], [4242, 0]]);
+  assert.deepEqual(harness.exits, [0]);
+});
+
+test('common transport stops waiting for a credential watcher that never exits', () => {
+  const { harness, events } = watcherHarness(Infinity);
+  harness.signals.SIGTERM();
+
+  assert.deepEqual(harness.exits, [0]);
+  // 6s budget at the harness clock's 100ms per reading: bounded, not a hang.
+  assert.ok(events.length > 1 && events.length < 100, String(events.length));
+});
+
+test('common transport flushes the credential watcher when the agent itself ends', () => {
+  const { harness, events } = watcherHarness(1);
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+
+  assert.deepEqual(events, [[4242, 'SIGTERM'], [4242, 0]]);
+  assert.deepEqual(harness.exits, [0]);
+});
+
+test('common transport exits normally when no credential watcher was started', () => {
+  const harness = createHarness({}, {}, { kill() { throw new Error('must not signal'); } });
+  harness.signals.SIGTERM();
+  assert.deepEqual(harness.exits, [0]);
 });
 
 test('common transport backs up scrollback and posts Running and terminal status', async () => {
