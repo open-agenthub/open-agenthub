@@ -136,6 +136,28 @@ export function entryLabel(entry) {
   return ROLE_LABELS[entry.role] || entry.role
 }
 
+export function conversationState(page) {
+  return {
+    source: page.source, entries: page.entries || [], text: page.text || '',
+    nextOffset: page.nextOffset, length: page.length
+  }
+}
+
+// Folds a polled page into what the tab already holds, or returns null when the cursor the
+// page was fetched with no longer means what it did: `length` went down (the server's copy was
+// trimmed or replaced — the same signal TranscriptPage gives its pollers), the source switched
+// (a native transcript appeared after the tab opened on the scrollback), or the server clamped
+// the offset. In all three cases the only honest answer is to reload from the start; appending
+// would stitch two different histories together.
+export function mergeConversationPage(current, page) {
+  if (!current || current.source !== page.source) return null
+  if (page.length < current.length || page.offset !== current.nextOffset) return null
+  const next = conversationState(page)
+  if (page.source === 'native') next.entries = current.entries.concat(next.entries)
+  else next.text = current.text + next.text
+  return next
+}
+
 // What the Transcript tab renders from one conversation page. A native page carries the
 // provider's own turns and needs no guessing; the scrollback fallback goes through the
 // terminal heuristics above, which exist only because terminal output has no roles.

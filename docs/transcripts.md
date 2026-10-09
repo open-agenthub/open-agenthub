@@ -123,6 +123,24 @@ conversation. A separate `ISessionStore` interface member for every fake in the 
 avoided by giving the new store and service members default implementations; only the real
 implementations override them.
 
+## The Transcript tab follows a running session
+
+The tab used to load once when opened and never again while the session ran; a person reading
+it saw the state of the first click. It now polls `…/conversation` every four seconds from the
+cursor of the last page while the tab is active and the session is live, appends what comes back
+(`mergeConversationPage`), and fetches once more when the phase settles — the session agent
+uploads a last time as it exits, and that tail would otherwise be missing until the next visit.
+
+Polling rather than the session event socket: the transcript is appended by a 30-second upload,
+so there is no finer-grained event to push, and a cursor poll costs the hub one small page — a
+push would still need the same read to find out what is new. Four seconds is the interval the
+permission and inbox polls in the same view already use, so the tab adds no new timer.
+
+A page that cannot be appended is not appended: `length` going down, the server clamping the
+offset, or the source switching from `scrollback` to `native` (the first upload landing after the
+tab opened) all mean the cursor no longer points into the history the tab holds, and the tab
+reloads from the start. Stitching the two would show a conversation that never happened.
+
 **Compatibility.** Nothing changes for sessions created before this: no `transcript.jsonl` exists,
 `GetConversationAsync` returns null, and every surface serves what it served before. A runtime
 image older than the hub ignores `AGENTHUB_TRANSCRIPT_PUT_URL`; a hub older than the image answers

@@ -9,7 +9,7 @@ import { sessionCapabilities } from '../lib/access.js'
 import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { authLabel } from '../lib/agent.js'
-import { toTranscriptItems } from '../lib/transcript.js'
+import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
 import { permissionTitle } from '../lib/permissions.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
@@ -97,16 +97,21 @@ async function toggleAutoApprove() {
 onMounted(() => {
   refreshPermissions()
   refreshMessages()
-  permissionTimer = setInterval(() => { refreshPermissions(); refreshMessages() }, 4000)
+  permissionTimer = setInterval(() => { refreshPermissions(); refreshMessages(); refreshTranscript() }, 4000)
 })
 onBeforeUnmount(() => clearInterval(permissionTimer))
 watch(() => props.session?.id, () => {
   pendingPermissions.value = []
   agentMessages.value = []
   dismissedMessages.value = new Set()
+  conversation.value = null
   refreshPermissions()
   refreshMessages()
+  if (activeTab.value === 'transcript') loadTranscript()
 })
+// The session agent uploads once more as it exits; one final fetch after the phase settles
+// picks that tail up instead of leaving the tab on the last live poll.
+watch(isLive, (live, wasLive) => { if (!live && wasLive) refreshTranscript(true) })
 
 const repoLabel = computed(() => repoShortName(props.session?.repoUrl || props.session?.repos?.[0]?.url || ''))
 
@@ -117,15 +122,32 @@ async function fetchConversation(offset) {
 }
 
 async function loadTranscript() {
+  const sessionId = props.session?.id
   try {
     const page = await fetchConversation()
-    conversation.value = {
-      source: page.source, entries: page.entries || [], text: page.text || '',
-      nextOffset: page.nextOffset, length: page.length
-    }
+    if (sessionId !== props.session?.id) return
+    conversation.value = conversationState(page)
   } catch {
+    if (sessionId !== props.session?.id) return
     conversation.value = { source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 }
   }
+}
+
+// Follows a running session from the cursor the last page left, so the tab shows what the
+// agent is doing now rather than what it had done when the tab was opened. Polling, not the
+// event socket: the transcript is appended by a 30-second upload, and a cursor poll costs the
+// hub one small page while a push would still need the same read to find out what is new.
+async function refreshTranscript(force = false) {
+  const current = conversation.value
+  if (!current || activeTab.value !== 'transcript' || (!isLive.value && !force)) return
+  const sessionId = props.session?.id
+  try {
+    const page = await fetchConversation(current.nextOffset)
+    if (sessionId !== props.session?.id || conversation.value !== current) return
+    const merged = mergeConversationPage(current, page)
+    if (merged) conversation.value = merged
+    else await loadTranscript()
+  } catch {}
 }
 
 async function selectTab(tab) {

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import TerminalView from './TerminalView.vue'
 
@@ -123,6 +123,94 @@ describe('transcript tab', () => {
     await openTranscript(wrapper)
 
     expect(wrapper.find('.transcript-state').text()).toBe('[no saved transcript]')
+  })
+
+  describe('while the session runs', () => {
+    const running = { ...session, phase: 'Running' }
+    const entry = text => ({ role: 'assistant', text, at: null })
+
+    beforeEach(() => { vi.useFakeTimers() })
+    afterEach(() => { vi.useRealTimers() })
+
+    it('polls from the cursor and appends what is new', async () => {
+      mocks.api.getConversation
+        .mockResolvedValueOnce({ ...nativePage([entry('first')]), running: true })
+        .mockResolvedValueOnce({ source: 'native', entries: [entry('second')], text: '', offset: 1, nextOffset: 2, length: 2, running: true })
+        .mockResolvedValueOnce({ source: 'native', entries: [], text: '', offset: 2, nextOffset: 2, length: 2, running: true })
+      const wrapper = mountView({ session: running })
+      await openTranscript(wrapper)
+      expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['first'])
+
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+
+      expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 1)
+      expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['first', 'second'])
+
+      // Nothing new: the cursor stays and nothing is duplicated.
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+      expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 2)
+      expect(wrapper.findAll('.transcript-bubble pre')).toHaveLength(2)
+    })
+
+    it('appends scrollback text for sessions without a native transcript', async () => {
+      mocks.api.getConversation
+        .mockResolvedValueOnce({ ...scrollbackPage('hello world'), running: true })
+        .mockResolvedValueOnce({ source: 'scrollback', entries: [], text: ' and more', offset: 11, nextOffset: 20, length: 20, running: true })
+      const wrapper = mountView({ session: running })
+      await openTranscript(wrapper)
+
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+
+      expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 11)
+      expect(wrapper.find('.transcript-bubble pre').text()).toBe('hello world and more')
+    })
+
+    it('reloads from the start when the cursor went stale', async () => {
+      mocks.api.getConversation
+        .mockResolvedValueOnce({ ...nativePage([entry('first'), entry('second')]), running: true })
+        // The server's copy shrank under the cursor: a clamped, shorter page comes back.
+        .mockResolvedValueOnce({ source: 'native', entries: [], text: '', offset: 1, nextOffset: 1, length: 1, running: true })
+        .mockResolvedValueOnce({ ...nativePage([entry('only')]), running: true })
+      const wrapper = mountView({ session: running })
+      await openTranscript(wrapper)
+
+      await vi.advanceTimersByTimeAsync(4000)
+      await flushPromises()
+
+      expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', undefined)
+      expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['only'])
+    })
+
+    it('does not poll a finished session or an inactive tab', async () => {
+      mocks.api.getConversation.mockResolvedValue(nativePage([entry('first')]))
+      const finished = mountView()
+      await openTranscript(finished)
+      await vi.advanceTimersByTimeAsync(8000)
+      await flushPromises()
+      expect(mocks.api.getConversation).toHaveBeenCalledTimes(1)
+
+      mocks.api.getConversation.mockClear()
+      const live = mountView({ session: running })
+      await vi.advanceTimersByTimeAsync(8000)
+      await flushPromises()
+      expect(mocks.api.getConversation).not.toHaveBeenCalled()
+    })
+
+    it('fetches once more when the session ends, for the final upload', async () => {
+      mocks.api.getConversation
+        .mockResolvedValueOnce({ ...nativePage([entry('working')]), running: true })
+        .mockResolvedValueOnce({ source: 'native', entries: [entry('done')], text: '', offset: 1, nextOffset: 2, length: 2, running: false })
+      const wrapper = mountView({ session: running })
+      await openTranscript(wrapper)
+
+      await wrapper.setProps({ session: { ...running, phase: 'Succeeded' } })
+      await flushPromises()
+
+      expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['working', 'done'])
+    })
   })
 
   it('shows loading while the transcript request is pending', async () => {

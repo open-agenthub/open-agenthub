@@ -1,7 +1,43 @@
 import { describe, expect, it } from 'vitest'
-import { entryLabel, toTranscriptBlocks, toTranscriptItems } from './transcript.js'
+import { entryLabel, mergeConversationPage, toTranscriptBlocks, toTranscriptItems } from './transcript.js'
 
 const separated = (...blocks) => blocks.join('\n\n\n')
+
+describe('mergeConversationPage', () => {
+  const native = (entries, offset, length) =>
+    ({ source: 'native', entries, text: '', offset, nextOffset: offset + entries.length, length })
+
+  it('appends native entries fetched from the cursor', () => {
+    const current = { source: 'native', entries: [{ role: 'user', text: 'a' }], text: '', nextOffset: 1, length: 1 }
+
+    const merged = mergeConversationPage(current, native([{ role: 'assistant', text: 'b' }], 1, 2))
+
+    expect(merged.entries.map(e => e.text)).toEqual(['a', 'b'])
+    expect(merged.nextOffset).toBe(2)
+    expect(merged.length).toBe(2)
+  })
+
+  it('appends scrollback text fetched from the cursor', () => {
+    const current = { source: 'scrollback', entries: [], text: 'abc', nextOffset: 3, length: 3 }
+
+    const merged = mergeConversationPage(current, { source: 'scrollback', entries: [], text: 'def', offset: 3, nextOffset: 6, length: 6 })
+
+    expect(merged.text).toBe('abcdef')
+    expect(merged.nextOffset).toBe(6)
+  })
+
+  it('asks for a reload when the cursor went stale instead of stitching histories', () => {
+    const current = { source: 'native', entries: [{ role: 'user', text: 'a' }, { role: 'user', text: 'b' }], text: '', nextOffset: 2, length: 2 }
+
+    // Shrunk under the cursor.
+    expect(mergeConversationPage(current, native([], 1, 1))).toBeNull()
+    // Server clamped the offset.
+    expect(mergeConversationPage(current, native([{ role: 'user', text: 'x' }], 0, 3))).toBeNull()
+    // The source changed: a native transcript appeared behind a scrollback tab.
+    expect(mergeConversationPage({ ...current, source: 'scrollback' }, native([], 2, 2))).toBeNull()
+    expect(mergeConversationPage(null, native([], 0, 0))).toBeNull()
+  })
+})
 
 describe('toTranscriptItems', () => {
   it('renders native entries one to one, labelled by role, with the tool name', () => {
