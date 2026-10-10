@@ -75,9 +75,27 @@ const dismissedMessages = ref(new Set())
 const visibleMessages = computed(() => agentMessages.value
   .filter(m => !dismissedMessages.value.has(m.id))
   .filter(m => !m.deliveredAt || (m.priority && Date.now() - new Date(m.deliveredAt).getTime() < PRIORITY_BANNER_MS)))
-// What the badge counts: not yet picked up by the agent and not dismissed here.
-const openMessages = computed(() => agentMessages.value
-  .filter(m => !dismissedMessages.value.has(m.id) && !m.deliveredAt))
+// The badge counts exactly what the panel lists — a number on the button that does not match
+// the tiles behind it would only make people hunt for the missing one.
+const expandedMessages = ref(new Set())
+const isExpanded = id => expandedMessages.value.has(id)
+function toggleExpanded(id) {
+  const next = new Set(expandedMessages.value)
+  if (next.has(id)) next.delete(id); else next.add(id)
+  expandedMessages.value = next
+}
+// Tiles show three lines; a longer body gets a "Show more". Line count is the honest signal,
+// the length a fallback for one long paragraph that wraps past three lines anyway.
+const CLAMP_LINES = 3
+const CLAMP_CHARS = 240
+const needsClamp = m => m.body.split('\n').length > CLAMP_LINES || m.body.length > CLAMP_CHARS
+function messageTime(m) {
+  const at = new Date(m.createdAt)
+  if (Number.isNaN(at.getTime())) return ''
+  const sameDay = at.toDateString() === new Date().toDateString()
+  return sameDay ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    : at.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
 
 function deliveryLabel(m) {
   if (!m.priority) return ''
@@ -335,7 +353,7 @@ async function selectTab(tab) {
       <template v-if="capabilities.canManage">
         <button v-if="canPause(session)" class="bar-btn" @click="$emit('pause', session.id)">❚❚ Pause</button>
         <button v-if="session.canResume" class="bar-btn" @click="$emit('resume', session.id)">▶ Resume</button>
-        <button v-if="showMessages" class="bar-btn" data-send-message-toggle :class="{ on: sendOpen }" @click="sendOpen = !sendOpen">✉ Messages<span v-if="openMessages.length" class="msg-badge" data-message-badge>{{ openMessages.length }}</span></button>
+        <button v-if="showMessages" class="bar-btn" data-send-message-toggle :class="{ on: sendOpen }" @click="sendOpen = !sendOpen">✉ Messages<span v-if="visibleMessages.length" class="msg-badge" data-message-badge>{{ visibleMessages.length }}</span></button>
         <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
@@ -404,7 +422,7 @@ async function selectTab(tab) {
     <div v-if="showMessages && sendOpen" class="messages-panel" data-send-message>
       <div class="messages-head">
         <strong>Messages</strong>
-        <span class="perm-summary" data-messages-count>{{ openMessages.length ? `${openMessages.length} open` : 'nothing open' }}</span>
+        <span class="perm-summary" data-messages-count>{{ visibleMessages.length ? `${visibleMessages.length} open` : 'nothing open' }}</span>
         <button class="ghost" data-send-message-close :disabled="sendBusy" @click="sendOpen = false; sendNote = ''">✕</button>
       </div>
       <div v-if="showSendMessage" class="perm send-card" data-send-message-form>
@@ -423,19 +441,24 @@ async function selectTab(tab) {
           <button class="bar-btn primary" data-send-message-submit :disabled="sendBusy || !sendText.trim()" @click="sendMessage">{{ sendBusy ? 'Sending…' : 'Send' }}</button>
         </div>
       </div>
-      <div v-for="m in visibleMessages" :key="m.id" class="perm agent-msg" :class="{ priority: m.priority }" data-agent-message
-           :data-priority="m.priority ? 'true' : null" :data-delivered-via="m.deliveredVia || null">
-        <span class="ask-dot msg-dot"></span>
-        <div class="perm-text">
-          <strong>{{ m.interrupt ? 'Interrupt' : m.priority ? 'Priority message' : 'Message' }} from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}<template v-if="m.priority"> · <span class="msg-delivery" data-message-delivery>{{ deliveryLabel(m) }}</span></template></strong>
-          <span class="msg-body">{{ m.body }}</span>
-        </div>
-        <div class="perm-actions">
-          <button class="bar-btn" data-dismiss-message @click="dismissMessage(m.id)">Dismiss</button>
-        </div>
+      <div v-if="visibleMessages.length" class="messages-grid">
+        <article v-for="m in visibleMessages" :key="m.id" class="msg-tile" :class="{ priority: m.priority, interrupt: m.interrupt }" data-agent-message
+             :data-priority="m.priority ? 'true' : null" :data-delivered-via="m.deliveredVia || null">
+          <header class="msg-tile-head">
+            <span class="msg-from"><span class="msg-kind" :class="{ priority: m.priority }">{{ m.interrupt ? 'Interrupt' : m.priority ? 'Priority message' : 'Message' }}</span> from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}</span>
+            <time class="msg-time" :datetime="m.createdAt">{{ messageTime(m) }}</time>
+            <button class="ghost msg-dismiss" title="Dismiss" aria-label="Dismiss message" data-dismiss-message @click="dismissMessage(m.id)">✕</button>
+          </header>
+          <p class="msg-body" :class="{ clamped: !isExpanded(m.id) }" data-message-body>{{ m.body }}</p>
+          <footer class="msg-tile-foot">
+            <span v-if="m.priority" class="msg-delivery" data-message-delivery>{{ deliveryLabel(m) }}</span>
+            <button v-if="needsClamp(m)" class="ghost msg-expand" data-message-expand :aria-expanded="isExpanded(m.id) ? 'true' : 'false'"
+                    @click="toggleExpanded(m.id)">{{ isExpanded(m.id) ? 'Show less' : 'Show more' }}</button>
+          </footer>
+        </article>
       </div>
-      <div v-if="!visibleMessages.length" class="perm agent-msg messages-empty" data-messages-empty>
-        <span class="perm-summary">No open messages. Fleet peers reach this session with agent_send; priority ones go straight into its prompt.</span>
+      <div v-else class="messages-empty" data-messages-empty>
+        No open messages. Fleet peers reach this session with agent_send; priority ones go straight into its prompt.
       </div>
     </div>
     <div v-for="p in pendingPermissions" :key="p.id" class="perm">
@@ -527,10 +550,27 @@ async function selectTab(tab) {
 .send-note { white-space: normal; color: var(--muted); }
 .bar-btn.on { background: var(--border-2); color: var(--strong); }
 .msg-badge { display: inline-block; min-width: 18px; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
-.messages-panel { display: flex; flex-direction: column; border-bottom: 1px solid var(--border-2); background: var(--panel); max-height: 40vh; overflow-y: auto; }
-.messages-head { display: flex; align-items: center; gap: 10px; padding: 8px 20px; font-size: 12px; color: var(--strong); border-bottom: 1px solid var(--border-2); }
+.messages-panel { display: flex; flex-direction: column; border-bottom: 1px solid var(--border-2); background: var(--bg); max-height: 48vh; overflow-y: auto; }
+.messages-head { display: flex; align-items: center; gap: 10px; padding: 8px 20px; font-size: 12px; color: var(--strong); border-bottom: 1px solid var(--border-2); background: var(--panel); position: sticky; top: 0; z-index: 1; }
 .messages-head .ghost { margin-left: auto; }
-.messages-empty { color: var(--muted); }
+.messages-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; padding: 12px 20px 14px; }
+.msg-tile { display: flex; flex-direction: column; gap: 6px; min-width: 0; padding: 10px 12px 10px 14px; background: var(--panel); border: 1px solid var(--border-2); border-left: 3px solid var(--accent-2); border-radius: 12px; font-size: 12px; }
+.msg-tile.priority { border-left-color: var(--accent); background: #0f1d2e; }
+.msg-tile.interrupt { border-left-color: var(--warn); }
+.msg-tile-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.msg-kind { font: 700 10px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; color: var(--accent-2); white-space: nowrap; }
+.msg-kind.priority { color: var(--accent); }
+.msg-tile.interrupt .msg-kind { color: var(--warn); }
+.msg-from { color: var(--strong); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-time { margin-left: auto; color: var(--muted-2); font-size: 11px; white-space: nowrap; }
+.msg-dismiss { padding: 0 2px; line-height: 1; color: var(--muted-2); }
+.msg-dismiss:hover { color: var(--strong); }
+.msg-tile .msg-body { margin: 0; color: var(--text); font-size: 13px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-tile .msg-body.clamped { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.msg-tile-foot { display: flex; align-items: center; gap: 10px; min-height: 16px; }
+.msg-tile .msg-delivery { color: var(--muted-2); font-size: 11px; }
+.msg-expand { margin-left: auto; padding: 0; font-size: 11px; color: var(--accent); }
+.messages-empty { padding: 14px 20px; color: var(--muted); font-size: 12px; }
 .msg-body { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .terminal-stack { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }

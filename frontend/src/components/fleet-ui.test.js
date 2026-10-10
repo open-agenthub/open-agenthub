@@ -131,6 +131,26 @@ describe('fleet messages panel in the session view', () => {
     expect(panel.get('[data-messages-empty]').exists()).toBe(true)
   })
 
+  it('clamps a long message to three lines until it is expanded', async () => {
+    mocks.api.listSessionMessages.mockResolvedValue([
+      message({ id: 'long', body: 'line 1\nline 2\nline 3\nline 4\nline 5' }),
+      message({ id: 'short', body: 'just this' })
+    ])
+    const wrapper = mountTerminal()
+    await flushPromises()
+    const panel = await openPanel(wrapper)
+
+    const tiles = panel.findAll('[data-agent-message]')
+    expect(tiles[0].get('[data-message-body]').classes()).toContain('clamped')
+    expect(tiles[0].get('[data-message-expand]').text()).toBe('Show more')
+    expect(tiles[1].find('[data-message-expand]').exists()).toBe(false)
+
+    await tiles[0].get('[data-message-expand]').trigger('click')
+    expect(tiles[0].get('[data-message-body]').classes()).not.toContain('clamped')
+    expect(tiles[0].get('[data-message-expand]').text()).toBe('Show less')
+    expect(tiles[0].get('[data-message-expand]').attributes('aria-expanded')).toBe('true')
+  })
+
   it('polls messages alongside permissions but not for shared links or viewers', async () => {
     mountTerminal()
     await flushPromises()
