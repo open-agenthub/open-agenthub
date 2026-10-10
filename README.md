@@ -645,6 +645,20 @@ once to a fresh launch if that chat is missing. OpenClaw resumes from restored
 `~/.openclaw` state and/or an explicit session id when the CLI accepts one, with one
 fresh-session fallback when state is absent.
 
+A finished or paused **autonomous** session can be continued **interactively** — from the
+session page, `POST /api/sessions/{id}/convert`, the remote API, or the `session_convert` MCP
+tool. Whether the conversation survives depends on the runtime:
+
+| Runtime | Converted to interactive | Keeps the conversation |
+|---|---|---|
+| Claude | terminal or chat pane | **yes** — same fixed session id, `--resume` |
+| Codex | TUI | **yes** — the thread id recorded in the state archive |
+| Cursor | TUI | no — new conversation in the restored workspace |
+| OpenClaw | TUI | no — new conversation in the restored workspace |
+
+Auto-approve is switched off by conversion unless asked to stay: somebody is now there to answer.
+Details and the alternatives rejected: [`docs/session-mode-conversion.md`](docs/session-mode-conversion.md).
+
 Provider runtime hooks call the internal notification endpoint when supported; the
 backend sets `question_pending=true` and fires the configured webhook. The UI shows a
 blinking "waiting for your reply" dot.

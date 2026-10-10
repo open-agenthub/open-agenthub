@@ -13,10 +13,15 @@ test('agenthub_sessions registers lifecycle and fleet tools', () => {
   assert.match(server, /name:\s*'agenthub_sessions'/);
   for (const name of [
     'session_create', 'session_get', 'session_list', 'session_wait', 'session_delete',
-    'agents_list', 'agent_send', 'agent_inbox'
+    'session_convert', 'agents_list', 'agent_send', 'agent_inbox'
   ]) {
     assert.match(server, new RegExp(`register\\('${name}'`));
   }
+  // Conversion goes through the peer route, so the descendant rule of session_get applies.
+  const convert = server.slice(server.indexOf("register('session_convert'"));
+  assert.match(convert, /sessionId: z\.string\(\)\.min\(1\)\.max\(128\)/);
+  assert.match(convert, /uiMode: z\.enum\(\['terminal', 'chat'\]\)\.optional\(\)/);
+  assert.match(convert, /client\.convert\(sessionId, body\)/);
   // A child a person can watch and answer is the safe default; Autonomous auto-approves.
   assert.match(server, /mode:\s*z\.[\s\S]*?\.default\('Interactive'\)/);
   assert.match(server, /mcpServerIds:\s*z\.array\(/);

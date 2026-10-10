@@ -37,6 +37,12 @@ export class SessionsBackendClient {
     return { deleted: true };
   }
 
+  /** Continues a descendant's finished autonomous run interactively (docs/session-mode-conversion.md). */
+  convert(childId, body = {}) {
+    return this.#request('POST', `/peer/${encodeURIComponent(childId)}/convert`,
+      { mode: 'interactive', ...body });
+  }
+
   /** Directory of this session's project fleet (slim records, includes a `self` marker). */
   listProjectAgents() {
     return this.#request('GET', '/project-agents');

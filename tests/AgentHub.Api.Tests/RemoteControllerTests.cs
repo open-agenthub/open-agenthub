@@ -165,6 +165,79 @@ public class RemoteControllerTests
     }
 
     [Fact]
+    public async Task Convert_PassesTheTokenOwnerAndTheBodyToTheService()
+    {
+        var svc = new RecordingSessionService();
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken);
+
+        var result = await controller.Convert("session-1",
+            new ConvertSessionRequest { UiMode = "chat", AutoApprove = true, Resume = false }, CancellationToken.None);
+
+        var info = Assert.IsType<SessionInfo>(Assert.IsType<OkObjectResult>(result.Result).Value);
+        Assert.Equal(SessionMode.Interactive, info.Mode);
+        var call = Assert.Single(svc.ConvertCalls);
+        Assert.Equal(("alice", "session-1"), (call.Owner, call.Id));
+        Assert.Equal("chat", call.Request.UiMode);
+        Assert.True(call.Request.AutoApprove);
+        Assert.False(call.Request.Resume);
+    }
+
+    [Fact]
+    public async Task Convert_WithoutAValidToken_IsUnauthorizedAndNeverReachesTheService()
+    {
+        var svc = new RecordingSessionService();
+        var controller = Remote((_, _) => Task.FromResult<string?>(null), svc, "oah_unknown");
+
+        var result = await controller.Convert("session-1", new ConvertSessionRequest(), CancellationToken.None);
+
+        Assert.IsType<UnauthorizedResult>(result.Result);
+        Assert.Empty(svc.ConvertCalls);
+    }
+
+    [Fact]
+    public async Task Convert_MapsTheServiceOutcomesToStatusCodes()
+    {
+        var owner = (string _, CancellationToken _) => Task.FromResult<string?>("alice");
+        async Task<IActionResult?> Act(Exception thrown) => (await Remote(owner,
+            new RecordingSessionService { ConvertException = thrown }, ValidToken)
+            .Convert("session-1", new ConvertSessionRequest(), CancellationToken.None)).Result;
+
+        Assert.IsType<NotFoundResult>(await Act(new KeyNotFoundException()));
+
+        // Not autonomous, or still running: wait or pause first. The body carries the reason so
+        // a client can show it instead of guessing which of the two it was.
+        var conflict = Assert.IsType<ConflictObjectResult>(await Act(new InvalidOperationException("Pause the session first.")));
+        Assert.Equal("Pause the session first.", ErrorOf(conflict.Value));
+
+        var bad = Assert.IsType<BadRequestObjectResult>(await Act(new ArgumentException("Chat UI mode is only supported for interactive Claude sessions.")));
+        Assert.Contains("Claude", ErrorOf(bad.Value));
+
+        var forbidden = Assert.IsType<ObjectResult>(await Act(new AgentNotAllowedException("Codex is not allowed.")));
+        Assert.Equal(StatusCodes.Status403Forbidden, forbidden.StatusCode);
+    }
+
+    [Fact]
+    public async Task SessionsConvert_UsesTheSameStatusCodesAsTheRemoteSurface()
+    {
+        async Task<IActionResult?> Act(Exception thrown) => (await Sessions(
+            new RecordingSessionService { ConvertException = thrown })
+            .Convert("session-1", new ConvertSessionRequest(), CancellationToken.None)).Result;
+
+        Assert.IsType<NotFoundResult>(await Act(new KeyNotFoundException()));
+        var conflict = Assert.IsType<ConflictObjectResult>(await Act(new InvalidOperationException("The session is already interactive.")));
+        Assert.Equal("The session is already interactive.", ErrorOf(conflict.Value));
+        Assert.IsType<BadRequestObjectResult>(await Act(new ArgumentException("bad ui mode")));
+
+        var svc = new RecordingSessionService();
+        Assert.IsType<OkObjectResult>((await Sessions(svc).Convert("session-1", new ConvertSessionRequest(), CancellationToken.None)).Result);
+        Assert.Equal(("alice", "session-1"), (svc.ConvertCalls[0].Owner, svc.ConvertCalls[0].Id));
+    }
+
+    /// <summary>The anonymous <c>{ error }</c> body the convert endpoints answer with.</summary>
+    private static string? ErrorOf(object? value) =>
+        value?.GetType().GetProperty("error")?.GetValue(value) as string;
+
+    [Fact]
     public async Task State_WithoutAValidToken_IsUnauthorizedAndNeverTouchesTheArchive()
     {
         // The state archive is the whole conversation. An unauthenticated caller must not reach
@@ -398,6 +471,16 @@ public class RemoteControllerTests
         {
             Id = id, Title = "t", Owner = owner, Mode = SessionMode.Interactive, Phase = phase
         };
+
+        public Exception? ConvertException { get; init; }
+        public List<(string Owner, string Id, ConvertSessionRequest Request)> ConvertCalls { get; } = [];
+
+        public Task<SessionInfo> ConvertSessionAsync(string owner, string id, ConvertSessionRequest req, CancellationToken ct = default)
+        {
+            ConvertCalls.Add((owner, id, req));
+            if (ConvertException is not null) throw ConvertException;
+            return Task.FromResult(Info(owner, id, SessionStatus.Pending) with { ConvertedFrom = SessionMode.Autonomous });
+        }
         public Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default) =>

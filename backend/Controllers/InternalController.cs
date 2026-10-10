@@ -433,6 +433,25 @@ public sealed class InternalController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Converts a descendant's finished autonomous run into an interactive session — an
+    /// orchestrator handing one of its children to a person. Same descendant rule as GetPeer, so
+    /// nothing about a session outside the caller's line leaks through the status code.
+    /// </summary>
+    [HttpPost("peer/{childId}/convert")]
+    public async Task<IActionResult> ConvertPeer(string id, string childId, [FromBody] ConvertSessionRequest req,
+        CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (!await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
+
+        try { return Ok(await _svc.ConvertSessionAsync(rec.Owner, childId, req, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(new { error = e.Message }); }
+        catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
+    }
+
     private async Task<bool> IsDescendantPeerAsync(SessionRecord parent, string childId, CancellationToken ct)
     {
         var all = await _svc.ListSessionsAsync(parent.Owner, ct);

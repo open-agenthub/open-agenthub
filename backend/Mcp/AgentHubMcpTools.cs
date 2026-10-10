@@ -208,6 +208,38 @@ public sealed class AgentHubMcpTools(
         }
     }
 
+    [McpServerTool(Name = "session_convert")]
+    [Description("Continue a finished or paused Autonomous session as an Interactive one, so a person "
+                 + "can take the conversation on. Claude and Codex keep the conversation; Cursor and "
+                 + "OpenClaw start a new one in the same workspace. The session resumes right away "
+                 + "unless resume is \"false\". Fails with session_not_convertible while the session "
+                 + "is running or is not Autonomous.")]
+    public async Task<SessionInfo> ConvertSession(
+        [Description("Session id.")] string sessionId,
+        [Description("\"terminal\" (default) or \"chat\" (interactive Claude only).")] string? uiMode = null,
+        [Description("\"true\" or \"false\". Keep approving tool requests automatically. Off by "
+                     + "default: a person is now there to answer them.")] string? autoApprove = null,
+        [Description("\"true\" (default) or \"false\". False only changes the mode and leaves the "
+                     + "session stopped.")] string? resume = null,
+        CancellationToken ct = default)
+    {
+        var request = new ConvertSessionRequest
+        {
+            UiMode = uiMode,
+            AutoApprove = ParseFlag(autoApprove),
+            Resume = ParseFlag(resume) ?? true
+        };
+        try
+        {
+            var converted = await sessions.ConvertSessionAsync(Owner, sessionId, request, ct);
+            logger.LogInformation("MCP client converted session {SessionId} to interactive", sessionId);
+            return converted;
+        }
+        catch (KeyNotFoundException) { throw new McpException("session_not_found"); }
+        catch (InvalidOperationException e) { throw new McpException("session_not_convertible: " + e.Message); }
+        catch (ArgumentException e) { throw new McpException("invalid_argument: " + e.Message); }
+    }
+
     [McpServerTool(Name = "session_delete")]
     [Description("Delete a session, removing its pod and record. Does not cascade to child sessions.")]
     public async Task<string> DeleteSession([Description("Session id.")] string id, CancellationToken ct = default)

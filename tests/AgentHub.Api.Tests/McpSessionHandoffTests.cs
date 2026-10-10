@@ -70,6 +70,44 @@ public class McpSessionHandoffTests
         Assert.Equal(0, svc.TranscriptCalls);
     }
 
+    [Fact]
+    public async Task SessionConvert_PassesTheFlagsAsTextAndResumesByDefault()
+    {
+        // The other direction of a handoff: an autonomous run the agent started, handed to a person
+        // as an interactive session. Flags arrive as strings for the reason ParseFlag gives.
+        var svc = new FakeSessions { Session = Info("Succeeded") };
+        var tools = Tools(svc);
+
+        var converted = await tools.ConvertSession("sess-1", uiMode: "chat", autoApprove: "true");
+
+        Assert.Equal(("alice", "sess-1"), (svc.ConvertOwner, svc.ConvertId));
+        Assert.Equal("chat", svc.ConvertRequest!.UiMode);
+        Assert.True(svc.ConvertRequest.AutoApprove);
+        Assert.True(svc.ConvertRequest.Resume);
+        Assert.Equal(SessionMode.Interactive, converted.Mode);
+
+        await tools.ConvertSession("sess-1", resume: "false");
+        Assert.False(svc.ConvertRequest!.Resume);
+        Assert.Null(svc.ConvertRequest.AutoApprove);
+    }
+
+    [Fact]
+    public async Task SessionConvert_ReportsWhyItWasRefused()
+    {
+        var running = new FakeSessions { ConvertException = new InvalidOperationException("Pause the session first.") };
+        var refused = await Assert.ThrowsAsync<McpException>(() => Tools(running).ConvertSession("sess-1"));
+        Assert.StartsWith("session_not_convertible", refused.Message);
+        Assert.Contains("Pause", refused.Message);
+
+        var unknown = new FakeSessions { ConvertException = new KeyNotFoundException() };
+        var missing = await Assert.ThrowsAsync<McpException>(() => Tools(unknown).ConvertSession("sess-1"));
+        Assert.Equal("session_not_found", missing.Message);
+
+        var badUi = new FakeSessions { ConvertException = new ArgumentException("Chat UI mode is only supported for interactive Claude sessions.") };
+        var invalid = await Assert.ThrowsAsync<McpException>(() => Tools(badUi).ConvertSession("sess-1", uiMode: "chat"));
+        Assert.StartsWith("invalid_argument", invalid.Message);
+    }
+
     // ------------------------------------------------------------------ fixtures
 
     private static SessionInfo Info(string phase) => new()
@@ -105,6 +143,20 @@ public class McpSessionHandoffTests
 
         public Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default) =>
             Task.FromResult(Session);
+
+        public Exception? ConvertException { get; init; }
+        public string? ConvertOwner { get; private set; }
+        public string? ConvertId { get; private set; }
+        public ConvertSessionRequest? ConvertRequest { get; private set; }
+
+        public Task<SessionInfo> ConvertSessionAsync(string owner, string id, ConvertSessionRequest req, CancellationToken ct = default)
+        {
+            ConvertOwner = owner;
+            ConvertId = id;
+            ConvertRequest = req;
+            if (ConvertException is not null) throw ConvertException;
+            return Task.FromResult(Info("Pending") with { ConvertedFrom = SessionMode.Autonomous });
+        }
 
         /// <summary>Mirrors production: no visible session means no transcript, whatever is stored.</summary>
         public Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default)

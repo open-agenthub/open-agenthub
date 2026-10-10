@@ -64,6 +64,22 @@ public class ApiRouteTableTests
     }
 
     [Fact]
+    public void ConvertRoute_ExistsOnBothSurfacesAndForDescendantsInThePod()
+    {
+        // The web card uses api/sessions, a token client api/remote, and an orchestrating agent
+        // the internal peer route — three callers, three auth schemes, one service method.
+        foreach (var template in new[]
+                 {
+                     "api/sessions/{id}/convert",
+                     "api/remote/sessions/{id}/convert",
+                     "internal/sessions/{id}/peer/{childId}/convert"
+                 })
+        {
+            Assert.Contains(Routes(), route => route.Template == template && route.Methods.Contains("POST"));
+        }
+    }
+
+    [Fact]
     public void NoTwoActions_ClaimTheSameMethodAndTemplate()
     {
         // An ambiguous route throws when the first request arrives at it, not at startup, so it

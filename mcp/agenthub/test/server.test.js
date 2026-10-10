@@ -11,7 +11,7 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   assert.match(server, /name:\s*'agenthub'/);
   for (const name of [
     'session_create', 'session_get', 'session_list', 'session_wait', 'session_delete',
-    'agents_list', 'agent_send'
+    'session_convert', 'agents_list', 'agent_send'
   ]) {
     assert.match(server, new RegExp(`register\\('${name}'`));
   }
@@ -19,6 +19,16 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   assert.match(server, /AGENTHUB_URL|AgentHubClient/);
   assert.match(server, /mode:\s*z\.[\s\S]*?\.default\('Interactive'\)/);
   assert.match(server, /sanitizeSession/);
+});
+
+test('agenthub MCP converts by sessionId with the same flags as the REST body', () => {
+  const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
+  const tool = server.slice(server.indexOf("register('session_convert'"));
+  assert.match(tool, /sessionId: z\.string\(\)\.min\(1\)\.max\(128\)/);
+  assert.match(tool, /uiMode: z\.enum\(\['terminal', 'chat'\]\)\.optional\(\)/);
+  assert.match(tool, /autoApprove: z\.boolean\(\)\.optional\(\)/);
+  assert.match(tool, /resume: z\.boolean\(\)\.optional\(\)/);
+  assert.match(tool, /client\.convert\(sessionId, body\)/);
 });
 
 test('agenthub MCP exposes transcript polling and the caller system prompt', () => {

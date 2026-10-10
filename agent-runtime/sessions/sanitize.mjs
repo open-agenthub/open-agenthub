@@ -2,7 +2,9 @@
 const SAFE_KEYS = [
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
-  'createdAt', 'hasMcp'
+  'createdAt', 'hasMcp',
+  // What session_convert changes and whether it can be called.
+  'uiMode', 'canConvertToInteractive', 'convertedFrom'
 ];
 
 /**
