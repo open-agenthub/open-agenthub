@@ -55,6 +55,29 @@ Public session responses expose only browser phase, screen size, and a non-secre
 code. They never expose callback or lease tokens, pod IPs, CDP URLs, presigned URLs, or
 cookie contents.
 
+## Clipboard
+
+A viewer who may control the browser (owner, collaborator, or a collaborator share link) can
+copy and paste text between their own clipboard and the remote page. Ctrl/Cmd+V, C and X over
+the browser pane are taken out of the VNC stream; the frontend calls
+`/api/sessions/{id}/browser/clipboard/{paste,copy}` (or the `/api/shared/{token}/…` twin), and
+the backend relays to the browser supervisor on TCP 6081, which only the backend can reach.
+Paste inserts the text into the focused element with CDP `Input.insertText`. Copy reads the
+selection of the focused frame, then lets Chromium run its own copy or cut command, so a cut
+removes what it handed over and the page still sees the shortcut. Password fields yield
+nothing, as they do for a native copy. Text is limited to 256 Ki characters and never logged.
+
+The alternative was the RFB clipboard that x11vnc and noVNC already speak. It was rejected
+because x11vnc sends every change of the X selection to all connected viewers, the view-only
+endpoint included, so a copy made by one user would reach everybody watching. Both x11vnc
+processes therefore run with `-nosel`, and the clipboard travels only per request, after the
+same access check as keyboard input.
+
+Text only: images and rich formats are not carried. Paste reads the local clipboard from the
+browser's paste event, which needs no permission; only when the browser raises none is the
+Clipboard API asked. Copy writes through the Clipboard API, and where the browser refuses
+(insecure origin, denied permission) the pane says so instead of failing silently.
+
 ## Cookie persistence
 
 When S3-compatible storage is configured, the browser supervisor periodically checkpoints

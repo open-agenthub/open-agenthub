@@ -75,8 +75,11 @@ start_child chromium \
   --disable-component-update \
   --disable-sync \
   about:blank
-start_child x11vnc -display :99 -localhost -forever -shared -xrandr resize -nopw -rfbport 5900
-start_child x11vnc -display :99 -localhost -forever -shared -viewonly -xrandr resize -nopw -rfbport 5901
+# -nosel: x11vnc would otherwise push every copy made in Chromium to all connected viewers,
+# view-only ones included. The clipboard goes through the supervisor instead, per request and
+# only for a viewer allowed to control the browser.
+start_child x11vnc -display :99 -localhost -forever -shared -nosel -xrandr resize -nopw -rfbport 5900
+start_child x11vnc -display :99 -localhost -forever -shared -nosel -viewonly -xrandr resize -nopw -rfbport 5901
 start_child websockify 0.0.0.0:6080 127.0.0.1:5900
 start_child websockify 0.0.0.0:6082 127.0.0.1:5901
 start_child socat TCP-LISTEN:9222,fork,reuseaddr TCP:127.0.0.1:9223
