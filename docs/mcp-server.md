@@ -96,6 +96,13 @@ The same surface as the stdio server:
 | `session_delete` | Delete a session; does not cascade to children |
 | `agents_list` | Your agents with title, description and phase |
 | `agent_send` | Send a message/task to an agent by id or unique title |
+| `credentials_list` | Provider accounts, git PATs (ids, never tokens) and API-key presence a session may use |
+
+`session_create` takes `credentialId` (an account id from `credentials_list`) and `gitPatIds`
+(comma-separated PAT ids; `none` for no token) — the latter as text rather than a declared array,
+because a connected client keeps the schema it saw at connect time (`docs/credential-scopes.md`).
+A personal API token can be restricted to some of these credentials; the stdio server then lists
+and may use only that slice.
 
 `session_logs` is the only way to see what a session did. `kubectl logs` on the pod shows the
 entrypoint and the launch command but not the agent's output, which goes to the PTY; and once a

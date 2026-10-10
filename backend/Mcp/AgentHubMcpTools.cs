@@ -84,6 +84,13 @@ public sealed class AgentHubMcpTools(
                      + "filesystem, so only turn it on for a task that genuinely needs tooling the "
                      + "image does not ship. The pod stays unprivileged either way.")]
         string? runAsRoot = null,
+        [Description("Id of the stored provider login (see credentials_list → accounts) a "
+                     + "Subscription session mounts. Omit for the default account.")]
+        string? credentialId = null,
+        [Description("Comma-separated ids of the stored git personal access tokens (see "
+                     + "credentials_list → gitPats) the session gets. Omit or \"*\" for every "
+                     + "stored token; \"none\" for no token at all.")]
+        string? gitPatIds = null,
         CancellationToken ct = default)
     {
         var request = new CreateSessionRequest
@@ -103,7 +110,9 @@ public sealed class AgentHubMcpTools(
             ParentSessionId = parentSessionId,
             Schedule = schedule,
             AutoApprove = ParseFlag(autoApprove),
-            RunAsRoot = ParseFlag(runAsRoot) ?? false
+            RunAsRoot = ParseFlag(runAsRoot) ?? false,
+            CredentialId = string.IsNullOrWhiteSpace(credentialId) ? null : credentialId.Trim(),
+            GitPatIds = ParseIdList(gitPatIds)
         };
         if (ParseRepos(repos) is { Count: > 0 } parsedRepos) request = request with { Repos = parsedRepos };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
@@ -117,6 +126,19 @@ public sealed class AgentHubMcpTools(
         // The response carries `url`: the page a person opens to take this session over. It is null
         // on an instance with no FrontendOrigin configured — see SessionUrl.
         return created;
+    }
+
+    [McpServerTool(Name = "credentials_list")]
+    [Description("List the credentials a session may use: provider logins (accounts, keyed by agent) "
+                 + "with id, label and identity, stored git personal access tokens (id, kind, host — "
+                 + "never the token), and which API keys are stored. Pass an account id as "
+                 + "credentialId and git token ids as gitPatIds to session_create.")]
+    public async Task<RemoteCredentialListing> ListCredentials(CancellationToken ct = default)
+    {
+        var owner = Owner;
+        return RemoteCredentialListing.From(
+            await sessions.ListProviderAccountsAsync(owner, ct),
+            await sessions.GetCredentialStatusAsync(owner, ct));
     }
 
     [McpServerTool(Name = "session_get")]
@@ -321,6 +343,20 @@ public sealed class AgentHubMcpTools(
         "false" or "no" or "0" or "off" => false,
         _ => null
     };
+
+    /// <summary>
+    /// Reads an id list that arrives as text, for the reason given at <see cref="ParseFlag"/>.
+    /// Empty or <c>*</c> is "not specified" (every stored token, the session service's default);
+    /// <c>none</c> is the one way to ask for no token, since an empty string cannot carry it.
+    /// </summary>
+    public static List<string>? ParseIdList(string? value)
+    {
+        var text = value?.Trim();
+        if (string.IsNullOrEmpty(text) || text == "*") return null;
+        if (string.Equals(text, "none", StringComparison.OrdinalIgnoreCase)) return new List<string>();
+        return text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal).ToList();
+    }
 }
 
 public record AgentSummary(string Id, string Title, string? Description, string Phase, string? ProjectId);

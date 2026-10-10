@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { SessionsBackendClient } from './client.mjs';
+import { withCredentialSelection } from './credentials.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
@@ -40,7 +41,13 @@ const createSchema = z.object({
   image: z.string().max(512).optional(),
   runAsRoot: z.boolean().optional(),
   cpu: z.string().max(32).optional(),
-  memory: z.string().max(32).optional()
+  memory: z.string().max(32).optional(),
+  // Which stored provider login the child mounts (omitted = the owner's default account) and
+  // which stored git tokens it gets, as comma-separated ids — text, not an array, so an
+  // already-connected client's call does not fail schema validation (see credentials.mjs).
+  // Omitted or "*" = every stored token, "none" = no token.
+  credentialId: z.string().max(64).optional(),
+  gitPatIds: z.string().max(4096).optional()
 });
 
 register('session_create', {
@@ -50,9 +57,11 @@ register('session_create', {
     + 'itself to report back. Default mode is Interactive: a person can watch and answer it, and '
     + 'tool requests outside its allow list wait for their approval. Use Autonomous only for '
     + 'unattended work, where such requests are approved automatically. hasMcp in the result counts '
-    + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled.',
+    + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled. '
+    + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
+    + 'token) the git tokens the child gets.',
   inputSchema: createSchema
-}, async (body) => text(sanitizeSession(await client.create(body))));
+}, async (body) => text(sanitizeSession(await client.create(withCredentialSelection(body)))));
 
 register('session_get', {
   description: 'Get a descendant session by id.',

@@ -230,6 +230,17 @@ Whether the OpenClaw image *should* ship `sessions/` (orchestration) or `browser
 decision — `browser/` additionally depends on the browser-runtime sidecar — and is deliberately not
 settled here.
 
+## Which credentials the session gets
+
+`POST /api/remote/sessions` takes `credentialId` (a stored provider login) and `gitPatIds` (which
+stored git personal access tokens; omitted = all, `[]` = none) like the in-app create does, and
+`GET /api/remote/credentials` lists what the token may choose from — a token-authenticated caller
+cannot reach `GET /api/credentials/accounts`, which sits behind the interactive login. A personal
+API token can itself be restricted to some accounts and PATs; a request outside that restriction is
+a `403` whose body is a stable code (`credential_not_allowed`, `credential_required`,
+`agent_not_allowed`, `api_keys_not_allowed`, `git_pat_not_allowed`). The rules, and why a resume is
+not re-checked against the token, are in `docs/credential-scopes.md`.
+
 ## Following a session without a websocket
 
 `GET /api/remote/sessions/{id}/transcript` and the `session_transcript` MCP tool page the transcript

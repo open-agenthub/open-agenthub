@@ -24,9 +24,11 @@ const showOpenClawSource = computed(() => needsOpenClawApiKeySource(props.agent,
 const readiness = computed(() =>
   credentialReadiness(props.agent, props.authMode, props.mode, props.credentialStatus, props.openClawApiKeySource))
 const providerAccounts = computed(() => accountsFor(props.accounts, props.agent))
-// One login needs no choice and stays "the default, resolved at each start"; the dropdown only
-// appears once there is something to choose between, and then the default is preselected.
-const showAccounts = computed(() => props.authMode !== 'ApiKey' && providerAccounts.value.length >= 2)
+// Shown from the first login, with the default preselected. It used to wait for a second one,
+// which left the dialog silent about *which* login the session would run on — and once an API
+// token can be restricted to some accounts (docs/credential-scopes.md), "the default" is no
+// longer something a person can take for granted.
+const showAccounts = computed(() => props.authMode !== 'ApiKey' && providerAccounts.value.length >= 1)
 // The listing always carries every agent's key, so an empty object is "not loaded yet" (or an
 // older backend) rather than "no accounts". Until it arrives a pinned id must be left alone:
 // resetting it against an empty list would wipe the pin of a session being edited or copied.

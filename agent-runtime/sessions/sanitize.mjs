@@ -2,7 +2,10 @@
 const SAFE_KEYS = [
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
-  'createdAt', 'hasMcp'
+  'createdAt', 'hasMcp',
+  // Ids of the login and git tokens the session runs with, never the secrets, so a parent can
+  // read back that its child was created the way it asked.
+  'credentialId', 'gitPatIds'
 ];
 
 /**

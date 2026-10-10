@@ -215,6 +215,21 @@ test('transcript polls with a cursor and allows a page larger than the small-JSO
   });
 });
 
+test('credentials reads the remote listing with Bearer auth', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const calls = [];
+
+  await withFakeServer((req, body, res) => {
+    calls.push({ method: req.method, url: req.url, authorization: req.headers.authorization });
+    json(res, 200, { accounts: { Claude: [{ id: 'a1', label: 'Work' }] }, gitPats: [], apiKeys: { anthropic: true } });
+  }, async (baseUrl) => {
+    const client = new AgentHubClient({ AGENTHUB_URL: baseUrl, AGENTHUB_TOKEN: TOKEN });
+    const listing = await client.credentials();
+    assert.deepEqual(calls, [{ method: 'GET', url: '/api/remote/credentials', authorization: `Bearer ${TOKEN}` }]);
+    assert.equal(listing.accounts.Claude[0].id, 'a1');
+  });
+});
+
 test('transcript omits query parameters that were not asked for', async () => {
   const { AgentHubClient } = await import('../client.mjs');
   const urls = [];

@@ -54,7 +54,7 @@ describe('account helpers', () => {
 })
 
 describe('account choice when creating, editing and duplicating a session', () => {
-  it('shows the dropdown only from two accounts of the chosen agent and preselects the default', async () => {
+  it('shows the dropdown for the chosen agent\'s accounts and preselects the default', async () => {
     const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await flushPromises()
     const select = wrapper.get('[data-account-select]')
@@ -63,12 +63,24 @@ describe('account choice when creating, editing and duplicating a session', () =
       'Work — me@example.com · Example Org (default)', 'Personal — me@home.example'
     ])
 
+    // Codex has no stored login here, so there is nothing to show for it.
     await wrapper.get('[data-agent-option="Codex"]').trigger('click')
     expect(wrapper.find('[data-account-select]').exists()).toBe(false)
   })
 
-  it('stays hidden with a single login, so the session follows the default', async () => {
+  it('shows a single login too, with its identity, so the dialog says which login runs', async () => {
     mocks.api.listProviderAccounts.mockResolvedValue({ Claude: [work] })
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.findAll('[data-account-option]').map(o => o.text())).toEqual([
+      'Work — me@example.com · Example Org (default)'
+    ])
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].credentialId).toBe('work0001')
+  })
+
+  it('stays hidden while no login is stored at all', async () => {
+    mocks.api.listProviderAccounts.mockResolvedValue({ Claude: [], Codex: [], Cursor: [], OpenClaw: [] })
     const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await flushPromises()
     expect(wrapper.find('[data-account-select]').exists()).toBe(false)

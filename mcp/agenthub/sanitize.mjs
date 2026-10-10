@@ -6,7 +6,10 @@ const SAFE_KEYS = [
   // The page a person opens to take the session over. An allowlist means a field the backend
   // starts returning is dropped here until it is named, so leaving this out would have made
   // session_create answer without the one thing a caller handing over a session needs.
-  'url'
+  'url',
+  // Which login and git tokens the session runs with — ids, not secrets — so a caller can read
+  // back that the session was created the way it asked (docs/credential-scopes.md).
+  'credentialId', 'gitPatIds'
 ];
 
 /**

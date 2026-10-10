@@ -109,6 +109,21 @@ public sealed class RemoteController : ControllerBase
     }
 
     /// <summary>
+    /// The provider accounts, git PATs and API keys a session created with this token may use —
+    /// ids, labels and hosts, never a secret. The in-app listing sits behind the interactive login,
+    /// which a token cannot pass, and without this a caller had to guess a <c>credentialId</c>.
+    /// </summary>
+    [HttpGet("credentials")]
+    public async Task<ActionResult<RemoteCredentialListing>> Credentials(CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        return Ok(RemoteCredentialListing.From(
+            await _svc.ListProviderAccountsAsync(owner, ct),
+            await _svc.GetCredentialStatusAsync(owner, ct)));
+    }
+
+    /// <summary>
     /// Sends a message/task to one of the token owner's sessions. Stored with a null
     /// sender session — the receiving agent sees it as an external message from its owner.
     /// </summary>

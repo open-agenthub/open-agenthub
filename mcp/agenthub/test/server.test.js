@@ -11,7 +11,7 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   assert.match(server, /name:\s*'agenthub'/);
   for (const name of [
     'session_create', 'session_get', 'session_list', 'session_wait', 'session_delete',
-    'agents_list', 'agent_send'
+    'agents_list', 'agent_send', 'credentials_list'
   ]) {
     assert.match(server, new RegExp(`register\\('${name}'`));
   }
@@ -28,4 +28,14 @@ test('agenthub MCP exposes transcript polling and the caller system prompt', () 
   assert.doesNotMatch(server, /sanitizeSession\(await client\.transcript/);
   assert.match(server, /offset: z\.number\(\)\.int\(\)\.min\(0\)\.optional\(\)/);
   assert.match(server, /systemPrompt: z\.string\(\)\.max\(20_000\)\.optional\(\)/);
+});
+
+test('agenthub MCP takes the credential selection as text and lists credentials unsanitized', () => {
+  const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
+  // Strings, not arrays: an already-connected client sends a new parameter as text.
+  assert.match(server, /credentialId: z\.string\(\)\.max\(64\)\.optional\(\)/);
+  assert.match(server, /gitPatIds: z\.string\(\)\.max\(4096\)\.optional\(\)/);
+  assert.match(server, /client\.create\(withCredentialSelection\(body\)\)/);
+  // The listing is not a session record; the allowlist would empty it.
+  assert.doesNotMatch(server, /sanitizeSession\(await client\.credentials/);
 });
