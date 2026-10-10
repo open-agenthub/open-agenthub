@@ -89,12 +89,16 @@ register('agents_list', {
 register('agent_send', {
   description: 'Send a message/task to a peer agent (anyone in agents_list). "to" is a session id or a '
     + 'unique agent title (see agents_list); an ambiguous title fails with the candidate list. '
-    + 'The peer reads it via its agent_inbox tool.',
+    + 'By default the peer reads it via its agent_inbox tool. priority pushes it straight into the '
+    + 'peer\'s running prompt; interrupt also stops the peer\'s current work first (implies priority). '
+    + 'The result\'s deliveredVia says where it went: inbox, injected or mod.',
   inputSchema: z.object({
     to: z.string().min(1).max(256),
-    message: z.string().min(1).max(4000)
+    message: z.string().min(1).max(4000),
+    priority: z.boolean().optional(),
+    interrupt: z.boolean().optional()
   })
-}, async ({ to, message }) => {
+}, async ({ to, message, priority, interrupt }) => {
   const agents = await client.listProjectAgents();
   let targetId;
   try {
@@ -106,7 +110,7 @@ register('agent_send', {
       isError: true
     };
   }
-  return text(await client.sendAgentMessage(targetId, message));
+  return text(await client.sendAgentMessage(targetId, message, { priority, interrupt }));
 });
 
 register('agent_inbox', {

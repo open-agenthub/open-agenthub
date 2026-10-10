@@ -24,4 +24,8 @@ test('agenthub_sessions registers lifecycle and fleet tools', () => {
   // Title resolution goes through the shared resolver and never targets the sender itself.
   assert.match(server, /resolveAgentTarget/);
   assert.match(server, /filter\(a => !a\?\.self\)/);
+  // agent_send carries the priority flags as real booleans (zod), unlike the remote MCP's strings.
+  assert.match(server, /priority: z\.boolean\(\)\.optional\(\)/);
+  assert.match(server, /interrupt: z\.boolean\(\)\.optional\(\)/);
+  assert.match(server, /sendAgentMessage\(targetId, message, \{ priority, interrupt \}\)/);
 });

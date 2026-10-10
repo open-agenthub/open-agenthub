@@ -109,14 +109,18 @@ register('agents_list', {
 
 register('agent_send', {
   description: 'Send a message/task to one of your agents. "to" is a session id or a unique title '
-    + '(scope the lookup with projectId); an ambiguous title fails with the candidate list. The agent '
-    + 'reads it via its in-session agent_inbox tool.',
+    + '(scope the lookup with projectId); an ambiguous title fails with the candidate list. By default '
+    + 'the agent reads it via its in-session agent_inbox tool. priority pushes it straight into the '
+    + 'running agent\'s prompt; interrupt also stops its current work first (implies priority). The '
+    + 'result\'s deliveredVia says where it went: inbox, injected or mod.',
   inputSchema: z.object({
     to: z.string().min(1).max(256),
     message: z.string().min(1).max(4000),
-    projectId: z.string().max(128).optional()
+    projectId: z.string().max(128).optional(),
+    priority: z.boolean().optional(),
+    interrupt: z.boolean().optional()
   })
-}, async ({ to, message, projectId }) => {
+}, async ({ to, message, projectId, priority, interrupt }) => {
   const agents = await client.listAgents(projectId);
   let targetId;
   try {
@@ -128,7 +132,7 @@ register('agent_send', {
       isError: true
     };
   }
-  return text(await client.sendAgentMessage(targetId, message));
+  return text(await client.sendAgentMessage(targetId, message, { priority, interrupt }));
 });
 
 function safeError(error) {
