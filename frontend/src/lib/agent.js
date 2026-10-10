@@ -2,7 +2,8 @@ export const agentOptions = [
   { value: 'Claude', label: 'Claude', hint: 'Anthropic agent runtime' },
   { value: 'Codex', label: 'Codex', hint: 'OpenAI agent runtime' },
   { value: 'Cursor', label: 'Cursor', hint: 'Cursor agent runtime' },
-  { value: 'OpenClaw', label: 'OpenClaw', hint: 'OpenClaw agent runtime' }
+  { value: 'OpenClaw', label: 'OpenClaw', hint: 'OpenClaw agent runtime' },
+  { value: 'OpenCode', label: 'OpenCode', hint: 'OpenCode agent runtime (OpenCode Go)' }
 ]
 
 /** Filter the agent catalog by an allowlist. Empty/missing = unrestricted. */
@@ -46,6 +47,15 @@ export function defaultPolicy(agent) {
       allowedTools: ['Read', 'Edit'],
       allowedMcpTools: [],
       allowedCommands: ['git status', 'npm test', 'dotnet test']
+    }
+  }
+  if (agent === 'OpenCode') {
+    // OpenCode's tools arrive under the hub's names (bash → Bash, edit/apply_patch → Edit, …),
+    // and shell commands are matched by prefix like Codex's, so the same shape applies.
+    return {
+      allowedTools: ['Read', 'Edit', 'Glob', 'Grep'],
+      allowedMcpTools: [],
+      allowedCommands: ['git status', 'npm test']
     }
   }
   if (agent === 'Cursor') {
@@ -122,11 +132,12 @@ export function policyPayload(form) {
 export function toolsPlaceholder(agent) {
   if (agent === 'Cursor') return 'Shell(git status)\nRead(**)\nWrite(**)'
   if (agent === 'Codex') return 'Read\nEdit'
+  if (agent === 'OpenCode') return 'Read\nEdit\nGlob\nGrep'
   return 'Read\nEdit\nBash(git*)'
 }
 
 export function commandsPlaceholder(agent) {
-  return agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'
+  return agent === 'Codex' || agent === 'OpenCode' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'
 }
 
 /** The accounts stored for one agent out of the `{ Claude: [...], ... }` listing. */
@@ -166,6 +177,7 @@ export function credentialReadiness(agent, authMode, mode, status = {}, openClaw
       agent === 'Codex' ? 'codexSubscription'
         : agent === 'Cursor' ? 'cursorSubscription'
           : agent === 'OpenClaw' ? 'openclawSubscription'
+            : agent === 'OpenCode' ? 'opencodeSubscription'
             : 'claudeSubscription'
     ]
     if (ready) return { ready, text: `${agent} subscription login is stored.` }
@@ -178,6 +190,7 @@ export function credentialReadiness(agent, authMode, mode, status = {}, openClaw
     if (source === 'Cursor') return apiKeyReadiness('Cursor', 'cursorApiKey', status)
     return apiKeyReadiness('Anthropic', 'anthropicApiKey', status)
   }
+  if (agent === 'OpenCode') return apiKeyReadiness('OpenCode', 'openCodeApiKey', status)
   const provider = agent === 'Codex' ? 'OpenAI' : agent === 'Cursor' ? 'Cursor' : 'Anthropic'
   const statusKey = agent === 'Codex' ? 'openAiApiKey' : agent === 'Cursor' ? 'cursorApiKey' : 'anthropicApiKey'
   return apiKeyReadiness(provider, statusKey, status)

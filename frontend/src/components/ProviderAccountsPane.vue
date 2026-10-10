@@ -16,7 +16,7 @@ const props = defineProps({ status: { type: Object, default: () => ({}) } })
 const emit = defineEmits(['changed'])
 
 const providers = agentOptions.map(option => option.value)
-const statusKey = { Claude: 'claudeSubscription', Codex: 'codexSubscription', Cursor: 'cursorSubscription', OpenClaw: 'openclawSubscription' }
+const statusKey = { Claude: 'claudeSubscription', Codex: 'codexSubscription', Cursor: 'cursorSubscription', OpenClaw: 'openclawSubscription', OpenCode: 'opencodeSubscription' }
 
 const accounts = ref({})
 const listed = ref(false)

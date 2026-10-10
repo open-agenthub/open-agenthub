@@ -22,6 +22,7 @@ public class InternalNotifyTests
     [Theory]
     [InlineData(AgentKind.Codex)]
     [InlineData(AgentKind.Cursor)]
+    [InlineData(AgentKind.OpenCode)]
     [InlineData(AgentKind.Claude)]
     public async Task Notify_FansOutQuestion_ForAnyAgent(AgentKind agent)
     {
@@ -70,6 +71,7 @@ public class InternalNotifyTests
     [InlineData(AgentKind.Codex, "Codex")]
     [InlineData(AgentKind.Cursor, "Cursor")]
     [InlineData(AgentKind.OpenClaw, "OpenClaw")]
+    [InlineData(AgentKind.OpenCode, "OpenCode")]
     [InlineData(AgentKind.Claude, "Claude")]
     public void StatusText_NamesTheSessionsAgent(AgentKind agent, string expected)
     {

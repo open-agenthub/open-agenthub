@@ -10,7 +10,7 @@ const props = defineProps({ embedded: { type: Boolean, default: false } })
 // Fields that are staged here and written together on Save. Git tokens are not among them:
 // they are a list with their own endpoints (see addPat/removePat below).
 const c = ref({
-  sshPrivateKey: '', anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '',
+  sshPrivateKey: '', anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '', openCodeApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
 })
 // Which fields already have a stored value (values are never sent back).
@@ -34,6 +34,10 @@ const apiKeys = [
   {
     field: 'cursorApiKey', label: 'Cursor API key', placeholder: 'key_…',
     hint: 'Cursor with API key billing, or OpenClaw with Cursor as the API key source.'
+  },
+  {
+    field: 'openCodeApiKey', label: 'OpenCode API key', placeholder: 'sk-…',
+    hint: 'OpenCode Go subscription or Zen billing — the key from the opencode.ai console.'
   }
 ]
 

@@ -29,6 +29,7 @@ public static class ProviderAccountIdentityReader
                 AgentKind.Codex => FromCodex(root),
                 AgentKind.Cursor => FromCursor(root),
                 AgentKind.OpenClaw => FromOpenClaw(root),
+                AgentKind.OpenCode => FromOpenCode(root),
                 // Claude's file has opaque tokens only; its identity arrives in the header.
                 _ => null
             };
@@ -97,6 +98,40 @@ public static class ProviderAccountIdentityReader
         names.Sort(StringComparer.Ordinal);
         return Normalize(string.Join(",", names), email, names.Count == 1 ? names[0] : null);
     }
+
+    /// <summary>
+    /// OpenCode's auth.json maps provider ids to { type, ... } and names no person. An OpenCode Go
+    /// login is an API key, so two logins to the same provider differ only in their key: the
+    /// matching key therefore carries a short hash of each api key (an oauth entry's accountId,
+    /// when it has one — its tokens rotate), otherwise a second Go key would be matched to the
+    /// first account by provider name and overwrite it. The provider list is what is shown.
+    /// The hash never leaves the secret: <see cref="ProviderAccountInfo"/> does not carry the key.
+    /// </summary>
+    private static ProviderAccountIdentity? FromOpenCode(JsonElement root)
+    {
+        var parts = new List<string>();
+        var providers = new List<string>();
+        foreach (var entry in root.EnumerateObject())
+        {
+            if (entry.Value.ValueKind != JsonValueKind.Object) continue;
+            providers.Add(entry.Name);
+            var distinct = Text(entry.Value, "type") switch
+            {
+                "api" => Text(entry.Value, "key") is { Length: > 0 } key ? Fingerprint(key) : null,
+                "oauth" => Text(entry.Value, "accountId"),
+                _ => null
+            };
+            parts.Add(distinct is null ? entry.Name : $"{entry.Name}:{distinct}");
+        }
+        if (providers.Count == 0) return null;
+        parts.Sort(StringComparer.Ordinal);
+        providers.Sort(StringComparer.Ordinal);
+        return Normalize(string.Join(",", parts), null, string.Join(", ", providers));
+    }
+
+    private static string Fingerprint(string secret) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(secret)))[..12]
+            .ToLowerInvariant();
 
     private static JsonElement? JwtPayload(string? token)
     {

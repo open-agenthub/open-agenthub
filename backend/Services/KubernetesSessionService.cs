@@ -146,7 +146,8 @@ public sealed class KubernetesSessionService : ISessionService
         var codex = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Codex), ct))?.Data;
         var cursor = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Cursor), ct))?.Data;
         var openclaw = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.OpenClaw), ct))?.Data;
-        return CredentialSecretFactory.CredentialStatus(data, claude, codex, cursor, openclaw);
+        var opencode = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.OpenCode), ct))?.Data;
+        return CredentialSecretFactory.CredentialStatus(data, claude, codex, cursor, openclaw, opencode);
     }
 
     /// <summary>
@@ -173,7 +174,7 @@ public sealed class KubernetesSessionService : ISessionService
         string owner, CancellationToken ct = default)
     {
         var result = new Dictionary<string, IReadOnlyList<ProviderAccountInfo>>();
-        foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex, AgentKind.Cursor, AgentKind.OpenClaw })
+        foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex, AgentKind.Cursor, AgentKind.OpenClaw, AgentKind.OpenCode })
         {
             var set = await ReadProviderAccountsAsync(owner, agent, ct);
             result[agent.ToString()] = set.Accounts.Select(ProviderAccountInfo.From).ToList();
@@ -1180,6 +1181,7 @@ public sealed class KubernetesSessionService : ISessionService
                 AgentKind.Codex => "openai_api_key",
                 AgentKind.Cursor => "cursor_api_key",
                 AgentKind.OpenClaw => AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource),
+                AgentKind.OpenCode => "opencode_api_key",
                 _ => "anthropic_api_key"
             };
             hasApiKey = apiKey is not null && await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
@@ -1197,6 +1199,7 @@ public sealed class KubernetesSessionService : ISessionService
             CodexCredentialSecretName = ProviderSecretName(owner, AgentKind.Codex),
             CursorCredentialSecretName = ProviderSecretName(owner, AgentKind.Cursor),
             OpenClawCredentialSecretName = ProviderSecretName(owner, AgentKind.OpenClaw),
+            OpenCodeCredentialSecretName = ProviderSecretName(owner, AgentKind.OpenCode),
             HasSelectedApiKey = hasApiKey,
             HasSelectedSubscriptionCredential = hasSubscription,
             SubscriptionAccountId = accountId,
@@ -1209,7 +1212,7 @@ public sealed class KubernetesSessionService : ISessionService
             S3Insecure = _s3Insecure,
             RuntimeImages = new AgentRuntimeImages(
                 claudeImage, _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.OpenClawAgentImage,
-                _opts.AgentImagePullPolicy),
+                _opts.OpenCodeAgentImage, _opts.AgentImagePullPolicy),
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
@@ -1319,6 +1322,7 @@ public sealed class KubernetesSessionService : ISessionService
         AgentKind.Codex => $"codex-{Sanitize(owner)}",
         AgentKind.Cursor => $"cursor-{Sanitize(owner)}",
         AgentKind.OpenClaw => $"openclaw-{Sanitize(owner)}",
+        AgentKind.OpenCode => $"opencode-{Sanitize(owner)}",
         _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
     };
 
@@ -1342,6 +1346,7 @@ public sealed class AgentHubOptions
     public string CodexAgentImage { get; set; } = "";
     public string CursorAgentImage { get; set; } = "";
     public string OpenClawAgentImage { get; set; } = "";
+    public string OpenCodeAgentImage { get; set; } = "";
     public int AgentPort { get; set; } = 7681;
     public string GitCloneImage { get; set; } = "alpine/git:2.45.2";
     /// <summary>Pull policy for the agent/runtime image. Set "Always" when the agent

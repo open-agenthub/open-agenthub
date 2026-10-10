@@ -105,3 +105,14 @@ Host=postgres.{{ .Release.Namespace }}.svc.cluster.local;Database=agenthub;Usern
 {{ required "externalDatabase.connectionString is required when postgres.enabled=false" .Values.externalDatabase.connectionString }}
 {{- end -}}
 {{- end }}
+
+{{- define "agenthub.opencodeAgentImage" -}}
+{{- $override := .Values.agent.images.opencode | default "" | trim -}}
+{{- if $override -}}
+{{- $override -}}
+{{- else -}}
+{{- $registry := required "image.registry is required when agent.images.opencode is empty" .Values.image.registry | trimSuffix "/" -}}
+{{- $tag := required "image.tag is required when agent.images.opencode is empty" .Values.image.tag -}}
+{{- printf "%s/agent-runtime-opencode:%s" $registry $tag -}}
+{{- end -}}
+{{- end }}

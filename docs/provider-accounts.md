@@ -21,8 +21,8 @@ accounts.json                  index: [{id, label, identity, createdAt, lastUsed
 9b02ee1d5c7f8a30.credentials.json   the file of another account
 ```
 
-The file name after the dot is the provider's own (`credentials.json`, `auth.json`,
-`auth-profiles.json`), which is what makes the pod side unchanged — see below.
+The file name after the dot is the provider's own (`credentials.json`, `auth.json` — Codex,
+Cursor and OpenCode, each in its own secret — `auth-profiles.json`), which is what makes the pod side unchanged — see below.
 
 **The alternative was one secret per account** (`claude-u-<hash>-<accountId>`) with the index kept
 in Postgres or derived from a label selector. It was rejected for three reasons:
@@ -84,6 +84,13 @@ Per provider (what was checked, and against which version):
   one is present and nothing is assumed about it. Key: `sub`.
 - **OpenClaw**: `auth-profiles.json` holds `profiles` keyed `provider:name`; a profile may carry an
   `email`. The identity is the sorted profile key list plus the first e-mail found. Key: that list.
+- **OpenCode**: `auth.json` maps provider ids to `{type, ...}` (pinned 1.18.34/1.18.35) and names
+  nobody. The provider list is what is shown. An OpenCode Go login is `{type: "api", key}`, so two
+  Go logins differ only in their key; a key made of provider names alone would match the second
+  login to the first account (rule 3 below) and overwrite it. The key is therefore the sorted list
+  of `provider:<12 hex of sha256(key)>` for api entries and `provider:<accountId>` for oauth
+  entries (whose tokens rotate, so hashing them would turn every refresh into a new account). The
+  hash stays in the secret: the API never returns an identity key.
 
 When nothing can be extracted the account still exists, with a label the user can edit
 (`PATCH /api/credentials/accounts/{agent}/{id}`) and no identity line.
@@ -206,12 +213,20 @@ without a cluster:
   binary also compares `accountUuid`/`organizationUuid` across reads to detect a profile change.
   A live swap would run one account's token under another account's organisation metadata, and
   what that does to requests is exactly the kind of thing that cannot be verified from strings.
-- **Codex, Cursor, OpenClaw**: not verified. The Codex CLI is Rust and reads `auth.json` through
+- **Codex, Cursor, OpenClaw, OpenCode**: not verified. The Codex CLI is Rust and reads `auth.json` through
   its own auth manager; nothing was found either way. OpenClaw reads SQLite, not the file.
 
 Given that, every provider is restarted with resume. The cost is a few seconds and a resume that,
 for a session started in this pod, finds its conversation on local disk (Claude by the session id
-it was started with, Codex by `resume --last`, Cursor by chat id, OpenClaw by its session file).
+it was started with, Codex by `resume --last`, Cursor by chat id, OpenClaw by its session file,
+OpenCode by `--continue`, the newest top-level session in `~/.opencode`).
+
+OpenCode needs one step more. Its user config carries a default model chosen for the login the
+session started with — an OpenCode Go model for a Go key. A swap to a login for another provider
+would leave that model in place and fail every request, so the OpenCode driver's
+`installCredential` marks the config stale and the restart runs through `refresh-config.sh`, which
+regenerates it before `opencode` starts. In the PTY rather than in the swap request: choosing a Go
+model lists the catalogue with the CLI, which takes seconds, and the hub waits at most 15.
 The alternative — reloading in place where a CLI supports it — saves those seconds for Claude only
 and trades them for a state that could not be verified. If a later version exposes a documented
 reload, the swap route already has the driver hook (`installCredential`) to make the restart

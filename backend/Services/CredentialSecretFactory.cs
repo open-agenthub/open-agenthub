@@ -16,6 +16,7 @@ public static class CredentialSecretFactory
         ["anthropicApiKey"] = "anthropic_api_key",
         ["openAiApiKey"] = "openai_api_key",
         ["cursorApiKey"] = "cursor_api_key",
+        ["openCodeApiKey"] = "opencode_api_key",
         ["gitKnownHosts"] = "known_hosts",
         ["gitUserName"] = "git_user_name",
         ["gitUserEmail"] = "git_user_email"
@@ -38,6 +39,7 @@ public static class CredentialSecretFactory
         Put(data, "anthropic_api_key", credentials.AnthropicApiKey);
         Put(data, "openai_api_key", credentials.OpenAiApiKey);
         Put(data, "cursor_api_key", credentials.CursorApiKey);
+        Put(data, "opencode_api_key", credentials.OpenCodeApiKey);
         Put(data, "known_hosts", credentials.GitKnownHosts);
         Put(data, "git_user_name", credentials.GitUserName);
         Put(data, "git_user_email", credentials.GitUserEmail);
@@ -71,7 +73,8 @@ public static class CredentialSecretFactory
         IDictionary<string, byte[]>? claudeSubscription = null,
         IDictionary<string, byte[]>? codexSubscription = null,
         IDictionary<string, byte[]>? cursorSubscription = null,
-        IDictionary<string, byte[]>? openclawSubscription = null) => new()
+        IDictionary<string, byte[]>? openclawSubscription = null,
+        IDictionary<string, byte[]>? opencodeSubscription = null) => new()
     {
         SshPrivateKey = data.ContainsKey("ssh_key"),
         // Projected to id/kind/host: the status answer is the one place the list is read back,
@@ -80,6 +83,7 @@ public static class CredentialSecretFactory
         AnthropicApiKey = data.ContainsKey("anthropic_api_key"),
         OpenAiApiKey = data.ContainsKey("openai_api_key"),
         CursorApiKey = data.ContainsKey("cursor_api_key"),
+        OpenCodeApiKey = data.ContainsKey("opencode_api_key"),
         GitKnownHosts = data.ContainsKey("known_hosts"),
         GitUserName = data.ContainsKey("git_user_name"),
         GitUserEmail = data.ContainsKey("git_user_email"),
@@ -88,7 +92,8 @@ public static class CredentialSecretFactory
         ClaudeSubscription = ProviderAccountSecret.HasAnyAccount(claudeSubscription, AgentKind.Claude),
         CodexSubscription = ProviderAccountSecret.HasAnyAccount(codexSubscription, AgentKind.Codex),
         CursorSubscription = ProviderAccountSecret.HasAnyAccount(cursorSubscription, AgentKind.Cursor),
-        OpenclawSubscription = ProviderAccountSecret.HasAnyAccount(openclawSubscription, AgentKind.OpenClaw)
+        OpenclawSubscription = ProviderAccountSecret.HasAnyAccount(openclawSubscription, AgentKind.OpenClaw),
+        OpencodeSubscription = ProviderAccountSecret.HasAnyAccount(opencodeSubscription, AgentKind.OpenCode)
     };
 
     /// <summary>

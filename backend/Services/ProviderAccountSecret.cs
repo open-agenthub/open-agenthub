@@ -56,6 +56,8 @@ public static partial class ProviderAccountSecret
         AgentKind.Cursor => "auth.json",
         // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
         AgentKind.OpenClaw => "auth-profiles.json",
+        // Pinned from OpenCode 1.18.34: $XDG_DATA_HOME/opencode/auth.json.
+        AgentKind.OpenCode => "auth.json",
         _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
     };
 

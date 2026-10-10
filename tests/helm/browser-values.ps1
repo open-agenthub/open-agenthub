@@ -59,7 +59,8 @@ $noTag = Render @(
     '--set-string', 'agent.images.claude=example/claude:test',
     '--set-string', 'agent.images.codex=example/codex:test',
     '--set-string', 'agent.images.cursor=example/cursor:test',
-    '--set-string', 'agent.images.openclaw=example/openclaw:test'
+    '--set-string', 'agent.images.openclaw=example/openclaw:test',
+    '--set-string', 'agent.images.opencode=example/opencode:test'
 )
 # Read the expectation from Chart.yaml rather than repeating the number here: this is the
 # appVersion the fallback resolves to, and a literal version in this script turns every
