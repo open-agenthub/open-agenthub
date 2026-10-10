@@ -46,6 +46,11 @@ shift.
 
 ## Features
 
+- **Conversation workspace alongside the terminal** — the Workspace tab combines readable
+  conversation history, compact tool activity, copy/quote actions, a message composer, files,
+  and an optional terminal drawer. Settings save your preferred Workspace or Terminal view
+  in this browser. Claude Workspace sessions stream live; terminal sessions show
+  their saved native conversation where available. Switch views without restarting the agent.
 - **Interactive, autonomous, or scheduled sessions** — watch and answer live, hand off a
   prompt for unattended work, or run recurring jobs as CronJobs. Your agent works the
   night shift.
@@ -574,7 +579,9 @@ Results flow back via `git push` or as artifacts to S3. What is persisted:
   selected agent, authentication mode, agent conversation identifier, status, policy,
   and callback metadata.
 - **Object storage** = provider-separated state (`claude-state.tgz`, `codex-state.tgz`,
-  `cursor-state.tgz`, or `openclaw-state.tgz`), `scrollback.log`, `browser-cookies.json`, and
+  `cursor-state.tgz`, or `openclaw-state.tgz`), `scrollback.log`, `transcript.jsonl` (the
+  provider's own conversation file, where the runtime has one — see `docs/transcripts.md`),
+  `browser-cookies.json`, and
   `artifacts/...`. State archives exclude provider authentication files; authentication restore
   happens after state restore so stale state cannot replace the current per-user login.
   Layout: `sessions/{owner-hash}/{sessionId}/...`
@@ -589,8 +596,8 @@ Results flow back via `git push` or as artifacts to S3. What is persisted:
 
 ### Session files and visual previews
 
-The Chat UI accepts images and documents by file picker, paste, and drag-and-drop. Images,
-PDF, Markdown, and plain text can be opened in the Files workspace beside Chat or Terminal.
+Claude's streaming Workspace accepts images and documents by file picker, paste, and drag-and-drop.
+Images, PDF, Markdown, and plain text can be opened in Files beside Workspace or Terminal.
 HTML and SVG are download-only. A managed `files` MCP gives every supported agent the same
 provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,
 `upload_file`, `present_file`, and `dismiss_presentation`.

@@ -28,6 +28,12 @@ function validateDriver(driver) {
   for (const key of ['buildCommand', 'isResumeCommand', 'isMissingResume', 'prepare']) {
     if (typeof driver[key] !== 'function') throw new Error('Agent driver ' + key + ' must be a function');
   }
+  // Optional: findTranscript({ env, home, cwd, fs, launchedAt }) names the provider's own
+  // conversation file (Claude's project JSONL, Codex's rollout) once it exists, or returns
+  // null. Runtimes without a readable native transcript simply leave it out.
+  if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
+    throw new Error('Agent driver findTranscript must be a function');
+  }
   for (const key of ['stateDir', 'authFilename']) {
     if (typeof driver[key] !== 'string' || !SAFE_RELATIVE_NAME.test(driver[key])) {
       throw new Error('Agent driver ' + key + ' must be a safe single relative name');

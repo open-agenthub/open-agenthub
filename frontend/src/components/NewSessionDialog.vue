@@ -7,6 +7,7 @@ import {
 } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import { preferredUi, UI_OPTIONS } from '../lib/ui-preference.js'
 
 const emit = defineEmits(['close', 'created'])
 const props = defineProps({ embedded: { type: Boolean, default: false }, projects: { type: Array, default: () => [] } })
@@ -19,10 +20,6 @@ const MODES = [
 const repos = ref([])
 const advOpen = ref(false)
 const credentialStatus = ref({})
-const UI_MODES = [
-  { key: 'terminal', label: 'Terminal', hint: 'the agent’s own console UI' },
-  { key: 'chat', label: 'Chat', hint: 'a chat view like Claude Desktop (Claude only)' }
-]
 const agentChoices = ref(filterAgentOptions([]))
 // Saved MCP servers from the personal library (own + org + shared with me).
 const savedMcpServers = ref([])
@@ -34,7 +31,7 @@ const form = ref({
   title: '',
   description: '',
   mode: 'Interactive',
-  uiMode: 'terminal',
+  uiMode: preferredUi(),
   prompt: '',
   schedule: '0 6 * * 1-5',
   projectId: '',
@@ -52,11 +49,8 @@ const error = ref('')
 const needsPrompt = computed(() => form.value.mode !== 'Interactive')
 const needsSchedule = computed(() => form.value.mode === 'Scheduled')
 const modeHint = computed(() => MODES.find(m => m.key === form.value.mode)?.hint)
-// Chat runs Claude in stream-json mode; other agents and automation stay terminal.
-const canChooseUi = computed(() => form.value.mode === 'Interactive' && form.value.agent === 'Claude')
-const isChatUi = computed(() => canChooseUi.value && form.value.uiMode === 'chat')
-const uiHint = computed(() => UI_MODES.find(u => u.key === form.value.uiMode)?.hint)
-watch(canChooseUi, allowed => { if (!allowed) form.value.uiMode = 'terminal' })
+const isInteractiveWorkspace = computed(() => form.value.mode === 'Interactive' && form.value.uiMode === 'workspace')
+const uiHint = computed(() => UI_OPTIONS.find(u => u.key === form.value.uiMode)?.hint)
 
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* readiness stays advisory */ }
@@ -98,7 +92,8 @@ async function submit() {
       title: form.value.title || 'Session',
       description: form.value.description.trim() || null,
       mode: form.value.mode,
-      uiMode: form.value.uiMode,
+      // This existing API field selects the runtime transport, not the viewer's surface.
+      uiMode: isInteractiveWorkspace.value && form.value.agent === 'Claude' ? 'chat' : 'terminal',
       ...agentPayload(form.value),
       repos: repos.value,
       prompt: form.value.prompt || null,
@@ -118,7 +113,7 @@ async function submit() {
       cpu: form.value.cpu,
       memory: form.value.memory
     })
-    emit('created', session)
+    emit('created', session, form.value.uiMode)
   } catch (e) {
     error.value = String(e.message || e)
   } finally {
@@ -152,10 +147,10 @@ async function submit() {
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
           v-model:open-claw-api-key-source="form.openClawApiKeySource"
           :mode="form.mode" :credential-status="credentialStatus" :options="agentChoices" />
-        <div class="field" v-if="canChooseUi">
+        <div class="field">
           <label>Interface</label>
           <div class="chips-box">
-            <button v-for="u in UI_MODES" :key="u.key" type="button" class="chip" :class="{ on: form.uiMode === u.key }"
+            <button v-for="u in UI_OPTIONS" :key="u.key" type="button" class="chip" :class="{ on: form.uiMode === u.key }"
               :aria-pressed="form.uiMode === u.key" data-ui-mode-option @click="form.uiMode = u.key">{{ u.label }}</button>
           </div>
           <small class="hint">{{ uiHint }}</small>
@@ -164,8 +159,8 @@ async function submit() {
           <label>Schedule <span class="dim">— cron, UTC</span></label>
           <input v-model="form.schedule" class="mono short" placeholder="0 6 * * 1-5" />
         </div>
-        <div class="field" v-if="needsPrompt || isChatUi">
-          <label>Task <span class="dim">— {{ isChatUi ? 'optional first message' : 'what should the agent do?' }}</span></label>
+        <div class="field" v-if="needsPrompt || isInteractiveWorkspace">
+          <label>Task <span class="dim">— {{ isInteractiveWorkspace ? 'optional first message' : 'what should the agent do?' }}</span></label>
           <textarea v-model="form.prompt" class="task" placeholder="Describe the task in plain language — the agent figures out the rest."></textarea>
         </div>
         <div class="field last">

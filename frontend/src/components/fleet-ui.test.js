@@ -11,6 +11,7 @@ import { sessionMatches } from '../lib/text.js'
 const mocks = vi.hoisted(() => ({
   api: {
     getTranscript: vi.fn().mockResolvedValue(''),
+    getConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 }),
     listPermissions: vi.fn().mockResolvedValue([]),
     listSessionMessages: vi.fn().mockResolvedValue([]),
     decidePermission: vi.fn(),
@@ -26,7 +27,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../api.js', () => ({
   api: mocks.api,
   config: mocks.config,
-  getSharedTranscript: vi.fn().mockResolvedValue('')
+  getSharedTranscript: vi.fn().mockResolvedValue(''),
+  getSharedConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 })
 }))
 
 const session = (extra = {}) => ({ id: 's1', title: 'Coder', phase: 'Running', mode: 'Interactive', ...extra })

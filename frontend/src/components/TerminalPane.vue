@@ -3,10 +3,10 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { api, getSharedTranscript, sharedTerminalUrl, shellUrl, terminalUrl } from '../api.js'
-import { submitToAgent } from '../lib/terminal-input.js'
+import { SUBMIT_ENTER_DELAY_MS, submitToAgent } from '../lib/terminal-input.js'
 import { attachTerminalClipboard } from '../lib/terminal-clipboard.js'
 
-const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null } })
+const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, showComposer: { type: Boolean, default: true } })
 const emit = defineEmits(['status'])
 const host = ref(null)
 const mobileInput = ref('')
@@ -17,6 +17,7 @@ let connectionGeneration = 0
 let fitFrame = 0
 let lastSentCols = 0
 let lastSentRows = 0
+let cancelSubmission
 
 const isLive = computed(() => props.kind === 'shell' || ['Running', 'Pending'].includes(props.session?.phase))
 const canSend = computed(() => isLive.value && !props.readonly)
@@ -24,6 +25,45 @@ const canSend = computed(() => isLive.value && !props.readonly)
 function send(value) {
   if (canSend.value && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value))
 }
+
+// Reuse this pane's connection: a second terminal client could resize the same PTY
+// and two independently reconnecting clients could submit to different generations.
+function submitMessage(text) {
+  const socket = ws
+  const generation = connectionGeneration
+  if (!canSend.value || socket?.readyState !== WebSocket.OPEN || cancelSubmission)
+    return Promise.reject(new Error('Agent is disconnected. Your draft is still here.'))
+  // Bracketed paste preserves multiline prompts as one edit instead of executing each line.
+  // Strip terminal controls from pasted text so it cannot close its own paste envelope.
+  const value = String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+  if (!value.trim()) return Promise.reject(new Error('Enter a message.'))
+  return new Promise((resolve, reject) => {
+    let timer
+    const finish = error => {
+      clearTimeout(timer)
+      cancelSubmission = undefined
+      if (error) reject(error)
+      else resolve()
+    }
+    cancelSubmission = () => finish(new Error('Connection changed. Check the agent terminal before retrying your draft.'))
+    try {
+      socket.send(JSON.stringify({ type: 'input', data: '\x1b[200~' + value + '\x1b[201~' }))
+      timer = setTimeout(() => {
+        if (generation !== connectionGeneration || socket !== ws || !canSend.value || socket.readyState !== WebSocket.OPEN)
+          return cancelSubmission?.()
+        try { socket.send(JSON.stringify({ type: 'input', data: '\r' })); finish() }
+        catch (error) { finish(error) }
+      }, SUBMIT_ENTER_DELAY_MS)
+    } catch (error) { finish(error) }
+  })
+}
+
+function interruptAgent() {
+  if (!canSend.value || ws?.readyState !== WebSocket.OPEN) throw new Error('Agent is disconnected')
+  cancelSubmission?.()
+  ws.send(JSON.stringify({ type: 'input', data: '\x03' }))
+}
+defineExpose({ submitMessage, interruptAgent })
 
 function sendComposerMessage() {
   if (submitToAgent(send, mobileInput.value)) mobileInput.value = ''
@@ -65,6 +105,7 @@ function clearReconnect() {
 }
 
 function closeSocket() {
+  cancelSubmission?.()
   connectionGeneration += 1
   clearReconnect()
   const socket = ws
@@ -107,6 +148,7 @@ async function connect() {
   }
   socket.onclose = () => {
     if (disposed || ws !== socket) return
+    cancelSubmission?.()
     ws = undefined
     emit('status', 'disconnected')
     if (isLive.value) reconnectTimer = setTimeout(connect, 2000)
@@ -189,5 +231,5 @@ onBeforeUnmount(() => {
   fit = undefined
 })
 </script>
-<template><div class="pane"><div ref="host" class="term"></div><div v-if="canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="sendComposerMessage" /><button class="primary" @click="sendComposerMessage">Send</button></div></div></template>
+<template><div class="pane"><div ref="host" class="term"></div><div v-if="showComposer && canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="sendComposerMessage" /><button class="primary" @click="sendComposerMessage">Send</button></div></div></template>
 <style scoped>.pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; } .term { flex: 1; min-height: 0; padding: 10px 12px; overflow: hidden; } .composer { display: flex; gap: 10px; padding: 12px 16px; background: var(--bg); border-top: 1px solid var(--border); } .composer input { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); } .composer button { align-self: center; padding: 9px 18px; }</style>

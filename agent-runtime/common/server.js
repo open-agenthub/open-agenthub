@@ -5,6 +5,9 @@ const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 
+// The scrollback window, in characters. The hub stores and pages exactly this much
+// (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
+// from the hub's copy comes back shorter than what this process uploaded.
 const MAX_BUFFER = 1_000_000;
 // Upper bound for each archive/upload step of a persistence run.
 const PERSIST_STEP_SECONDS = 120;
@@ -53,6 +56,7 @@ function createCommonServer(options = {}) {
   const token = env.AGENTHUB_CALLBACK_TOKEN || '';
   const statePut = env.AGENTHUB_STATE_PUT_URL || '';
   const scrollPut = env.AGENTHUB_SCROLLBACK_PUT_URL || '';
+  const transcriptPut = env.AGENTHUB_TRANSCRIPT_PUT_URL || '';
   const home = env.HOME || '/home/agent';
   const workdir = env.AGENTHUB_WORKDIR || (hasRepo ? '/workspace/repo' : '/workspace');
   const cwd = fs.existsSync(workdir) ? workdir : '/workspace';
@@ -77,6 +81,9 @@ function createCommonServer(options = {}) {
   let promptSent = false;
   let persisting = false;
   let persistWaiters = null;
+  let firstLaunchedAt = 0;
+  let transcriptFile = null;
+  let transcriptUploaded = { size: -1, mtimeMs: -1 };
 
   function remember(chunk) {
     scrollback += chunk;
@@ -122,6 +129,65 @@ function createCommonServer(options = {}) {
       'curl -fsS --max-time ' + PERSIST_STEP_SECONDS + ' ' + curlOption +
       '-T /tmp/scrollback.log "' + scrollPut + '"'
     ], () => done && done());
+  }
+
+  // The provider's own conversation file, once the driver can name it. Asked again on every
+  // persistence tick until found: providers create the file on the first turn or pick its
+  // name themselves after starting, so it does not exist when this process comes up.
+  function locateTranscript() {
+    if (transcriptFile || typeof driver.findTranscript !== 'function') return transcriptFile;
+    let found = null;
+    try {
+      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt });
+    } catch {}
+    // The path is interpolated into a shell command below; anything a driver could not have
+    // derived from a home directory, a slug and a uuid is not a transcript.
+    if (typeof found === 'string' && found && !/["'$`\\\s]/.test(found)) {
+      transcriptFile = found;
+      console.log('[agent] Transcript: ' + found);
+    }
+    return transcriptFile;
+  }
+
+  // The last `max` characters, cut at a line boundary so the first line the hub keeps is a
+  // whole JSON record rather than the tail of one.
+  function tailLines(text, max) {
+    if (text.length <= max) return text;
+    const cut = text.slice(-max);
+    const newline = cut.indexOf('\n');
+    return newline === -1 ? cut : cut.slice(newline + 1);
+  }
+
+  // Uploads the native transcript next to the scrollback: the whole file to S3, the capped
+  // tail to the hub's Postgres copy. Skipped while the file has not changed — most 30-second
+  // ticks of an idle session would otherwise re-upload megabytes for nothing.
+  function persistTranscript(done) {
+    const file = locateTranscript();
+    if (!file || (!transcriptPut && !callback)) return done && done();
+    let stat;
+    try { stat = fs.statSync(file); } catch { return done && done(); }
+    if (stat.size === transcriptUploaded.size && stat.mtimeMs === transcriptUploaded.mtimeMs) {
+      return done && done();
+    }
+    transcriptUploaded = { size: stat.size, mtimeMs: stat.mtimeMs };
+    const toHub = () => {
+      if (!callback) return done && done();
+      let text;
+      try { text = fs.readFileSync(file, 'utf8'); } catch { return done && done(); }
+      fetchImpl(callback + '/transcript', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': token },
+        body: tailLines(text, MAX_BUFFER)
+      }).catch(() => {}).finally(() => done && done());
+    };
+    if (!transcriptPut) return toHub();
+    // No shell here: the file name is whatever the CLI chose for its session file, and a quote
+    // or `$(` in it would otherwise become part of the command. The state upload above keeps
+    // its shell pipeline because every path in it is one this process picked itself.
+    execFile('curl', [
+      '-fsS', ...(curlOption ? ['-k'] : []), '--max-time', String(PERSIST_STEP_SECONDS),
+      '-T', file, transcriptPut
+    ], toHub);
   }
 
   function restoreScrollback(done) {
@@ -210,13 +276,13 @@ function createCommonServer(options = {}) {
     }
     persisting = true;
     postResources();
-    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistState(() => {
+    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() => persistState(() => {
       persisting = false;
       const waiters = persistWaiters;
       persistWaiters = null;
       if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); });
       if (done) done();
-    }))));
+    })))));
   }
 
   // The credential watcher runs beside this server, not under it: on pod stop only PID 1 — this
@@ -459,6 +525,7 @@ function createCommonServer(options = {}) {
     attemptedResume = driver.isResumeCommand(command);
     attemptOutput = '';
     launchedAt = now();
+    if (!firstLaunchedAt) firstLaunchedAt = launchedAt;
     chatMode = command.pipe === true;
     console.log('[agent] driver=' + driver.name + ' mode=' + mode + ' resume=' + attemptedResume +
       (chatMode ? ' ui=chat' : '') +

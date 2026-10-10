@@ -39,7 +39,7 @@ public class NetworkPodEnvTests
             OpenClawCredentialSecretName = "openclaw-owner",
             HasSelectedApiKey = true,
             CallbackUrl = "http://callback/internal/sessions/session-id",
-            StatePutUrl = "", StateGetUrl = "", ScrollbackPutUrl = "",
+            StatePutUrl = "", StateGetUrl = "", ScrollbackPutUrl = "", TranscriptPutUrl = "",
             RuntimeImages = new AgentRuntimeImages("claude", "codex", "cursor", "openclaw", "Always"),
             Runtime = new AgentPodRuntimeSettings { NetworkMcpEnabled = enabled }
         };

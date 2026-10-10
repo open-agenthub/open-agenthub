@@ -1,8 +1,10 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import SessionsView from './SessionsView.vue'
 import HomeView from './HomeView.vue'
+
+enableAutoUnmount(afterEach)
 
 const mocks = vi.hoisted(() => ({
   api: { usageSummary: vi.fn(), usageSessions: vi.fn(), getCredentialStatus: vi.fn().mockResolvedValue({}) },
@@ -163,19 +165,19 @@ describe('TerminalView session identity', () => {
     expect(wrapper.find('.meta').text()).toContain('Subscription')
   })
 
-  it('renders the chat pane instead of the terminal for chat sessions and drops the Transcript tab', () => {
-    const stubs = { TerminalPane: true, ChatPane: true, ShareSessionDialog: true }
+  it('renders streaming sessions only in Workspace and drops legacy tabs', () => {
+    const stubs = { TerminalPane: true, WorkspaceStream: true, ShareSessionDialog: true }
     const chat = mount(TerminalView, {
       props: { session: { id: 'c1', title: 'Chat', phase: 'Running', mode: 'Interactive', agent: 'Claude', uiMode: 'chat' } },
       global: { stubs }
     })
-    expect(chat.findComponent({ name: 'ChatPane' }).exists()).toBe(true)
+    expect(chat.findComponent({ name: 'WorkspaceStream' }).exists()).toBe(true)
     expect(chat.findComponent({ name: 'TerminalPane' }).exists()).toBe(false)
     expect(chat.findAll('.tabs button').map(b => b.text())).not.toContain('Transcript')
 
     const terminal = mount(TerminalView, { props: { session: sessions[0] }, global: { stubs } })
     expect(terminal.findComponent({ name: 'TerminalPane' }).exists()).toBe(true)
-    expect(terminal.findComponent({ name: 'ChatPane' }).exists()).toBe(false)
+    expect(terminal.findComponent({ name: 'WorkspaceStream' }).exists()).toBe(false)
     expect(terminal.findAll('.tabs button').map(b => b.text())).toContain('Transcript')
   })
 })
@@ -188,19 +190,41 @@ describe('NewSessionDialog interface choice', () => {
     global: { stubs: { RepoPicker: true, AgentDecisionCard: true } }
   })
 
-  it('offers Terminal/Chat only for interactive Claude sessions', async () => {
+  it('uses the saved preference as the initial selection', () => {
+    localStorage.setItem('agenthub.preferredUi', 'terminal')
     const wrapper = mountDialog()
-    expect(wrapper.findAll('[data-ui-mode-option]').map(b => b.text())).toEqual(['Terminal', 'Chat'])
+    expect(wrapper.get('[data-ui-mode-option][aria-pressed=true]').text()).toBe('Terminal')
+    wrapper.unmount()
+    localStorage.removeItem('agenthub.preferredUi')
+  })
+
+  it('keeps Workspace available across agents while selecting a compatible runtime transport', async () => {
+    mocks.api.createSession = vi.fn().mockResolvedValue({ id: 'new' })
+    const wrapper = mountDialog()
+    for (const agent of ['Claude', 'Codex', 'Cursor', 'OpenClaw']) {
+      wrapper.findComponent({ name: 'AgentDecisionCard' }).vm.$emit('update:agent', agent)
+      await flushPromises()
+      await wrapper.find('[data-submit]').trigger('click')
+      await flushPromises()
+      expect(mocks.api.createSession.mock.lastCall[0].uiMode).toBe(agent === 'Claude' ? 'chat' : 'terminal')
+      expect(wrapper.get('[data-ui-mode-option][aria-pressed=true]').text()).toBe('Workspace')
+    }
+    wrapper.unmount()
+  })
+
+  it('offers Workspace/Terminal for all agents and execution modes', async () => {
+    const wrapper = mountDialog()
+    expect(wrapper.findAll('[data-ui-mode-option]').map(b => b.text())).toEqual(['Workspace', 'Terminal'])
 
     const autonomous = wrapper.findAll('[data-mode-option]').find(b => b.text() === 'Autonomous')
     await autonomous.trigger('click')
-    expect(wrapper.findAll('[data-ui-mode-option]')).toHaveLength(0)
+    expect(wrapper.findAll('[data-ui-mode-option]')).toHaveLength(2)
   })
 
-  it('submits the chosen uiMode and resets it when chat becomes unavailable', async () => {
+  it('selects streaming only for interactive Claude Workspace without changing the chosen surface', async () => {
     mocks.api.createSession = vi.fn().mockResolvedValue({ id: 'new' })
     const wrapper = mountDialog()
-    const chatChip = wrapper.findAll('[data-ui-mode-option]').find(b => b.text() === 'Chat')
+    const chatChip = wrapper.findAll('[data-ui-mode-option]').find(b => b.text() === 'Workspace')
     await chatChip.trigger('click')
     await wrapper.find('[data-submit]').trigger('click')
     await flushPromises()
@@ -213,7 +237,8 @@ describe('NewSessionDialog interface choice', () => {
     await interactive.trigger('click')
     await wrapper.find('[data-submit]').trigger('click')
     await flushPromises()
-    expect(mocks.api.createSession.mock.calls[1][0].uiMode).toBe('terminal')
+    expect(mocks.api.createSession.mock.calls[1][0].uiMode).toBe('chat')
+    expect(wrapper.emitted('created')[1][1]).toBe('workspace')
   })
 })
 

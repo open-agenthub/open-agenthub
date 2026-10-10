@@ -39,6 +39,7 @@ public sealed record PodBuildContext
     public required string StatePutUrl { get; init; }
     public required string StateGetUrl { get; init; }
     public required string ScrollbackPutUrl { get; init; }
+    public required string TranscriptPutUrl { get; init; }
     public bool S3Insecure { get; init; }
     public required AgentRuntimeImages RuntimeImages { get; init; }
     public AgentPodRuntimeSettings Runtime { get; init; } = new();
@@ -188,7 +189,8 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_S3_INSECURE", Value = context.S3Insecure ? "1" : "0" },
             new() { Name = "AGENTHUB_STATE_PUT_URL", Value = context.StatePutUrl },
             new() { Name = "AGENTHUB_STATE_GET_URL", Value = context.StateGetUrl },
-            new() { Name = "AGENTHUB_SCROLLBACK_PUT_URL", Value = context.ScrollbackPutUrl }
+            new() { Name = "AGENTHUB_SCROLLBACK_PUT_URL", Value = context.ScrollbackPutUrl },
+            new() { Name = "AGENTHUB_TRANSCRIPT_PUT_URL", Value = context.TranscriptPutUrl }
         };
 
         void AddSubscriptionVolume(string name, string secretName)

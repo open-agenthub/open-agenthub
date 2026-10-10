@@ -108,11 +108,32 @@ public sealed class SessionsController : ControllerBase
         catch (ArgumentException e) { return BadRequest(e.Message); }
     }
 
+    /// <summary>
+    /// The cleaned terminal scrollback. The ended-terminal replay and the chat pane's history
+    /// read this; the Transcript tab reads <see cref="Conversation"/>.
+    /// </summary>
     [HttpGet("{id}/transcript")]
     public async Task<IActionResult> Transcript(string id, CancellationToken ct)
     {
         var text = await _svc.GetTranscriptAsync(Owner, id, ct);
         return text is null ? NotFound() : Content(text, "text/plain");
+    }
+
+    /// <summary>
+    /// The conversation for the Transcript tab, paged by an opaque cursor so the tab can follow a
+    /// running session without re-downloading what it already shows. See <see cref="ConversationPage"/>.
+    /// </summary>
+    [HttpGet("{id}/conversation")]
+    public async Task<ActionResult<ConversationPage>> Conversation(
+        string id, [FromQuery] int? offset, [FromQuery] int? max, CancellationToken ct)
+    {
+        // Phase before text, as the remote API does: a session that finishes between the two
+        // reads is reported as still running with its final output present, so the tab polls
+        // once more and then stops — rather than stopping with output missing.
+        var session = await _svc.GetSessionAsync(Owner, id, ct);
+        if (session is null) return NotFound();
+        var page = await SessionTranscripts.PageAsync(_svc, Owner, id, session.Phase, offset, max, ct);
+        return page is null ? NotFound() : Ok(page);
     }
 
     /// <summary>

@@ -24,11 +24,13 @@ public class AgentSessionResourceOrchestratorTests
         Assert.Equal($"PUT:{stateKey}", urls.StatePutUrl);
         Assert.Equal($"GET:{stateKey}", urls.StateGetUrl);
         Assert.Equal("PUT:sessions/alice/session-id/scrollback.log", urls.ScrollbackPutUrl);
+        Assert.Equal("PUT:sessions/alice/session-id/transcript.jsonl", urls.TranscriptPutUrl);
         Assert.Equal(new[]
         {
             $"PUT:{stateKey}",
             $"GET:{stateKey}",
-            "PUT:sessions/alice/session-id/scrollback.log"
+            "PUT:sessions/alice/session-id/scrollback.log",
+            "PUT:sessions/alice/session-id/transcript.jsonl"
         }, artifacts.Presigned);
     }
 
@@ -123,6 +125,7 @@ public class AgentSessionResourceOrchestratorTests
         StatePutUrl = "http://s3/state-put",
         StateGetUrl = "",
         ScrollbackPutUrl = "http://s3/scroll-put",
+        TranscriptPutUrl = "http://s3/transcript-put",
         RuntimeImages = new AgentRuntimeImages(
             "runtime-claude", "runtime-codex", "runtime-cursor", "runtime-openclaw", "Always")
     };

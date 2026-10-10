@@ -101,7 +101,11 @@ The same surface as the stdio server:
 entrypoint and the launch command but not the agent's output, which goes to the PTY; and once a
 session finishes its pod is gone. The transcript is read from object storage, falling back to
 the database copy, so it outlives the pod. It returns the tail by default — a long session's
-transcript runs to megabytes, and the part that says how it ended is at the end.
+transcript runs to megabytes, and the part that says how it ended is at the end. Where the
+runtime keeps its own conversation file (Claude Code, Codex), the text is that conversation
+rendered as `## User` / `## Assistant` / `## Tool: …` / `## Result` sections rather than the
+terminal output; sessions without one fall back to the cleaned terminal scrollback
+(`docs/transcripts.md`).
 
 `session_create` takes `runAsRoot` for tasks that need tooling the runtime image does not ship
 (it has `node` and `npm`, but no `dotnet`, `docker` or `trivy`). It is off by default because a

@@ -4,6 +4,7 @@ import { api, auth, config } from '../api.js'
 import AccountDialog from './AccountDialog.vue'
 import CredentialsDialog from './CredentialsDialog.vue'
 import SettingsDialog from './SettingsDialog.vue'
+import InterfaceSettings from './InterfaceSettings.vue'
 import AdminView from './AdminView.vue'
 import AdminLimitsView from './AdminLimitsView.vue'
 import McpServersPane from './McpServersPane.vue'
@@ -20,6 +21,7 @@ const props = defineProps({
 
 const personalTabs = computed(() => [
   { key: 'profile', label: 'Profile' },
+  { key: 'interface', label: 'Interface' },
   { key: 'account', label: 'Connected accounts', show: () => config.gitEnabled },
   { key: 'credentials', label: 'Credentials' },
   { key: 'mcp', label: 'MCP servers' },
@@ -108,6 +110,7 @@ async function deleteAccount() {
           <p v-if="deleteError" class="dz-err" data-delete-error>{{ deleteError }}</p>
         </div>
       </div>
+      <InterfaceSettings v-else-if="active === 'interface'" />
       <AccountDialog v-else-if="active === 'account'" embedded />
       <CredentialsDialog v-else-if="active === 'credentials'" embedded @accounts="active = 'account'" />
       <McpServersPane v-else-if="active === 'mcp'" :is-admin="isAdmin" mode="personal" />

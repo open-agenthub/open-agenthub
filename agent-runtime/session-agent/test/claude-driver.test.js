@@ -129,6 +129,26 @@ test('Claude resume command requires requested resume, restored state, and fixed
   });
 });
 
+test('Claude names its transcript from the fixed session id and the cwd slug', () => {
+  const home = '/home/agent';
+  const expected = path.join(home, '.claude', 'projects', '-workspace-repo', 'fixed-session.jsonl');
+  const seen = [];
+  const fakeFs = { existsSync(file) { seen.push(file); return file === expected; } };
+
+  assert.equal(driver.findTranscript({
+    env: environment({ AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session' }),
+    home, cwd: '/workspace/repo', fs: fakeFs
+  }), expected);
+  assert.deepEqual(seen, [expected]);
+
+  // Not written yet (first turn pending): asked again later rather than guessed.
+  assert.equal(driver.findTranscript({
+    env: environment({ AGENTHUB_CLAUDE_SESSION_ID: 'other' }), home, cwd: '/workspace/repo', fs: fakeFs
+  }), null);
+  // Without a fixed id there is nothing to look for.
+  assert.equal(driver.findTranscript({ env: environment(), home, cwd: '/workspace/repo', fs: fakeFs }), null);
+});
+
 test('Claude resume falls back for the same output and quick-exit conditions', () => {
   assert.equal(driver.isMissingResume('No conversation found for session', 1, 15_000), true);
   assert.equal(driver.isMissingResume('unexpected failure', 1, 9_999), true);
