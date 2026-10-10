@@ -76,6 +76,37 @@ export class AgentHubClient {
     return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(sessionId)}/messages`, { body: message });
   }
 
+  // ---------------------------------------------------------------- sharing (enterprise)
+
+  /** Direct grants and links of an owned session; never the link tokens. */
+  listShares(sessionId) {
+    return this.#request('GET', `${sharesPath(sessionId)}`);
+  }
+
+  shareWithUser(sessionId, recipient, role = 'Viewer') {
+    return this.#request('POST', `${sharesPath(sessionId)}/users`, { recipient, role });
+  }
+
+  async unshareUser(sessionId, recipient) {
+    await this.#request('DELETE', `${sharesPath(sessionId)}/users/${encodeURIComponent(recipient)}`);
+    return { recipient, removed: true };
+  }
+
+  /** Mints a link; the response's `url` is the only copy of the secret. */
+  createShareLink(sessionId, { role = 'Viewer', expiresAt } = {}) {
+    return this.#request('POST', `${sharesPath(sessionId)}/links`, { role, expiresAt: expiresAt ?? null });
+  }
+
+  async deleteShareLink(sessionId, linkId) {
+    await this.#request('DELETE', `${sharesPath(sessionId)}/links/${encodeURIComponent(linkId)}`);
+    return { linkId, removed: true };
+  }
+
+  /** Sessions other owners shared with the token owner, in the sanitised shared-session shape. */
+  listSharedWithMe() {
+    return this.#request('GET', '/api/remote/sessions/shared');
+  }
+
   async #request(method, path, body, maxBytes = MAX_RESPONSE_BYTES) {
     const headers = {
       Authorization: `Bearer ${this.token}`,
@@ -88,10 +119,32 @@ export class AgentHubClient {
     }
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, init);
     const bytes = await readBounded(response, maxBytes);
-    if (!response.ok) throw new Error(`agenthub_http_${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`agenthub_http_${response.status}`);
+      // The one thing read from an error body: a code the backend chose (e.g. unknown_recipient).
+      // The message text is left behind on purpose — it is for people, and the tool answers with
+      // a fixed vocabulary.
+      const code = errorCode(bytes);
+      if (code !== undefined) error.code = code;
+      throw error;
+    }
     if (response.status === 204 || bytes.length === 0) return null;
     try { return JSON.parse(new TextDecoder().decode(bytes)); }
     catch { throw new Error('agenthub_invalid_json'); }
+  }
+}
+
+function sharesPath(sessionId) {
+  return `/api/remote/sessions/${encodeURIComponent(sessionId)}/shares`;
+}
+
+function errorCode(bytes) {
+  if (bytes.length === 0) return undefined;
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    return typeof parsed?.code === 'string' ? parsed.code : undefined;
+  } catch {
+    return undefined;
   }
 }
 

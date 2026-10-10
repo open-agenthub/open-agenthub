@@ -39,12 +39,14 @@ public class SessionShareStorePostgresTests
         await database.AddSessionAsync("owner-a", "session-a");
         await database.AddUserAsync("owner-a");
 
-        var unknown = await Assert.ThrowsAsync<ArgumentException>(() =>
+        // Its own type, so API clients can branch on it; still an ArgumentException underneath.
+        var unknown = await Assert.ThrowsAsync<UnknownRecipientException>(() =>
             database.Shares.UpsertDirectAsync(
                 "owner-a",
                 "session-a",
                 "unknown-user",
                 ShareRole.Viewer));
+        Assert.Equal("unknown-user", unknown.Recipient);
         var selfShare = await Assert.ThrowsAsync<ArgumentException>(() =>
             database.Shares.UpsertDirectAsync(
                 "owner-a",
