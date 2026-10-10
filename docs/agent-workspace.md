@@ -1,7 +1,8 @@
 # One session, two surfaces
 
 The session's **Workspace** tab puts the conversation above a docked composer and an optional
-agent terminal or shell. **Agent**, **Shell**, and **Transcript** remain available. Switching
+agent terminal or shell. **Terminal**, **Shell**, and **Transcript** remain available for terminal
+sessions. Switching
 surfaces does not change the session's execution mode, start another provider, or replay a task.
 
 ## UI provenance
@@ -22,9 +23,21 @@ second session authority and preserves the current authentication and sharing ch
 
 ## Execution and history
 
-Claude chat-mode sessions keep their streaming JSON connection, attachment delivery receipts,
-and native interrupt command. Their Workspace view adds compact activity rows, copy/quote
-actions, and a docked composer without changing the runtime protocol.
+Settings → Interface saves the preferred surface in this browser. Workspace is the default;
+the preference controls session opening and the initial selection in New session. An explicit
+creation choice applies to that opening without replacing the saved preference. This is viewer
+state, not a setting shared with other people viewing the session.
+
+The old standalone chat surface and its alternate layout are removed. `WorkspaceStream.vue`
+renders streaming sessions only in Workspace. The existing API value `uiMode: "chat"` remains
+as a transport contract for interactive Claude sessions and for previously saved sessions;
+other agents and automated sessions use terminal transport with either viewer surface. Keeping
+that contract avoids stranding existing session history and attachment delivery receipts.
+
+Claude Workspace sessions keep their streaming JSON connection, attachment delivery receipts,
+and native interrupt command. Compact activity rows, copy/quote actions, and a docked composer
+now form their only conversation surface. Existing streaming sessions open in Workspace even
+when the saved preference is Terminal, because their process speaks JSON rather than a CLI TUI.
 
 Terminal-mode sessions use the native conversation API introduced by the transcript work
 (see `transcripts.md`). The workspace polls the saved conversation every four seconds while

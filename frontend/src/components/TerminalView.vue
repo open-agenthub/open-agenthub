@@ -2,7 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
-import ChatPane from './ChatPane.vue'
+import WorkspaceStream from './workspace/WorkspaceStream.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import ConversationTimeline from './workspace/ConversationTimeline.vue'
 import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
@@ -13,17 +13,17 @@ import { repoShortName } from '../lib/text.js'
 import { authLabel } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
 import { permissionTitle } from '../lib/permissions.js'
+import { preferredUi } from '../lib/ui-preference.js'
 
-const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
+const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
 defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
-// Chat sessions render the structured stream; their agent pane already replays
-// history, so the raw Transcript tab stays terminal-only.
+// Older 'chat' records use the streaming transport, now rendered only in Workspace.
 const isChat = computed(() => props.session?.uiMode === 'chat')
-const activeTab = ref('agent')
+const activeTab = ref(isChat.value || (props.initialUi || preferredUi()) === 'workspace' ? 'workspace' : 'agent')
 const modern = computed(() => activeTab.value === 'workspace')
-const workspaceOpened = ref(false)
+const workspaceOpened = ref(activeTab.value === 'workspace')
 const conversationVisible = computed(() => activeTab.value === 'transcript' || (modern.value && !isChat.value))
 const terminalOpened = ref(false)
 const drawerKind = ref('agent')
@@ -33,7 +33,7 @@ const transcriptError = ref('')
 const transcriptBusy = ref(false)
 const canCompose = computed(() => capabilities.value.canWrite && isLive.value &&
   String(props.session?.mode).toLowerCase() === 'interactive' && statuses.agent === 'connected')
-watch(isChat, chat => { if (chat && activeTab.value === 'transcript') activeTab.value = 'agent' })
+watch(isChat, chat => { if (chat) activeTab.value = 'workspace' })
 const shellOpened = ref(false)
 const shareOpen = ref(false)
 // The Transcript tab's page: null until first loaded. `source` is 'native' (role-tagged turns
@@ -108,6 +108,7 @@ async function toggleAutoApprove() {
 }
 
 onMounted(() => {
+  if (conversationVisible.value) void loadTranscript()
   refreshPermissions()
   refreshMessages()
   permissionTimer = setInterval(() => { refreshPermissions(); refreshMessages(); refreshTranscript() }, 4000)
@@ -188,7 +189,7 @@ async function selectTab(tab) {
   if (tab === 'workspace') workspaceOpened.value = true
   if (tab === 'shell') shellOpened.value = true
   activeTab.value = tab
-  if (conversationVisible.value && conversation.value === null) await loadTranscript()
+  if (conversationVisible.value && conversation.value === null && !transcriptBusy.value) await loadTranscript()
 }
 
 function toggleDrawer(kind) {
@@ -224,7 +225,7 @@ function interruptWorkspaceAgent() {
       <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
       <nav class="tabs">
         <button :class="{ on: modern }" data-open-workspace @click="selectTab('workspace')">Workspace</button>
-        <button :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">{{ tabLabel('agent') }}</button>
+        <button v-if="!isChat" :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">Terminal</button>
         <button v-if="isLive && capabilities.canShell" :class="{ on: activeTab === 'shell' }" @click="selectTab('shell')">{{ tabLabel('shell') }}</button>
         <button v-if="!isChat" :class="{ on: activeTab === 'transcript' }" @click="selectTab('transcript')">Transcript</button>
       </nav>
@@ -242,7 +243,7 @@ function interruptWorkspaceAgent() {
       </div>
     </div>
     <div v-if="session.questionPending && capabilities.canWrite" class="asking">
-      <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ isChat ? 'below' : 'in the terminal below' }}.
+      <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ modern || isChat ? 'below' : 'in the terminal below' }}.
     </div>
     <div v-if="autoApprove && isLive && capabilities.canManage && !sharedToken" class="perm auto-on">
       <span class="ask-dot"></span>
@@ -287,7 +288,7 @@ function interruptWorkspaceAgent() {
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose"
           @retry="loadTranscript" @quote="composer?.quote($event)" />
-        <ChatPane v-if="isChat" v-show="activeTab === 'agent' || modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" :active="activeTab === 'agent' || modern" :modern="modern" @status="statuses.agent = $event" />
+        <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Saved conversation · updates about every 30 seconds</span>
           <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>

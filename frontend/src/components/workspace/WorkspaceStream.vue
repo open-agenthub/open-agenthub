@@ -1,16 +1,16 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { api, getSharedTranscript, sharedTerminalUrl, terminalUrl } from '../api.js'
-import { createAttachmentQueue } from '../lib/attachments.js'
-import { createChatLog } from '../lib/chat.js'
-import { chatDrafts as sessionDrafts } from '../lib/session-drafts.js'
-import { renderMarkdown } from '../lib/markdown.js'
-import { renderMermaidBlocks } from '../lib/mermaid.js'
-import ChatAttachments from './ChatAttachments.vue'
-import WorkLog from './workspace/WorkLog.vue'
-import MessageActions from './workspace/MessageActions.vue'
+import { api, getSharedTranscript, sharedTerminalUrl, terminalUrl } from '../../api.js'
+import { createAttachmentQueue } from '../../lib/attachments.js'
+import { createChatLog } from '../../lib/chat.js'
+import { chatDrafts as sessionDrafts } from '../../lib/session-drafts.js'
+import { renderMarkdown } from '../../lib/markdown.js'
+import { renderMermaidBlocks } from '../../lib/mermaid.js'
+import ChatAttachments from '../ChatAttachments.vue'
+import WorkLog from './WorkLog.vue'
+import MessageActions from './MessageActions.vue'
 
-const props = defineProps({ session: Object, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, modern: Boolean })
+const props = defineProps({ session: Object, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null } })
 const emit = defineEmits(['status'])
 
 const scroller = ref(null)
@@ -190,9 +190,10 @@ function submit() {
   if (!canSubmit.value || ws?.readyState !== WebSocket.OPEN) return
   deliveryError.value = ''
   const ids = readyAttachments.value.map(item => item.id)
-  const clientTurnId = crypto.randomUUID()
-  const payload = { type: 'chat', text: value, clientTurnId, ...(ids.length ? { attachments: ids } : {}) }
   try {
+    // getRandomValues also works on local HTTP origins; randomUUID requires HTTPS.
+    const clientTurnId = Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('')
+    const payload = { type: 'chat', text: value, clientTurnId, ...(ids.length ? { attachments: ids } : {}) }
     ws.send(JSON.stringify(payload))
     pendingTurn.value = { id: clientTurnId, text: value }
     // Sending asks to see the reply, so re-pin even from a scrolled-up position.
@@ -260,11 +261,11 @@ onBeforeUnmount(() => {
 })
 </script>
 <template>
-  <div class="pane" :class="{ 'workspace-chat': modern }">
+  <div class="pane">
     <div ref="scroller" class="chat-scroll" data-chat-scroll @scroll.passive="onScroll">
       <div class="chat-inner">
         <div v-if="!items.length && !drafts.length" class="empty">
-          <template v-if="modern"><span class="workspace-symbol" aria-hidden="true">✳</span><h2>What shall we build?</h2></template>
+          <span class="workspace-symbol" aria-hidden="true">✳</span><h2>What shall we build?</h2>
           {{ isLive ? 'Send a message to start the conversation.' : 'No saved conversation.' }}
         </div>
         <template v-for="(item, i) in items" :key="i">
@@ -272,31 +273,22 @@ onBeforeUnmount(() => {
             <pre v-if="item.text">{{ item.text }}</pre>
             <ChatAttachments v-if="item.attachments?.length" :items="item.attachments" :retry="() => {}"
               :remove="() => {}" transcript />
-            <MessageActions v-if="modern && item.text" :text="item.text" :can-quote="canSend" @quote="quote" />
+            <MessageActions v-if="item.text" :text="item.text" :can-quote="canSend" @quote="quote" />
           </div>
           <div v-else-if="item.kind === 'assistant'" class="bubble assistant" data-chat-assistant>
             <template v-for="(block, j) in item.blocks" :key="j">
-              <div v-if="block.type === 'text'" class="md" v-html="renderMarkdown(block.text)"></div>
+              <div v-if="block.type === 'text'" class="workspace-markdown" v-html="renderMarkdown(block.text)"></div>
               <details v-else-if="block.type === 'thinking'" class="fold thinking">
                 <summary>Thinking</summary>
-                <div class="md muted-md" v-html="renderMarkdown(block.text)"></div>
+                <div class="workspace-markdown muted-md" v-html="renderMarkdown(block.text)"></div>
               </details>
-              <WorkLog v-else-if="block.type === 'tool' && modern" :label="block.name" :failed="block.isError"
+              <WorkLog v-else-if="block.type === 'tool'" :label="block.name" :failed="block.isError"
                 :state="block.isError ? 'failed' : block.result === null ? 'running…' : 'done'" :data-chat-tool="block.name">
                 <pre>{{ pretty(block.input) }}</pre>
                 <pre v-if="block.result">{{ clip(block.result) }}</pre>
               </WorkLog>
-              <details v-else-if="block.type === 'tool'" class="fold tool" :data-chat-tool="block.name">
-                <summary>
-                  <span class="tool-name">{{ block.name }}</span>
-                  <span v-if="block.isError" class="tool-failed">failed</span>
-                  <span v-else-if="block.result === null" class="tool-running">running…</span>
-                </summary>
-                <pre class="io">{{ pretty(block.input) }}</pre>
-                <pre v-if="block.result" class="io result">{{ clip(block.result) }}</pre>
-              </details>
             </template>
-            <MessageActions v-if="modern && item.blocks.some(b => b.type === 'text')"
+            <MessageActions v-if="item.blocks.some(b => b.type === 'text')"
               :text="item.blocks.filter(b => b.type === 'text').map(b => b.text).join('\n\n')" :can-quote="canSend" @quote="quote" />
           </div>
           <div v-else-if="item.kind === 'stderr'" class="note err"><pre>{{ item.text }}</pre></div>
@@ -307,15 +299,15 @@ onBeforeUnmount(() => {
           <template v-for="draft in drafts" :key="draft.index">
             <details v-if="draft.type === 'thinking'" class="fold thinking" open>
               <summary>Thinking…</summary>
-              <div class="md muted-md" v-html="renderMarkdown(draft.text)"></div>
+              <div class="workspace-markdown muted-md" v-html="renderMarkdown(draft.text)"></div>
             </details>
-            <div v-else class="md" v-html="renderMarkdown(draft.text)"></div>
+            <div v-else class="workspace-markdown" v-html="renderMarkdown(draft.text)"></div>
           </template>
         </div>
         <div v-else-if="busy" class="typing" data-chat-busy><span></span><span></span><span></span></div>
       </div>
     </div>
-    <button v-if="modern && !following" type="button" class="jump-latest" @click="scrollToEnd({ force: true })">↓ Jump to latest</button>
+    <button v-if="!following" type="button" class="jump-latest" @click="scrollToEnd({ force: true })">↓ Jump to latest</button>
     <div v-if="canSend" class="composer" @dragover.prevent @drop.prevent="dropFiles">
       <ChatAttachments v-if="attachmentItems.length" :items="attachmentItems"
         :retry="attachmentQueue.retry" :remove="attachmentQueue.remove" />
@@ -325,56 +317,31 @@ onBeforeUnmount(() => {
           @change="addFiles($event.target.files); $event.target.value = ''">
         <button v-if="canAttach" type="button" class="attach" data-chat-attach aria-label="Attach files" title="Attach files"
           @click="fileInput?.click()">＋</button>
-        <textarea ref="composerInput" v-model="text" data-chat-input :rows="modern ? 3 : 1" aria-label="Message the agent" placeholder="Message the agent — paste, drop, or attach files"
+        <textarea ref="composerInput" v-model="text" data-chat-input rows="3" aria-label="Message the agent" placeholder="Message the agent — paste, drop, or attach files"
           @paste="pasteFiles" @keydown="composerKey"></textarea>
         <button v-if="busy" class="stop" data-chat-stop @click="interrupt">◼ Stop</button>
         <button class="primary" data-chat-send :disabled="!canSubmit" @click="submit">Send</button>
       </div>
-      <div v-if="modern" class="composer-footer"><span>{{ session.agent || 'Agent' }} · {{ connectionStatus }}</span><span>Enter to send · Shift+Enter for newline</span></div>
+      <div class="composer-footer"><span>{{ session.agent || 'Agent' }} · {{ connectionStatus }}</span><span>Enter to send · Shift+Enter for newline</span></div>
       <p v-if="deliveryError" class="delivery-error" role="alert">{{ deliveryError }}</p>
     </div>
   </div>
 </template>
 <style scoped>
-.pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; }
+.pane { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--bg); }
 .chat-scroll { flex: 1; overflow-y: auto; min-height: 0; }
-.chat-inner { max-width: 760px; margin: 0 auto; padding: 22px 24px 28px; display: flex; flex-direction: column; gap: 14px; }
+.chat-inner { max-width: 840px; margin: auto; padding: 32px; display: flex; flex-direction: column; gap: 24px; }
 .empty { color: var(--muted-3); font-size: 13px; padding: 24px 0; text-align: center; }
-.bubble { border-radius: var(--radius-lg); font-size: 14px; line-height: 1.6; }
-.bubble.user { align-self: flex-end; max-width: 85%; background: var(--panel-2); border: 1px solid var(--border-2); padding: 10px 14px; }
+.bubble { font-size: 14px; line-height: 1.6; }
+.bubble.user { align-self: flex-end; max-width: 85%; background: var(--panel-2); border: 1px solid var(--border-2); border-radius: 16px; padding: 14px 18px; }
 .bubble.user pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.6 var(--ui); color: var(--text); }
 .bubble.assistant { align-self: stretch; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
-.md :deep(p) { margin: 0 0 8px; }
-.md :deep(p:last-child) { margin-bottom: 0; }
-.md :deep(h3), .md :deep(h4), .md :deep(h5) { margin: 10px 0 6px; font-size: 15px; }
-.md :deep(ul), .md :deep(ol) { margin: 0 0 8px; padding-left: 22px; }
-.md :deep(code) { background: var(--input); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; font: 12px var(--mono); }
-.md :deep(pre.md-code) { background: var(--input); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; overflow-x: auto; margin: 0 0 8px; }
-.md :deep(pre.md-code code) { background: none; border: none; padding: 0; font: 12.5px/1.55 var(--mono); color: #c9c4bb; }
-.md :deep(.md-table) { overflow-x: auto; margin: 0 0 8px; }
-.md :deep(table) { border-collapse: collapse; font-size: 13px; min-width: 60%; }
-.md :deep(th), .md :deep(td) { border: 1px solid var(--border-2); padding: 5px 10px; text-align: left; vertical-align: top; }
-.md :deep(th) { background: var(--panel-2); font-weight: 600; color: var(--strong); }
-.md :deep(tbody tr:nth-child(even) td) { background: var(--panel); }
-.md :deep(blockquote) { margin: 0 0 8px; padding: 2px 12px; border-left: 3px solid var(--border-3); color: var(--muted-2); }
-.md :deep(blockquote > :last-child) { margin-bottom: 0; }
-.md :deep(hr) { border: none; border-top: 1px solid var(--border-2); margin: 12px 0; }
-.md :deep(del) { color: var(--muted-3); }
-.md :deep(li.task) { list-style: none; margin-left: -18px; }
-.md :deep(li.task input) { margin-right: 6px; vertical-align: -1px; accent-color: var(--accent); }
-.md :deep(.md-mermaid-svg) { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin: 0 0 8px; overflow-x: auto; display: flex; justify-content: center; }
-.md :deep(.md-mermaid-svg svg) { max-width: 100%; height: auto; }
 .muted-md { color: var(--muted-2); font-size: 13px; }
 .fold { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
 .fold summary { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--muted-2); cursor: pointer; user-select: none; }
 .fold summary:hover { color: var(--text); }
 .fold[open] summary { border-bottom: 1px solid var(--border); }
-.fold > .md, .fold > .io { padding: 10px 12px; }
-.tool-name { font-family: var(--mono); color: var(--accent); }
-.tool-running { color: var(--warn); font-weight: 400; }
-.tool-failed { color: var(--danger); font-weight: 700; }
-.io { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.55 var(--mono); color: var(--muted); max-height: 320px; overflow-y: auto; }
-.io.result { border-top: 1px dashed var(--border); color: #c9c4bb; }
+.fold > .workspace-markdown { padding: 10px 12px; }
 .note { align-self: center; color: var(--muted-3); font-size: 12px; }
 .note.err { align-self: stretch; color: var(--danger); }
 .note.err pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); }
@@ -383,27 +350,21 @@ onBeforeUnmount(() => {
 .typing span:nth-child(2) { animation-delay: 0.15s; }
 .typing span:nth-child(3) { animation-delay: 0.3s; }
 @keyframes pulse { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
-.composer { display: flex; flex-direction: column; gap: 9px; padding: 10px 16px 12px; background: var(--bg); border-top: 1px solid var(--border); }
-.composer-row { display: flex; align-items: flex-end; gap: 10px; }
-.composer textarea { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); font-family: var(--ui); font-size: 14px; min-height: 42px; max-height: 180px; resize: vertical; }
 .composer button { align-self: flex-end; padding: 9px 18px; white-space: nowrap; }
 .composer .stop { color: var(--danger); border-color: var(--border-3); }
 .composer .attach { width: 42px; height: 42px; padding: 0; color: var(--muted); border-color: var(--border-2); font-size: 20px; }
 .composer .attach:hover { color: var(--accent); }
 .file-input { position: absolute; width: 1px; height: 1px; overflow: hidden; opacity: 0; pointer-events: none; }
-.workspace-chat { position: relative; background: var(--bg); }
-.workspace-chat .chat-inner { max-width: 840px; padding: 32px; gap: 24px; }
-.workspace-chat .bubble.user { border-radius: 16px; padding: 14px 18px; }
-.workspace-chat .composer { width: calc(100% - 64px); max-width: 840px; align-self: center; box-sizing: border-box; padding: 14px; margin: 8px 0 12px; border: 1px solid var(--border-2); border-radius: 18px; background: var(--panel); box-shadow: 0 6px 24px #0002; }
-.workspace-chat .composer:focus-within { border-color: var(--accent); }
-.workspace-chat .composer-row { flex-wrap: wrap; }
-.workspace-chat .composer textarea { flex: 1 1 100%; order: -1; border: 0; padding: 0; background: transparent; box-shadow: none; }
-.workspace-chat .composer .attach { margin-right: auto; }
+.composer { display: flex; flex-direction: column; flex-shrink: 0; gap: 9px; width: calc(100% - 64px); max-width: 840px; align-self: center; box-sizing: border-box; padding: 14px; margin: 8px 0 12px; border: 1px solid var(--border-2); border-radius: 18px; background: var(--panel); box-shadow: 0 6px 24px #0002; }
+.composer:focus-within { border-color: var(--accent); }
+.composer-row { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.composer textarea { min-width: 0; min-height: 72px; max-height: 180px; resize: vertical; font: 14px/1.6 var(--ui); flex: 1 1 100%; order: -1; border: 0; padding: 0; background: transparent; box-shadow: none; }
+.composer .attach { margin-right: auto; }
 .composer-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; color: var(--muted-3); font-size: 10px; }
 .delivery-error { margin: 0; color: var(--danger); font-size: 12px; }
 .workspace-symbol { display: block; margin: 40px 0 16px; font-size: 36px; color: var(--accent); }
-.workspace-chat .empty h2 { color: var(--strong); font-size: 24px; font-weight: 500; }
+.empty h2 { color: var(--strong); font-size: 24px; font-weight: 500; }
 .jump-latest { position: absolute; left: 50%; bottom: 240px; transform: translateX(-50%); border-radius: 20px; font-size: 12px; padding: 7px 14px; }
-@media(max-width: 640px) { .workspace-chat .chat-inner { padding: 20px 16px; } .workspace-chat .composer { width: calc(100% - 20px); } }
+@media(max-width: 640px) { .chat-inner { padding: 20px 16px; } .composer { width: calc(100% - 20px); } }
 @media (max-width: 640px) { .composer { padding-inline: 10px; } .composer-row { gap: 6px; } .composer button { padding-inline: 12px; } }
 </style>

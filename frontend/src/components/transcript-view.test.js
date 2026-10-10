@@ -36,7 +36,7 @@ const nativePage = entries => ({
 
 function mountView(props = {}) {
   return mount(TerminalView, {
-    props: { session, ...props },
+    props: { session, initialUi: 'terminal', ...props },
     global: {
       stubs: {
         TerminalPane: true,

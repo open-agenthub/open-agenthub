@@ -23,7 +23,7 @@ const entry = (role, text, tool) => ({ role, text, tool })
 const wrappers = []
 function view(props = {}) {
   const wrapper = mount(TerminalView, {
-    props: { session, ...props },
+    props: { session, initialUi: 'terminal', ...props },
     global: { stubs: {
       SessionWorkspace: { template: '<div><slot /></div>' }, ShareSessionDialog: true,
       TerminalPane: defineComponent({
@@ -44,6 +44,7 @@ async function workspace(wrapper) {
   await flushPromises()
 }
 beforeEach(() => {
+  localStorage.clear()
   workspaceDrafts.clear()
   vi.clearAllMocks()
   mocks.send.mockResolvedValue(undefined)
@@ -55,6 +56,19 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
 describe('integrated workspace', () => {
+  it('opens the saved surface and permits an explicit creation choice without changing the preference', async () => {
+    localStorage.setItem('agenthub.preferredUi', 'terminal')
+    const terminal = view({ initialUi: null })
+    expect(terminal.get('.tabs button.on').text()).toBe('Terminal')
+    const workspaceView = view({ initialUi: 'workspace' })
+    await flushPromises()
+    expect(workspaceView.get('.tabs button.on').text()).toBe('Workspace')
+    expect(localStorage.getItem('agenthub.preferredUi')).toBe('terminal')
+    localStorage.setItem('agenthub.preferredUi', 'workspace')
+    const preferred = view({ initialUi: null })
+    await flushPromises()
+    expect(preferred.get('.tabs button.on').text()).toBe('Workspace')
+  })
   it('renders native roles, Markdown and compact activity, sends and stops through the existing terminal', async () => {
     const wrapper = view()
     await workspace(wrapper)
@@ -69,7 +83,7 @@ describe('integrated workspace', () => {
     expect(mocks.stop).toHaveBeenCalledOnce()
     await wrapper.get('[data-drawer-agent]').trigger('click')
     await wrapper.get('[data-workspace-composer] textarea').setValue('Keep across views')
-    await wrapper.findAll('.tabs button').find(button => button.text() === 'Agent').trigger('click')
+    await wrapper.findAll('.tabs button').find(button => button.text() === 'Terminal').trigger('click')
     await workspace(wrapper)
     expect(mocks.mounted).toHaveBeenCalledTimes(1)
     expect(wrapper.get('[data-workspace-composer] textarea').element.value).toBe('Keep across views')
