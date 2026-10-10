@@ -29,7 +29,8 @@ test('sanitizeSession omits mcpConfigJson and other secrets', async () => {
     memory: '4Gi',
     runAsRoot: true,
     browser: { state: 'running', vncPassword: 'nope' },
-    repos: [{ url: 'https://example.com/r.git', branch: 'main', extra: 'drop' }],
+    repos: [{ url: 'https://example.com/r.git', branch: 'main', providerId: 'github', extra: 'drop' }],
+    autoApprove: true,
     callbackToken: 'tok'
   };
 
@@ -38,7 +39,8 @@ test('sanitizeSession omits mcpConfigJson and other secrets', async () => {
   assert.equal(safe.description, 'Implements tasks handed over by the reviewer.');
   assert.equal(safe.prompt, 'do work');
   assert.equal(safe.hasMcp, true);
-  assert.deepEqual(safe.repos, [{ url: 'https://example.com/r.git', branch: 'main' }]);
+  assert.deepEqual(safe.repos, [{ url: 'https://example.com/r.git', branch: 'main', providerId: 'github' }]);
+  assert.equal(safe.autoApprove, true);
   assert.equal(safe.mcpConfigJson, undefined);
   assert.equal(safe.podIp, undefined);
   assert.equal(safe.policy, undefined);

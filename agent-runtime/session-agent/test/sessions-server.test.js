@@ -34,6 +34,10 @@ test('agenthub_sessions registers lifecycle and fleet tools', () => {
   // A child a person can watch and answer is the safe default; Autonomous auto-approves.
   assert.match(server, /mode:\s*z\.[\s\S]*?\.default\('Interactive'\)/);
   assert.match(server, /mcpServerIds:\s*z\.array\(/);
+  // Fields zod would otherwise strip before the call reaches the hub: without providerId a child
+  // can clone but not push, and without autoApprove an agent cannot start an unattended child.
+  assert.match(server, /providerId:\s*z\.string\(\)/);
+  assert.match(server, /autoApprove:\s*z\.boolean\(\)/);
   assert.match(server, /sanitizeSession/);
   // Title resolution goes through the shared resolver and never targets the sender itself.
   assert.match(server, /resolveAgentTarget/);

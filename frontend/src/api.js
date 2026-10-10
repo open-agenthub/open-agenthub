@@ -86,14 +86,18 @@ async function fileContent(path, authenticated) {
   return res.blob()
 }
 
-async function sharedReq(path) {
-  const res = await fetch(`/api${path}`, { method: 'GET', headers: {} })
+async function sharedReq(path, method = 'GET', body) {
+  const res = await fetch(`/api${path}`, {
+    method,
+    headers: body ? { 'Content-Type': 'application/json' } : {},
+    body: body ? JSON.stringify(body) : undefined
+  })
   if (!res.ok) {
     const err = new Error(`${res.status} ${await res.text()}`)
     err.status = res.status
     throw err
   }
-  return res.json()
+  return res.status === 204 ? null : res.json()
 }
 
 
@@ -287,6 +291,10 @@ async function wsUrl(id, kind) {
 // The selected agent's shared terminal.
 export const terminalUrl = (id) => wsUrl(id, 'terminal')
 export const resizeBrowserViewport = (id, width, height) => req('PUT', `/sessions/${encodeURIComponent(id)}/browser/viewport`, { width, height })
+export const pasteBrowserClipboard = (id, text) => req('POST', `/sessions/${encodeURIComponent(id)}/browser/clipboard/paste`, { text })
+export const copyBrowserClipboard = (id, cut) => req('POST', `/sessions/${encodeURIComponent(id)}/browser/clipboard/copy`, { cut })
+export const pasteSharedBrowserClipboard = (token, text) => sharedReq(`/shared/${encodeURIComponent(token)}/browser/clipboard/paste`, 'POST', { text })
+export const copySharedBrowserClipboard = (token, cut) => sharedReq(`/shared/${encodeURIComponent(token)}/browser/clipboard/copy`, 'POST', { cut })
 export const browserUrl = (id) => wsUrl(id, 'browser')
 // Server push for "something about this session changed". Async like the other session sockets
 // because the access token travels in the query string.

@@ -15,7 +15,39 @@ const SHUTDOWN_TIMEOUT_MS = 45_000;
 const VIEWPORT_WINDOW_RETRY_ATTEMPTS = 40;
 const VIEWPORT_WINDOW_RETRY_DELAY_MS = 100;
 const ALLOWED_SAME_SITE = new Set(['Strict', 'Lax', 'None']);
+// Bounds one paste or copy so a single request cannot push an unbounded string through the
+// supervisor and Chromium's input pipeline; far above anything typed into a form.
+export const MAX_CLIPBOARD_CHARS = 262_144;
+const MAX_CLIPBOARD_REQUEST_BYTES = 2 * 1024 * 1024;
 class ViewportRequestError extends Error {}
+class ClipboardRequestError extends Error {
+  constructor(message, status = 400) { super(message); this.status = status; }
+}
+
+export function validateClipboardText(value) {
+  const text = value?.text;
+  if (typeof text !== 'string') throw new ClipboardRequestError('Clipboard text is missing');
+  if (text.length > MAX_CLIPBOARD_CHARS) throw new ClipboardRequestError('Clipboard text exceeds size limit', 413);
+  return text;
+}
+
+// Runs inside every frame of a page. The frame whose document has focus and whose focused
+// element is not itself a frame holds the caret; asking only the top document would miss a
+// selection inside an iframe, cross-origin ones included, because each frame is evaluated in
+// its own context. A password field answers empty, as it does for a native copy.
+export function readFrameSelection() {
+  const active = document.activeElement;
+  const focused = document.hasFocus() && !(active && /^(IFRAME|FRAME)$/.test(active.tagName));
+  let text;
+  if (active && (active.tagName === 'TEXTAREA' || active.tagName === 'INPUT') &&
+      typeof active.selectionStart === 'number') {
+    text = active.type === 'password' ? ''
+      : active.value.slice(active.selectionStart, active.selectionEnd ?? active.selectionStart);
+  } else {
+    text = document.getSelection()?.toString() ?? '';
+  }
+  return { focused, visible: document.visibilityState === 'visible', text };
+}
 
 export function decodeCookieState(input, maxBytes = DEFAULT_MAX_BYTES) {
   try {
@@ -119,10 +151,88 @@ export class BrowserSupervisor {
     }
   }
 
+  // The page the user is looking at: the one holding focus, else the visible tab. Background
+  // tabs report 'hidden', so a paste never lands in a tab nobody sees.
+  async focusedTarget() {
+    const pages = this.context?.pages?.() ?? [];
+    let fallback = null;
+    for (const page of pages) {
+      const frames = page.frames?.() ?? [page.mainFrame()];
+      const states = await Promise.all(frames.map(frame =>
+        frame.evaluate(readFrameSelection).catch(() => null)));
+      const focused = states.findLastIndex(state => state?.focused);
+      if (focused >= 0) return { page, state: states[focused] };
+      if (!fallback && states[0]?.visible) fallback = { page, state: states[0] };
+    }
+    if (fallback) return fallback;
+    if (pages[0]) return { page: pages[0], state: { text: '' } };
+    throw new Error('Chromium did not expose a page for the clipboard');
+  }
+
+  async paste(text) {
+    if (!text) return;
+    const { page } = await this.focusedTarget();
+    const session = await this.context.newCDPSession(page);
+    try {
+      await session.send('Input.insertText', { text });
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+  }
+
+  // Reads the selection first, then lets Chromium run its own copy or cut command, so the page
+  // still sees the shortcut it expects and a cut removes the text it handed over. Reading after
+  // the cut would find the selection already gone.
+  async copy(cut) {
+    const { page, state } = await this.focusedTarget();
+    const text = state?.text ?? '';
+    if (text.length > MAX_CLIPBOARD_CHARS) throw new ClipboardRequestError('Selection exceeds size limit', 413);
+    if (!text) return '';
+    const key = cut ? 'x' : 'c';
+    const event = {
+      key, code: `Key${key.toUpperCase()}`, modifiers: 2,
+      windowsVirtualKeyCode: key.toUpperCase().charCodeAt(0),
+    };
+    const session = await this.context.newCDPSession(page);
+    try {
+      await session.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...event, commands: [cut ? 'cut' : 'copy'] });
+      await session.send('Input.dispatchKeyEvent', { type: 'keyUp', ...event });
+    } finally {
+      await session.detach().catch(() => undefined);
+    }
+    return text;
+  }
+
+  // Clipboard text is the user's own data: a failure is reported by status only and the text
+  // never reaches a log line.
+  async handleClipboardRequest(request, response) {
+    try {
+      const body = await readJsonRequestBounded(request, MAX_CLIPBOARD_REQUEST_BYTES, ClipboardRequestError);
+      if (request.url === '/clipboard/paste') {
+        await this.paste(validateClipboardText(body));
+        response.writeHead(204, { 'Cache-Control': 'no-store' });
+        response.end();
+        return;
+      }
+      const text = await this.copy(body?.cut === true);
+      response.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      response.end(JSON.stringify({ text }));
+    } catch (error) {
+      const invalid = error instanceof SyntaxError || error instanceof ClipboardRequestError;
+      if (!invalid) diagnostic('clipboard request failed', error);
+      response.writeHead(error instanceof ClipboardRequestError ? error.status : invalid ? 400 : 500);
+      response.end();
+    }
+  }
+
   async handleRequest(request, response) {
     if (request.method === 'GET' && request.url === '/healthz') {
       response.writeHead(200, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
       response.end('ok');
+      return;
+    }
+    if (request.method === 'POST' && (request.url === '/clipboard/paste' || request.url === '/clipboard/copy')) {
+      await this.handleClipboardRequest(request, response);
       return;
     }
     if (request.method !== 'PUT' || request.url !== '/viewport') {
@@ -214,12 +324,12 @@ export class BrowserSupervisor {
   }
 }
 
-async function readJsonRequestBounded(request, maxBytes) {
+async function readJsonRequestBounded(request, maxBytes, ErrorType = ViewportRequestError) {
   const chunks = [];
   let total = 0;
   for await (const chunk of request) {
     total += chunk.byteLength;
-    if (total > maxBytes) throw new ViewportRequestError('Viewport request exceeds size limit');
+    if (total > maxBytes) throw new ErrorType('Request exceeds size limit', 413);
     chunks.push(Buffer.from(chunk));
   }
   return JSON.parse(Buffer.concat(chunks, total).toString('utf8'));

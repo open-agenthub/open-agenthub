@@ -31,7 +31,10 @@ const createSchema = z.object({
   authMode: z.enum(['Auto', 'Subscription', 'ApiKey']).optional(),
   repos: z.array(z.object({
     url: z.string().max(2048),
-    branch: z.string().max(256).optional()
+    branch: z.string().max(256).optional(),
+    // Names the connected Git provider whose token authenticates clone and push. Left out of
+    // the schema, zod strips it and the child can clone a public repository but never push.
+    providerId: z.string().max(128).optional()
   })).max(32).optional(),
   projectId: z.string().max(128).optional(),
   parentSessionId: z.string().max(128).optional(),
@@ -41,6 +44,7 @@ const createSchema = z.object({
   policy: z.record(z.string(), z.unknown()).optional(),
   image: z.string().max(512).optional(),
   runAsRoot: z.boolean().optional(),
+  autoApprove: z.boolean().optional(),
   cpu: z.string().max(32).optional(),
   memory: z.string().max(32).optional(),
   // Text with a unit, converted to seconds before the HTTP call — see expiry.mjs for why.
@@ -63,7 +67,10 @@ register('session_create', {
     + 'shows up in agents_list and can be reached with agent_send, and has agent_inbox/agent_send '
     + 'itself to report back. Default mode is Interactive: a person can watch and answer it, and '
     + 'tool requests outside its allow list wait for their approval. Use Autonomous only for '
-    + 'unattended work, where such requests are approved automatically. hasMcp in the result counts '
+    + 'unattended work, where such requests are approved automatically; autoApprove: true gives an '
+    + 'Interactive session the same without making it unattended. A repo on a host this session '
+    + 'already uses a connected Git provider for gets that provider, so the child can push; name '
+    + 'providerId on a repo to choose one yourself. hasMcp in the result counts '
     + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled. '
     + 'autoDeleteAfter ("90m", "12h", "3d") makes the child delete itself after that long since '
     + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start. '
