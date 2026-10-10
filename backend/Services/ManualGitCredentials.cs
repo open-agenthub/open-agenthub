@@ -66,9 +66,12 @@ public static class ManualGitCredentials
     /// when they are stored, so anything invalid here predates that validation and must not stop a
     /// session from starting.
     /// </summary>
-    public static IReadOnlyList<string> Lines(IDictionary<string, byte[]>? data)
+    public static IReadOnlyList<string> Lines(IDictionary<string, byte[]>? data) => Lines(GitPatStore.Read(data));
+
+    /// <summary>The store lines of an already-read (and possibly narrowed, see
+    /// <see cref="GitPatSelection"/>) list of entries.</summary>
+    public static IReadOnlyList<string> Lines(IReadOnlyList<GitPatStore.Entry> entries)
     {
-        var entries = GitPatStore.Read(data);
         var lines = new List<string>(entries.Count);
         foreach (var entry in entries)
         {

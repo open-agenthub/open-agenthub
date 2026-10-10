@@ -33,5 +33,6 @@ public static class SessionUpdateValidator
         request.AuthMode is not null ||
         request.OpenClawApiKeySource is not null ||
         request.CredentialId is not null ||
+        request.GitPatIds is not null ||
         request.Policy is not null;
 }

@@ -580,6 +580,8 @@ describe('Git personal access tokens', () => {
       .mockResolvedValueOnce({ gitPats: two })
       .mockResolvedValueOnce({ gitPats: [two[1]] })
     mocks.api.deleteGitPat.mockResolvedValue(null)
+    // happy-dom 20 ships no confirm(); the spy still has to prove the dialog never calls one.
+    if (typeof window.confirm !== 'function') window.confirm = () => true
     const confirmSpy = vi.spyOn(window, 'confirm')
     const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
     await flushPromises()
@@ -609,6 +611,108 @@ describe('Git personal access tokens', () => {
     expect(wrapper.get('[data-git-pat="github.com"] [data-git-pat-remove]').text()).toBe('Remove')
     expect(wrapper.find('[data-git-pat-keep]').exists()).toBe(false)
     expect(mocks.api.deleteGitPat).not.toHaveBeenCalled()
+  })
+})
+
+/// A session chooses which stored git tokens it is built with (docs/credential-scopes.md). The
+/// picker appears from the first stored token; every token ticked means "all, as before".
+describe('Git token selection per session', () => {
+  const two = [
+    { id: 'a', kind: 'gitlab', host: 'gitlab.example.com' },
+    { id: 'b', kind: 'github', host: 'github.com' }
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Reset, not clear: an earlier block may have queued a mockResolvedValueOnce it never consumed.
+    mocks.api.getCredentialStatus.mockReset()
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: two })
+    mocks.api.createSession.mockResolvedValue({ id: 'new' })
+    mocks.api.updateSession.mockResolvedValue({ id: 's1' })
+    mocks.api.duplicateSession.mockResolvedValue({ id: 'copy' })
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude'] })
+  })
+
+  it('lists every stored token ticked and sends null (= all) when left alone', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    const boxes = wrapper.findAll('[data-git-pat-option]')
+    expect(boxes).toHaveLength(2)
+    expect(boxes.every(box => box.element.checked)).toBe(true)
+    expect(wrapper.get('[data-git-pat-picker]').text()).toContain('gitlab.example.com')
+    expect(wrapper.get('[data-git-pat-picker]').text()).toContain('GitHub')
+    expect(wrapper.get('[data-git-pat-hint]').text()).toContain('next start or resume')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].gitPatIds).toBeNull()
+  })
+
+  it('sends the ticked ids once one is unticked, and an empty list when none is', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    await wrapper.get('[data-git-pat-option="a"]').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].gitPatIds).toEqual(['b'])
+
+    await wrapper.get('[data-git-pat-option="b"]').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[1][0].gitPatIds).toEqual([])
+  })
+
+  it('is absent when no token is stored, and then sends nothing about tokens', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({})
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.find('[data-git-pat-picker]').exists()).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].gitPatIds).toBeNull()
+  })
+
+  it('prefills a restricted session on edit and sends only a change, with "*" to go back to all', async () => {
+    const session = { ...baseSession, mode: 'Interactive', gitPatIds: ['b'] }
+    const wrapper = mount(EditSessionDialog, { props: { session, projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.get('[data-git-pat-option="a"]').element.checked).toBe(false)
+    expect(wrapper.get('[data-git-pat-option="b"]').element.checked).toBe(true)
+
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('gitPatIds')
+
+    await wrapper.get('[data-git-pat-option="a"]').setValue(true)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[1][1].gitPatIds).toEqual(['*'])
+
+    await wrapper.get('[data-git-pat-option="a"]').setValue(false)
+    await wrapper.get('[data-git-pat-option="b"]').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[2][1].gitPatIds).toEqual([])
+  })
+
+  it('does not restrict an unrestricted session on an untouched save', async () => {
+    const session = { ...baseSession, mode: 'Interactive', gitPatIds: null }
+    const wrapper = mount(EditSessionDialog, { props: { session, projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.findAll('[data-git-pat-option]').every(box => box.element.checked)).toBe(true)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('gitPatIds')
+    // A scheduled session never sends it: the backend rejects runtime fields there.
+    const scheduled = mount(EditSessionDialog, { props: { session: { ...session, mode: 'Scheduled' }, projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(scheduled.find('[data-git-pat-picker]').exists()).toBe(false)
+  })
+
+  it('carries the source selection into a duplicate and lets it be changed', async () => {
+    const session = { ...baseSession, gitPatIds: ['a'] }
+    const wrapper = mount(DuplicateSessionDialog, { props: { session, projects: [] } })
+    await flushPromises()
+    expect(wrapper.get('[data-git-pat-option="a"]').element.checked).toBe(true)
+    expect(wrapper.get('[data-git-pat-option="b"]').element.checked).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    // Unchanged: omitted, so the backend copies the source's selection.
+    expect(mocks.api.duplicateSession.mock.calls[0][1]).not.toHaveProperty('gitPatIds')
+
+    await wrapper.get('[data-git-pat-option="a"]').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession.mock.calls[1][1].gitPatIds).toEqual([])
   })
 })
 

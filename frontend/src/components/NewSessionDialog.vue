@@ -3,9 +3,11 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
 import {
   agentPayload, buildEphemeralApiSources, defaultAgentForm, defaultPolicy, ephemeralNameFromUrl,
-  filterAgentOptions, mcpBadgeLabel, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder
+  filterAgentOptions, gitPatIdsPayload, gitPatOptions, gitPatSelectionFor, mcpBadgeLabel, policyFromForm,
+  policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
 import RepoPicker from './RepoPicker.vue'
+import GitPatPicker from './GitPatPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
 
@@ -20,8 +22,12 @@ const MODES = [
 const repos = ref([])
 const advOpen = ref(false)
 const credentialStatus = ref({})
-// Stored provider logins per agent; the card shows a choice once there are two or more.
+// Stored provider logins per agent, shown in the card from the first one.
 const providerAccounts = ref({})
+// Stored git PATs; all ticked by default, which sends null = "every token, as before".
+const gitPats = computed(() => gitPatOptions(credentialStatus.value))
+const selectedGitPats = ref([])
+watch(gitPats, options => { selectedGitPats.value = gitPatSelectionFor(null, options) })
 const UI_MODES = [
   { key: 'terminal', label: 'Terminal', hint: 'the agent’s own console UI' },
   { key: 'chat', label: 'Chat', hint: 'a chat view like Claude Desktop (Claude only)' }
@@ -109,6 +115,7 @@ async function submit() {
       // Null = the default account, resolved at each start; an id pins the session to that login.
       credentialId: form.value.credentialId || null,
       repos: repos.value,
+      gitPatIds: gitPatIdsPayload(selectedGitPats.value, gitPats.value),
       prompt: form.value.prompt || null,
       systemPrompt: form.value.systemPrompt.trim() || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
@@ -188,6 +195,7 @@ async function submit() {
       <div class="card sect">
         <label>Repositories <span class="dim">— optional, pick one or more</span></label>
         <RepoPicker v-model="repos" />
+        <GitPatPicker v-model="selectedGitPats" :options="gitPats" />
       </div>
 
       <div class="card adv">

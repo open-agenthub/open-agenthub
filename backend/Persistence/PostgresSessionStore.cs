@@ -30,6 +30,9 @@ public sealed class SessionRecord
     /// <summary>The provider account this session mounts (docs/provider-accounts.md); null = the
     /// default account at each start. Also where a writeback from the pod lands.</summary>
     public string? CredentialId { get; set; }
+    /// <summary>JSON array of the git PAT ids the session is built with; null = every stored PAT
+    /// (docs/credential-scopes.md). Read at every spawn, so a resume uses the same selection.</summary>
+    public string? GitPatIdsJson { get; set; }
     public string? AgentPolicyJson { get; set; }
     public string? AllowedToolsJson { get; set; }
     /// <summary>Agent session ID assigned by us (used for --resume).</summary>
@@ -148,6 +151,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS description TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS system_prompt TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS credential_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS git_pat_ids TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -159,11 +163,11 @@ public sealed class PostgresSessionStore : ISessionStore
             INSERT INTO sessions (id, owner, title, description, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
                                   openclaw_api_key_source, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
-                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at)
+                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, git_pat_ids, created_at, updated_at)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
-                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now())
+                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @gitPatIds, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, description = EXCLUDED.description,
                 mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
@@ -173,6 +177,7 @@ public sealed class PostgresSessionStore : ISessionStore
                 agent = EXCLUDED.agent, auth_mode = EXCLUDED.auth_mode,
                 openclaw_api_key_source = EXCLUDED.openclaw_api_key_source,
                 credential_id = EXCLUDED.credential_id,
+                git_pat_ids = EXCLUDED.git_pat_ids,
                 agent_policy = EXCLUDED.agent_policy,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
@@ -271,7 +276,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, git_pat_ids FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -313,6 +318,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("systemPrompt", (object?)r.SystemPrompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("allowedTools", (object?)r.AllowedToolsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("credentialId", (object?)r.CredentialId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("gitPatIds", (object?)r.GitPatIdsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
     }
 
@@ -349,6 +355,7 @@ public sealed class PostgresSessionStore : ISessionStore
         AutoApprove = r.GetBoolean(28),
         Description = r.IsDBNull(29) ? null : r.GetString(29),
         SystemPrompt = r.IsDBNull(30) ? null : r.GetString(30),
-        CredentialId = r.IsDBNull(31) ? null : r.GetString(31)
+        CredentialId = r.IsDBNull(31) ? null : r.GetString(31),
+        GitPatIdsJson = r.IsDBNull(32) ? null : r.GetString(32)
     };
 }
