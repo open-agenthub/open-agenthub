@@ -91,6 +91,8 @@ while :; do sleep 1; done
     assert.equal(vncArguments.length, 2, `Expected writable and view-only x11vnc processes: ${events.join(', ')}`);
     assert.ok(vncArguments.every(event => event.includes('-xrandr resize')),
       `x11vnc processes do not track XRandR resizes: ${vncArguments.join(', ')}`);
+    assert.ok(vncArguments.every(event => / -nosel /.test(event)),
+      `x11vnc processes would share the browser clipboard with every viewer: ${vncArguments.join(', ')}`);
 
     const readyIndex = events.indexOf('Xvfb-ready');
     for (const name of ['chromium', 'x11vnc', 'websockify', 'socat', 'node']) {
