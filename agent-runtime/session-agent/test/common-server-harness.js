@@ -3,12 +3,11 @@
 // The fake transport every common-server test runs against: PTY, child process, sockets, HTTP,
 // timers and the hub, all recorded. Shared by common-server.test.js and the message-route tests.
 
-const fs = require('node:fs');
 const path = require('node:path');
 const { Readable } = require('node:stream');
 
 const commonDir = path.join(__dirname, '..', '..', 'common');
-const { createCommonServer, MAX_BUFFER } = require('../../common/server');
+const { createCommonServer } = require('../../common/server');
 
 class FakeTerminal {
   constructor() {

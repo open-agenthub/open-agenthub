@@ -19,9 +19,10 @@
 const { spawn, spawnSync } = require('node:child_process');
 const { createServer } = require('node:http');
 const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 const workspace = '/workspace';
-const codexHome = '/tmp/codex-notify-home';
 const answer = 'Notify smoke: which branch should I use?';
 
 function sse(events) {
@@ -29,8 +30,9 @@ function sse(events) {
 }
 
 async function runOnce(mode) {
-  fs.rmSync(codexHome, { recursive: true, force: true });
-  fs.mkdirSync(codexHome, { recursive: true });
+  // A fresh private directory per run: a fixed name under the shared temp dir could be
+  // pre-created by someone else, and the config written into it decides what Codex trusts.
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-notify-home-'));
   const gitInit = spawnSync('git', ['init', '-q', workspace], { encoding: 'utf8' });
   if (gitInit.status !== 0)
     throw new Error(`git init failed: ${gitInit.stderr.slice(0, 300)}`);

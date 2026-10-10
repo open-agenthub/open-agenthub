@@ -84,9 +84,13 @@ function assistantText(entry) {
 /** Last assistant message in a JSONL transcript, or null when there is none to find. */
 export function lastAssistantMessage(transcriptPath, fsImpl = fs) {
   if (typeof transcriptPath !== 'string' || transcriptPath.length === 0) return null;
+  let fd;
   try {
-    if (fsImpl.statSync(transcriptPath).size > MAX_TRANSCRIPT_BYTES) return null;
-    const lines = fsImpl.readFileSync(transcriptPath, 'utf8').split('\n');
+    // One descriptor for the size check and the read: checked by path, the file could be
+    // swapped for a larger one between the two calls.
+    fd = fsImpl.openSync(transcriptPath, 'r');
+    if (fsImpl.fstatSync(fd).size > MAX_TRANSCRIPT_BYTES) return null;
+    const lines = fsImpl.readFileSync(fd, 'utf8').split('\n');
     for (let i = lines.length - 1; i >= 0; i--) {
       if (lines[i].trim().length === 0) continue;
       let entry;
@@ -96,6 +100,8 @@ export function lastAssistantMessage(transcriptPath, fsImpl = fs) {
     }
   } catch {
     // Unreadable transcript: the generic message is still a correct notification.
+  } finally {
+    if (fd !== undefined) { try { fsImpl.closeSync(fd); } catch { /* nothing left to release */ } }
   }
   return null;
 }
