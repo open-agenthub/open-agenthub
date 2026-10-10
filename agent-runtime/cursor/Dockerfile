@@ -14,7 +14,7 @@ FROM node:26-bookworm-slim
 # time Cursor shipped, which blocked the whole image set. The installed version is
 # recorded instead (INSTALLED_VERSION, exported as CURSOR_AGENT_VERSION by the entrypoint).
 ARG GH_VERSION=2.102.0
-ARG GLAB_VERSION=1.120.0
+ARG GLAB_VERSION=1.122.0
 # Set by BuildKit per target platform (amd64, arm64); gh and glab use the same names.
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
