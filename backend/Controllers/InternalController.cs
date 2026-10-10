@@ -480,9 +480,12 @@ public sealed class InternalController : ControllerBase
         if (repos.Count == 0 || repos.All(r => !string.IsNullOrWhiteSpace(r.ProviderId))) return repos;
 
         var byHost = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var parentRepo in ParseRepos(parentReposJson))
-            if (!string.IsNullOrWhiteSpace(parentRepo.ProviderId) && HttpsHost(parentRepo.Url) is { } host)
-                byHost.TryAdd(host, parentRepo.ProviderId!);
+        var parentProviders = ParseRepos(parentReposJson)
+            .Where(r => !string.IsNullOrWhiteSpace(r.ProviderId))
+            .Select(r => (Host: HttpsHost(r.Url), ProviderId: r.ProviderId!))
+            .Where(p => p.Host is not null);
+        foreach (var (host, providerId) in parentProviders)
+            byHost.TryAdd(host!, providerId);
         if (byHost.Count == 0) return repos;
 
         return repos.Select(repo =>
