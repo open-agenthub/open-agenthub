@@ -95,7 +95,7 @@ The same surface as the stdio server:
 | `session_wait` | Poll until a session reaches Succeeded or Failed |
 | `session_delete` | Delete a session; does not cascade to children |
 | `agents_list` | Your agents with title, description and phase |
-| `agent_send` | Send a message/task to an agent by id or unique title |
+| `agent_send` | Send a message/task to an agent by id or unique title. `priority` pushes it into the running agent's prompt, `interrupt` stops its current work first; the result's `deliveredVia` says `inbox`, `injected` or `mod` (`docs/priority-messages.md`) |
 
 `session_logs` is the only way to see what a session did. `kubectl logs` on the pod shows the
 entrypoint and the launch command but not the agent's output, which goes to the PTY; and once a

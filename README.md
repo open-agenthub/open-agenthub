@@ -510,6 +510,19 @@ When `spawnMcpEnabled` is true (Helm / `AgentHub:SpawnMcpEnabled`, default on), 
 pods also receive the runtime-owned `agenthub_sessions` MCP so an in-session agent can spawn
 and manage descendant sessions without mounting personal API tokens.
 
+Sessions of one project form a fleet: `agents_list`, `agent_send` and `agent_inbox` let them
+find and message each other. A message sent with `priority` is pushed into the running agent
+instead of waiting for its inbox poll, and `interrupt` stops its current work first; the
+session view has a "✉ Message" card that does the same for the owner. How a push reaches the
+agent depends on the runtime ([`docs/priority-messages.md`](docs/priority-messages.md)):
+
+| Runtime | Priority delivery |
+|---|---|
+| Claude | the `agenthub-fleet` mod inside Claude Code submits it as the next prompt (also in chat UI and `-p` runs); a chat-UI session without the mod gets it over the stream-json pipe |
+| Codex, Cursor, OpenClaw | typed into the interactive terminal as a queued prompt; autonomous runs: inbox only |
+
+What could not be pushed stays in the inbox, and the sender is told (`deliveredVia: inbox`).
+
 ## Agents, authentication, and policy
 
 Agent and billing choices are independent for Interactive, Autonomous, and Scheduled

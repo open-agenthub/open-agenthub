@@ -45,11 +45,21 @@ async function refreshPermissions() {
 
 // Fleet inbox: messages other agents of the project sent to this session. The view is
 // read-only — only the agent's own inbox poll marks messages delivered — so a banner
-// stays visible until the agent picks the message up or the user dismisses it.
+// stays visible until the agent picks the message up or the user dismisses it. A priority
+// message was pushed into the agent the moment it arrived, so it is shown for a while after
+// delivery too: the person would otherwise never see what interrupted their agent.
+const PRIORITY_BANNER_MS = 5 * 60 * 1000
 const agentMessages = ref([])
 const dismissedMessages = ref(new Set())
 const visibleMessages = computed(() => agentMessages.value
-  .filter(m => !m.deliveredAt && !dismissedMessages.value.has(m.id)))
+  .filter(m => !dismissedMessages.value.has(m.id))
+  .filter(m => !m.deliveredAt || (m.priority && Date.now() - new Date(m.deliveredAt).getTime() < PRIORITY_BANNER_MS)))
+
+function deliveryLabel(m) {
+  if (!m.priority) return ''
+  if (m.deliveredVia === 'injected' || m.deliveredVia === 'mod') return 'delivered to the agent'
+  return m.deliveredAt ? 'picked up from the inbox' : 'waiting in inbox'
+}
 
 async function refreshMessages() {
   if (props.sharedToken || !capabilities.value.canManage) {
@@ -61,6 +71,39 @@ async function refreshMessages() {
 
 function dismissMessage(id) {
   dismissedMessages.value = new Set([...dismissedMessages.value, id])
+}
+
+// "Message this agent": the owner pushes a message into their own session. This is the only
+// way to reach a chat-mode or autonomous session from the app without a terminal to type in,
+// and it is what a fleet peer does with agent_send — same endpoint family, same flags.
+const sendOpen = ref(false)
+const sendText = ref('')
+const sendPriority = ref(true)
+const sendInterrupt = ref(false)
+const sendBusy = ref(false)
+const sendNote = ref('')
+const showSendMessage = computed(() => !props.sharedToken && capabilities.value.canManage && isLive.value)
+watch(sendInterrupt, stop => { if (stop) sendPriority.value = true })
+watch(sendPriority, urgent => { if (!urgent) sendInterrupt.value = false })
+
+async function sendMessage() {
+  const body = sendText.value.trim()
+  if (!body || sendBusy.value) return
+  sendBusy.value = true
+  try {
+    const result = await api.sendSessionMessage(props.session.id, {
+      body, priority: sendPriority.value, interrupt: sendInterrupt.value
+    })
+    sendText.value = ''
+    sendNote.value = result?.deliveredVia === 'injected' || result?.deliveredVia === 'mod'
+      ? 'Delivered to the agent.'
+      : 'Waiting in the inbox — the agent reads it on its next agent_inbox call.'
+    await refreshMessages()
+  } catch (e) {
+    sendNote.value = e?.message || 'The message could not be sent.'
+  } finally {
+    sendBusy.value = false
+  }
 }
 
 async function decidePermission(reqId, decision) {
@@ -242,6 +285,7 @@ async function selectTab(tab) {
       <template v-if="capabilities.canManage">
         <button v-if="canPause(session)" class="bar-btn" @click="$emit('pause', session.id)">❚❚ Pause</button>
         <button v-if="session.canResume" class="bar-btn" @click="$emit('resume', session.id)">▶ Resume</button>
+        <button v-if="showSendMessage" class="bar-btn" data-send-message-toggle :class="{ on: sendOpen }" @click="sendOpen = !sendOpen">✉ Message</button>
         <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
@@ -285,10 +329,28 @@ async function selectTab(tab) {
         <button class="bar-btn" data-auto-approve :disabled="autoApproveBusy" @click="toggleAutoApprove">Turn off</button>
       </div>
     </div>
-    <div v-for="m in visibleMessages" :key="m.id" class="perm agent-msg" data-agent-message>
+    <div v-if="showSendMessage && sendOpen" class="perm send-card" data-send-message>
+      <span class="ask-dot send-dot"></span>
+      <div class="perm-text send-form">
+        <strong>Message this agent</strong>
+        <textarea v-model="sendText" rows="2" maxlength="4000" placeholder="What should the agent know or do?"
+          data-send-message-text :disabled="sendBusy" @keydown.ctrl.enter.prevent="sendMessage"></textarea>
+        <div class="send-flags">
+          <label><input type="checkbox" v-model="sendPriority" data-send-message-priority :disabled="sendBusy" /> priority — deliver into the running prompt now</label>
+          <label><input type="checkbox" v-model="sendInterrupt" data-send-message-interrupt :disabled="sendBusy" /> interrupt — stop the current work first</label>
+        </div>
+        <span v-if="sendNote" class="perm-summary send-note" data-send-message-note>{{ sendNote }}</span>
+      </div>
+      <div class="perm-actions">
+        <button class="bar-btn primary" data-send-message-submit :disabled="sendBusy || !sendText.trim()" @click="sendMessage">{{ sendBusy ? 'Sending…' : 'Send' }}</button>
+        <button class="bar-btn" data-send-message-close :disabled="sendBusy" @click="sendOpen = false; sendNote = ''">Close</button>
+      </div>
+    </div>
+    <div v-for="m in visibleMessages" :key="m.id" class="perm agent-msg" :class="{ priority: m.priority }" data-agent-message
+         :data-priority="m.priority ? 'true' : null" :data-delivered-via="m.deliveredVia || null">
       <span class="ask-dot msg-dot"></span>
       <div class="perm-text">
-        <strong>Message from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}</strong>
+        <strong>{{ m.interrupt ? 'Interrupt' : m.priority ? 'Priority message' : 'Message' }} from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}<template v-if="m.priority"> · <span class="msg-delivery" data-message-delivery>{{ deliveryLabel(m) }}</span></template></strong>
         <span class="msg-body">{{ m.body }}</span>
       </div>
       <div class="perm-actions">
@@ -367,6 +429,18 @@ async function selectTab(tab) {
 .perm-actions .danger { color: #e5484d; }
 .agent-msg { color: var(--accent-2); background: #121a24; border-bottom: 1px solid #24405c; }
 .msg-dot { background: var(--accent-2); }
+.agent-msg.priority { color: var(--accent); background: #0f1d2e; border-left: 3px solid var(--accent); border-bottom-color: var(--accent); }
+.agent-msg.priority .msg-dot { background: var(--accent); }
+.msg-delivery { font-weight: 400; color: var(--muted-3); }
+.send-card { color: var(--text); background: var(--panel); border-bottom: 1px solid var(--border-2); align-items: flex-start; }
+.send-dot { background: var(--accent); margin-top: 6px; }
+.send-form { gap: 8px; }
+.send-form textarea { width: 100%; resize: vertical; font: 13px/1.5 var(--mono); }
+.send-flags { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 12px; color: var(--muted); }
+.send-flags label { display: flex; align-items: center; gap: 6px; margin: 0; }
+.send-flags input { width: auto; margin: 0; }
+.send-note { white-space: normal; color: var(--muted); }
+.bar-btn.on { background: var(--border-2); color: var(--strong); }
 .msg-body { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .terminal-stack { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }
