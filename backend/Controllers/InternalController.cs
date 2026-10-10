@@ -346,6 +346,7 @@ public sealed class InternalController : ControllerBase
         var forced = req with
         {
             ParentSessionId = id,
+            Repos = InheritRepoProviders(req.Repos, rec.ReposJson),
             ProjectId = req.ProjectId ?? rec.ProjectId,
             McpConfigJson = inheritMcp ? rec.McpConfigJson : req.McpConfigJson,
             McpServerIds = inheritMcp ? await AccessibleParentServerIdsAsync(rec, ct) : req.McpServerIds
@@ -463,6 +464,45 @@ public sealed class InternalController : ControllerBase
         var accessible = (await _library.ResolveMcpServersAsync(parent.Owner, ids, strict: false, ct))
             .Select(s => s.Id).ToHashSet(StringComparer.Ordinal);
         return ids.Where(accessible.Contains).ToList();
+    }
+
+    /// <summary>
+    /// Gives a child's repositories the Git provider their parent already uses for the same host.
+    ///
+    /// A connected provider's token only reaches a pod for a repository that names the provider,
+    /// and the agent creating the child does not know that id — it sees a clone url. Without this
+    /// a child cloned a public repository anonymously, did its work, and then could not push:
+    /// "could not read Username", with nothing in the session saying why. A repository that names
+    /// its own provider keeps it, and a host the parent has no provider for stays anonymous.
+    /// </summary>
+    private static List<RepoRef> InheritRepoProviders(List<RepoRef> repos, string? parentReposJson)
+    {
+        if (repos.Count == 0 || repos.All(r => !string.IsNullOrWhiteSpace(r.ProviderId))) return repos;
+
+        var byHost = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var parentRepo in ParseRepos(parentReposJson))
+            if (!string.IsNullOrWhiteSpace(parentRepo.ProviderId) && HttpsHost(parentRepo.Url) is { } host)
+                byHost.TryAdd(host, parentRepo.ProviderId!);
+        if (byHost.Count == 0) return repos;
+
+        return repos.Select(repo =>
+            string.IsNullOrWhiteSpace(repo.ProviderId) && HttpsHost(repo.Url) is { } host
+                && byHost.TryGetValue(host, out var providerId)
+                ? repo with { ProviderId = providerId }
+                : repo).ToList();
+    }
+
+    // Only https remotes: a provider token is an https credential, and an SSH remote is
+    // authenticated by the stored key instead.
+    private static string? HttpsHost(string? url) =>
+        Uri.TryCreate(url?.Trim(), UriKind.Absolute, out var uri) && uri.Scheme == Uri.UriSchemeHttps
+            ? uri.Host : null;
+
+    private static List<RepoRef> ParseRepos(string? json)
+    {
+        if (string.IsNullOrWhiteSpace(json)) return new();
+        try { return JsonSerializer.Deserialize<List<RepoRef>>(json) ?? new(); }
+        catch (JsonException) { return new(); }
     }
 
     private static List<string> ParseServerIds(string? json)
