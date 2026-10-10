@@ -119,8 +119,23 @@ provider:
   before the HTTP call. It is now in the schema and in `sanitize.mjs`, so a caller can read back how
   the session was authenticated. The id is not a secret; the token never leaves the backend.
 
-Validation lives in the session service rather than in either schema, so the rules cannot drift
-between the two MCP servers and the REST API.
+- The in-session server (`agent-runtime/sessions`, the one an agent uses to create a child) was
+  missed by that fix and stripped `providerId` the same way. It showed late because nothing fails
+  at create: a child clones a public repository anonymously, works, and only then cannot push —
+  `could not read Username`, hours in, with no credential in the pod to explain it. The field is
+  now in its schema too.
+
+  The schema alone would not have been enough here, because the caller is an agent and does not
+  know a provider id; it knows a clone url. So `POST /internal/sessions/{id}/spawn` fills it in:
+  a child repository without a provider gets the one its parent uses for the same https host. The
+  alternative was matching the host against every provider the owner has connected, for every
+  create. That was rejected because it turns "this url is on a host you connected" into "this
+  session holds your token" for sessions that never asked — a parent that already carries the
+  provider is the narrower statement of intent. A repository naming its own provider keeps it, an
+  SSH remote is left to the stored key, and a host the parent has no provider for stays anonymous.
+
+Validation lives in the session service rather than in any schema, so the rules cannot drift
+between the MCP servers and the REST API.
 
 ## Not built
 

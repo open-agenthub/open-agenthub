@@ -2,7 +2,7 @@
 const SAFE_KEYS = [
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
-  'createdAt', 'hasMcp'
+  'createdAt', 'hasMcp', 'autoApprove'
 ];
 
 /**
@@ -34,6 +34,8 @@ function pickRepos(info) {
       if (!repo || typeof repo !== 'object' || typeof repo.url !== 'string') continue;
       const entry = { url: repo.url };
       if (typeof repo.branch === 'string') entry.branch = repo.branch;
+      // Not a secret, and the only way a caller sees whether a repository is authenticated.
+      if (typeof repo.providerId === 'string') entry.providerId = repo.providerId;
       repos.push(entry);
     }
     return repos;

@@ -100,6 +100,57 @@ public class InternalSessionSpawnTests
     }
 
     [Fact]
+    public async Task Spawn_GivesAChildRepoTheProviderItsParentUsesForThatHost()
+    {
+        var svc = new RecordingSessionService();
+        var parent = Parent();
+        parent.ReposJson = JsonSerializer.Serialize(new[]
+        {
+            new RepoRef { Url = "https://git.example.com/team/app.git", ProviderId = "github" }
+        });
+        var controller = Controller(parent, svc);
+
+        await controller.Spawn(ParentId, new CreateSessionRequest
+        {
+            Title = "child", Prompt = "p",
+            Repos =
+            [
+                new RepoRef { Url = "https://GIT.example.com/team/other.git", Branch = "main" },
+                new RepoRef { Url = "https://elsewhere.example.com/x.git" },
+                new RepoRef { Url = "git@git.example.com:team/app.git" },
+                new RepoRef { Url = "https://git.example.com/team/own.git", ProviderId = "gitlab" }
+            ]
+        }, CancellationToken.None);
+
+        var repos = svc.CreateRequest!.Repos;
+        // Same host over https: inherits, and keeps its own branch.
+        Assert.Equal("github", repos[0].ProviderId);
+        Assert.Equal("main", repos[0].Branch);
+        // A host the parent has no provider for, and an SSH remote, stay as they were.
+        Assert.Null(repos[1].ProviderId);
+        Assert.Null(repos[2].ProviderId);
+        // A provider the caller named is never overridden.
+        Assert.Equal("gitlab", repos[3].ProviderId);
+    }
+
+    [Fact]
+    public async Task Spawn_WithAParentThatHasNoProvider_LeavesTheChildReposAnonymous()
+    {
+        var svc = new RecordingSessionService();
+        var parent = Parent();
+        parent.ReposJson = """[{"Url":"https://git.example.com/team/app.git"}]""";
+        var controller = Controller(parent, svc);
+
+        await controller.Spawn(ParentId, new CreateSessionRequest
+        {
+            Title = "child", Prompt = "p",
+            Repos = [new RepoRef { Url = "https://git.example.com/team/app.git" }]
+        }, CancellationToken.None);
+
+        Assert.Null(Assert.Single(svc.CreateRequest!.Repos).ProviderId);
+    }
+
+    [Fact]
     public async Task Spawn_WithWrongToken_ReturnsUnauthorized()
     {
         var svc = new RecordingSessionService();
