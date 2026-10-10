@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { SessionsBackendClient } from './client.mjs';
+import { withCredentialSelection } from './credentials.mjs';
 import { withExpiry } from './expiry.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
@@ -44,7 +45,13 @@ const createSchema = z.object({
   memory: z.string().max(32).optional(),
   // Text with a unit, converted to seconds before the HTTP call — see expiry.mjs for why.
   autoDeleteAfter: z.string().max(16).optional(),
-  autoDeleteFrom: z.enum(['start', 'lastActivity']).optional()
+  autoDeleteFrom: z.enum(['start', 'lastActivity']).optional(),
+  // Which stored provider login the child mounts (omitted = the owner's default account) and
+  // which stored git tokens it gets, as comma-separated ids — text, not an array, so an
+  // already-connected client's call does not fail schema validation (see credentials.mjs).
+  // Omitted or "*" = every stored token, "none" = no token.
+  credentialId: z.string().max(64).optional(),
+  gitPatIds: z.string().max(4096).optional()
 });
 
 register('session_create', {
@@ -56,9 +63,11 @@ register('session_create', {
     + 'unattended work, where such requests are approved automatically. hasMcp in the result counts '
     + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled. '
     + 'autoDeleteAfter ("90m", "12h", "3d") makes the child delete itself after that long since '
-    + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start.',
+    + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start. '
+    + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
+    + 'token) the git tokens the child gets.',
   inputSchema: createSchema
-}, async (body) => text(sanitizeSession(await client.create(withExpiry(body)))));
+}, async (body) => text(sanitizeSession(await client.create(withCredentialSelection(withExpiry(body))))));
 
 register('session_get', {
   description: 'Get a descendant session by id.',

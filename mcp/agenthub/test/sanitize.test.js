@@ -52,6 +52,15 @@ test('sanitizeSession maps lists and delete results', () => {
   assert.equal(list[0].mcpConfigJson, undefined);
 });
 
+test('sanitizeSession keeps the credential ids so a caller can read back what it asked for', () => {
+  const safe = sanitizeSession({ id: 's1', credentialId: 'acct1', gitPatIds: ['p1'], owner: 'u' });
+  assert.equal(safe.credentialId, 'acct1');
+  assert.deepEqual(safe.gitPatIds, ['p1']);
+  // Null ("every token") is still a value worth reporting; undefined is simply absent.
+  assert.equal(sanitizeSession({ id: 's1', gitPatIds: null }).gitPatIds, null);
+  assert.equal('gitPatIds' in sanitizeSession({ id: 's1' }), false);
+});
+
 test('sanitizeSession keeps the session url a caller hands to a person', () => {
   // The allowlist silently drops anything it does not name, so a create response without `url`
   // would leave an MCP caller with an id it cannot turn into a link.

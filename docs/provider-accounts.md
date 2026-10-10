@@ -230,6 +230,9 @@ fresh exactly once, as a cross-pod resume already does, rather than leaving the 
   the value of the feature is telling two logins apart, which the file does.
 - **No automatic switch on a failing token.** A session whose account expired fails as before.
   Choosing another account on the user's behalf would hide which login is broken.
-- **The remote API and the MCP tools accept `credentialId`** through `CreateSessionRequest` like
-  every other field, but do not list accounts. A token-authenticated listing of a user's logins
-  is a reasonable follow-up; it was not needed for the UI this was built for.
+- ~~The remote API and the MCP tools accept `credentialId` but do not list accounts.~~ Since
+  `docs/credential-scopes.md`: `GET /api/remote/credentials` and the `credentials_list` tool list
+  the accounts (keyed like `GET /api/credentials/accounts`), the git PATs and which API keys are
+  stored — narrowed to what the calling token is allowed to use — and `session_create` takes
+  `credentialId` on every MCP surface. The dropdown in the session dialogs also shows from the
+  first account now, rather than from the second, so a person sees which login a session runs on.

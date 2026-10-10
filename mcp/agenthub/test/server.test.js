@@ -11,7 +11,7 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   assert.match(server, /name:\s*'agenthub'/);
   for (const name of [
     'session_create', 'session_get', 'session_list', 'session_wait', 'session_delete',
-    'session_convert', 'agents_list', 'agent_send'
+    'session_convert', 'agents_list', 'agent_send', 'credentials_list'
   ]) {
     assert.match(server, new RegExp(`register\\('${name}'`));
   }
@@ -56,8 +56,18 @@ test('agenthub MCP takes the self-deletion deadline as text and converts it befo
   const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
   assert.match(server, /autoDeleteAfter: z\.string\(\)\.max\(16\)\.optional\(\)/);
   assert.match(server, /autoDeleteFrom: z\.enum\(\['start', 'lastActivity'\]\)\.optional\(\)/);
-  assert.match(server, /client\.create\(withExpiry\(body\)\)/);
+  assert.match(server, /client\.create\(withCredentialSelection\(withExpiry\(body\)\)\)/);
   // The parser's error is a stable code, not the generic operation_failed.
   const errors = fs.readFileSync(path.join(root, 'errors.mjs'), 'utf8');
   assert.match(errors, /'autodelete_invalid_duration'/);
+});
+
+test('agenthub MCP takes the credential selection as text and lists credentials unsanitized', () => {
+  const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
+  // Strings, not arrays: an already-connected client sends a new parameter as text.
+  assert.match(server, /credentialId: z\.string\(\)\.max\(64\)\.optional\(\)/);
+  assert.match(server, /gitPatIds: z\.string\(\)\.max\(4096\)\.optional\(\)/);
+  assert.match(server, /client\.create\(withCredentialSelection\(withExpiry\(body\)\)\)/);
+  // The listing is not a session record; the allowlist would empty it.
+  assert.doesNotMatch(server, /sanitizeSession\(await client\.credentials/);
 });

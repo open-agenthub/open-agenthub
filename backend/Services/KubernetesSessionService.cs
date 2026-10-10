@@ -246,6 +246,20 @@ public sealed class KubernetesSessionService : ISessionService
         return credentialId;
     }
 
+    /// <summary>
+    /// Checks a requested PAT selection against what is stored; null and the wildcard pass
+    /// through as "all". The secret is read only when there is something to check, so a request
+    /// that says nothing about PATs costs no extra round trip.
+    /// </summary>
+    private async Task<IReadOnlyList<string>?> ValidateGitPatIdsAsync(string owner, IReadOnlyList<string>? requested,
+        CancellationToken ct)
+    {
+        if (requested is null) return null;
+        if (requested.Count == 0) return Array.Empty<string>();
+        var stored = GitPatStore.Read((await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data);
+        return GitPatSelection.Normalize(requested, stored);
+    }
+
     public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
         CancellationToken ct = default)
     {
@@ -323,6 +337,7 @@ public sealed class KubernetesSessionService : ISessionService
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
         await SessionSoftLimit.EnsureCanCreateAsync(_store, owner, _maxRunningSessionsPerOwner, ct);
         var credentialId = await ValidateCredentialIdAsync(owner, req.Agent, req.AuthMode, req.CredentialId, ct);
+        var gitPatIds = await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct);
 
         var repos = NormalizeRepos(req);
         SessionRepos.Validate(repos);
@@ -353,6 +368,7 @@ public sealed class KubernetesSessionService : ISessionService
                 ? req.OpenClawApiKeySource
                 : null,
             CredentialId = credentialId,
+            GitPatIdsJson = GitPatSelection.Serialize(gitPatIds),
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
             Image = image, RunAsRoot = req.RunAsRoot,
@@ -692,6 +708,7 @@ public sealed class KubernetesSessionService : ISessionService
             ProjectId = rec.ProjectId, Prompt = rec.Prompt, SystemPrompt = rec.SystemPrompt,
             Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
             CredentialId = rec.CredentialId,
+            GitPatIds = GitPatSelection.Parse(rec.GitPatIdsJson)?.ToList(),
             Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot, AutoApprove = rec.AutoApprove,
@@ -904,6 +921,8 @@ public sealed class KubernetesSessionService : ISessionService
             rec.CredentialId = await ValidateCredentialIdAsync(owner, rec.Agent, rec.AuthMode, req.CredentialId, ct);
         else if (rec.Agent != previousAgent || rec.AuthMode == AgentAuthMode.ApiKey)
             rec.CredentialId = null;
+        if (req.GitPatIds is not null)
+            rec.GitPatIdsJson = GitPatSelection.Serialize(await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct));
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
@@ -971,12 +990,18 @@ public sealed class KubernetesSessionService : ISessionService
                 // a global credential helper, which offered the token to any host that answered
                 // 401; a store entry is bound to one host. It also means the raw token no longer
                 // has to be projected into the pod at all — see ManualGitCredentials.
+                //
+                // Which PATs is read from the record, not the request: a resume rebuilds the
+                // request from the record anyway, and one source means a resumed session cannot
+                // come back with a different selection than it was created with.
                 var oauthStore = await _gitAuth.BuildCredentialStoreAsync(
                     owner, NormalizeRepos(req), resourceCt);
                 var manualCredentials = (await ReadSecretOrNullAsync(
                     CredsSecretName(owner), resourceCt))?.Data;
+                var selectedPats = GitPatSelection.Apply(
+                    GitPatStore.Read(manualCredentials), GitPatSelection.Parse(rec.GitPatIdsJson));
                 var credentialStore = ManualGitCredentials.ComposeStore(
-                    oauthStore, ManualGitCredentials.Lines(manualCredentials));
+                    oauthStore, ManualGitCredentials.Lines(selectedPats));
                 if (credentialStore is null) return false;
 
                 await UpsertSecretAsync(new V1Secret
@@ -1304,6 +1329,7 @@ public sealed class KubernetesSessionService : ISessionService
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
         CredentialId = r.CredentialId,
+        GitPatIds = GitPatSelection.Parse(r.GitPatIdsJson),
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),

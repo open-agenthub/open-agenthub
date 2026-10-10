@@ -2,12 +2,13 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import {
-  agentPayload, defaultAgentForm, filterAgentOptions, mcpBadgeLabel,
-  policyPayload, toolsPlaceholder, commandsPlaceholder
+  agentPayload, defaultAgentForm, filterAgentOptions, gitPatIdsChange, gitPatOptions, gitPatSelectionFor,
+  mcpBadgeLabel, policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
 import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
+import GitPatPicker from './GitPatPicker.vue'
 import SystemPromptField from './SystemPromptField.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
@@ -22,6 +23,12 @@ const agentForm = ref({})
 const advOpen = ref(false)
 const credentialStatus = ref({})
 const providerAccounts = ref({})
+// The source's PAT selection, editable; unchanged means the backend copies it (null).
+const gitPats = computed(() => gitPatOptions(credentialStatus.value))
+const selectedGitPats = ref([])
+watch([gitPats, () => props.session.id], ([options]) => {
+  selectedGitPats.value = gitPatSelectionFor(props.session.gitPatIds, options)
+})
 const allowedAgents = ref([])
 const agentChoices = computed(() => filterAgentOptions(allowedAgents.value, { include: props.session?.agent }))
 // Saved MCP servers; selection overrides the copied list independently of includeMcp.
@@ -68,7 +75,9 @@ async function submit() {
       policy: policyPayload(agentForm.value),
       // Always sent, prefilled from the source: 0 means a copy without a deadline, so a setting
       // cleared in the dialog is dropped rather than copied back in (null would copy it).
-      ...autoDeletePayload(autoDelete.value, { off: 0 })
+      ...autoDeletePayload(autoDelete.value, { off: 0 }),
+      // Omitted when unchanged, so the backend copies the source's selection.
+      ...gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds)
     }))
   }
   catch (e) { error.value = String(e.message || e) } finally { busy.value = false }
@@ -95,6 +104,9 @@ async function submit() {
       v-model:open-claw-api-key-source="agentForm.openClawApiKeySource" v-model:credential-id="agentForm.credentialId"
       :accounts="providerAccounts" :mode="session.mode"
       :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
+    <div v-if="gitPats.length" class="card sect">
+      <GitPatPicker v-model="selectedGitPats" :options="gitPats" />
+    </div>
     <AutoDeleteCard v-model="autoDelete" :scheduled="scheduled" />
     <div v-if="automated" class="card adv">
       <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">

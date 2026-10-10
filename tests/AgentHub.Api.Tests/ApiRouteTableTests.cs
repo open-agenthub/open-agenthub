@@ -70,6 +70,21 @@ public class ApiRouteTableTests
         Assert.Contains(Routes(), route => route.Template == template && route.Methods.Contains(method));
     }
 
+    /// <summary>Routes the credential-scope feature adds (docs/credential-scopes.md); the stdio
+    /// MCP server and the token settings page call exactly these.</summary>
+    public static TheoryData<string, string> CredentialScopeRoutes => new()
+    {
+        { "GET", "api/remote/credentials" },
+        { "PATCH", "api/tokens/{id}" }
+    };
+
+    [Theory]
+    [MemberData(nameof(CredentialScopeRoutes))]
+    public void CredentialScopeSurface_ExposesItsRoutes(string method, string template)
+    {
+        Assert.Contains(Routes(), route => route.Template == template && route.Methods.Contains(method));
+    }
+
     [Fact]
     public void SharedWithMe_ExistsOnBothSurfaces_AndTheInAppOneIsBehindTheLogin()
     {

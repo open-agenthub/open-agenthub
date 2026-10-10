@@ -148,6 +148,46 @@ export function accountOptionLabel(account) {
   return identity ? `${account.label} — ${identity}` : account.label
 }
 
+/** The stored git PATs ({id, kind, host}) out of the credential status; never a token. */
+export function gitPatOptions(status) {
+  return Array.isArray(status?.gitPats) ? status.gitPats : []
+}
+
+/** The ids a session's stored selection ticks: null ("all") ticks every option, a list ticks what still exists. */
+export function gitPatSelectionFor(current, options) {
+  const ids = options.map(pat => pat.id)
+  return Array.isArray(current) ? ids.filter(id => current.includes(id)) : ids
+}
+
+function everyPatTicked(selected, options) {
+  return options.length > 0 && options.every(pat => selected.includes(pat.id))
+}
+
+/**
+ * What a create sends: null when every stored token is ticked — "all, including ones added
+ * later", which is what every session got before a selection existed — else the ticked ids.
+ */
+export function gitPatIdsPayload(selected, options) {
+  if (!options.length || everyPatTicked(selected, options)) return null
+  return options.map(pat => pat.id).filter(id => selected.includes(id))
+}
+
+/**
+ * What an edit or duplicate sends: nothing when the selection matches the session's, `['*']`
+ * when a restricted session goes back to every token (null would mean "unchanged" there), else
+ * the ticked ids.
+ */
+export function gitPatIdsChange(selected, options, current) {
+  if (!options.length) return {}
+  const all = everyPatTicked(selected, options)
+  if (!Array.isArray(current)) return all ? {} : { gitPatIds: gitPatIdsPayload(selected, options) }
+  if (all) return { gitPatIds: ['*'] }
+  const chosen = options.map(pat => pat.id).filter(id => selected.includes(id))
+  const kept = gitPatSelectionFor(current, options)
+  const same = chosen.length === kept.length && chosen.every(id => kept.includes(id))
+  return same ? {} : { gitPatIds: chosen }
+}
+
 export function authLabel(authMode) {
   return authMode === 'ApiKey' ? 'API key' : authMode === 'Auto' ? 'Auto (legacy)' : authMode || ''
 }

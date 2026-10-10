@@ -11,7 +11,10 @@ const SAFE_KEYS = [
   // session_create answer without the one thing a caller handing over a session needs.
   'url',
   // The self-deletion setting and the deadline it yields (docs/session-expiry.md).
-  'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt'
+  'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt',
+  // Which login and git tokens the session runs with — ids, not secrets — so a caller can read
+  // back that the session was created the way it asked (docs/credential-scopes.md).
+  'credentialId', 'gitPatIds'
 ];
 
 /**

@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AgentHubClient } from './client.mjs';
+import { withCredentialSelection } from './credentials.mjs';
 import { safeError, sharingErrorCode } from './errors.mjs';
 import { withExpiry } from './expiry.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
@@ -54,7 +55,14 @@ const createSchema = z.object({
   memory: z.string().max(32).optional(),
   // Text with a unit, converted to seconds before the HTTP call — see expiry.mjs for why.
   autoDeleteAfter: z.string().max(16).optional(),
-  autoDeleteFrom: z.enum(['start', 'lastActivity']).optional()
+  autoDeleteFrom: z.enum(['start', 'lastActivity']).optional(),
+  // Which stored provider login (credentials_list → accounts) a Subscription session mounts;
+  // omitted = the default account.
+  credentialId: z.string().max(64).optional(),
+  // Comma-separated ids from credentials_list → gitPats. Text, not an array, so an already
+  // connected client's call does not fail schema validation (see credentials.mjs). Omitted or
+  // "*" = every stored token, "none" = no token.
+  gitPatIds: z.string().max(4096).optional()
 });
 
 register('session_create', {
@@ -64,9 +72,20 @@ register('session_create', {
     + 'Use Autonomous only for unattended work, where such requests are approved automatically. '
     + 'autoDeleteAfter ("90m", "12h", "3d") makes the session delete itself after that long since '
     + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start; the '
-    + 'response\'s expiresAt says when.',
+    + 'response\'s expiresAt says when. '
+    + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
+    + 'token) the git tokens the session gets; credentials_list shows what is available to this token.',
   inputSchema: createSchema
-}, async (body) => text(sanitizeSession(await client.create(withExpiry(body)))));
+}, async (body) => text(sanitizeSession(await client.create(withCredentialSelection(withExpiry(body))))));
+
+register('credentials_list', {
+  description: 'List the credentials a session created with this token may use: provider logins '
+    + '(accounts, keyed by agent) with id, label and identity, stored git personal access tokens '
+    + '(id, kind, host — never the token), and which API keys are stored. A restricted token sees '
+    + 'only what it is allowed to use.',
+  inputSchema: z.object({})
+  // Not a session record; sanitizeSession's allowlist would strip all of it.
+}, async () => text(await client.credentials()));
 
 register('session_get', {
   description: 'Get a session by id.',

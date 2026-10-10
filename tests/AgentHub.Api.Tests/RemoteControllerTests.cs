@@ -465,7 +465,9 @@ public class RemoteControllerTests
         string? bearerToken,
         ISessionMessageStore? messages = null)
     {
-        var controller = new RemoteController(findOwner, svc, messages)
+        // An owner-only resolver is an unrestricted token: the behaviour every token had before scopes.
+        var controller = new RemoteController(
+            async (token, ct) => await findOwner(token, ct) is { } owner ? new RemoteCaller(owner, null) : null, svc, messages)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

@@ -319,6 +319,12 @@ public record CreateSessionRequest
     /// accounts when the session is created, so an unknown id fails the request, not the pod.
     /// </summary>
     public string? CredentialId { get; init; }
+    /// <summary>
+    /// Which stored git personal access tokens the session's credential store is built from
+    /// (docs/credential-scopes.md). Null means every stored PAT, as before; an empty list means
+    /// none; <c>["*"]</c> is accepted as a spelling of null. An unknown id fails the request.
+    /// </summary>
+    public List<string>? GitPatIds { get; init; }
     /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
     public AgentPolicy? Policy { get; init; }
     /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
@@ -417,6 +423,10 @@ public record UpdateSessionRequest
     /// <summary>Provider account for the next start; null = unchanged, empty string = back to the
     /// default account. A running session is switched live through the credential endpoint instead.</summary>
     public string? CredentialId { get; init; }
+    /// <summary>Git PATs for the next start; null = unchanged, empty = none, <c>["*"]</c> = all.
+    /// The empty-string convention of the text fields cannot express "all" for a list, hence the
+    /// wildcard.</summary>
+    public List<string>? GitPatIds { get; init; }
     public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
@@ -485,12 +495,14 @@ public record ConvertSessionRequest
 /// empty string yields a copy without one (create-side normalization turns it into null).</param>
 /// <param name="AutoDeleteAfterSeconds">Replaces the copied self-deletion deadline; null copies
 /// the source's setting, 0 yields a copy that never deletes itself.</param>
+/// <param name="GitPatIds">Replaces the copied PAT selection; null copies the source's.</param>
 public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
     AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null,
     OpenClawApiKeySource? OpenClawApiKeySource = null,
     List<string>? McpServerIds = null,
     string? SystemPrompt = null, string? CredentialId = null,
-    int? AutoDeleteAfterSeconds = null, string? AutoDeleteFrom = null);
+    int? AutoDeleteAfterSeconds = null, string? AutoDeleteFrom = null,
+    List<string>? GitPatIds = null);
 
 public static class SessionDuplication
 {
@@ -506,6 +518,9 @@ public static class SessionDuplication
             // carrying it over would turn "copy as API key" into a 400 about a field never shown.
             CredentialId = request.CredentialId
                 ?? (agent == source.Agent && authMode != AgentAuthMode.ApiKey ? source.CredentialId : null),
+            // The PAT selection is configuration, not conversation, so a copy keeps it; the
+            // stored form is a JSON array or null, which the create side reads back the same way.
+            GitPatIds = request.GitPatIds ?? Services.GitPatSelection.Parse(source.GitPatIdsJson)?.ToList(),
             Title = request.Title,
             Description = source.Description,
             ProjectId = request.ProjectId,
@@ -607,6 +622,8 @@ public record SessionInfo
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
     /// <summary>The provider account this session is pinned to; null = the default account.</summary>
     public string? CredentialId { get; init; }
+    /// <summary>The stored git PATs this session is built with; null = all of them.</summary>
+    public IReadOnlyList<string>? GitPatIds { get; init; }
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }

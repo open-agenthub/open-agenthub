@@ -1,8 +1,42 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentOptions, agentPayload, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy,
-  filterAgentOptions, needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload
+  filterAgentOptions, gitPatIdsChange, gitPatIdsPayload, gitPatOptions, gitPatSelectionFor,
+  needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload
 } from './agent.js'
+
+/// A session's git token selection (docs/credential-scopes.md): null = every stored token,
+/// including later ones; a list = exactly these; '*' = back to all on an update.
+describe('git PAT selection helpers', () => {
+  const two = [{ id: 'a', kind: 'gitlab', host: 'gitlab.example.com' }, { id: 'b', kind: 'github', host: 'github.com' }]
+
+  it('reads the options from the credential status and ticks a session\'s selection', () => {
+    expect(gitPatOptions({ gitPats: two })).toEqual(two)
+    expect(gitPatOptions({})).toEqual([])
+    expect(gitPatOptions(null)).toEqual([])
+    expect(gitPatSelectionFor(null, two)).toEqual(['a', 'b'])
+    expect(gitPatSelectionFor(['b', 'gone'], two)).toEqual(['b'])
+    expect(gitPatSelectionFor([], two)).toEqual([])
+  })
+
+  it('sends null for "every token" on create and the ids otherwise', () => {
+    expect(gitPatIdsPayload(['a', 'b'], two)).toBeNull()
+    expect(gitPatIdsPayload(['b'], two)).toEqual(['b'])
+    expect(gitPatIdsPayload([], two)).toEqual([])
+    // Nothing stored: nothing to choose, so nothing is sent.
+    expect(gitPatIdsPayload([], [])).toBeNull()
+  })
+
+  it('sends an edit only when the selection changed, and the wildcard to go back to all', () => {
+    expect(gitPatIdsChange(['a', 'b'], two, null)).toEqual({})
+    expect(gitPatIdsChange(['a'], two, null)).toEqual({ gitPatIds: ['a'] })
+    expect(gitPatIdsChange(['a'], two, ['a'])).toEqual({})
+    expect(gitPatIdsChange(['a', 'b'], two, ['a'])).toEqual({ gitPatIds: ['*'] })
+    expect(gitPatIdsChange([], two, ['a'])).toEqual({ gitPatIds: [] })
+    expect(gitPatIdsChange([], two, [])).toEqual({})
+    expect(gitPatIdsChange([], [], ['a'])).toEqual({})
+  })
+})
 
 describe('agent session helpers', () => {
   it('defaults new sessions to Claude subscription', () => {

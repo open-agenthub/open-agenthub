@@ -77,6 +77,11 @@ export class AgentHubClient {
     return projectId === undefined ? sessions : sessions.filter(session => session.projectId === projectId);
   }
 
+  /** Provider accounts, git PATs and API-key presence the token may use — never a secret. */
+  credentials() {
+    return this.#request('GET', '/api/remote/credentials');
+  }
+
   /** Sends a message/task to an owned session (stored as an external message). */
   sendAgentMessage(sessionId, message) {
     return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(sessionId)}/messages`, { body: message });

@@ -64,7 +64,8 @@ Consequences worth knowing:
 Tokens are still scoped to the repositories actually requested: `BuildCredentialStoreAsync` emits a
 line only for a provider some repository in the session names. A manual PAT is the exception — the
 user stored one token for one host, so it is included whether or not a repository uses it, which is
-what it did before.
+what it did before. Which PATs a session gets at all is now a per-session choice (`gitPatIds` on
+create, update and duplicate; null keeps "every stored token"), see `docs/credential-scopes.md`.
 
 ## A list of tokens keyed by host, not one slot per provider
 

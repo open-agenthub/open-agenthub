@@ -151,8 +151,12 @@ export const api = {
   deleteAccount: (confirm) => req('DELETE', `/account?confirm=${encodeURIComponent(confirm)}`),
   // Personal API tokens for driving sessions remotely.
   listApiTokens: () => req('GET', '/tokens'),
-  // Returns the plaintext token exactly once (in the `token` field).
-  createApiToken: (name) => req('POST', '/tokens', { name }),
+  // Returns the plaintext token exactly once (in the `token` field). `allowedCredentials`
+  // (optional) restricts what sessions created with the token may use — docs/credential-scopes.md.
+  createApiToken: (name, allowedCredentials = null) =>
+    req('POST', '/tokens', allowedCredentials ? { name, allowedCredentials } : { name }),
+  // Replaces the restriction; null lifts it.
+  updateApiToken: (id, allowedCredentials) => req('PATCH', `/tokens/${encodeURIComponent(id)}`, { allowedCredentials }),
   deleteApiToken: (id) => req('DELETE', `/tokens/${id}`),
   // Token/cost usage dashboard (fed by the agents' OpenTelemetry exporter).
   usageSummary: () => req('GET', '/usage/summary'),

@@ -3,10 +3,12 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import {
   accountsFor, agentPayload, buildEphemeralApiSources, defaultAccountId, defaultAgentForm, ephemeralNameFromUrl,
-  filterAgentOptions, mcpBadgeLabel, policyPayload, toolsPlaceholder, commandsPlaceholder
+  filterAgentOptions, gitPatIdsChange, gitPatOptions, gitPatSelectionFor, mcpBadgeLabel, policyPayload,
+  toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
 import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
+import GitPatPicker from './GitPatPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
@@ -22,6 +24,13 @@ const busy = ref(false)
 const error = ref('')
 const credentialStatus = ref({})
 const providerAccounts = ref({})
+// Stored git PATs, ticked as the session has them (null = all). Re-derived when the list
+// arrives or the session changes; the change is only sent when it differs (see gitPatIdsChange).
+const gitPats = computed(() => gitPatOptions(credentialStatus.value))
+const selectedGitPats = ref([])
+watch([gitPats, () => props.session.id], ([options]) => {
+  selectedGitPats.value = gitPatSelectionFor(props.session.gitPatIds, options)
+})
 const allowedAgents = ref([])
 const agentChoices = computed(() => filterAgentOptions(allowedAgents.value, { include: props.session?.agent }))
 // Saved MCP servers from the personal library (own + org + shared with me).
@@ -129,7 +138,10 @@ async function save() {
     if (!scheduled.value && f.value.authMode !== 'Auto') {
       Object.assign(payload, agentPayload(f.value))
     }
-    if (!scheduled.value) Object.assign(payload, credentialChange())
+    if (!scheduled.value) {
+      Object.assign(payload, credentialChange())
+      Object.assign(payload, gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds))
+    }
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
   } catch (e) { error.value = String(e.message || e) }
@@ -179,6 +191,7 @@ async function save() {
         <div class="card sect">
           <label>Repositories</label>
           <RepoPicker v-model="repos" />
+          <GitPatPicker v-model="selectedGitPats" :options="gitPats" />
         </div>
         <div class="card adv">
           <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">

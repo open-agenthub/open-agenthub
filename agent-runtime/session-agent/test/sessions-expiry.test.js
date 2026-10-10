@@ -32,6 +32,6 @@ test('session_create accepts autoDeleteAfter and converts it before the spawn ca
   const server = fs.readFileSync(path.join(sessionsDir, 'server.mjs'), 'utf8');
   assert.match(server, /autoDeleteAfter: z\.string\(\)\.max\(16\)\.optional\(\)/);
   assert.match(server, /autoDeleteFrom: z\.enum\(\['start', 'lastActivity'\]\)\.optional\(\)/);
-  assert.match(server, /client\.create\(withExpiry\(body\)\)/);
+  assert.match(server, /client\.create\(withCredentialSelection\(withExpiry\(body\)\)\)/);
   assert.match(server, /'autodelete_invalid_duration'/);
 });

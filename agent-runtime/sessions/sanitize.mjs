@@ -6,7 +6,10 @@ const SAFE_KEYS = [
   // The self-deletion setting and the deadline it yields (docs/session-expiry.md).
   'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt',
   // What session_convert changes and whether it can be called.
-  'uiMode', 'canConvertToInteractive', 'convertedFrom'
+  'uiMode', 'canConvertToInteractive', 'convertedFrom',
+  // Ids of the login and git tokens the session runs with, never the secrets, so a parent can
+  // read back that its child was created the way it asked.
+  'credentialId', 'gitPatIds'
 ];
 
 /**

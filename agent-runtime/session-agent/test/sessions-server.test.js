@@ -30,3 +30,26 @@ test('agenthub_sessions registers lifecycle and fleet tools', () => {
   assert.match(server, /resolveAgentTarget/);
   assert.match(server, /filter\(a => !a\?\.self\)/);
 });
+
+test('agenthub_sessions takes the credential selection as text and converts it before the spawn', () => {
+  const server = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'sessions', 'server.mjs'),
+    'utf8'
+  );
+  // Strings, not arrays: an already-connected client sends a new parameter as text.
+  assert.match(server, /credentialId: z\.string\(\)\.max\(64\)\.optional\(\)/);
+  assert.match(server, /gitPatIds: z\.string\(\)\.max\(4096\)\.optional\(\)/);
+  assert.match(server, /client\.create\(withCredentialSelection\(withExpiry\(body\)\)\)/);
+});
+
+test('sessions credentials helper turns the text parameters into the spawn body fields', async () => {
+  const { parseIdList, withCredentialSelection } = await import('../../sessions/credentials.mjs');
+  assert.deepEqual(parseIdList('a, b,,a'), ['a', 'b']);
+  assert.equal(parseIdList(''), undefined);
+  assert.equal(parseIdList('*'), undefined);
+  assert.deepEqual(parseIdList('none'), []);
+  assert.deepEqual(
+    withCredentialSelection({ title: 'x', credentialId: ' acct ', gitPatIds: 'p1,p2' }),
+    { title: 'x', credentialId: 'acct', gitPatIds: ['p1', 'p2'] });
+  assert.deepEqual(withCredentialSelection({ title: 'x', credentialId: '', gitPatIds: '' }), { title: 'x' });
+});
