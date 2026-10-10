@@ -203,8 +203,12 @@ function createCommonServer(options = {}) {
       }).catch(() => {}).finally(() => done && done());
     };
     if (!transcriptPut) return toHub();
-    execFile('/bin/sh', ['-c',
-      'curl -fsS ' + curlOption + '-T "' + file + '" "' + transcriptPut + '"'
+    // No shell here: the file name is whatever the CLI chose for its session file, and a quote
+    // or `$(` in it would otherwise become part of the command. The state upload above keeps
+    // its shell pipeline because every path in it is one this process picked itself.
+    execFile('curl', [
+      '-fsS', ...(curlOption ? ['-k'] : []), '--max-time', String(PERSIST_STEP_SECONDS),
+      '-T', file, transcriptPut
     ], toHub);
   }
 

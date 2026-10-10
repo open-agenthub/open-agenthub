@@ -787,9 +787,10 @@ test('common transport uploads the native transcript next to the scrollback once
   files[file] = '{"type":"user"}\n{"type":"assistant"}\n';
   harness.intervals[0].callback();
   await tick();
-  const s3 = harness.commands.find(c => /curl -fsS -k -T/.test(c.args[1]));
+  const s3 = harness.commands.find(c => c.file === 'curl' && c.args.includes('-T'));
   assert.ok(s3, 'the whole file goes to S3');
-  assert.match(s3.args[1], new RegExp('-T "' + file + '" "https://storage.invalid/transcript"'));
+  // Argument list, not a shell string: the CLI picks the file name, so it must never be parsed.
+  assert.deepEqual(s3.args, ['-fsS', '-k', '--max-time', '120', '-T', file, 'https://storage.invalid/transcript']);
   const hub = harness.requests.find(r => r.url.endsWith('/transcript'));
   assert.ok(hub, 'and the hub gets a copy');
   assert.equal(hub.options.method, 'PUT');
@@ -800,7 +801,7 @@ test('common transport uploads the native transcript next to the scrollback once
   harness.intervals[0].callback();
   await tick();
   assert.equal(harness.requests.filter(r => r.url.endsWith('/transcript')).length, 1);
-  assert.equal(harness.commands.filter(c => /-T "/.test(c.args[1])).length, 1);
+  assert.equal(harness.commands.filter(c => c.file === 'curl' && c.args.includes('-T')).length, 1);
 });
 
 test('common transport sends the hub the capped tail of the transcript cut at a line boundary', async () => {

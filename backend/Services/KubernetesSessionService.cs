@@ -135,7 +135,9 @@ public sealed class KubernetesSessionService : ISessionService
         // never saved a credential.
         if (existing is null) return;
         await UpsertSecretAsync(CredentialSecretFactory.RemoveGitPat(name, _opts.Namespace, Sanitize(owner), existing, id), ct);
-        _log.LogInformation("Removed git token {Id} for {Owner}", id, owner);
+        // The id comes straight from the route and is never validated against a format, so it
+        // stays out of the log line: a crafted value could forge extra log entries.
+        _log.LogInformation("Removed a git token for {Owner}", owner);
     }
 
     /// <summary>Which credential fields have a stored value. Values are never returned.</summary>
