@@ -1,5 +1,5 @@
 # ---- builder: compile node-pty natively ----
-FROM node:22-bookworm AS builder
+FROM node:25-bookworm AS builder
 WORKDIR /opt/session-agent
 COPY session-agent/package.json session-agent/package-lock.json ./
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -7,7 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
  && apt-get purge -y python3 make g++ && apt-get autoremove -y
 
 # ---- runtime (non-root) ----
-FROM node:22-bookworm-slim
+FROM node:25-bookworm-slim
 # Pinned so a rebuild of this commit yields the same CLI. The policy plugin depends on
 # tool.execute.before firing for every tool call and the credential watcher on the auth.json
 # layout, so update-agent-runtimes.yml reports a newer version instead of applying it — see
