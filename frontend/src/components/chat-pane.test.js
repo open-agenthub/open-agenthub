@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ChatPane from './ChatPane.vue'
+import { chatDrafts } from '../lib/session-drafts.js'
 
 const mocks = vi.hoisted(() => ({ sockets: [], transcript: '', uploadError: null }))
 
@@ -32,10 +33,23 @@ const line = value => JSON.stringify(value) + '\n'
 
 describe('ChatPane', () => {
   beforeEach(() => {
+    chatDrafts.clear()
     mocks.sockets.length = 0
     mocks.transcript = ''
     mocks.uploadError = null
     globalThis.WebSocket = MockSocket
+  })
+
+  it('restores text when switching away from and back to a keyed chat session', async () => {
+    const session = { id: 'draft-session', phase: 'Running' }
+    const first = mount(ChatPane, { props: { session } })
+    await flushPromises()
+    await first.get('[data-chat-input]').setValue('Unsent chat task')
+    first.unmount()
+    const restored = mount(ChatPane, { props: { session } })
+    await flushPromises()
+    expect(restored.get('[data-chat-input]').element.value).toBe('Unsent chat task')
+    restored.unmount()
   })
 
   it('replays a finished session from the transcript as chat items', async () => {

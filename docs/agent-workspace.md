@@ -61,5 +61,13 @@ local server with real TCP WebSockets, a child-process provider fixture, reconne
 and native transcript upload to an HTTP callback. That fixture does not call a real model.
 The backend suite covers native parsing, conversation paging, and owner/shared access.
 
-A browser visual pass and a live provider/pod deployment remain release checks; neither is
-established by these tests.
+An integrated Chromium pass also exercises the real frontend with isolated HTTP/WebSocket
+session fixtures: history paging and retry, search, tool disclosure, quoting, multiline send,
+interrupt, terminal/shell drawers, view and session draft retention, and mobile navigation.
+Desktop, tablet, and phone layouts were checked, including a 390 × 667 viewport. This caught
+and corrected unbounded mobile transcript height and drafts lost on keyed view remounts.
+Draft text remains in memory across session navigation; reload/sign-out clears it.
+
+This browser pass uses test responses, not a real model. A live provider/pod deployment remains
+a release check: the session container denies namespace creation and mounts, has read-only
+cgroups, and exposes no container runtime socket, so it cannot host a nested Kubernetes worker.

@@ -1,11 +1,11 @@
 <script setup>
 import { onBeforeUnmount, ref, watch } from 'vue'
+import { workspaceDrafts as drafts } from '../../lib/session-drafts.js'
 const props = defineProps({ sessionId: String, enabled: Boolean, status: String, agent: String, send: Function, interrupt: Function })
-const text = ref('')
+const text = ref(drafts.get(props.sessionId) || '')
 const input = ref(null)
 const pending = ref(false)
 const error = ref('')
-const drafts = new Map()
 let generation = 0
 watch(() => props.sessionId, (id, previous) => {
   if (previous) drafts.set(previous, text.value)
@@ -40,7 +40,7 @@ function quote(value) {
   input.value?.focus()
 }
 defineExpose({ quote })
-onBeforeUnmount(() => { generation += 1 })
+onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); generation += 1 })
 </script>
 <template>
   <form class="workspace-composer" @submit.prevent="submit" data-workspace-composer>

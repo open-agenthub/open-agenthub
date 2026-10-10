@@ -5,6 +5,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import TerminalView from '../TerminalView.vue'
 import WorkspaceComposer from './WorkspaceComposer.vue'
 import ConversationTimeline from './ConversationTimeline.vue'
+import { workspaceDrafts } from '../../lib/session-drafts.js'
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -43,6 +44,7 @@ async function workspace(wrapper) {
   await flushPromises()
 }
 beforeEach(() => {
+  workspaceDrafts.clear()
   vi.clearAllMocks()
   mocks.send.mockResolvedValue(undefined)
   mocks.api.getConversation.mockResolvedValue(page([
@@ -127,6 +129,17 @@ describe('integrated workspace', () => {
 })
 
 describe('workspace interaction boundaries', () => {
+  it('restores unsent text after the application remounts a keyed session view', async () => {
+    const first = mount(WorkspaceComposer, { props: { sessionId: 'first', enabled: true } })
+    await first.get('textarea').setValue('Unsent task')
+    first.unmount()
+    const second = mount(WorkspaceComposer, { props: { sessionId: 'second', enabled: true } })
+    expect(second.get('textarea').element.value).toBe('')
+    second.unmount()
+    const restored = mount(WorkspaceComposer, { props: { sessionId: 'first', enabled: true } })
+    wrappers.push(restored)
+    expect(restored.get('textarea').element.value).toBe('Unsent task')
+  })
   it('retains a failed draft and does not submit while an IME composition is active', async () => {
     const send = vi.fn().mockRejectedValue(new Error('Connection changed'))
     const wrapper = mount(WorkspaceComposer, { props: { sessionId: 's1', enabled: true, send } })

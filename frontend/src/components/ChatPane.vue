@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { api, getSharedTranscript, sharedTerminalUrl, terminalUrl } from '../api.js'
 import { createAttachmentQueue } from '../lib/attachments.js'
 import { createChatLog } from '../lib/chat.js'
+import { chatDrafts as sessionDrafts } from '../lib/session-drafts.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { renderMermaidBlocks } from '../lib/mermaid.js'
 import ChatAttachments from './ChatAttachments.vue'
@@ -13,12 +14,11 @@ const props = defineProps({ session: Object, active: { type: Boolean, default: t
 const emit = defineEmits(['status'])
 
 const scroller = ref(null)
-const text = ref('')
+const text = ref(sessionDrafts.get(props.session.id) || '')
 const fileInput = ref(null)
 const composerInput = ref(null)
 const connectionStatus = ref('connecting…')
 const following = ref(true)
-const sessionDrafts = new Map()
 const deliveryError = ref('')
 let ws, reconnectTimer
 const pendingTurn = ref(null)
@@ -253,6 +253,7 @@ watch(isLive, (live, wasLive) => {
 })
 
 onBeforeUnmount(() => {
+  sessionDrafts.set(props.session.id, text.value)
   disposed = true
   closeSocket()
   void attachmentQueue.cancelAll()

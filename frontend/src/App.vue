@@ -27,6 +27,7 @@ const error = ref('')
 const isAdmin = ref(false)
 const settingsTab = ref('credentials')
 const query = ref('')
+const mobileNavigationOpen = ref(false)
 const searchBox = ref(null)
 const banner = ref(null) // { kind: 'ok' | 'warn' | 'error', text }
 const sharedToken = sharedTokenFromPath(location.pathname)
@@ -99,6 +100,7 @@ async function handleLicenseReturn() {
 }
 
 watch(activeId, id => {
+  mobileNavigationOpen.value = false
   const target = id ? `/s/${encodeURIComponent(id)}` : '/'
   if (!id && location.pathname === '/account') return
   if (location.pathname + location.search !== target) history.pushState({}, '', target)
@@ -123,7 +125,7 @@ onBeforeUnmount(() => {
 <template>
   <SharedSessionView v-if="sharedToken" :token="sharedToken" />
   <div v-else-if="needsLogin" class="login"><div class="login-card"><h1>Open AgentHub</h1><p>Please sign in to manage your agent sessions.</p><button class="primary" @click="auth.login()">Sign in</button></div></div>
-  <div v-else class="shell">
+  <div v-else class="shell" :class="{ 'session-open': activeSession, 'mobile-navigation-open': mobileNavigationOpen }">
     <aside class="side">
       <div class="brand" @click="goHome"><img src="/favicon.svg" alt="" class="logo" /><span>Open AgentHub</span></div>
       <button class="primary task-btn" @click="openPage('new')">+ Give an agent a task</button>
@@ -141,6 +143,7 @@ onBeforeUnmount(() => {
     </aside>
     <div class="main">
       <header class="topbar">
+        <button v-if="activeSession" class="mobile-sessions" :aria-expanded="mobileNavigationOpen" @click="mobileNavigationOpen = !mobileNavigationOpen">Sessions</button>
         <SessionSearch ref="searchBox" v-model="query" :sessions="sessions" @select="selectSession" />
         <span class="spacer"></span>
         <button class="icon-btn" :class="{ on: page === 'settings' }" title="Settings" @click="openSettings()">⚙</button>
@@ -190,7 +193,8 @@ onBeforeUnmount(() => {
 .side-foot { padding: 10px 12px 2px; font-size: 11px; color: var(--faint); white-space: nowrap; }
 .err { color: var(--danger); padding: 6px 12px; font: 12px var(--mono); }
 
-.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.mobile-sessions { display: none; }
 .topbar { height: 56px; flex-shrink: 0; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 12px; padding: 0 24px; }
 .spacer { flex: 1; }
 .icon-btn { width: 34px; height: 34px; border-radius: 10px; border: none; background: none; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 16px; padding: 0; }
@@ -205,6 +209,8 @@ onBeforeUnmount(() => {
 .page { display: flex; flex: 1; min-width: 0; }
 
 @media (max-width: 760px) {
+  .mobile-sessions { display: block; }
+  .shell.session-open:not(.mobile-navigation-open) .side { display: none; }
   .shell { flex-direction: column; }
   .side { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); max-height: 45%; }
   .search { max-width: none; }
