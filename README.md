@@ -517,8 +517,9 @@ and manage descendant sessions without mounting personal API tokens.
 Sessions of one project form a fleet: `agents_list`, `agent_send` and `agent_inbox` let them
 find and message each other. A message sent with `priority` is pushed into the running agent
 instead of waiting for its inbox poll, and `interrupt` stops its current work first; the
-session view has a "✉ Message" card that does the same for the owner. How a push reaches the
-agent depends on the runtime ([`docs/priority-messages.md`](docs/priority-messages.md)):
+session view has a "✉ Messages" panel that does the same for the owner and lists what arrived,
+with a badge for the count, so incoming messages never cover the terminal. How a push reaches
+the agent depends on the runtime ([`docs/priority-messages.md`](docs/priority-messages.md)):
 
 | Runtime | Priority delivery |
 |---|---|

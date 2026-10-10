@@ -57,6 +57,13 @@ The mod polls rather than being pushed to because a mod cannot listen: it has `$
 and no server. Three seconds is the latency a person perceives as "now" for a message typed
 elsewhere, and 20 loopback requests a minute cost nothing.
 
+Seen working end to end (Docker Desktop, Claude Code 2.1.287, interactive terminal session): a
+priority message sent through `POST /api/sessions/{id}/messages` came back as
+`deliveredVia: "mod"`, the TUI printed Claude Code's own notice that a plugin submitted the
+prompt between turns, and the model started the turn on it; a plain message showed up as the
+status line `agenthub-fleet: 1 fleet message — /inbox` under the prompt. Not yet seen in a
+cluster: the same in a `-p` chat-UI session, and an interrupt aborting a running turn.
+
 ### The usage hook
 
 The same mod carries the one other thing only a mod can see: the plan's rate-limit windows.

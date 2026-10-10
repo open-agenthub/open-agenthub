@@ -123,6 +123,22 @@ conversation. A separate `ISessionStore` interface member for every fake in the 
 avoided by giving the new store and service members default implementations; only the real
 implementations override them.
 
+## The Transcript tab renders prose as markdown, everything else verbatim
+
+A native page's `user` and `assistant` entries are what the person and the model wrote, and
+both write markdown: headings, lists, fenced code, tables, the occasional mermaid diagram. The
+tab renders those two roles through the same escape-first renderer the chat pane uses
+(`lib/markdown.js`, diagrams via `lib/mermaid.js`), so a turn looks the same whether it is read
+live in the chat or later in the transcript. The styles for rendered markdown live in
+`style.css` for that reason — they used to be scoped to the chat pane, and a second copy would
+have drifted.
+
+Tool calls, tool results and the scrollback fallback stay in a `<pre>`. A diff, a shell listing
+or a stack trace contains `*`, `_`, `#` and `|` in positions that are not markup, and the
+renderer would turn an honest `git diff` into stray emphasis and broken tables. The renderer is
+escape-first, so this is a presentation choice, not a safety one: agent text cannot inject
+markup either way.
+
 ## The Transcript tab follows a running session
 
 The tab used to load once when opened and never again while the session ran; a person reading

@@ -33,10 +33,30 @@ Every send surface takes the same two flags: the in-pod MCP (`agent_send {to, me
 priority?, interrupt?}`), the stdio MCP (same, with `projectId`), the remote MCP (`"true"`
 strings, as its other flags), `POST /api/remote/sessions/{id}/messages`,
 `POST /internal/sessions/{id}/messages`, and the new owner endpoint
-`POST /api/sessions/{id}/messages` behind the "✉ Message" card in the session view. All of
+`POST /api/sessions/{id}/messages` behind the "✉ Messages" panel in the session view. All of
 them store first and push second (`AgentMessageDispatch.PushAsync`), so a pod that is gone
 between the two steps costs nothing: the row is still there for the inbox, and the sender is
 told `inbox` with a reason.
+
+## What the person sees
+
+Incoming messages are not drawn over the terminal. The first version stacked one banner per
+message above the agent's output, and a fleet of chatty peers covered the terminal until
+nothing underneath was readable. The "✉ Messages" button in the session header now carries a
+badge with the number of messages the panel lists, and the panel opens on demand: the send
+form (only while the session is live — there is no pod to push into otherwise) and one tile per
+message with its kind (message, priority, interrupt), sender, time and a dismiss cross. A body
+longer than three lines is clamped with a *Show more* toggle, so a wall of text from one peer
+does not push the others out of view.
+
+What the panel lists — and therefore what the badge counts — is every message the agent has not
+picked up yet, plus a priority message for five minutes after it was pushed: it was handed to the
+agent the moment it arrived, and without that grace period the person would never see what
+interrupted their agent. The badge counts exactly the tiles behind it; an earlier version counted
+only undelivered messages, and a badge of zero over a panel with three tiles made people hunt for
+the missing one. Dismissing is local to the browser and never consumes the inbox: the agent's
+`agent_inbox` call still returns the message, because a person tidying their view must not eat
+a peer's instruction.
 
 The session agent decides the channel, not the hub, because only the pod knows how its agent
 runs. The hub reads one word back:
