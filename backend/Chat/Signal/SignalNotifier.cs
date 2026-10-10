@@ -55,7 +55,8 @@ public sealed class SignalNotifier : INotifier
                 await _bindings.SetStatusRefAsync("signal", s.Id, null, ct);
             }
 
-            if (eventType is "finished" or "failed")
+            // An expiry is terminal like the other two: the chat learns the session is gone.
+            if (eventType is "finished" or "failed" or "session-expired")
             {
                 if (binding is not null)
                 {

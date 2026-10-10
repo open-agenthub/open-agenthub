@@ -1,5 +1,6 @@
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
+using AgentHub.Api.Services;
 using Npgsql;
 using Xunit;
 
@@ -140,6 +141,29 @@ public class SessionExpiryPostgresTests
 
         var capped = await database.Sessions.ListExpiredAsync(now, 1);
         Assert.Single(capped);
+    }
+
+    [PostgreSqlFact]
+    public async Task ExpiryLock_IsExclusivePerSession_AndIndependentOfTheBrowserLock()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var locks = new PostgresSessionExpiryLock(database.Configuration);
+        var browserLocks = new Browser.PostgresBrowserSessionLock(database.Configuration);
+
+        await using var first = await locks.TryAcquireAsync("s-1");
+        Assert.NotNull(first);
+        // A second replica asking for the same session is told no, at once.
+        Assert.Null(await locks.TryAcquireAsync("s-1"));
+        // Another session is unaffected.
+        await using var other = await locks.TryAcquireAsync("s-2");
+        Assert.NotNull(other);
+        // The browser reconcile's blocking lock on the same id lives in another key space, so
+        // holding the expiry lock does not stall it (and this call would hang if it did).
+        await using var browser = await browserLocks.AcquireAsync("s-1");
+
+        await first.DisposeAsync();
+        await using var again = await locks.TryAcquireAsync("s-1");
+        Assert.NotNull(again);
     }
 
     private static SessionRecord Record(string id, int? seconds, string? from, string owner = "alice") => new()

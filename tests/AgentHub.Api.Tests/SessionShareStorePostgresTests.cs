@@ -392,6 +392,11 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
     /// <summary>The session store itself, for tests of its own operations (touch, expiry listing).</summary>
     public PostgresSessionStore Sessions => _sessions;
 
+    /// <summary>Configuration pointing at this test schema, for components built from one.</summary>
+    public IConfiguration Configuration => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Postgres"] = _connectionString })
+        .Build();
+
     public static async Task<PostgresSharingDatabase> CreateAsync()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable(

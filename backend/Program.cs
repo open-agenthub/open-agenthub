@@ -211,6 +211,11 @@ builder.Services.AddHostedService<AgentHub.Api.Chat.Signal.SignalReceiveService>
 // Safety net: expires pending permission prompts whose hook never called /expire.
 builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepService>();
 
+// Sessions with a self-deletion deadline (docs/session-expiry.md). The lock keeps two replicas
+// from deleting the same session at once.
+builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
+builder.Services.AddHostedService<SessionExpirySweepService>();
+
 // Runtime network port requests: agents ask for extra ports (agenthub_network MCP),
 // the owner approves via the permission channel, approved ports become NetworkPolicies.
 builder.Services.AddSingleton<AgentHub.Api.Network.IPortGrantStore, AgentHub.Api.Network.PortGrantStore>();
