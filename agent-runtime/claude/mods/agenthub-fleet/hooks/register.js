@@ -1,22 +1,30 @@
 // agenthub-fleet: delivers Open AgentHub fleet messages into this Claude Code session
-// (docs/priority-messages.md, docs/claude-code-mods.md). The session agent beside the CLI
-// queues pushed messages at a loopback endpoint; this mod polls it, submits priority messages
-// as prompts (aborting the running turn when asked), and holds plain ones behind /inbox.
-import { formatFleetMessage, inboxStatus, inboxText, parseInbox, planDelivery } from './lib.mjs'
+// (docs/priority-messages.md, docs/claude-code-mods.md) and reports the account's usage
+// limits to the hub (docs/account-limits.md). The session agent beside the CLI queues pushed
+// messages at a loopback endpoint; this mod polls it, submits priority messages as prompts
+// (aborting the running turn when asked), and holds plain ones behind /inbox. It also watches
+// the rate-limit windows Claude Code reports and tells the session agent when one is used up;
+// the hub, not the mod, decides what to do about it.
+import { formatFleetMessage, inboxStatus, inboxText, limitKey, parseInbox, parseThreshold, planDelivery, planLimitReports } from './lib.mjs'
 
 const POLL_MS = 3000
 const INBOX_URL = 'http://127.0.0.1:7681/agenthub/mod/inbox'
 const HEARTBEAT_URL = 'http://127.0.0.1:7681/agenthub/mod/heartbeat'
+const LIMIT_URL = 'http://127.0.0.1:7681/agenthub/mod/limit'
 
 // Plain messages not yet shown to Claude; a prompt.submit hook or /inbox drains them.
 let waiting = []
 // The id turn.start handed us, while that turn runs; what $.turn.abort needs.
 let runningTurn = null
 let modToken = ''
+// Percent of a window at which it is reported, and the windows already reported this session.
+let limitThreshold = 100
+const reportedLimits = new Set()
 
 export function register(on) {
   on('session.start', async ($, e, next) => {
     modToken = (await $.env.get('AGENTHUB_MOD_TOKEN')) || ''
+    limitThreshold = parseThreshold(await $.env.get('AGENTHUB_LIMIT_THRESHOLD'))
     // Without a token there is no session agent to poll; stay inert rather than hammer
     // localhost in a developer's own Claude session that happens to load this directory.
     if (modToken) {
@@ -44,6 +52,24 @@ export function register(on) {
 
   on('turn.complete', async ($, e, next) => {
     if (runningTurn === e.turnId) runningTurn = null
+    // A turn that died on an API error is the one a person would have noticed. The windows
+    // may not have moved a whole point since the last measurement, so they are read afresh
+    // rather than waited for; the dedupe keeps a window already reported from going twice.
+    if (e.reason === 'error' && modToken) {
+      try {
+        const usage = await $.session.usage()
+        await reportLimits($, usage.rateLimits)
+      } catch (error) {
+        $.ui.log('usage read after a failed turn failed: ' + describe(error), { to: 'debug' })
+      }
+    }
+    return next(e)
+  })
+
+  // Claude Code pushes the rate-limit windows after every turn and whenever one moves a whole
+  // point. The mod only relays; the threshold is the one knob it has.
+  on('session.measure', async ($, e, next) => {
+    if (modToken) await reportLimits($, e.rateLimits)
     return next(e)
   })
 
@@ -70,6 +96,27 @@ async function heartbeat($) {
     await $.http.fetch(HEARTBEAT_URL, { method: 'POST', headers: { Authorization: 'Bearer ' + modToken } })
   } catch (error) {
     $.ui.log('fleet heartbeat failed: ' + describe(error), { to: 'debug' })
+  }
+}
+
+// Never throws: a session agent that is restarting must not take a hook down with it.
+async function reportLimits($, rateLimits) {
+  for (const report of planLimitReports(rateLimits, limitThreshold, reportedLimits)) {
+    try {
+      const response = await $.http.fetch(LIMIT_URL, {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + modToken, 'Content-Type': 'application/json' },
+        body: JSON.stringify(report)
+      })
+      if (!response.ok) {
+        $.ui.log('usage limit report answered HTTP ' + response.status, { to: 'debug' })
+        continue
+      }
+      reportedLimits.add(limitKey(report))
+      $.ui.log('reported the ' + report.kind + ' window at ' + report.percentUsed + '% to the hub', { to: 'debug' })
+    } catch (error) {
+      $.ui.log('usage limit report failed: ' + describe(error), { to: 'debug' })
+    }
   }
 }
 

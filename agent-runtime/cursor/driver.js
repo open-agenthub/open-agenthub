@@ -89,10 +89,22 @@ function credentialPath(env) {
   return env.CURSOR_AUTH_FILE || null;
 }
 
+// Unverified, deliberately narrow. The CLI is unpinned (docs/agent-runtime-updates.md); the
+// 2026.10.01 package was unpacked and holds no usage-limit sentence of its own beyond
+// `budget_exceeded` for a run's dollar budget, so whatever a terminal shows at the limit is
+// the API's text printed verbatim. These are the sentences the other providers print and the
+// one code the CLI has; nothing matches a bare "rate limit" (docs/account-limits.md).
+const limitPatterns = [
+  { pattern: /You've hit your (?:\w+ )?(?:usage )?limit/i },
+  { pattern: /\busage limit (?:reached|exceeded)\b/i },
+  { pattern: /\bbudget_exceeded\b/ }
+];
+
 module.exports = {
   // authFilename: CLI file store (AGENT_CLI_CREDENTIAL_STORE=file, domain "cursor")
   // writes auth.json — confirmed from CLI package 2026.07.23-e383d2b source.
   name: 'Cursor', stateDir: '.cursor', authFilename: 'auth.json',
+  limitPatterns,
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand, isResumeCommand, isMissingResume, prepare,

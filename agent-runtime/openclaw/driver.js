@@ -113,7 +113,20 @@ function isMissingResume(output, exitCode) {
     /unknown session(?: id)?/i.test(output);
 }
 
+// The notices openclaw 2026.7.1-2 (the pinned version) prints when its upstream is at a limit,
+// read from dist/*.js: "Your Codex usage limit is reached.", "<period> Codex usage limit is
+// reached", "check your account for subscription or usage limits, then try again.",
+// "API rate limit reached. Please try again later." and the 429 explanation. None carries a
+// reset time the hub could parse, so the default applies.
+const limitPatterns = [
+  { pattern: /Codex usage limit is reached/ },
+  { pattern: /check your account for subscription or usage limits/ },
+  { pattern: /API rate limit reached\. Please try again later\./ },
+  { pattern: /returned HTTP 429 before replying/ }
+];
+
 module.exports = {
+  limitPatterns,
   // authFilename: AgentHub Secret key + root state-tar exclusion under ~/.openclaw/.
   // stateExcludes: nested agent-store credentials (JSON + SQLite) for every agent id.
   // Runtime restore imports Secret into agents/main/agent/ via sync-auth-profiles.js.

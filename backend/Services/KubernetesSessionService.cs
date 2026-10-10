@@ -1312,7 +1312,8 @@ public sealed class KubernetesSessionService : ISessionService
                 MaxCpu = _opts.MaxCpu,
                 MaxMemory = _opts.MaxMemory,
                 TelemetryEnabled = _opts.TelemetryEnabled,
-                TelemetryOtlpEndpoint = _opts.TelemetryOtlpEndpoint
+                TelemetryOtlpEndpoint = _opts.TelemetryOtlpEndpoint,
+                AccountLimitThreshold = Math.Clamp(_opts.AccountLimitThreshold, 1, 100)
             }
         };
     }
@@ -1467,4 +1468,8 @@ public sealed class AgentHubOptions
     public int MaxRunningSessionsPerOwner { get; set; } = SessionSoftLimit.DefaultMax;
     /// <summary>Inject the in-pod agenthub_sessions MCP and allow internal spawn.</summary>
     public bool SpawnMcpEnabled { get; set; } = true;
+    /// <summary>Percent of a provider rate-limit window at which a Claude session reports its
+    /// account as at its limit (docs/account-limits.md). 100 reports the limit itself; lower
+    /// values switch accounts early and spend a second window on work the first could still do.</summary>
+    public int AccountLimitThreshold { get; set; } = 100;
 }

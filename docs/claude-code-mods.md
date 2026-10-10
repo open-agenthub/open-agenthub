@@ -57,6 +57,20 @@ The mod polls rather than being pushed to because a mod cannot listen: it has `$
 and no server. Three seconds is the latency a person perceives as "now" for a message typed
 elsewhere, and 20 loopback requests a minute cost nothing.
 
+### The usage hook
+
+The same mod carries the one other thing only a mod can see: the plan's rate-limit windows.
+Claude Code fires `session.measure` after every turn and whenever a window moves a whole
+point, with the figures `$.session.usage()` returns (`rateLimits: [{kind, percentUsed,
+resetsAt}]`). The mod posts every window at or past `AGENTHUB_LIMIT_THRESHOLD` (default 100)
+to the session agent's `POST /agenthub/mod/limit`, once per window and reset time, and reads
+the usage afresh after a `turn.complete` with `reason: "error"`, the turn an API refusal ends.
+The session agent relays the report to the hub, which marks the account and may move the
+session to another login — `docs/account-limits.md` has the policy and why the mod holds
+none of it. `turn.step` was not used: its hook is a generator over the streamed response and
+its result carries no error text, while the windows themselves come from response headers
+that `session.measure` already pushes.
+
 ## Where it lives and how it loads
 
 The plugin directory ships inside the runtime tree (`/opt/session-agent/claude/mods/…`) rather
@@ -99,15 +113,14 @@ stores. The status line (`$.ui.status`) is the one visual the mod uses, and it i
 
 ## Looking ahead
 
-Two things a mod can see that nothing else in the pod can, noted so they are not forgotten:
+Things a mod can see that nothing else in the pod can, noted so they are not forgotten:
 
-- `$.session.usage()` returns context-window fill and the plan's rate limits as the CLI
-  knows them. Posted to the hub on `turn.complete`, that would give the session view a live
-  "context 62 % · weekly limit 40 %" readout without parsing a transcript.
+- `$.session.usage()` as a live readout. The usage hook above posts a window only when it
+  is used up; posting the figures on every `session.measure` would give the session view a
+  "context 62 % · weekly limit 40 %" line without parsing a transcript.
 - `ui.render` on `AskUserQuestion` and the permission dialog could mirror a pending question
   into the hub's permission card with its real options, rather than the text the
   `Notification` hook scrapes. The permission *decision* would still come from the
   settings hook, for the reason above; only the display would move.
 
-Neither is built. Both would be new mods, or new hooks in this one, with the same
-offline-tested shape.
+Neither is built. Both would be new hooks in this mod, with the same offline-tested shape.

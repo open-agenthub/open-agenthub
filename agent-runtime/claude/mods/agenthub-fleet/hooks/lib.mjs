@@ -43,6 +43,44 @@ export function planDelivery(messages, turnRunning) {
   return { submit, waiting, abort };
 }
 
+// ---- usage limits (docs/account-limits.md) ---------------------------------------------------
+
+export const DEFAULT_LIMIT_THRESHOLD = 100;
+
+/** The percent at which a rate-limit window counts as exhausted: AGENTHUB_LIMIT_THRESHOLD,
+ * bounded to 1..100; anything unreadable is the limit itself. */
+export function parseThreshold(text) {
+  const value = Number.parseFloat(String(text ?? '').trim());
+  if (!Number.isFinite(value) || value < 1) return DEFAULT_LIMIT_THRESHOLD;
+  return Math.min(100, value);
+}
+
+/** One report per window and reset time: the key the dedupe set holds. */
+export function limitKey(window) {
+  return window.kind + '|' + (window.resetsAt || '');
+}
+
+/**
+ * Which of a usage reading's windows to report to the session agent: those at or past the
+ * threshold that have not been reported for this reset yet. `reported` is the set of keys
+ * already sent; the caller adds the returned keys once the posts went out. A window that stays
+ * at 100 % raises session.measure after every turn, and the hub needs to hear it once.
+ */
+export function planLimitReports(rateLimits, threshold, reported) {
+  const reports = [];
+  const list = Array.isArray(rateLimits) ? rateLimits : [];
+  for (const window of list) {
+    if (!window || typeof window !== 'object' || typeof window.kind !== 'string') continue;
+    if (typeof window.percentUsed !== 'number' || !Number.isFinite(window.percentUsed)) continue;
+    if (window.percentUsed < threshold) continue;
+    const resetsAt = typeof window.resetsAt === 'string' && window.resetsAt ? window.resetsAt : null;
+    const report = { kind: window.kind, percentUsed: window.percentUsed, resetsAt };
+    if (reported && reported.has(limitKey(report))) continue;
+    reports.push(report);
+  }
+  return reports;
+}
+
 export function inboxStatus(count) {
   return '📨 ' + count + ' fleet message' + (count === 1 ? '' : 's') + ' — /inbox';
 }

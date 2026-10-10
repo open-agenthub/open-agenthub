@@ -21,6 +21,9 @@ public sealed record AgentPodRuntimeSettings
     public bool NetworkMcpEnabled { get; init; }
     public bool TelemetryEnabled { get; init; }
     public string TelemetryOtlpEndpoint { get; init; } = "";
+    /// <summary>Percent of a rate-limit window at which Claude's mod reports the account as at
+    /// its limit (docs/account-limits.md); 100 = the limit itself.</summary>
+    public int AccountLimitThreshold { get; init; } = 100;
 }
 
 /// <summary>Non-secret inputs used to construct an agent pod.</summary>
@@ -208,6 +211,7 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_ALLOWED_COMMANDS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedCommands) },
             new() { Name = "AGENTHUB_CALLBACK_URL", Value = context.CallbackUrl },
             new() { Name = "AGENTHUB_CALLBACK_TOKEN", Value = record.CallbackToken },
+            new() { Name = "AGENTHUB_LIMIT_THRESHOLD", Value = context.Runtime.AccountLimitThreshold.ToString() },
             new() { Name = "AGENTHUB_S3_INSECURE", Value = context.S3Insecure ? "1" : "0" },
             new() { Name = "AGENTHUB_STATE_PUT_URL", Value = context.StatePutUrl },
             new() { Name = "AGENTHUB_STATE_GET_URL", Value = context.StateGetUrl },

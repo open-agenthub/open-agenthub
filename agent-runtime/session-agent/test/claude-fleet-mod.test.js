@@ -66,6 +66,36 @@ test('a poll is planned: priority submits, interrupt aborts only during a turn, 
   assert.deepEqual(planDelivery([], true), { submit: [], waiting: [], abort: false });
 });
 
+test('the threshold is read defensively and bounded', async () => {
+  const { parseThreshold, DEFAULT_LIMIT_THRESHOLD } = await lib();
+  assert.equal(DEFAULT_LIMIT_THRESHOLD, 100);
+  assert.equal(parseThreshold(undefined), 100);
+  assert.equal(parseThreshold(''), 100);
+  assert.equal(parseThreshold('abc'), 100);
+  assert.equal(parseThreshold('0'), 100);
+  assert.equal(parseThreshold(' 95 '), 95);
+  assert.equal(parseThreshold('250'), 100);
+});
+
+test('limit reports: windows at the threshold, once per reset, junk ignored', async () => {
+  const { planLimitReports, limitKey } = await lib();
+  const full = { kind: 'five_hour', percentUsed: 100, resetsAt: '2026-10-11T15:00:00.000Z' };
+  const half = { kind: 'seven_day', percentUsed: 50, resetsAt: '2026-10-14T00:00:00.000Z' };
+
+  assert.deepEqual(planLimitReports([full, half], 100, new Set()), [full]);
+  assert.deepEqual(planLimitReports([full, half], 50, new Set()), [full, half]);
+  assert.deepEqual(planLimitReports([full], 100, new Set([limitKey(full)])), []);
+  // A new reset time is a new window.
+  const later = { ...full, resetsAt: '2026-10-11T20:00:00.000Z' };
+  assert.deepEqual(planLimitReports([later], 100, new Set([limitKey(full)])), [later]);
+  // No reset time, a string percent, no kind, not an object, not a list: all dropped.
+  assert.deepEqual(planLimitReports([{ kind: 'spend_limit', percentUsed: 120 }, { kind: 'x', percentUsed: '100' }, { percentUsed: 100 }, null], 100, new Set()),
+    [{ kind: 'spend_limit', percentUsed: 120, resetsAt: null }]);
+  assert.deepEqual(planLimitReports('nope', 100, new Set()), []);
+  assert.equal(limitKey(full), 'five_hour|2026-10-11T15:00:00.000Z');
+  assert.equal(limitKey({ kind: 'five_hour', resetsAt: null }), 'five_hour|');
+});
+
 test('status line and /inbox text', async () => {
   const { inboxStatus, inboxText } = await lib();
   assert.equal(inboxStatus(1), '📨 1 fleet message — /inbox');

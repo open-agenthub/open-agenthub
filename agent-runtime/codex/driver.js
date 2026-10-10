@@ -175,8 +175,29 @@ function credentialPath(env) {
   return env.CODEX_HOME ? path.join(env.CODEX_HOME, 'auth.json') : null;
 }
 
+// The CLI's own usage-limit notices, read from the string table of @openai/codex 0.160.0 (the
+// pinned version): the TUI's "You've hit your usage limit." / "Usage limit reached" /
+// "You've reached your usage limit." and the error codes `exec --json` emits
+// (usage_limit_reached, rate_limit_reached, workspace_*_usage_limit_reached, quota_exceeded).
+// The JSON body carries `resets_at` (unix seconds) or `reset_after_seconds`; the TUI's
+// "Try again at 3:15 PM" is in the person's locale and is left for them to read.
+const limitPatterns = [
+  { pattern: /You've (?:hit|reached) your usage limit/i, resetsAt: resetFromJson },
+  { pattern: /\bUsage limit reached\b/, resetsAt: resetFromJson },
+  { pattern: /\b(?:workspace_(?:owner|member)_)?usage_limit_reached\b|\brate_limit_reached\b|\bquota_exceeded\b/, resetsAt: resetFromJson }
+];
+
+function resetFromJson(match, text, { secondsFromNow }) {
+  const window = text.slice(Math.max(0, match.index - 400), match.index + 400);
+  const at = /"resets?_at"\s*:\s*(\d{9,13})/.exec(window);
+  if (at) return Number(at[1]);
+  const after = /"reset_after_seconds"\s*:\s*(\d+)/.exec(window);
+  return after ? secondsFromNow(Number(after[1])) : null;
+}
+
 module.exports = {
   name: 'Codex', stateDir: '.codex', authFilename: 'auth.json',
+  limitPatterns,
   // The TUI log only grows and the tmp dirs are per-process scratch; neither is needed to
   // resume, and every byte of them is re-compressed on each 30s persistence tick.
   // packages/ is the TUI's app-server daemon install (~400 MB of binaries the image already

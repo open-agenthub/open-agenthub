@@ -39,6 +39,7 @@ public sealed class InternalController : ControllerBase
     private readonly IUsageStore? _usage;
     private readonly ISessionMessageStore? _messages;
     private readonly ISessionMessageDelivery? _delivery;
+    private readonly IAccountFailover? _accountFailover;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
@@ -46,7 +47,7 @@ public sealed class InternalController : ControllerBase
         ILibraryAccess library, IBrowserService? browsers = null, bool? spawnMcpEnabled = null,
         IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null,
         IUsageStore? usage = null, ISessionMessageStore? messages = null,
-        ISessionMessageDelivery? delivery = null)
+        ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
@@ -55,6 +56,7 @@ public sealed class InternalController : ControllerBase
         _usage = usage;
         _messages = messages;
         _delivery = delivery;
+        _accountFailover = accountFailover;
         _callbackAuthorizer = callbackAuthorizer ?? new AgentCallbackAuthorizer(store);
         _spawnMcpEnabled = spawnMcpEnabled
             ?? configuration?.GetValue("AgentHub:SpawnMcpEnabled", true)
@@ -140,6 +142,22 @@ public sealed class InternalController : ControllerBase
         if (!sample.IsValid) return BadRequest();
         await _usage.AddResourceSampleAsync(id, rec.Owner, sample, ct);
         return NoContent();
+    }
+
+    /// <summary>
+    /// The pod reports that its provider account hit a usage limit — Claude's mod read the
+    /// rate-limit windows, or the session agent matched the CLI's own notice. The hub marks the
+    /// account and, where it can, moves the session to another one (docs/account-limits.md).
+    /// The answer says what happened so the pod can log it; nothing in it is acted on there.
+    /// </summary>
+    [HttpPost("account-exhausted")]
+    public async Task<IActionResult> AccountExhausted(string id, [FromBody] AccountExhaustedReport body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (body.Source is not ("mod" or "output")) return BadRequest("source must be mod or output");
+        if (_accountFailover is null) return Ok(new AccountFailoverOutcome(null, null, AccountFailoverOutcome.Ignored));
+        return Ok(await _accountFailover.HandleAsync(rec, body, ct));
     }
 
     /// <summary>Persists a subscription credential file uploaded by the matching provider agent.</summary>

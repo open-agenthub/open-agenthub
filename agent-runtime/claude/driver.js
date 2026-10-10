@@ -156,10 +156,34 @@ function findTranscript({ env, home, cwd, fs: fileSystem }) {
   return fileSystem.existsSync(file) ? file : null;
 }
 
+// The CLI's own words when a plan window is used up, read from the string table of
+// @anthropic-ai/claude-code 2.1.285 ("You've hit your limit", "You've hit your usage limit",
+// "Usage limit reached", "You're out of extra usage"; the runtime pins 2.1.287). Fallback
+// only: with the agenthub-fleet mod alive the session agent ignores these, because the mod
+// reports the rate-limit windows themselves (docs/account-limits.md). The reset is read off
+// the CLI's own "resets at 3pm" / "resets in 2h" suffix when it prints one.
+const RESET_SUFFIX = /resets?\s+(?:at|in)\s+([^.\n\r)]{1,40})/i;
+const limitPatterns = [
+  { pattern: /You've hit your (?:\w+ )?(?:usage )?limit/i, resetsAt: (match, text) => resetFromText(text, match.index) },
+  { pattern: /\bUsage limit reached\b/, resetsAt: (match, text) => resetFromText(text, match.index) },
+  { pattern: /You're out of extra usage/, resetsAt: (match, text) => resetFromText(text, match.index) }
+];
+
+// A "resets at 3pm" is in the person's time zone, not the pod's, and "resets in 2h" has no
+// anchor the hub could trust; both stay in the matched line for a person to read, and the
+// hub applies its default. Only an ISO timestamp in the line is handed over as a time.
+function resetFromText(text, from) {
+  const window = text.slice(from, from + 300);
+  const suffix = RESET_SUFFIX.exec(window);
+  if (!suffix) return null;
+  return /^\d{4}-\d{2}-\d{2}T/.test(suffix[1].trim()) ? suffix[1].trim() : null;
+}
+
 module.exports = {
   name: 'Claude',
   stateDir: '.claude',
   authFilename: '.credentials.json',
+  limitPatterns,
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand,

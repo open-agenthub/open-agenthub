@@ -41,6 +41,17 @@ function validateDriver(driver) {
       throw new Error('Agent driver ' + key + ' must be a function when present');
     }
   }
+  // Optional: the CLI's own usage-limit notices as `{ pattern: RegExp, resetsAt?: fn }`
+  // (common/limit-detector.js). A runtime whose CLI reports limits some other way leaves it out.
+  if (driver.limitPatterns !== undefined) {
+    if (!Array.isArray(driver.limitPatterns)) throw new Error('Agent driver limitPatterns must be an array');
+    for (const entry of driver.limitPatterns) {
+      if (!entry || !(entry.pattern instanceof RegExp) ||
+          (entry.resetsAt !== undefined && typeof entry.resetsAt !== 'function')) {
+        throw new Error('Agent driver limitPatterns entries must be { pattern: RegExp, resetsAt?: function }');
+      }
+    }
+  }
   for (const key of ['stateDir', 'authFilename']) {
     if (typeof driver[key] !== 'string' || !SAFE_RELATIVE_NAME.test(driver[key])) {
       throw new Error('Agent driver ' + key + ' must be a safe single relative name');
