@@ -13,6 +13,14 @@ public class ProviderCredentialValidatorTests
     [InlineData(AgentKind.Cursor, "{\"accessToken\":\"synthetic-test-token-not-real\",\"refreshToken\":\"synthetic-refresh\"}", true)]
     // Pinned from OpenClaw 2026.7.1-2 auth-profiles store: { version?, profiles, order? }.
     [InlineData(AgentKind.OpenClaw, "{\"version\":1,\"profiles\":{\"anthropic:default\":{\"type\":\"api_key\",\"provider\":\"anthropic\",\"key\":\"x\"}}}", true)]
+    // Pinned from OpenCode 1.18.34 auth.json: provider id → { type: api | oauth | wellknown, … }.
+    [InlineData(AgentKind.OpenCode, "{\"opencode-go\":{\"type\":\"api\",\"key\":\"x\"}}", true)]
+    [InlineData(AgentKind.OpenCode, "{\"github-copilot\":{\"type\":\"oauth\",\"refresh\":\"r\",\"access\":\"a\",\"expires\":1}}", true)]
+    [InlineData(AgentKind.OpenCode, "{}", false)]
+    [InlineData(AgentKind.OpenCode, "{\"opencode-go\":{\"key\":\"x\"}}", false)]
+    [InlineData(AgentKind.OpenCode, "{\"opencode-go\":{\"type\":\"api\"},\"x\":\"loose\"}", false)]
+    [InlineData(AgentKind.OpenCode, "{\"opencode-go\":{\"type\":\"token\"}}", false)]
+    [InlineData(AgentKind.OpenCode, "[]", false)]
     [InlineData(AgentKind.Claude, "{\"tokens\":{}}", false)]
     [InlineData(AgentKind.Codex, "{\"claudeAiOauth\":{}}", false)]
     [InlineData(AgentKind.Claude, "{\"accessToken\":\"x\"}", false)]

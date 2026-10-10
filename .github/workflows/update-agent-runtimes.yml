@@ -30,6 +30,7 @@ jobs:
             echo "claude=$(npm view @anthropic-ai/claude-code version)"
             echo "codex=$(npm view @openai/codex version)"
             echo "openclaw=$(npm view openclaw version)"
+            echo "opencode=$(npm view opencode-ai version)"
             echo "gh=$(gh api repos/cli/cli/releases/latest --jq .tag_name | sed 's/^v//')"
             echo "glab=$(curl -fsSL https://gitlab.com/api/v4/projects/34675721/releases \
               | jq -r '.[0].tag_name' | sed 's/^v//')"
@@ -56,7 +57,10 @@ jobs:
           # build picks the newest CLI up by itself.
           # openclaw is deliberately excluded: sync-auth-profiles.js depends on the auth
           # store layout of the pinned version. Report it instead of rewriting it.
-          for f in claude codex cursor openclaw; do
+          # opencode is excluded for the same kind of reason: the policy plugin relies on
+          # tool.execute.before firing for every tool call, and the credential watcher on the
+          # auth.json layout. Neither is something a successful build proves.
+          for f in claude codex cursor openclaw opencode; do
             bump $R/$f/Dockerfile GH_VERSION   "${{ steps.latest.outputs.gh }}"
             bump $R/$f/Dockerfile GLAB_VERSION "${{ steps.latest.outputs.glab }}"
           done
@@ -65,6 +69,12 @@ jobs:
           if [ "$current_openclaw" != "${{ steps.latest.outputs.openclaw }}" ]; then
             echo "" >> "$RUNNER_TEMP/bump-notes.md"
             echo "openclaw ${current_openclaw} → **${{ steps.latest.outputs.openclaw }}** is available but was **not** applied: \`sync-auth-profiles.js\` reads the agent's auth-profile store directly, so the bump needs a manual check of that store's layout." >> "$RUNNER_TEMP/bump-notes.md"
+          fi
+
+          current_opencode="$(sed -n 's/^ARG OPENCODE_VERSION=//p' $R/opencode/Dockerfile | head -1)"
+          if [ "$current_opencode" != "${{ steps.latest.outputs.opencode }}" ]; then
+            echo "" >> "$RUNNER_TEMP/bump-notes.md"
+            echo "opencode ${current_opencode} → **${{ steps.latest.outputs.opencode }}** is available but was **not** applied: the policy plugin depends on \`tool.execute.before\` gating every tool call, so the bump needs the check in \`docs/agent-runtime-updates.md\`." >> "$RUNNER_TEMP/bump-notes.md"
           fi
 
           if git diff --quiet; then

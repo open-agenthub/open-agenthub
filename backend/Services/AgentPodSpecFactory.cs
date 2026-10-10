@@ -6,7 +6,8 @@ using k8s.Models;
 namespace AgentHub.Api.Services;
 
 public sealed record AgentRuntimeImages(
-    string ClaudeImage, string CodexImage, string CursorImage, string OpenClawImage, string PullPolicy);
+    string ClaudeImage, string CodexImage, string CursorImage, string OpenClawImage, string OpenCodeImage,
+    string PullPolicy);
 
 public sealed record AgentPodRuntimeSettings
 {
@@ -35,6 +36,7 @@ public sealed record PodBuildContext
     public required string CodexCredentialSecretName { get; init; }
     public required string CursorCredentialSecretName { get; init; }
     public required string OpenClawCredentialSecretName { get; init; }
+    public required string OpenCodeCredentialSecretName { get; init; }
     public bool HasSelectedApiKey { get; init; }
     public bool HasSelectedSubscriptionCredential { get; init; }
     /// <summary>
@@ -120,6 +122,7 @@ public static class AgentPodSpecFactory
             AgentKind.Codex => images.CodexImage,
             AgentKind.Cursor => images.CursorImage,
             AgentKind.OpenClaw => images.OpenClawImage,
+            AgentKind.OpenCode => images.OpenCodeImage,
             _ => images.ClaudeImage
         };
         var repos = NormalizeRepos(request);
@@ -201,10 +204,10 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_RESUME", Value = string.IsNullOrEmpty(context.StateGetUrl) ? "0" : "1" },
             new() { Name = "AGENTHUB_PROMPT", Value = request.Prompt ?? "" },
             new() { Name = "AGENTHUB_SYSTEM_PROMPT", Value = request.SystemPrompt ?? "" },
-            // Claude and Codex read the flag off the session record on every tool call, so it can
-            // be toggled while they run. Cursor and OpenClaw have no per-call hook to ask through:
-            // their permission settings are fixed when the process starts, which is what this is
-            // for. A session that changes the flag has to be restarted for those two.
+            // Claude, Codex and OpenCode read the flag off the session record on every tool call, so
+            // it can be toggled while they run. Cursor and OpenClaw have no per-call hook to ask
+            // through: their permission settings are fixed when the process starts, which is what
+            // this is for. A session that changes the flag has to be restarted for those two.
             new() { Name = "AGENTHUB_AUTO_APPROVE", Value = record.AutoApprove ? "1" : "0" },
             new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedTools) },
             new() { Name = "AGENTHUB_ALLOWED_MCP_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedMcpTools) },
@@ -287,6 +290,12 @@ public static class AgentPodSpecFactory
                 AddApiKey(binding.EnvName, binding.SecretKey);
                 break;
             }
+            case (AgentKind.OpenCode, AgentAuthMode.Subscription):
+                AddSubscriptionVolume("opencode", context.OpenCodeCredentialSecretName);
+                break;
+            case (AgentKind.OpenCode, AgentAuthMode.ApiKey):
+                AddApiKey("OPENCODE_API_KEY", "opencode_api_key");
+                break;
             case (AgentKind.Claude, AgentAuthMode.Auto):
                 AddSubscriptionVolume("claude", context.ClaudeCredentialSecretName);
                 AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
@@ -316,6 +325,16 @@ public static class AgentPodSpecFactory
         {
             volumes.Add(new V1Volume { Name = "codex-system-config", EmptyDir = new V1EmptyDirVolumeSource() });
             mounts.Add(new V1VolumeMount { Name = "codex-system-config", MountPath = "/etc/codex", ReadOnlyProperty = true });
+        }
+
+        // OpenCode's managed config (/etc/opencode/opencode.json) outranks every config the agent
+        // can write, so it is where the policy plugin is registered. Under $HOME the agent could
+        // drop the plugin from its own config and every tool call would run unchecked; a read-only
+        // mount filled by an init container keeps it out of reach, as /etc/codex does for Codex.
+        if (record.Agent == AgentKind.OpenCode)
+        {
+            volumes.Add(new V1Volume { Name = "opencode-system-config", EmptyDir = new V1EmptyDirVolumeSource() });
+            mounts.Add(new V1VolumeMount { Name = "opencode-system-config", MountPath = "/etc/opencode", ReadOnlyProperty = true });
         }
 
         if (record.Agent == AgentKind.Claude && context.Runtime.TelemetryEnabled)
@@ -387,6 +406,20 @@ public static class AgentPodSpecFactory
                     chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/openclaw)"
                     echo "Runtime copied to /opt/agenthub."
                     """,
+                AgentKind.OpenCode => """
+                    set -e
+                    mkdir -p /opt/agenthub/bin /opt/agenthub/lib
+                    cp -r /opt/session-agent /opt/agenthub/session-agent
+                    cp /usr/local/bin/node /opt/agenthub/bin/node
+                    cp -r /usr/local/lib/node_modules /opt/agenthub/lib/node_modules
+                    cp /usr/local/bin/entrypoint.sh /opt/agenthub/entrypoint.sh
+                    # opencode launcher: resolve the symlink target of the global npm install and link it
+                    target=$(readlink -f /usr/local/bin/opencode)
+                    ln -sf "/opt/agenthub/${target#/usr/local/}" /opt/agenthub/bin/opencode
+                    chmod -R a+rX /opt/agenthub
+                    chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/opencode)"
+                    echo "Runtime copied to /opt/agenthub."
+                    """,
                 _ => """
                     set -e
                     mkdir -p /opt/agenthub/bin /opt/agenthub/lib
@@ -428,6 +461,29 @@ public static class AgentPodSpecFactory
                 VolumeMounts = new List<V1VolumeMount>
                 {
                     new() { Name = "codex-system-config", MountPath = "/codex-system-config" }
+                },
+                SecurityContext = ContainerSecurity()
+            });
+        }
+
+        if (record.Agent == AgentKind.OpenCode)
+        {
+            // The plugin path is the one the agent container will see: a custom image runs the
+            // runtime copied to /opt/agenthub, the stock image its own /opt/session-agent.
+            var managedRuntime = customImage is null ? "/opt/session-agent/opencode" : "/opt/agenthub/session-agent/opencode";
+            var managedConfigScript = $"""
+                node /opt/session-agent/opencode/managed-config.js \
+                  /opencode-system-config/opencode.json {managedRuntime}
+                """;
+            initContainers.Add(new V1Container
+            {
+                Name = "prepare-opencode-system-config",
+                Image = runtimeImage,
+                ImagePullPolicy = context.RuntimeImages.PullPolicy,
+                Command = new List<string> { "/bin/sh", "-c", managedConfigScript },
+                VolumeMounts = new List<V1VolumeMount>
+                {
+                    new() { Name = "opencode-system-config", MountPath = "/opencode-system-config" }
                 },
                 SecurityContext = ContainerSecurity()
             });

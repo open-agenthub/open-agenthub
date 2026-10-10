@@ -16,7 +16,7 @@ public enum SessionMode
     Scheduled
 }
 
-public enum AgentKind { Claude, Codex, Cursor, OpenClaw }
+public enum AgentKind { Claude, Codex, Cursor, OpenClaw, OpenCode }
 public enum AgentAuthMode { Auto, Subscription, ApiKey }
 public enum OpenClawApiKeySource { Anthropic, OpenAI, Cursor }
 
@@ -92,7 +92,7 @@ public static class AgentConfiguration
     private static void ValidateAgent(AgentKind agent)
     {
         if (agent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor
-            and not AgentKind.OpenClaw)
+            and not AgentKind.OpenClaw and not AgentKind.OpenCode)
             throw new ArgumentException("Unsupported agent kind.");
     }
 
@@ -707,6 +707,9 @@ public record UserCredentials
     public string? AnthropicApiKey { get; init; }
     public string? OpenAiApiKey { get; init; }
     public string? CursorApiKey { get; init; }
+    /// <summary>OpenCode API key from the opencode.ai console. One key serves both the OpenCode Go
+    /// subscription and Zen pay-as-you-go; OpenCode reads it as OPENCODE_API_KEY.</summary>
+    public string? OpenCodeApiKey { get; init; }
     /// <summary>known_hosts entry of the git server (protects against MITM on the first clone).</summary>
     public string? GitKnownHosts { get; init; }
     public string? GitUserName { get; init; }
@@ -726,12 +729,14 @@ public record CredentialStatus
     public bool GitKnownHosts { get; init; }
     public bool OpenAiApiKey { get; init; }
     public bool CursorApiKey { get; init; }
+    public bool OpenCodeApiKey { get; init; }
     public bool GitUserName { get; init; }
     public bool GitUserEmail { get; init; }
     public bool ClaudeSubscription { get; init; }
     public bool CodexSubscription { get; init; }
     public bool CursorSubscription { get; init; }
     public bool OpenclawSubscription { get; init; }
+    public bool OpencodeSubscription { get; init; }
 }
 
 /// <summary>

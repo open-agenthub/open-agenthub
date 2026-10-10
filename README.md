@@ -40,7 +40,7 @@ shift.
    Vue 3 + xterm.js            - Auth (OIDC, any provider)              - isolated, unprivileged
                                - Session orchestration                  - git + ssh + selected CLI
                                - WS terminal proxy                      - session-agent (PTY+WS)
-                                                                        - Claude Code, Codex, Cursor, or OpenClaw
+                                                                        - Claude Code, Codex, Cursor, OpenClaw, or OpenCode
                                                                         - selected secrets/MCP mounted
 ```
 
@@ -49,14 +49,15 @@ shift.
 - **Interactive, autonomous, or scheduled sessions** — watch and answer live, hand off a
   prompt for unattended work, or run recurring jobs as CronJobs. Your agent works the
   night shift.
-- **Claude, Codex, Cursor, or OpenClaw per session** — choose the agent and Subscription or API-key
-  billing independently in every mode. Cursor and OpenClaw are peer agents with the same session
+- **Claude, Codex, Cursor, OpenClaw, or OpenCode per session** — choose the agent and Subscription or API-key
+  billing independently in every mode. OpenCode runs on an OpenCode Go subscription (or Zen) through
+  one API key from the opencode.ai console. Cursor, OpenClaw, and OpenCode are peer agents with the same session
   modes; they do not use Claude's legacy `Auto` authentication. Migrated Claude sessions
   may retain internal legacy `Auto` until explicitly changed; new sessions cannot select it.
 - **Supervise from anywhere** — mobile-first web UI with live terminal streaming
   (xterm.js); reconnect from your phone and the scrollback replays.
 - **Bring your own container image** — run the agent inside your project's toolchain
-  image; the selected Claude, Codex, Cursor, or OpenClaw runtime, Node, and terminal transport are
+  image; the selected Claude, Codex, Cursor, OpenClaw, or OpenCode runtime, Node, and terminal transport are
   copied in automatically.
 - **Opt-in root mode** to install tools inside the container (apt, npm -g, …) while the
   pod stays unprivileged.
@@ -86,10 +87,10 @@ shift.
   MCP tools; the remaining time is shown everywhere the session is listed. See
   `docs/session-expiry.md`.
 - **Subscription login that sticks** — sign in inside the selected provider container;
-  refreshed Claude, Codex, Cursor, or OpenClaw file-based authentication is persisted per user in the
+  refreshed Claude, Codex, Cursor, OpenClaw, or OpenCode file-based authentication is persisted per user in the
   background. Codex uses its device-code flow in headless sessions; Cursor uses
   `agent login` with a file-backed credential store; OpenClaw uses interactive auth under
-  `~/.openclaw`. Host authentication files are never
+  `~/.openclaw`; OpenCode uses `opencode auth login`. Host authentication files are never
   copied into the cluster by the setup scripts.
 - **Usage & cost dashboard** — token/cost telemetry per session, split into real
   **API cost** and the estimated **“would have cost”** of subscription-covered sessions;
@@ -100,8 +101,8 @@ shift.
 - **Chat integrations** — session updates, replies, permission approvals, and starting
   new sessions (`/new <prompt>`) from your phone via **Telegram or Signal** (free,
   community) — Slack is part of the Enterprise edition — plus browser desktop
-  notifications. Claude, Codex and Cursor sessions take part; OpenClaw has no hook for
-  it. [Setup and per-runtime details below.](#chat-integrations)
+  notifications. Claude, Codex, Cursor and OpenCode sessions take part; OpenClaw has no
+  hook for it. [Setup and per-runtime details below.](#chat-integrations)
 - **Auto approve** — let a session run its tools without asking, set when you create the
   session or flipped on a running one. [Details below.](#auto-approve)
 - **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
@@ -169,14 +170,15 @@ storage can be skipped with `AGENTHUB_OBJECT_STORAGE=0` — not recommended.
      --set oidc.audience=<expected-audience>
    ```
 3. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
-   for repo access, plus an Anthropic, OpenAI, or Cursor API key if using API-key billing.
+   for repo access, plus an Anthropic, OpenAI, Cursor, or OpenCode API key if using API-key billing.
    OpenClaw ApiKey mode reuses those existing keys (pick Anthropic, OpenAI, or Cursor as the
    source). These inputs are write-only; status responses expose only stored/not-stored booleans.
-4. **Start your first session**: pick Claude, Codex, Cursor, or OpenClaw, Subscription or API key,
+4. **Start your first session**: pick Claude, Codex, Cursor, OpenClaw, or OpenCode, Subscription or API key,
    and a mode (interactive / autonomous / scheduled), plus any repo, custom image,
    policy, and MCP config. An Interactive Subscription session can complete provider
    login in its terminal; Codex uses `codex login --device-auth`, Cursor uses
-   `agent login`, and OpenClaw uses `openclaw models auth add`.
+   `agent login`, OpenClaw uses `openclaw models auth add`, and OpenCode uses
+   `opencode auth login` (choose OpenCode Go and paste the console key).
 
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
 [`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml).
@@ -364,6 +366,7 @@ the session and only **interactive** sessions wait for anyone:
 | Codex | yes, at the end of every turn, with the agent's last message | yes | yes | yes |
 | Cursor | yes, at the end of every turn (generic text — the CLI's stop hook carries no message) | yes | yes | no — Cursor decides approvals from its own allowlist, there is no hook to relay them |
 | OpenClaw | **no** — OpenClaw has no per-turn hook, so no thread is ever opened | no | no | no |
+| OpenCode | yes, at the end of every turn, with the agent's last message | yes | yes | yes — the policy plugin asks the hub like the Codex hook |
 
 Autonomous and scheduled sessions never open a thread themselves: nobody is asked anything,
 and "finished"/"failed" is posted only where a thread already exists. Details and what was
@@ -428,7 +431,7 @@ finishes — enable per device under **Settings → Notifications**.
 ### Docker Desktop Kubernetes development
 
 For a local Kubernetes environment, the setup scripts build backend, frontend, Claude
-runtime, Codex runtime, Cursor runtime, OpenClaw runtime, and browser images locally, deploy the
+runtime, Codex runtime, Cursor runtime, OpenClaw runtime, OpenCode runtime, and browser images locally, deploy the
 agenthub-dev Helm release into the agenthub-dev control namespace, and use
 agenthub-dev-sessions for session pods. They refuse to run unless the active kubectl
 context is docker-desktop.
@@ -476,7 +479,7 @@ as user `dev`.
 | Path | Contents |
 |------|----------|
 | `backend/` | ASP.NET Core: REST + WS proxy, K8s orchestration, JWT auth |
-| `agent-runtime/` | Separate Claude, Codex, Cursor, and OpenClaw images sharing provider-neutral PTY/WS transport |
+| `agent-runtime/` | Separate Claude, Codex, Cursor, OpenClaw, and OpenCode images sharing provider-neutral PTY/WS transport |
 | `browser-runtime/` | Hardened Chromium, Xvfb, VNC, websockify, and cookie checkpoint supervisor |
 | `frontend/` | Vue 3 + Vite + xterm.js, mobile-first |
 | `helm/open-agenthub/` | Helm chart (recommended deployment) |
@@ -550,8 +553,9 @@ sessions. Subscription mode mounts only the selected provider's writable authent
 file; a background watcher persists valid login and refresh updates to that user's
 provider-specific Secret. Claude login happens through its normal in-container flow;
 Codex uses device-code authentication; Cursor uses `agent login` with
-`AGENT_CLI_CREDENTIAL_STORE=file`; OpenClaw uses interactive auth under `~/.openclaw`.
-Open AgentHub does not copy a workstation's real Claude, Codex, Cursor, or OpenClaw
+`AGENT_CLI_CREDENTIAL_STORE=file`; OpenClaw uses interactive auth under `~/.openclaw`;
+OpenCode uses `opencode auth login`, whose `auth.json` the watcher stores.
+Open AgentHub does not copy a workstation's real Claude, Codex, Cursor, OpenClaw, or OpenCode
 authentication files into the cluster.
 
 API-key mode never mounts the subscription Secret. For provider authentication, Claude
@@ -560,7 +564,8 @@ Autonomous/Scheduled runs scope `CODEX_API_KEY` to `codex exec` and its descenda
 Interactive Codex creates an ephemeral file login from the key. Cursor scopes
 `CURSOR_API_KEY` to the Cursor agent process and its descendants. OpenClaw ApiKey mode
 injects only the selected existing key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
-`CURSOR_API_KEY`). The shared `/shell`
+`CURSOR_API_KEY`). OpenCode scopes `OPENCODE_API_KEY` to the OpenCode process and its
+descendants. The shared `/shell`
 receives neither provider API key. This selected-only behavior makes the billing source
 deterministic. Subscription avoids API-key billing, but it does not isolate credentials
 from the running agent.
@@ -601,7 +606,7 @@ NetworkPolicy isolation remain mandatory.
 ### Trusted-code credential boundary
 
 Provider credentials and authentication files are accessible to code and tools running
-as the same agent user. Claude, Codex, Cursor, and OpenClaw provider-process descendants may inherit
+as the same agent user. Claude, Codex, Cursor, OpenClaw, and OpenCode provider-process descendants may inherit
 the selected `ANTHROPIC_API_KEY`, `CODEX_API_KEY`, `CURSOR_API_KEY`, or `OPENAI_API_KEY`, and subscription
 sessions can read their selected provider auth file. Run only trusted repositories and
 prompts when credentials are present. Use pod and network isolation to limit exposure and
@@ -676,7 +681,8 @@ restored session-local thread and may fall back once to a fresh thread if state 
 or invalid. Cursor resumes with `--resume` when a chat id is present and may fall back
 once to a fresh launch if that chat is missing. OpenClaw resumes from restored
 `~/.openclaw` state and/or an explicit session id when the CLI accepts one, with one
-fresh-session fallback when state is absent.
+fresh-session fallback when state is absent. OpenCode resumes with `--continue`, which picks the
+newest top-level session in the restored `~/.opencode` database and starts fresh when there is none.
 
 A finished or paused **autonomous** session can be continued **interactively** — from the
 session page, `POST /api/sessions/{id}/convert`, the remote API, or the `session_convert` MCP
@@ -716,7 +722,7 @@ instance runs itself. Off by default. See [Remote MCP server](docs/mcp-server.md
 
 - **Auth**: any OIDC provider works. Client `agenthub`, claim `preferred_username` as the
   tenant key.
-- **Provider access**: each user supplies their own Claude, Codex, Cursor, or OpenClaw subscription
+- **Provider access**: each user supplies their own Claude, Codex, Cursor, OpenClaw, or OpenCode subscription
   login or API key. OpenClaw ApiKey billing reuses Anthropic, OpenAI, or Cursor keys.
   Open AgentHub does not issue subscriptions, tokens, or provider
   organization access.

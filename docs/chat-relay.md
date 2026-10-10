@@ -23,10 +23,28 @@ interactive turn stopped") was written down in the Codex design spec and never b
 | Codex | managed `Stop` (`codex/turn-notify-hook.js` → `common/turn-notify-hook.mjs`) | end of every turn | `last_assistant_message`, else the rollout's last assistant text |
 | Cursor | `hooks.json` `stop` (`common/turn-notify-hook.mjs`) | end of every turn | generic — the stop payload carries no text |
 | OpenClaw | none | — | **not relayed** |
+| OpenCode | `event` hook of the managed policy plugin (`opencode/turn-notify.mjs`) | `session.idle` of a top-level session | the turn's assistant text, read through the plugin's own client |
 
 OpenClaw has no per-turn hook of any kind (its approvals cannot reach the relay either, see
 `CLAUDE.md`). An OpenClaw session is reachable through the web terminal only; the README's
 chat section says so rather than promising otherwise.
+
+### OpenCode: an event, not a hook command
+
+OpenCode runs no hook commands. Its plugins receive the server's events, and `session.idle`
+fires once a session has finished its turn, so the relay lives in the same plugin that gates
+tool calls — registered in the read-only managed config, where the agent cannot drop it. The
+plugin's own SDK client reads the session's messages for the text; the alternative, parsing
+OpenCode's storage from disk, would tie the relay to a layout that is not an interface.
+
+Two idles are not the user's turn ending and are skipped: a session with a `parentID` is a
+subagent the `task` tool started (its idle is a step inside the parent's turn), and a last
+message that ended in `MessageAbortedError` was interrupted from the keyboard.
+
+Verified against the pinned 1.18.35 with a mock model and a mock hub: an interactive `run`
+posts one question with the final text; a turn that ran a `task` subagent posts one question,
+for the parent, not two; `autonomous` posts none. The TUI could not be driven here (it waits
+for terminal query answers); it runs the same server and plugin, but the TUI path is unverified.
 
 ### Why Stop, and why one turn early
 

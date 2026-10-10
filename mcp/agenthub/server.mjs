@@ -32,7 +32,7 @@ const createSchema = z.object({
   mode: z.enum(['Interactive', 'Autonomous', 'Scheduled']).optional().default('Interactive'),
   // OpenClaw was missing here while the backend accepted it, so the stdio server was the one
   // client that could not create an OpenClaw session. The enum is the whole AgentKind set.
-  agent: z.enum(['Claude', 'Codex', 'Cursor', 'OpenClaw']).optional(),
+  agent: z.enum(['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode']).optional(),
   authMode: z.enum(['Auto', 'Subscription', 'ApiKey']).optional(),
   repos: z.array(z.object({
     url: z.string().max(2048),

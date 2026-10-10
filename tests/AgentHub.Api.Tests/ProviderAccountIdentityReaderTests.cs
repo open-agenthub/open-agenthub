@@ -71,6 +71,39 @@ public sealed class ProviderAccountIdentityReaderTests
         Assert.Equal("anthropic:default", identity!.Organization);
     }
 
+    // An OpenCode Go login is an API key and names nobody. Two keys for the same provider must
+    // not share a matching key, or the second login would be filed under the first account.
+    [Fact]
+    public void OpenCode_KeysTwoApiKeysForTheSameProviderApart()
+    {
+        var first = ProviderAccountIdentityReader.FromFile(AgentKind.OpenCode,
+            "{\"opencode-go\":{\"type\":\"api\",\"key\":\"sk-first\"}}");
+        var second = ProviderAccountIdentityReader.FromFile(AgentKind.OpenCode,
+            "{\"opencode-go\":{\"type\":\"api\",\"key\":\"sk-second\"}}");
+
+        Assert.Equal("opencode-go", first!.Organization);
+        Assert.Null(first.Email);
+        Assert.NotEqual(first.Key, second!.Key);
+        Assert.DoesNotContain("sk-first", first.Key);
+    }
+
+    // An oauth entry rotates its tokens, so only the account id (when present) tells two apart;
+    // a rotation must keep the same key or every refresh would become a new account.
+    [Fact]
+    public void OpenCode_OauthKeyIgnoresRotatingTokensAndListsEveryProvider()
+    {
+        var before = ProviderAccountIdentityReader.FromFile(AgentKind.OpenCode,
+            "{\"openai\":{\"type\":\"oauth\",\"access\":\"a1\",\"refresh\":\"r1\",\"expires\":1,\"accountId\":\"acct\"},"
+            + "\"opencode-go\":{\"type\":\"api\",\"key\":\"k\"}}");
+        var after = ProviderAccountIdentityReader.FromFile(AgentKind.OpenCode,
+            "{\"opencode-go\":{\"type\":\"api\",\"key\":\"k\"},"
+            + "\"openai\":{\"type\":\"oauth\",\"access\":\"a2\",\"refresh\":\"r2\",\"expires\":2,\"accountId\":\"acct\"}}");
+
+        Assert.Equal(before!.Key, after!.Key);
+        Assert.StartsWith("openai:acct,opencode-go:", before.Key);
+        Assert.Equal("openai, opencode-go", before.Organization);
+    }
+
     [Fact]
     public void Claude_HasNoIdentityInItsFile()
         => Assert.Null(ProviderAccountIdentityReader.FromFile(AgentKind.Claude, "{\"claudeAiOauth\":{\"accessToken\":\"x\"}}"));
@@ -83,6 +116,8 @@ public sealed class ProviderAccountIdentityReaderTests
     [InlineData(AgentKind.Cursor, "{\"accessToken\":\"\"}")]
     [InlineData(AgentKind.Cursor, "[]")]
     [InlineData(AgentKind.OpenClaw, "{\"profiles\":{}}")]
+    [InlineData(AgentKind.OpenCode, "{}")]
+    [InlineData(AgentKind.OpenCode, "{\"opencode-go\":\"key\"}")]
     public void MalformedInputYieldsNull(AgentKind agent, string json)
         => Assert.Null(ProviderAccountIdentityReader.FromFile(agent, json));
 

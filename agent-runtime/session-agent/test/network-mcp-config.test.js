@@ -52,7 +52,7 @@ test('runtime wiring owns the network server for Claude, Codex, and Cursor', () 
   assert.match(cursor, /AGENTHUB_NETWORK_MCP_ENABLED/);
   assert.match(cursor, /network\/configure\.mjs/);
 
-  for (const provider of ['claude', 'codex', 'cursor', 'openclaw']) {
+  for (const provider of ['claude', 'codex', 'cursor', 'openclaw', 'opencode']) {
     const docker = fs.readFileSync(path.join(runtime, provider, 'Dockerfile'), 'utf8');
     assert.match(docker, /COPY network \/opt\/session-agent\/network/,
       `${provider} image ships the network MCP`);

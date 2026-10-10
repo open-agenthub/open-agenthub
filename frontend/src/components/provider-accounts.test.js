@@ -181,6 +181,18 @@ describe('ProviderAccountsPane', () => {
       .toContain('No Codex subscription login is stored yet')
   })
 
+  it('lists OpenCode logins like every other provider', async () => {
+    const go = { id: 'go000001', label: 'Go', email: null, organization: 'opencode-go', isDefault: true, createdAt: '2026-10-09T00:00:00Z' }
+    mocks.api.listProviderAccounts.mockResolvedValue({ ...twoClaude(), OpenCode: [go] })
+    const wrapper = mount(ProviderAccountsPane, { props: { status: {} } })
+    await flushPromises()
+    const rows = wrapper.findAll('[data-provider-accounts-for="OpenCode"] [data-provider-account]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].get('[data-account-identity]').text()).toBe('opencode-go')
+    expect(wrapper.get('[data-provider-accounts-for="OpenCode"] [data-credential-status="opencodeSubscription"]').text())
+      .toContain('One OpenCode subscription login is stored')
+  })
+
   it('makes an account the default, renames it and removes it, then re-reads the listing', async () => {
     const wrapper = mount(ProviderAccountsPane, { props: { status: {} } })
     await flushPromises()
@@ -257,6 +269,15 @@ describe('switching the account of a running session', () => {
     await flushPromises()
     expect(wrapper.get('[data-account-select]').element.value).toBe('work0001')
     expect(wrapper.find('[data-account-confirm]').exists()).toBe(false)
+  })
+
+  it('is offered for an OpenCode session with two logins', async () => {
+    const a = { id: 'go000001', label: 'Go', isDefault: true }
+    const b = { id: 'go000002', label: 'Go team', isDefault: false }
+    mocks.api.listProviderAccounts.mockResolvedValue({ OpenCode: [a, b] })
+    const wrapper = mountTerminal({ session: session({ agent: 'OpenCode', credentialId: 'go000002' }) })
+    await flushPromises()
+    expect(wrapper.get('[data-account-select]').element.value).toBe('go000002')
   })
 
   it('asks inline before switching and reports the restart afterwards', async () => {

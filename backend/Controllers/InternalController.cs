@@ -166,7 +166,7 @@ public sealed class InternalController : ControllerBase
     {
         if (!Enum.TryParse<AgentKind>(agent, ignoreCase: true, out var parsedAgent) ||
             parsedAgent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor
-                and not AgentKind.OpenClaw)
+                and not AgentKind.OpenClaw and not AgentKind.OpenCode)
             return BadRequest();
 
         var rec = await AuthAsync(id, ct);

@@ -3,7 +3,7 @@
 // gitPats: [ids|'*'], apiKeys: bool } or null for "anything" — and the draft the checkboxes
 // bind to is the same shape with every list spelled out.
 
-export const AGENTS = ['Claude', 'Codex', 'Cursor', 'OpenClaw']
+export const AGENTS = ['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode']
 
 /** The accounts of one agent out of the `{ Claude: [...] }` listing. */
 function listFor(accounts, agent) {

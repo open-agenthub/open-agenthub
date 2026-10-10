@@ -157,6 +157,7 @@ function providerName(id) {
               <option>Codex</option>
               <option>Cursor</option>
               <option>OpenClaw</option>
+              <option>OpenCode</option>
             </select>
           </div>
           <label class="check auto">

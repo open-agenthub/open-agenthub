@@ -52,6 +52,7 @@ public interface IArtifactStore
             AgentKind.Codex => "codex-state.tgz",
             AgentKind.Cursor => "cursor-state.tgz",
             AgentKind.OpenClaw => "openclaw-state.tgz",
+            AgentKind.OpenCode => "opencode-state.tgz",
             _ => throw new ArgumentOutOfRangeException(nameof(agent), agent, "Unknown agent kind.")
         }}";
     static string ScrollbackKey(string owner, string id) => $"sessions/{owner}/{id}/scrollback.log";

@@ -30,7 +30,7 @@ test('all runtime entrypoints own and enable agenthub_files', () => {
   // the workspace — see claude-mcp-config.test.js.
   assert.match(common, /export AGENTHUB_MCP_CONFIG/);
   assert.match(cursor, /agenthub_files/);
-  for (const provider of ['claude', 'codex', 'cursor', 'openclaw']) {
+  for (const provider of ['claude', 'codex', 'cursor', 'openclaw', 'opencode']) {
     const dockerfile = fs.readFileSync(path.join(runtimeRoot, provider, 'Dockerfile'), 'utf8');
     assert.match(dockerfile, /COPY files \/opt\/session-agent\/files/);
   }

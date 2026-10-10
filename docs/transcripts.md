@@ -73,7 +73,9 @@ re-upload megabytes every half minute.
   line. The driver scans for rollouts touched since the agent was launched, reads the id from
   `session_meta` and records it in `$CODEX_HOME/agenthub-thread-id` — inside the state directory,
   so the archive a pause uploads carries it to the next resume.
-- **Cursor and OpenClaw** have no `findTranscript`; they keep the scrollback fallback.
+- **Cursor, OpenClaw and OpenCode** have no `findTranscript`; they keep the scrollback fallback.
+  OpenCode keeps its conversation in its own database under `~/.opencode`, not in a JSONL file
+  the reader could serve.
 
 **Codex resumes by id, not `--last`.** `codex resume --last` means "newest rollout in this
 directory wins". A `codex` someone ran from the shell tab, or a thread the TUI opened with `/new`,
