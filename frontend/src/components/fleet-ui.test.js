@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     getConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 }),
     listPermissions: vi.fn().mockResolvedValue([]),
     listSessionMessages: vi.fn().mockResolvedValue([]),
+    sendSessionMessage: vi.fn(),
     decidePermission: vi.fn(),
     createSession: vi.fn(),
     updateSession: vi.fn(),
@@ -114,6 +115,118 @@ describe('fleet message banner in the session view', () => {
     await flushPromises()
     expect(mocks.api.listSessionMessages).not.toHaveBeenCalled()
     viewer.unmount()
+  })
+})
+
+describe('priority messages in the session view', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.listPermissions.mockResolvedValue([])
+    mocks.api.listSessionMessages.mockResolvedValue([])
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-20T10:10:00Z'))
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it('marks an undelivered priority message as waiting in the inbox', async () => {
+    mocks.api.listSessionMessages.mockResolvedValue([message({ priority: true })])
+    const wrapper = mountTerminal()
+    await flushPromises()
+
+    const banner = wrapper.get('[data-agent-message]')
+    expect(banner.attributes('data-priority')).toBe('true')
+    expect(banner.text()).toContain('Priority message from agent “Code Reviewer”')
+    expect(banner.get('[data-message-delivery]').text()).toBe('waiting in inbox')
+  })
+
+  it('keeps a delivered priority message visible for a while and says it reached the agent', async () => {
+    mocks.api.listSessionMessages.mockResolvedValue([
+      message({ id: 'fresh', priority: true, interrupt: true, deliveredAt: '2026-09-20T10:08:00Z', deliveredVia: 'injected' }),
+      message({ id: 'mod', priority: true, deliveredAt: '2026-09-20T10:09:00Z', deliveredVia: 'mod' }),
+      message({ id: 'stale', priority: true, deliveredAt: '2026-09-20T09:00:00Z', deliveredVia: 'injected' }),
+      message({ id: 'plain', deliveredAt: '2026-09-20T10:09:30Z', deliveredVia: 'inbox' })
+    ])
+    const wrapper = mountTerminal()
+    await flushPromises()
+
+    const banners = wrapper.findAll('[data-agent-message]')
+    expect(banners).toHaveLength(2)
+    expect(banners[0].text()).toContain('Interrupt from agent “Code Reviewer”')
+    expect(banners[0].get('[data-message-delivery]').text()).toBe('delivered to the agent')
+    expect(banners[1].attributes('data-delivered-via')).toBe('mod')
+    expect(banners[1].get('[data-message-delivery]').text()).toBe('delivered to the agent')
+  })
+
+  it('a plain message has no delivery label and no priority marker', async () => {
+    mocks.api.listSessionMessages.mockResolvedValue([message()])
+    const wrapper = mountTerminal()
+    await flushPromises()
+
+    const banner = wrapper.get('[data-agent-message]')
+    expect(banner.attributes('data-priority')).toBeUndefined()
+    expect(banner.find('[data-message-delivery]').exists()).toBe(false)
+  })
+})
+
+describe('messaging the agent from the session view', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.listPermissions.mockResolvedValue([])
+    mocks.api.listSessionMessages.mockResolvedValue([])
+    mocks.api.sendSessionMessage.mockResolvedValue({ id: 'm-9', to: 's1', deliveredVia: 'injected' })
+  })
+
+  it('sends the text with the priority and interrupt flags, interrupt implying priority', async () => {
+    const wrapper = mountTerminal()
+    await flushPromises()
+    expect(wrapper.find('[data-send-message]').exists()).toBe(false)
+
+    await wrapper.get('[data-send-message-toggle]').trigger('click')
+    const card = wrapper.get('[data-send-message]')
+    await card.get('[data-send-message-priority]').setValue(false)
+    await card.get('[data-send-message-interrupt]').setValue(true)
+    expect(card.get('[data-send-message-priority]').element.checked).toBe(true)
+    await card.get('[data-send-message-text]').setValue('  Stop and look at MR 42  ')
+    await card.get('[data-send-message-submit]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.sendSessionMessage).toHaveBeenCalledWith('s1', {
+      body: 'Stop and look at MR 42', priority: true, interrupt: true
+    })
+    expect(wrapper.get('[data-send-message-note]').text()).toBe('Delivered to the agent.')
+    expect(wrapper.get('[data-send-message-text]').element.value).toBe('')
+    // The banner list is refreshed so the pushed message shows up at once.
+    expect(mocks.api.listSessionMessages).toHaveBeenCalledTimes(2)
+  })
+
+  it('tells the person when the message only reached the inbox', async () => {
+    mocks.api.sendSessionMessage.mockResolvedValue({ id: 'm-9', to: 's1', deliveredVia: 'inbox', reason: 'non_interactive' })
+    const wrapper = mountTerminal()
+    await flushPromises()
+
+    await wrapper.get('[data-send-message-toggle]').trigger('click')
+    await wrapper.get('[data-send-message-text]').setValue('later please')
+    await wrapper.get('[data-send-message-submit]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.sendSessionMessage).toHaveBeenCalledWith('s1', { body: 'later please', priority: true, interrupt: false })
+    expect(wrapper.get('[data-send-message-note]').text()).toContain('Waiting in the inbox')
+  })
+
+  it('offers the card only to a manager of a live session that is not opened through a share link', async () => {
+    const stopped = mountTerminal({ session: session({ phase: 'Succeeded' }) })
+    await flushPromises()
+    expect(stopped.find('[data-send-message-toggle]').exists()).toBe(false)
+    stopped.unmount()
+
+    const shared = mountTerminal({ sharedToken: 'tok' })
+    await flushPromises()
+    expect(shared.find('[data-send-message-toggle]').exists()).toBe(false)
+    shared.unmount()
+
+    const viewer = mountTerminal({ session: session({ accessRole: 'Viewer' }) })
+    await flushPromises()
+    expect(viewer.find('[data-send-message-toggle]').exists()).toBe(false)
   })
 })
 

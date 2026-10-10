@@ -22,6 +22,7 @@ public sealed class RemoteController : ControllerBase
     private readonly Func<string, CancellationToken, Task<RemoteCaller?>> _findCaller;
     private readonly ISessionService _svc;
     private readonly ISessionMessageStore? _messages;
+    private readonly ISessionMessageDelivery? _delivery;
 
     /// <remarks>
     /// Marked as the one to construct from the container. MVC builds a controller through
@@ -31,16 +32,18 @@ public sealed class RemoteController : ControllerBase
     /// unauthenticated one, which makes it look like an auth problem rather than a wiring one.
     /// </remarks>
     [ActivatorUtilitiesConstructor]
-    public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null)
-        : this(tokens.FindCallerByTokenAsync, svc, messages) { }
+    public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null,
+        ISessionMessageDelivery? delivery = null)
+        : this(tokens.FindCallerByTokenAsync, svc, messages, delivery) { }
 
     /// <summary>Test seam: resolve the caller (owner and scope) from a plaintext token without Postgres.</summary>
     public RemoteController(Func<string, CancellationToken, Task<RemoteCaller?>> findCallerByToken, ISessionService svc,
-        ISessionMessageStore? messages = null)
+        ISessionMessageStore? messages = null, ISessionMessageDelivery? delivery = null)
     {
         _findCaller = findCallerByToken;
         _svc = svc;
         _messages = messages;
+        _delivery = delivery;
     }
 
     /// <summary>Resolves the bearer token to its owner and scope, or null if missing/invalid.</summary>
@@ -149,6 +152,8 @@ public sealed class RemoteController : ControllerBase
     /// <summary>
     /// Sends a message/task to one of the token owner's sessions. Stored with a null
     /// sender session — the receiving agent sees it as an external message from its owner.
+    /// A priority message is pushed into the running agent; the answer's <c>deliveredVia</c>
+    /// says whether that worked or the message waits in the inbox.
     /// </summary>
     [HttpPost("sessions/{id}/messages")]
     public async Task<IActionResult> SendMessage(string id, [FromBody] RemoteAgentMessageRequest req, CancellationToken ct)
@@ -163,6 +168,7 @@ public sealed class RemoteController : ControllerBase
         var target = await _svc.GetSessionAsync(owner, id, ct);
         if (target is null) return NotFound();
 
+        var (priority, interrupt) = AgentMessaging.ResolveFlags(req.Priority, req.Interrupt);
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
@@ -170,12 +176,15 @@ public sealed class RemoteController : ControllerBase
             FromSessionId = null,
             ToSessionId = target.Id,
             Owner = owner,
-            Body = text
+            Body = text,
+            Priority = priority,
+            Interrupt = interrupt
         };
         await _messages.AddAsync(message, ct);
         // A task handed to the session is the owner using it (docs/session-expiry.md).
         await _svc.TouchActivityAsync(owner, target.Id, ct);
-        return Ok(new { id = message.Id, to = target.Id });
+        var delivery = await AgentMessageDispatch.PushAsync(_delivery, target, message, null, ct);
+        return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));
     }
 
     /// <summary>

@@ -19,6 +19,10 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   assert.match(server, /AGENTHUB_URL|AgentHubClient/);
   assert.match(server, /mode:\s*z\.[\s\S]*?\.default\('Interactive'\)/);
   assert.match(server, /sanitizeSession/);
+  // agent_send carries the priority flags as real booleans (zod), unlike the remote MCP's strings.
+  assert.match(server, /priority: z\.boolean\(\)\.optional\(\)/);
+  assert.match(server, /interrupt: z\.boolean\(\)\.optional\(\)/);
+  assert.match(server, /sendAgentMessage\(targetId, message, \{ priority, interrupt \}\)/);
 });
 
 test('agenthub MCP registers the sharing tools without the session allowlist', () => {

@@ -110,6 +110,7 @@ var sessionFileOptions = builder.Configuration.GetSection("Files")
 builder.Services.AddSingleton(sessionFileOptions);
 builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api.Files.AgentFileClient>();
 builder.Services.AddHttpClient<IAgentCredentialPusher, AgentCredentialPusher>();
+builder.Services.AddHttpClient<ISessionMessageDelivery, SessionMessageDelivery>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileService, AgentHub.Api.Files.SessionFileService>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileCleanup, AgentHub.Api.Files.SessionFileCleanup>();
 builder.Services.AddHostedService<AgentHub.Api.Files.SessionFileSweepService>();

@@ -82,9 +82,13 @@ export class AgentHubClient {
     return this.#request('GET', '/api/remote/credentials');
   }
 
-  /** Sends a message/task to an owned session (stored as an external message). */
-  sendAgentMessage(sessionId, message) {
-    return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(sessionId)}/messages`, { body: message });
+  /** Sends a message/task to an owned session (stored as an external message). The flags are
+   * only sent when set, so a plain send looks exactly as it did before they existed. */
+  sendAgentMessage(sessionId, message, { priority, interrupt } = {}) {
+    const payload = { body: message };
+    if (priority !== undefined) payload.priority = priority;
+    if (interrupt !== undefined) payload.interrupt = interrupt;
+    return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(sessionId)}/messages`, payload);
   }
 
   // ---------------------------------------------------------------- sharing (enterprise)

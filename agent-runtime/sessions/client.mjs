@@ -48,9 +48,13 @@ export class SessionsBackendClient {
     return this.#request('GET', '/project-agents');
   }
 
-  /** Sends a message/task to a peer agent (already resolved to a session id). */
-  sendAgentMessage(toSessionId, message) {
-    return this.#request('POST', '/messages', { to: toSessionId, body: message });
+  /** Sends a message/task to a peer agent (already resolved to a session id). The flags are
+   * only sent when set, so a plain send looks exactly as it did before they existed. */
+  sendAgentMessage(toSessionId, message, { priority, interrupt } = {}) {
+    const payload = { to: toSessionId, body: message };
+    if (priority !== undefined) payload.priority = priority;
+    if (interrupt !== undefined) payload.interrupt = interrupt;
+    return this.#request('POST', '/messages', payload);
   }
 
   /** Takes undelivered inbox messages, long-polling up to waitSeconds (0..60). */

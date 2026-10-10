@@ -38,13 +38,15 @@ public sealed class InternalController : ControllerBase
     private readonly IAgentCallbackAuthorizer _callbackAuthorizer;
     private readonly IUsageStore? _usage;
     private readonly ISessionMessageStore? _messages;
+    private readonly ISessionMessageDelivery? _delivery;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares,
         ILibraryAccess library, IBrowserService? browsers = null, bool? spawnMcpEnabled = null,
         IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null,
-        IUsageStore? usage = null, ISessionMessageStore? messages = null)
+        IUsageStore? usage = null, ISessionMessageStore? messages = null,
+        ISessionMessageDelivery? delivery = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
@@ -52,6 +54,7 @@ public sealed class InternalController : ControllerBase
         _browsers = browsers;
         _usage = usage;
         _messages = messages;
+        _delivery = delivery;
         _callbackAuthorizer = callbackAuthorizer ?? new AgentCallbackAuthorizer(store);
         _spawnMcpEnabled = spawnMcpEnabled
             ?? configuration?.GetValue("AgentHub:SpawnMcpEnabled", true)
@@ -538,9 +541,11 @@ public sealed class InternalController : ControllerBase
         if (to == id) return BadRequest("A session cannot message itself.");
         var target = await _store.GetAsync(rec.Owner, to, ct);
         if (target is null) return NotFound();
-        var parentOf = ParentLookup(rec, await _svc.ListSessionsAsync(rec.Owner, ct));
+        var all = await _svc.ListSessionsAsync(rec.Owner, ct);
+        var parentOf = ParentLookup(rec, all);
         if (!IsFleetPeer(rec, target.Id, target.ProjectId, parentOf)) return NotFound();
 
+        var (priority, interrupt) = AgentMessaging.ResolveFlags(body.Priority, body.Interrupt);
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
@@ -548,7 +553,9 @@ public sealed class InternalController : ControllerBase
             FromSessionId = rec.Id,
             ToSessionId = target.Id,
             Owner = rec.Owner,
-            Body = text
+            Body = text,
+            Priority = priority,
+            Interrupt = interrupt
         };
         await _messages.AddAsync(message, ct);
         // Best-effort visibility beyond the pull inbox: the same fan-out that carries
@@ -556,7 +563,9 @@ public sealed class InternalController : ControllerBase
         // itself from the public messages endpoint.
         await NotifyAllAsync(target, "agent-message",
             $"Agent \"{rec.Title}\" sent a message to \"{target.Title}\": {Truncate(text, 300)}", ct);
-        return Ok(new { id = message.Id, to = target.Id });
+        var delivery = await AgentMessageDispatch.PushAsync(_delivery,
+            all.FirstOrDefault(s => s.Id == target.Id), message, rec.Title, ct);
+        return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));
     }
 
     /// <summary>
@@ -586,7 +595,7 @@ public sealed class InternalController : ControllerBase
         var messages = taken.Select(m => new AgentMessageInfo(
             m.Id, m.FromSessionId,
             m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId),
-            m.Body, m.CreatedAt, m.DeliveredAt)).ToList();
+            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia)).ToList();
         return Ok(new { messages });
     }
 

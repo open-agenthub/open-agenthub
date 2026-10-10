@@ -121,6 +121,8 @@ export const api = {
   convertSession: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/convert`, data),
   // Recent agent-to-agent messages sent to a session (read-only fleet inbox view).
   listSessionMessages: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/messages`),
+  // The owner messages their own session: {body, priority?, interrupt?} → {id, to, deliveredVia, reason?}.
+  sendSessionMessage: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/messages`, data),
   // Pending tool-permission requests + in-app approval (mirrors the messenger buttons).
   listPermissions: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/permissions`),
   decidePermission: (id, reqId, decision) => req('POST', `/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(reqId)}`, { decision }),

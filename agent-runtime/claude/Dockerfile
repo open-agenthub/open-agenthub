@@ -42,6 +42,15 @@ COPY network /opt/session-agent/network
 COPY skills /opt/session-agent/skills
 COPY claude /opt/session-agent/claude
 COPY claude/entrypoint.sh /usr/local/bin/entrypoint.sh
+# The agenthub-fleet mod (docs/claude-code-mods.md) ships inside the runtime directory, so the
+# copy a custom image receives carries it too; the entrypoint points CLAUDE_CODE_PLUGIN_DIRS at
+# wherever the runtime ended up. The ENV here covers the plain image. Validated and tested at
+# build time against the pinned CLI — both run without a login or the network — so a CLI bump
+# that changes the mods API fails the build rather than loading a silent no-op into every
+# session.
+ENV CLAUDE_CODE_PLUGIN_DIRS=/opt/session-agent/claude/mods/agenthub-fleet
+RUN claude plugin validate --strict /opt/session-agent/claude/mods/agenthub-fleet \
+ && claude plugin test /opt/session-agent/claude/mods/agenthub-fleet
 RUN chmod +x /usr/local/bin/entrypoint.sh \
     /opt/session-agent/common/entrypoint-common.sh \
     /opt/session-agent/common/setup-cli-auth.sh \

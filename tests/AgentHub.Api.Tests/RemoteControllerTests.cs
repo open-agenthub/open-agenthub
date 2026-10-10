@@ -457,6 +457,8 @@ public class RemoteControllerTests
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
         public Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
+        // No delivery service is wired in these tests, so nothing ever reaches this.
+        public Task MarkDeliveredAsync(string id, string via, CancellationToken ct = default) => Task.CompletedTask;
     }
 
     private static RemoteController Remote(

@@ -5,6 +5,7 @@ const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
+const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -22,6 +23,11 @@ const WATCHER_FLUSH_WAIT_MS = 6_000;
 const WATCHER_POLL_MS = 100;
 // Protocol chatter that the chat UI only needs live, never on replay.
 const TRANSIENT_CHAT_EVENTS = new Set(['stream_event', 'control_response', 'control_request']);
+// A fleet message as the hub posts it: a 4000-character body plus a few fields.
+const MAX_MESSAGE_BYTES = 64 * 1024;
+// How long after its last poll the provider's in-process mod counts as alive. It polls every 3 s; a
+// window of five polls survives a slow turn without handing a message to a mod that is gone.
+const MOD_HEARTBEAT_TTL_MS = 15_000;
 
 function createCommonServer(options = {}) {
   const env = options.env || process.env;
@@ -94,6 +100,12 @@ function createCommonServer(options = {}) {
   let lastSize = null;
   let persisting = false;
   let persistWaiters = null;
+  // Fleet messages waiting for the provider's in-process mod (docs/priority-messages.md), and when the
+  // mod last showed itself. The token is minted by the entrypoint and shared with the CLI
+  // process only, so nothing else on the pod's port can read the queue.
+  const modToken = env.AGENTHUB_MOD_TOKEN || '';
+  let modQueue = [];
+  let lastModHeartbeat = 0;
 
   function remember(chunk) {
     scrollback += chunk;
@@ -101,7 +113,7 @@ function createCommonServer(options = {}) {
   }
 
   function safeSend(socket, data) {
-    if (socket.readyState === socket.OPEN) {
+    if (socket && socket.readyState === socket.OPEN) {
       try { socket.send(data); } catch {}
     }
   }
@@ -759,9 +771,128 @@ function createCommonServer(options = {}) {
     sendJson(response, 202, { installed: true, restarting });
   }
 
+  /**
+   * POST /agenthub/messages: the hub pushes a fleet message that should not wait for the agent's
+   * next inbox poll. Where it goes depends on how the agent runs (docs/priority-messages.md):
+   * the provider's in-process mod when one is alive, the chat pipe, the terminal as typed input — or
+   * nowhere, in which case the hub keeps it in the inbox and tells the sender so. Delivery here
+   * is the only place that knows those three channels; the hub only reads the answer.
+   */
+  async function handleMessageRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const raw = await readBoundedBody(request, MAX_MESSAGE_BYTES);
+    const message = raw && parseFleetMessage(raw);
+    if (!message) {
+      fileError(response, raw ? 400 : 413, raw ? 'invalid_message' : 'message_too_large');
+      return;
+    }
+    const unavailable = reason => sendJson(response, 200, { delivered: 'unavailable', reason });
+    if (exited) return unavailable('agent_exited');
+
+    // One channel per message. A mod that is alive takes priority messages always and plain
+    // ones in interactive sessions, where it can show them and hand them over with the next
+    // prompt; in an autonomous run nobody types a next prompt, so a plain message stays in the
+    // inbox for agent_inbox. Writing to the terminal as well would deliver it twice.
+    if (modAlive() && (message.priority || mode === 'interactive')) {
+      modQueue.push(message);
+      sendJson(response, 200, { delivered: 'queued-for-mod' });
+      return;
+    }
+    if (!message.priority) return unavailable('not_priority');
+    if (chatMode) {
+      if (!chat) return unavailable('agent_not_started');
+      if (message.interrupt) chat.interrupt();
+      queueChatMessage(null, { text: formatFleetMessage(message) });
+      sendJson(response, 200, { delivered: 'chat' });
+      return;
+    }
+    // A -p run reads its prompt from the command line; keystrokes into its PTY reach nothing.
+    if (mode !== 'interactive') return unavailable('non_interactive');
+    if (!term) return unavailable('agent_not_started');
+    await injectTerminalInput(term, formatFleetMessage(message), {
+      interrupt: message.interrupt,
+      wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
+    });
+    sendJson(response, 200, { delivered: 'pty' });
+  }
+
+  function parseFleetMessage(raw) {
+    let parsed;
+    try { parsed = JSON.parse(raw.toString('utf8')); } catch { return null; }
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.body !== 'string' || !parsed.body.trim()) return null;
+    const text = field => typeof parsed[field] === 'string' && parsed[field] ? parsed[field] : null;
+    return {
+      id: text('id') || '',
+      from: text('from'),
+      fromTitle: text('fromTitle'),
+      body: parsed.body,
+      priority: parsed.priority === true,
+      interrupt: parsed.interrupt === true
+    };
+  }
+
+  function modAlive() {
+    return Boolean(modToken) && now() - lastModHeartbeat < MOD_HEARTBEAT_TTL_MS;
+  }
+
+  /**
+   * The in-process mod's side: GET /agenthub/mod/inbox hands over and clears the queue, POST
+   * /agenthub/mod/heartbeat only says "still here". Both are loopback-only and carry the mod
+   * token, not the callback token: the hub's token never reaches the agent process, and the
+   * mod's token never leaves the pod.
+   */
+  function handleModRequest(request, response, requestPath) {
+    if (!modToken) {
+      fileError(response, 404, 'not_found');
+      return;
+    }
+    const address = request.socket && request.socket.remoteAddress;
+    const header = String(request.headers['authorization'] || '');
+    const bearer = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
+    if (!isLoopback(address) || !secretMatches(modToken, bearer)) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    lastModHeartbeat = now();
+    if (requestPath === '/agenthub/mod/heartbeat') {
+      if (request.method !== 'POST') {
+        response.setHeader('Allow', 'POST');
+        fileError(response, 405, 'method_not_allowed');
+        return;
+      }
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    if (request.method !== 'GET') {
+      response.setHeader('Allow', 'GET');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const messages = modQueue;
+    modQueue = [];
+    sendJson(response, 200, { messages });
+  }
+
+  function isLoopback(address) {
+    return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+  }
+
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
+    if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
+    if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat') {
+      return handleModRequest(request, response, requestPath);
+    }
     return handleFileRequest(request, response);
   }
 
@@ -794,8 +925,12 @@ function createCommonServer(options = {}) {
   }
 
   function tokenMatches(requestToken) {
-    if (!token || typeof requestToken !== 'string') return false;
-    const expected = Buffer.from(token);
+    return secretMatches(token, requestToken);
+  }
+
+  function secretMatches(secret, requestToken) {
+    if (!secret || typeof requestToken !== 'string') return false;
+    const expected = Buffer.from(secret);
     const received = Buffer.from(requestToken);
     const length = Math.max(expected.length, received.length, 1);
     const left = Buffer.alloc(length);
@@ -919,7 +1054,9 @@ function createCommonServer(options = {}) {
   });
 
   httpServer.listen(port);
-  console.log('[agent] Agent server listening on :' + port + ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials)');
+  console.log('[agent] Agent server listening on :' + port +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/messages' +
+    (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 
   for (const signal of ['SIGTERM', 'SIGINT']) {

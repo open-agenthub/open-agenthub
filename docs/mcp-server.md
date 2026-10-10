@@ -97,7 +97,7 @@ The same surface as the stdio server:
 | `session_delete` | Delete a session; does not cascade to children |
 | `session_convert` | Continue a finished or paused Autonomous session as an Interactive one, in the same conversation where the runtime can (`docs/session-mode-conversion.md`) |
 | `agents_list` | Your agents with title, description and phase |
-| `agent_send` | Send a message/task to an agent by id or unique title |
+| `agent_send` | Send a message/task to an agent by id or unique title. `priority` pushes it into the running agent's prompt, `interrupt` stops its current work first; the result's `deliveredVia` says `inbox`, `injected` or `mod` (`docs/priority-messages.md`) |
 | `credentials_list` | Provider accounts, git PATs (ids, never tokens) and API-key presence a session may use |
 | `session_share` | Share a session with a user as Viewer (default) or Collaborator — Enterprise |
 | `session_unshare` | Revoke a user's access — Enterprise |
