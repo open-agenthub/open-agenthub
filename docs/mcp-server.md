@@ -91,11 +91,22 @@ The same surface as the stdio server:
 | `session_create` | Create and start a session (defaults to Interactive) |
 | `session_get` | Fetch one session by id |
 | `session_logs` | Read a session's transcript — what the agent actually printed |
+| `session_transcript` | Poll the transcript from a cursor (`offset` → `nextOffset`), with `running` saying when to stop |
 | `session_list` | List your sessions, optionally filtered by parent or phase |
 | `session_wait` | Poll until a session reaches Succeeded or Failed |
 | `session_delete` | Delete a session; does not cascade to children |
 | `agents_list` | Your agents with title, description and phase |
 | `agent_send` | Send a message/task to an agent by id or unique title |
+| `session_share` | Share a session with a user as Viewer (default) or Collaborator — Enterprise |
+| `session_unshare` | Revoke a user's access — Enterprise |
+| `session_share_link` | Mint a secret link; returns `{url, linkId}`, the url exactly once — Enterprise |
+| `session_shares` | Direct grants and links of a session (ids and roles, never link tokens) — Enterprise |
+
+The four sharing tools need an active enterprise licence and answer `license_required` without
+one; `session_not_found` covers a session that is not yours, `unknown_recipient` a username that
+has never signed in. They exist on this server and on the stdio one, but not on the in-session
+server an agent gets — an agent should not widen who can see its own session. Decisions in
+`session-sharing-api.md`.
 
 `session_logs` is the only way to see what a session did. `kubectl logs` on the pod shows the
 entrypoint and the launch command but not the agent's output, which goes to the PTY; and once a

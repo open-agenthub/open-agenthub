@@ -22,8 +22,10 @@ async function load() {
     if (generation !== loadGeneration || sessionId !== props.session.id) return
     data.value = result
     linkDrafts.value = Object.fromEntries((result.links || []).map(link => [link.id, { role: link.role, expiresAt: link.expiresAt ? link.expiresAt.slice(0, 16) : '' }]))
-    blockedServers.value = (result.policy?.blockedServers || []).join('\n')
-    blockedTools.value = (result.policy?.blockedTools || []).join('\n')
+    // The overview spells it mcpPolicy (SessionSharingOverview). Reading `policy` here meant the
+    // textareas came up empty on every open, and saving one restriction dropped the others.
+    blockedServers.value = (result.mcpPolicy?.blockedServers || []).join('\n')
+    blockedTools.value = (result.mcpPolicy?.blockedTools || []).join('\n')
   } catch (e) {
     if (generation === loadGeneration) error.value = String(e.message || e)
   }
@@ -86,8 +88,8 @@ watch(() => props.session.id, reset)
       <div class="sect-title">MCP security</div>
       <p class="sub">Restrictions apply to every participant, including you, on the next MCP call. Earlier transcript content may already contain tool results.</p>
       <p v-if="serverNames.length" class="servers">Configured servers: {{ serverNames.join(', ') }}</p>
-      <div class="field"><label>Blocked servers (one per line)</label><textarea v-model="blockedServers" placeholder="server-name"></textarea></div>
-      <div class="field"><label>Blocked exact tool names (one per line)</label><textarea v-model="blockedTools" placeholder="mcp__server__tool"></textarea></div>
+      <div class="field"><label>Blocked servers (one per line)</label><textarea v-model="blockedServers" data-blocked-servers placeholder="server-name"></textarea></div>
+      <div class="field"><label>Blocked exact tool names (one per line)</label><textarea v-model="blockedTools" data-blocked-tools placeholder="mcp__server__tool"></textarea></div>
       <button @click="savePolicy">Save MCP policy</button>
     </section>
 

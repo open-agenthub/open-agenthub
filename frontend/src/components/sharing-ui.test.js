@@ -27,10 +27,11 @@ describe('shared-session UI', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     apiMocks.getSharedSession.mockResolvedValue({ id: 's1', title: 'Shared work', accessRole: 'Viewer' })
+    // The overview as the backend spells it (SessionSharingOverview): the policy key is mcpPolicy.
     apiMocks.api.listSessionShares.mockResolvedValue({
       users: [],
       links: [{ id: 'link-1', role: 'Viewer', expiresAt: null }],
-      policy: { blockedServers: [], blockedTools: [] }
+      mcpPolicy: { blockedServers: ['filesystem', 'github'], blockedTools: ['mcp__github__create_issue'] }
     })
     apiMocks.api.updateShareLink.mockResolvedValue({})
   })

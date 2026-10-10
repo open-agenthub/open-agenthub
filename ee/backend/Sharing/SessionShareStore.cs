@@ -12,7 +12,7 @@ using NpgsqlTypes;
 
 namespace AgentHub.Api.Ee.Sharing;
 
-public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyReader
+public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyReader, ISessionShareStore
 {
     private readonly NpgsqlDataSource _db;
     private readonly ILogger<SessionShareStore> _logger;
@@ -506,7 +506,7 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
             transaction);
         command.Parameters.AddWithValue("recipient", recipient);
         if (await command.ExecuteScalarAsync(ct) is null)
-            throw new ArgumentException("Recipient is not a known user.", nameof(recipient));
+            throw new UnknownRecipientException(recipient);
     }
 
     private static async Task<SessionMcpPolicy?> GetMcpPolicyAsync(

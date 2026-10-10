@@ -21,6 +21,18 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   assert.match(server, /sanitizeSession/);
 });
 
+test('agenthub MCP registers the sharing tools without the session allowlist', () => {
+  const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
+  for (const name of ['session_share', 'session_unshare', 'session_share_link', 'session_shares']) {
+    assert.match(server, new RegExp(`register\\('${name}'`));
+  }
+  // Grants and links are not session records; sanitizeSession's allowlist would empty them.
+  assert.doesNotMatch(server, /sanitizeSession\(await client\.(listShares|shareWithUser|unshareUser|createShareLink)/);
+  // Errors go through the sharing vocabulary (license_required, session_not_found, …).
+  assert.match(server, /sharingErrorCode/);
+  assert.match(server, /role: roleSchema/);
+});
+
 test('agenthub MCP exposes transcript polling and the caller system prompt', () => {
   const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
   assert.match(server, /register\('session_transcript'/);

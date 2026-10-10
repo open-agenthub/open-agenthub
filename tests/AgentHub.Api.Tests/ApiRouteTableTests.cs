@@ -49,6 +49,40 @@ public class ApiRouteTableTests
                 .Select(r => $"{string.Join('|', r.Methods)} {r.Template}")));
     }
 
+    /// <summary>The sharing routes on the token surface, which the stdio MCP server's client
+    /// calls by path (mcp/agenthub/client.mjs) — the same contract as the transfer routes.</summary>
+    public static TheoryData<string, string> RemoteSharingRoutes => new()
+    {
+        { "GET", "api/remote/sessions/shared" },
+        { "GET", "api/remote/sessions/{id}/shares" },
+        { "POST", "api/remote/sessions/{id}/shares/users" },
+        { "DELETE", "api/remote/sessions/{id}/shares/users/{recipient}" },
+        { "POST", "api/remote/sessions/{id}/shares/links" },
+        { "DELETE", "api/remote/sessions/{id}/shares/links/{linkId}" }
+    };
+
+    [Theory]
+    [MemberData(nameof(RemoteSharingRoutes))]
+    public void RemoteSurface_ExposesEverySharingRoute(string method, string template)
+    {
+        Assert.Contains(Routes(), route => route.Template == template && route.Methods.Contains(method));
+    }
+
+    [Fact]
+    public void SharedWithMe_ExistsOnBothSurfaces_AndTheInAppOneIsBehindTheLogin()
+    {
+        // The in-app listing lives on the Enterprise controller with an absolute template, so it
+        // is outside the SessionsController sweep above and needs its own [Authorize] check: an
+        // unauthenticated principal would otherwise be asked "what is shared with you".
+        var inApp = Actions().OfType<ControllerActionDescriptor>()
+            .Single(action => action.AttributeRouteInfo?.Template == "api/sessions/shared");
+        Assert.Contains(inApp.EndpointMetadata, metadata => metadata is AuthorizeAttribute);
+        Assert.DoesNotContain(inApp.EndpointMetadata, metadata => metadata is AllowAnonymousAttribute);
+        Assert.Contains("GET", HttpMethodsOf(inApp));
+
+        Assert.Contains(Routes(), route => route.Template == "api/remote/sessions/shared" && route.Methods.Contains("GET"));
+    }
+
     [Fact]
     public void StateRoutes_ExistOnBothSurfaces_BecauseATokenCannotReachTheInAppOne()
     {

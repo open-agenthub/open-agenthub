@@ -85,6 +85,14 @@ builder.Services.AddSingleton<SessionShareStore>();
 builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
+// Every sharing surface (web, token API, MCP) goes through this one service, which holds the
+// licence check — see docs/session-sharing-api.md. FrontendOrigin is what share-link URLs are
+// built from, for the same reason SessionInfo.Url is (never the request host).
+builder.Services.AddSingleton<ISessionShareStore>(sp => sp.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<ISessionSharingService>(sp => new SessionSharingService(
+    sp.GetRequiredService<ISessionShareStore>(),
+    sp.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>(),
+    builder.Configuration["FrontendOrigin"]));
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
@@ -287,7 +295,9 @@ if (mcpOptions.IsConfigured)
     var mcpEncryptionCertificate = mcpKeys.GetEncryptionCertificateAsync().GetAwaiter().GetResult();
 
     builder.Services.AddAntiforgery();
-    builder.Services.AddMcpServer().WithHttpTransport().WithTools<AgentHubMcpTools>();
+    builder.Services.AddMcpServer().WithHttpTransport()
+        .WithTools<AgentHubMcpTools>()
+        .WithTools<SessionSharingMcpTools>();
 
     if (authEnabled)
     {

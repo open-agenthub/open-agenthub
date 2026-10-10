@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AgentHubClient } from './client.mjs';
+import { safeError, sharingErrorCode } from './errors.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
@@ -131,14 +132,67 @@ register('agent_send', {
   return text(await client.sendAgentMessage(targetId, message));
 });
 
-function safeError(error) {
-  const message = error instanceof Error ? error.message : '';
-  const stable = [
-    'agenthub_not_configured', 'agenthub_invalid_url',
-    'agenthub_response_too_large', 'agenthub_invalid_json'
-  ];
-  return stable.find(code => message.includes(code)) ??
-    (/agenthub_http_\d{3}/.exec(message)?.[0]) ?? 'agenthub_operation_failed';
-}
+// ------------------------------------------------------------------ sharing (enterprise)
+//
+// Same tool names and codes as the remote MCP server's SessionSharingMcpTools. Share answers are
+// not passed through sanitizeSession: they are grants and links, not session records, and the
+// allowlist there would strip every field of them. The in-pod server deliberately has none of
+// these — an agent must not widen who can see its own session (docs/session-sharing-api.md).
+
+const sharing = async fn => {
+  try { return await fn(); }
+  catch (error) {
+    const coded = new Error(sharingErrorCode(error));
+    coded.code = coded.message;
+    throw coded;
+  }
+};
+
+const roleSchema = z.enum(['Viewer', 'Collaborator']).optional().default('Viewer');
+
+register('session_share', {
+  description: 'Share one of your sessions with another user of this instance. Viewer (default) '
+    + 'can watch the terminal and read the transcript; Collaborator can also type. Sharing again '
+    + 'with a different role changes it. Fails with license_required on a Community instance and '
+    + 'unknown_recipient if that username has never signed in here.',
+  inputSchema: z.object({
+    sessionId: z.string().min(1).max(128),
+    recipient: z.string().min(1).max(256),
+    role: roleSchema
+  })
+}, ({ sessionId, recipient, role }) => sharing(async () => text(await client.shareWithUser(sessionId, recipient, role))));
+
+register('session_unshare', {
+  description: 'Revoke a user\'s access to one of your sessions. Links are revoked separately.',
+  inputSchema: z.object({
+    sessionId: z.string().min(1).max(128),
+    recipient: z.string().min(1).max(256)
+  })
+}, ({ sessionId, recipient }) => sharing(async () => text(await client.unshareUser(sessionId, recipient))));
+
+register('session_share_link', {
+  description: 'Create a secret link to one of your sessions. Anyone holding the link gets the '
+    + 'role, so treat the url as a secret — it is returned exactly once. Returns {url, linkId}.',
+  inputSchema: z.object({
+    sessionId: z.string().min(1).max(128),
+    role: roleSchema,
+    // ISO-8601; the backend reads it and rejects a time in the past.
+    expiresAt: z.string().max(64).optional()
+  })
+}, ({ sessionId, role, expiresAt }) => sharing(async () => {
+  const created = await client.createShareLink(sessionId, { role, expiresAt });
+  return text({
+    url: created?.url,
+    linkId: created?.link?.id,
+    role: created?.link?.role,
+    expiresAt: created?.link?.expiresAt ?? null
+  });
+}));
+
+register('session_shares', {
+  description: 'Who a session of yours is shared with: direct user grants and the links that '
+    + 'exist (ids and roles, never the link tokens).',
+  inputSchema: z.object({ sessionId: z.string().min(1).max(128) })
+}, ({ sessionId }) => sharing(async () => text(await client.listShares(sessionId))));
 
 await server.connect(new StdioServerTransport());
