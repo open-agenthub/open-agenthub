@@ -62,7 +62,7 @@ public class SessionTranscriptsTests
     {
         var svc = new TranscriptService { Entries = Conversation, Scrollback = "{\"type\":\"assistant\"} stream json" };
 
-        var remote = new RemoteController((_, _) => Task.FromResult<string?>("alice"), svc)
+        var remote = new RemoteController((_, _) => Task.FromResult<RemoteCaller?>(new("alice", null)), svc)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

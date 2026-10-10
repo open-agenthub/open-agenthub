@@ -99,7 +99,8 @@ public sealed class RemoteCredentialListingTests
 
     private static RemoteController Remote(string? owner, FakeSessions svc, string bearer)
     {
-        var controller = new RemoteController((_, _) => Task.FromResult(owner), svc)
+        var controller = new RemoteController(
+            (_, _) => Task.FromResult(owner is null ? null : new RemoteCaller(owner, null)), svc)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };

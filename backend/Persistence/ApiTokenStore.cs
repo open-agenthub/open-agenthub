@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using AgentHub.Api.Models;
 using Npgsql;
 
 namespace AgentHub.Api.Persistence;
@@ -13,6 +14,8 @@ public sealed class ApiTokenInfo
     public required string Prefix { get; init; }
     public DateTime CreatedAt { get; init; }
     public DateTime? LastUsedAt { get; init; }
+    /// <summary>Which credentials a session created with this token may use; null = any.</summary>
+    public ApiTokenScope? AllowedCredentials { get; init; }
 }
 
 /// <summary>
@@ -45,6 +48,7 @@ public sealed class ApiTokenStore
             );
             CREATE INDEX IF NOT EXISTS idx_api_tokens_owner ON api_tokens(owner);
             CREATE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens(token_hash);
+            ALTER TABLE api_tokens ADD COLUMN IF NOT EXISTS allowed_credentials TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -54,7 +58,8 @@ public sealed class ApiTokenStore
     public static string Hash(string token)
         => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(token))).ToLowerInvariant();
 
-    public async Task<ApiTokenInfo> CreateAsync(string owner, string name, string token, CancellationToken ct = default)
+    public async Task<ApiTokenInfo> CreateAsync(string owner, string name, string token, ApiTokenScope? scope = null,
+        CancellationToken ct = default)
     {
         var id = Guid.NewGuid().ToString("n");
         // Recognizable, non-secret prefix: "oah_" plus the first 8 chars of the random part.
@@ -62,8 +67,8 @@ public sealed class ApiTokenStore
         var createdAt = DateTime.UtcNow;
 
         const string sql = """
-            INSERT INTO api_tokens (id, owner, name, token_hash, token_prefix, created_at)
-            VALUES (@id, @owner, @name, @hash, @prefix, @created);
+            INSERT INTO api_tokens (id, owner, name, token_hash, token_prefix, created_at, allowed_credentials)
+            VALUES (@id, @owner, @name, @hash, @prefix, @created, @scope);
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("id", id);
@@ -72,16 +77,17 @@ public sealed class ApiTokenStore
         cmd.Parameters.AddWithValue("hash", Hash(token));
         cmd.Parameters.AddWithValue("prefix", prefix);
         cmd.Parameters.AddWithValue("created", createdAt);
+        cmd.Parameters.AddWithValue("scope", (object?)scope?.ToJson() ?? DBNull.Value);
         await cmd.ExecuteNonQueryAsync(ct);
 
-        return new ApiTokenInfo { Id = id, Name = name, Prefix = prefix, CreatedAt = createdAt, LastUsedAt = null };
+        return new ApiTokenInfo { Id = id, Name = name, Prefix = prefix, CreatedAt = createdAt, LastUsedAt = null, AllowedCredentials = scope };
     }
 
     public async Task<IReadOnlyList<ApiTokenInfo>> ListByOwnerAsync(string owner, CancellationToken ct = default)
     {
         var list = new List<ApiTokenInfo>();
         await using var cmd = _db.CreateCommand(
-            "SELECT id, name, token_prefix, created_at, last_used_at FROM api_tokens WHERE owner=@owner ORDER BY created_at DESC");
+            "SELECT id, name, token_prefix, created_at, last_used_at, allowed_credentials FROM api_tokens WHERE owner=@owner ORDER BY created_at DESC");
         cmd.Parameters.AddWithValue("owner", owner);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct))
@@ -91,9 +97,21 @@ public sealed class ApiTokenStore
                 Name = r.GetString(1),
                 Prefix = r.GetString(2),
                 CreatedAt = r.GetDateTime(3),
-                LastUsedAt = r.IsDBNull(4) ? null : r.GetDateTime(4)
+                LastUsedAt = r.IsDBNull(4) ? null : r.GetDateTime(4),
+                AllowedCredentials = ApiTokenScope.FromJson(r.IsDBNull(5) ? null : r.GetString(5))
             });
         return list;
+    }
+
+    /// <summary>Replaces the restriction of one of the owner's tokens; null lifts it. False when
+    /// the token is not theirs.</summary>
+    public async Task<bool> UpdateScopeAsync(string owner, string id, ApiTokenScope? scope, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE api_tokens SET allowed_credentials=@scope WHERE id=@id AND owner=@owner");
+        cmd.Parameters.AddWithValue("scope", (object?)scope?.ToJson() ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("owner", owner);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 
     public async Task<bool> DeleteAsync(string owner, string id, CancellationToken ct = default)
@@ -105,18 +123,23 @@ public sealed class ApiTokenStore
     }
 
     /// <summary>
-    /// Resolves a plaintext token to its owner (or null if unknown) and stamps last_used_at.
+    /// Resolves a plaintext token to its owner and scope (or null if unknown) and stamps last_used_at.
     /// </summary>
-    public async Task<string?> FindOwnerByTokenAsync(string token, CancellationToken ct = default)
+    public async Task<RemoteCaller?> FindCallerByTokenAsync(string token, CancellationToken ct = default)
     {
         const string sql = """
             UPDATE api_tokens SET last_used_at = now()
             WHERE token_hash = @hash
-            RETURNING owner;
+            RETURNING owner, allowed_credentials;
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("hash", Hash(token));
-        var v = await cmd.ExecuteScalarAsync(ct);
-        return v as string;
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        if (!await r.ReadAsync(ct)) return null;
+        return new RemoteCaller(r.GetString(0), ApiTokenScope.FromJson(r.IsDBNull(1) ? null : r.GetString(1)));
     }
+
+    /// <summary>Resolves a plaintext token to its owner (or null if unknown) and stamps last_used_at.</summary>
+    public async Task<string?> FindOwnerByTokenAsync(string token, CancellationToken ct = default)
+        => (await FindCallerByTokenAsync(token, ct))?.Owner;
 }

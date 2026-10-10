@@ -53,7 +53,8 @@ public class ApiRouteTableTests
     /// MCP server and the token settings page call exactly these.</summary>
     public static TheoryData<string, string> CredentialScopeRoutes => new()
     {
-        { "GET", "api/remote/credentials" }
+        { "GET", "api/remote/credentials" },
+        { "PATCH", "api/tokens/{id}" }
     };
 
     [Theory]

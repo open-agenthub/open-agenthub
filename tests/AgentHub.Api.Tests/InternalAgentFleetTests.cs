@@ -405,7 +405,7 @@ public class InternalAgentFleetTests
     private static RemoteController RemoteControllerFor(FleetWorld world, string token)
     {
         var controller = new RemoteController(
-            (t, _) => Task.FromResult<string?>(t == "oah_valid" ? Owner : null),
+            (t, _) => Task.FromResult(t == "oah_valid" ? new RemoteCaller(Owner, null) : null),
             world.Service, world.Messages)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

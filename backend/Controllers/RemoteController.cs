@@ -19,7 +19,7 @@ namespace AgentHub.Api.Controllers;
 [Route("api/remote")]
 public sealed class RemoteController : ControllerBase
 {
-    private readonly Func<string, CancellationToken, Task<string?>> _findOwner;
+    private readonly Func<string, CancellationToken, Task<RemoteCaller?>> _findCaller;
     private readonly ISessionService _svc;
     private readonly ISessionMessageStore? _messages;
 
@@ -32,19 +32,19 @@ public sealed class RemoteController : ControllerBase
     /// </remarks>
     [ActivatorUtilitiesConstructor]
     public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null)
-        : this(tokens.FindOwnerByTokenAsync, svc, messages) { }
+        : this(tokens.FindCallerByTokenAsync, svc, messages) { }
 
-    /// <summary>Test seam: resolve owner from a plaintext token without Postgres.</summary>
-    public RemoteController(Func<string, CancellationToken, Task<string?>> findOwnerByToken, ISessionService svc,
+    /// <summary>Test seam: resolve the caller (owner and scope) from a plaintext token without Postgres.</summary>
+    public RemoteController(Func<string, CancellationToken, Task<RemoteCaller?>> findCallerByToken, ISessionService svc,
         ISessionMessageStore? messages = null)
     {
-        _findOwner = findOwnerByToken;
+        _findCaller = findCallerByToken;
         _svc = svc;
         _messages = messages;
     }
 
-    /// <summary>Resolves the bearer token to its owner, or null if missing/invalid.</summary>
-    private async Task<string?> ResolveOwnerAsync(CancellationToken ct)
+    /// <summary>Resolves the bearer token to its owner and scope, or null if missing/invalid.</summary>
+    private async Task<RemoteCaller?> ResolveCallerAsync(CancellationToken ct)
     {
         var header = Request.Headers.Authorization.ToString();
         const string scheme = "Bearer ";
@@ -53,15 +53,31 @@ public sealed class RemoteController : ControllerBase
         var token = header[scheme.Length..].Trim();
         if (string.IsNullOrEmpty(token) || !token.StartsWith("oah_", StringComparison.Ordinal)) return null;
 
-        return await _findOwner(token, ct);
+        return await _findCaller(token, ct);
     }
+
+    /// <summary>The owner alone, for the endpoints that act on existing sessions. Only session
+    /// creation and the credential listing consult the scope: a session belongs to its owner,
+    /// not to the token that created it (docs/credential-scopes.md).</summary>
+    private async Task<string?> ResolveOwnerAsync(CancellationToken ct) => (await ResolveCallerAsync(ct))?.Owner;
 
     [HttpPost("sessions")]
     public async Task<ActionResult<SessionInfo>> Create([FromBody] CreateSessionRequest req, CancellationToken ct)
     {
-        var owner = await ResolveOwnerAsync(ct);
-        if (owner is null) return Unauthorized();
-        try { return Ok(await _svc.CreateSessionAsync(owner, req, ct)); }
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        try
+        {
+            if (caller.Scope is { } scope)
+            {
+                // Narrowed before the service sees it; the service still validates the ids.
+                req = CredentialScope.ApplyToCreate(req, scope,
+                    await _svc.ListProviderAccountsAsync(caller.Owner, ct),
+                    (await _svc.GetCredentialStatusAsync(caller.Owner, ct)).GitPats);
+            }
+            return Ok(await _svc.CreateSessionAsync(caller.Owner, req, ct));
+        }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (AgentNotAllowedException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Message); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
@@ -116,11 +132,12 @@ public sealed class RemoteController : ControllerBase
     [HttpGet("credentials")]
     public async Task<ActionResult<RemoteCredentialListing>> Credentials(CancellationToken ct)
     {
-        var owner = await ResolveOwnerAsync(ct);
-        if (owner is null) return Unauthorized();
-        return Ok(RemoteCredentialListing.From(
-            await _svc.ListProviderAccountsAsync(owner, ct),
-            await _svc.GetCredentialStatusAsync(owner, ct)));
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        var listing = RemoteCredentialListing.From(
+            await _svc.ListProviderAccountsAsync(caller.Owner, ct),
+            await _svc.GetCredentialStatusAsync(caller.Owner, ct));
+        return Ok(CredentialScope.FilterListing(listing, caller.Scope));
     }
 
     /// <summary>
