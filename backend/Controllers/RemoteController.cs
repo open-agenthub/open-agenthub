@@ -91,6 +91,21 @@ public sealed class RemoteController : ControllerBase
         return Ok(TranscriptPage.From(session.Id, session.Phase, transcript, offset, maxChars));
     }
 
+    /// <summary>
+    /// Changes the title, description or self-deletion deadline of a session
+    /// (docs/session-expiry.md). Only those fields: everything else on the in-app PATCH is
+    /// runtime configuration a token should not be able to rewrite.
+    /// </summary>
+    [HttpPatch("sessions/{id}")]
+    public async Task<ActionResult<SessionInfo>> Update(string id, [FromBody] RemoteUpdateSessionRequest req, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        try { return Ok(await _svc.UpdateSessionAsync(owner, id, req.ToUpdate(), ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
     [HttpGet("sessions")]
     public async Task<ActionResult<IReadOnlyList<SessionInfo>>> List(CancellationToken ct)
     {
@@ -126,6 +141,8 @@ public sealed class RemoteController : ControllerBase
             Body = text
         };
         await _messages.AddAsync(message, ct);
+        // A task handed to the session is the owner using it (docs/session-expiry.md).
+        await _svc.TouchActivityAsync(owner, target.Id, ct);
         return Ok(new { id = message.Id, to = target.Id });
     }
 

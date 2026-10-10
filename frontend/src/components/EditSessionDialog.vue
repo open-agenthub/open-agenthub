@@ -5,14 +5,17 @@ import {
   accountsFor, agentPayload, buildEphemeralApiSources, defaultAccountId, defaultAgentForm, ephemeralNameFromUrl,
   filterAgentOptions, mcpBadgeLabel, policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
+import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'updated'])
 
 const f = ref({})
+const autoDelete = ref(autoDeleteForm(null))
 const repos = ref([])
 const advOpen = ref(false)
 const busy = ref(false)
@@ -46,6 +49,7 @@ function reset(session) {
     ...defaultAgentForm(session),
     credentialId: session.credentialId || ''
   }
+  autoDelete.value = autoDeleteForm(session)
   repos.value = (session.repos || []).map(repo => ({ ...repo }))
   selectedMcpIds.value = [...(session.mcpServerIds || [])]
   ephemeralUrl.value = ''
@@ -97,12 +101,15 @@ async function save() {
       name: ephemeralName.value,
       saveToLibrary: ephemeralSaveToLibrary.value
     })
+    // Off has to be said as 0: null would mean "leave the stored deadline alone".
+    const expiry = autoDeletePayload(autoDelete.value, { off: 0 })
     const payload = scheduled.value
-      // Auto approve is not part of the pod spec, so it is safe to change even for a
-      // scheduled session (everything else there is fixed by the CronJob spec).
-      // The description ("" clears it) is plain metadata and applies immediately too.
-      ? { title: f.value.title, description: f.value.description, projectId: f.value.projectId || null, autoApprove: f.value.autoApprove }
+      // Auto approve and the auto-delete deadline are not part of the pod spec, so they are
+      // safe to change even for a scheduled session (everything else there is fixed by the
+      // CronJob spec). The description ("" clears it) is plain metadata and applies immediately too.
+      ? { title: f.value.title, description: f.value.description, projectId: f.value.projectId || null, autoApprove: f.value.autoApprove, ...expiry }
       : {
+          ...expiry,
           title: f.value.title,
           description: f.value.description,  // "" clears it
           systemPrompt: f.value.systemPrompt, // "" clears it; a scheduled session never sends it
@@ -135,7 +142,7 @@ async function save() {
     <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3 class="form-title">Edit session</h3>
       <p class="note" v-if="scheduled">Scheduled sessions run from a fixed CronJob spec — delete and recreate the session to change its agent, billing, policy, or runtime settings.</p>
-      <p class="note" v-else>The title and auto approve apply immediately. Image, root mode, resources and the system prompt take effect the next time the session is resumed.</p>
+      <p class="note" v-else>The title, auto approve and auto-delete apply immediately. Image, root mode, resources and the system prompt take effect the next time the session is resumed.</p>
 
       <div class="card sect">
         <div class="field">
@@ -163,6 +170,7 @@ async function save() {
           </p>
         </div>
       </div>
+      <AutoDeleteCard v-model="autoDelete" :scheduled="scheduled" :expires-at="session.expiresAt || null" />
       <template v-if="!scheduled">
         <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode"
           v-model:open-claw-api-key-source="f.openClawApiKeySource" v-model:credential-id="f.credentialId"

@@ -67,6 +67,14 @@ public sealed class AgentHubMcpTools(
                      + "filesystem, so only turn it on for a task that genuinely needs tooling the "
                      + "image does not ship. The pod stays unprivileged either way.")]
         string? runAsRoot = null,
+        [Description("Delete the session on its own after this long, written with a unit: \"90m\", "
+                     + "\"12h\", \"3d\" (5 minutes to 365 days). Omit to keep the session until "
+                     + "somebody deletes it. The response's expiresAt says when it will go.")]
+        string? autoDeleteAfter = null,
+        [Description("What autoDeleteAfter counts from: \"lastActivity\" (default — anyone "
+                     + "attaching, typing or messaging restarts the countdown) or \"start\". A "
+                     + "Scheduled session only accepts \"start\".")]
+        string? autoDeleteFrom = null,
         CancellationToken ct = default)
     {
         var request = new CreateSessionRequest
@@ -86,7 +94,9 @@ public sealed class AgentHubMcpTools(
             ParentSessionId = parentSessionId,
             Schedule = schedule,
             AutoApprove = ParseFlag(autoApprove),
-            RunAsRoot = ParseFlag(runAsRoot) ?? false
+            RunAsRoot = ParseFlag(runAsRoot) ?? false,
+            AutoDeleteAfterSeconds = ParseAutoDeleteAfter(autoDeleteAfter),
+            AutoDeleteFrom = autoDeleteFrom
         };
         if (ParseRepos(repos) is { Count: > 0 } parsedRepos) request = request with { Repos = parsedRepos };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
@@ -261,6 +271,19 @@ public sealed class AgentHubMcpTools(
 
     private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback) where TEnum : struct, Enum
         => Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed) ? parsed : fallback;
+
+    /// <summary>
+    /// A duration with a unit rather than a number of seconds: the caller is a language model,
+    /// and "12h" is what it writes. Reported rather than ignored when unreadable, because a
+    /// session silently created without the deadline it asked for is a session that is never
+    /// cleaned up (docs/session-expiry.md).
+    /// </summary>
+    private static int? ParseAutoDeleteAfter(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        try { return SessionExpiry.ParseDuration(text); }
+        catch (ArgumentException e) { throw new McpException(e.Message); }
+    }
 
     /// <summary>
     /// Reads the repository list, which arrives as JSON text for the same reason the boolean flags

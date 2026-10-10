@@ -122,6 +122,14 @@ terminal output; sessions without one fall back to the cleaned terminal scrollba
 (it has `node` and `npm`, but no `dotnet`, `docker` or `trivy`). It is off by default because a
 root session gives up the read-only root filesystem; the pod stays unprivileged either way.
 
+`session_create` also takes `autoDeleteAfter` (`"90m"`, `"12h"`, `"3d"`; 5 minutes to 365 days)
+and `autoDeleteFrom` (`lastActivity`, the default, or `start`), after which the session deletes
+itself; `session_get` and `session_list` report the resulting `expiresAt`. The duration is text
+with a unit rather than a number of seconds on purpose: a wrong unit is a session gone twelve
+minutes instead of twelve hours later, and an unreadable value is an error rather than a session
+silently created without its deadline. The in-session `agenthub_sessions` server offers the same
+two parameters on its `session_create`. See `docs/session-expiry.md`.
+
 Every call runs as the user who approved the client, and the session service enforces that
 user's ownership exactly as it does for the REST API.
 

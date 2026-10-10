@@ -282,6 +282,22 @@ Two decisions inside it are worth keeping in mind:
 `running` is reported alongside the text rather than left to the caller to infer from the phase
 string, so a poller cannot loop forever on a phase name it does not recognise.
 
+## Sessions that clean up after themselves
+
+A caller that creates sessions by the dozen never comes back to delete them, so a create request
+can carry a deadline: `autoDeleteAfterSeconds` (300 to 31 536 000) and `autoDeleteFrom` (`start`,
+or `lastActivity`, the default). `SessionInfo` reports both plus the computed `expiresAt` and
+`lastActivityAt`. The deadline can be changed or switched off later with
+`PATCH /api/remote/sessions/{id}` — `{ "autoDeleteAfterSeconds": 0 }` switches it off, `null` leaves
+it alone — which takes only `title`, `description` and the two deadline fields: a token is for
+driving sessions, and letting it rewrite the image, root mode or repositories of one would widen
+what a leaked token can do far beyond what the feature needed.
+
+The MCP tools take the deadline as text with a unit (`autoDeleteAfter: "12h"`), because a model
+writes that and a wrong unit conversion is a session deleted twelve *minutes* later. What counts as
+activity, why `updated_at` could not be used, and how the sweep is made safe across replicas is in
+`docs/session-expiry.md`.
+
 ## How these claims were verified
 
 Against the pinned CLI versions, not from memory: Claude Code 2.1.283, Codex 0.157.1, Cursor Agent

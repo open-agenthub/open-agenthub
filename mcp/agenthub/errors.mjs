@@ -4,7 +4,9 @@
  */
 const STABLE = [
   'agenthub_not_configured', 'agenthub_invalid_url',
-  'agenthub_response_too_large', 'agenthub_invalid_json'
+  'agenthub_response_too_large', 'agenthub_invalid_json',
+  // expiry.mjs throws this before any HTTP call when autoDeleteAfter has no unit or is out of range.
+  'autodelete_invalid_duration'
 ];
 
 // A code the backend named in its error body (client.mjs attaches it as error.code). Only the

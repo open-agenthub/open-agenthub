@@ -5,8 +5,10 @@ import {
   agentPayload, buildEphemeralApiSources, defaultAgentForm, defaultPolicy, ephemeralNameFromUrl,
   filterAgentOptions, mcpBadgeLabel, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
+import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
 
 const emit = defineEmits(['close', 'created'])
@@ -51,11 +53,15 @@ const form = ref({
   cpu: '500m',
   memory: '1Gi'
 })
+const autoDelete = ref(autoDeleteForm(null))
 const busy = ref(false)
 const error = ref('')
 
 const needsPrompt = computed(() => form.value.mode !== 'Interactive')
 const needsSchedule = computed(() => form.value.mode === 'Scheduled')
+// A scheduled session can only count from its start; the card disables the other basis, and
+// the value follows so the backend is never sent a combination it refuses.
+watch(needsSchedule, scheduled => { if (scheduled) autoDelete.value = { ...autoDelete.value, from: 'start' } })
 const modeHint = computed(() => MODES.find(m => m.key === form.value.mode)?.hint)
 // Chat runs Claude in stream-json mode; other agents and automation stay terminal.
 const canChooseUi = computed(() => form.value.mode === 'Interactive' && form.value.agent === 'Claude')
@@ -125,7 +131,8 @@ async function submit() {
       runAsRoot: form.value.runAsRoot,
       autoApprove: form.value.autoApprove,
       cpu: form.value.cpu,
-      memory: form.value.memory
+      memory: form.value.memory,
+      ...autoDeletePayload(autoDelete.value)
     })
     emit('created', session)
   } catch (e) {
@@ -189,6 +196,8 @@ async function submit() {
         <label>Repositories <span class="dim">— optional, pick one or more</span></label>
         <RepoPicker v-model="repos" />
       </div>
+
+      <AutoDeleteCard v-model="autoDelete" :scheduled="needsSchedule" />
 
       <div class="card adv">
         <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">

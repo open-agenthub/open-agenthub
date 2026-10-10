@@ -219,6 +219,11 @@ builder.Services.AddHostedService<AgentHub.Api.Chat.Signal.SignalReceiveService>
 // Safety net: expires pending permission prompts whose hook never called /expire.
 builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepService>();
 
+// Sessions with a self-deletion deadline (docs/session-expiry.md). The lock keeps two replicas
+// from deleting the same session at once.
+builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
+builder.Services.AddHostedService<SessionExpirySweepService>();
+
 // Runtime network port requests: agents ask for extra ports (agenthub_network MCP),
 // the owner approves via the permission channel, approved ports become NetworkPolicies.
 builder.Services.AddSingleton<AgentHub.Api.Network.IPortGrantStore, AgentHub.Api.Network.PortGrantStore>();
@@ -661,7 +666,10 @@ async Task ProxyResolvedWs(HttpContext ctx, SessionAccessResult resolved, ISessi
     if (live is null) { ctx.Response.StatusCode = 404; return; }
     if (resolved.Level == SessionAccessLevel.Owner)
         try { await sessions.ClearQuestionAsync(resolved.Session.Owner, resolved.Session.Id, ctx.RequestAborted); } catch { }
-    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level), lf, agentPort);
+    // Anyone allowed to type — owner or collaborator — keeps the idle countdown from running
+    // out; the proxy ignores the callback for a read-only viewer.
+    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level), lf, agentPort,
+        onActivity: ct => sessions.TouchActivityAsync(resolved.Session.Owner, resolved.Session.Id, ct));
 }
 
 async Task ProxySharedWs(HttpContext ctx, string id, ISessionAccessService access, ISessionService sessions, ILoggerFactory lf)

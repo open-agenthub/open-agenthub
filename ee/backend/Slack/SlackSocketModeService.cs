@@ -151,6 +151,7 @@ public sealed class SlackSocketModeService : BackgroundService
         }
 
         await AgentTerminal.SendInputAsync(podIp, _agentPort, textReply, ct);
+        await _sessions.TouchActivityAsync(thread.Owner, thread.SessionId, ct);
         _log.LogInformation("Delivered Slack reply to session {Id}", thread.SessionId);
 
         // A previous status message may still be up (second reply while working) — remove it first.

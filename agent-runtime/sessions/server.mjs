@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { SessionsBackendClient } from './client.mjs';
+import { withExpiry } from './expiry.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
@@ -40,7 +41,10 @@ const createSchema = z.object({
   image: z.string().max(512).optional(),
   runAsRoot: z.boolean().optional(),
   cpu: z.string().max(32).optional(),
-  memory: z.string().max(32).optional()
+  memory: z.string().max(32).optional(),
+  // Text with a unit, converted to seconds before the HTTP call — see expiry.mjs for why.
+  autoDeleteAfter: z.string().max(16).optional(),
+  autoDeleteFrom: z.enum(['start', 'lastActivity']).optional()
 });
 
 register('session_create', {
@@ -50,9 +54,11 @@ register('session_create', {
     + 'itself to report back. Default mode is Interactive: a person can watch and answer it, and '
     + 'tool requests outside its allow list wait for their approval. Use Autonomous only for '
     + 'unattended work, where such requests are approved automatically. hasMcp in the result counts '
-    + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled.',
+    + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled. '
+    + 'autoDeleteAfter ("90m", "12h", "3d") makes the child delete itself after that long since '
+    + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start.',
   inputSchema: createSchema
-}, async (body) => text(sanitizeSession(await client.create(body))));
+}, async (body) => text(sanitizeSession(await client.create(withExpiry(body)))));
 
 register('session_get', {
   description: 'Get a descendant session by id.',
@@ -120,7 +126,7 @@ function safeError(error) {
   const message = error instanceof Error ? error.message : '';
   const stable = [
     'sessions_backend_not_configured', 'sessions_backend_invalid_url',
-    'sessions_backend_response_too_large', 'sessions_backend_invalid_json'
+    'sessions_backend_response_too_large', 'sessions_backend_invalid_json', 'autodelete_invalid_duration'
   ];
   return stable.find(code => message.includes(code)) ??
     (/sessions_backend_http_\d{3}/.exec(message)?.[0]) ?? 'sessions_operation_failed';

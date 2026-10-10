@@ -34,7 +34,9 @@ public class ApiRouteTableTests
         { "POST", "api/remote/sessions/{id}/resume" },
         { "GET", "api/remote/sessions/{id}/state" },
         { "PUT", "api/remote/sessions/{id}/state" },
-        { "DELETE", "api/remote/sessions/{id}" }
+        { "DELETE", "api/remote/sessions/{id}" },
+        // The stdio MCP server and docs/session-expiry.md name this one for changing a deadline.
+        { "PATCH", "api/remote/sessions/{id}" }
     };
 
     [Theory]

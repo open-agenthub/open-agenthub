@@ -41,3 +41,13 @@ test('agenthub MCP exposes transcript polling and the caller system prompt', () 
   assert.match(server, /offset: z\.number\(\)\.int\(\)\.min\(0\)\.optional\(\)/);
   assert.match(server, /systemPrompt: z\.string\(\)\.max\(20_000\)\.optional\(\)/);
 });
+
+test('agenthub MCP takes the self-deletion deadline as text and converts it before the HTTP call', () => {
+  const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
+  assert.match(server, /autoDeleteAfter: z\.string\(\)\.max\(16\)\.optional\(\)/);
+  assert.match(server, /autoDeleteFrom: z\.enum\(\['start', 'lastActivity'\]\)\.optional\(\)/);
+  assert.match(server, /client\.create\(withExpiry\(body\)\)/);
+  // The parser's error is a stable code, not the generic operation_failed.
+  const errors = fs.readFileSync(path.join(root, 'errors.mjs'), 'utf8');
+  assert.match(errors, /'autodelete_invalid_duration'/);
+});

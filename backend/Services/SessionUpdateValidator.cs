@@ -15,6 +15,12 @@ public static class SessionUpdateValidator
         AgentConfiguration.ValidateForUpdate(
             record.Agent, record.AuthMode, request.Agent, request.AuthMode,
             record.OpenClawApiKeySource, request.OpenClawApiKeySource);
+
+        // Not a runtime field — the pod knows nothing about it — but it has a rule of its own: a
+        // scheduled session can only count from its start. Checked here, before anything is
+        // mutated, like the rest.
+        if (request.AutoDeleteAfterSeconds is not null || request.AutoDeleteFrom is not null)
+            SessionExpiry.ForUpdate(record, request.AutoDeleteAfterSeconds, request.AutoDeleteFrom);
     }
 
     // The system prompt counts as a runtime field because a CronJob bakes it into its pod

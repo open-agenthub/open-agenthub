@@ -5,12 +5,16 @@ import {
   agentPayload, defaultAgentForm, filterAgentOptions, mcpBadgeLabel,
   policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
+import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'duplicated'])
 const title = ref('')
+const autoDelete = ref(autoDeleteForm(null))
+const scheduled = computed(() => props.session.mode === 'Scheduled')
 const projectId = ref('')
 const systemPrompt = ref('')
 const includeMcp = ref(true)
@@ -31,6 +35,7 @@ function reset(session) {
   systemPrompt.value = session.systemPrompt || ''
   includeMcp.value = true
   agentForm.value = { ...defaultAgentForm(session), credentialId: session.credentialId || '' }
+  autoDelete.value = autoDeleteForm(session)
   selectedMcpIds.value = [...(session.mcpServerIds || [])]
   advOpen.value = false
   busy.value = false
@@ -60,7 +65,10 @@ async function submit() {
       ...agentPayload(agentForm.value),
       // Null lets the backend carry the source's account over (while the agent stays the same).
       credentialId: agentForm.value.credentialId || null,
-      policy: policyPayload(agentForm.value)
+      policy: policyPayload(agentForm.value),
+      // Always sent, prefilled from the source: 0 means a copy without a deadline, so a setting
+      // cleared in the dialog is dropped rather than copied back in (null would copy it).
+      ...autoDeletePayload(autoDelete.value, { off: 0 })
     }))
   }
   catch (e) { error.value = String(e.message || e) } finally { busy.value = false }
@@ -87,6 +95,7 @@ async function submit() {
       v-model:open-claw-api-key-source="agentForm.openClawApiKeySource" v-model:credential-id="agentForm.credentialId"
       :accounts="providerAccounts" :mode="session.mode"
       :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
+    <AutoDeleteCard v-model="autoDelete" :scheduled="scheduled" />
     <div v-if="automated" class="card adv">
       <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">
         <span><b>Advanced</b><span class="adv-sub">automation policy</span></span><span>{{ advOpen ? '▾' : '▸' }}</span>

@@ -4,6 +4,7 @@ import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { repoShortName, sessionMatches } from '../lib/text.js'
 import { authLabel } from '../lib/agent.js'
+import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 
 const props = defineProps({
   sessions: { type: Array, default: () => [] },
@@ -76,7 +77,7 @@ function repoLine(s) {
           <div class="row-main">
             <div class="row-title">{{ s.title }}</div>
             <div v-if="s.description" class="row-desc" data-session-description>{{ s.description }}</div>
-            <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span></div>
+            <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at>{{ repoLine(s) || s.sharedBy ? ' · ' : '' }}⌛ expires in {{ formatRemaining(s.expiresAt) }}</span></div>
           </div>
           <div v-if="sessionCapabilities(s).canManage" class="row-actions">
             <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)">⧉</button>
@@ -121,6 +122,8 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .row-desc { font-size: 12px; color: var(--muted-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row-repo { font-family: var(--mono); font-size: 12px; color: var(--muted-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .shared-by { color: var(--accent); }
+.expires { color: var(--muted); }
+.expires.soon { color: var(--warn); font-weight: 700; }
 .row-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .act { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 13px; border-radius: 8px; border: none; background: none; color: var(--muted); padding: 0; }
 .act:hover { background: var(--panel-2); color: var(--text); }

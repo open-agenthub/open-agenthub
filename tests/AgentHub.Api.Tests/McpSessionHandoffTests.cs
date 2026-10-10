@@ -33,6 +33,35 @@ public class McpSessionHandoffTests
     }
 
     [Fact]
+    public async Task SessionCreate_ReadsTheDeadlineAsADurationWithAUnit()
+    {
+        // A model writes "12h"; the REST field is seconds. The tool converts, so a wrong unit
+        // cannot turn twelve hours into twelve minutes on the way.
+        var svc = new FakeSessions();
+        var tools = Tools(svc);
+
+        await tools.CreateSession(title: "cleanup", autoDeleteAfter: "12h", autoDeleteFrom: "start");
+
+        Assert.Equal(43_200, svc.LastRequest!.AutoDeleteAfterSeconds);
+        Assert.Equal("start", svc.LastRequest.AutoDeleteFrom);
+
+        await tools.CreateSession(title: "kept");
+        Assert.Null(svc.LastRequest!.AutoDeleteAfterSeconds);
+    }
+
+    [Fact]
+    public async Task SessionCreate_RefusesADeadlineItCannotRead_BeforeCreatingAnything()
+    {
+        var svc = new FakeSessions();
+        var tools = Tools(svc);
+
+        var error = await Assert.ThrowsAsync<McpException>(() => tools.CreateSession(title: "x", autoDeleteAfter: "12"));
+
+        Assert.Contains("90m, 12h, 3d", error.Message);
+        Assert.Null(svc.LastRequest);
+    }
+
+    [Fact]
     public async Task SessionTranscript_PagesFromTheCursorAndReportsWhenToStop()
     {
         var svc = new FakeSessions

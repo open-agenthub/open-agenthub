@@ -2,6 +2,7 @@ using System.Security.Claims;
 using AgentHub.Api.Agents;
 using AgentHub.Api.Controllers;
 using AgentHub.Api.Models;
+using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -293,14 +294,105 @@ public class RemoteControllerTests
         Assert.Equal(0, svc.TranscriptCalls);
     }
 
+    [Fact]
+    public async Task SendMessage_StoresTheMessage_AndCountsAsActivityOnTheTarget()
+    {
+        // A task handed to a session is the owner using it; without the touch an idle-based
+        // deadline would delete a session that was just given work.
+        var svc = new RecordingSessionService
+        {
+            Session = new SessionInfo { Id = "session-1", Title = "t", Owner = "alice", Mode = SessionMode.Interactive, Phase = "Running" }
+        };
+        var messages = new RecordingMessageStore();
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken, messages);
+
+        var result = await controller.SendMessage("session-1", new RemoteAgentMessageRequest("do the thing"), CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Single(messages.Added);
+        Assert.Equal([("alice", "session-1")], svc.TouchCalls);
+    }
+
+    [Fact]
+    public async Task SendMessage_ToAnUnknownSession_NeitherStoresNorTouches()
+    {
+        var svc = new RecordingSessionService { Session = null };
+        var messages = new RecordingMessageStore();
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken, messages);
+
+        var result = await controller.SendMessage("session-1", new RemoteAgentMessageRequest("do the thing"), CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(messages.Added);
+        Assert.Empty(svc.TouchCalls);
+    }
+
+    [Fact]
+    public async Task Update_PassesOnlyTheRemoteFieldsToTheService()
+    {
+        var svc = new RecordingSessionService();
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken);
+
+        var result = await controller.Update("session-1",
+            new RemoteUpdateSessionRequest { AutoDeleteAfterSeconds = 7200, AutoDeleteFrom = "start", Title = "renamed" },
+            CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        var (owner, id, request) = Assert.Single(svc.UpdateCalls);
+        Assert.Equal(("alice", "session-1"), (owner, id));
+        Assert.Equal(7200, request.AutoDeleteAfterSeconds);
+        Assert.Equal("start", request.AutoDeleteFrom);
+        Assert.Equal("renamed", request.Title);
+        // Nothing a token should not be able to touch rides along.
+        Assert.Null(request.Image);
+        Assert.Null(request.RunAsRoot);
+        Assert.Null(request.Repos);
+    }
+
+    [Fact]
+    public async Task Update_MapsTheServiceOutcomesToStatusCodes()
+    {
+        var owner = (string _, CancellationToken _) => Task.FromResult<string?>("alice");
+        var body = new RemoteUpdateSessionRequest { AutoDeleteAfterSeconds = 60 };
+
+        Assert.IsType<NotFoundResult>((await Remote(owner,
+            new RecordingSessionService { UpdateException = new KeyNotFoundException() }, ValidToken)
+            .Update("session-1", body, CancellationToken.None)).Result);
+        var badRequest = Assert.IsType<BadRequestObjectResult>((await Remote(owner,
+            new RecordingSessionService { UpdateException = new ArgumentException("too short") }, ValidToken)
+            .Update("session-1", body, CancellationToken.None)).Result);
+        Assert.Equal("too short", badRequest.Value);
+
+        var svc = new RecordingSessionService();
+        Assert.IsType<UnauthorizedResult>((await Remote((_, _) => Task.FromResult<string?>(null), svc, "oah_unknown")
+            .Update("session-1", body, CancellationToken.None)).Result);
+        Assert.Empty(svc.UpdateCalls);
+    }
+
     // ------------------------------------------------------------------ fixtures
+
+    private sealed class RecordingMessageStore : ISessionMessageStore
+    {
+        public List<SessionMessageRecord> Added { get; } = [];
+        public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task AddAsync(SessionMessageRecord message, CancellationToken ct = default)
+        {
+            Added.Add(message);
+            return Task.CompletedTask;
+        }
+        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
+        public Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
+    }
 
     private static RemoteController Remote(
         Func<string, CancellationToken, Task<string?>> findOwner,
         RecordingSessionService svc,
-        string? bearerToken)
+        string? bearerToken,
+        ISessionMessageStore? messages = null)
     {
-        var controller = new RemoteController(findOwner, svc)
+        var controller = new RemoteController(findOwner, svc, messages)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
@@ -398,14 +490,27 @@ public class RemoteControllerTests
         {
             Id = id, Title = "t", Owner = owner, Mode = SessionMode.Interactive, Phase = phase
         };
-        public Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Exception? UpdateException { get; init; }
+        public List<(string Owner, string Id, UpdateSessionRequest Request)> UpdateCalls { get; } = [];
+        public Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default)
+        {
+            UpdateCalls.Add((owner, id, req));
+            if (UpdateException is not null) throw UpdateException;
+            return Task.FromResult(Info(owner, id, SessionStatus.Running));
+        }
         public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default) =>
             Task.FromResult(Session);
         public Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public List<(string Owner, string Id)> TouchCalls { get; } = [];
+        public Task TouchActivityAsync(string owner, string id, CancellationToken ct = default)
+        {
+            TouchCalls.Add((owner, id));
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Mirrors production: the real service returns null for a session the owner cannot see, so
