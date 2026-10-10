@@ -24,10 +24,15 @@ function prepare(env) {
     env.AGENTHUB_STATE_RESTORED = fs.existsSync('/tmp/.state-restored') ? '1' : '0';
   }
 
+  // Scoped to the agent child in every mode. This used to skip interactive sessions on the
+  // assumption that those are always subscription logins, which an autonomous run converted to
+  // interactive (docs/session-mode-conversion.md) breaks. The shipped entrypoint consumes the
+  // key with `codex login --with-api-key` before this runs, so when the key is still here it is
+  // the only credential the session has — dropping it leaves the TUI on a login screen nobody
+  // can complete.
   const apiKey = env.CODEX_API_KEY;
   delete env.CODEX_API_KEY;
-  const mode = (env.AGENTHUB_MODE || 'interactive').toLowerCase();
-  if (apiKey && mode !== 'interactive') return { childEnv: { CODEX_API_KEY: apiKey } };
+  if (apiKey) return { childEnv: { CODEX_API_KEY: apiKey } };
   return undefined;
 }
 

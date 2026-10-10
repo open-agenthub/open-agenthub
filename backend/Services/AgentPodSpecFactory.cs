@@ -81,6 +81,17 @@ public static class AgentPodSpecFactory
         return new OpenClawApiKeyEnvBinding(envName, secretKey);
     }
 
+    /// <summary>
+    /// Whether the session's start has to look up a stored API key. Every ApiKey session needs
+    /// one, whatever its mode; an Auto session only bills the API when it runs unattended without
+    /// a subscription login. The mode used to gate both, on the assumption that an interactive
+    /// session is always a subscription login — untrue once an autonomous run can be converted
+    /// to interactive (docs/session-mode-conversion.md).
+    /// </summary>
+    public static bool ResolvesApiKey(SessionMode mode, AgentAuthMode authMode) =>
+        authMode == AgentAuthMode.ApiKey
+        || (mode is SessionMode.Autonomous or SessionMode.Scheduled && authMode == AgentAuthMode.Auto);
+
     public static string? MissingCredentialDiagnostic(SessionRecord record, PodBuildContext context)
     {
         if (record.Mode == SessionMode.Interactive) return null;

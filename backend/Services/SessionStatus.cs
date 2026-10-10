@@ -29,6 +29,15 @@ public static class SessionStatus
         => mode != SessionMode.Scheduled && phase is Running or Pending;
 
     /// <summary>
+    /// An autonomous session that could be resumed can instead be continued interactively
+    /// (docs/session-mode-conversion.md). Built on <see cref="CanResume"/> rather than restated,
+    /// because the conversion *is* a resume with a changed record: a phase one predicate accepts
+    /// and the other refuses would offer a card whose button then answers 409.
+    /// </summary>
+    public static bool CanConvertToInteractive(SessionMode mode, string phase)
+        => mode == SessionMode.Autonomous && CanResume(mode, phase);
+
+    /// <summary>
     /// Whether saved state may be overwritten from outside. Only while no pod is live: a pod
     /// writes its own state over the same key when it stops, so an upload accepted next to a
     /// Running or Pending session is silently discarded at the next pause.

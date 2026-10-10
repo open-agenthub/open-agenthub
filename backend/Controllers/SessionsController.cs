@@ -116,6 +116,21 @@ public sealed class SessionsController : ControllerBase
         catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
+    /// <summary>
+    /// Continues a finished or paused autonomous session interactively, in the same conversation
+    /// where the runtime can (docs/session-mode-conversion.md). 409 when the session is not
+    /// autonomous or still running, 400 for a UI mode the agent does not support.
+    /// </summary>
+    [HttpPost("{id}/convert")]
+    public async Task<ActionResult<SessionInfo>> Convert(string id, [FromBody] ConvertSessionRequest req, CancellationToken ct)
+    {
+        try { return Ok(await _svc.ConvertSessionAsync(Owner, id, req, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (ArgumentException e) { return BadRequest(new { error = e.Message }); }
+        catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
+    }
+
     [HttpPost("{id}/pause")]
     public async Task<ActionResult<SessionInfo>> Pause(string id, CancellationToken ct)
     {

@@ -45,6 +45,9 @@ public sealed class SessionRecord
     /// <summary>Tool-permission requests are approved without asking. Read per request,
     /// so toggling it applies to an already running session.</summary>
     public bool AutoApprove { get; set; }
+    /// <summary>The mode the session had before it was converted to interactive; null = never
+    /// converted. Display only (docs/session-mode-conversion.md).</summary>
+    public SessionMode? ConvertedFrom { get; set; }
     public string Cpu { get; set; } = "500m";
     public string Memory { get; set; } = "1Gi";
     /// <summary>MCP configuration (.mcp.json content); null/empty = no MCP servers.</summary>
@@ -148,6 +151,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS description TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS system_prompt TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS credential_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS converted_from TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -159,11 +163,11 @@ public sealed class PostgresSessionStore : ISessionStore
             INSERT INTO sessions (id, owner, title, description, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
                                   openclaw_api_key_source, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
-                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at)
+                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, converted_from, created_at, updated_at)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
-                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now())
+                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @convertedFrom, @created, now())
             ON CONFLICT (id) DO UPDATE SET
                 title = EXCLUDED.title, description = EXCLUDED.description,
                 mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
@@ -180,7 +184,8 @@ public sealed class PostgresSessionStore : ISessionStore
                 repos = EXCLUDED.repos,
                 project_id = EXCLUDED.project_id, parent_session_id = EXCLUDED.parent_session_id,
                 prompt = EXCLUDED.prompt, system_prompt = EXCLUDED.system_prompt,
-                allowed_tools = EXCLUDED.allowed_tools, auto_approve = EXCLUDED.auto_approve, updated_at = now();
+                allowed_tools = EXCLUDED.allowed_tools, auto_approve = EXCLUDED.auto_approve,
+                converted_from = EXCLUDED.converted_from, updated_at = now();
             """;
         await using var cmd = _db.CreateCommand(sql);
         Bind(cmd, r);
@@ -271,7 +276,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, converted_from FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -313,6 +318,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("systemPrompt", (object?)r.SystemPrompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("allowedTools", (object?)r.AllowedToolsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("credentialId", (object?)r.CredentialId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("convertedFrom", (object?)r.ConvertedFrom?.ToString() ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
     }
 
@@ -349,6 +355,7 @@ public sealed class PostgresSessionStore : ISessionStore
         AutoApprove = r.GetBoolean(28),
         Description = r.IsDBNull(29) ? null : r.GetString(29),
         SystemPrompt = r.IsDBNull(30) ? null : r.GetString(30),
-        CredentialId = r.IsDBNull(31) ? null : r.GetString(31)
+        CredentialId = r.IsDBNull(31) ? null : r.GetString(31),
+        ConvertedFrom = r.IsDBNull(32) ? null : Enum.Parse<SessionMode>(r.GetString(32))
     };
 }

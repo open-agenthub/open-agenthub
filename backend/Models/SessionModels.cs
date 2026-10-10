@@ -422,6 +422,25 @@ public record UpdateSessionRequest
     }
 }
 
+/// <summary>
+/// Continues a finished or paused autonomous session as an interactive one, in the same
+/// conversation where the runtime can (docs/session-mode-conversion.md).
+/// </summary>
+public record ConvertSessionRequest
+{
+    /// <summary>Target mode. Only "interactive" is accepted; null means the same.</summary>
+    public string? Mode { get; init; }
+    /// <summary>"terminal" (default) or "chat" (interactive Claude only), validated like on create.</summary>
+    public string? UiMode { get; init; }
+    /// <summary>
+    /// Null takes the interactive default (off): the autonomous run approved everything because
+    /// nobody was there to ask; now somebody is. True keeps the run's setting.
+    /// </summary>
+    public bool? AutoApprove { get; init; }
+    /// <summary>Start the session right away (default). False only changes the record.</summary>
+    public bool Resume { get; init; } = true;
+}
+
 /// <param name="SystemPrompt">Replaces the copied system prompt; null copies the source's, an
 /// empty string yields a copy without one (create-side normalization turns it into null).</param>
 public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
@@ -545,6 +564,10 @@ public record SessionInfo
     public bool QuestionPending { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>
     public bool CanResume { get; init; }
+    /// <summary>A finished or paused autonomous session can be continued interactively.</summary>
+    public bool CanConvertToInteractive { get; init; }
+    /// <summary>The mode this session was converted from, or null if it never was.</summary>
+    public SessionMode? ConvertedFrom { get; init; }
     /// <summary>Custom image of the session (null = default agent image).</summary>
     public string? Image { get; init; }
     public bool RunAsRoot { get; init; }

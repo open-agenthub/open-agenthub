@@ -111,6 +111,32 @@ test('Claude does not re-submit the prompt when resuming an interactive session'
   }), true).args, ['--session-id', 'fixed-session', 'triage the failing build']);
 });
 
+test('Claude continues a converted autonomous run as the same conversation, without the prompt', () => {
+  // docs/session-mode-conversion.md: the hub fixes the session id, so the autonomous -p run and
+  // the interactive resume after conversion share one conversation. The task must not be
+  // submitted again — it is the first turn of that conversation already.
+  const autonomous = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(autonomous.args,
+    ['--session-id', 'fixed-session', '-p', 'triage the failing build', '--permission-mode', 'acceptEdits']);
+
+  const terminal = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'interactive', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1', AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(terminal, { cmd: 'claude', args: ['--resume', 'fixed-session'] });
+
+  const chat = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'interactive', AGENTHUB_UI_MODE: 'chat', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1', AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(chat.args.slice(0, 2), ['--resume', 'fixed-session']);
+  assert.ok(!chat.args.includes('triage the failing build'));
+  assert.equal(chat.pipe, true);
+});
+
 test('Claude resume command requires requested resume, restored state, and fixed id', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1',

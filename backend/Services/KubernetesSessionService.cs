@@ -699,6 +699,36 @@ public sealed class KubernetesSessionService : ISessionService
     }
 
     /// <summary>
+    /// Turns a finished or paused autonomous session into an interactive one and resumes it
+    /// (docs/session-mode-conversion.md). The conversion is an edit of the record followed by
+    /// the ordinary resume: the pod sees AGENTHUB_MODE=interactive and AGENTHUB_RESUME=1, and the
+    /// drivers already continue the conversation on those two values where the CLI can.
+    /// </summary>
+    public async Task<SessionInfo> ConvertSessionAsync(string owner, string id, ConvertSessionRequest req,
+        CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        // The live pod's phase, as everywhere else: a record still saying Running for a pod that
+        // has since finished must not refuse the conversion, and a stored Succeeded next to a pod
+        // that is somehow still alive must not allow it.
+        var phase = SessionStatus.ResolvePhase(pod?.Status?.Phase, rec.Status);
+        var plan = SessionConversion.Validate(rec, phase, req);
+
+        SessionConversion.Apply(rec, plan);
+        await _store.UpsertAsync(rec, ct);
+        _log.LogInformation("Converted session {Id} from {From} to interactive (ui={UiMode}, autoApprove={AutoApprove})",
+            id, rec.ConvertedFrom, rec.UiMode, rec.AutoApprove);
+
+        // Persisted before the resume on purpose: if the resume is refused (agent no longer
+        // allowed, usage limit), the session is still interactive and the ordinary Resume button
+        // finishes the job, instead of a session that looks autonomous and resumes interactive.
+        if (req.Resume) return await ResumeSessionAsync(owner, id, ct);
+        return await ToInfoAsync(rec, phase, podIp: null, await _browsers.GetSummaryAsync(id, ct), ct);
+    }
+
+    /// <summary>
     /// Pauses a session: deleting the pod sends SIGTERM, whereupon the agent uploads
     /// its Claude state + scrollback to S3 during the grace period (see server.js).
     /// The session is marked "Paused" and can later be resumed from that saved state.
@@ -1172,8 +1202,7 @@ public sealed class KubernetesSessionService : ISessionService
                 : ProviderAccountSecret.ResolveId(accounts, null);
             hasSubscription = accountId is not null;
         }
-        if (record.Mode is SessionMode.Autonomous or SessionMode.Scheduled
-            && record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
+        if (AgentPodSpecFactory.ResolvesApiKey(record.Mode, record.AuthMode))
         {
             var apiKey = record.Agent switch
             {
@@ -1265,6 +1294,8 @@ public sealed class KubernetesSessionService : ISessionService
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
+        CanConvertToInteractive = SessionStatus.CanConvertToInteractive(r.Mode, phase),
+        ConvertedFrom = r.ConvertedFrom,
         Image = r.Image, RunAsRoot = r.RunAsRoot, AutoApprove = r.AutoApprove, Cpu = r.Cpu, Memory = r.Memory,
         Browser = browser ?? BrowserSummary.Stopped
     };
