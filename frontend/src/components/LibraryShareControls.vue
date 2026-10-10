@@ -1,11 +1,13 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { api } from '../api.js'
+import { isLicenseError } from '../lib/license.js'
+import LicenseGate from './LicenseGate.vue'
 import UserMultiSelect from './UserMultiSelect.vue'
 
 // Inline sharing editor for a library item. Loads current share state and
 // IdP groups (via /ee/admin/groups). A 402 from the enterprise share
-// endpoints collapses into a short license note instead of crashing the pane.
+// endpoints collapses into the license gate instead of crashing the pane.
 const props = defineProps({
   kind: { type: String, required: true }, // 'mcp-servers' | 'skills'
   itemId: { type: String, required: true }
@@ -37,7 +39,7 @@ onMounted(async () => {
     groupNames.value = [...(shares.groups || [])]
     groups.value = groupList || []
   } catch (e) {
-    if (e.status === 402) locked.value = true
+    if (isLicenseError(e)) locked.value = true
     else error.value = String(e.message || e)
     loading.value = false
     return
@@ -68,7 +70,7 @@ async function save() {
     })
     saved.value = true
   } catch (e) {
-    if (e.status === 402) locked.value = true
+    if (isLicenseError(e)) locked.value = true
     else error.value = String(e.message || e)
   } finally { busy.value = false }
 }
@@ -77,7 +79,7 @@ async function save() {
 <template>
   <div class="share-box">
     <p v-if="loading" class="muted">Loading…</p>
-    <p v-else-if="locked" class="muted" data-share-locked>Enterprise license required for sharing.</p>
+    <LicenseGate v-else-if="locked" data-share-locked feature="Sharing library entries with users and groups" />
     <template v-else>
       <label class="check">
         <input type="checkbox" v-model="all" data-share-all />

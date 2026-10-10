@@ -2,6 +2,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import App from './App.vue'
+import LicenseGate from './components/LicenseGate.vue'
 
 const mocks = vi.hoisted(() => ({
   api: {
@@ -167,6 +168,45 @@ describe('application navigation', () => {
     await wrapper.get('[data-select]').trigger('click')
     expect(location.pathname).toBe('/s/s1')
     expect(wrapper.get('.terminal-id').text()).toBe('s1')
+  })
+})
+
+describe('license gate wiring', () => {
+  // A gate deep inside the session page (the share dialog lives in TerminalView) gets the admin
+  // flag and the settings navigation from App.vue by injection, not by props.
+  const gateStubs = {
+    ...stubs,
+    TerminalView: { components: { LicenseGate }, template: '<LicenseGate feature="Sharing sessions with other users" />' }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.spyOn(globalThis, 'setInterval').mockReturnValue(1)
+    mocks.api.listSessions.mockResolvedValue(sessions)
+    mocks.api.listProjects.mockResolvedValue([])
+    history.replaceState({}, '', '/s/s1')
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('shows an admin the link and opens the license tab in place', async () => {
+    mocks.api.adminAccess.mockResolvedValue({ isAdmin: true })
+    const wrapper = mount(App, { global: { stubs: gateStubs } })
+    await flushPromises()
+
+    await wrapper.get('[data-license-link]').trigger('click')
+    expect(location.pathname).toBe('/settings/license')
+    expect(wrapper.get('.settings-tab').text()).toBe('license')
+    expect(wrapper.find('[data-license-link]').exists()).toBe(false) // the session page is gone
+  })
+
+  it('shows a non-admin the hint instead of a link', async () => {
+    mocks.api.adminAccess.mockResolvedValue({ isAdmin: false })
+    const wrapper = mount(App, { global: { stubs: gateStubs } })
+    await flushPromises()
+
+    expect(wrapper.find('[data-license-link]').exists()).toBe(false)
+    expect(wrapper.get('[data-license-hint]').text()).toContain('Ask an administrator')
+    expect(location.pathname).toBe('/s/s1')
   })
 })
 

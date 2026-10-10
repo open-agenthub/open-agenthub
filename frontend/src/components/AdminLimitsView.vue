@@ -2,7 +2,9 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api.js'
 import { agentOptions } from '../lib/agent.js'
+import { isLicenseError } from '../lib/license.js'
 import { formatCost } from '../lib/usage.js'
+import LicenseGate from './LicenseGate.vue'
 
 defineProps({ embedded: { type: Boolean, default: false } })
 
@@ -24,11 +26,17 @@ async function load() {
     const listed = new Set(allowed?.agents || [])
     for (const option of agentOptions) allowedChecked[option.value] = listed.has(option.value)
   } catch (e) {
-    if (e.status === 402) needsLicense.value = true
-    else error.value = String(e.message || e)
+    fail(e)
   } finally { loading.value = false }
 }
 onMounted(load)
+
+// Limits, group roles and the agent allowlist are all enterprise endpoints: a 402 from any of
+// them — on load or on a later save, once the license lapsed — swaps the pane for the gate.
+function fail(e) {
+  if (isLicenseError(e)) needsLicense.value = true
+  else error.value = String(e.message || e)
+}
 
 const globalLimit = computed(() => limits.value.find(l => l.scope === 'global'))
 const groupLimits = computed(() => limits.value.filter(l => l.scope === 'group'))
@@ -49,7 +57,7 @@ function parseAmount(raw) {
 async function run(action) {
   busy.value = true; error.value = ''
   try { limits.value = await action() ?? limits.value }
-  catch (e) { error.value = String(e.message || e) }
+  catch (e) { fail(e) }
   finally { busy.value = false }
 }
 
@@ -75,7 +83,7 @@ async function removeLimit(l) {
 async function setRole(group, role) {
   busy.value = true; error.value = ''
   try { groups.value = await api.eeSetGroupRole(group, role || null) }
-  catch (e) { error.value = String(e.message || e) }
+  catch (e) { fail(e) }
   finally { busy.value = false }
 }
 
@@ -87,7 +95,7 @@ async function saveAllowedAgents() {
     const listed = new Set(result?.agents || [])
     for (const option of agentOptions) allowedChecked[option.value] = listed.has(option.value)
   } catch (e) {
-    error.value = String(e.message || e)
+    fail(e)
   } finally { busy.value = false }
 }
 </script>
@@ -97,10 +105,7 @@ async function saveAllowedAgents() {
     <p class="lead">Monthly API budgets for everyone, a group, or a single user — the strictest limit wins, and personal limits still apply. Groups come from the OAuth token; map them to roles here.</p>
     <p v-if="error" class="err">{{ error }}</p>
     <p v-if="loading" class="muted">Loading…</p>
-    <div v-else-if="needsLicense" class="card locked" data-limits-locked>
-      <b>Enterprise feature.</b> Usage limits and group roles need an active enterprise license —
-      activate one in the License tab.
-    </div>
+    <LicenseGate v-else-if="needsLicense" data-limits-locked feature="Usage limits, group roles and the agent allowlist" />
     <template v-else>
       <div class="card block" data-global-limit>
         <div class="block-head">Global limit</div>
@@ -183,7 +188,6 @@ input.grow { max-width: none; }
 .intro { margin: 0; font-size: 12px; }
 .agent-check { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); cursor: pointer; }
 .agent-check input { width: auto; max-width: none; }
-.locked { padding: 16px 18px; font-size: 13px; color: var(--muted); }
 .muted { color: var(--muted); font-size: 13px; margin: 0; }
 .err { color: var(--danger); font: 12px var(--mono); }
 code { font-family: var(--mono); font-size: 12px; }

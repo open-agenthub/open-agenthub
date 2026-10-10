@@ -70,3 +70,60 @@ describe('ShareSessionDialog MCP policy', () => {
     expect(wrapper.get('.one-time code').text()).toBe('https://hub.example.com/shared/tok')
   })
 })
+
+describe('ShareSessionDialog without a license', () => {
+  const license402 = () => Object.assign(
+    new Error('402 {"error":"An active enterprise license is required."}'),
+    { status: 402, code: 'license_required' })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMocks.api.createShareUser.mockResolvedValue({})
+  })
+
+  it('replaces the form with the license gate when the overview answers 402', async () => {
+    // This is the raw `402 {"error":…}` text an owner saw on a Community instance.
+    apiMocks.api.listSessionShares.mockRejectedValue(license402())
+    const wrapper = mount(ShareSessionDialog, { props: { session } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-license-gate]').text()).toContain('Sharing sessions with other users')
+    expect(wrapper.text()).not.toContain('An active enterprise license is required')
+    expect(wrapper.text()).not.toContain('402')
+    expect(wrapper.find('[data-blocked-servers]').exists()).toBe(false)
+    expect(wrapper.findAll('button').find(b => b.text() === 'Create link')).toBeUndefined()
+  })
+
+  it('keeps the form and adds the gate when a change is refused with 402', async () => {
+    apiMocks.api.listSessionShares.mockResolvedValue({
+      users: [{ recipient: 'bob', role: 'Viewer' }], links: [], mcpPolicy: null
+    })
+    apiMocks.api.createShareUser.mockRejectedValue(license402())
+    const wrapper = mount(ShareSessionDialog, { props: { session } })
+    await flushPromises()
+    expect(wrapper.find('[data-license-gate]').exists()).toBe(false)
+
+    await wrapper.get('input[placeholder="Add people by username…"]').setValue('carol')
+    await wrapper.findAll('button').find(b => b.text() === 'Add').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-license-gate]').exists()).toBe(true)
+    expect(wrapper.text()).toContain('bob') // the existing shares stay visible
+    expect(wrapper.find('[data-blocked-servers]').exists()).toBe(true)
+    expect(wrapper.find('.err').exists()).toBe(false)
+  })
+
+  it('still shows other failures as the inline error line', async () => {
+    apiMocks.api.listSessionShares.mockResolvedValue({ users: [], links: [], mcpPolicy: null })
+    apiMocks.api.createShareUser.mockRejectedValue(Object.assign(new Error('400 {"error":"unknown recipient"}'), { status: 400 }))
+    const wrapper = mount(ShareSessionDialog, { props: { session } })
+    await flushPromises()
+
+    await wrapper.get('input[placeholder="Add people by username…"]').setValue('nobody')
+    await wrapper.findAll('button').find(b => b.text() === 'Add').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('.err').text()).toContain('unknown recipient')
+    expect(wrapper.find('[data-license-gate]').exists()).toBe(false)
+  })
+})

@@ -128,13 +128,29 @@ describe('AdminLimitsView', () => {
     mocks.api.adminSetAllowedAgents.mockResolvedValue({ agents: [] })
   })
 
-  it('shows the enterprise lock without a license (402)', async () => {
+  it('shows the license gate without a license (402)', async () => {
     const err = new Error('402 payment required'); err.status = 402
     mocks.api.eeListLimits.mockRejectedValue(err)
     mocks.api.eeListGroups.mockRejectedValue(err)
     const wrapper = mount(AdminLimitsView)
     await flushPromises()
+    const locked = wrapper.get('[data-limits-locked]')
+    expect(locked.attributes('data-license-gate')).toBeDefined()
+    expect(locked.text()).toContain('agent allowlist')
+    expect(wrapper.find('[data-allowed-agents]').exists()).toBe(false)
+    expect(wrapper.text()).not.toContain('402')
+  })
+
+  it('swaps the pane for the gate when saving the allowlist is refused with 402', async () => {
+    const err = new Error('402 payment required'); err.status = 402
+    mocks.api.adminSetAllowedAgents.mockRejectedValue(err)
+    const wrapper = mount(AdminLimitsView)
+    await flushPromises()
+    await wrapper.get('[data-allowed-agent="Claude"] input').setValue(true)
+    await wrapper.get('[data-save-allowed-agents]').trigger('click')
+    await flushPromises()
     expect(wrapper.find('[data-limits-locked]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('402')
   })
 
   it('renders global, group and user limits plus groups with roles', async () => {

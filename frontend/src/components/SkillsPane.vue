@@ -1,7 +1,9 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
+import { isLicenseError } from '../lib/license.js'
 import LibraryShareControls from './LibraryShareControls.vue'
+import LicenseGate from './LicenseGate.vue'
 
 // Skill library (SKILL.md files) — personal or per project, versioned on every
 // save and searchable. Own skills are editable, shared ones read-only.
@@ -72,6 +74,9 @@ const visible = computed(() => searchResults.value ?? items.value)
 const publishEnabled = ref(false)
 const publishState = ref({}) // skill id -> currently published to everyone
 const publishError = ref('')
+// The toggle only appears once the settings endpoint answered, i.e. with a license; a 402 on
+// the toggle itself means the license lapsed since — the gate says so instead of an error line.
+const publishLocked = ref(false)
 
 async function loadPublishing() {
   if (props.isAdmin) return // admins use the full sharing expander instead
@@ -97,8 +102,8 @@ async function togglePublish(item, e) {
   } catch (err) {
     e.target.checked = !on
     publishState.value[item.id] = !on
-    publishError.value = err.status === 402 ? 'Enterprise license required for publishing.'
-      : err.status === 403 ? 'Publishing is not allowed on this instance.'
+    if (isLicenseError(err)) { publishLocked.value = true; return }
+    publishError.value = err.status === 403 ? 'Publishing is not allowed on this instance.'
       : String(err.message || err)
   }
 }
@@ -273,6 +278,7 @@ function scopeLabel(item) {
 
       <p v-if="error" class="err">{{ error }}</p>
       <p v-if="publishError" class="err" data-skill-publish-error>{{ publishError }}</p>
+      <LicenseGate v-if="publishLocked" class="gate" data-skill-publish-locked feature="Publishing skills to everyone" />
       <p v-if="loading" class="muted">Loading…</p>
       <p v-else-if="searching" class="muted">Searching…</p>
       <p v-else-if="searchResults && !visible.length" class="muted" data-skill-no-results>No skills match your search.</p>
@@ -340,6 +346,7 @@ function scopeLabel(item) {
 .row.toolbar { justify-content: flex-start; margin-bottom: 16px; }
 .search { flex: 1; max-width: 340px; }
 .form-card { padding: 18px 20px; margin-bottom: 16px; }
+.gate { margin-bottom: 12px; }
 .form-card h4 { margin: 0 0 12px; font-size: 15px; }
 .dim { color: var(--faint); font-weight: 400; }
 .mono { font-family: var(--mono); font-size: 13px; }

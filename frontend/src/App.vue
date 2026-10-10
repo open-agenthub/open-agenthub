@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
 import { api, auth, config } from './api.js'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TerminalView from './components/TerminalView.vue'
@@ -63,6 +63,11 @@ function openDuplicate(id) { editId.value = id; page.value = 'duplicate' }
 function openShare(id) { editId.value = id; page.value = 'share' }
 function openSettings(tab = SETTINGS_DEFAULT_TAB) { settingsTab.value = tab; page.value = 'settings' }
 function closePage() { page.value = null; editId.value = null }
+// LicenseGate sits several levels deep (share dialog inside TerminalView, share controls inside
+// a library row); threading `isAdmin` and a navigation callback through every prop list would
+// couple panes that have nothing to do with licensing. Injected instead.
+provide('isAdmin', isAdmin)
+provide('openSettings', openSettings)
 async function resume(id) { await api.resumeSession(id); await refresh(); activeId.value = id }
 // The card already made the call; the list has to pick up the new mode before the session page
 // renders it, or the key'd TerminalView would keep showing the autonomous header.
