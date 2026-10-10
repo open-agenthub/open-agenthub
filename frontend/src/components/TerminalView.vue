@@ -4,8 +4,10 @@ import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
 import ChatPane from './ChatPane.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
+import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
+import { canConvert, convertedLabel } from '../lib/conversion.js'
 import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { accountOptionLabel, accountsFor, authLabel, defaultAccountId } from '../lib/agent.js'
@@ -13,9 +15,13 @@ import { conversationState, mergeConversationPage, toTranscriptItems } from '../
 import { permissionTitle } from '../lib/permissions.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
-defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate'])
+defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
+// A stopped autonomous run is offered as an interactive continuation next to the plain Resume;
+// the backend's own flag decides, so the card never appears where the call would answer 409.
+const showConvert = computed(() => !props.sharedToken && capabilities.value.canManage && canConvert(props.session))
+const converted = computed(() => convertedLabel(props.session))
 // Chat sessions render the structured stream; their agent pane already replays
 // history, so the raw Transcript tab stays terminal-only.
 const isChat = computed(() => props.session?.uiMode === 'chat')
@@ -219,6 +225,7 @@ async function selectTab(tab) {
           <span class="st" :style="{ color: statusStyle(session).color }">{{ sessionStatus(session) }}</span>
           <span class="mdot" :style="{ background: statusStyle(session).color }"></span>
           <span v-if="session.mode">{{ session.mode }}</span>
+          <span v-if="converted" class="converted" data-converted-from>({{ converted }})</span>
           <span v-if="session.agent">· {{ session.agent }}<template v-if="session.authMode"> / {{ authLabel(session.authMode) }}</template></span>
           <span v-if="repoLabel" class="mono">· {{ repoLabel }}</span>
           <span v-if="session.schedule" class="cron">· ▶ {{ session.schedule }}</span>
@@ -251,6 +258,7 @@ async function selectTab(tab) {
         <ShareSessionDialog embedded :session="session" @close="shareOpen = false" />
       </div>
     </div>
+    <ConvertSessionCard v-if="showConvert" :session="session" @converted="$emit('converted', $event)" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
       <div class="perm-text">
@@ -346,6 +354,7 @@ async function selectTab(tab) {
 .mono { font-family: var(--mono); }
 .cron { color: var(--sched); font-weight: 600; }
 .shared { color: var(--accent); }
+.converted { color: var(--faint); }
 .tabs { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius); padding: 3px; }
 .tabs button { font-size: 12px; font-weight: 700; padding: 5px 14px; border-radius: 8px; border: none; background: none; color: var(--muted-3); }
 .tabs button:hover { color: var(--text); background: none; }

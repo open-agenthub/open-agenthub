@@ -64,6 +64,9 @@ function openShare(id) { editId.value = id; page.value = 'share' }
 function openSettings(tab = SETTINGS_DEFAULT_TAB) { settingsTab.value = tab; page.value = 'settings' }
 function closePage() { page.value = null; editId.value = null }
 async function resume(id) { await api.resumeSession(id); await refresh(); activeId.value = id }
+// The card already made the call; the list has to pick up the new mode before the session page
+// renders it, or the key'd TerminalView would keep showing the autonomous header.
+async function converted(id) { await refresh(); activeId.value = id }
 async function pause(id) { await api.pauseSession(id); await refresh() }
 async function remove(id) { if (!confirm('Really delete this session? (S3 artifacts are kept)')) return; await api.deleteSession(id); if (activeId.value === id) activeId.value = null; await refresh() }
 async function created(session) { closePage(); await refresh(); activeId.value = session.id }
@@ -174,8 +177,8 @@ onBeforeUnmount(() => {
         <div v-else-if="page === 'edit' && editSession" class="page"><EditSessionDialog :key="editSession.id" embedded :session="editSession" :projects="projects" @close="closePage" @updated="created" /></div>
         <div v-else-if="page === 'duplicate' && editSession" class="page"><DuplicateSessionDialog :key="editSession.id" embedded :session="editSession" :projects="projects" @close="closePage" @duplicated="created" /></div>
         <div v-else-if="page === 'share' && editSession" class="page"><ShareSessionDialog :key="editSession.id" embedded :session="editSession" @close="closePage" /></div>
-        <TerminalView v-else-if="activeSession" :key="activeSession.id" :session="activeSession" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" />
-        <SessionsView v-else-if="page === 'sessions'" :sessions="sessions" :projects="projects" :query="query" @select="selectSession" @new="openPage('new')" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" />
+        <TerminalView v-else-if="activeSession" :key="activeSession.id" :session="activeSession" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
+        <SessionsView v-else-if="page === 'sessions'" :sessions="sessions" :projects="projects" :query="query" @select="selectSession" @new="openPage('new')" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
         <UsageView v-else-if="page === 'usage'" />
         <HomeView v-else :sessions="sessions" @select="selectSession" @sessions="openPage('sessions')" @usage="openPage('usage')" @new="openPage('new')" @resume="resume" />
       </section>

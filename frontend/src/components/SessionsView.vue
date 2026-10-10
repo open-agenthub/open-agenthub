@@ -1,16 +1,23 @@
 <script setup>
 import { computed, ref } from 'vue'
+import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { repoShortName, sessionMatches } from '../lib/text.js'
 import { authLabel } from '../lib/agent.js'
+import { canConvert } from '../lib/conversion.js'
 
 const props = defineProps({
   sessions: { type: Array, default: () => [] },
   projects: { type: Array, default: () => [] },
   query: { type: String, default: '' }
 })
-const emit = defineEmits(['select', 'new', 'remove', 'resume', 'pause', 'edit', 'duplicate'])
+const emit = defineEmits(['select', 'new', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
+
+// The row whose "Continue interactively" card is folded out; one at a time, and no dialog.
+const convertingId = ref(null)
+function toggleConvert(id) { convertingId.value = convertingId.value === id ? null : id }
+function converted(id) { convertingId.value = null; emit('converted', id) }
 
 const GROUP_BYS = ['Project', 'Repository', 'Status', 'None']
 const FILTERS = ['All', 'Running', 'Waiting', 'Scheduled', 'Paused', 'Done', 'Failed']
@@ -68,24 +75,29 @@ function repoLine(s) {
     <div v-for="grp in groups" :key="grp.name" class="group">
       <div class="group-name">{{ grp.name.toUpperCase() }}</div>
       <div class="card rows">
-        <div v-for="s in grp.sessions" :key="s.id" class="row" @click="$emit('select', s.id)">
-          <div class="row-status">
-            <span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span>
-            <span class="mode">{{ s.mode }}<template v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></template></span>
+        <template v-for="s in grp.sessions" :key="s.id">
+          <div class="row" @click="$emit('select', s.id)">
+            <div class="row-status">
+              <span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span>
+              <span class="mode">{{ s.mode }}<template v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></template></span>
+            </div>
+            <div class="row-main">
+              <div class="row-title">{{ s.title }}</div>
+              <div v-if="s.description" class="row-desc" data-session-description>{{ s.description }}</div>
+              <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span></div>
+            </div>
+            <div v-if="sessionCapabilities(s).canManage" class="row-actions">
+              <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)">⧉</button>
+              <button v-if="canPause(s)" class="act" title="Pause session" @click.stop="$emit('pause', s.id)">❚❚</button>
+              <button v-if="s.canResume" class="act" title="Resume session" @click.stop="$emit('resume', s.id)">▶</button>
+              <button v-if="canConvert(s)" class="act" :class="{ on: convertingId === s.id }" title="Continue interactively" data-convert-action @click.stop="toggleConvert(s.id)">↪</button>
+              <button class="act" title="Edit session" @click.stop="$emit('edit', s.id)">✎</button>
+              <button class="act del" title="Delete session" @click.stop="$emit('remove', s.id)">✕</button>
+            </div>
           </div>
-          <div class="row-main">
-            <div class="row-title">{{ s.title }}</div>
-            <div v-if="s.description" class="row-desc" data-session-description>{{ s.description }}</div>
-            <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span></div>
-          </div>
-          <div v-if="sessionCapabilities(s).canManage" class="row-actions">
-            <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)">⧉</button>
-            <button v-if="canPause(s)" class="act" title="Pause session" @click.stop="$emit('pause', s.id)">❚❚</button>
-            <button v-if="s.canResume" class="act" title="Resume session" @click.stop="$emit('resume', s.id)">▶</button>
-            <button class="act" title="Edit session" @click.stop="$emit('edit', s.id)">✎</button>
-            <button class="act del" title="Delete session" @click.stop="$emit('remove', s.id)">✕</button>
-          </div>
-        </div>
+          <ConvertSessionCard v-if="convertingId === s.id && canConvert(s)" :session="s" dismissible
+            @converted="converted" @cancel="convertingId = null" />
+        </template>
       </div>
     </div>
     <div v-if="!groups.length" class="empty">
@@ -124,6 +136,7 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .row-actions { display: flex; gap: 4px; flex-shrink: 0; }
 .act { width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-size: 13px; border-radius: 8px; border: none; background: none; color: var(--muted); padding: 0; }
 .act:hover { background: var(--panel-2); color: var(--text); }
+.act.on { background: var(--panel-2); color: var(--accent-2); }
 .act.del:hover { background: rgba(245,122,106,0.12); color: var(--danger); }
 .empty { margin: 40px auto; text-align: center; color: var(--muted); }
 @media (max-width: 620px) {
