@@ -121,7 +121,7 @@ test('Codex resume recognition rejects fresh and merely resume-like commands', (
   assert.equal(driver.isResumeCommand({
     cmd: 'bash', args: [path.join(runtimeDir, 'codex', 'device-login.sh')]
   }), false);
-  assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['resume', '--last'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon'] }), false);
 });
 
@@ -170,10 +170,10 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
   const { home, cleanup } = codexHomeFixture();
   try {
     const env = environment({ CODEX_HOME: home, AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1' });
-    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['resume', '--last'] });
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
 
     fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), THREAD_A + '\n');
-    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['resume', THREAD_A] });
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] });
     assert.deepEqual(driver.buildCommand(environment({
       CODEX_HOME: home, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'go',
       AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
@@ -182,7 +182,7 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
       args: ['exec', '--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust',
         'resume', THREAD_A, 'go']
     });
-    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['resume', THREAD_A] }), true);
+    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] }), true);
     assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['resume', 'not-an-id'] }), false);
 
     // The remembered id wins over anything newer: that is the whole point of recording it.
@@ -192,7 +192,7 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
 
     // A corrupt id file is ignored rather than passed to the CLI.
     fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), 'garbage; rm -rf /\n');
-    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['resume', '--last'] });
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
   } finally {
     cleanup();
   }
