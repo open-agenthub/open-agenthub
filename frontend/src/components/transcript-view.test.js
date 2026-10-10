@@ -218,7 +218,7 @@ describe('transcript tab', () => {
       expect(mocks.api.getConversation).toHaveBeenCalledTimes(1)
 
       mocks.api.getConversation.mockClear()
-      const live = mountView({ session: running })
+      mountView({ session: running })
       await vi.advanceTimersByTimeAsync(8000)
       await flushPromises()
       expect(mocks.api.getConversation).not.toHaveBeenCalled()
