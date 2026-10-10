@@ -77,6 +77,12 @@ public interface ISessionService
     Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Clears the "waiting for reply" flag (e.g. once the user opens the terminal).</summary>
     Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default);
+    /// <summary>
+    /// Records that the owner (or someone acting for them) used the session, for the idle
+    /// countdown of docs/session-expiry.md. Owner-checked like <see cref="ClearQuestionAsync"/>;
+    /// a no-op for an unknown session. Default no-op for test doubles.
+    /// </summary>
+    Task TouchActivityAsync(string owner, string id, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>The terminal scrollback as plain text, control sequences stripped — what people read.</summary>
     Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>

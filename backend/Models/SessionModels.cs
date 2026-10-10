@@ -349,6 +349,15 @@ public record CreateSessionRequest
 
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
+
+    /// <summary>
+    /// Delete the session on its own after this many seconds (300 to 365 days); null or 0 = never.
+    /// Measured from the point <see cref="AutoDeleteFrom"/> names. See docs/session-expiry.md.
+    /// </summary>
+    public int? AutoDeleteAfterSeconds { get; init; }
+    /// <summary><c>start</c> or <c>lastActivity</c> (default). A scheduled session only accepts
+    /// <c>start</c>: nobody attaches to a CronJob, so "last activity" would be its creation.</summary>
+    public string? AutoDeleteFrom { get; init; }
 }
 
 /// <summary>Session-scoped OpenAPI/GraphQL source registered on the in-process MCP gateway.</summary>
@@ -411,6 +420,14 @@ public record UpdateSessionRequest
     public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
+    /// <summary>
+    /// Self-deletion deadline; null = unchanged, 0 = off (the basis is cleared with it). Like
+    /// <see cref="AutoApprove"/> this is not a runtime field: nothing in the pod changes, so it
+    /// applies at once and is allowed on a scheduled session.
+    /// </summary>
+    public int? AutoDeleteAfterSeconds { get; init; }
+    /// <summary><c>start</c> or <c>lastActivity</c>; null = unchanged.</summary>
+    public string? AutoDeleteFrom { get; init; }
     /// <summary>Replacement project assignment; null removes the assignment when supplied.</summary>
     private string? _projectId;
     [JsonIgnore]
@@ -424,11 +441,14 @@ public record UpdateSessionRequest
 
 /// <param name="SystemPrompt">Replaces the copied system prompt; null copies the source's, an
 /// empty string yields a copy without one (create-side normalization turns it into null).</param>
+/// <param name="AutoDeleteAfterSeconds">Replaces the copied self-deletion deadline; null copies
+/// the source's setting, 0 yields a copy that never deletes itself.</param>
 public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
     AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null,
     OpenClawApiKeySource? OpenClawApiKeySource = null,
     List<string>? McpServerIds = null,
-    string? SystemPrompt = null, string? CredentialId = null);
+    string? SystemPrompt = null, string? CredentialId = null,
+    int? AutoDeleteAfterSeconds = null, string? AutoDeleteFrom = null);
 
 public static class SessionDuplication
 {
@@ -474,7 +494,12 @@ public static class SessionDuplication
             RunAsRoot = source.RunAsRoot,
             AutoApprove = source.AutoApprove,
             Cpu = source.Cpu,
-            Memory = source.Memory
+            Memory = source.Memory,
+            // The setting is configuration and copies; the timestamps are not, so the copy's
+            // countdown starts from its own creation. An explicit 0 means "no deadline" here as
+            // it does on PATCH; create-side normalization turns it into null.
+            AutoDeleteAfterSeconds = request.AutoDeleteAfterSeconds ?? source.AutoDeleteAfterSeconds,
+            AutoDeleteFrom = request.AutoDeleteFrom ?? source.AutoDeleteFrom
         };
     }
 
@@ -553,6 +578,15 @@ public record SessionInfo
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
     public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
+    /// <summary>Self-deletion deadline in seconds; null = the session is kept.</summary>
+    public int? AutoDeleteAfterSeconds { get; init; }
+    /// <summary><c>start</c> or <c>lastActivity</c>; null when there is no deadline.</summary>
+    public string? AutoDeleteFrom { get; init; }
+    /// <summary>When the sweep will delete the session, computed from the two fields above and
+    /// the timestamps, so no client repeats the arithmetic. Null = never.</summary>
+    public DateTime? ExpiresAt { get; init; }
+    /// <summary>When somebody last used the session (docs/session-expiry.md says what counts).</summary>
+    public DateTime LastActivityAt { get; init; }
 }
 
 /// <summary>

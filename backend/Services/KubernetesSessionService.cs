@@ -335,6 +335,7 @@ public sealed class KubernetesSessionService : ISessionService
         // Validate ephemeral sources before allocating a session id / writing a row.
         var preparedEphemeral = PrepareEphemeralSources(req.EphemeralApiSources);
         var policy = EffectivePolicy(req.Policy, req.AllowedTools);
+        var (autoDeleteAfter, autoDeleteFrom) = SessionExpiry.ForCreate(req.AutoDeleteAfterSeconds, req.AutoDeleteFrom, req.Mode);
 
         var id = Guid.NewGuid().ToString("n")[..12];
         var rec = new SessionRecord
@@ -359,7 +360,8 @@ public sealed class KubernetesSessionService : ISessionService
             Cpu = req.Cpu, Memory = req.Memory,
             AgentSessionId = Guid.NewGuid().ToString(),
             CallbackToken = RandomToken(),
-            Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending"
+            Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending",
+            AutoDeleteAfterSeconds = autoDeleteAfter, AutoDeleteFrom = autoDeleteFrom
         };
         // Persist session row before registering ephemerals so a failed Upsert
         // cannot leave orphaned session-scoped API sources.
@@ -679,6 +681,8 @@ public sealed class KubernetesSessionService : ISessionService
         rec.Status = "Pending";
         rec.QuestionPending = false;
         await _store.UpsertAsync(rec, ct);
+        // Somebody wanted this session back: a resume restarts the idle countdown.
+        await _store.TouchActivityAsync(id, ct);
 
         var req = new CreateSessionRequest
         {
@@ -875,6 +879,9 @@ public sealed class KubernetesSessionService : ISessionService
             rec.AgentPolicyJson = SerializePolicy(policy);
             rec.AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools);
         }
+        if (req.AutoDeleteAfterSeconds is not null || req.AutoDeleteFrom is not null)
+            (rec.AutoDeleteAfterSeconds, rec.AutoDeleteFrom) =
+                SessionExpiry.ForUpdate(rec, req.AutoDeleteAfterSeconds, req.AutoDeleteFrom);
 
         try
         {
@@ -1045,6 +1052,12 @@ public sealed class KubernetesSessionService : ISessionService
     {
         if (await _store.GetAsync(owner, id, ct) is not null)
             await _store.SetQuestionPendingAsync(id, false, ct);
+    }
+
+    public async Task TouchActivityAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (await _store.GetAsync(owner, id, ct) is not null)
+            await _store.TouchActivityAsync(id, ct);
     }
 
     public async Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default)
@@ -1266,7 +1279,9 @@ public sealed class KubernetesSessionService : ISessionService
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
         Image = r.Image, RunAsRoot = r.RunAsRoot, AutoApprove = r.AutoApprove, Cpu = r.Cpu, Memory = r.Memory,
-        Browser = browser ?? BrowserSummary.Stopped
+        Browser = browser ?? BrowserSummary.Stopped,
+        AutoDeleteAfterSeconds = r.AutoDeleteAfterSeconds, AutoDeleteFrom = r.AutoDeleteFrom,
+        ExpiresAt = SessionExpiry.ExpiresAt(r), LastActivityAt = r.LastActivityAt
     };
 
     private V1ObjectMeta Meta(string name, string owner, string id, string component,

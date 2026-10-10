@@ -59,6 +59,17 @@ public sealed class SessionRecord
     public required string CallbackToken { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>Seconds until the session deletes itself; null = never (docs/session-expiry.md).</summary>
+    public int? AutoDeleteAfterSeconds { get; set; }
+    /// <summary><c>start</c> or <c>lastActivity</c>: what the countdown is measured from. Null
+    /// whenever <see cref="AutoDeleteAfterSeconds"/> is.</summary>
+    public string? AutoDeleteFrom { get; set; }
+    /// <summary>
+    /// When somebody last used the session. Not <see cref="UpdatedAt"/>: the pod rewrites the
+    /// row every 30 seconds with its scrollback, so that clock never shows a running session as
+    /// idle. Rows older than the column read as <see cref="CreatedAt"/>.
+    /// </summary>
+    public DateTime LastActivityAt { get; set; } = DateTime.UtcNow;
 }
 
 public interface ISessionStore
@@ -87,6 +98,19 @@ public interface ISessionStore
     /// </summary>
     Task SetTranscriptAsync(string id, string jsonl, CancellationToken ct = default) => Task.CompletedTask;
     Task<string?> GetTranscriptAsync(string id, CancellationToken ct = default) => Task.FromResult<string?>(null);
+    /// <summary>
+    /// Records that somebody used the session: sets <c>last_activity_at</c> and nothing else —
+    /// not <c>updated_at</c>, so a touch is never mistaken for an edit. Default no-op for the test
+    /// doubles that never expire anything.
+    /// </summary>
+    Task TouchActivityAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>
+    /// Sessions whose self-deletion deadline has passed, across every owner — the one query on
+    /// the table that is not owner-scoped, which is why it is its own method rather than a filter
+    /// on <see cref="ListAsync"/>. Oldest deadline first, at most <paramref name="limit"/>.
+    /// </summary>
+    Task<IReadOnlyList<SessionRecord>> ListExpiredAsync(DateTime now, int limit, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<SessionRecord>>(Array.Empty<SessionRecord>());
     Task DeleteAsync(string id, CancellationToken ct = default);
 }
 
@@ -148,6 +172,11 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS description TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS system_prompt TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS credential_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_delete_after_seconds INT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_delete_from TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
+            CREATE INDEX IF NOT EXISTS idx_sessions_auto_delete ON sessions(auto_delete_after_seconds)
+                WHERE auto_delete_after_seconds IS NOT NULL;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -159,12 +188,19 @@ public sealed class PostgresSessionStore : ISessionStore
             INSERT INTO sessions (id, owner, title, description, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
                                   openclaw_api_key_source, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
-                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at)
+                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at,
+                                  auto_delete_after_seconds, auto_delete_from, last_activity_at)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
-                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now())
+                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now(),
+                    @autoDeleteAfter, @autoDeleteFrom, @lastActivity)
             ON CONFLICT (id) DO UPDATE SET
+                auto_delete_after_seconds = EXCLUDED.auto_delete_after_seconds,
+                auto_delete_from = EXCLUDED.auto_delete_from,
+                -- The stored touch wins: an edit reads the record, changes a field and writes it
+                -- back, and a touch that landed in between must not be undone by the stale copy.
+                last_activity_at = COALESCE(sessions.last_activity_at, EXCLUDED.last_activity_at),
                 title = EXCLUDED.title, description = EXCLUDED.description,
                 mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
@@ -208,7 +244,10 @@ public sealed class PostgresSessionStore : ISessionStore
 
     public async Task UpdateStatusAsync(string id, string status, CancellationToken ct = default)
     {
-        await using var cmd = _db.CreateCommand("UPDATE sessions SET status=@s, updated_at=now() WHERE id=@id");
+        // A phase change is the pod doing something on the session's behalf; it counts as
+        // activity so a session that just finished is not swept away by a short idle window.
+        await using var cmd = _db.CreateCommand(
+            "UPDATE sessions SET status=@s, updated_at=now(), last_activity_at=now() WHERE id=@id");
         cmd.Parameters.AddWithValue("s", status);
         cmd.Parameters.AddWithValue("id", id);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -262,6 +301,31 @@ public sealed class PostgresSessionStore : ISessionStore
         return v is string s ? s : null;
     }
 
+    public async Task TouchActivityAsync(string id, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET last_activity_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<SessionRecord>> ListExpiredAsync(DateTime now, int limit, CancellationToken ct = default)
+    {
+        // A row older than last_activity_at has never been touched, so its creation is the last
+        // thing known to have happened to it — the same fallback Map applies when reading.
+        const string deadline = """
+            (CASE auto_delete_from WHEN 'start' THEN created_at ELSE COALESCE(last_activity_at, created_at) END)
+                + auto_delete_after_seconds * interval '1 second'
+            """;
+        var list = new List<SessionRecord>();
+        await using var cmd = _db.CreateCommand(
+            $"{SelectBase} WHERE auto_delete_after_seconds IS NOT NULL AND {deadline} < @now ORDER BY {deadline} LIMIT @limit");
+        cmd.Parameters.AddWithValue("now", now);
+        cmd.Parameters.AddWithValue("limit", limit);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) list.Add(Map(r));
+        return list;
+    }
+
     public async Task DeleteAsync(string id, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("DELETE FROM sessions WHERE id=@id");
@@ -271,7 +335,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -314,6 +378,9 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("allowedTools", (object?)r.AllowedToolsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("credentialId", (object?)r.CredentialId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
+        cmd.Parameters.AddWithValue("autoDeleteAfter", (object?)r.AutoDeleteAfterSeconds ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("autoDeleteFrom", (object?)r.AutoDeleteFrom ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("lastActivity", r.LastActivityAt);
     }
 
     private static SessionRecord Map(NpgsqlDataReader r) => new()
@@ -349,6 +416,9 @@ public sealed class PostgresSessionStore : ISessionStore
         AutoApprove = r.GetBoolean(28),
         Description = r.IsDBNull(29) ? null : r.GetString(29),
         SystemPrompt = r.IsDBNull(30) ? null : r.GetString(30),
-        CredentialId = r.IsDBNull(31) ? null : r.GetString(31)
+        CredentialId = r.IsDBNull(31) ? null : r.GetString(31),
+        AutoDeleteAfterSeconds = r.IsDBNull(32) ? null : r.GetInt32(32),
+        AutoDeleteFrom = r.IsDBNull(33) ? null : r.GetString(33),
+        LastActivityAt = r.IsDBNull(34) ? r.GetDateTime(14) : r.GetDateTime(34)
     };
 }

@@ -389,6 +389,9 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
 
     public SessionShareStore Shares { get; }
 
+    /// <summary>The session store itself, for tests of its own operations (touch, expiry listing).</summary>
+    public PostgresSessionStore Sessions => _sessions;
+
     public static async Task<PostgresSharingDatabase> CreateAsync()
     {
         var baseConnectionString = Environment.GetEnvironmentVariable(
