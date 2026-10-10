@@ -95,6 +95,7 @@ The same surface as the stdio server:
 | `session_list` | List your sessions, optionally filtered by parent or phase |
 | `session_wait` | Poll until a session reaches Succeeded or Failed |
 | `session_delete` | Delete a session; does not cascade to children |
+| `session_convert` | Continue a finished or paused Autonomous session as an Interactive one, in the same conversation where the runtime can (`docs/session-mode-conversion.md`) |
 | `agents_list` | Your agents with title, description and phase |
 | `agent_send` | Send a message/task to an agent by id or unique title |
 | `session_share` | Share a session with a user as Viewer (default) or Collaborator — Enterprise |
@@ -129,6 +130,13 @@ with a unit rather than a number of seconds on purpose: a wrong unit is a sessio
 minutes instead of twelve hours later, and an unreadable value is an error rather than a session
 silently created without its deadline. The in-session `agenthub_sessions` server offers the same
 two parameters on its `session_create`. See `docs/session-expiry.md`.
+
+`session_convert {sessionId, uiMode?, autoApprove?, resume?}` is the step after an unattended
+run: the agent that started an Autonomous session hands it to a person as an Interactive one.
+Claude and Codex continue the same conversation; Cursor and OpenClaw start a new one in the same
+workspace. `autoApprove` is off after conversion unless asked for, because somebody is now there
+to answer. The in-pod server has the same tool, limited to the calling session's descendants like
+`session_get`. Running or non-Autonomous sessions fail with `session_not_convertible`.
 
 Every call runs as the user who approved the client, and the session service enforces that
 user's ownership exactly as it does for the REST API.

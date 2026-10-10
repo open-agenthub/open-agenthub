@@ -3,6 +3,9 @@ const SAFE_KEYS = [
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
   'parentSessionId', 'projectId', 'prompt', 'systemPrompt', 'schedule', 'questionPending',
   'createdAt', 'hasMcp',
+  // What session_convert changes and whether it can be called: a caller that cannot read uiMode
+  // back cannot confirm it got the chat pane it asked for.
+  'uiMode', 'canConvertToInteractive', 'convertedFrom',
   // The page a person opens to take the session over. An allowlist means a field the backend
   // starts returning is dropped here until it is named, so leaving this out would have made
   // session_create answer without the one thing a caller handing over a session needs.

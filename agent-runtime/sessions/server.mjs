@@ -85,6 +85,20 @@ register('session_delete', {
   inputSchema: z.object({ id: z.string().min(1).max(128) })
 }, async ({ id }) => text(sanitizeSession(await client.delete(id))));
 
+register('session_convert', {
+  description: 'Continue a finished or paused Autonomous descendant session as an Interactive one, so '
+    + 'a person can take its conversation on (hand them its id). Claude and Codex keep the conversation; '
+    + 'Cursor and OpenClaw start a new one in the same workspace. Resumes right away unless resume is '
+    + 'false. Fails with sessions_backend_http_409 while the session is running or is not Autonomous.',
+  inputSchema: z.object({
+    sessionId: z.string().min(1).max(128),
+    uiMode: z.enum(['terminal', 'chat']).optional(),
+    // Off by default: a person is now there to answer tool requests.
+    autoApprove: z.boolean().optional(),
+    resume: z.boolean().optional()
+  })
+}, async ({ sessionId, ...body }) => text(sanitizeSession(await client.convert(sessionId, body))));
+
 register('agents_list', {
   description: 'List the agents (sessions) of this session\'s project: id, title (= agent name), '
     + 'description (what the agent is for), phase. Also lists this session\'s parent chain and the '

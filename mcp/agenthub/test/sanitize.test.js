@@ -34,6 +34,16 @@ test('sanitizeSession omits mcpConfigJson and other secrets', () => {
   assert.equal(safe.callbackToken, undefined);
 });
 
+test('sanitizeSession keeps what session_convert changes and whether it applies', () => {
+  const safe = sanitizeSession({
+    id: 's1', mode: 'Interactive', uiMode: 'chat', canConvertToInteractive: false,
+    convertedFrom: 'Autonomous', canResume: true
+  });
+  assert.equal(safe.uiMode, 'chat');
+  assert.equal(safe.canConvertToInteractive, false);
+  assert.equal(safe.convertedFrom, 'Autonomous');
+});
+
 test('sanitizeSession maps lists and delete results', () => {
   assert.deepEqual(sanitizeSession({ deleted: true }), { deleted: true });
   const list = sanitizeSession([

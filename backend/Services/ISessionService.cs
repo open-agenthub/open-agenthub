@@ -71,6 +71,16 @@ public interface ISessionService
     /// <summary>Pauses a running session: uploads its state, removes the pod and marks it "Paused".
     /// A paused session is resumable via the normal resume path.</summary>
     Task<SessionInfo> PauseSessionAsync(string owner, string id, CancellationToken ct = default);
+    /// <summary>
+    /// Continues a finished or paused autonomous session as an interactive one, by rewriting the
+    /// record and resuming it (docs/session-mode-conversion.md). Throws
+    /// <see cref="KeyNotFoundException"/> (no such session), <see cref="ArgumentException"/>
+    /// (unknown target mode, UI mode the agent does not support) or
+    /// <see cref="InvalidOperationException"/> (not autonomous, or not finished/paused). Default
+    /// throws so the many test doubles that never convert keep compiling.
+    /// </summary>
+    Task<SessionInfo> ConvertSessionAsync(string owner, string id, ConvertSessionRequest req,
+        CancellationToken ct = default) => throw new NotSupportedException();
     /// <summary>Partial update of session settings; non-title changes apply on the next resume.</summary>
     Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default);
     Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default);

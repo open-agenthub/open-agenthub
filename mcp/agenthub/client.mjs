@@ -65,6 +65,12 @@ export class AgentHubClient {
     return { deleted: true };
   }
 
+  /** Continues a finished autonomous session interactively (docs/session-mode-conversion.md). */
+  convert(id, body = {}) {
+    return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(id)}/convert`,
+      { mode: 'interactive', ...body });
+  }
+
   /** Owner sessions as an agent directory, optionally scoped to one project. */
   async listAgents(projectId) {
     const sessions = await this.list();

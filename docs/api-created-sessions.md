@@ -298,6 +298,18 @@ writes that and a wrong unit conversion is a session deleted twelve *minutes* la
 activity, why `updated_at` could not be used, and how the sweep is made safe across replicas is in
 `docs/session-expiry.md`.
 
+## The other direction: an autonomous run handed to a person
+
+A caller that created an Autonomous session can later turn it into an Interactive one with
+`POST /api/remote/sessions/{id}/convert {mode:"interactive", uiMode?, autoApprove?, resume?}` (the
+same body as `POST /api/sessions/{id}/convert`, and the `session_convert` MCP tool). The session
+resumes in the same conversation on Claude and Codex, and in a fresh one on Cursor and OpenClaw;
+`401` without a token, `404` for a session the token's owner does not have, `409 {error}` while it
+is still running or is not Autonomous, `400 {error}` for a UI mode the agent does not support.
+`canConvertToInteractive` on the session says in advance whether the call will be accepted. The
+reasoning, the per-runtime table and the two runtime corrections it needed are in
+`docs/session-mode-conversion.md`.
+
 ## How these claims were verified
 
 Against the pinned CLI versions, not from memory: Claude Code 2.1.283, Codex 0.157.1, Cursor Agent

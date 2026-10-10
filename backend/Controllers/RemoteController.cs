@@ -178,6 +178,23 @@ public sealed class RemoteController : ControllerBase
     }
 
     /// <summary>
+    /// Continues a finished or paused autonomous session interactively — the step a caller takes
+    /// when an unattended run needs a person's follow-up in the same conversation. Same rules and
+    /// status codes as the in-app endpoint (docs/session-mode-conversion.md).
+    /// </summary>
+    [HttpPost("sessions/{id}/convert")]
+    public async Task<ActionResult<SessionInfo>> Convert(string id, [FromBody] ConvertSessionRequest req, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        try { return Ok(await _svc.ConvertSessionAsync(owner, id, req, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (AgentNotAllowedException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Message); }
+        catch (ArgumentException e) { return BadRequest(new { error = e.Message }); }
+        catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
+    }
+
+    /// <summary>
     /// The session's provider state archive, so a client outside the cluster can continue the
     /// conversation in its own agent CLI. Same archive the resume path unpacks into the pod.
     /// </summary>

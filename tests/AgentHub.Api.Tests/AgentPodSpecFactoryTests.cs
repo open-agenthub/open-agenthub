@@ -359,6 +359,21 @@ public class AgentPodSpecFactoryTests
     }
 
     [Theory]
+    [InlineData(SessionMode.Autonomous, AgentAuthMode.ApiKey, true)]
+    [InlineData(SessionMode.Scheduled, AgentAuthMode.ApiKey, true)]
+    // An autonomous run converted to interactive keeps AuthMode ApiKey, and the key is the only
+    // credential it has. This used to be false: the mode alone gated the lookup.
+    [InlineData(SessionMode.Interactive, AgentAuthMode.ApiKey, true)]
+    [InlineData(SessionMode.Autonomous, AgentAuthMode.Auto, true)]
+    [InlineData(SessionMode.Scheduled, AgentAuthMode.Auto, true)]
+    // Auto bills the API only when unattended without a login; interactive Auto is a login.
+    [InlineData(SessionMode.Interactive, AgentAuthMode.Auto, false)]
+    [InlineData(SessionMode.Interactive, AgentAuthMode.Subscription, false)]
+    [InlineData(SessionMode.Autonomous, AgentAuthMode.Subscription, false)]
+    public void ResolvesApiKey_ForEveryApiKeySessionWhateverItsMode(SessionMode mode, AgentAuthMode auth, bool expected)
+        => Assert.Equal(expected, AgentPodSpecFactory.ResolvesApiKey(mode, auth));
+
+    [Theory]
     [InlineData(SessionMode.Interactive, AgentKind.Codex, AgentAuthMode.Subscription, false, false, null)]
     [InlineData(SessionMode.Autonomous, AgentKind.Codex, AgentAuthMode.Subscription, false, false,
         "[agent] Cannot start Codex Autonomous session: Subscription credential is not stored.")]

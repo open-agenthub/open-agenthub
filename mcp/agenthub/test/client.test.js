@@ -120,6 +120,37 @@ test('get list and delete hit remote sessions routes with Bearer auth', async ()
   });
 });
 
+test('convert posts the interactive target and the flags to the remote convert route', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const calls = [];
+
+  await withFakeServer((req, body, res) => {
+    calls.push({ method: req.method, url: req.url, authorization: req.headers.authorization, body });
+    json(res, 200, sessionInfo({ mode: 'Interactive', phase: 'Pending', convertedFrom: 'Autonomous' }));
+  }, async baseUrl => {
+    const client = new AgentHubClient({ AGENTHUB_URL: baseUrl, AGENTHUB_TOKEN: TOKEN });
+
+    const result = await client.convert('sess-1', { uiMode: 'chat', autoApprove: true });
+
+    assert.equal(result.convertedFrom, 'Autonomous');
+    assert.equal(calls[0].method, 'POST');
+    assert.equal(calls[0].url, '/api/remote/sessions/sess-1/convert');
+    assert.equal(calls[0].authorization, `Bearer ${TOKEN}`);
+    assert.deepEqual(JSON.parse(calls[0].body), { mode: 'interactive', uiMode: 'chat', autoApprove: true });
+  });
+});
+
+test('convert surfaces the 409 a running session answers with as a stable code', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+
+  await withFakeServer((req, body, res) => {
+    json(res, 409, { error: 'Pause the session or wait for it to finish before converting it.' });
+  }, async baseUrl => {
+    const client = new AgentHubClient({ AGENTHUB_URL: baseUrl, AGENTHUB_TOKEN: TOKEN });
+    await assert.rejects(() => client.convert('sess-1'), /agenthub_http_409/);
+  });
+});
+
 test('list filters by parentSessionId and phase client-side', async () => {
   const { AgentHubClient } = await import('../client.mjs');
 

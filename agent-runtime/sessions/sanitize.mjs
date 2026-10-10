@@ -4,7 +4,9 @@ const SAFE_KEYS = [
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
   'createdAt', 'hasMcp',
   // The self-deletion setting and the deadline it yields (docs/session-expiry.md).
-  'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt'
+  'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt',
+  // What session_convert changes and whether it can be called.
+  'uiMode', 'canConvertToInteractive', 'convertedFrom'
 ];
 
 /**
