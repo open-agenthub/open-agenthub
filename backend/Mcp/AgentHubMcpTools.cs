@@ -20,7 +20,8 @@ public sealed class AgentHubMcpTools(
     IHttpContextAccessor http,
     ISessionService sessions,
     ILogger<AgentHubMcpTools> logger,
-    ISessionMessageStore? messages = null)
+    ISessionMessageStore? messages = null,
+    ISessionMessageDelivery? delivery = null)
 {
     /// <summary>
     /// The calling user. The access token carries "preferred_username", the same claim the REST
@@ -233,11 +234,17 @@ public sealed class AgentHubMcpTools(
 
     [McpServerTool(Name = "agent_send")]
     [Description("Send a message or task to one of your agents. \"to\" is a session id or a unique title; "
-                 + "scope the lookup with projectId. The agent reads it via its in-session agent_inbox tool.")]
+                 + "scope the lookup with projectId. By default the agent reads it via its in-session "
+                 + "agent_inbox tool; with priority the message is pushed straight into the running agent's "
+                 + "prompt. deliveredVia in the result says where it went: inbox, injected or mod.")]
     public async Task<AgentMessageResult> SendToAgent(
         [Description("Session id or unique agent title.")] string to,
         [Description("Message body, 1..4000 characters.")] string message,
         [Description("Narrows an ambiguous title to one project.")] string? projectId = null,
+        [Description("\"true\" to deliver into the running agent's prompt now instead of its inbox.")]
+        string? priority = null,
+        [Description("\"true\" to stop the agent's current work before delivering; implies priority.")]
+        string? interrupt = null,
         CancellationToken ct = default)
     {
         if (messages is null) throw new McpException("messaging_unavailable");
@@ -263,6 +270,7 @@ public sealed class AgentHubMcpTools(
             target = byTitle[0];
         }
 
+        var (isPriority, isInterrupt) = AgentMessaging.ResolveFlags(ParseFlag(priority), ParseFlag(interrupt));
         var record = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
@@ -270,10 +278,13 @@ public sealed class AgentHubMcpTools(
             FromSessionId = null,
             ToSessionId = target.Id,
             Owner = owner,
-            Body = body
+            Body = body,
+            Priority = isPriority,
+            Interrupt = isInterrupt
         };
         await messages.AddAsync(record, ct);
-        return new AgentMessageResult(record.Id, target.Id, target.Title);
+        var sent = await AgentMessageDispatch.PushAsync(delivery, target, record, null, ct);
+        return new AgentMessageResult(record.Id, target.Id, target.Title, sent.Via, sent.Reason);
     }
 
     private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback) where TEnum : struct, Enum
@@ -325,4 +336,5 @@ public sealed class AgentHubMcpTools(
 
 public record AgentSummary(string Id, string Title, string? Description, string Phase, string? ProjectId);
 
-public record AgentMessageResult(string Id, string To, string Title);
+public record AgentMessageResult(string Id, string To, string Title, string DeliveredVia = MessageDeliveryVia.Inbox,
+    string? Reason = null);
