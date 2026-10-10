@@ -364,6 +364,34 @@ public record CreateSessionRequest
     /// <summary><c>start</c> or <c>lastActivity</c> (default). A scheduled session only accepts
     /// <c>start</c>: nobody attaches to a CronJob, so "last activity" would be its creation.</summary>
     public string? AutoDeleteFrom { get; init; }
+
+    /// <summary>
+    /// <c>auto</c> (default): when the session's provider account hits a usage limit, the hub
+    /// moves the running session to another available account of the same provider.
+    /// <c>off</c> keeps it where it is (docs/account-limits.md).
+    /// </summary>
+    public string? AccountFailover { get; init; }
+}
+
+/// <summary>The two spellings of <see cref="CreateSessionRequest.AccountFailover"/> and how they
+/// are stored: null for the default, so a row from before the column reads as <c>auto</c>.</summary>
+public static class AccountFailoverMode
+{
+    public const string Auto = "auto";
+    public const string Off = "off";
+
+    /// <summary>The stored form: null for auto. Throws for anything but the two words.</summary>
+    public static string? Normalize(string? value)
+    {
+        var text = value?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(text) || text == Auto) return null;
+        if (text == Off) return Off;
+        throw new ArgumentException("accountFailover must be \"auto\" or \"off\".");
+    }
+
+    public static bool IsOff(string? stored) => string.Equals(stored, Off, StringComparison.OrdinalIgnoreCase);
+
+    public static string Display(string? stored) => IsOff(stored) ? Off : Auto;
 }
 
 /// <summary>Session-scoped OpenAPI/GraphQL source registered on the in-process MCP gateway.</summary>
@@ -438,6 +466,9 @@ public record UpdateSessionRequest
     public int? AutoDeleteAfterSeconds { get; init; }
     /// <summary><c>start</c> or <c>lastActivity</c>; null = unchanged.</summary>
     public string? AutoDeleteFrom { get; init; }
+    /// <summary><c>auto</c> or <c>off</c>; null = unchanged. Not a runtime field: the hub reads it
+    /// when a limit is reported, so it applies to the running session.</summary>
+    public string? AccountFailover { get; init; }
     /// <summary>Replacement project assignment; null removes the assignment when supplied.</summary>
     private string? _projectId;
     [JsonIgnore]
@@ -462,13 +493,16 @@ public sealed record RemoteUpdateSessionRequest
     /// <summary>Null = unchanged, 0 = off. See <see cref="UpdateSessionRequest.AutoDeleteAfterSeconds"/>.</summary>
     public int? AutoDeleteAfterSeconds { get; init; }
     public string? AutoDeleteFrom { get; init; }
+    /// <summary><c>auto</c> or <c>off</c>; null = unchanged (docs/account-limits.md).</summary>
+    public string? AccountFailover { get; init; }
 
     public UpdateSessionRequest ToUpdate() => new()
     {
         Title = Title,
         Description = Description,
         AutoDeleteAfterSeconds = AutoDeleteAfterSeconds,
-        AutoDeleteFrom = AutoDeleteFrom
+        AutoDeleteFrom = AutoDeleteFrom,
+        AccountFailover = AccountFailover
     };
 }
 
@@ -502,7 +536,7 @@ public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bo
     List<string>? McpServerIds = null,
     string? SystemPrompt = null, string? CredentialId = null,
     int? AutoDeleteAfterSeconds = null, string? AutoDeleteFrom = null,
-    List<string>? GitPatIds = null);
+    List<string>? GitPatIds = null, string? AccountFailover = null);
 
 public static class SessionDuplication
 {
@@ -556,7 +590,9 @@ public static class SessionDuplication
             // countdown starts from its own creation. An explicit 0 means "no deadline" here as
             // it does on PATCH; create-side normalization turns it into null.
             AutoDeleteAfterSeconds = request.AutoDeleteAfterSeconds ?? source.AutoDeleteAfterSeconds,
-            AutoDeleteFrom = request.AutoDeleteFrom ?? source.AutoDeleteFrom
+            AutoDeleteFrom = request.AutoDeleteFrom ?? source.AutoDeleteFrom,
+            // Configuration, like the deadline: a copy keeps the source's choice unless told otherwise.
+            AccountFailover = request.AccountFailover ?? source.AccountFailover
         };
     }
 
@@ -653,6 +689,9 @@ public record SessionInfo
     public DateTime? ExpiresAt { get; init; }
     /// <summary>When somebody last used the session (docs/session-expiry.md says what counts).</summary>
     public DateTime LastActivityAt { get; init; }
+    /// <summary><c>auto</c> or <c>off</c>: whether the hub moves this session to another account
+    /// when its own hits a usage limit (docs/account-limits.md).</summary>
+    public string AccountFailover { get; init; } = AccountFailoverMode.Auto;
 }
 
 /// <summary>

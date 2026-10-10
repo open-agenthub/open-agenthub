@@ -36,6 +36,9 @@ public sealed class SessionRecord
     /// reports a usage limit could not say which login hit it. Written at every spawn.
     /// </summary>
     public string? ResolvedCredentialId { get; set; }
+    /// <summary><c>off</c> to keep the session on its account when that hits a usage limit;
+    /// null = <c>auto</c>, the hub moves it to another one (docs/account-limits.md).</summary>
+    public string? AccountFailover { get; set; }
     /// <summary>JSON array of the git PAT ids the session is built with; null = every stored PAT
     /// (docs/credential-scopes.md). Read at every spawn, so a resume uses the same selection.</summary>
     public string? GitPatIdsJson { get; set; }
@@ -197,6 +200,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS converted_from TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS git_pat_ids TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS resolved_credential_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_failover TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -210,15 +214,16 @@ public sealed class PostgresSessionStore : ISessionStore
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
                                   mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at,
                                   auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids,
-                                  resolved_credential_id)
+                                  resolved_credential_id, account_failover)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now(),
                     @autoDeleteAfter, @autoDeleteFrom, @lastActivity, @convertedFrom, @gitPatIds,
-                    @resolvedCredentialId)
+                    @resolvedCredentialId, @accountFailover)
             ON CONFLICT (id) DO UPDATE SET
                 resolved_credential_id = EXCLUDED.resolved_credential_id,
+                account_failover = EXCLUDED.account_failover,
                 auto_delete_after_seconds = EXCLUDED.auto_delete_after_seconds,
                 auto_delete_from = EXCLUDED.auto_delete_from,
                 -- The stored touch wins: an edit reads the record, changes a field and writes it
@@ -369,7 +374,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -414,6 +419,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("convertedFrom", (object?)r.ConvertedFrom?.ToString() ?? DBNull.Value);
         cmd.Parameters.AddWithValue("gitPatIds", (object?)r.GitPatIdsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("resolvedCredentialId", (object?)r.ResolvedCredentialId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("accountFailover", (object?)r.AccountFailover ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
         cmd.Parameters.AddWithValue("autoDeleteAfter", (object?)r.AutoDeleteAfterSeconds ?? DBNull.Value);
         cmd.Parameters.AddWithValue("autoDeleteFrom", (object?)r.AutoDeleteFrom ?? DBNull.Value);
@@ -459,6 +465,7 @@ public sealed class PostgresSessionStore : ISessionStore
         LastActivityAt = r.IsDBNull(34) ? r.GetDateTime(14) : r.GetDateTime(34),
         ConvertedFrom = r.IsDBNull(35) ? null : Enum.Parse<SessionMode>(r.GetString(35)),
         GitPatIdsJson = r.IsDBNull(36) ? null : r.GetString(36),
-        ResolvedCredentialId = r.IsDBNull(37) ? null : r.GetString(37)
+        ResolvedCredentialId = r.IsDBNull(37) ? null : r.GetString(37),
+        AccountFailover = r.IsDBNull(38) ? null : r.GetString(38)
     };
 }

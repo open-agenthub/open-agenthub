@@ -79,6 +79,62 @@ test('the mod relays a rate-limit reading through its loopback route, deduplicat
   assert.equal(limitReports(harness).length, 2);
 });
 
+// ---- the switch itself: the reason line and messages that arrive mid-restart ------------------
+
+const credentialHeaders = { 'X-Agent-Token': 'correct-token', 'X-Agent-Provider': 'test', 'Content-Type': 'application/json' };
+const reason = 'Switched to account "Büro" because "Work" hit its usage limit (resets 14:00 UTC)';
+
+test('a credential swap with a reason names it in the scrollback instead of the generic line', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' });
+
+  await requestHttp(harness, 'PUT', '/agenthub/credentials',
+    { ...credentialHeaders, 'X-Agent-Switch-Reason': encodeURIComponent(reason + '\x1b[2J') }, '{"token":"t"}');
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+
+  const socket = new (require('./common-server-harness').FakeSocket)();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  assert.match(socket.sent[0], /\[agent\] Switched to account "Büro" because "Work" hit its usage limit \(resets 14:00 UTC\)\s+— restarting the agent and resuming the conversation\./);
+  assert.doesNotMatch(socket.sent[0], /\x1b\[2J/);
+  assert.doesNotMatch(socket.sent[0], /Provider account switched/);
+});
+
+test('in chat mode the reason arrives as an account-switched event', async () => {
+  const harness = createChatHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' });
+  const { FakeSocket } = require('./common-server-harness');
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+
+  await requestHttp(harness, 'PUT', '/agenthub/credentials',
+    { ...credentialHeaders, 'X-Agent-Switch-Reason': encodeURIComponent(reason) }, '{"token":"t"}');
+  harness.children[0].emitExit(0, null);
+
+  const events = socket.sent.map(line => JSON.parse(line.trim()));
+  const switched = events.find(event => event.type === 'agenthub' && event.subtype === 'account-switched');
+  assert.ok(switched);
+  assert.match(switched.text, /^Switched to account "Büro"/);
+});
+
+test('a priority message that arrives while the agent restarts is typed into the new terminal after a pause', async () => {
+  const delays = [];
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, {}, {
+    setTimeout(callback, ms) { delays.push(ms); callback(); return 1; }
+  });
+  const messageHeaders = { 'X-Agent-Token': 'correct-token', 'Content-Type': 'application/json' };
+  const body = JSON.stringify({ id: 'm-1', from: null, body: reason, priority: true });
+
+  await requestHttp(harness, 'PUT', '/agenthub/credentials', credentialHeaders, '{"token":"t"}');
+  const during = await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, body);
+  assert.deepEqual(JSON.parse(during.body), { delivered: 'pty', deferred: true });
+  // Nothing went into the terminal that is on its way out.
+  assert.deepEqual(harness.terminals[0].writes, []);
+
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+  // The new terminal gets it, after the TUI has had time to draw its prompt.
+  await new Promise(resolve => setImmediate(resolve));
+  assert.ok(delays.includes(3000));
+  assert.deepEqual(harness.terminals[1].writes, ['[AgentHub message from outside the fleet]\n' + reason, '\r']);
+});
+
 test('without a mod token the limit route does not exist, and without a callback nothing is reported', async () => {
   const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, { limitPatterns: patterns });
   const response = await requestHttp(harness, 'POST', '/agenthub/mod/limit', modHeaders, '{"kind":"five_hour","percentUsed":100}', '127.0.0.1');

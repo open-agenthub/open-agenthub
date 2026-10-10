@@ -6,7 +6,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
-const { createLimitDetector, toIso } = require('./limit-detector');
+const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -31,6 +31,11 @@ const MAX_MESSAGE_BYTES = 64 * 1024;
 const MOD_HEARTBEAT_TTL_MS = 15_000;
 // A mod's limit report: kind, percent, reset time — small by construction.
 const MAX_LIMIT_REPORT_BYTES = 4 * 1024;
+// How long a restarted TUI gets to draw its prompt box before a message held back during the
+// restart is typed into it. Text written earlier lands in a terminal nothing reads yet.
+const RESTART_INPUT_DELAY_MS = 3_000;
+// The longest reason a credential swap may carry into the scrollback.
+const MAX_SWITCH_REASON_CHARS = 300;
 
 function createCommonServer(options = {}) {
   const env = options.env || process.env;
@@ -96,8 +101,12 @@ function createCommonServer(options = {}) {
   let transcriptFile = null;
   let transcriptUploaded = { size: -1, mtimeMs: -1 };
   // Set while the agent is being stopped on purpose so that its exit starts it again instead
-  // of ending the session.
+  // of ending the session: `{ text, subtype }`, the line the clients see and the agenthub event
+  // the chat UI gets for it.
   let restartReason = null;
+  // Fleet messages that arrived while the agent was restarting; handed to the new agent once it
+  // is up, since the old PTY or pipe would have swallowed them (docs/account-limits.md).
+  let deferredMessages = [];
   // The last size a client asked for, re-applied to a restarted PTY: the clients do not know
   // the terminal was replaced and would not send a resize until their own window changes.
   let lastSize = null;
@@ -481,23 +490,24 @@ function createCommonServer(options = {}) {
   }
 
   function restartMessage(reason) {
-    if (chatMode) return agenthubEvent('info', { text: reason + ' — restarting the agent and resuming the conversation.' });
-    return '\r\n[agent] ' + reason + ' — restarting the agent and resuming the conversation.\r\n';
+    const text = reason.text + ' — restarting the agent and resuming the conversation.';
+    if (chatMode) return agenthubEvent(reason.subtype || 'info', { text });
+    return '\r\n[agent] ' + text + '\r\n';
   }
 
   /**
    * Stops the agent so that handleAgentExit starts it again with the provider's resume command.
    * The conversation this pod ran is on its own disk, which is what the resume flags describe;
    * a session that started fresh in this pod therefore resumes exactly like one restored from
-   * the archive would.
+   * the archive would. `subtype` names the agenthub event the chat UI gets for the restart line.
    */
-  function restartAgent(reason) {
+  function restartAgent(reason, subtype) {
     if (exited || !term) return false;
     // A provider that names its conversation itself does so only once it has written the file,
     // and that name is what its resume command takes; looking now means the restarted agent
     // resumes this conversation and not whichever one is newest on disk.
     locateTranscript();
-    restartReason = reason;
+    restartReason = { text: reason, subtype: subtype || 'info' };
     env.AGENTHUB_RESUME = '1';
     env.AGENTHUB_STATE_RESTORED = '1';
     const stopping = term;
@@ -519,6 +529,7 @@ function createCommonServer(options = {}) {
       remember(message);
       broadcast(message);
       startAgent(true);
+      flushDeferredMessages();
       return;
     }
 
@@ -828,9 +839,48 @@ function createCommonServer(options = {}) {
     credentials.writeBaselineHash(credentials.baselineFile(env), credentials.sha256(body), fs);
     if (typeof driver.installCredential === 'function') driver.installCredential(env, body, target, fs);
     else credentials.writeCredentialFile(target, body, fs);
-    const restarting = restartAgent('Provider account switched');
+    // A reason from the hub (the automatic failover says why) replaces the generic line and
+    // names the event, so a person reading the scrollback or the chat sees the switch happen.
+    const reason = switchReason(request.headers['x-agent-switch-reason']);
+    const restarting = reason
+      ? restartAgent(reason, 'account-switched')
+      : restartAgent('Provider account switched');
     console.log('[agent] Provider credential replaced' + (restarting ? '; restarting with resume.' : '.'));
     sendJson(response, 202, { installed: true, restarting });
+  }
+
+  // Percent-encoded by the hub so a label with any character survives the header; control
+  // characters are dropped so nothing in it can drive the terminal.
+  function switchReason(header) {
+    if (typeof header !== 'string' || !header) return null;
+    let text;
+    try { text = decodeURIComponent(header); } catch { text = header; }
+    text = stripAnsi(text).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    return text.length > MAX_SWITCH_REASON_CHARS ? text.slice(0, MAX_SWITCH_REASON_CHARS) : text;
+  }
+
+  // Messages held back during a restart go to the new agent: the mod queue keeps itself, the
+  // chat pipe buffers, and a TUI gets them typed once it has had time to draw its prompt.
+  function flushDeferredMessages() {
+    const held = deferredMessages;
+    deferredMessages = [];
+    for (const message of held) {
+      if (modAlive() && (message.priority || mode === 'interactive')) {
+        modQueue.push(message);
+      } else if (chatMode) {
+        if (chat) queueChatMessage(null, { text: formatFleetMessage(message) });
+      } else if (mode === 'interactive' && term) {
+        const target = term;
+        setTimeoutImpl(() => {
+          if (term !== target || exited) return;
+          void injectTerminalInput(target, formatFleetMessage(message), {
+            interrupt: false,
+            wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
+          });
+        }, RESTART_INPUT_DELAY_MS);
+      }
+    }
   }
 
   /**
@@ -869,8 +919,17 @@ function createCommonServer(options = {}) {
       return;
     }
     if (!message.priority) return unavailable('not_priority');
+    // The agent is being swapped out (an account switch): the pipe or PTY it is about to leave
+    // would swallow the text, so the message waits for the one that comes up. The answer names
+    // the channel it will take, since that is what the hub records.
+    const restarting = restartReason !== null;
     if (chatMode) {
       if (!chat) return unavailable('agent_not_started');
+      if (restarting) {
+        deferredMessages.push(message);
+        sendJson(response, 200, { delivered: 'chat', deferred: true });
+        return;
+      }
       if (message.interrupt) chat.interrupt();
       queueChatMessage(null, { text: formatFleetMessage(message) });
       sendJson(response, 200, { delivered: 'chat' });
@@ -879,6 +938,11 @@ function createCommonServer(options = {}) {
     // A -p run reads its prompt from the command line; keystrokes into its PTY reach nothing.
     if (mode !== 'interactive') return unavailable('non_interactive');
     if (!term) return unavailable('agent_not_started');
+    if (restarting) {
+      deferredMessages.push(message);
+      sendJson(response, 200, { delivered: 'pty', deferred: true });
+      return;
+    }
     await injectTerminalInput(term, formatFleetMessage(message), {
       interrupt: message.interrupt,
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))

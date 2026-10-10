@@ -73,6 +73,14 @@ public interface ISessionService
     Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
         CancellationToken ct = default) => throw new NotSupportedException();
 
+    /// <summary>
+    /// The same switch with a reason the pod shows in place of its generic "account switched"
+    /// line — what the automatic failover passes (docs/account-limits.md). Default forwards to
+    /// the plain switch so a test double implementing that one still serves both.
+    /// </summary>
+    Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId, string? reason,
+        CancellationToken ct = default) => SwitchSessionCredentialAsync(owner, id, credentialId, ct);
+
     Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default);
     Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);
     Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default);

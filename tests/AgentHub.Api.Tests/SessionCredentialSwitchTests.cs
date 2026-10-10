@@ -115,6 +115,25 @@ public sealed class SessionCredentialSwitchTests
         Assert.Equal([1, 2, 3], body);
     }
 
+    /// <summary>The automatic failover says why it switched; the pod shows that line instead of
+    /// the generic one (docs/account-limits.md). Percent-encoded, since a label may hold anything.</summary>
+    [Fact]
+    public async Task Pusher_CarriesTheSwitchReasonPercentEncoded_AndOmitsTheHeaderWithoutOne()
+    {
+        var headers = new List<string?>();
+        var pusher = Pusher(request =>
+        {
+            headers.Add(request.Headers.TryGetValues(AgentCredentialPusher.ReasonHeader, out var values) ? values.Single() : null);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Accepted));
+        });
+
+        await pusher.PushAsync("10.0.0.8", "t", AgentKind.Claude, [1], "Switched to \"Büro\" — limit", default);
+        await pusher.PushAsync("10.0.0.8", "t", AgentKind.Claude, [1], default);
+
+        Assert.Equal(Uri.EscapeDataString("Switched to \"Büro\" — limit"), headers[0]);
+        Assert.Null(headers[1]);
+    }
+
     [Fact]
     public async Task Pusher_TurnsARefusalIntoAnHttpRequestException()
     {

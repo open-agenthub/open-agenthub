@@ -275,8 +275,12 @@ public sealed class KubernetesSessionService : ISessionService
         return GitPatSelection.Normalize(requested, stored);
     }
 
-    public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
+    public Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
         CancellationToken ct = default)
+        => SwitchSessionCredentialAsync(owner, id, credentialId, reason: null, ct);
+
+    public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
+        string? reason, CancellationToken ct = default)
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
@@ -292,9 +296,13 @@ public sealed class KubernetesSessionService : ISessionService
 
         // Recorded before the push: the pod's watcher uploads the file it was just given as soon
         // as it changes again, and that upload has to land on the new account, not the old one.
+        // The resolved id follows for the same reason the spawn writes it: a later limit report
+        // from this pod must name the account that is now mounted.
         await _store.SetCredentialIdAsync(rec.Id, account.Id, ct);
+        await _store.SetResolvedCredentialIdAsync(rec.Id, account.Id, ct);
         rec.CredentialId = account.Id;
-        await _credentialPusher.PushAsync(pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, ct);
+        rec.ResolvedCredentialId = account.Id;
+        await _credentialPusher.PushAsync(pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, reason, ct);
 
         account.LastUsedAt = DateTime.UtcNow;
         set.Dirty = true;
@@ -392,7 +400,8 @@ public sealed class KubernetesSessionService : ISessionService
             AgentSessionId = Guid.NewGuid().ToString(),
             CallbackToken = RandomToken(),
             Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending",
-            AutoDeleteAfterSeconds = autoDeleteAfter, AutoDeleteFrom = autoDeleteFrom
+            AutoDeleteAfterSeconds = autoDeleteAfter, AutoDeleteFrom = autoDeleteFrom,
+            AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover)
         };
         // Persist session row before registering ephemerals so a failed Upsert
         // cannot leave orphaned session-scoped API sources.
@@ -946,6 +955,9 @@ public sealed class KubernetesSessionService : ISessionService
         if (req.AutoDeleteAfterSeconds is not null || req.AutoDeleteFrom is not null)
             (rec.AutoDeleteAfterSeconds, rec.AutoDeleteFrom) =
                 SessionExpiry.ForUpdate(rec, req.AutoDeleteAfterSeconds, req.AutoDeleteFrom);
+        // Read off the record when a limit is reported, so it applies to the live session.
+        if (req.AccountFailover is not null)
+            rec.AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover);
 
         try
         {
@@ -1362,7 +1374,8 @@ public sealed class KubernetesSessionService : ISessionService
         Image = r.Image, RunAsRoot = r.RunAsRoot, AutoApprove = r.AutoApprove, Cpu = r.Cpu, Memory = r.Memory,
         Browser = browser ?? BrowserSummary.Stopped,
         AutoDeleteAfterSeconds = r.AutoDeleteAfterSeconds, AutoDeleteFrom = r.AutoDeleteFrom,
-        ExpiresAt = SessionExpiry.ExpiresAt(r), LastActivityAt = r.LastActivityAt
+        ExpiresAt = SessionExpiry.ExpiresAt(r), LastActivityAt = r.LastActivityAt,
+        AccountFailover = AccountFailoverMode.Display(r.AccountFailover)
     };
 
     private V1ObjectMeta Meta(string name, string owner, string id, string component,
