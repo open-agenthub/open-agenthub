@@ -26,6 +26,8 @@ function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MO
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: undefined }))
   on('session.usage', () => ({ value: calls.usage }))
+  // The engine answers session.measure with the units that moved; here the test is the engine.
+  on('session.measure', ($, e) => ({ changed: e.changed }))
   on('http.fetch', ($, e) => {
     const init = e.init ?? {}
     calls.fetches.push({ url: e.url, method: init.method ?? 'GET', auth: String(init.headers?.Authorization ?? '') })
@@ -218,6 +220,7 @@ test('without a mod token the mod stays inert', async ($, on) => {
   const fetches: string[] = []
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: undefined }))
+  on('session.measure', ($, e) => ({ changed: e.changed }))
   on('http.fetch', ($, e) => {
     fetches.push(e.url)
     return { value: { status: 200, ok: true, headers: {}, text: '{"messages":[]}' } }
