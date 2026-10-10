@@ -11,6 +11,7 @@ import { repoShortName } from '../lib/text.js'
 import { accountOptionLabel, accountsFor, authLabel, defaultAccountId } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
 import { permissionTitle } from '../lib/permissions.js'
+import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
 defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate'])
@@ -222,6 +223,8 @@ async function selectTab(tab) {
           <span v-if="session.agent">· {{ session.agent }}<template v-if="session.authMode"> / {{ authLabel(session.authMode) }}</template></span>
           <span v-if="repoLabel" class="mono">· {{ repoLabel }}</span>
           <span v-if="session.schedule" class="cron">· ▶ {{ session.schedule }}</span>
+          <span v-if="session.expiresAt" class="expires" :class="{ soon: isExpiringSoon(session.expiresAt) }"
+            data-expires-at :title="`Auto-delete ${session.autoDeleteFrom === 'start' ? 'after start' : 'after last activity'}`">· ⌛ expires in {{ formatRemaining(session.expiresAt) }}</span>
           <span v-if="session.sharedBy" class="shared">· shared by {{ session.sharedBy }}</span>
         </div>
       </div>
@@ -345,6 +348,8 @@ async function selectTab(tab) {
 .mdot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .mono { font-family: var(--mono); }
 .cron { color: var(--sched); font-weight: 600; }
+.expires { color: var(--muted); font-weight: 600; }
+.expires.soon { color: var(--warn); }
 .shared { color: var(--accent); }
 .tabs { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius); padding: 3px; }
 .tabs button { font-size: 12px; font-weight: 700; padding: 5px 14px; border-radius: 8px; border: none; background: none; color: var(--muted-3); }

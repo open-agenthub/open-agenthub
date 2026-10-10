@@ -81,6 +81,10 @@ shift.
   Chromium only when the agent needs it. The same desktop appears beside the chat through
   noVNC, while idle sessions consume no browser CPU or memory.
 - **Community Edition projects and session duplication** — organize sessions into personal projects and duplicate reusable settings into an independent session without copying conversation state or credentials.
+- **Sessions that delete themselves** — set a deadline per session (hours or days, counted
+  from its start or from the last time anyone used it) in the web app, the remote API or the
+  MCP tools; the remaining time is shown everywhere the session is listed. See
+  `docs/session-expiry.md`.
 - **Subscription login that sticks** — sign in inside the selected provider container;
   refreshed Claude, Codex, Cursor, or OpenClaw file-based authentication is persisted per user in the
   background. Codex uses its device-code flow in headless sessions; Cursor uses
