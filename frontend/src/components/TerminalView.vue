@@ -10,7 +10,7 @@ import { sessionCapabilities } from '../lib/access.js'
 import { canConvert, convertedLabel } from '../lib/conversion.js'
 import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
-import { accountOptionLabel, accountsFor, authLabel, defaultAccountId } from '../lib/agent.js'
+import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
@@ -152,8 +152,27 @@ const accountList = computed(() => accountsFor(providerAccounts.value, props.ses
 // What the session is known to run on right now. The parent's session object only picks the
 // new id up on its next refresh, so a switch made here is remembered until then.
 const switchedTo = ref('')
+// The pin, else what the last start mounted (the hub records it), else the default.
 const currentAccountId = computed(() =>
-  switchedTo.value || props.session?.credentialId || defaultAccountId(accountList.value))
+  switchedTo.value || props.session?.credentialId || props.session?.resolvedCredentialId || defaultAccountId(accountList.value))
+const currentAccount = computed(() => accountList.value.find(a => a.id === currentAccountId.value) || null)
+// The hub moved the session on its own (docs/account-limits.md): the record's account changed
+// under a running session without this view asking for it. Shown until dismissed; a switch
+// made from the dropdown here is reported through accountNote instead.
+const autoSwitched = ref(null)
+watch(() => props.session?.credentialId, (id, previous) => {
+  if (!id || !previous || id === previous || id === switchedTo.value || !isLive.value) return
+  autoSwitched.value = id
+})
+const autoSwitchedLabel = computed(() => {
+  const account = accountList.value.find(a => a.id === autoSwitched.value)
+  return account ? accountOptionLabel(account) : autoSwitched.value
+})
+// The account the session runs on is at its usage limit. Whether another one could take
+// over is what the person wants to know — the hub has already tried (or was told not to).
+const accountAtLimit = computed(() => !props.sharedToken && capabilities.value.canManage && isLive.value
+  && props.session?.authMode === 'Subscription' && isAccountExhausted(currentAccount.value))
+const hasAlternative = computed(() => availableAlternatives(accountList.value, currentAccountId.value).length > 0)
 const pendingAccountId = ref('')
 const pendingAccount = computed(() =>
   accountList.value.find(a => a.id === pendingAccountId.value && a.id !== currentAccountId.value) || null)
@@ -206,6 +225,7 @@ watch(() => props.session?.id, () => {
   switchedTo.value = ''
   pendingAccountId.value = ''
   accountNote.value = ''
+  autoSwitched.value = null
   refreshPermissions()
   refreshMessages()
   loadAccounts()
@@ -282,7 +302,8 @@ async function selectTab(tab) {
         <span class="acct-label">Account</span>
         <select data-account-select :value="pendingAccountId || currentAccountId" :disabled="accountBusy"
           aria-label="Provider account of this session" @change="chooseAccount">
-          <option v-for="a in accountList" :key="a.id" :value="a.id" :data-account-option="a.id">{{ accountOptionLabel(a) }}</option>
+          <option v-for="a in accountList" :key="a.id" :value="a.id" :data-account-option="a.id"
+            :data-account-exhausted="isAccountExhausted(a) ? 'true' : null">{{ accountOptionLabel(a) }}{{ isAccountExhausted(a) ? ` (${accountLimitLabel(a)})` : '' }}</option>
         </select>
       </label>
       <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
@@ -322,6 +343,27 @@ async function selectTab(tab) {
       <span class="ask-dot msg-dot"></span>
       <div class="perm-text"><span class="msg-body">{{ accountNote }}</span></div>
       <div class="perm-actions"><button class="bar-btn" data-account-note-dismiss @click="accountNote = ''">Dismiss</button></div>
+    </div>
+    <div v-if="autoSwitched" class="perm acct-note" data-account-switched>
+      <span class="ask-dot msg-dot"></span>
+      <div class="perm-text">
+        <strong>Account switched to “{{ autoSwitchedLabel }}”.</strong>
+        <span class="perm-summary">The previous account hit its usage limit; the agent restarted on this one and resumed the conversation.</span>
+      </div>
+      <div class="perm-actions"><button class="bar-btn" data-account-switched-dismiss @click="autoSwitched = null">Dismiss</button></div>
+    </div>
+    <div v-if="accountAtLimit" class="perm" data-account-at-limit :data-has-alternative="hasAlternative ? 'true' : 'false'">
+      <span class="ask-dot"></span>
+      <div class="perm-text">
+        <strong>Account at limit{{ hasAlternative ? '' : ', no other account available' }}.</strong>
+        <span class="perm-summary">
+          {{ hasAlternative
+            ? (session.accountFailover === 'off'
+              ? 'Automatic switching is off for this session — pick another account from the dropdown.'
+              : 'Another account is available — pick it from the dropdown if the hub has not switched yet.')
+            : `“${currentAccount?.label}” ${accountLimitLabel(currentAccount)}. The session keeps running on it; sign in with another login or wait for the reset.` }}
+        </span>
+      </div>
     </div>
     <div v-if="session.questionPending && capabilities.canWrite" class="asking">
       <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ isChat ? 'below' : 'in the terminal below' }}.

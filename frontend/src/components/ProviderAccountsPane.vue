@@ -1,7 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { api } from '../api.js'
-import { accountsFor, agentOptions } from '../lib/agent.js'
+import { accountLimitLabel, accountsFor, agentOptions, isAccountExhausted } from '../lib/agent.js'
 
 /**
  * The stored provider logins, as accounts: one list per agent with label, identity, default
@@ -76,6 +76,11 @@ const makeDefault = (agent, account) =>
 const remove = (agent, account) =>
   run(`${agent}/${account.id}`, () => api.deleteProviderAccount(agent, account.id))
 
+// The way out of a wrong limit detection (docs/account-limits.md): the mark is lifted and the
+// account goes back into the rotation for new sessions and failovers at once.
+const clearExhausted = (agent, account) =>
+  run(`${agent}/${account.id}`, () => api.updateProviderAccount(agent, account.id, { clearExhausted: true }))
+
 /**
  * Removes the stored login outright when the listing is not available. Like the per-account
  * removal it is immediate, not staged for save: a credential the user has decided is broken
@@ -107,6 +112,8 @@ const removeAll = agent => run(agent, () => api.deleteSubscriptionCredential(age
               <template v-else>
                 <span class="label" data-account-label>{{ account.label }}</span>
                 <span v-if="account.isDefault" class="badge" data-account-default>default</span>
+                <span v-if="isAccountExhausted(account)" class="badge limit" data-account-exhausted
+                  :title="account.exhaustedReason || ''">{{ accountLimitLabel(account) }}</span>
               </template>
               <span v-if="identity(account)" class="identity" data-account-identity>{{ identity(account) }}</span>
             </div>
@@ -117,6 +124,8 @@ const removeAll = agent => run(agent, () => api.deleteSubscriptionCredential(age
                 <button type="button" class="chip" data-account-cancel-label @click="editing = null">cancel</button>
               </template>
               <template v-else>
+                <button v-if="isAccountExhausted(account)" type="button" class="chip" data-account-clear-exhausted
+                  :disabled="busy === `${agent}/${account.id}`" @click="clearExhausted(agent, account)">clear limit</button>
                 <button type="button" class="chip" data-account-rename @click="startRename(agent, account)">rename</button>
                 <button v-if="!account.isDefault" type="button" class="chip" data-account-make-default
                   :disabled="busy === `${agent}/${account.id}`" @click="makeDefault(agent, account)">make default</button>
@@ -154,6 +163,7 @@ const removeAll = agent => run(agent, () => api.deleteSubscriptionCredential(age
 .who input { width: 220px; max-width: 100%; }
 .label { font-size: 13px; font-weight: 700; color: var(--strong); }
 .badge { font-family: var(--mono); font-size: 10px; color: var(--ok); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+.badge.limit { color: var(--warn); border-color: var(--warn); }
 .identity { font-family: var(--mono); font-size: 11px; color: var(--muted-3); overflow: hidden; text-overflow: ellipsis; }
 .actions { display: flex; gap: 6px; flex-shrink: 0; }
 .chip {
