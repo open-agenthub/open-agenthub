@@ -48,6 +48,17 @@ export class SessionsBackendClient {
     return this.#request('GET', '/project-agents');
   }
 
+  /** The account this session (no id) or a descendant runs on, with its limit state and the
+   * alternatives (docs/account-limits.md). */
+  accountStatus(childId) {
+    return this.#request('GET', childId ? `/peer/${encodeURIComponent(childId)}/account-status` : '/account-status');
+  }
+
+  /** Moves this session (no id) or a descendant to another stored account; its agent restarts with resume. */
+  switchAccount(childId, credentialId) {
+    return this.#request('PATCH', childId ? `/peer/${encodeURIComponent(childId)}/credential` : '/credential', { credentialId });
+  }
+
   /** Sends a message/task to a peer agent (already resolved to a session id). The flags are
    * only sent when set, so a plain send looks exactly as it did before they existed. */
   sendAgentMessage(toSessionId, message, { priority, interrupt } = {}) {

@@ -148,6 +148,25 @@ export function accountOptionLabel(account) {
   return identity ? `${account.label} — ${identity}` : account.label
 }
 
+/** Whether a listing entry is at its usage limit right now (docs/account-limits.md). */
+export function isAccountExhausted(account) {
+  return !!account?.isExhausted
+}
+
+/** "at limit · resets 14:00": what the badges and dropdowns say about an exhausted account. */
+export function accountLimitLabel(account) {
+  if (!isAccountExhausted(account)) return ''
+  const until = account.exhaustedUntil ? new Date(account.exhaustedUntil) : null
+  if (!until || Number.isNaN(until.getTime())) return 'at limit'
+  const time = until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return `at limit · resets ${time}`
+}
+
+/** The accounts of a list a session could be moved to: not the current one, not exhausted. */
+export function availableAlternatives(list, currentId) {
+  return (Array.isArray(list) ? list : []).filter(account => account?.id !== currentId && !isAccountExhausted(account))
+}
+
 /** The stored git PATs ({id, kind, host}) out of the credential status; never a token. */
 export function gitPatOptions(status) {
   return Array.isArray(status?.gitPats) ? status.gitPats : []

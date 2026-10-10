@@ -117,6 +117,21 @@ public sealed class ProviderAccountEndpointsTests
         Assert.Equal(("alice", AgentKind.Claude, "a1"), service.UpdatedTarget);
     }
 
+    /// <summary>The manual way out of a wrong limit detection (docs/account-limits.md) rides on
+    /// the same PATCH; the controller forwards the flag untouched.</summary>
+    [Fact]
+    public async Task UpdateAccount_ForwardsClearExhausted()
+    {
+        var service = new RecordingSessionService { Updated = new("a1", "Work", null, null, DateTime.UtcNow, null, true) };
+
+        var result = await Credentials(service, "alice").UpdateAccount(AgentKind.Codex, "a1",
+            new UpdateProviderAccountRequest(ClearExhausted: true), CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result.Result);
+        Assert.True(service.UpdatedRequest!.ClearExhausted);
+        Assert.Null(service.UpdatedRequest.Label);
+    }
+
     [Fact]
     public async Task UpdateAccount_UnknownAccountIs404_AndBadIdOrLabelIs400()
     {
@@ -214,6 +229,7 @@ public sealed class ProviderAccountEndpointsTests
         public ProviderAccountInfo? Updated { get; init; }
         public Exception? UpdateException { get; set; }
         public (string Owner, AgentKind Agent, string Id)? UpdatedTarget { get; private set; }
+        public UpdateProviderAccountRequest? UpdatedRequest { get; private set; }
         public List<(string Owner, AgentKind Agent, string Id)> DeletedAccounts { get; } = new();
 
         public Task<string?> StoreProviderLoginAsync(string owner, AgentKind agent, string json,
@@ -233,6 +249,7 @@ public sealed class ProviderAccountEndpointsTests
         {
             if (UpdateException is not null) throw UpdateException;
             UpdatedTarget = (owner, agent, id);
+            UpdatedRequest = req;
             return Task.FromResult(Updated);
         }
         public Task DeleteProviderAccountAsync(string owner, AgentKind agent, string id, CancellationToken ct = default)

@@ -1,8 +1,8 @@
 <script setup>
 import { computed, watch } from 'vue'
 import {
-  accountOptionLabel, accountsFor, agentOptions, authOptions, credentialReadiness, defaultAccountId,
-  needsOpenClawApiKeySource, openClawApiKeySourceOptions
+  accountLimitLabel, accountOptionLabel, accountsFor, agentOptions, authOptions, credentialReadiness, defaultAccountId,
+  isAccountExhausted, needsOpenClawApiKeySource, openClawApiKeySourceOptions
 } from '../lib/agent.js'
 
 const props = defineProps({
@@ -85,11 +85,13 @@ function chooseAgent(agent) {
       <div class="decision-label">Account</div>
       <select data-account-select :value="credentialId" aria-label="Provider account"
         @change="$emit('update:credentialId', $event.target.value)">
-        <option v-for="account in providerAccounts" :key="account.id" :value="account.id" :data-account-option="account.id">
-          {{ accountOptionLabel(account) }}{{ account.isDefault ? ' (default)' : '' }}
+        <option v-for="account in providerAccounts" :key="account.id" :value="account.id" :data-account-option="account.id"
+          :data-account-exhausted="isAccountExhausted(account) ? 'true' : null">
+          {{ accountOptionLabel(account) }}{{ account.isDefault ? ' (default)' : '' }}{{ isAccountExhausted(account) ? ` (${accountLimitLabel(account)})` : '' }}
         </option>
       </select>
-      <small>Which stored {{ agent }} login this session uses. A running session can be switched from its header.</small>
+      <small>Which stored {{ agent }} login this session uses. A running session can be switched from its header.
+        <template v-if="providerAccounts.some(isAccountExhausted)"> An account marked “at limit” is skipped for new sessions unless you pick it here.</template></small>
     </div>
     <p class="readiness" :class="{ ready: readiness.ready }" data-readiness aria-live="polite">{{ readiness.text }}</p>
   </div>

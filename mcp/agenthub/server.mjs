@@ -62,7 +62,10 @@ const createSchema = z.object({
   // Comma-separated ids from credentials_list → gitPats. Text, not an array, so an already
   // connected client's call does not fail schema validation (see credentials.mjs). Omitted or
   // "*" = every stored token, "none" = no token.
-  gitPatIds: z.string().max(4096).optional()
+  gitPatIds: z.string().max(4096).optional(),
+  // Whether the hub moves the session to another account when its own hits a usage limit
+  // (docs/account-limits.md); omitted = auto.
+  accountFailover: z.enum(['auto', 'off']).optional()
 });
 
 register('session_create', {
@@ -74,9 +77,31 @@ register('session_create', {
     + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start; the '
     + 'response\'s expiresAt says when. '
     + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
-    + 'token) the git tokens the session gets; credentials_list shows what is available to this token.',
+    + 'token) the git tokens the session gets; credentials_list shows what is available to this token. '
+    + 'accountFailover "off" keeps the session on its account when that hits a usage limit; the '
+    + 'default "auto" moves it to another available one.',
   inputSchema: createSchema
 }, async (body) => text(sanitizeSession(await client.create(withCredentialSelection(withExpiry(body))))));
+
+register('account_status', {
+  description: 'Which provider account a session runs on, whether that account is at its usage limit '
+    + '(isExhausted, exhaustedUntil), the session\'s accountFailover setting, and the other stored '
+    + 'accounts of the same provider as alternatives — pass one of their ids to account_switch.',
+  inputSchema: z.object({ sessionId: z.string().min(1).max(128) })
+  // Not a session record; sanitizeSession's allowlist would strip all of it.
+}, async ({ sessionId }) => text(await client.accountStatus(sessionId)));
+
+register('account_switch', {
+  description: 'Move a running Subscription session to another stored provider account (an id from '
+    + 'account_status or credentials_list). The agent restarts with the other login and resumes its '
+    + 'conversation. Fails with agenthub_http_409 when the session has no live pod, agenthub_http_400 '
+    + 'for an unknown account or an API-key session, credential_not_allowed for an account this token '
+    + 'may not use, and agenthub_http_502 when the pod did not take the file.',
+  inputSchema: z.object({
+    sessionId: z.string().min(1).max(128),
+    credentialId: z.string().min(1).max(64)
+  })
+}, async ({ sessionId, credentialId }) => text(sanitizeSession(await client.switchAccount(sessionId, credentialId))));
 
 register('credentials_list', {
   description: 'List the credentials a session created with this token may use: provider logins '

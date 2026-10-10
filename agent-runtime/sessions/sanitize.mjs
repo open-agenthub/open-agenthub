@@ -9,7 +9,9 @@ const SAFE_KEYS = [
   'uiMode', 'canConvertToInteractive', 'convertedFrom',
   // Ids of the login and git tokens the session runs with, never the secrets, so a parent can
   // read back that its child was created the way it asked.
-  'credentialId', 'gitPatIds'
+  'credentialId', 'gitPatIds',
+  // The account the last start mounted and the failover setting (docs/account-limits.md).
+  'resolvedCredentialId', 'accountFailover'
 ];
 
 /**

@@ -56,6 +56,14 @@ public interface ISessionService
         => throw new NotSupportedException();
 
     /// <summary>
+    /// Records that an account hit its usage limit until <paramref name="until"/>
+    /// (docs/account-limits.md). Null when the account does not exist. Default throws so the
+    /// test doubles that never see a limit keep compiling.
+    /// </summary>
+    Task<ProviderAccountInfo?> MarkProviderAccountExhaustedAsync(string owner, AgentKind agent, string id,
+        DateTime until, string? reason, CancellationToken ct = default) => throw new NotSupportedException();
+
+    /// <summary>
     /// Moves a running Subscription session to another of the owner's accounts: records the choice
     /// and hands the file to the pod, which restarts its agent with resume. Throws
     /// <see cref="KeyNotFoundException"/> (no such session), <see cref="ArgumentException"/> (no
@@ -64,6 +72,14 @@ public interface ISessionService
     /// </summary>
     Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
         CancellationToken ct = default) => throw new NotSupportedException();
+
+    /// <summary>
+    /// The same switch with a reason the pod shows in place of its generic "account switched"
+    /// line — what the automatic failover passes (docs/account-limits.md). Default forwards to
+    /// the plain switch so a test double implementing that one still serves both.
+    /// </summary>
+    Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId, string? reason,
+        CancellationToken ct = default) => SwitchSessionCredentialAsync(owner, id, credentialId, ct);
 
     Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default);
     Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);

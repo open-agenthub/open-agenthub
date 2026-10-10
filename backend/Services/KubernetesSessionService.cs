@@ -175,10 +175,11 @@ public sealed class KubernetesSessionService : ISessionService
         string owner, CancellationToken ct = default)
     {
         var result = new Dictionary<string, IReadOnlyList<ProviderAccountInfo>>();
+        var now = DateTime.UtcNow;
         foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex, AgentKind.Cursor, AgentKind.OpenClaw })
         {
             var set = await ReadProviderAccountsAsync(owner, agent, ct);
-            result[agent.ToString()] = set.Accounts.Select(ProviderAccountInfo.From).ToList();
+            result[agent.ToString()] = set.Accounts.Select(a => ProviderAccountInfo.From(a, now)).ToList();
         }
         return result;
     }
@@ -191,8 +192,20 @@ public sealed class KubernetesSessionService : ISessionService
         if (account is null) return null;
         if (req.Label is not null) { account.Label = ProviderAccountSecret.NormalizeLabel(req.Label); set.Dirty = true; }
         if (req.IsDefault == true) ProviderAccountSecret.MakeDefault(set, id);
+        if (req.ClearExhausted == true) ProviderAccountSecret.ClearExhausted(set, id);
         await WriteProviderAccountsAsync(owner, agent, set, ct);
         return ProviderAccountInfo.From(account);
+    }
+
+    public async Task<ProviderAccountInfo?> MarkProviderAccountExhaustedAsync(string owner, AgentKind agent, string id,
+        DateTime until, string? reason, CancellationToken ct = default)
+    {
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        if (!ProviderAccountSecret.MarkExhausted(set, id, until, reason)) return null;
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        _log.LogInformation("Marked {Agent} account {Account} of {Owner} as at its usage limit until {Until}",
+            agent, id, owner, until);
+        return ProviderAccountInfo.From(set.Find(id)!);
     }
 
     public async Task DeleteProviderAccountAsync(string owner, AgentKind agent, string id, CancellationToken ct = default)
@@ -262,8 +275,12 @@ public sealed class KubernetesSessionService : ISessionService
         return GitPatSelection.Normalize(requested, stored);
     }
 
-    public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
+    public Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
         CancellationToken ct = default)
+        => SwitchSessionCredentialAsync(owner, id, credentialId, reason: null, ct);
+
+    public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
+        string? reason, CancellationToken ct = default)
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
@@ -279,9 +296,13 @@ public sealed class KubernetesSessionService : ISessionService
 
         // Recorded before the push: the pod's watcher uploads the file it was just given as soon
         // as it changes again, and that upload has to land on the new account, not the old one.
+        // The resolved id follows for the same reason the spawn writes it: a later limit report
+        // from this pod must name the account that is now mounted.
         await _store.SetCredentialIdAsync(rec.Id, account.Id, ct);
+        await _store.SetResolvedCredentialIdAsync(rec.Id, account.Id, ct);
         rec.CredentialId = account.Id;
-        await _credentialPusher.PushAsync(pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, ct);
+        rec.ResolvedCredentialId = account.Id;
+        await _credentialPusher.PushAsync(pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, reason, ct);
 
         account.LastUsedAt = DateTime.UtcNow;
         set.Dirty = true;
@@ -379,7 +400,8 @@ public sealed class KubernetesSessionService : ISessionService
             AgentSessionId = Guid.NewGuid().ToString(),
             CallbackToken = RandomToken(),
             Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending",
-            AutoDeleteAfterSeconds = autoDeleteAfter, AutoDeleteFrom = autoDeleteFrom
+            AutoDeleteAfterSeconds = autoDeleteAfter, AutoDeleteFrom = autoDeleteFrom,
+            AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover)
         };
         // Persist session row before registering ephemerals so a failed Upsert
         // cannot leave orphaned session-scoped API sources.
@@ -933,6 +955,9 @@ public sealed class KubernetesSessionService : ISessionService
         if (req.AutoDeleteAfterSeconds is not null || req.AutoDeleteFrom is not null)
             (rec.AutoDeleteAfterSeconds, rec.AutoDeleteFrom) =
                 SessionExpiry.ForUpdate(rec, req.AutoDeleteAfterSeconds, req.AutoDeleteFrom);
+        // Read off the record when a limit is reported, so it applies to the live session.
+        if (req.AccountFailover is not null)
+            rec.AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover);
 
         try
         {
@@ -1235,12 +1260,20 @@ public sealed class KubernetesSessionService : ISessionService
         if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
         {
             // Resolved at every start, so a session without a pinned account follows the default
-            // and a pinned one that was removed since is reported, not silently swapped.
+            // and a pinned one that was removed since is reported, not silently swapped. An
+            // unpinned session also steps around an account at its usage limit; a pinned one is
+            // mounted as pinned (docs/account-limits.md).
             var accounts = await ReadProviderAccountsAsync(owner, record.Agent, ct);
             accountId = record.CredentialId is not null
                 ? accounts.Find(record.CredentialId)?.Id
-                : ProviderAccountSecret.ResolveId(accounts, null);
+                : ProviderAccountSecret.ResolveId(accounts, null, DateTime.UtcNow);
             hasSubscription = accountId is not null;
+        }
+        // What was mounted, pinned or not: the limit report from this pod names this account.
+        if (record.ResolvedCredentialId != accountId)
+        {
+            record.ResolvedCredentialId = accountId;
+            await _store.SetResolvedCredentialIdAsync(record.Id, accountId, ct);
         }
         if (AgentPodSpecFactory.ResolvesApiKey(record.Mode, record.AuthMode))
         {
@@ -1291,7 +1324,8 @@ public sealed class KubernetesSessionService : ISessionService
                 MaxCpu = _opts.MaxCpu,
                 MaxMemory = _opts.MaxMemory,
                 TelemetryEnabled = _opts.TelemetryEnabled,
-                TelemetryOtlpEndpoint = _opts.TelemetryOtlpEndpoint
+                TelemetryOtlpEndpoint = _opts.TelemetryOtlpEndpoint,
+                AccountLimitThreshold = Math.Clamp(_opts.AccountLimitThreshold, 1, 100)
             }
         };
     }
@@ -1330,7 +1364,7 @@ public sealed class KubernetesSessionService : ISessionService
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
-        CredentialId = r.CredentialId,
+        CredentialId = r.CredentialId, ResolvedCredentialId = r.ResolvedCredentialId,
         GitPatIds = GitPatSelection.Parse(r.GitPatIdsJson),
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
@@ -1340,7 +1374,8 @@ public sealed class KubernetesSessionService : ISessionService
         Image = r.Image, RunAsRoot = r.RunAsRoot, AutoApprove = r.AutoApprove, Cpu = r.Cpu, Memory = r.Memory,
         Browser = browser ?? BrowserSummary.Stopped,
         AutoDeleteAfterSeconds = r.AutoDeleteAfterSeconds, AutoDeleteFrom = r.AutoDeleteFrom,
-        ExpiresAt = SessionExpiry.ExpiresAt(r), LastActivityAt = r.LastActivityAt
+        ExpiresAt = SessionExpiry.ExpiresAt(r), LastActivityAt = r.LastActivityAt,
+        AccountFailover = AccountFailoverMode.Display(r.AccountFailover)
     };
 
     private V1ObjectMeta Meta(string name, string owner, string id, string component,
@@ -1446,4 +1481,8 @@ public sealed class AgentHubOptions
     public int MaxRunningSessionsPerOwner { get; set; } = SessionSoftLimit.DefaultMax;
     /// <summary>Inject the in-pod agenthub_sessions MCP and allow internal spawn.</summary>
     public bool SpawnMcpEnabled { get; set; } = true;
+    /// <summary>Percent of a provider rate-limit window at which a Claude session reports its
+    /// account as at its limit (docs/account-limits.md). 100 reports the limit itself; lower
+    /// values switch accounts early and spend a second window on work the first could still do.</summary>
+    public int AccountLimitThreshold { get; set; } = 100;
 }

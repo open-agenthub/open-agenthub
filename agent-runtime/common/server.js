@@ -6,6 +6,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
+const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -28,6 +29,13 @@ const MAX_MESSAGE_BYTES = 64 * 1024;
 // How long after its last poll the provider's in-process mod counts as alive. It polls every 3 s; a
 // window of five polls survives a slow turn without handing a message to a mod that is gone.
 const MOD_HEARTBEAT_TTL_MS = 15_000;
+// A mod's limit report: kind, percent, reset time — small by construction.
+const MAX_LIMIT_REPORT_BYTES = 4 * 1024;
+// How long a restarted TUI gets to draw its prompt box before a message held back during the
+// restart is typed into it. Text written earlier lands in a terminal nothing reads yet.
+const RESTART_INPUT_DELAY_MS = 3_000;
+// The longest reason a credential swap may carry into the scrollback.
+const MAX_SWITCH_REASON_CHARS = 300;
 
 function createCommonServer(options = {}) {
   const env = options.env || process.env;
@@ -93,8 +101,12 @@ function createCommonServer(options = {}) {
   let transcriptFile = null;
   let transcriptUploaded = { size: -1, mtimeMs: -1 };
   // Set while the agent is being stopped on purpose so that its exit starts it again instead
-  // of ending the session.
+  // of ending the session: `{ text, subtype }`, the line the clients see and the agenthub event
+  // the chat UI gets for it.
   let restartReason = null;
+  // Fleet messages that arrived while the agent was restarting; handed to the new agent once it
+  // is up, since the old PTY or pipe would have swallowed them (docs/account-limits.md).
+  let deferredMessages = [];
   // The last size a client asked for, re-applied to a restarted PTY: the clients do not know
   // the terminal was replaced and would not send a resize until their own window changes.
   let lastSize = null;
@@ -106,6 +118,20 @@ function createCommonServer(options = {}) {
   const modToken = env.AGENTHUB_MOD_TOKEN || '';
   let modQueue = [];
   let lastModHeartbeat = 0;
+  // The CLI's own usage-limit notice, read off its output (docs/account-limits.md). Armed once
+  // per agent start; the hub hears the first hit and nothing more until the next start.
+  const limitDetector = createLimitDetector({
+    patterns: driver.limitPatterns,
+    now,
+    onHit: hit => {
+      // A live mod reads the provider's rate-limit figures and reports them itself; a sentence
+      // matched in the terminal would be a second, vaguer report of the same limit.
+      if (modAlive()) return;
+      void reportLimit({ source: 'output', resetsAt: hit.resetsAt, detail: hit.detail });
+    }
+  });
+  // Mod reports already forwarded this start, keyed by window and reset time.
+  const forwardedLimits = new Set();
 
   function remember(chunk) {
     scrollback += chunk;
@@ -418,6 +444,40 @@ function createCommonServer(options = {}) {
     return JSON.stringify({ type: 'agenthub', subtype, ...fields }) + '\n';
   }
 
+  /**
+   * Tells the hub this session's account is at its usage limit. The hub decides what follows —
+   * marking the account, moving the session to another one — and answers with what it did;
+   * nothing here depends on that answer beyond a log line.
+   */
+  function reportLimit(report) {
+    if (!callback || !token) return Promise.resolve();
+    const body = {
+      source: report.source,
+      kind: report.kind || null,
+      percentUsed: typeof report.percentUsed === 'number' ? report.percentUsed : null,
+      resetsAt: report.resetsAt || null,
+      detail: report.detail || null
+    };
+    console.log('[agent] Usage limit reported to the hub (' + report.source +
+      (report.kind ? ', ' + report.kind : '') + (report.resetsAt ? ', resets ' + report.resetsAt : '') + ')');
+    return fetchImpl(callback + '/account-exhausted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Agent-Token': token },
+      body: JSON.stringify(body)
+    }).then(response => {
+      if (!response || !response.ok) {
+        console.log('[agent] Usage limit report answered HTTP ' + (response && response.status));
+        return;
+      }
+      return response.json().then(answer => {
+        if (answer && answer.action) console.log('[agent] Hub action on the usage limit: ' + answer.action +
+          (answer.switchedTo ? ' (' + answer.switchedTo + ')' : ''));
+      }).catch(() => {});
+    }).catch(error => {
+      console.log('[agent] Usage limit report failed: ' + (error && error.message));
+    });
+  }
+
   function retryMessage() {
     if (chatMode) return agenthubEvent('info', { text: 'No saved conversation to resume — starting fresh.' });
     return '\r\n[agent] No saved conversation to resume — starting fresh.\r\n';
@@ -430,23 +490,24 @@ function createCommonServer(options = {}) {
   }
 
   function restartMessage(reason) {
-    if (chatMode) return agenthubEvent('info', { text: reason + ' — restarting the agent and resuming the conversation.' });
-    return '\r\n[agent] ' + reason + ' — restarting the agent and resuming the conversation.\r\n';
+    const text = reason.text + ' — restarting the agent and resuming the conversation.';
+    if (chatMode) return agenthubEvent(reason.subtype || 'info', { text });
+    return '\r\n[agent] ' + text + '\r\n';
   }
 
   /**
    * Stops the agent so that handleAgentExit starts it again with the provider's resume command.
    * The conversation this pod ran is on its own disk, which is what the resume flags describe;
    * a session that started fresh in this pod therefore resumes exactly like one restored from
-   * the archive would.
+   * the archive would. `subtype` names the agenthub event the chat UI gets for the restart line.
    */
-  function restartAgent(reason) {
+  function restartAgent(reason, subtype) {
     if (exited || !term) return false;
     // A provider that names its conversation itself does so only once it has written the file,
     // and that name is what its resume command takes; looking now means the restarted agent
     // resumes this conversation and not whichever one is newest on disk.
     locateTranscript();
-    restartReason = reason;
+    restartReason = { text: reason, subtype: subtype || 'info' };
     env.AGENTHUB_RESUME = '1';
     env.AGENTHUB_STATE_RESTORED = '1';
     const stopping = term;
@@ -468,6 +529,7 @@ function createCommonServer(options = {}) {
       remember(message);
       broadcast(message);
       startAgent(true);
+      flushDeferredMessages();
       return;
     }
 
@@ -525,13 +587,17 @@ function createCommonServer(options = {}) {
       while ((newline = pendingLine.indexOf('\n')) !== -1) {
         const line = pendingLine.slice(0, newline);
         pendingLine = pendingLine.slice(newline + 1);
-        if (line.trim()) deliverChatLine(line);
+        if (line.trim()) {
+          deliverChatLine(line);
+          limitDetector.feedChatLine(line);
+        }
       }
     });
 
     child.stderr.on('data', chunk => {
       const text = chunk.toString();
       attemptOutput += text;
+      limitDetector.feedStderr(text);
       const payload = agenthubEvent('stderr', { text });
       remember(payload);
       broadcast(payload);
@@ -588,6 +654,8 @@ function createCommonServer(options = {}) {
     const command = driver.buildCommand(env, allowResume);
     attemptedResume = driver.isResumeCommand(command);
     attemptOutput = '';
+    limitDetector.reset();
+    forwardedLimits.clear();
     launchedAt = now();
     if (!firstLaunchedAt) firstLaunchedAt = launchedAt;
     chatMode = command.pipe === true;
@@ -609,6 +677,7 @@ function createCommonServer(options = {}) {
       attemptOutput += data;
       remember(data);
       broadcast(data);
+      limitDetector.feedTerminal(data);
     });
 
     term.onExit(({ exitCode, signal }) => handleAgentExit(exitCode, signal));
@@ -770,9 +839,48 @@ function createCommonServer(options = {}) {
     credentials.writeBaselineHash(credentials.baselineFile(env), credentials.sha256(body), fs);
     if (typeof driver.installCredential === 'function') driver.installCredential(env, body, target, fs);
     else credentials.writeCredentialFile(target, body, fs);
-    const restarting = restartAgent('Provider account switched');
+    // A reason from the hub (the automatic failover says why) replaces the generic line and
+    // names the event, so a person reading the scrollback or the chat sees the switch happen.
+    const reason = switchReason(request.headers['x-agent-switch-reason']);
+    const restarting = reason
+      ? restartAgent(reason, 'account-switched')
+      : restartAgent('Provider account switched');
     console.log('[agent] Provider credential replaced' + (restarting ? '; restarting with resume.' : '.'));
     sendJson(response, 202, { installed: true, restarting });
+  }
+
+  // Percent-encoded by the hub so a label with any character survives the header; control
+  // characters are dropped so nothing in it can drive the terminal.
+  function switchReason(header) {
+    if (typeof header !== 'string' || !header) return null;
+    let text;
+    try { text = decodeURIComponent(header); } catch { text = header; }
+    text = stripAnsi(text).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    return text.length > MAX_SWITCH_REASON_CHARS ? text.slice(0, MAX_SWITCH_REASON_CHARS) : text;
+  }
+
+  // Messages held back during a restart go to the new agent: the mod queue keeps itself, the
+  // chat pipe buffers, and a TUI gets them typed once it has had time to draw its prompt.
+  function flushDeferredMessages() {
+    const held = deferredMessages;
+    deferredMessages = [];
+    for (const message of held) {
+      if (modAlive() && (message.priority || mode === 'interactive')) {
+        modQueue.push(message);
+      } else if (chatMode) {
+        if (chat) queueChatMessage(null, { text: formatFleetMessage(message) });
+      } else if (mode === 'interactive' && term) {
+        const target = term;
+        setTimeoutImpl(() => {
+          if (term !== target || exited) return;
+          void injectTerminalInput(target, formatFleetMessage(message), {
+            interrupt: false,
+            wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
+          });
+        }, RESTART_INPUT_DELAY_MS);
+      }
+    }
   }
 
   /**
@@ -811,8 +919,17 @@ function createCommonServer(options = {}) {
       return;
     }
     if (!message.priority) return unavailable('not_priority');
+    // The agent is being swapped out (an account switch): the pipe or PTY it is about to leave
+    // would swallow the text, so the message waits for the one that comes up. The answer names
+    // the channel it will take, since that is what the hub records.
+    const restarting = restartReason !== null;
     if (chatMode) {
       if (!chat) return unavailable('agent_not_started');
+      if (restarting) {
+        deferredMessages.push(message);
+        sendJson(response, 200, { delivered: 'chat', deferred: true });
+        return;
+      }
       if (message.interrupt) chat.interrupt();
       queueChatMessage(null, { text: formatFleetMessage(message) });
       sendJson(response, 200, { delivered: 'chat' });
@@ -821,6 +938,11 @@ function createCommonServer(options = {}) {
     // A -p run reads its prompt from the command line; keystrokes into its PTY reach nothing.
     if (mode !== 'interactive') return unavailable('non_interactive');
     if (!term) return unavailable('agent_not_started');
+    if (restarting) {
+      deferredMessages.push(message);
+      sendJson(response, 200, { delivered: 'pty', deferred: true });
+      return;
+    }
     await injectTerminalInput(term, formatFleetMessage(message), {
       interrupt: message.interrupt,
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
@@ -849,11 +971,12 @@ function createCommonServer(options = {}) {
 
   /**
    * The in-process mod's side: GET /agenthub/mod/inbox hands over and clears the queue, POST
-   * /agenthub/mod/heartbeat only says "still here". Both are loopback-only and carry the mod
+   * /agenthub/mod/heartbeat only says "still here", POST /agenthub/mod/limit relays a rate-limit
+   * reading to the hub (docs/account-limits.md). All are loopback-only and carry the mod
    * token, not the callback token: the hub's token never reaches the agent process, and the
    * mod's token never leaves the pod.
    */
-  function handleModRequest(request, response, requestPath) {
+  async function handleModRequest(request, response, requestPath) {
     if (!modToken) {
       fileError(response, 404, 'not_found');
       return;
@@ -876,6 +999,28 @@ function createCommonServer(options = {}) {
       response.end();
       return;
     }
+    if (requestPath === '/agenthub/mod/limit') {
+      if (request.method !== 'POST') {
+        response.setHeader('Allow', 'POST');
+        fileError(response, 405, 'method_not_allowed');
+        return;
+      }
+      const raw = await readBoundedBody(request, MAX_LIMIT_REPORT_BYTES);
+      const report = raw && parseLimitReport(raw);
+      if (!report) {
+        fileError(response, raw ? 400 : 413, raw ? 'invalid_report' : 'report_too_large');
+        return;
+      }
+      // The mod reports once per window and reset; this is the belt to that brace, so a mod
+      // that reloaded mid-session does not make the hub mark the same window twice.
+      const key = report.kind + '|' + (report.resetsAt || '');
+      if (!forwardedLimits.has(key)) {
+        forwardedLimits.add(key);
+        void reportLimit({ source: 'mod', ...report });
+      }
+      sendJson(response, 202, { accepted: true });
+      return;
+    }
     if (request.method !== 'GET') {
       response.setHeader('Allow', 'GET');
       fileError(response, 405, 'method_not_allowed');
@@ -886,6 +1031,16 @@ function createCommonServer(options = {}) {
     sendJson(response, 200, { messages });
   }
 
+  function parseLimitReport(raw) {
+    let parsed;
+    try { parsed = JSON.parse(raw.toString('utf8')); } catch { return null; }
+    if (!parsed || typeof parsed !== 'object') return null;
+    const kind = typeof parsed.kind === 'string' && parsed.kind.trim() ? parsed.kind.trim().slice(0, 64) : null;
+    const percentUsed = typeof parsed.percentUsed === 'number' && Number.isFinite(parsed.percentUsed) ? parsed.percentUsed : null;
+    if (!kind && percentUsed === null) return null;
+    return { kind: kind || 'unknown', percentUsed, resetsAt: toIso(parsed.resetsAt) };
+  }
+
   function isLoopback(address) {
     return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
   }
@@ -894,7 +1049,8 @@ function createCommonServer(options = {}) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
-    if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat') {
+    if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
+        requestPath === '/agenthub/mod/limit') {
       return handleModRequest(request, response, requestPath);
     }
     return handleFileRequest(request, response);

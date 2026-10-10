@@ -13,10 +13,19 @@ test('agenthub_sessions registers lifecycle and fleet tools', () => {
   assert.match(server, /name:\s*'agenthub_sessions'/);
   for (const name of [
     'session_create', 'session_get', 'session_list', 'session_wait', 'session_delete',
-    'session_convert', 'agents_list', 'agent_send', 'agent_inbox'
+    'session_convert', 'agents_list', 'agent_send', 'agent_inbox', 'account_status', 'account_switch'
   ]) {
     assert.match(server, new RegExp(`register\\('${name}'`));
   }
+  // The account tools take an optional session id: none means this session itself, which may
+  // switch its own account (docs/account-limits.md); anything else goes through the peer rule.
+  const status = server.slice(server.indexOf("register('account_status'"), server.indexOf("register('account_switch'"));
+  assert.match(status, /sessionId: z\.string\(\)\.min\(1\)\.max\(128\)\.optional\(\)/);
+  assert.doesNotMatch(status, /sanitizeSession\(await client\.accountStatus/);
+  const switching = server.slice(server.indexOf("register('account_switch'"));
+  assert.match(switching, /credentialId: z\.string\(\)\.min\(1\)\.max\(64\)/);
+  assert.match(switching, /client\.switchAccount\(sessionId, credentialId\)/);
+  assert.match(server, /accountFailover: z\.enum\(\['auto', 'off'\]\)\.optional\(\)/);
   // Conversion goes through the peer route, so the descendant rule of session_get applies.
   const convert = server.slice(server.indexOf("register('session_convert'"));
   assert.match(convert, /sessionId: z\.string\(\)\.min\(1\)\.max\(128\)/);

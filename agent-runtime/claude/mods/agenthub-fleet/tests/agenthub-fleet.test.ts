@@ -4,27 +4,38 @@ import { expect, mock, test } from 'claude-code/testing'
 
 const INBOX_URL = 'http://127.0.0.1:7681/agenthub/mod/inbox'
 const HEARTBEAT_URL = 'http://127.0.0.1:7681/agenthub/mod/heartbeat'
+const LIMIT_URL = 'http://127.0.0.1:7681/agenthub/mod/limit'
 
 type Reply = { messages?: unknown[]; status?: number; down?: boolean }
 
 /** Stubs everything the mod touches and records what it asked Claude Code to do. */
-function world(on, replies: Reply[]) {
+function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MOD_TOKEN: 'mod-secret' }) {
   const clock = mock.clock(on)
-  mock.env(on, { AGENTHUB_MOD_TOKEN: 'mod-secret' })
+  mock.env(on, env)
   const calls = {
     fetches: [] as { url: string; method: string; auth: string }[],
+    limits: [] as { kind: string; percentUsed: number; resetsAt: string | null }[],
     submits: [] as string[],
     contexts: [] as (readonly string[] | undefined)[],
     aborts: [] as string[],
     statuses: [] as (string | undefined)[],
-    logs: [] as string[]
+    logs: [] as string[],
+    usage: { context: { window: 200000, tokens: 1000, percent: 1 }, rateLimits: [] as unknown[] },
+    limitStatus: 202
   }
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: undefined }))
+  on('session.usage', () => ({ value: calls.usage }))
+  // The engine answers session.measure with the units that moved; here the test is the engine.
+  on('session.measure', ($, e) => ({ changed: e.changed }))
   on('http.fetch', ($, e) => {
     const init = e.init ?? {}
     calls.fetches.push({ url: e.url, method: init.method ?? 'GET', auth: String(init.headers?.Authorization ?? '') })
     if (e.url === HEARTBEAT_URL) return { value: { status: 204, ok: true, headers: {}, text: '' } }
+    if (e.url === LIMIT_URL) {
+      calls.limits.push(JSON.parse(String(init.body)))
+      return { value: { status: calls.limitStatus, ok: calls.limitStatus < 300, headers: {}, text: '' } }
+    }
     const reply = replies.shift() ?? { messages: [] }
     if (reply.down) return { deny: 'connection refused' }
     const status = reply.status ?? 200
@@ -137,12 +148,79 @@ test('a failed poll is a debug line and the timer keeps going', async ($, on) =>
   expect(calls.submits.length).toBe(1)
 })
 
+// ---- usage limits (docs/account-limits.md) ---------------------------------------------------
+
+const measure = (rateLimits: unknown[]) =>
+  ({ context: { window: 200000, tokens: 1000, percent: 1 }, rateLimits, changed: ['rateLimits'] })
+const fiveHourFull = { kind: 'five_hour', percentUsed: 100, resetsAt: '2026-10-11T15:00:00.000Z' }
+const weekHalf = { kind: 'seven_day', percentUsed: 48.5, resetsAt: '2026-10-14T00:00:00.000Z' }
+
+test('a window at 100 % is reported to the session agent once per reset, with the mod token', async ($, on) => {
+  const { calls } = world(on, [])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.session.measure(measure([fiveHourFull, weekHalf]))
+  // The same reading again, as every turn raises it: nothing new to say.
+  await $.session.measure(measure([fiveHourFull, weekHalf]))
+
+  expect(calls.limits).toEqual([{ kind: 'five_hour', percentUsed: 100, resetsAt: '2026-10-11T15:00:00.000Z' }])
+  const post = calls.fetches.find(f => f.url === LIMIT_URL)
+  expect(post).toEqual({ url: LIMIT_URL, method: 'POST', auth: 'Bearer mod-secret' })
+
+  // The window reset and filled up again: a new reset time is a new report.
+  await $.session.measure(measure([{ ...fiveHourFull, resetsAt: '2026-10-11T20:00:00.000Z' }]))
+  expect(calls.limits.length).toBe(2)
+  expect(calls.limits[1].resetsAt).toBe('2026-10-11T20:00:00.000Z')
+})
+
+test('under the threshold nothing is reported, and the threshold comes from the environment', async ($, on) => {
+  const { calls } = world(on, [], { AGENTHUB_MOD_TOKEN: 'mod-secret', AGENTHUB_LIMIT_THRESHOLD: '90' })
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.session.measure(measure([{ kind: 'five_hour', percentUsed: 89.9 }, weekHalf]))
+  expect(calls.limits).toEqual([])
+
+  await $.session.measure(measure([{ kind: 'five_hour', percentUsed: 90 }]))
+  expect(calls.limits).toEqual([{ kind: 'five_hour', percentUsed: 90, resetsAt: null }])
+})
+
+test('a turn that ended on an API error reads the usage afresh and reports a full window', async ($, on) => {
+  const { calls } = world(on, [])
+  calls.usage = { context: { window: 200000, tokens: 1000, percent: 1 }, rateLimits: [fiveHourFull] }
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'go', turnId: 'turn-1' })
+  await $.turn.complete({ turnId: 'turn-1', answer: '', durationMs: 10, isAborted: false, reason: 'error' })
+
+  expect(calls.limits).toEqual([{ kind: 'five_hour', percentUsed: 100, resetsAt: '2026-10-11T15:00:00.000Z' }])
+  // A later measurement with the same window does not repeat it.
+  await $.session.measure(measure([fiveHourFull]))
+  expect(calls.limits.length).toBe(1)
+})
+
+test('a refused report is retried on the next measurement, a failed one is a debug line', async ($, on) => {
+  const { calls } = world(on, [])
+  calls.limitStatus = 503
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.session.measure(measure([fiveHourFull]))
+  expect(calls.limits.length).toBe(1)
+  expect(calls.logs.some(line => /HTTP 503/.test(line))).toBe(true)
+
+  calls.limitStatus = 202
+  await $.session.measure(measure([fiveHourFull]))
+  expect(calls.limits.length).toBe(2)
+  await $.session.measure(measure([fiveHourFull]))
+  expect(calls.limits.length).toBe(2)
+})
+
 test('without a mod token the mod stays inert', async ($, on) => {
   const clock = mock.clock(on)
   mock.env(on, {})
   const fetches: string[] = []
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: undefined }))
+  on('session.measure', ($, e) => ({ changed: e.changed }))
   on('http.fetch', ($, e) => {
     fetches.push(e.url)
     return { value: { status: 200, ok: true, headers: {}, text: '{"messages":[]}' } }
@@ -150,6 +228,7 @@ test('without a mod token the mod stays inert', async ($, on) => {
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await clock.advance(9000)
+  await $.session.measure({ context: { window: 200000, percent: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 100 }], changed: ['rateLimits'] })
 
   expect(fetches).toEqual([])
 })

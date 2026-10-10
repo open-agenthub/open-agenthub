@@ -270,6 +270,107 @@ public sealed class ProviderAccountSecretTests
     public void IsValidId_AcceptsOnlyShortLowercaseAlphanumerics(string id, bool valid)
         => Assert.Equal(valid, ProviderAccountSecret.IsValidId(id));
 
+    // ------------------------------------------------------------------ usage limits (docs/account-limits.md)
+
+    private static readonly DateTime Now = new(2026, 10, 11, 12, 0, 0, DateTimeKind.Utc);
+
+    private static ProviderAccountSet Three()
+    {
+        var set = new ProviderAccountSet();
+        set.Accounts.Add(new ProviderAccount { Id = "work", Label = "Work", IsDefault = true, LastUsedAt = Now.AddHours(-1) });
+        set.Accounts.Add(new ProviderAccount { Id = "home", Label = "Home", LastUsedAt = Now.AddDays(-3) });
+        set.Accounts.Add(new ProviderAccount { Id = "spare", Label = "Spare" });
+        foreach (var account in set.Accounts) set.Files[account.Id] = File(account.Id);
+        return set;
+    }
+
+    [Fact]
+    public void ExhaustedMark_SurvivesTheIndexRoundTrip_AndExpiresOnItsOwn()
+    {
+        var set = Three();
+        Assert.True(ProviderAccountSecret.MarkExhausted(set, "work", Now.AddHours(2), "five_hour 100%"));
+        Assert.False(ProviderAccountSecret.MarkExhausted(set, "nope", Now.AddHours(2), null));
+
+        var read = ProviderAccountSecret.Read(ProviderAccountSecret.Write(set, AgentKind.Claude), AgentKind.Claude);
+
+        var work = read.Find("work")!;
+        Assert.Equal(Now.AddHours(2), work.ExhaustedUntil);
+        Assert.Equal("five_hour 100%", work.ExhaustedReason);
+        Assert.True(ProviderAccountSecret.IsExhausted(work, Now));
+        // Past the reset nothing has to clear it.
+        Assert.False(ProviderAccountSecret.IsExhausted(work, Now.AddHours(3)));
+        Assert.Equal(["home", "spare"], read.Available(Now).Select(a => a.Id));
+        Assert.Equal(["work", "home", "spare"], read.Available(Now.AddHours(3)).Select(a => a.Id));
+    }
+
+    [Fact]
+    public void ResolveId_StepsAroundAnExhaustedDefault_ButHonoursAPin()
+    {
+        var set = Three();
+        Assert.Equal("work", ProviderAccountSecret.ResolveId(set, null, Now));
+
+        ProviderAccountSecret.MarkExhausted(set, "work", Now.AddHours(1), null);
+        Assert.Equal("home", ProviderAccountSecret.ResolveId(set, null, Now));
+        // The pin is a choice: it is mounted exhausted rather than swapped.
+        Assert.Equal("work", ProviderAccountSecret.ResolveId(set, "work", Now));
+        // Once the window has reset the default is the default again.
+        Assert.Equal("work", ProviderAccountSecret.ResolveId(set, null, Now.AddHours(2)));
+
+        // Everything exhausted: the session still has to mount something, so the default it is.
+        foreach (var account in set.Accounts) ProviderAccountSecret.MarkExhausted(set, account.Id, Now.AddHours(1), null);
+        Assert.Equal("work", ProviderAccountSecret.ResolveId(set, null, Now));
+    }
+
+    [Fact]
+    public void NextAvailable_PrefersTheDefault_ThenTheLeastRecentlyUsed_NeverTheCurrentOrAnExhaustedOne()
+    {
+        var set = Three();
+        // Switching away from "spare": the default wins over the idle one.
+        Assert.Equal("work", ProviderAccountSecret.NextAvailable(set, "spare", Now)!.Id);
+        // Switching away from the default: never-used before used-three-days-ago.
+        Assert.Equal("spare", ProviderAccountSecret.NextAvailable(set, "work", Now)!.Id);
+
+        ProviderAccountSecret.MarkExhausted(set, "spare", Now.AddHours(1), null);
+        Assert.Equal("home", ProviderAccountSecret.NextAvailable(set, "work", Now)!.Id);
+
+        ProviderAccountSecret.MarkExhausted(set, "home", Now.AddHours(1), null);
+        Assert.Null(ProviderAccountSecret.NextAvailable(set, "work", Now));
+    }
+
+    [Fact]
+    public void ClearExhausted_LiftsTheMark_AndIsIdempotent()
+    {
+        var set = Three();
+        ProviderAccountSecret.MarkExhausted(set, "home", Now.AddHours(1), "matched");
+        set.Dirty = false;
+
+        Assert.True(ProviderAccountSecret.ClearExhausted(set, "home"));
+        Assert.True(set.Dirty);
+        Assert.Null(set.Find("home")!.ExhaustedUntil);
+        Assert.Null(set.Find("home")!.ExhaustedReason);
+
+        set.Dirty = false;
+        Assert.True(ProviderAccountSecret.ClearExhausted(set, "home"));
+        Assert.False(set.Dirty);
+        Assert.False(ProviderAccountSecret.ClearExhausted(set, "nope"));
+    }
+
+    [Fact]
+    public void Info_ReportsTheMarkOnlyWhileItApplies()
+    {
+        var account = new ProviderAccount { Id = "work", Label = "Work", ExhaustedUntil = Now.AddHours(1), ExhaustedReason = "five_hour" };
+
+        var during = ProviderAccountInfo.From(account, Now);
+        var after = ProviderAccountInfo.From(account, Now.AddHours(2));
+
+        Assert.True(during.IsExhausted);
+        Assert.Equal(Now.AddHours(1), during.ExhaustedUntil);
+        Assert.Equal("five_hour", during.ExhaustedReason);
+        Assert.False(after.IsExhausted);
+        Assert.Null(after.ExhaustedUntil);
+        Assert.Null(after.ExhaustedReason);
+    }
+
     [Fact]
     public void NormalizeLabel_TrimsAndBounds()
     {

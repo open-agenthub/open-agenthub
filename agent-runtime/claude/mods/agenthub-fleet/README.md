@@ -14,11 +14,18 @@ What it does:
   aborted first.
 - A plain message sets a status line (`📨 1 fleet message — /inbox`), is printed by `/inbox`,
   and otherwise rides along as context with the next prompt the person sends.
+- Watches the rate-limit windows Claude Code reports (`session.measure`, and a fresh
+  `$.session.usage()` after a turn that ended on an API error). A window at or past
+  `AGENTHUB_LIMIT_THRESHOLD` percent (default 100) is posted once per reset to
+  `POST http://127.0.0.1:7681/agenthub/mod/limit`; the session agent relays it to the hub,
+  which marks the account and may move the session to another one. The mod reports, the hub
+  decides (`docs/account-limits.md`).
 - Without `AGENTHUB_MOD_TOKEN` in the environment the mod does nothing, so loading this
   directory into a developer's own session is harmless.
 
 Why this is a mod and not a settings hook, what it deliberately does not do, and how the
-pieces fit: `docs/claude-code-mods.md` and `docs/priority-messages.md` in the repository.
+pieces fit: `docs/claude-code-mods.md`, `docs/priority-messages.md` and
+`docs/account-limits.md` in the repository.
 
 ## Files
 
@@ -26,7 +33,7 @@ pieces fit: `docs/claude-code-mods.md` and `docs/priority-messages.md` in the re
 agenthub-fleet/
 ├── .claude-plugin/plugin.json   manifest
 ├── hooks/hooks.json             points at the hooks module
-├── hooks/register.js            the hooks: session.start, turn.start/complete, prompt.submit, /inbox
+├── hooks/register.js            the hooks: session.start, turn.start/complete, session.measure, prompt.submit, /inbox
 ├── hooks/lib.mjs                the logic without the mods API (also tested by the session-agent suite)
 └── tests/agenthub-fleet.test.ts `claude plugin test`
 ```

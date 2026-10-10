@@ -229,7 +229,10 @@ fresh exactly once, as a cross-pod resume already does, rather than leaving the 
   controls. Any check would need a provider API call with the user's token on every listing, and
   the value of the feature is telling two logins apart, which the file does.
 - **No automatic switch on a failing token.** A session whose account expired fails as before.
-  Choosing another account on the user's behalf would hide which login is broken.
+  Choosing another account on the user's behalf would hide which login is broken. A *usage
+  limit* is the one exception, because it is temporary and the account is not broken: since
+  `docs/account-limits.md` the hub marks the account until the window resets and moves a
+  running session to another one, saying so in the session and to the notifiers.
 - ~~The remote API and the MCP tools accept `credentialId` but do not list accounts.~~ Since
   `docs/credential-scopes.md`: `GET /api/remote/credentials` and the `credentials_list` tool list
   the accounts (keyed like `GET /api/credentials/accounts`), the git PATs and which API keys are

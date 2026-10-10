@@ -56,7 +56,8 @@ function reset(session) {
     mcpConfigJson: session.mcpConfigJson || '',
     projectId: session.projectId || '',
     ...defaultAgentForm(session),
-    credentialId: session.credentialId || ''
+    credentialId: session.credentialId || '',
+    accountFailover: session.accountFailover === 'off' ? 'off' : 'auto'
   }
   autoDelete.value = autoDeleteForm(session)
   repos.value = (session.repos || []).map(repo => ({ ...repo }))
@@ -141,6 +142,10 @@ async function save() {
     if (!scheduled.value) {
       Object.assign(payload, credentialChange())
       Object.assign(payload, gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds))
+      // Sent only when changed: null means "unchanged" on the API, and the hub reads the stored
+      // value when a limit is reported, so this applies to the running session at once.
+      const storedFailover = props.session.accountFailover === 'off' ? 'off' : 'auto'
+      if (f.value.accountFailover !== storedFailover) payload.accountFailover = f.value.accountFailover
     }
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
@@ -188,6 +193,16 @@ async function save() {
           v-model:open-claw-api-key-source="f.openClawApiKeySource" v-model:credential-id="f.credentialId"
           :accounts="providerAccounts" :mode="session.mode"
           :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
+        <div v-if="f.authMode !== 'ApiKey'" class="card sect toggle-field failover-field">
+          <label>Switch account automatically at usage limit <span class="dim">— move to another stored login when this one is used up</span></label>
+          <button type="button" class="toggle" role="switch" data-account-failover
+                  :aria-checked="f.accountFailover !== 'off' ? 'true' : 'false'" :class="{ on: f.accountFailover !== 'off' }"
+                  @click="f.accountFailover = f.accountFailover === 'off' ? 'auto' : 'off'">
+            <span class="knob"></span>
+            <span class="toggle-label">{{ f.accountFailover !== 'off' ? 'On' : 'Off' }}</span>
+          </button>
+          <p class="note failover-note">Applies at once. Off keeps the session on its account when that hits a limit; the hub still marks the account so new sessions avoid it.</p>
+        </div>
         <div class="card sect">
           <label>Repositories</label>
           <RepoPicker v-model="repos" />
@@ -293,6 +308,8 @@ async function save() {
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
 .warn { margin: 10px 0 0; font-size: 12px; line-height: 1.5; color: var(--warn); }
 .toggle-field { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
+.failover-field { margin-top: 0; border-top: none; }
+.failover-note { margin: 10px 0 0; }
 .toggle { display: inline-flex; align-items: center; gap: 10px; width: auto; padding: 5px 14px 5px 6px; border: 1px solid var(--border-2); border-radius: 999px; background: none; font-size: 12px; color: var(--muted-3); }
 .toggle:hover { background: var(--hover); }
 .toggle .knob { width: 30px; height: 17px; padding: 2px; border-radius: 999px; background: var(--border-3); transition: background .15s; }
