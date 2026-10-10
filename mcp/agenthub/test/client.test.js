@@ -261,6 +261,28 @@ test('credentials reads the remote listing with Bearer auth', async () => {
   });
 });
 
+test('account status reads the remote account route and the switch patches the credential', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const calls = [];
+
+  await withFakeServer((req, body, res) => {
+    calls.push({ method: req.method, url: req.url, authorization: req.headers.authorization, body });
+    if (req.method === 'PATCH') return json(res, 200, sessionInfo({ credentialId: 'home0002' }));
+    json(res, 200, { sessionId: 'sess-1', account: { id: 'work0001', isExhausted: true }, alternatives: [{ id: 'home0002' }] });
+  }, async (baseUrl) => {
+    const client = new AgentHubClient({ AGENTHUB_URL: baseUrl, AGENTHUB_TOKEN: TOKEN });
+    const status = await client.accountStatus('sess 1');
+    const switched = await client.switchAccount('sess 1', 'home0002');
+
+    assert.equal(status.account.isExhausted, true);
+    assert.equal(switched.credentialId, 'home0002');
+    assert.deepEqual(calls.map(c => [c.method, c.url, c.authorization, c.body]), [
+      ['GET', '/api/remote/sessions/sess%201/account', `Bearer ${TOKEN}`, ''],
+      ['PATCH', '/api/remote/sessions/sess%201/credential', `Bearer ${TOKEN}`, '{"credentialId":"home0002"}']
+    ]);
+  });
+});
+
 test('transcript omits query parameters that were not asked for', async () => {
   const { AgentHubClient } = await import('../client.mjs');
   const urls = [];

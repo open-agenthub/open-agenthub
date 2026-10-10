@@ -14,7 +14,9 @@ const SAFE_KEYS = [
   'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt',
   // Which login and git tokens the session runs with — ids, not secrets — so a caller can read
   // back that the session was created the way it asked (docs/credential-scopes.md).
-  'credentialId', 'gitPatIds'
+  'credentialId', 'gitPatIds',
+  // The account the last start mounted and the failover setting (docs/account-limits.md).
+  'resolvedCredentialId', 'accountFailover'
 ];
 
 /**

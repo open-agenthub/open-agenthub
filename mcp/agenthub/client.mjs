@@ -82,6 +82,16 @@ export class AgentHubClient {
     return this.#request('GET', '/api/remote/credentials');
   }
 
+  /** The account a session runs on, its limit state and the alternatives (docs/account-limits.md). */
+  accountStatus(sessionId) {
+    return this.#request('GET', `/api/remote/sessions/${encodeURIComponent(sessionId)}/account`);
+  }
+
+  /** Moves a running session to another stored account; the pod restarts its agent with resume. */
+  switchAccount(sessionId, credentialId) {
+    return this.#request('PATCH', `/api/remote/sessions/${encodeURIComponent(sessionId)}/credential`, { credentialId });
+  }
+
   /** Sends a message/task to an owned session (stored as an external message). The flags are
    * only sent when set, so a plain send looks exactly as it did before they existed. */
   sendAgentMessage(sessionId, message, { priority, interrupt } = {}) {

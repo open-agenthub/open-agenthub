@@ -473,6 +473,53 @@ public sealed class InternalController : ControllerBase
         catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
     }
 
+    /// <summary>
+    /// The account this session runs on and the alternatives (docs/account-limits.md), for the
+    /// in-pod <c>account_status</c> tool; <c>peer/{childId}/account-status</c> answers the same
+    /// for a descendant.
+    /// </summary>
+    [HttpGet("account-status")]
+    public Task<IActionResult> AccountStatus(string id, CancellationToken ct) => AccountStatusOfAsync(id, null, ct);
+
+    [HttpGet("peer/{childId}/account-status")]
+    public Task<IActionResult> PeerAccountStatus(string id, string childId, CancellationToken ct) => AccountStatusOfAsync(id, childId, ct);
+
+    private async Task<IActionResult> AccountStatusOfAsync(string id, string? childId, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (childId is not null && !await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
+        var session = await _svc.GetSessionAsync(rec.Owner, childId ?? id, ct);
+        if (session is null) return NotFound();
+        return Ok(Models.AccountStatus.From(session, await _svc.ListProviderAccountsAsync(rec.Owner, ct)));
+    }
+
+    /// <summary>
+    /// Moves this session — or a descendant — to another of the owner's accounts, the same
+    /// switch the in-app header offers. A session switching itself is allowed on purpose: an
+    /// agent that reads "usage limit" in its own output can save itself (docs/account-limits.md).
+    /// </summary>
+    [HttpPatch("credential")]
+    public Task<IActionResult> SwitchCredential(string id, [FromBody] SwitchSessionCredentialRequest body, CancellationToken ct)
+        => SwitchCredentialOfAsync(id, null, body, ct);
+
+    [HttpPatch("peer/{childId}/credential")]
+    public Task<IActionResult> SwitchPeerCredential(string id, string childId, [FromBody] SwitchSessionCredentialRequest body,
+        CancellationToken ct) => SwitchCredentialOfAsync(id, childId, body, ct);
+
+    private async Task<IActionResult> SwitchCredentialOfAsync(string id, string? childId, SwitchSessionCredentialRequest body,
+        CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (childId is not null && !await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
+        try { return Ok(await _svc.SwitchSessionCredentialAsync(rec.Owner, childId ?? id, body.CredentialId, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(new { error = e.Message }); }
+        catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
+        catch (HttpRequestException e) { return StatusCode(StatusCodes.Status502BadGateway, new { error = e.Message }); }
+    }
+
     private async Task<bool> IsDescendantPeerAsync(SessionRecord parent, string childId, CancellationToken ct)
     {
         var all = await _svc.ListSessionsAsync(parent.Owner, ct);

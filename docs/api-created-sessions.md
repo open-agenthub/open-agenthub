@@ -269,6 +269,18 @@ a `403` whose body is a stable code (`credential_not_allowed`, `credential_requi
 `agent_not_allowed`, `api_keys_not_allowed`, `git_pat_not_allowed`). The rules, and why a resume is
 not re-checked against the token, are in `docs/credential-scopes.md`.
 
+### Switching the account of a running session
+
+`PATCH /api/remote/sessions/{id}/credential {credentialId}` moves a running Subscription session
+to another stored account, with the same rules and status codes as the in-app header dropdown
+(`docs/provider-accounts.md`): 400 for an unknown account or an API-key session, 409 without a
+live pod, 502 when the pod refused the file. A restricted token may only switch to an account it
+is allowed to use (403 `credential_not_allowed`). `GET /api/remote/sessions/{id}/account` says
+which account the session runs on, whether that account is at its usage limit, and which
+alternatives exist — `accountFailover` (`auto`, the default, or `off`) on `POST` and `PATCH
+/api/remote/sessions/{id}` decides whether the hub makes that switch on its own when a limit is
+reported (`docs/account-limits.md`).
+
 ## Following a session without a websocket
 
 `GET /api/remote/sessions/{id}/transcript` and the `session_transcript` MCP tool page the transcript

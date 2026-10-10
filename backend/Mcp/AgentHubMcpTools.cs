@@ -83,6 +83,10 @@ public sealed class AgentHubMcpTools(
                      + "credentials_list → gitPats) the session gets. Omit or \"*\" for every "
                      + "stored token; \"none\" for no token at all.")]
         string? gitPatIds = null,
+        [Description("\"auto\" (default) or \"off\". With auto, a running Subscription session whose "
+                     + "account hits its usage limit is moved to another available account of the "
+                     + "same provider; off keeps it on its account.")]
+        string? accountFailover = null,
         CancellationToken ct = default)
     {
         var request = new CreateSessionRequest
@@ -106,7 +110,8 @@ public sealed class AgentHubMcpTools(
             AutoDeleteAfterSeconds = ParseAutoDeleteAfter(autoDeleteAfter),
             AutoDeleteFrom = autoDeleteFrom,
             CredentialId = string.IsNullOrWhiteSpace(credentialId) ? null : credentialId.Trim(),
-            GitPatIds = ParseIdList(gitPatIds)
+            GitPatIds = ParseIdList(gitPatIds),
+            AccountFailover = string.IsNullOrWhiteSpace(accountFailover) ? null : accountFailover.Trim()
         };
         if (ParseRepos(repos) is { Count: > 0 } parsedRepos) request = request with { Repos = parsedRepos };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
@@ -133,6 +138,42 @@ public sealed class AgentHubMcpTools(
         return RemoteCredentialListing.From(
             await sessions.ListProviderAccountsAsync(owner, ct),
             await sessions.GetCredentialStatusAsync(owner, ct));
+    }
+
+    [McpServerTool(Name = "account_status")]
+    [Description("Which provider account a session runs on, whether that account is at its usage limit "
+                 + "(isExhausted, exhaustedUntil), the session's accountFailover setting, and the other "
+                 + "stored accounts of the same provider as alternatives. Pass an alternative's id to "
+                 + "account_switch to move a running session.")]
+    public async Task<AccountStatus> GetAccountStatus([Description("Session id.")] string sessionId, CancellationToken ct = default)
+    {
+        var owner = Owner;
+        var session = await sessions.GetSessionAsync(owner, sessionId, ct) ?? throw new McpException("session_not_found");
+        return AccountStatus.From(session, await sessions.ListProviderAccountsAsync(owner, ct));
+    }
+
+    [McpServerTool(Name = "account_switch")]
+    [Description("Move a running Subscription session to another stored provider account (an id from "
+                 + "account_status or credentials_list). The agent restarts with the other login and "
+                 + "resumes its conversation. Fails with session_not_running when the session has no "
+                 + "live pod (set credentialId with the edit flow for the next start instead), "
+                 + "invalid_argument for an unknown account or an API-key session, and pod_refused "
+                 + "when the pod did not take the file.")]
+    public async Task<SessionInfo> SwitchAccount(
+        [Description("Session id.")] string sessionId,
+        [Description("The account to switch to.")] string credentialId,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var switched = await sessions.SwitchSessionCredentialAsync(Owner, sessionId, credentialId?.Trim() ?? "", ct);
+            logger.LogInformation("MCP client switched session {SessionId} to account {Account}", sessionId, switched.CredentialId);
+            return switched;
+        }
+        catch (KeyNotFoundException) { throw new McpException("session_not_found"); }
+        catch (ArgumentException e) { throw new McpException("invalid_argument: " + e.Message); }
+        catch (InvalidOperationException e) { throw new McpException("session_not_running: " + e.Message); }
+        catch (HttpRequestException e) { throw new McpException("pod_refused: " + e.Message); }
     }
 
     [McpServerTool(Name = "session_get")]

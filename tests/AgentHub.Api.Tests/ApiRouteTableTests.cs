@@ -75,7 +75,10 @@ public class ApiRouteTableTests
     public static TheoryData<string, string> CredentialScopeRoutes => new()
     {
         { "GET", "api/remote/credentials" },
-        { "PATCH", "api/tokens/{id}" }
+        { "PATCH", "api/tokens/{id}" },
+        // The account switch and status of docs/account-limits.md, which the stdio MCP calls by path.
+        { "PATCH", "api/remote/sessions/{id}/credential" },
+        { "GET", "api/remote/sessions/{id}/account" }
     };
 
     [Theory]

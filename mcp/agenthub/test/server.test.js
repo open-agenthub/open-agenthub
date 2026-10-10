@@ -11,7 +11,7 @@ test('agenthub MCP registers lifecycle and fleet tools', () => {
   assert.match(server, /name:\s*'agenthub'/);
   for (const name of [
     'session_create', 'session_get', 'session_list', 'session_wait', 'session_delete',
-    'session_convert', 'agents_list', 'agent_send', 'credentials_list'
+    'session_convert', 'agents_list', 'agent_send', 'credentials_list', 'account_status', 'account_switch'
   ]) {
     assert.match(server, new RegExp(`register\\('${name}'`));
   }
@@ -64,6 +64,19 @@ test('agenthub MCP takes the self-deletion deadline as text and converts it befo
   // The parser's error is a stable code, not the generic operation_failed.
   const errors = fs.readFileSync(path.join(root, 'errors.mjs'), 'utf8');
   assert.match(errors, /'autodelete_invalid_duration'/);
+});
+
+test('agenthub MCP switches accounts by session id and reads the status unsanitized', () => {
+  const server = fs.readFileSync(path.join(root, 'server.mjs'), 'utf8');
+  const status = server.slice(server.indexOf("register('account_status'"), server.indexOf("register('account_switch'"));
+  assert.match(status, /sessionId: z\.string\(\)\.min\(1\)\.max\(128\)/);
+  // The status is not a session record; the allowlist would empty it.
+  assert.doesNotMatch(status, /sanitizeSession\(await client\.accountStatus/);
+  const tool = server.slice(server.indexOf("register('account_switch'"));
+  assert.match(tool, /credentialId: z\.string\(\)\.min\(1\)\.max\(64\)/);
+  assert.match(tool, /client\.switchAccount\(sessionId, credentialId\)/);
+  // The failover setting rides on session_create as the two words the backend takes.
+  assert.match(server, /accountFailover: z\.enum\(\['auto', 'off'\]\)\.optional\(\)/);
 });
 
 test('agenthub MCP takes the credential selection as text and lists credentials unsanitized', () => {

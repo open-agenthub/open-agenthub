@@ -527,6 +527,21 @@ agent depends on the runtime ([`docs/priority-messages.md`](docs/priority-messag
 
 What could not be pushed stays in the inbox, and the sender is told (`deliveredVia: inbox`).
 
+When a stored login hits its usage limit, the hub marks the account until the window resets,
+moves a running session to another available account of the same provider (per session:
+`accountFailover: auto|off`), and tells the session and the notifiers. New sessions avoid an
+exhausted account. How the hub finds out depends on the runtime
+([`docs/account-limits.md`](docs/account-limits.md)):
+
+| Runtime | Limit detection |
+|---|---|
+| Claude | the `agenthub-fleet` mod reads the rate-limit windows Claude Code reports and posts a window at 100 % (`AGENTHUB_LIMIT_THRESHOLD`) |
+| Codex, OpenClaw | the session agent matches the CLI's own usage-limit notice in its output (strings verified against the pinned versions) |
+| Cursor | output patterns, conservative and unverified — the unpinned CLI prints the API's text verbatim |
+
+`account_status` and `account_switch` (every MCP server) and `PATCH /api/remote/sessions/{id}/credential`
+do the same by hand; a session may switch itself.
+
 ## Agents, authentication, and policy
 
 Agent and billing choices are independent for Interactive, Autonomous, and Scheduled

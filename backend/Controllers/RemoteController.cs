@@ -150,6 +150,46 @@ public sealed class RemoteController : ControllerBase
     }
 
     /// <summary>
+    /// The account a session runs on, whether it is at its usage limit, and the alternatives —
+    /// what the stdio MCP's <c>account_status</c> reads (docs/account-limits.md). The accounts
+    /// are narrowed to the token's scope like the credential listing is.
+    /// </summary>
+    [HttpGet("sessions/{id}/account")]
+    public async Task<ActionResult<AccountStatus>> AccountStatus(string id, CancellationToken ct)
+    {
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        var session = await _svc.GetSessionAsync(caller.Owner, id, ct);
+        if (session is null) return NotFound();
+        var listing = CredentialScope.FilterListing(RemoteCredentialListing.From(
+            await _svc.ListProviderAccountsAsync(caller.Owner, ct), new CredentialStatus()), caller.Scope);
+        return Ok(Models.AccountStatus.From(session, listing.Accounts));
+    }
+
+    /// <summary>
+    /// Moves a running Subscription session to another stored account, as the in-app header
+    /// dropdown does. A restricted token may only switch to an account it is allowed to use
+    /// (403 <c>credential_not_allowed</c>); the session's own rules answer 400 and 409, and 502
+    /// when the pod refused the file.
+    /// </summary>
+    [HttpPatch("sessions/{id}/credential")]
+    public async Task<ActionResult<SessionInfo>> SwitchCredential(string id, [FromBody] SwitchSessionCredentialRequest body,
+        CancellationToken ct)
+    {
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        var session = await _svc.GetSessionAsync(caller.Owner, id, ct);
+        if (session is null) return NotFound();
+        if (caller.Scope is { } scope && !scope.AllowsAccount(session.Agent, body.CredentialId ?? ""))
+            return StatusCode(StatusCodes.Status403Forbidden, CredentialScopeException.CredentialNotAllowed);
+        try { return Ok(await _svc.SwitchSessionCredentialAsync(caller.Owner, id, body.CredentialId, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (HttpRequestException e) { return StatusCode(StatusCodes.Status502BadGateway, e.Message); }
+    }
+
+    /// <summary>
     /// Sends a message/task to one of the token owner's sessions. Stored with a null
     /// sender session — the receiving agent sees it as an external message from its owner.
     /// A priority message is pushed into the running agent; the answer's <c>deliveredVia</c>
