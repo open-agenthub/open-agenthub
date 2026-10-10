@@ -45,3 +45,37 @@ test('files client uploads bytes through the returned descriptor and completes t
   assert.equal(requests[1].init.headers['X-Agent-Token'], 'secret-token');
   assert.deepEqual(new Uint8Array(await new Response(requests[1].init.body).arrayBuffer()), new Uint8Array([1, 2, 3]));
 });
+
+test('files client reads project files through its own session route and token', async () => {
+  // The sibling's id is a path segment under the caller's own session, never the session in the
+  // base url: the backend authorises the token against that one and resolves the sibling itself.
+  const { FilesBackendClient } = await import('../../files/client.mjs');
+  const requests = [];
+  const client = new FilesBackendClient(env, async (url, init) => {
+    requests.push({ url, init });
+    return url.endsWith('/content')
+      ? new Response(new Uint8Array([1, 2, 3]))
+      : response(JSON.stringify({ files: [], truncated: false }));
+  });
+
+  await client.projectFiles();
+  await client.projectFiles('sib 1');
+  const body = await client.projectContentStream('sib/1', 'a'.repeat(32));
+
+  assert.deepEqual(requests.map(request => request.url), [
+    `${env.AGENTHUB_CALLBACK_URL}/files/project`,
+    `${env.AGENTHUB_CALLBACK_URL}/files/project?sessionId=sib%201`,
+    `${env.AGENTHUB_CALLBACK_URL}/files/project/sib%2F1/${'a'.repeat(32)}/content`
+  ]);
+  assert.ok(requests.every(request => request.init.method === 'GET'));
+  assert.ok(requests.every(request => request.init.headers['X-Agent-Token'] === 'secret-token'));
+  assert.deepEqual(new Uint8Array(await new Response(body).arrayBuffer()), new Uint8Array([1, 2, 3]));
+});
+
+test('files client reports a refused project file by status', async () => {
+  const { FilesBackendClient } = await import('../../files/client.mjs');
+  const client = new FilesBackendClient(env, async () => new Response(null, { status: 404 }));
+
+  await assert.rejects(() => client.projectContentStream('sib1', 'a'.repeat(32)), /files_backend_http_404/);
+  await assert.rejects(() => client.projectFiles('sib1'), /files_backend_http_404/);
+});

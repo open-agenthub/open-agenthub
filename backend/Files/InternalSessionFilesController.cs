@@ -20,6 +20,17 @@ public sealed record MaterializedSessionFile(
     string StorageKind,
     string? Locator,
     string? DownloadUrl);
+public sealed record ProjectSessionFile(
+    string SessionId,
+    string SessionTitle,
+    string Id,
+    string Name,
+    string MimeType,
+    long Size,
+    DateTime? CompletedAt);
+public sealed record ProjectSessionFilesResponse(
+    IReadOnlyList<ProjectSessionFile> Files,
+    bool Truncated);
 
 [ApiController]
 [AllowAnonymous]
@@ -28,8 +39,14 @@ public sealed class InternalSessionFilesController(
     IAgentCallbackAuthorizer authorizer,
     ISessionFileService files,
     IArtifactStore artifacts,
-    SessionFileOptions options) : ControllerBase
+    SessionFileOptions options,
+    IProjectFileAccess projectFiles) : ControllerBase
 {
+    // The in-pod client refuses a response over a megabyte, and a project of long-lived sessions
+    // can hold more file rows than fit in one. Past this the listing says it was cut short and the
+    // caller narrows it to one session, rather than failing as a whole on size.
+    public const int MaxProjectFiles = 500;
+
     [HttpGet("capabilities")]
     public async Task<IActionResult> Capabilities(string id, CancellationToken ct) =>
         await AuthorizeAsync(id, ct) is null
@@ -194,6 +211,96 @@ public sealed class InternalSessionFilesController(
             return SessionFileApi.Error(this, exception);
         }
     }
+
+    /// <summary>
+    /// Lists the ready files of the caller's sibling sessions — same owner, same project
+    /// (docs/project-files.md). Read-only by construction: nothing under this prefix reserves,
+    /// uploads, deletes or presents, so a sibling's files cannot be changed from here.
+    ///
+    /// The caller is identified by its own callback token and nothing else. The siblings are
+    /// resolved here, from that session's stored owner and project; the request names at most a
+    /// session to narrow the listing to, and an id it may not read narrows it to nothing.
+    /// </summary>
+    [HttpGet("project")]
+    public async Task<IActionResult> ProjectFiles(
+        string id, [FromQuery] string? sessionId, CancellationToken ct)
+    {
+        var caller = await AuthorizeAsync(id, ct);
+        if (caller is null) return Unauthorized();
+        IReadOnlyList<SessionRecord> siblings;
+        if (string.IsNullOrEmpty(sessionId))
+        {
+            siblings = await projectFiles.SiblingsAsync(caller, ct);
+        }
+        else
+        {
+            var sibling = await projectFiles.ResolveSiblingAsync(caller, sessionId, ct);
+            if (sibling is null) return NotFound();
+            siblings = [sibling];
+        }
+
+        var listed = new List<ProjectSessionFile>();
+        var truncated = false;
+        foreach (var sibling in siblings.OrderBy(session => session.CreatedAt)
+                     .ThenBy(session => session.Id, StringComparer.Ordinal))
+        {
+            var ready = (await files.ListAsync(ReaderOf(sibling), ct))
+                .Where(file => file.State == SessionFileState.Ready);
+            foreach (var file in ready)
+            {
+                if (listed.Count == MaxProjectFiles)
+                {
+                    truncated = true;
+                    break;
+                }
+                listed.Add(new ProjectSessionFile(
+                    sibling.Id,
+                    sibling.Title,
+                    file.Id,
+                    file.Name,
+                    file.DetectedMimeType ?? file.DeclaredMimeType,
+                    file.Size,
+                    file.CompletedAt));
+            }
+            if (truncated) break;
+        }
+        return Ok(new ProjectSessionFilesResponse(listed, truncated));
+    }
+
+    /// <summary>
+    /// Streams one file of a sibling session. Every refusal is the same bare 404 — unknown
+    /// session, another owner's, another project's, a caller without a project, an unknown file —
+    /// because any difference between them, a status or a body, would let a session probe which
+    /// ids exist outside its project.
+    /// </summary>
+    [HttpGet("project/{sessionId}/{fileId}/content")]
+    public async Task<IActionResult> ProjectFileContent(
+        string id, string sessionId, string fileId, CancellationToken ct)
+    {
+        var caller = await AuthorizeAsync(id, ct);
+        if (caller is null) return Unauthorized();
+        var sibling = await projectFiles.ResolveSiblingAsync(caller, sessionId, ct);
+        if (sibling is null) return NotFound();
+        try
+        {
+            return SessionFileApi.Content(
+                this,
+                await files.OpenContentAsync(ReaderOf(sibling), fileId, allowRedirect: false, ct));
+        }
+        catch (SessionFileException exception) when (exception.Code == "file_not_found")
+        {
+            return NotFound();
+        }
+        catch (SessionFileException exception)
+        {
+            return SessionFileApi.Error(this, exception);
+        }
+    }
+
+    // The actor a sibling's files are read as. Neither flag is set, so even if a write path were
+    // ever reached with it, the service's own checks refuse.
+    private static SessionFileActor ReaderOf(SessionRecord sibling) =>
+        new(sibling.Id, sibling.Owner, "agent", false, false);
 
     private Task<SessionRecord?> AuthorizeAsync(string id, CancellationToken ct) =>
         authorizer.AuthorizeAsync(Request, id, ct);

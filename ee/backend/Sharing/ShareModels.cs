@@ -165,6 +165,16 @@ public interface ISessionMcpPolicyReader
     Task<SessionMcpPolicy?> GetMcpPolicyAsync(string sessionId, CancellationToken ct = default);
 }
 
+/// <summary>
+/// Whether anybody besides the owner can currently open a session. Its own interface because the
+/// one caller outside sharing — project file access — must not be able to do anything else with
+/// the share tables.
+/// </summary>
+public interface ISessionShareStatus
+{
+    Task<bool> IsSharedAsync(string sessionId, CancellationToken ct = default);
+}
+
 public sealed record SessionSharingOverview(
     IReadOnlyList<DirectSessionShare> Users,
     IReadOnlyList<SessionShareLink> Links,

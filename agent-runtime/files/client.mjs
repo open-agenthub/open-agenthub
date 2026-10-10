@@ -21,6 +21,13 @@ export class FilesBackendClient {
   complete(fileId) { return this.#json('POST', `/files/${encodeURIComponent(fileId)}/complete`); }
   present(fileId) { return this.#json('PUT', '/files/presentation', { fileId }); }
   dismiss() { return this.#json('PUT', '/files/presentation', { fileId: null }); }
+  // Files of sibling sessions in the same project. The backend decides which sessions those are
+  // from this session's own token; the optional id only narrows the listing to one of them.
+  projectFiles(sessionId) {
+    return this.#json('GET', sessionId
+      ? `/files/project?sessionId=${encodeURIComponent(sessionId)}`
+      : '/files/project');
+  }
 
   /**
    * Opens a file's content as a stream, through the API.
@@ -34,8 +41,18 @@ export class FilesBackendClient {
    * belongs in the pod's filesystem where the agent can grep it, not in memory on its way into a
    * reply.
    */
-  async contentStream(fileId) {
-    const url = `${this.baseUrl}/files/${encodeURIComponent(fileId)}/content`;
+  contentStream(fileId) {
+    return this.#stream(`/files/${encodeURIComponent(fileId)}/content`);
+  }
+
+  /** The same, for a file that belongs to a sibling session in this session's project. */
+  projectContentStream(sessionId, fileId) {
+    return this.#stream(
+      `/files/project/${encodeURIComponent(sessionId)}/${encodeURIComponent(fileId)}/content`);
+  }
+
+  async #stream(path) {
+    const url = `${this.baseUrl}${path}`;
     const response = await this.fetchImpl(url, {
       method: 'GET',
       headers: { 'X-Agent-Token': this.token },

@@ -12,7 +12,8 @@ using NpgsqlTypes;
 
 namespace AgentHub.Api.Ee.Sharing;
 
-public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyReader, ISessionShareStore
+public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyReader, ISessionShareStore,
+    ISessionShareStatus
 {
     private readonly NpgsqlDataSource _db;
     private readonly ILogger<SessionShareStore> _logger;
@@ -305,6 +306,25 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
             throw new KeyNotFoundException();
 
         await transaction.CommitAsync(ct);
+    }
+
+    /// <summary>
+    /// True while the session has a direct share or a link that has not expired, whatever the
+    /// role and whether or not a licence is active. An expired link opens nothing, so it does not
+    /// count; a share that the missing licence makes inert does, because the licence can come
+    /// back without anyone looking at this session again.
+    /// </summary>
+    public async Task<bool> IsSharedAsync(string sessionId, CancellationToken ct = default)
+    {
+        await using var command = _db.CreateCommand("""
+            SELECT EXISTS (SELECT 1 FROM session_shares WHERE session_id = @session)
+                OR EXISTS (
+                    SELECT 1 FROM session_share_links
+                    WHERE session_id = @session
+                      AND (expires_at IS NULL OR expires_at > now()))
+            """);
+        command.Parameters.AddWithValue("session", sessionId);
+        return await command.ExecuteScalarAsync(ct) is true;
     }
 
     public async Task<SessionMcpPolicy?> GetMcpPolicyAsync(
