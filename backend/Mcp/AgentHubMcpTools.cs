@@ -22,25 +22,8 @@ public sealed class AgentHubMcpTools(
     ILogger<AgentHubMcpTools> logger,
     ISessionMessageStore? messages = null)
 {
-    /// <summary>
-    /// The calling user. The access token carries "preferred_username", the same claim the REST
-    /// API keys ownership on.
-    /// </summary>
-    private string Owner
-    {
-        get
-        {
-            var user = http.HttpContext?.User;
-            var name = user?.FindFirstValue("preferred_username")
-                       ?? user?.FindFirstValue(ClaimTypes.NameIdentifier)
-                       ?? user?.Identity?.Name;
-            // Reaching a tool without an identity would mean the endpoint was mapped without its
-            // authorization policy; refuse rather than silently acting as somebody.
-            return string.IsNullOrWhiteSpace(name)
-                ? throw new McpException("unauthenticated")
-                : name;
-        }
-    }
+    /// <summary>The calling user; see <see cref="McpCallerIdentity"/>.</summary>
+    private string Owner => McpCallerIdentity.Owner(http);
 
     [McpServerTool(Name = "session_create")]
     [Description("Create and start an AgentHub session. Default mode is Interactive: tool requests "

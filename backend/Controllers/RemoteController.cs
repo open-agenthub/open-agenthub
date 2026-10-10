@@ -45,16 +45,7 @@ public sealed class RemoteController : ControllerBase
 
     /// <summary>Resolves the bearer token to its owner, or null if missing/invalid.</summary>
     private async Task<string?> ResolveOwnerAsync(CancellationToken ct)
-    {
-        var header = Request.Headers.Authorization.ToString();
-        const string scheme = "Bearer ";
-        if (!header.StartsWith(scheme, StringComparison.OrdinalIgnoreCase)) return null;
-
-        var token = header[scheme.Length..].Trim();
-        if (string.IsNullOrEmpty(token) || !token.StartsWith("oah_", StringComparison.Ordinal)) return null;
-
-        return await _findOwner(token, ct);
-    }
+        => RemoteBearerToken.Read(Request) is { } token ? await _findOwner(token, ct) : null;
 
     [HttpPost("sessions")]
     public async Task<ActionResult<SessionInfo>> Create([FromBody] CreateSessionRequest req, CancellationToken ct)
