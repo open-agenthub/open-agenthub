@@ -13,6 +13,24 @@ function handle401() {
   throw new Error('401 Sign-in required')
 }
 
+// Builds the Error for a failed response. `.status` lets callers map specific failures (e.g.
+// 503) to inline messages; the message keeps the raw body because the chat relays and the
+// generic `.err` paragraphs still print it. A 402 additionally carries `.code`: every enterprise
+// endpoint answers it with `{error: "An active enterprise license is required."}`, and the
+// sharing service also sends `code: "license_required"` — the gate must not depend on which
+// of the two a given controller produces, so the code is normalised here, once.
+async function responseError(res) {
+  const text = await res.text()
+  const err = new Error(`${res.status} ${text}`)
+  err.status = res.status
+  if (res.status === 402) err.code = codeFromBody(text) || 'license_required'
+  return err
+}
+
+function codeFromBody(text) {
+  try { return JSON.parse(text)?.code || null } catch { return null }
+}
+
 async function req(method, path, body) {
   const res = await fetch(`/api${path}`, {
     method,
@@ -20,12 +38,7 @@ async function req(method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   })
   if (res.status === 401) handle401()
-  if (!res.ok) {
-    // `.status` lets callers map specific failures (e.g. 503) to inline messages.
-    const err = new Error(`${res.status} ${await res.text()}`)
-    err.status = res.status
-    throw err
-  }
+  if (!res.ok) throw await responseError(res)
   return res.status === 204 ? null : res.json()
 }
 
@@ -39,11 +52,7 @@ async function reqStatus(method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   })
   if (res.status === 401) handle401()
-  if (!res.ok) {
-    const err = new Error(`${res.status} ${await res.text()}`)
-    err.status = res.status
-    throw err
-  }
+  if (!res.ok) throw await responseError(res)
   return res.status
 }
 async function uploadSessionFile(upload, body, options = {}) {

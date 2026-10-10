@@ -237,7 +237,7 @@ describe('McpServersPane', () => {
     expect(shared.find('[data-mcp-share-controls]').exists()).toBe(false)
   })
 
-  it('shows a license note instead of controls when sharing answers 402', async () => {
+  it('shows the license gate instead of controls when sharing answers 402', async () => {
     mocks.api.libraryShares.mockRejectedValue(err402())
     mocks.api.eeListGroups.mockRejectedValue(err402())
     const wrapper = mount(McpServersPane, { props: { isAdmin: true } })
@@ -245,8 +245,23 @@ describe('McpServersPane', () => {
     const own = wrapper.findAll('[data-mcp-row]').find(r => r.text().includes('docs-search'))
     await own.get('[data-mcp-share-toggle]').trigger('click')
     await flushPromises()
-    expect(wrapper.get('[data-share-locked]').text()).toContain('Enterprise license required')
+    const locked = wrapper.get('[data-share-locked]')
+    expect(locked.attributes('data-license-gate')).toBeDefined()
+    expect(locked.text()).toContain('Sharing library entries')
     expect(wrapper.find('[data-share-save]').exists()).toBe(false)
+  })
+
+  it('raises the gate when saving a share is refused with 402', async () => {
+    mocks.api.setLibraryShares.mockRejectedValue(err402())
+    const wrapper = mount(McpServersPane, { props: { isAdmin: true } })
+    await flushPromises()
+    const own = wrapper.findAll('[data-mcp-row]').find(r => r.text().includes('docs-search'))
+    await own.get('[data-mcp-share-toggle]').trigger('click')
+    await flushPromises()
+    await wrapper.get('[data-share-save]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-share-locked]').attributes('data-license-gate')).toBeDefined()
+    expect(wrapper.find('[data-share-error]').exists()).toBe(false)
   })
 })
 
@@ -377,6 +392,30 @@ describe('SkillsPane', () => {
     await flushPromises()
     expect(wrapper.find('[data-skill-publish]').exists()).toBe(false)
     expect(wrapper.findAll('[data-skill-row]')).toHaveLength(2) // pane keeps working
+    // No gate either: a user who cannot publish anyway is not nagged about a license.
+    expect(wrapper.find('[data-license-gate]').exists()).toBe(false)
+  })
+
+  it('shows the license gate when publishing is refused with 402 after the toggle appeared', async () => {
+    mocks.api.setLibraryShares.mockRejectedValue(err402())
+    const wrapper = mount(SkillsPane, { props: { isAdmin: false } })
+    await flushPromises()
+    const toggle = wrapper.get('[data-skill-publish]')
+    await toggle.setValue(true)
+    await flushPromises()
+    expect(toggle.element.checked).toBe(false)
+    expect(wrapper.get('[data-skill-publish-locked]').text()).toContain('Publishing skills to everyone')
+    expect(wrapper.find('[data-skill-publish-error]').exists()).toBe(false)
+  })
+
+  it('keeps a 403 on publishing as a plain error line', async () => {
+    mocks.api.setLibraryShares.mockRejectedValue(Object.assign(new Error('403 Forbidden'), { status: 403 }))
+    const wrapper = mount(SkillsPane, { props: { isAdmin: false } })
+    await flushPromises()
+    await wrapper.get('[data-skill-publish]').setValue(true)
+    await flushPromises()
+    expect(wrapper.get('[data-skill-publish-error]').text()).toContain('not allowed')
+    expect(wrapper.find('[data-skill-publish-locked]').exists()).toBe(false)
   })
 
   it('hides the publish toggle for admins who use the sharing expander instead', async () => {
