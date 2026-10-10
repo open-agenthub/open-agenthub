@@ -1,0 +1,8 @@
+{
+  "name": "agenthub-fleet",
+  "version": "0.1.0",
+  "description": "Delivers Open AgentHub fleet messages into this Claude Code session: priority messages become the next prompt (interrupting the running turn on request), plain ones wait behind /inbox.",
+  "author": { "name": "Maik Boltze", "email": "open-agenthub@mail.on-mb.com" },
+  "homepage": "https://github.com/open-agenthub/open-agenthub",
+  "license": "AGPL-3.0-only"
+}
