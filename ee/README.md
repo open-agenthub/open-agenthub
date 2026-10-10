@@ -33,6 +33,11 @@ subscription for production use.
   enforced before tool execution.
 - **Owner-only controls** — sharing does not grant shell access, settings, project,
   duplication, lifecycle, or sharing-management permissions.
+- **Sharing from an API client** — the same grants and links over the personal-token API
+  (`/api/remote/sessions/{id}/shares…`, plus `/api/remote/sessions/shared` for "shared with
+  me") and as MCP tools `session_share`, `session_unshare`, `session_share_link`,
+  `session_shares` on the stdio and the remote MCP server. Without a licence these answer
+  `402` / `license_required`. See [`docs/session-sharing-api.md`](../docs/session-sharing-api.md).
 - **Org-wide usage limits** ✅ — admins set monthly API budgets globally, per user
   group, or per user (the strictest limit wins; personal limits from the Community
   Edition still apply on top). Sources under [`backend/Usage/`](./backend/Usage);

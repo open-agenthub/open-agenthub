@@ -149,6 +149,34 @@ The stdio MCP server returns sessions through an allowlist, so `url` had to be n
 explicitly — a field the backend starts returning is dropped until it is listed, and without it a
 caller would be left holding an id it could not turn into a link.
 
+## Sharing the session from the same caller
+
+Handing a link to one person is the common case; the next one is letting a colleague watch or
+join. The web dialog could do that and the token API could not, so a script that created a
+session still had to ask a human to open the dialog. The sharing operations are now on the token
+surface and on both MCP servers — the reasoning, and what was deliberately left out, is in
+`session-sharing-api.md`. All of it is Enterprise: without a licence every call answers `402`
+(`license_required` over MCP).
+
+| Operation | Token API (`Authorization: Bearer oah_…`) | MCP tool |
+|---|---|---|
+| Who it is shared with | `GET /api/remote/sessions/{id}/shares` | `session_shares {sessionId}` |
+| Share with a user | `POST /api/remote/sessions/{id}/shares/users {recipient, role}` | `session_share {sessionId, recipient, role?}` |
+| Revoke a user | `DELETE /api/remote/sessions/{id}/shares/users/{recipient}` | `session_unshare {sessionId, recipient}` |
+| Mint a secret link | `POST /api/remote/sessions/{id}/shares/links {role, expiresAt?}` | `session_share_link {sessionId, role?, expiresAt?}` → `{url, linkId}` |
+| Revoke a link | `DELETE /api/remote/sessions/{id}/shares/links/{linkId}` | — (use the API with the id from `session_shares`) |
+| Shared with me | `GET /api/remote/sessions/shared` (also `GET /api/sessions/shared` in the app) | — |
+
+`role` is `Viewer` (watch the terminal, read the transcript) or `Collaborator` (also type); it
+defaults to Viewer. Outcomes: `404` for a session that is not the token owner's — the same answer
+as for one that does not exist, so ids cannot be probed — and `400 {error, code: "unknown_recipient"}`
+for a username that has never signed in to the instance. The MCP tools report the same three
+things as `session_not_found`, `unknown_recipient` and `license_required`.
+
+The link response's `url` is absolute, built from `FrontendOrigin` exactly like `SessionInfo.Url`
+above, because the caller has no browser origin to resolve a path against. It is the only time the
+token is returned; `session_shares` lists links by id and role and never repeats it.
+
 ## Where a runtime's MCP configuration lives
 
 Each CLI reads its own, and all four locations are outside the workspace:
