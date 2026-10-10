@@ -33,8 +33,9 @@ public sealed class ProjectFilesTests
         Assert.Equal("shot.png", file.Name);
         Assert.False(listing.Truncated);
         var stream = Assert.IsType<FileStreamResult>(content);
+        await using var body = stream.FileStream;
         using var buffer = new MemoryStream();
-        await stream.FileStream.CopyToAsync(buffer);
+        await body.CopyToAsync(buffer);
         Assert.Equal("sibling"u8.ToArray(), buffer.ToArray());
         // The pod's fetch would follow a redirect carrying X-Agent-Token to the storage endpoint.
         Assert.False(world.Files.LastAllowRedirect);
@@ -151,7 +152,9 @@ public sealed class ProjectFilesTests
         var world = new World();
 
         await world.ListAsync("caller");
-        await world.Controller("caller").ProjectFileContent("caller", "sibling", FileId, default);
+        var content = Assert.IsType<FileStreamResult>(await world.Controller("caller")
+            .ProjectFileContent("caller", "sibling", FileId, default));
+        await content.FileStream.DisposeAsync();
 
         Assert.NotEmpty(world.Files.Actors);
         Assert.All(world.Files.Actors, actor =>

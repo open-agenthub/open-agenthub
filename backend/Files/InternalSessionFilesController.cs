@@ -244,9 +244,10 @@ public sealed class InternalSessionFilesController(
         foreach (var sibling in siblings.OrderBy(session => session.CreatedAt)
                      .ThenBy(session => session.Id, StringComparer.Ordinal))
         {
-            foreach (var file in await files.ListAsync(ReaderOf(sibling), ct))
+            var ready = (await files.ListAsync(ReaderOf(sibling), ct))
+                .Where(file => file.State == SessionFileState.Ready);
+            foreach (var file in ready)
             {
-                if (file.State != SessionFileState.Ready) continue;
                 if (listed.Count == MaxProjectFiles)
                 {
                     truncated = true;
