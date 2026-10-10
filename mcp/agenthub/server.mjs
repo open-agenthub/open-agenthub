@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AgentHubClient } from './client.mjs';
+import { withExpiry } from './expiry.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
@@ -49,16 +50,22 @@ const createSchema = z.object({
   image: z.string().max(512).optional(),
   runAsRoot: z.boolean().optional(),
   cpu: z.string().max(32).optional(),
-  memory: z.string().max(32).optional()
+  memory: z.string().max(32).optional(),
+  // Text with a unit, converted to seconds before the HTTP call — see expiry.mjs for why.
+  autoDeleteAfter: z.string().max(16).optional(),
+  autoDeleteFrom: z.enum(['start', 'lastActivity']).optional()
 });
 
 register('session_create', {
   description: 'Create and start an AgentHub session. Default mode is Interactive: the session '
     + 'starts working on its prompt and stays live, tool requests outside its allow list wait for '
     + 'a person\'s approval, and the response carries "url" — the page to hand to that person. '
-    + 'Use Autonomous only for unattended work, where such requests are approved automatically.',
+    + 'Use Autonomous only for unattended work, where such requests are approved automatically. '
+    + 'autoDeleteAfter ("90m", "12h", "3d") makes the session delete itself after that long since '
+    + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start; the '
+    + 'response\'s expiresAt says when.',
   inputSchema: createSchema
-}, async (body) => text(sanitizeSession(await client.create(body))));
+}, async (body) => text(sanitizeSession(await client.create(withExpiry(body)))));
 
 register('session_get', {
   description: 'Get a session by id.',
@@ -135,7 +142,7 @@ function safeError(error) {
   const message = error instanceof Error ? error.message : '';
   const stable = [
     'agenthub_not_configured', 'agenthub_invalid_url',
-    'agenthub_response_too_large', 'agenthub_invalid_json'
+    'agenthub_response_too_large', 'agenthub_invalid_json', 'autodelete_invalid_duration'
   ];
   return stable.find(code => message.includes(code)) ??
     (/agenthub_http_\d{3}/.exec(message)?.[0]) ?? 'agenthub_operation_failed';

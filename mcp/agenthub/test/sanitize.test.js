@@ -55,3 +55,17 @@ test('sanitizeSession keeps the session url a caller hands to a person', () => {
   assert.equal(safe.systemPrompt, 'You review, you do not commit.');
   assert.equal(safe.callbackToken, undefined);
 });
+
+test('sanitizeSession keeps the self-deletion setting and the deadline it yields', () => {
+  const safe = sanitizeSession({
+    id: 's1', phase: 'Running',
+    autoDeleteAfterSeconds: 43200, autoDeleteFrom: 'lastActivity',
+    expiresAt: '2026-10-11T00:00:00Z', lastActivityAt: '2026-10-10T12:00:00Z',
+    callbackToken: 'tok'
+  });
+  assert.equal(safe.autoDeleteAfterSeconds, 43200);
+  assert.equal(safe.autoDeleteFrom, 'lastActivity');
+  assert.equal(safe.expiresAt, '2026-10-11T00:00:00Z');
+  assert.equal(safe.lastActivityAt, '2026-10-10T12:00:00Z');
+  assert.equal(safe.callbackToken, undefined);
+});

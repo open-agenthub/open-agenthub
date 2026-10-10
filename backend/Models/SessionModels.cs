@@ -439,6 +439,29 @@ public record UpdateSessionRequest
     }
 }
 
+/// <summary>
+/// The subset of <see cref="UpdateSessionRequest"/> the token-authenticated remote API accepts.
+/// A separate type rather than the full request: the remote surface is for driving sessions,
+/// and letting a token rewrite the image, root mode or repositories of a session would widen
+/// what a leaked token can do far beyond what the feature needed.
+/// </summary>
+public sealed record RemoteUpdateSessionRequest
+{
+    public string? Title { get; init; }
+    public string? Description { get; init; }
+    /// <summary>Null = unchanged, 0 = off. See <see cref="UpdateSessionRequest.AutoDeleteAfterSeconds"/>.</summary>
+    public int? AutoDeleteAfterSeconds { get; init; }
+    public string? AutoDeleteFrom { get; init; }
+
+    public UpdateSessionRequest ToUpdate() => new()
+    {
+        Title = Title,
+        Description = Description,
+        AutoDeleteAfterSeconds = AutoDeleteAfterSeconds,
+        AutoDeleteFrom = AutoDeleteFrom
+    };
+}
+
 /// <param name="SystemPrompt">Replaces the copied system prompt; null copies the source's, an
 /// empty string yields a copy without one (create-side normalization turns it into null).</param>
 /// <param name="AutoDeleteAfterSeconds">Replaces the copied self-deletion deadline; null copies

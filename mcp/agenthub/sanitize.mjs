@@ -6,7 +6,9 @@ const SAFE_KEYS = [
   // The page a person opens to take the session over. An allowlist means a field the backend
   // starts returning is dropped here until it is named, so leaving this out would have made
   // session_create answer without the one thing a caller handing over a session needs.
-  'url'
+  'url',
+  // The self-deletion setting and the deadline it yields (docs/session-expiry.md).
+  'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt'
 ];
 
 /**

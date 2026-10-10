@@ -2,7 +2,9 @@
 const SAFE_KEYS = [
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
-  'createdAt', 'hasMcp'
+  'createdAt', 'hasMcp',
+  // The self-deletion setting and the deadline it yields (docs/session-expiry.md).
+  'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt'
 ];
 
 /**
