@@ -45,7 +45,13 @@ function mountTerminal(props = {}) {
   })
 }
 
-describe('fleet message banner in the session view', () => {
+// Messages live behind the ✉ button; nothing about them is drawn over the terminal.
+async function openPanel(wrapper) {
+  await wrapper.get('[data-send-message-toggle]').trigger('click')
+  return wrapper.get('[data-send-message]')
+}
+
+describe('fleet messages panel in the session view', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.listPermissions.mockResolvedValue([])
@@ -58,6 +64,7 @@ describe('fleet message banner in the session view', () => {
     mocks.api.listSessionMessages.mockResolvedValue([message()])
     const wrapper = mountTerminal()
     await flushPromises()
+    await openPanel(wrapper)
 
     const banner = wrapper.get('[data-agent-message]')
     expect(banner.text()).toContain('Message from agent “Code Reviewer”')
@@ -68,6 +75,7 @@ describe('fleet message banner in the session view', () => {
     mocks.api.listSessionMessages.mockResolvedValue([message({ from: null, fromTitle: null })])
     const wrapper = mountTerminal()
     await flushPromises()
+    await openPanel(wrapper)
 
     expect(wrapper.get('[data-agent-message]').text()).toContain('Message from outside the fleet')
   })
@@ -79,6 +87,7 @@ describe('fleet message banner in the session view', () => {
     ])
     const wrapper = mountTerminal()
     await flushPromises()
+    await openPanel(wrapper)
 
     expect(wrapper.findAll('[data-agent-message]')).toHaveLength(1)
     expect(wrapper.text()).not.toContain('old task')
@@ -88,6 +97,7 @@ describe('fleet message banner in the session view', () => {
     mocks.api.listSessionMessages.mockResolvedValue([message()])
     const wrapper = mountTerminal()
     await flushPromises()
+    await openPanel(wrapper)
 
     await wrapper.get('[data-dismiss-message]').trigger('click')
 
@@ -96,6 +106,29 @@ describe('fleet message banner in the session view', () => {
     await vi.advanceTimersByTimeAsync(4000)
     await flushPromises()
     expect(wrapper.find('[data-agent-message]').exists()).toBe(false)
+  })
+
+  it('draws nothing over the terminal and counts the open messages on the button', async () => {
+    mocks.api.listSessionMessages.mockResolvedValue([
+      message(),
+      message({ id: 'm2', body: 'second' }),
+      message({ id: 'm3', body: 'done already', deliveredAt: '2026-09-20T10:01:00Z' })
+    ])
+    const wrapper = mountTerminal()
+    await flushPromises()
+
+    expect(wrapper.find('[data-agent-message]').exists()).toBe(false)
+    expect(wrapper.get('[data-message-badge]').text()).toBe('2')
+
+    const panel = await openPanel(wrapper)
+    expect(panel.findAll('[data-agent-message]')).toHaveLength(2)
+    expect(panel.get('[data-messages-count]').text()).toBe('2 open')
+
+    await panel.findAll('[data-dismiss-message]')[0].trigger('click')
+    expect(wrapper.get('[data-message-badge]').text()).toBe('1')
+    await panel.findAll('[data-dismiss-message]')[0].trigger('click')
+    expect(wrapper.find('[data-message-badge]').exists()).toBe(false)
+    expect(panel.get('[data-messages-empty]').exists()).toBe(true)
   })
 
   it('polls messages alongside permissions but not for shared links or viewers', async () => {
@@ -132,6 +165,7 @@ describe('priority messages in the session view', () => {
     mocks.api.listSessionMessages.mockResolvedValue([message({ priority: true })])
     const wrapper = mountTerminal()
     await flushPromises()
+    await openPanel(wrapper)
 
     const banner = wrapper.get('[data-agent-message]')
     expect(banner.attributes('data-priority')).toBe('true')
@@ -148,6 +182,7 @@ describe('priority messages in the session view', () => {
     ])
     const wrapper = mountTerminal()
     await flushPromises()
+    await openPanel(wrapper)
 
     const banners = wrapper.findAll('[data-agent-message]')
     expect(banners).toHaveLength(2)
@@ -161,6 +196,7 @@ describe('priority messages in the session view', () => {
     mocks.api.listSessionMessages.mockResolvedValue([message()])
     const wrapper = mountTerminal()
     await flushPromises()
+    await openPanel(wrapper)
 
     const banner = wrapper.get('[data-agent-message]')
     expect(banner.attributes('data-priority')).toBeUndefined()
@@ -213,10 +249,13 @@ describe('messaging the agent from the session view', () => {
     expect(wrapper.get('[data-send-message-note]').text()).toContain('Waiting in the inbox')
   })
 
-  it('offers the card only to a manager of a live session that is not opened through a share link', async () => {
+  it('offers the panel to managers only, and the send form only while the session is live', async () => {
     const stopped = mountTerminal({ session: session({ phase: 'Succeeded' }) })
     await flushPromises()
-    expect(stopped.find('[data-send-message-toggle]').exists()).toBe(false)
+    // A finished session still has an inbox worth reading, but no pod to push a message into.
+    const panel = await openPanel(stopped)
+    expect(panel.find('[data-send-message-form]').exists()).toBe(false)
+    expect(panel.get('[data-messages-empty]').exists()).toBe(true)
     stopped.unmount()
 
     const shared = mountTerminal({ sharedToken: 'tok' })

@@ -77,10 +77,35 @@ describe('transcript tab', () => {
     expect(wrapper.find('.transcript-list').attributes('data-transcript-source')).toBe('native')
     expect(wrapper.findAll('.transcript-label').map(item => item.text()))
       .toEqual(['User', 'Agent', 'Tool · Bash', 'Result', 'Agent'])
-    expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text()))
+    expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text()))
       .toEqual(['Fix the build', 'Looking.', 'ls', 'ok', 'Done.'])
     expect(wrapper.findAll('.transcript-bubble').map(item => item.attributes('data-transcript-role')))
       .toEqual(['user', 'assistant', 'tool', 'result', 'assistant'])
+  })
+
+  it('renders what the person and the model wrote as markdown, tool output verbatim', async () => {
+    mocks.api.getConversation.mockResolvedValue(nativePage([
+      { role: 'user', text: 'Fix **the build** in `ci.yml`', at: null },
+      { role: 'assistant', text: '## Plan\n\n- one\n- two\n\n```sh\nnpm test\n```', at: null },
+      { role: 'tool', text: '**not** markdown', at: null, tool: 'Bash' },
+      { role: 'result', text: '<b>escaped</b>', at: null }
+    ]))
+    const wrapper = mountView()
+
+    await openTranscript(wrapper)
+
+    const prose = wrapper.findAll('[data-transcript-markdown]')
+    expect(prose).toHaveLength(2)
+    expect(prose[0].find('strong').text()).toBe('the build')
+    expect(prose[0].find('code').text()).toBe('ci.yml')
+    // The renderer lowers headings by two levels so agent text never outranks the page's own.
+    expect(prose[1].find('h4').text()).toBe('Plan')
+    expect(prose[1].findAll('li').map(item => item.text())).toEqual(['one', 'two'])
+    expect(prose[1].find('pre code').text()).toBe('npm test')
+
+    const verbatim = wrapper.findAll('.transcript-bubble pre.transcript-text')
+    expect(verbatim.map(item => item.text())).toEqual(['**not** markdown', '<b>escaped</b>'])
+    expect(wrapper.find('.transcript-bubble b').exists()).toBe(false)
   })
 
   it('falls back to neutral terminal bubbles for a session without a native transcript', async () => {
@@ -90,7 +115,7 @@ describe('transcript tab', () => {
     await openTranscript(wrapper)
 
     expect(wrapper.find('.transcript-list').attributes('data-transcript-source')).toBe('scrollback')
-    expect(wrapper.findAll('.transcript-bubble').map(item => item.find('pre').text())).toEqual([
+    expect(wrapper.findAll('.transcript-bubble').map(item => item.find('.transcript-text').text())).toEqual([
       'first\n\nsecond'
     ])
     expect(wrapper.findAll('.transcript-label').map(item => item.text())).toEqual(['Terminal'])
@@ -104,7 +129,7 @@ describe('transcript tab', () => {
 
     expect(mocks.getSharedConversation).toHaveBeenCalledWith('shared-token', undefined)
     expect(mocks.api.getConversation).not.toHaveBeenCalled()
-    expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['shared hello'])
+    expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['shared hello'])
   })
 
   it('keeps the existing empty transcript state', async () => {
@@ -139,19 +164,19 @@ describe('transcript tab', () => {
         .mockResolvedValueOnce({ source: 'native', entries: [], text: '', offset: 2, nextOffset: 2, length: 2, running: true })
       const wrapper = mountView({ session: running })
       await openTranscript(wrapper)
-      expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['first'])
+      expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['first'])
 
       await vi.advanceTimersByTimeAsync(4000)
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 1)
-      expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['first', 'second'])
+      expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['first', 'second'])
 
       // Nothing new: the cursor stays and nothing is duplicated.
       await vi.advanceTimersByTimeAsync(4000)
       await flushPromises()
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 2)
-      expect(wrapper.findAll('.transcript-bubble pre')).toHaveLength(2)
+      expect(wrapper.findAll('.transcript-bubble .transcript-text')).toHaveLength(2)
     })
 
     it('appends scrollback text for sessions without a native transcript', async () => {
@@ -165,7 +190,7 @@ describe('transcript tab', () => {
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 11)
-      expect(wrapper.find('.transcript-bubble pre').text()).toBe('hello world and more')
+      expect(wrapper.find('.transcript-bubble .transcript-text').text()).toBe('hello world and more')
     })
 
     it('reloads from the start when the cursor went stale', async () => {
@@ -181,7 +206,7 @@ describe('transcript tab', () => {
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', undefined)
-      expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['only'])
+      expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['only'])
     })
 
     it('does not poll a finished session or an inactive tab', async () => {
@@ -209,7 +234,7 @@ describe('transcript tab', () => {
       await wrapper.setProps({ session: { ...running, phase: 'Succeeded' } })
       await flushPromises()
 
-      expect(wrapper.findAll('.transcript-bubble pre').map(item => item.text())).toEqual(['working', 'done'])
+      expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['working', 'done'])
     })
   })
 
@@ -225,6 +250,6 @@ describe('transcript tab', () => {
 
     resolveTranscript(scrollbackPage('ready'))
     await flushPromises()
-    expect(wrapper.find('.transcript-bubble pre').text()).toBe('ready')
+    expect(wrapper.find('.transcript-bubble .transcript-text').text()).toBe('ready')
   })
 })

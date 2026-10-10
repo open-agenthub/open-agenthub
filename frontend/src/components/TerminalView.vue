@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
 import ChatPane from './ChatPane.vue'
@@ -12,6 +12,8 @@ import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
+import { renderMarkdown } from '../lib/markdown.js'
+import { renderMermaidBlocks } from '../lib/mermaid.js'
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 
@@ -35,6 +37,15 @@ const shareOpen = ref(false)
 // the heuristics in lib/transcript.js because terminal output has no roles).
 const conversation = ref(null)
 const transcriptItems = computed(() => toTranscriptItems(conversation.value))
+// A native turn is what the person or the model wrote, so it is markdown like the chat pane's
+// bubbles; tool calls, results and scrollback text are shown verbatim, because a diff or a
+// shell listing would only be mangled by markdown rules.
+const isProse = item => item.role === 'user' || item.role === 'assistant'
+const transcriptList = ref(null)
+watch(transcriptItems, async () => {
+  await nextTick()
+  if (transcriptList.value) void renderMermaidBlocks(transcriptList.value)
+})
 const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '', transcript: '' })
 
@@ -58,9 +69,15 @@ async function refreshPermissions() {
 const PRIORITY_BANNER_MS = 5 * 60 * 1000
 const agentMessages = ref([])
 const dismissedMessages = ref(new Set())
+// Messages live in the ✉ panel, not above the terminal: a fleet of chatty peers used to stack
+// one banner per message over the agent's output until nothing underneath was readable. The
+// button carries a count of the open ones instead, and the panel lists them on demand.
 const visibleMessages = computed(() => agentMessages.value
   .filter(m => !dismissedMessages.value.has(m.id))
   .filter(m => !m.deliveredAt || (m.priority && Date.now() - new Date(m.deliveredAt).getTime() < PRIORITY_BANNER_MS)))
+// What the badge counts: not yet picked up by the agent and not dismissed here.
+const openMessages = computed(() => agentMessages.value
+  .filter(m => !dismissedMessages.value.has(m.id) && !m.deliveredAt))
 
 function deliveryLabel(m) {
   if (!m.priority) return ''
@@ -89,7 +106,9 @@ const sendPriority = ref(true)
 const sendInterrupt = ref(false)
 const sendBusy = ref(false)
 const sendNote = ref('')
-const showSendMessage = computed(() => !props.sharedToken && capabilities.value.canManage && isLive.value)
+// The panel (list + badge) is for every manager of the session; sending needs a live pod.
+const showMessages = computed(() => !props.sharedToken && capabilities.value.canManage)
+const showSendMessage = computed(() => showMessages.value && isLive.value)
 watch(sendInterrupt, stop => { if (stop) sendPriority.value = true })
 watch(sendPriority, urgent => { if (!urgent) sendInterrupt.value = false })
 
@@ -316,7 +335,7 @@ async function selectTab(tab) {
       <template v-if="capabilities.canManage">
         <button v-if="canPause(session)" class="bar-btn" @click="$emit('pause', session.id)">❚❚ Pause</button>
         <button v-if="session.canResume" class="bar-btn" @click="$emit('resume', session.id)">▶ Resume</button>
-        <button v-if="showSendMessage" class="bar-btn" data-send-message-toggle :class="{ on: sendOpen }" @click="sendOpen = !sendOpen">✉ Message</button>
+        <button v-if="showMessages" class="bar-btn" data-send-message-toggle :class="{ on: sendOpen }" @click="sendOpen = !sendOpen">✉ Messages<span v-if="openMessages.length" class="msg-badge" data-message-badge>{{ openMessages.length }}</span></button>
         <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
@@ -382,32 +401,41 @@ async function selectTab(tab) {
         <button class="bar-btn" data-auto-approve :disabled="autoApproveBusy" @click="toggleAutoApprove">Turn off</button>
       </div>
     </div>
-    <div v-if="showSendMessage && sendOpen" class="perm send-card" data-send-message>
-      <span class="ask-dot send-dot"></span>
-      <div class="perm-text send-form">
-        <strong>Message this agent</strong>
-        <textarea v-model="sendText" rows="2" maxlength="4000" placeholder="What should the agent know or do?"
-          data-send-message-text :disabled="sendBusy" @keydown.ctrl.enter.prevent="sendMessage"></textarea>
-        <div class="send-flags">
-          <label><input type="checkbox" v-model="sendPriority" data-send-message-priority :disabled="sendBusy" /> priority — deliver into the running prompt now</label>
-          <label><input type="checkbox" v-model="sendInterrupt" data-send-message-interrupt :disabled="sendBusy" /> interrupt — stop the current work first</label>
+    <div v-if="showMessages && sendOpen" class="messages-panel" data-send-message>
+      <div class="messages-head">
+        <strong>Messages</strong>
+        <span class="perm-summary" data-messages-count>{{ openMessages.length ? `${openMessages.length} open` : 'nothing open' }}</span>
+        <button class="ghost" data-send-message-close :disabled="sendBusy" @click="sendOpen = false; sendNote = ''">✕</button>
+      </div>
+      <div v-if="showSendMessage" class="perm send-card" data-send-message-form>
+        <span class="ask-dot send-dot"></span>
+        <div class="perm-text send-form">
+          <strong>Message this agent</strong>
+          <textarea v-model="sendText" rows="2" maxlength="4000" placeholder="What should the agent know or do?"
+            data-send-message-text :disabled="sendBusy" @keydown.ctrl.enter.prevent="sendMessage"></textarea>
+          <div class="send-flags">
+            <label><input type="checkbox" v-model="sendPriority" data-send-message-priority :disabled="sendBusy" /> priority — deliver into the running prompt now</label>
+            <label><input type="checkbox" v-model="sendInterrupt" data-send-message-interrupt :disabled="sendBusy" /> interrupt — stop the current work first</label>
+          </div>
+          <span v-if="sendNote" class="perm-summary send-note" data-send-message-note>{{ sendNote }}</span>
         </div>
-        <span v-if="sendNote" class="perm-summary send-note" data-send-message-note>{{ sendNote }}</span>
+        <div class="perm-actions">
+          <button class="bar-btn primary" data-send-message-submit :disabled="sendBusy || !sendText.trim()" @click="sendMessage">{{ sendBusy ? 'Sending…' : 'Send' }}</button>
+        </div>
       </div>
-      <div class="perm-actions">
-        <button class="bar-btn primary" data-send-message-submit :disabled="sendBusy || !sendText.trim()" @click="sendMessage">{{ sendBusy ? 'Sending…' : 'Send' }}</button>
-        <button class="bar-btn" data-send-message-close :disabled="sendBusy" @click="sendOpen = false; sendNote = ''">Close</button>
+      <div v-for="m in visibleMessages" :key="m.id" class="perm agent-msg" :class="{ priority: m.priority }" data-agent-message
+           :data-priority="m.priority ? 'true' : null" :data-delivered-via="m.deliveredVia || null">
+        <span class="ask-dot msg-dot"></span>
+        <div class="perm-text">
+          <strong>{{ m.interrupt ? 'Interrupt' : m.priority ? 'Priority message' : 'Message' }} from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}<template v-if="m.priority"> · <span class="msg-delivery" data-message-delivery>{{ deliveryLabel(m) }}</span></template></strong>
+          <span class="msg-body">{{ m.body }}</span>
+        </div>
+        <div class="perm-actions">
+          <button class="bar-btn" data-dismiss-message @click="dismissMessage(m.id)">Dismiss</button>
+        </div>
       </div>
-    </div>
-    <div v-for="m in visibleMessages" :key="m.id" class="perm agent-msg" :class="{ priority: m.priority }" data-agent-message
-         :data-priority="m.priority ? 'true' : null" :data-delivered-via="m.deliveredVia || null">
-      <span class="ask-dot msg-dot"></span>
-      <div class="perm-text">
-        <strong>{{ m.interrupt ? 'Interrupt' : m.priority ? 'Priority message' : 'Message' }} from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}<template v-if="m.priority"> · <span class="msg-delivery" data-message-delivery>{{ deliveryLabel(m) }}</span></template></strong>
-        <span class="msg-body">{{ m.body }}</span>
-      </div>
-      <div class="perm-actions">
-        <button class="bar-btn" data-dismiss-message @click="dismissMessage(m.id)">Dismiss</button>
+      <div v-if="!visibleMessages.length" class="perm agent-msg messages-empty" data-messages-empty>
+        <span class="perm-summary">No open messages. Fleet peers reach this session with agent_send; priority ones go straight into its prompt.</span>
       </div>
     </div>
     <div v-for="p in pendingPermissions" :key="p.id" class="perm">
@@ -434,12 +462,13 @@ async function selectTab(tab) {
             <h3 id="transcript-heading">What happened so far</h3>
             <p v-if="conversation === null" class="transcript-state">Loading…</p>
             <p v-else-if="!transcriptItems.length" class="transcript-state">[no saved transcript]</p>
-            <ol v-else class="transcript-list" :aria-label="conversation.source === 'native' ? 'Conversation' : 'Terminal transcript'"
+            <ol v-else ref="transcriptList" class="transcript-list" :aria-label="conversation.source === 'native' ? 'Conversation' : 'Terminal transcript'"
                 :data-transcript-source="conversation.source">
               <li v-for="(item, index) in transcriptItems" :key="index" class="transcript-bubble" :class="'role-' + item.role"
                   :data-transcript-role="item.role">
                 <span class="transcript-label">{{ item.label }}</span>
-                <pre>{{ item.text }}</pre>
+                <div v-if="isProse(item)" class="md transcript-text transcript-md" data-transcript-markdown v-html="renderMarkdown(item.text)"></div>
+                <pre v-else class="transcript-text">{{ item.text }}</pre>
               </li>
             </ol>
           </div>
@@ -497,6 +526,11 @@ async function selectTab(tab) {
 .send-flags input { width: auto; margin: 0; }
 .send-note { white-space: normal; color: var(--muted); }
 .bar-btn.on { background: var(--border-2); color: var(--strong); }
+.msg-badge { display: inline-block; min-width: 18px; margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-size: 11px; font-weight: 700; line-height: 16px; text-align: center; }
+.messages-panel { display: flex; flex-direction: column; border-bottom: 1px solid var(--border-2); background: var(--panel); max-height: 40vh; overflow-y: auto; }
+.messages-head { display: flex; align-items: center; gap: 10px; padding: 8px 20px; font-size: 12px; color: var(--strong); border-bottom: 1px solid var(--border-2); }
+.messages-head .ghost { margin-left: auto; }
+.messages-empty { color: var(--muted); }
 .msg-body { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .terminal-stack { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }
@@ -509,5 +543,6 @@ async function selectTab(tab) {
 .transcript-bubble.role-tool pre, .transcript-bubble.role-result pre { color: var(--muted); font-size: 12px; }
 .transcript-label { display: block; color: var(--muted-2); font: 700 10px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
 .transcript-bubble pre { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); color: #c9c4bb; }
+.transcript-md { margin-top: 7px; font-size: 14px; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; }
 .transcript-state { margin: 0; color: var(--muted-3); font: 13px/1.6 var(--mono); }
 </style>
