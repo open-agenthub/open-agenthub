@@ -133,6 +133,11 @@ public static class AgentPodSpecFactory
             RunAsNonRoot = !asRoot, RunAsUser = uid, RunAsGroup = uid, FsGroup = uid,
             SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
         };
+        // A raw string literal keeps the line endings of the source file, and a Windows checkout
+        // has CRLF. sh then reads a trailing "\" followed by CR as a literal backslash rather than a
+        // line continuation, and the Codex init container ran requirements.toml as a script of its
+        // own. The shell scripts below go through here so a CRLF build behaves like an LF one.
+        static string ShellScript(string script) => script.Replace("\r\n", "\n");
         V1SecurityContext ContainerSecurity() => new()
         {
             AllowPrivilegeEscalation = false, ReadOnlyRootFilesystem = !asRoot,
@@ -397,7 +402,7 @@ public static class AgentPodSpecFactory
             {
                 Name = "copy-runtime", Image = runtimeImage,
                 ImagePullPolicy = context.RuntimeImages.PullPolicy,
-                Command = new List<string> { "/bin/sh", "-c", copyScript },
+                Command = new List<string> { "/bin/sh", "-c", ShellScript(copyScript) },
                 VolumeMounts = new List<V1VolumeMount> { new() { Name = "runtime", MountPath = "/opt/agenthub" } },
                 SecurityContext = ContainerSecurity()
             });
@@ -415,7 +420,7 @@ public static class AgentPodSpecFactory
                 Name = "prepare-codex-system-config",
                 Image = runtimeImage,
                 ImagePullPolicy = context.RuntimeImages.PullPolicy,
-                Command = new List<string> { "/bin/sh", "-c", requirementsScript },
+                Command = new List<string> { "/bin/sh", "-c", ShellScript(requirementsScript) },
                 VolumeMounts = new List<V1VolumeMount>
                 {
                     new() { Name = "codex-system-config", MountPath = "/codex-system-config" }
@@ -456,7 +461,7 @@ public static class AgentPodSpecFactory
             initContainers.Add(new V1Container
             {
                 Name = "git-clone", Image = context.Runtime.GitCloneImage,
-                Command = new List<string> { "/bin/sh", "-c", cloneScript },
+                Command = new List<string> { "/bin/sh", "-c", ShellScript(cloneScript) },
                 Env = new List<V1EnvVar>
                 {
                     new() { Name = "REPOS", Value = reposEnv },

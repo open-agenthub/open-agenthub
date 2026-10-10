@@ -228,6 +228,11 @@ public class AgentPodSpecFactoryTests
         Assert.True(agentMount.ReadOnlyProperty);
         Assert.Equal("runtime-codex", requirements.Image);
         Assert.Contains("/etc/codex/requirements.toml", command);
+        // The script spans two lines joined by a backslash. On a CRLF checkout the raw string
+        // carries "\r\n", sh does not treat "\\\r" as a continuation, and the second line ran
+        // requirements.toml as a shell script (exit 125/127 in the init container).
+        Assert.DoesNotContain('\r', command);
+        Assert.Contains("\\\n", command);
         Assert.Contains("/opt/session-agent/codex/project-requirements.js", command);
         Assert.Contains(expectedManagedRuntime, command);
     }
