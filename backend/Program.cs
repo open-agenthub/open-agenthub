@@ -651,7 +651,10 @@ async Task ProxyResolvedWs(HttpContext ctx, SessionAccessResult resolved, ISessi
     if (live is null) { ctx.Response.StatusCode = 404; return; }
     if (resolved.Level == SessionAccessLevel.Owner)
         try { await sessions.ClearQuestionAsync(resolved.Session.Owner, resolved.Session.Id, ctx.RequestAborted); } catch { }
-    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level), lf, agentPort);
+    // Anyone allowed to type — owner or collaborator — keeps the idle countdown from running
+    // out; the proxy ignores the callback for a read-only viewer.
+    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level), lf, agentPort,
+        onActivity: ct => sessions.TouchActivityAsync(resolved.Session.Owner, resolved.Session.Id, ct));
 }
 
 async Task ProxySharedWs(HttpContext ctx, string id, ISessionAccessService access, ISessionService sessions, ILoggerFactory lf)

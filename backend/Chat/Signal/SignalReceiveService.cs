@@ -337,6 +337,7 @@ public sealed class SignalReceiveService : BackgroundService
         }
 
         await AgentTerminal.SendInputAsync(podIp, _agentPort, text, ct);
+        await _sessions.TouchActivityAsync(binding.Owner, binding.SessionId, ct);
         _log.LogInformation("Delivered Signal reply to session {Id}", binding.SessionId);
 
         // Signal cannot edit messages, so the "working…" indicator is a static message:

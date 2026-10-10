@@ -399,6 +399,7 @@ public sealed class TelegramUpdateService : BackgroundService
         }
 
         await AgentTerminal.SendInputAsync(podIp, _agentPort, text, ct);
+        await _sessions.TouchActivityAsync(binding.Owner, binding.SessionId, ct);
         _log.LogInformation("Delivered Telegram reply to session {Id}", binding.SessionId);
 
         // A previous status message may still be up (second reply while working) — remove it first.

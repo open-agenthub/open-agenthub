@@ -2,6 +2,7 @@ using System.Security.Claims;
 using AgentHub.Api.Agents;
 using AgentHub.Api.Controllers;
 using AgentHub.Api.Models;
+using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -293,14 +294,63 @@ public class RemoteControllerTests
         Assert.Equal(0, svc.TranscriptCalls);
     }
 
+    [Fact]
+    public async Task SendMessage_StoresTheMessage_AndCountsAsActivityOnTheTarget()
+    {
+        // A task handed to a session is the owner using it; without the touch an idle-based
+        // deadline would delete a session that was just given work.
+        var svc = new RecordingSessionService
+        {
+            Session = new SessionInfo { Id = "session-1", Title = "t", Owner = "alice", Mode = SessionMode.Interactive, Phase = "Running" }
+        };
+        var messages = new RecordingMessageStore();
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken, messages);
+
+        var result = await controller.SendMessage("session-1", new RemoteAgentMessageRequest("do the thing"), CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Single(messages.Added);
+        Assert.Equal([("alice", "session-1")], svc.TouchCalls);
+    }
+
+    [Fact]
+    public async Task SendMessage_ToAnUnknownSession_NeitherStoresNorTouches()
+    {
+        var svc = new RecordingSessionService { Session = null };
+        var messages = new RecordingMessageStore();
+        var controller = Remote((_, _) => Task.FromResult<string?>("alice"), svc, ValidToken, messages);
+
+        var result = await controller.SendMessage("session-1", new RemoteAgentMessageRequest("do the thing"), CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(messages.Added);
+        Assert.Empty(svc.TouchCalls);
+    }
+
     // ------------------------------------------------------------------ fixtures
+
+    private sealed class RecordingMessageStore : ISessionMessageStore
+    {
+        public List<SessionMessageRecord> Added { get; } = [];
+        public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task AddAsync(SessionMessageRecord message, CancellationToken ct = default)
+        {
+            Added.Add(message);
+            return Task.CompletedTask;
+        }
+        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
+        public Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
+    }
 
     private static RemoteController Remote(
         Func<string, CancellationToken, Task<string?>> findOwner,
         RecordingSessionService svc,
-        string? bearerToken)
+        string? bearerToken,
+        ISessionMessageStore? messages = null)
     {
-        var controller = new RemoteController(findOwner, svc)
+        var controller = new RemoteController(findOwner, svc, messages)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
         };
@@ -406,6 +456,13 @@ public class RemoteControllerTests
             Task.FromResult(Session);
         public Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public List<(string Owner, string Id)> TouchCalls { get; } = [];
+        public Task TouchActivityAsync(string owner, string id, CancellationToken ct = default)
+        {
+            TouchCalls.Add((owner, id));
+            return Task.CompletedTask;
+        }
 
         /// <summary>
         /// Mirrors production: the real service returns null for a session the owner cannot see, so

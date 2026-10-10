@@ -135,6 +135,8 @@ public sealed class RemoteController : ControllerBase
             Body = text
         };
         await _messages.AddAsync(message, ct);
+        // A task handed to the session is the owner using it (docs/session-expiry.md).
+        await _svc.TouchActivityAsync(owner, target.Id, ct);
         return Ok(new { id = message.Id, to = target.Id });
     }
 
