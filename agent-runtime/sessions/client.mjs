@@ -37,14 +37,35 @@ export class SessionsBackendClient {
     return { deleted: true };
   }
 
+  /** Continues a descendant's finished autonomous run interactively (docs/session-mode-conversion.md). */
+  convert(childId, body = {}) {
+    return this.#request('POST', `/peer/${encodeURIComponent(childId)}/convert`,
+      { mode: 'interactive', ...body });
+  }
+
   /** Directory of this session's project fleet (slim records, includes a `self` marker). */
   listProjectAgents() {
     return this.#request('GET', '/project-agents');
   }
 
-  /** Sends a message/task to a peer agent (already resolved to a session id). */
-  sendAgentMessage(toSessionId, message) {
-    return this.#request('POST', '/messages', { to: toSessionId, body: message });
+  /** The account this session (no id) or a descendant runs on, with its limit state and the
+   * alternatives (docs/account-limits.md). */
+  accountStatus(childId) {
+    return this.#request('GET', childId ? `/peer/${encodeURIComponent(childId)}/account-status` : '/account-status');
+  }
+
+  /** Moves this session (no id) or a descendant to another stored account; its agent restarts with resume. */
+  switchAccount(childId, credentialId) {
+    return this.#request('PATCH', childId ? `/peer/${encodeURIComponent(childId)}/credential` : '/credential', { credentialId });
+  }
+
+  /** Sends a message/task to a peer agent (already resolved to a session id). The flags are
+   * only sent when set, so a plain send looks exactly as it did before they existed. */
+  sendAgentMessage(toSessionId, message, { priority, interrupt } = {}) {
+    const payload = { to: toSessionId, body: message };
+    if (priority !== undefined) payload.priority = priority;
+    if (interrupt !== undefined) payload.interrupt = interrupt;
+    return this.#request('POST', '/messages', payload);
   }
 
   /** Takes undelivered inbox messages, long-polling up to waitSeconds (0..60). */

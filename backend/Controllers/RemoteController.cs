@@ -19,9 +19,10 @@ namespace AgentHub.Api.Controllers;
 [Route("api/remote")]
 public sealed class RemoteController : ControllerBase
 {
-    private readonly Func<string, CancellationToken, Task<string?>> _findOwner;
+    private readonly Func<string, CancellationToken, Task<RemoteCaller?>> _findCaller;
     private readonly ISessionService _svc;
     private readonly ISessionMessageStore? _messages;
+    private readonly ISessionMessageDelivery? _delivery;
 
     /// <remarks>
     /// Marked as the one to construct from the container. MVC builds a controller through
@@ -31,37 +32,46 @@ public sealed class RemoteController : ControllerBase
     /// unauthenticated one, which makes it look like an auth problem rather than a wiring one.
     /// </remarks>
     [ActivatorUtilitiesConstructor]
-    public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null)
-        : this(tokens.FindOwnerByTokenAsync, svc, messages) { }
+    public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null,
+        ISessionMessageDelivery? delivery = null)
+        : this(tokens.FindCallerByTokenAsync, svc, messages, delivery) { }
 
-    /// <summary>Test seam: resolve owner from a plaintext token without Postgres.</summary>
-    public RemoteController(Func<string, CancellationToken, Task<string?>> findOwnerByToken, ISessionService svc,
-        ISessionMessageStore? messages = null)
+    /// <summary>Test seam: resolve the caller (owner and scope) from a plaintext token without Postgres.</summary>
+    public RemoteController(Func<string, CancellationToken, Task<RemoteCaller?>> findCallerByToken, ISessionService svc,
+        ISessionMessageStore? messages = null, ISessionMessageDelivery? delivery = null)
     {
-        _findOwner = findOwnerByToken;
+        _findCaller = findCallerByToken;
         _svc = svc;
         _messages = messages;
+        _delivery = delivery;
     }
 
-    /// <summary>Resolves the bearer token to its owner, or null if missing/invalid.</summary>
-    private async Task<string?> ResolveOwnerAsync(CancellationToken ct)
-    {
-        var header = Request.Headers.Authorization.ToString();
-        const string scheme = "Bearer ";
-        if (!header.StartsWith(scheme, StringComparison.OrdinalIgnoreCase)) return null;
+    /// <summary>Resolves the bearer token to its owner and scope, or null if missing/invalid.</summary>
+    private async Task<RemoteCaller?> ResolveCallerAsync(CancellationToken ct)
+        => RemoteBearerToken.Read(Request) is { } token ? await _findCaller(token, ct) : null;
 
-        var token = header[scheme.Length..].Trim();
-        if (string.IsNullOrEmpty(token) || !token.StartsWith("oah_", StringComparison.Ordinal)) return null;
-
-        return await _findOwner(token, ct);
-    }
+    /// <summary>The owner alone, for the endpoints that act on existing sessions. Only session
+    /// creation and the credential listing consult the scope: a session belongs to its owner,
+    /// not to the token that created it (docs/credential-scopes.md).</summary>
+    private async Task<string?> ResolveOwnerAsync(CancellationToken ct) => (await ResolveCallerAsync(ct))?.Owner;
 
     [HttpPost("sessions")]
     public async Task<ActionResult<SessionInfo>> Create([FromBody] CreateSessionRequest req, CancellationToken ct)
     {
-        var owner = await ResolveOwnerAsync(ct);
-        if (owner is null) return Unauthorized();
-        try { return Ok(await _svc.CreateSessionAsync(owner, req, ct)); }
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        try
+        {
+            if (caller.Scope is { } scope)
+            {
+                // Narrowed before the service sees it; the service still validates the ids.
+                req = CredentialScope.ApplyToCreate(req, scope,
+                    await _svc.ListProviderAccountsAsync(caller.Owner, ct),
+                    (await _svc.GetCredentialStatusAsync(caller.Owner, ct)).GitPats);
+            }
+            return Ok(await _svc.CreateSessionAsync(caller.Owner, req, ct));
+        }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (AgentNotAllowedException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Message); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
@@ -95,9 +105,24 @@ public sealed class RemoteController : ControllerBase
         // and sees the terminal phase. The other order could report "finished" with output missing.
         var session = await _svc.GetSessionAsync(owner, id, ct);
         if (session is null) return NotFound();
-        var transcript = await _svc.GetTranscriptAsync(owner, id, ct);
+        var transcript = await SessionTranscripts.ReadableAsync(_svc, owner, id, ct);
         if (transcript is null) return NotFound();
         return Ok(TranscriptPage.From(session.Id, session.Phase, transcript, offset, maxChars));
+    }
+
+    /// <summary>
+    /// Changes the title, description or self-deletion deadline of a session
+    /// (docs/session-expiry.md). Only those fields: everything else on the in-app PATCH is
+    /// runtime configuration a token should not be able to rewrite.
+    /// </summary>
+    [HttpPatch("sessions/{id}")]
+    public async Task<ActionResult<SessionInfo>> Update(string id, [FromBody] RemoteUpdateSessionRequest req, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        try { return Ok(await _svc.UpdateSessionAsync(owner, id, req.ToUpdate(), ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
     }
 
     [HttpGet("sessions")]
@@ -109,8 +134,66 @@ public sealed class RemoteController : ControllerBase
     }
 
     /// <summary>
+    /// The provider accounts, git PATs and API keys a session created with this token may use —
+    /// ids, labels and hosts, never a secret. The in-app listing sits behind the interactive login,
+    /// which a token cannot pass, and without this a caller had to guess a <c>credentialId</c>.
+    /// </summary>
+    [HttpGet("credentials")]
+    public async Task<ActionResult<RemoteCredentialListing>> Credentials(CancellationToken ct)
+    {
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        var listing = RemoteCredentialListing.From(
+            await _svc.ListProviderAccountsAsync(caller.Owner, ct),
+            await _svc.GetCredentialStatusAsync(caller.Owner, ct));
+        return Ok(CredentialScope.FilterListing(listing, caller.Scope));
+    }
+
+    /// <summary>
+    /// The account a session runs on, whether it is at its usage limit, and the alternatives —
+    /// what the stdio MCP's <c>account_status</c> reads (docs/account-limits.md). The accounts
+    /// are narrowed to the token's scope like the credential listing is.
+    /// </summary>
+    [HttpGet("sessions/{id}/account")]
+    public async Task<ActionResult<AccountStatus>> AccountStatus(string id, CancellationToken ct)
+    {
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        var session = await _svc.GetSessionAsync(caller.Owner, id, ct);
+        if (session is null) return NotFound();
+        var listing = CredentialScope.FilterListing(RemoteCredentialListing.From(
+            await _svc.ListProviderAccountsAsync(caller.Owner, ct), new CredentialStatus()), caller.Scope);
+        return Ok(Models.AccountStatus.From(session, listing.Accounts));
+    }
+
+    /// <summary>
+    /// Moves a running Subscription session to another stored account, as the in-app header
+    /// dropdown does. A restricted token may only switch to an account it is allowed to use
+    /// (403 <c>credential_not_allowed</c>); the session's own rules answer 400 and 409, and 502
+    /// when the pod refused the file.
+    /// </summary>
+    [HttpPatch("sessions/{id}/credential")]
+    public async Task<ActionResult<SessionInfo>> SwitchCredential(string id, [FromBody] SwitchSessionCredentialRequest body,
+        CancellationToken ct)
+    {
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        var session = await _svc.GetSessionAsync(caller.Owner, id, ct);
+        if (session is null) return NotFound();
+        if (caller.Scope is { } scope && !scope.AllowsAccount(session.Agent, body.CredentialId ?? ""))
+            return StatusCode(StatusCodes.Status403Forbidden, CredentialScopeException.CredentialNotAllowed);
+        try { return Ok(await _svc.SwitchSessionCredentialAsync(caller.Owner, id, body.CredentialId, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (HttpRequestException e) { return StatusCode(StatusCodes.Status502BadGateway, e.Message); }
+    }
+
+    /// <summary>
     /// Sends a message/task to one of the token owner's sessions. Stored with a null
     /// sender session — the receiving agent sees it as an external message from its owner.
+    /// A priority message is pushed into the running agent; the answer's <c>deliveredVia</c>
+    /// says whether that worked or the message waits in the inbox.
     /// </summary>
     [HttpPost("sessions/{id}/messages")]
     public async Task<IActionResult> SendMessage(string id, [FromBody] RemoteAgentMessageRequest req, CancellationToken ct)
@@ -125,6 +208,7 @@ public sealed class RemoteController : ControllerBase
         var target = await _svc.GetSessionAsync(owner, id, ct);
         if (target is null) return NotFound();
 
+        var (priority, interrupt) = AgentMessaging.ResolveFlags(req.Priority, req.Interrupt);
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
@@ -132,10 +216,15 @@ public sealed class RemoteController : ControllerBase
             FromSessionId = null,
             ToSessionId = target.Id,
             Owner = owner,
-            Body = text
+            Body = text,
+            Priority = priority,
+            Interrupt = interrupt
         };
         await _messages.AddAsync(message, ct);
-        return Ok(new { id = message.Id, to = target.Id });
+        // A task handed to the session is the owner using it (docs/session-expiry.md).
+        await _svc.TouchActivityAsync(owner, target.Id, ct);
+        var delivery = await AgentMessageDispatch.PushAsync(_delivery, target, message, null, ct);
+        return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));
     }
 
     /// <summary>
@@ -167,6 +256,23 @@ public sealed class RemoteController : ControllerBase
         catch (AgentNotAllowedException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Message); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
+    }
+
+    /// <summary>
+    /// Continues a finished or paused autonomous session interactively — the step a caller takes
+    /// when an unattended run needs a person's follow-up in the same conversation. Same rules and
+    /// status codes as the in-app endpoint (docs/session-mode-conversion.md).
+    /// </summary>
+    [HttpPost("sessions/{id}/convert")]
+    public async Task<ActionResult<SessionInfo>> Convert(string id, [FromBody] ConvertSessionRequest req, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        try { return Ok(await _svc.ConvertSessionAsync(owner, id, req, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (AgentNotAllowedException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Message); }
+        catch (ArgumentException e) { return BadRequest(new { error = e.Message }); }
+        catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
     }
 
     /// <summary>

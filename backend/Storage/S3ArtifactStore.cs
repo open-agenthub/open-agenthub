@@ -9,7 +9,7 @@ public sealed record ArtifactObjectInfo(long Size, string? ContentType);
 /// <summary>
 /// Storage in S3 or any S3-compatible server. The agent pod never receives S3 credentials,
 /// only time-limited presigned URLs.
-/// Key layout: sessions/{owner}/{sessionId}/{state.tgz|scrollback.log|artifacts/...}
+/// Key layout: sessions/{owner}/{sessionId}/{state.tgz|scrollback.log|transcript.jsonl|artifacts/...}
 /// </summary>
 public interface IArtifactStore
 {
@@ -52,9 +52,12 @@ public interface IArtifactStore
             AgentKind.Codex => "codex-state.tgz",
             AgentKind.Cursor => "cursor-state.tgz",
             AgentKind.OpenClaw => "openclaw-state.tgz",
+            AgentKind.OpenCode => "opencode-state.tgz",
             _ => throw new ArgumentOutOfRangeException(nameof(agent), agent, "Unknown agent kind.")
         }}";
     static string ScrollbackKey(string owner, string id) => $"sessions/{owner}/{id}/scrollback.log";
+    /// <summary>The provider's own conversation file (JSONL), uploaded whole by the session agent.</summary>
+    static string TranscriptKey(string owner, string id) => $"sessions/{owner}/{id}/transcript.jsonl";
     static string BrowserCookiesKey(string owner, string id) =>
         $"sessions/{owner}/{id}/browser-cookies.json";
     static string ArtifactKey(string owner, string id, string name)

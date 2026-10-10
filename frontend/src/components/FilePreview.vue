@@ -1,6 +1,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { getSessionFileContent, getSharedSessionFileContent } from '../api.js'
+import { REPO_URL } from '../lib/docs.js'
 import { previewKind } from '../lib/files.js'
 import { renderMarkdown } from '../lib/markdown.js'
 import { renderMermaidBlocks } from '../lib/mermaid.js'
@@ -111,7 +112,7 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
       <strong>Preview for Office documents is switched off</strong>
       <span>An administrator can enable it for this instance; it converts documents to PDF in a
         separate renderer.</span>
-      <a href="https://github.com/open-agenthub/open-agenthub/blob/main/README.md#office-document-previews"
+      <a :href="`${REPO_URL}/blob/main/README.md#office-document-previews`"
          target="_blank" rel="noopener noreferrer" data-office-preview-docs>How to enable it</a>
       <a v-if="objectUrl" :href="objectUrl" :download="file.name" data-file-download>Download {{ file.name }}</a>
     </div>

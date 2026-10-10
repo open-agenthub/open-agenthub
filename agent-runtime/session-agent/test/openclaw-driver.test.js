@@ -277,3 +277,29 @@ test('OpenClaw image installs CLI and preserves custom-image injection paths', (
   assert.match(dockerfile, /test -x \/usr\/local\/bin\/openclaw/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai|@openai\/codex|COPY claude|COPY codex|COPY cursor/);
 });
+
+// OpenClaw reads credentials from SQLite, so a swapped file must be imported there too — the
+// step the entrypoint and login.sh perform — or the restarted agent keeps the previous login.
+test('OpenClaw installCredential writes the hub file and imports it into the agent SQLite store', () => {
+  const os = require('node:os');
+  const { readStoreFromSqlite } = require('../../openclaw/sync-auth-profiles');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openclaw-install-'));
+  const stateDir = path.join(root, '.openclaw');
+  const agentDir = path.join(stateDir, 'agents', 'main', 'agent');
+  const env = {
+    HOME: root, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_AGENT_DIR: agentDir,
+    OPENCLAW_AUTH_FILE: path.join(stateDir, 'auth-profiles.json'), AGENTHUB_OPENCLAW_AGENT_ID: 'main'
+  };
+  const body = Buffer.from(JSON.stringify({
+    version: 1, profiles: { 'anthropic:work': { type: 'api_key', provider: 'anthropic', key: 'synthetic-key-swapped' } }
+  }));
+
+  assert.equal(driver.credentialPath(env), env.OPENCLAW_AUTH_FILE);
+  assert.equal(driver.validCredential(body), true);
+  assert.equal(driver.validCredential(Buffer.from('{"profiles":{}}')), false);
+  driver.installCredential(env, body, env.OPENCLAW_AUTH_FILE);
+
+  assert.equal(fs.readFileSync(env.OPENCLAW_AUTH_FILE, 'utf8'), body.toString());
+  const store = readStoreFromSqlite(path.join(agentDir, 'openclaw-agent.sqlite'));
+  assert.equal(store.profiles['anthropic:work'].key, 'synthetic-key-swapped');
+});

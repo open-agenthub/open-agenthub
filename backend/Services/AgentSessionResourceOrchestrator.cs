@@ -7,7 +7,8 @@ public sealed record AgentSessionResourcePreparation(bool ShouldSpawn, bool HasG
 public sealed record AgentSessionArtifactUrls(
     string StatePutUrl,
     string StateGetUrl,
-    string ScrollbackPutUrl);
+    string ScrollbackPutUrl,
+    string TranscriptPutUrl);
 
 /// <summary>
 /// Ensures credential preflight completes before any session-scoped Kubernetes resource is prepared.
@@ -21,7 +22,8 @@ public static class AgentSessionResourceOrchestrator
         return new AgentSessionArtifactUrls(
             artifacts.PresignPut(stateKey, ttl),
             resume ? artifacts.PresignGet(stateKey, ttl) : "",
-            artifacts.PresignPut(IArtifactStore.ScrollbackKey(ownerKey, record.Id), ttl));
+            artifacts.PresignPut(IArtifactStore.ScrollbackKey(ownerKey, record.Id), ttl),
+            artifacts.PresignPut(IArtifactStore.TranscriptKey(ownerKey, record.Id), ttl));
     }
 
     public static async Task<AgentSessionResourcePreparation> PrepareAsync(

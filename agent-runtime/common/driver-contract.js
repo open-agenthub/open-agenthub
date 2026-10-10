@@ -28,6 +28,30 @@ function validateDriver(driver) {
   for (const key of ['buildCommand', 'isResumeCommand', 'isMissingResume', 'prepare']) {
     if (typeof driver[key] !== 'function') throw new Error('Agent driver ' + key + ' must be a function');
   }
+  // Optional: findTranscript({ env, home, cwd, fs, launchedAt }) names the provider's own
+  // conversation file (Claude's project JSONL, Codex's rollout) once it exists, or returns
+  // null. Runtimes without a readable native transcript simply leave it out.
+  if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
+    throw new Error('Agent driver findTranscript must be a function');
+  }
+  // Optional hooks for swapping the provider login of a running session; a driver without them
+  // gets the common behaviour (file under HOME/<stateDir>/<authFilename>, JSON-object check).
+  for (const key of ['credentialPath', 'validCredential', 'installCredential']) {
+    if (driver[key] !== undefined && typeof driver[key] !== 'function') {
+      throw new Error('Agent driver ' + key + ' must be a function when present');
+    }
+  }
+  // Optional: the CLI's own usage-limit notices as `{ pattern: RegExp, resetsAt?: fn }`
+  // (common/limit-detector.js). A runtime whose CLI reports limits some other way leaves it out.
+  if (driver.limitPatterns !== undefined) {
+    if (!Array.isArray(driver.limitPatterns)) throw new Error('Agent driver limitPatterns must be an array');
+    for (const entry of driver.limitPatterns) {
+      if (!entry || !(entry.pattern instanceof RegExp) ||
+          (entry.resetsAt !== undefined && typeof entry.resetsAt !== 'function')) {
+        throw new Error('Agent driver limitPatterns entries must be { pattern: RegExp, resetsAt?: function }');
+      }
+    }
+  }
   for (const key of ['stateDir', 'authFilename']) {
     if (typeof driver[key] !== 'string' || !SAFE_RELATIVE_NAME.test(driver[key])) {
       throw new Error('Agent driver ' + key + ' must be a safe single relative name');

@@ -1,7 +1,8 @@
 'use strict';
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
+
+const { KnownHashes, baselineFile, sha256 } = require('../common/credential-install');
 const { exportFromSqlite, validStore } = require('./sync-auth-profiles');
 
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
@@ -22,7 +23,7 @@ function watchCredential(options) {
     source, callbackUrl, callbackToken, intervalMs = 30_000,
     fetchImpl = globalThis.fetch, logger = console,
     fsImpl = fs, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval,
-    unrefTimer = true, expectCreate = false, baselineHash,
+    unrefTimer = true, expectCreate = false, baselineHash, baselineFile: baselinePath,
     exportImpl = exportFromSqlite
   } = options || {};
   if (!source || !callbackUrl || !callbackToken || typeof fetchImpl !== 'function') {
@@ -31,7 +32,9 @@ function watchCredential(options) {
 
   const hasBaseline = typeof baselineHash === 'string' && /^[a-f0-9]{64}$/.test(baselineHash);
   let initialized = hasBaseline;
-  let lastUploadedHash = hasBaseline ? baselineHash : undefined;
+  // Everything in here has either been uploaded or was installed by the hub itself (the
+  // entrypoint's restore, or a swap by the session agent) and must not be echoed back.
+  const known = new KnownHashes(hasBaseline ? baselineHash : undefined);
   let stopped = false;
   let active = Promise.resolve();
 
@@ -50,6 +53,7 @@ function watchCredential(options) {
 
   async function runPoll() {
     if (stopped) return;
+    if (baselinePath && known.adopt(baselinePath, fsImpl)) initialized = true;
     // OpenClaw persists to SQLite; export store_json into the watched JSON before each poll.
     try {
       if (typeof exportImpl === 'function') exportImpl();
@@ -71,15 +75,15 @@ function watchCredential(options) {
       return;
     }
 
-    const hash = crypto.createHash('sha256').update(body).digest('hex');
+    const hash = sha256(body);
     if (!initialized) {
       initialized = true;
       if (!expectCreate) {
-        lastUploadedHash = hash;
+        known.add(hash);
         return;
       }
     }
-    if (hash === lastUploadedHash) return;
+    if (known.has(hash)) return;
 
     try {
       const response = await fetchImpl(callbackUrl.replace(/\/$/, '') + '/openclaw-credentials', {
@@ -88,7 +92,7 @@ function watchCredential(options) {
         body
       });
       if (!response || !response.ok) throw new Error('Credential upload rejected');
-      lastUploadedHash = hash;
+      known.add(hash);
       logger.info('[openclaw-auth] Credential backup updated.');
     } catch {
       logger.warn('[openclaw-auth] Credential backup failed; it will be retried.');
@@ -116,6 +120,7 @@ function watchCredential(options) {
 if (require.main === module) {
   const watcher = watchCredential({
     source: process.env.OPENCLAW_AUTH_FILE,
+    baselineFile: baselineFile(process.env),
     callbackUrl: process.env.AGENTHUB_CALLBACK_URL,
     callbackToken: process.env.AGENTHUB_CALLBACK_TOKEN,
     expectCreate: process.env.AGENTHUB_OPENCLAW_AUTH_EXPECT_CREATE === '1',

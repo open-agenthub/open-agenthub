@@ -27,6 +27,21 @@ public sealed class SessionRecord
     public AgentAuthMode AuthMode { get; set; } = AgentAuthMode.Auto;
     /// <summary>Which existing API key OpenClaw should use; set only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; set; }
+    /// <summary>The provider account this session mounts (docs/provider-accounts.md); null = the
+    /// default account at each start. Also where a writeback from the pod lands.</summary>
+    public string? CredentialId { get; set; }
+    /// <summary>
+    /// The account the last start actually mounted (docs/account-limits.md). <see cref="CredentialId"/>
+    /// is null for a session that follows the default, so without this an unpinned session that
+    /// reports a usage limit could not say which login hit it. Written at every spawn.
+    /// </summary>
+    public string? ResolvedCredentialId { get; set; }
+    /// <summary><c>off</c> to keep the session on its account when that hits a usage limit;
+    /// null = <c>auto</c>, the hub moves it to another one (docs/account-limits.md).</summary>
+    public string? AccountFailover { get; set; }
+    /// <summary>JSON array of the git PAT ids the session is built with; null = every stored PAT
+    /// (docs/credential-scopes.md). Read at every spawn, so a resume uses the same selection.</summary>
+    public string? GitPatIdsJson { get; set; }
     public string? AgentPolicyJson { get; set; }
     public string? AllowedToolsJson { get; set; }
     /// <summary>Agent session ID assigned by us (used for --resume).</summary>
@@ -42,6 +57,9 @@ public sealed class SessionRecord
     /// <summary>Tool-permission requests are approved without asking. Read per request,
     /// so toggling it applies to an already running session.</summary>
     public bool AutoApprove { get; set; }
+    /// <summary>The mode the session had before it was converted to interactive; null = never
+    /// converted. Display only (docs/session-mode-conversion.md).</summary>
+    public SessionMode? ConvertedFrom { get; set; }
     public string Cpu { get; set; } = "500m";
     public string Memory { get; set; } = "1Gi";
     /// <summary>MCP configuration (.mcp.json content); null/empty = no MCP servers.</summary>
@@ -56,6 +74,17 @@ public sealed class SessionRecord
     public required string CallbackToken { get; init; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
+    /// <summary>Seconds until the session deletes itself; null = never (docs/session-expiry.md).</summary>
+    public int? AutoDeleteAfterSeconds { get; set; }
+    /// <summary><c>start</c> or <c>lastActivity</c>: what the countdown is measured from. Null
+    /// whenever <see cref="AutoDeleteAfterSeconds"/> is.</summary>
+    public string? AutoDeleteFrom { get; set; }
+    /// <summary>
+    /// When somebody last used the session. Not <see cref="UpdatedAt"/>: the pod rewrites the
+    /// row every 30 seconds with its scrollback, so that clock never shows a running session as
+    /// idle. Rows older than the column read as <see cref="CreatedAt"/>.
+    /// </summary>
+    public DateTime LastActivityAt { get; set; } = DateTime.UtcNow;
 }
 
 public interface ISessionStore
@@ -68,9 +97,40 @@ public interface ISessionStore
     Task<IReadOnlyList<SessionRecord>> ListAsync(string owner, CancellationToken ct = default);
     Task UpdateStatusAsync(string id, string status, CancellationToken ct = default);
     Task SetQuestionPendingAsync(string id, bool pending, CancellationToken ct = default);
+    /// <summary>
+    /// Attaches the session to a provider account. A column update rather than an Upsert of the
+    /// whole record: the caller is the pod's writeback, which runs while the owner may be editing
+    /// the session, and a full Upsert from a record read moments earlier would undo that edit.
+    /// </summary>
+    Task SetCredentialIdAsync(string id, string? credentialId, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>
+    /// Records which account a start mounted. A column update for the same reason as
+    /// <see cref="SetCredentialIdAsync"/>: the spawn runs while the row may be edited elsewhere.
+    /// </summary>
+    Task SetResolvedCredentialIdAsync(string id, string? accountId, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>Stores the terminal scrollback so transcripts work without S3.</summary>
     Task SetScrollbackAsync(string id, string text, CancellationToken ct = default);
     Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default);
+    /// <summary>
+    /// The provider's own transcript (JSONL), capped like the scrollback, so the role-based
+    /// conversation works without S3 too. Default no-ops for the many test doubles that never
+    /// see a transcript.
+    /// </summary>
+    Task SetTranscriptAsync(string id, string jsonl, CancellationToken ct = default) => Task.CompletedTask;
+    Task<string?> GetTranscriptAsync(string id, CancellationToken ct = default) => Task.FromResult<string?>(null);
+    /// <summary>
+    /// Records that somebody used the session: sets <c>last_activity_at</c> and nothing else —
+    /// not <c>updated_at</c>, so a touch is never mistaken for an edit. Default no-op for the test
+    /// doubles that never expire anything.
+    /// </summary>
+    Task TouchActivityAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>
+    /// Sessions whose self-deletion deadline has passed, across every owner — the one query on
+    /// the table that is not owner-scoped, which is why it is its own method rather than a filter
+    /// on <see cref="ListAsync"/>. Oldest deadline first, at most <paramref name="limit"/>.
+    /// </summary>
+    Task<IReadOnlyList<SessionRecord>> ListExpiredAsync(DateTime now, int limit, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<SessionRecord>>(Array.Empty<SessionRecord>());
     Task DeleteAsync(string id, CancellationToken ct = default);
 }
 
@@ -128,8 +188,19 @@ public sealed class PostgresSessionStore : ISessionStore
             CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(owner, parent_session_id);
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS mcp_server_ids TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_approve BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS transcript TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS description TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS system_prompt TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS credential_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_delete_after_seconds INT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_delete_from TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_activity_at TIMESTAMPTZ;
+            CREATE INDEX IF NOT EXISTS idx_sessions_auto_delete ON sessions(auto_delete_after_seconds)
+                WHERE auto_delete_after_seconds IS NOT NULL;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS converted_from TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS git_pat_ids TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS resolved_credential_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_failover TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -141,12 +212,23 @@ public sealed class PostgresSessionStore : ISessionStore
             INSERT INTO sessions (id, owner, title, description, mode, ui_mode, repo_url, schedule, agent_session_id, agent, auth_mode,
                                   openclaw_api_key_source, agent_policy,
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
-                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, created_at, updated_at)
+                                  mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at,
+                                  auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids,
+                                  resolved_credential_id, account_failover)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
-                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @created, now())
+                    @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now(),
+                    @autoDeleteAfter, @autoDeleteFrom, @lastActivity, @convertedFrom, @gitPatIds,
+                    @resolvedCredentialId, @accountFailover)
             ON CONFLICT (id) DO UPDATE SET
+                resolved_credential_id = EXCLUDED.resolved_credential_id,
+                account_failover = EXCLUDED.account_failover,
+                auto_delete_after_seconds = EXCLUDED.auto_delete_after_seconds,
+                auto_delete_from = EXCLUDED.auto_delete_from,
+                -- The stored touch wins: an edit reads the record, changes a field and writes it
+                -- back, and a touch that landed in between must not be undone by the stale copy.
+                last_activity_at = COALESCE(sessions.last_activity_at, EXCLUDED.last_activity_at),
                 title = EXCLUDED.title, description = EXCLUDED.description,
                 mode = EXCLUDED.mode, ui_mode = EXCLUDED.ui_mode, repo_url = EXCLUDED.repo_url,
                 schedule = EXCLUDED.schedule, status = EXCLUDED.status,
@@ -154,6 +236,8 @@ public sealed class PostgresSessionStore : ISessionStore
                 agent_session_id = EXCLUDED.agent_session_id,
                 agent = EXCLUDED.agent, auth_mode = EXCLUDED.auth_mode,
                 openclaw_api_key_source = EXCLUDED.openclaw_api_key_source,
+                credential_id = EXCLUDED.credential_id,
+                git_pat_ids = EXCLUDED.git_pat_ids,
                 agent_policy = EXCLUDED.agent_policy,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
@@ -161,7 +245,8 @@ public sealed class PostgresSessionStore : ISessionStore
                 repos = EXCLUDED.repos,
                 project_id = EXCLUDED.project_id, parent_session_id = EXCLUDED.parent_session_id,
                 prompt = EXCLUDED.prompt, system_prompt = EXCLUDED.system_prompt,
-                allowed_tools = EXCLUDED.allowed_tools, auto_approve = EXCLUDED.auto_approve, updated_at = now();
+                allowed_tools = EXCLUDED.allowed_tools, auto_approve = EXCLUDED.auto_approve,
+                converted_from = EXCLUDED.converted_from, updated_at = now();
             """;
         await using var cmd = _db.CreateCommand(sql);
         Bind(cmd, r);
@@ -189,7 +274,10 @@ public sealed class PostgresSessionStore : ISessionStore
 
     public async Task UpdateStatusAsync(string id, string status, CancellationToken ct = default)
     {
-        await using var cmd = _db.CreateCommand("UPDATE sessions SET status=@s, updated_at=now() WHERE id=@id");
+        // A phase change is the pod doing something on the session's behalf; it counts as
+        // activity so a session that just finished is not swept away by a short idle window.
+        await using var cmd = _db.CreateCommand(
+            "UPDATE sessions SET status=@s, updated_at=now(), last_activity_at=now() WHERE id=@id");
         cmd.Parameters.AddWithValue("s", status);
         cmd.Parameters.AddWithValue("id", id);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -199,6 +287,23 @@ public sealed class PostgresSessionStore : ISessionStore
     {
         await using var cmd = _db.CreateCommand("UPDATE sessions SET question_pending=@p, updated_at=now() WHERE id=@id");
         cmd.Parameters.AddWithValue("p", pending);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task SetCredentialIdAsync(string id, string? credentialId, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET credential_id=@c, updated_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("c", (object?)credentialId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task SetResolvedCredentialIdAsync(string id, string? accountId, CancellationToken ct = default)
+    {
+        // Not updated_at: the mount is the pod's doing, not an edit, and the idle clock has its own column.
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET resolved_credential_id=@c WHERE id=@id");
+        cmd.Parameters.AddWithValue("c", (object?)accountId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("id", id);
         await cmd.ExecuteNonQueryAsync(ct);
     }
@@ -219,6 +324,47 @@ public sealed class PostgresSessionStore : ISessionStore
         return v is string s ? s : null;
     }
 
+    public async Task SetTranscriptAsync(string id, string jsonl, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET transcript=@t, updated_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("t", jsonl);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<string?> GetTranscriptAsync(string id, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("SELECT transcript FROM sessions WHERE id=@id");
+        cmd.Parameters.AddWithValue("id", id);
+        var v = await cmd.ExecuteScalarAsync(ct);
+        return v is string s ? s : null;
+    }
+
+    public async Task TouchActivityAsync(string id, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET last_activity_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<IReadOnlyList<SessionRecord>> ListExpiredAsync(DateTime now, int limit, CancellationToken ct = default)
+    {
+        // A row older than last_activity_at has never been touched, so its creation is the last
+        // thing known to have happened to it — the same fallback Map applies when reading.
+        const string deadline = """
+            (CASE auto_delete_from WHEN 'start' THEN created_at ELSE COALESCE(last_activity_at, created_at) END)
+                + auto_delete_after_seconds * interval '1 second'
+            """;
+        var list = new List<SessionRecord>();
+        await using var cmd = _db.CreateCommand(
+            $"{SelectBase} WHERE auto_delete_after_seconds IS NOT NULL AND {deadline} < @now ORDER BY {deadline} LIMIT @limit");
+        cmd.Parameters.AddWithValue("now", now);
+        cmd.Parameters.AddWithValue("limit", limit);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) list.Add(Map(r));
+        return list;
+    }
+
     public async Task DeleteAsync(string id, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("DELETE FROM sessions WHERE id=@id");
@@ -228,7 +374,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -269,7 +415,15 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("prompt", (object?)r.Prompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("systemPrompt", (object?)r.SystemPrompt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("allowedTools", (object?)r.AllowedToolsJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("credentialId", (object?)r.CredentialId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("convertedFrom", (object?)r.ConvertedFrom?.ToString() ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("gitPatIds", (object?)r.GitPatIdsJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("resolvedCredentialId", (object?)r.ResolvedCredentialId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("accountFailover", (object?)r.AccountFailover ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
+        cmd.Parameters.AddWithValue("autoDeleteAfter", (object?)r.AutoDeleteAfterSeconds ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("autoDeleteFrom", (object?)r.AutoDeleteFrom ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("lastActivity", r.LastActivityAt);
     }
 
     private static SessionRecord Map(NpgsqlDataReader r) => new()
@@ -304,6 +458,14 @@ public sealed class PostgresSessionStore : ISessionStore
         McpServerIdsJson = r.IsDBNull(27) ? null : r.GetString(27),
         AutoApprove = r.GetBoolean(28),
         Description = r.IsDBNull(29) ? null : r.GetString(29),
-        SystemPrompt = r.IsDBNull(30) ? null : r.GetString(30)
+        SystemPrompt = r.IsDBNull(30) ? null : r.GetString(30),
+        CredentialId = r.IsDBNull(31) ? null : r.GetString(31),
+        AutoDeleteAfterSeconds = r.IsDBNull(32) ? null : r.GetInt32(32),
+        AutoDeleteFrom = r.IsDBNull(33) ? null : r.GetString(33),
+        LastActivityAt = r.IsDBNull(34) ? r.GetDateTime(14) : r.GetDateTime(34),
+        ConvertedFrom = r.IsDBNull(35) ? null : Enum.Parse<SessionMode>(r.GetString(35)),
+        GitPatIdsJson = r.IsDBNull(36) ? null : r.GetString(36),
+        ResolvedCredentialId = r.IsDBNull(37) ? null : r.GetString(37),
+        AccountFailover = r.IsDBNull(38) ? null : r.GetString(38)
     };
 }

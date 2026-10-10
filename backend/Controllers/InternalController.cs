@@ -38,13 +38,16 @@ public sealed class InternalController : ControllerBase
     private readonly IAgentCallbackAuthorizer _callbackAuthorizer;
     private readonly IUsageStore? _usage;
     private readonly ISessionMessageStore? _messages;
+    private readonly ISessionMessageDelivery? _delivery;
+    private readonly IAccountFailover? _accountFailover;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMcpPolicyReader shares,
         ILibraryAccess library, IBrowserService? browsers = null, bool? spawnMcpEnabled = null,
         IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null,
-        IUsageStore? usage = null, ISessionMessageStore? messages = null)
+        IUsageStore? usage = null, ISessionMessageStore? messages = null,
+        ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null)
     {
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
@@ -52,6 +55,8 @@ public sealed class InternalController : ControllerBase
         _browsers = browsers;
         _usage = usage;
         _messages = messages;
+        _delivery = delivery;
+        _accountFailover = accountFailover;
         _callbackAuthorizer = callbackAuthorizer ?? new AgentCallbackAuthorizer(store);
         _spawnMcpEnabled = spawnMcpEnabled
             ?? configuration?.GetValue("AgentHub:SpawnMcpEnabled", true)
@@ -139,13 +144,29 @@ public sealed class InternalController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>
+    /// The pod reports that its provider account hit a usage limit — Claude's mod read the
+    /// rate-limit windows, or the session agent matched the CLI's own notice. The hub marks the
+    /// account and, where it can, moves the session to another one (docs/account-limits.md).
+    /// The answer says what happened so the pod can log it; nothing in it is acted on there.
+    /// </summary>
+    [HttpPost("account-exhausted")]
+    public async Task<IActionResult> AccountExhausted(string id, [FromBody] AccountExhaustedReport body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (body.Source is not ("mod" or "output")) return BadRequest("source must be mod or output");
+        if (_accountFailover is null) return Ok(new AccountFailoverOutcome(null, null, AccountFailoverOutcome.Ignored));
+        return Ok(await _accountFailover.HandleAsync(rec, body, ct));
+    }
+
     /// <summary>Persists a subscription credential file uploaded by the matching provider agent.</summary>
     [HttpPut("{agent}-credentials")]
     public async Task<IActionResult> ProviderCredentials(string id, string agent, CancellationToken ct)
     {
         if (!Enum.TryParse<AgentKind>(agent, ignoreCase: true, out var parsedAgent) ||
             parsedAgent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor
-                and not AgentKind.OpenClaw)
+                and not AgentKind.OpenClaw and not AgentKind.OpenCode)
             return BadRequest();
 
         var rec = await AuthAsync(id, ct);
@@ -155,7 +176,15 @@ public sealed class InternalController : ControllerBase
         var json = await ReadProviderCredentialBodyAsync(ct);
         if (json is null || !ProviderCredentialValidator.Validate(parsedAgent, json)) return BadRequest();
 
-        await _svc.StoreProviderCredentialsAsync(rec.Owner, parsedAgent, json, ct);
+        // The Claude watcher sends who the login belongs to in a header, since its file does not
+        // say; the other providers' files carry it themselves. Display only, never authorised on.
+        var identity = ProviderAccountIdentityReader.FromHeader(Request.Headers[ProviderAccountIdentityReader.HeaderName])
+            ?? ProviderAccountIdentityReader.FromFile(parsedAgent, json);
+        var accountId = await _svc.StoreProviderLoginAsync(rec.Owner, parsedAgent, json, identity, rec.CredentialId, ct);
+        // A login that turned out to be a different account than the one mounted, or the first
+        // login of a session that had none, re-points the session so later rotations land there.
+        if (accountId is not null && accountId != rec.CredentialId)
+            await _store.SetCredentialIdAsync(rec.Id, accountId, ct);
         return NoContent();
     }
 
@@ -171,23 +200,42 @@ public sealed class InternalController : ControllerBase
 
         using var reader = new StreamReader(Request.Body);
         var text = await reader.ReadToEndAsync(ct);
-        // Cap: matches the agent's in-memory scrollback buffer.
-        if (text.Length > 400_000) text = text[^400_000..];
+        if (text.Length > ScrollbackLimits.MaxChars) text = text[^ScrollbackLimits.MaxChars..];
         await _store.SetScrollbackAsync(id, text, ct);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Receives the provider's own transcript file (JSONL) and keeps its capped tail in
+    /// Postgres; the whole file goes to S3 through a presigned URL. The role-based conversation
+    /// the web app, the remote API and the MCP tools show is read from this, not from the
+    /// scrollback — see docs/transcripts.md.
+    /// </summary>
+    [HttpPut("transcript")]
+    public async Task<IActionResult> Transcript(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        using var reader = new StreamReader(Request.Body);
+        var text = await reader.ReadToEndAsync(ct);
+        await _store.SetTranscriptAsync(id, NativeTranscript.TrimToLineCap(text, ScrollbackLimits.MaxChars), ct);
         return NoContent();
     }
 
     /// <summary>
     /// Hands the stored scrollback back to a restarting agent. A resumed session runs in a
     /// fresh pod with an empty buffer, so without this everything said before the resume is
-    /// missing from the replay every client gets on connect.
+    /// missing from the replay every client gets on connect. Raw on purpose: the agent replays
+    /// these bytes into a terminal and persists them again as its own scrollback, so anything
+    /// stripped here is stripped from the history for good.
     /// </summary>
     [HttpGet("scrollback")]
     public async Task<IActionResult> GetScrollback(string id, CancellationToken ct)
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
-        return Content(await _svc.GetTranscriptAsync(rec.Owner, id, ct) ?? "", "text/plain");
+        return Content(await _svc.GetScrollbackAsync(rec.Owner, id, ct) ?? "", "text/plain");
     }
 
     public record PermissionBody(string Tool, string? Input);
@@ -407,6 +455,72 @@ public sealed class InternalController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Converts a descendant's finished autonomous run into an interactive session — an
+    /// orchestrator handing one of its children to a person. Same descendant rule as GetPeer, so
+    /// nothing about a session outside the caller's line leaks through the status code.
+    /// </summary>
+    [HttpPost("peer/{childId}/convert")]
+    public async Task<IActionResult> ConvertPeer(string id, string childId, [FromBody] ConvertSessionRequest req,
+        CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (!await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
+
+        try { return Ok(await _svc.ConvertSessionAsync(rec.Owner, childId, req, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(new { error = e.Message }); }
+        catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
+    }
+
+    /// <summary>
+    /// The account this session runs on and the alternatives (docs/account-limits.md), for the
+    /// in-pod <c>account_status</c> tool; <c>peer/{childId}/account-status</c> answers the same
+    /// for a descendant.
+    /// </summary>
+    [HttpGet("account-status")]
+    public Task<IActionResult> AccountStatus(string id, CancellationToken ct) => AccountStatusOfAsync(id, null, ct);
+
+    [HttpGet("peer/{childId}/account-status")]
+    public Task<IActionResult> PeerAccountStatus(string id, string childId, CancellationToken ct) => AccountStatusOfAsync(id, childId, ct);
+
+    private async Task<IActionResult> AccountStatusOfAsync(string id, string? childId, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (childId is not null && !await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
+        var session = await _svc.GetSessionAsync(rec.Owner, childId ?? id, ct);
+        if (session is null) return NotFound();
+        return Ok(Models.AccountStatus.From(session, await _svc.ListProviderAccountsAsync(rec.Owner, ct)));
+    }
+
+    /// <summary>
+    /// Moves this session — or a descendant — to another of the owner's accounts, the same
+    /// switch the in-app header offers. A session switching itself is allowed on purpose: an
+    /// agent that reads "usage limit" in its own output can save itself (docs/account-limits.md).
+    /// </summary>
+    [HttpPatch("credential")]
+    public Task<IActionResult> SwitchCredential(string id, [FromBody] SwitchSessionCredentialRequest body, CancellationToken ct)
+        => SwitchCredentialOfAsync(id, null, body, ct);
+
+    [HttpPatch("peer/{childId}/credential")]
+    public Task<IActionResult> SwitchPeerCredential(string id, string childId, [FromBody] SwitchSessionCredentialRequest body,
+        CancellationToken ct) => SwitchCredentialOfAsync(id, childId, body, ct);
+
+    private async Task<IActionResult> SwitchCredentialOfAsync(string id, string? childId, SwitchSessionCredentialRequest body,
+        CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (childId is not null && !await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
+        try { return Ok(await _svc.SwitchSessionCredentialAsync(rec.Owner, childId ?? id, body.CredentialId, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(new { error = e.Message }); }
+        catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
+        catch (HttpRequestException e) { return StatusCode(StatusCodes.Status502BadGateway, new { error = e.Message }); }
+    }
+
     private async Task<bool> IsDescendantPeerAsync(SessionRecord parent, string childId, CancellationToken ct)
     {
         var all = await _svc.ListSessionsAsync(parent.Owner, ct);
@@ -535,9 +649,11 @@ public sealed class InternalController : ControllerBase
         if (to == id) return BadRequest("A session cannot message itself.");
         var target = await _store.GetAsync(rec.Owner, to, ct);
         if (target is null) return NotFound();
-        var parentOf = ParentLookup(rec, await _svc.ListSessionsAsync(rec.Owner, ct));
+        var all = await _svc.ListSessionsAsync(rec.Owner, ct);
+        var parentOf = ParentLookup(rec, all);
         if (!IsFleetPeer(rec, target.Id, target.ProjectId, parentOf)) return NotFound();
 
+        var (priority, interrupt) = AgentMessaging.ResolveFlags(body.Priority, body.Interrupt);
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
@@ -545,7 +661,9 @@ public sealed class InternalController : ControllerBase
             FromSessionId = rec.Id,
             ToSessionId = target.Id,
             Owner = rec.Owner,
-            Body = text
+            Body = text,
+            Priority = priority,
+            Interrupt = interrupt
         };
         await _messages.AddAsync(message, ct);
         // Best-effort visibility beyond the pull inbox: the same fan-out that carries
@@ -553,7 +671,9 @@ public sealed class InternalController : ControllerBase
         // itself from the public messages endpoint.
         await NotifyAllAsync(target, "agent-message",
             $"Agent \"{rec.Title}\" sent a message to \"{target.Title}\": {Truncate(text, 300)}", ct);
-        return Ok(new { id = message.Id, to = target.Id });
+        var delivery = await AgentMessageDispatch.PushAsync(_delivery,
+            all.FirstOrDefault(s => s.Id == target.Id), message, rec.Title, ct);
+        return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));
     }
 
     /// <summary>
@@ -583,7 +703,7 @@ public sealed class InternalController : ControllerBase
         var messages = taken.Select(m => new AgentMessageInfo(
             m.Id, m.FromSessionId,
             m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId),
-            m.Body, m.CreatedAt, m.DeliveredAt)).ToList();
+            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia)).ToList();
         return Ok(new { messages });
     }
 

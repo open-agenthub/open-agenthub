@@ -38,6 +38,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly IMcpGatewayTokenService _mcpGatewayTokens;
     private readonly ISessionFileCleanup? _fileCleanup;
     private readonly Network.INetworkSessionCleanup? _networkCleanup;
+    private readonly IAgentCredentialPusher? _credentialPusher;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -59,9 +60,11 @@ public sealed class KubernetesSessionService : ISessionService
         Usage.UsageLimitService usageLimits, IAllowedAgentsProvider allowedAgents,
         ILibraryAccess library, IMcpServerStore mcpServers, IEphemeralApiMcpStore ephemeralApiMcps,
         IMcpGatewayTokenService mcpGatewayTokens, ILogger<KubernetesSessionService> log,
-        ISessionFileCleanup? fileCleanup = null, Network.INetworkSessionCleanup? networkCleanup = null)
+        ISessionFileCleanup? fileCleanup = null, Network.INetworkSessionCleanup? networkCleanup = null,
+        IAgentCredentialPusher? credentialPusher = null)
     {
         _log = log;
+        _credentialPusher = credentialPusher;
         _store = store;
         _projects = projects;
         _artifacts = artifacts;
@@ -114,6 +117,29 @@ public sealed class KubernetesSessionService : ISessionService
         _log.LogInformation("Stored credentials for {Owner} ({Keys} keys)", owner, secret.Data.Count);
     }
 
+    public async Task<GitPatInfo> UpsertGitPatAsync(string owner, UpsertGitPatRequest request, CancellationToken ct = default)
+    {
+        var name = CredsSecretName(owner);
+        var existing = (await ReadSecretOrNullAsync(name, ct))?.Data;
+        var (secret, info) = CredentialSecretFactory.UpsertGitPat(name, _opts.Namespace, Sanitize(owner), existing, request);
+        await UpsertSecretAsync(secret, ct);
+        _log.LogInformation("Stored {Kind} token for {Host} for {Owner}", info.Kind, info.Host, owner);
+        return info;
+    }
+
+    public async Task DeleteGitPatAsync(string owner, string id, CancellationToken ct = default)
+    {
+        var name = CredsSecretName(owner);
+        var existing = (await ReadSecretOrNullAsync(name, ct))?.Data;
+        // Nothing stored at all: writing an empty secret would only create one for a user who has
+        // never saved a credential.
+        if (existing is null) return;
+        await UpsertSecretAsync(CredentialSecretFactory.RemoveGitPat(name, _opts.Namespace, Sanitize(owner), existing, id), ct);
+        // The id comes straight from the route and is never validated against a format, so it
+        // stays out of the log line: a crafted value could forge extra log entries.
+        _log.LogInformation("Removed a git token for {Owner}", owner);
+    }
+
     /// <summary>Which credential fields have a stored value. Values are never returned.</summary>
     public async Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default)
     {
@@ -122,18 +148,168 @@ public sealed class KubernetesSessionService : ISessionService
         var codex = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Codex), ct))?.Data;
         var cursor = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Cursor), ct))?.Data;
         var openclaw = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.OpenClaw), ct))?.Data;
-        return CredentialSecretFactory.CredentialStatus(data, claude, codex, cursor, openclaw);
+        var opencode = (await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.OpenCode), ct))?.Data;
+        return CredentialSecretFactory.CredentialStatus(data, claude, codex, cursor, openclaw, opencode);
     }
 
     /// <summary>
     /// Stores provider CLI subscription credentials in a dedicated secret.
     /// Separate secret so StoreCredentialsAsync (which fully replaces its secret) does not overwrite it.
     /// </summary>
-    public async Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default)
+    public Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default)
+        => StoreProviderLoginAsync(owner, agent, json, identity: null, mountedCredentialId: null, ct);
+
+    public async Task<string?> StoreProviderLoginAsync(string owner, AgentKind agent, string json,
+        ProviderAccountIdentity? identity, string? mountedCredentialId, CancellationToken ct = default)
     {
-        var secret = CredentialSecretFactory.CreateProviderSecret(ProviderSecretName(owner, agent), _opts.Namespace, Sanitize(owner), agent, json);
-        await UpsertSecretAsync(secret, ct);
-        _log.LogInformation("Saved {Agent} login for {Owner}", agent, owner);
+        if (!ProviderCredentialValidator.Validate(agent, json))
+            throw new ArgumentException("Invalid provider credential document.", nameof(json));
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        var attached = ProviderAccountSecret.Attach(set, Encoding.UTF8.GetBytes(json), identity, mountedCredentialId);
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        _log.LogInformation("Saved {Agent} login for {Owner} into account {Account} ({Outcome})",
+            agent, owner, attached.AccountId, attached.Created ? "new" : "updated");
+        return attached.AccountId;
+    }
+
+    public async Task<IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>>> ListProviderAccountsAsync(
+        string owner, CancellationToken ct = default)
+    {
+        var result = new Dictionary<string, IReadOnlyList<ProviderAccountInfo>>();
+        var now = DateTime.UtcNow;
+        foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex, AgentKind.Cursor, AgentKind.OpenClaw, AgentKind.OpenCode })
+        {
+            var set = await ReadProviderAccountsAsync(owner, agent, ct);
+            result[agent.ToString()] = set.Accounts.Select(a => ProviderAccountInfo.From(a, now)).ToList();
+        }
+        return result;
+    }
+
+    public async Task<ProviderAccountInfo?> UpdateProviderAccountAsync(string owner, AgentKind agent, string id,
+        UpdateProviderAccountRequest req, CancellationToken ct = default)
+    {
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        var account = set.Find(id);
+        if (account is null) return null;
+        if (req.Label is not null) { account.Label = ProviderAccountSecret.NormalizeLabel(req.Label); set.Dirty = true; }
+        if (req.IsDefault == true) ProviderAccountSecret.MakeDefault(set, id);
+        if (req.ClearExhausted == true) ProviderAccountSecret.ClearExhausted(set, id);
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        return ProviderAccountInfo.From(account);
+    }
+
+    public async Task<ProviderAccountInfo?> MarkProviderAccountExhaustedAsync(string owner, AgentKind agent, string id,
+        DateTime until, string? reason, CancellationToken ct = default)
+    {
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        if (!ProviderAccountSecret.MarkExhausted(set, id, until, reason)) return null;
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        _log.LogInformation("Marked {Agent} account {Account} of {Owner} as at its usage limit until {Until}",
+            agent, id, owner, until);
+        return ProviderAccountInfo.From(set.Find(id)!);
+    }
+
+    public async Task DeleteProviderAccountAsync(string owner, AgentKind agent, string id, CancellationToken ct = default)
+    {
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        if (!ProviderAccountSecret.Remove(set, id)) return;
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        _log.LogInformation("Deleted {Agent} account for {Owner}", agent, owner);
+    }
+
+    /// <summary>
+    /// Reads the provider secret as accounts. Any read that had to normalise the layout — the
+    /// lazy migration of a single-file secret, a reconciled index — is written back straight
+    /// away, so a pod spec built a moment later projects a key that exists.
+    /// </summary>
+    private async Task<ProviderAccountSet> ReadProviderAccountsAsync(string owner, AgentKind agent, CancellationToken ct)
+    {
+        var data = (await ReadSecretOrNullAsync(ProviderSecretName(owner, agent), ct))?.Data;
+        var set = ProviderAccountSecret.Read(data, agent);
+        if (set.Dirty && data is not null)
+        {
+            await WriteProviderAccountsAsync(owner, agent, set, ct);
+            _log.LogInformation("Normalised the {Agent} login secret of {Owner} to the account layout", agent, owner);
+        }
+        return set;
+    }
+
+    private async Task WriteProviderAccountsAsync(string owner, AgentKind agent, ProviderAccountSet set, CancellationToken ct)
+    {
+        if (set.Accounts.Count == 0)
+        {
+            await DeleteProviderCredentialsAsync(owner, agent, ct);
+            return;
+        }
+        await UpsertSecretAsync(CredentialSecretFactory.ProviderSecret(
+            ProviderSecretName(owner, agent), _opts.Namespace, Sanitize(owner),
+            ProviderAccountSecret.Write(set, agent)), ct);
+        set.Dirty = false;
+    }
+
+    /// <summary>Checks that a requested account exists for the agent; null passes through as "default".</summary>
+    private async Task<string?> ValidateCredentialIdAsync(string owner, AgentKind agent, AgentAuthMode authMode,
+        string? credentialId, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(credentialId)) return null;
+        if (authMode == AgentAuthMode.ApiKey)
+            throw new ArgumentException("A provider account only applies to Subscription sessions.");
+        if (!ProviderAccountSecret.IsValidId(credentialId))
+            throw new ArgumentException("Invalid provider account id.");
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        if (set.Find(credentialId) is null)
+            throw new ArgumentException($"No stored {agent} login with id '{credentialId}'.");
+        return credentialId;
+    }
+
+    /// <summary>
+    /// Checks a requested PAT selection against what is stored; null and the wildcard pass
+    /// through as "all". The secret is read only when there is something to check, so a request
+    /// that says nothing about PATs costs no extra round trip.
+    /// </summary>
+    private async Task<IReadOnlyList<string>?> ValidateGitPatIdsAsync(string owner, IReadOnlyList<string>? requested,
+        CancellationToken ct)
+    {
+        if (requested is null) return null;
+        if (requested.Count == 0) return Array.Empty<string>();
+        var stored = GitPatStore.Read((await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data);
+        return GitPatSelection.Normalize(requested, stored);
+    }
+
+    public Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
+        CancellationToken ct = default)
+        => SwitchSessionCredentialAsync(owner, id, credentialId, reason: null, ct);
+
+    public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
+        string? reason, CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        SessionCredentialSwitch.Validate(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP, credentialId);
+        if (_credentialPusher is null)
+            throw new InvalidOperationException("Switching accounts on a running session is not available on this instance.");
+
+        var set = await ReadProviderAccountsAsync(owner, rec.Agent, ct);
+        var account = set.Find(credentialId)
+            ?? throw new ArgumentException($"No stored {rec.Agent} login with id '{credentialId}'.");
+        var file = set.Files[account.Id];
+
+        // Recorded before the push: the pod's watcher uploads the file it was just given as soon
+        // as it changes again, and that upload has to land on the new account, not the old one.
+        // The resolved id follows for the same reason the spawn writes it: a later limit report
+        // from this pod must name the account that is now mounted.
+        await _store.SetCredentialIdAsync(rec.Id, account.Id, ct);
+        await _store.SetResolvedCredentialIdAsync(rec.Id, account.Id, ct);
+        rec.CredentialId = account.Id;
+        rec.ResolvedCredentialId = account.Id;
+        await _credentialPusher.PushAsync(pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, reason, ct);
+
+        account.LastUsedAt = DateTime.UtcNow;
+        set.Dirty = true;
+        await WriteProviderAccountsAsync(owner, rec.Agent, set, ct);
+        _log.LogInformation("Switched session {Id} to {Agent} account {Account}", id, rec.Agent, account.Id);
+        return await ToInfoAsync(rec, pod.Status.Phase, pod.Status.PodIP, await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
     public async Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default)
@@ -184,6 +360,8 @@ public sealed class KubernetesSessionService : ISessionService
         await EnsureAgentAllowedAsync(req.Agent, ct);
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
         await SessionSoftLimit.EnsureCanCreateAsync(_store, owner, _maxRunningSessionsPerOwner, ct);
+        var credentialId = await ValidateCredentialIdAsync(owner, req.Agent, req.AuthMode, req.CredentialId, ct);
+        var gitPatIds = await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct);
 
         var repos = NormalizeRepos(req);
         SessionRepos.Validate(repos);
@@ -196,6 +374,7 @@ public sealed class KubernetesSessionService : ISessionService
         // Validate ephemeral sources before allocating a session id / writing a row.
         var preparedEphemeral = PrepareEphemeralSources(req.EphemeralApiSources);
         var policy = EffectivePolicy(req.Policy, req.AllowedTools);
+        var (autoDeleteAfter, autoDeleteFrom) = SessionExpiry.ForCreate(req.AutoDeleteAfterSeconds, req.AutoDeleteFrom, req.Mode);
 
         var id = Guid.NewGuid().ToString("n")[..12];
         var rec = new SessionRecord
@@ -212,6 +391,8 @@ public sealed class KubernetesSessionService : ISessionService
             OpenClawApiKeySource = req.Agent == AgentKind.OpenClaw && req.AuthMode == AgentAuthMode.ApiKey
                 ? req.OpenClawApiKeySource
                 : null,
+            CredentialId = credentialId,
+            GitPatIdsJson = GitPatSelection.Serialize(gitPatIds),
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
             Image = image, RunAsRoot = req.RunAsRoot,
@@ -219,7 +400,9 @@ public sealed class KubernetesSessionService : ISessionService
             Cpu = req.Cpu, Memory = req.Memory,
             AgentSessionId = Guid.NewGuid().ToString(),
             CallbackToken = RandomToken(),
-            Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending"
+            Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending",
+            AutoDeleteAfterSeconds = autoDeleteAfter, AutoDeleteFrom = autoDeleteFrom,
+            AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover)
         };
         // Persist session row before registering ephemerals so a failed Upsert
         // cannot leave orphaned session-scoped API sources.
@@ -539,6 +722,8 @@ public sealed class KubernetesSessionService : ISessionService
         rec.Status = "Pending";
         rec.QuestionPending = false;
         await _store.UpsertAsync(rec, ct);
+        // Somebody wanted this session back: a resume restarts the idle countdown.
+        await _store.TouchActivityAsync(id, ct);
 
         var req = new CreateSessionRequest
         {
@@ -547,6 +732,8 @@ public sealed class KubernetesSessionService : ISessionService
             McpServerIds = ParseMcpServerIds(rec),
             ProjectId = rec.ProjectId, Prompt = rec.Prompt, SystemPrompt = rec.SystemPrompt,
             Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
+            CredentialId = rec.CredentialId,
+            GitPatIds = GitPatSelection.Parse(rec.GitPatIdsJson)?.ToList(),
             Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot, AutoApprove = rec.AutoApprove,
@@ -555,6 +742,36 @@ public sealed class KubernetesSessionService : ISessionService
         await SpawnAsync(owner, rec, req, resume: true, ct);
         _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.AgentSessionId);
         return await ToInfoAsync(rec, phase: rec.Status, podIp: null, ct: ct);
+    }
+
+    /// <summary>
+    /// Turns a finished or paused autonomous session into an interactive one and resumes it
+    /// (docs/session-mode-conversion.md). The conversion is an edit of the record followed by
+    /// the ordinary resume: the pod sees AGENTHUB_MODE=interactive and AGENTHUB_RESUME=1, and the
+    /// drivers already continue the conversation on those two values where the CLI can.
+    /// </summary>
+    public async Task<SessionInfo> ConvertSessionAsync(string owner, string id, ConvertSessionRequest req,
+        CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        // The live pod's phase, as everywhere else: a record still saying Running for a pod that
+        // has since finished must not refuse the conversion, and a stored Succeeded next to a pod
+        // that is somehow still alive must not allow it.
+        var phase = SessionStatus.ResolvePhase(pod?.Status?.Phase, rec.Status);
+        var plan = SessionConversion.Validate(rec, phase, req);
+
+        SessionConversion.Apply(rec, plan);
+        await _store.UpsertAsync(rec, ct);
+        _log.LogInformation("Converted session {Id} from {From} to interactive (ui={UiMode}, autoApprove={AutoApprove})",
+            id, rec.ConvertedFrom, rec.UiMode, rec.AutoApprove);
+
+        // Persisted before the resume on purpose: if the resume is refused (agent no longer
+        // allowed, usage limit), the session is still interactive and the ordinary Resume button
+        // finishes the job, instead of a session that looks autonomous and resumes interactive.
+        if (req.Resume) return await ResumeSessionAsync(owner, id, ct);
+        return await ToInfoAsync(rec, phase, podIp: null, await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
     /// <summary>
@@ -604,6 +821,11 @@ public sealed class KubernetesSessionService : ISessionService
         // null = unchanged; an empty string clears the description.
         if (req.Description is not null)
             rec.Description = SessionDescription.Normalize(req.Description);
+        // Same convention: null leaves the prompt alone, an empty string removes it. Normalize
+        // applies the create-side cap, so an oversized prompt is a 400 here and not a pod spec
+        // the API server refuses on the next resume.
+        if (req.SystemPrompt is not null)
+            rec.SystemPrompt = SessionSystemPrompt.Normalize(req.SystemPrompt);
         if (req.Image is not null)
         {
             // Empty string resets to the default agent image.
@@ -704,6 +926,7 @@ public sealed class KubernetesSessionService : ISessionService
                 throw;
             }
         }
+        var previousAgent = rec.Agent;
         if (req.Agent is { } agent)
             rec.Agent = agent;
         if (req.AuthMode is { } authMode)
@@ -717,11 +940,25 @@ public sealed class KubernetesSessionService : ISessionService
         {
             rec.OpenClawApiKeySource = null;
         }
+        // An account is bound to one provider: a change of agent drops the pin unless the
+        // request names an account of the new agent in the same breath.
+        if (req.CredentialId is not null)
+            rec.CredentialId = await ValidateCredentialIdAsync(owner, rec.Agent, rec.AuthMode, req.CredentialId, ct);
+        else if (rec.Agent != previousAgent || rec.AuthMode == AgentAuthMode.ApiKey)
+            rec.CredentialId = null;
+        if (req.GitPatIds is not null)
+            rec.GitPatIdsJson = GitPatSelection.Serialize(await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct));
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
             rec.AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools);
         }
+        if (req.AutoDeleteAfterSeconds is not null || req.AutoDeleteFrom is not null)
+            (rec.AutoDeleteAfterSeconds, rec.AutoDeleteFrom) =
+                SessionExpiry.ForUpdate(rec, req.AutoDeleteAfterSeconds, req.AutoDeleteFrom);
+        // Read off the record when a limit is reported, so it applies to the live session.
+        if (req.AccountFailover is not null)
+            rec.AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover);
 
         try
         {
@@ -781,12 +1018,18 @@ public sealed class KubernetesSessionService : ISessionService
                 // a global credential helper, which offered the token to any host that answered
                 // 401; a store entry is bound to one host. It also means the raw token no longer
                 // has to be projected into the pod at all — see ManualGitCredentials.
+                //
+                // Which PATs is read from the record, not the request: a resume rebuilds the
+                // request from the record anyway, and one source means a resumed session cannot
+                // come back with a different selection than it was created with.
                 var oauthStore = await _gitAuth.BuildCredentialStoreAsync(
                     owner, NormalizeRepos(req), resourceCt);
                 var manualCredentials = (await ReadSecretOrNullAsync(
                     CredsSecretName(owner), resourceCt))?.Data;
+                var selectedPats = GitPatSelection.Apply(
+                    GitPatStore.Read(manualCredentials), GitPatSelection.Parse(rec.GitPatIdsJson));
                 var credentialStore = ManualGitCredentials.ComposeStore(
-                    oauthStore, ManualGitCredentials.Lines(manualCredentials));
+                    oauthStore, ManualGitCredentials.Lines(selectedPats));
                 if (credentialStore is null) return false;
 
                 await UpsertSecretAsync(new V1Secret
@@ -894,13 +1137,40 @@ public sealed class KubernetesSessionService : ISessionService
             await _store.SetQuestionPendingAsync(id, false, ct);
     }
 
+    public async Task TouchActivityAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (await _store.GetAsync(owner, id, ct) is not null)
+            await _store.TouchActivityAsync(id, ct);
+    }
+
     public async Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default)
+        => AgentTerminal.CleanTranscript(await GetScrollbackAsync(owner, id, ct));
+
+    public async Task<IReadOnlyList<TranscriptEntry>?> GetConversationAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (await _store.GetAsync(owner, id, ct) is not { } rec) return null;
+        var key = IArtifactStore.TranscriptKey(Sanitize(owner), id);
+        var jsonl = await TranscriptReader.ReadRawAsync(
+            token => _artifacts.GetTextAsync(key, token),
+            token => _store.GetTranscriptAsync(id, token),
+            ct);
+        // A chat session's scrollback *is* stream-json — the same line shape the native file
+        // has — so a chat session from before native transcripts were uploaded still gets a
+        // readable conversation instead of raw JSON on the remote API and the MCP tools.
+        if (string.IsNullOrEmpty(jsonl) && string.Equals(rec.UiMode, "chat", StringComparison.OrdinalIgnoreCase))
+            jsonl = await GetScrollbackAsync(owner, id, ct);
+        if (string.IsNullOrEmpty(jsonl)) return null;
+        var entries = NativeTranscript.Parse(jsonl);
+        return entries.Count == 0 ? null : entries;
+    }
+
+    public async Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
     {
         if (await _store.GetAsync(owner, id, ct) is null) return null;
         // Prefer S3 (survives DB trimming); fall back to the Postgres-stored
         // scrollback so transcripts work on instances without S3.
         var key = IArtifactStore.ScrollbackKey(Sanitize(owner), id);
-        return await TranscriptReader.ReadAsync(
+        return await TranscriptReader.ReadRawAsync(
             token => _artifacts.GetTextAsync(key, token),
             token => _store.GetScrollbackAsync(id, token),
             ct);
@@ -987,19 +1257,36 @@ public sealed class KubernetesSessionService : ISessionService
     {
         var hasApiKey = false;
         var hasSubscription = false;
-        if (record.Mode is SessionMode.Autonomous or SessionMode.Scheduled)
+        string? accountId = null;
+        if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
         {
-            var (apiKey, providerKey) = record.Agent switch
+            // Resolved at every start, so a session without a pinned account follows the default
+            // and a pinned one that was removed since is reported, not silently swapped. An
+            // unpinned session also steps around an account at its usage limit; a pinned one is
+            // mounted as pinned (docs/account-limits.md).
+            var accounts = await ReadProviderAccountsAsync(owner, record.Agent, ct);
+            accountId = record.CredentialId is not null
+                ? accounts.Find(record.CredentialId)?.Id
+                : ProviderAccountSecret.ResolveId(accounts, null, DateTime.UtcNow);
+            hasSubscription = accountId is not null;
+        }
+        // What was mounted, pinned or not: the limit report from this pod names this account.
+        if (record.ResolvedCredentialId != accountId)
+        {
+            record.ResolvedCredentialId = accountId;
+            await _store.SetResolvedCredentialIdAsync(record.Id, accountId, ct);
+        }
+        if (AgentPodSpecFactory.ResolvesApiKey(record.Mode, record.AuthMode))
+        {
+            var apiKey = record.Agent switch
             {
-                AgentKind.Codex => ("openai_api_key", "auth.json"),
-                AgentKind.Cursor => ("cursor_api_key", "auth.json"),
-                AgentKind.OpenClaw => (AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource), "auth-profiles.json"),
-                _ => ("anthropic_api_key", "credentials.json")
+                AgentKind.Codex => "openai_api_key",
+                AgentKind.Cursor => "cursor_api_key",
+                AgentKind.OpenClaw => AgentPodSpecFactory.TryOpenClawApiKeySecretKey(record.OpenClawApiKeySource),
+                AgentKind.OpenCode => "opencode_api_key",
+                _ => "anthropic_api_key"
             };
-            if (record.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.Auto)
-                hasApiKey = apiKey is not null && await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
-            if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
-                hasSubscription = await HasSecretKeyAsync(ProviderSecretName(owner, record.Agent), providerKey, ct);
+            hasApiKey = apiKey is not null && await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
         }
 
         var ownerKey = Sanitize(owner);
@@ -1014,17 +1301,20 @@ public sealed class KubernetesSessionService : ISessionService
             CodexCredentialSecretName = ProviderSecretName(owner, AgentKind.Codex),
             CursorCredentialSecretName = ProviderSecretName(owner, AgentKind.Cursor),
             OpenClawCredentialSecretName = ProviderSecretName(owner, AgentKind.OpenClaw),
+            OpenCodeCredentialSecretName = ProviderSecretName(owner, AgentKind.OpenCode),
             HasSelectedApiKey = hasApiKey,
             HasSelectedSubscriptionCredential = hasSubscription,
+            SubscriptionAccountId = accountId,
             HasGitCredentials = hasGitCredentials,
             CallbackUrl = $"{_callbackBaseUrl}/internal/sessions/{record.Id}",
             StatePutUrl = artifactUrls.StatePutUrl,
             StateGetUrl = artifactUrls.StateGetUrl,
             ScrollbackPutUrl = artifactUrls.ScrollbackPutUrl,
+            TranscriptPutUrl = artifactUrls.TranscriptPutUrl,
             S3Insecure = _s3Insecure,
             RuntimeImages = new AgentRuntimeImages(
                 claudeImage, _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.OpenClawAgentImage,
-                _opts.AgentImagePullPolicy),
+                _opts.OpenCodeAgentImage, _opts.AgentImagePullPolicy),
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
@@ -1037,7 +1327,8 @@ public sealed class KubernetesSessionService : ISessionService
                 MaxCpu = _opts.MaxCpu,
                 MaxMemory = _opts.MaxMemory,
                 TelemetryEnabled = _opts.TelemetryEnabled,
-                TelemetryOtlpEndpoint = _opts.TelemetryOtlpEndpoint
+                TelemetryOtlpEndpoint = _opts.TelemetryOtlpEndpoint,
+                AccountLimitThreshold = Math.Clamp(_opts.AccountLimitThreshold, 1, 100)
             }
         };
     }
@@ -1076,11 +1367,18 @@ public sealed class KubernetesSessionService : ISessionService
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
+        CredentialId = r.CredentialId, ResolvedCredentialId = r.ResolvedCredentialId,
+        GitPatIds = GitPatSelection.Parse(r.GitPatIdsJson),
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
+        CanConvertToInteractive = SessionStatus.CanConvertToInteractive(r.Mode, phase),
+        ConvertedFrom = r.ConvertedFrom,
         Image = r.Image, RunAsRoot = r.RunAsRoot, AutoApprove = r.AutoApprove, Cpu = r.Cpu, Memory = r.Memory,
-        Browser = browser ?? BrowserSummary.Stopped
+        Browser = browser ?? BrowserSummary.Stopped,
+        AutoDeleteAfterSeconds = r.AutoDeleteAfterSeconds, AutoDeleteFrom = r.AutoDeleteFrom,
+        ExpiresAt = SessionExpiry.ExpiresAt(r), LastActivityAt = r.LastActivityAt,
+        AccountFailover = AccountFailoverMode.Display(r.AccountFailover)
     };
 
     private V1ObjectMeta Meta(string name, string owner, string id, string component,
@@ -1133,6 +1431,7 @@ public sealed class KubernetesSessionService : ISessionService
         AgentKind.Codex => $"codex-{Sanitize(owner)}",
         AgentKind.Cursor => $"cursor-{Sanitize(owner)}",
         AgentKind.OpenClaw => $"openclaw-{Sanitize(owner)}",
+        AgentKind.OpenCode => $"opencode-{Sanitize(owner)}",
         _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
     };
 
@@ -1156,6 +1455,7 @@ public sealed class AgentHubOptions
     public string CodexAgentImage { get; set; } = "";
     public string CursorAgentImage { get; set; } = "";
     public string OpenClawAgentImage { get; set; } = "";
+    public string OpenCodeAgentImage { get; set; } = "";
     public int AgentPort { get; set; } = 7681;
     public string GitCloneImage { get; set; } = "alpine/git:2.45.2";
     /// <summary>Pull policy for the agent/runtime image. Set "Always" when the agent
@@ -1186,4 +1486,8 @@ public sealed class AgentHubOptions
     public int MaxRunningSessionsPerOwner { get; set; } = SessionSoftLimit.DefaultMax;
     /// <summary>Inject the in-pod agenthub_sessions MCP and allow internal spawn.</summary>
     public bool SpawnMcpEnabled { get; set; } = true;
+    /// <summary>Percent of a provider rate-limit window at which a Claude session reports its
+    /// account as at its limit (docs/account-limits.md). 100 reports the limit itself; lower
+    /// values switch accounts early and spend a second window on work the first could still do.</summary>
+    public int AccountLimitThreshold { get; set; } = 100;
 }

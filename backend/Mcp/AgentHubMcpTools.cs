@@ -20,27 +20,11 @@ public sealed class AgentHubMcpTools(
     IHttpContextAccessor http,
     ISessionService sessions,
     ILogger<AgentHubMcpTools> logger,
-    ISessionMessageStore? messages = null)
+    ISessionMessageStore? messages = null,
+    ISessionMessageDelivery? delivery = null)
 {
-    /// <summary>
-    /// The calling user. The access token carries "preferred_username", the same claim the REST
-    /// API keys ownership on.
-    /// </summary>
-    private string Owner
-    {
-        get
-        {
-            var user = http.HttpContext?.User;
-            var name = user?.FindFirstValue("preferred_username")
-                       ?? user?.FindFirstValue(ClaimTypes.NameIdentifier)
-                       ?? user?.Identity?.Name;
-            // Reaching a tool without an identity would mean the endpoint was mapped without its
-            // authorization policy; refuse rather than silently acting as somebody.
-            return string.IsNullOrWhiteSpace(name)
-                ? throw new McpException("unauthenticated")
-                : name;
-        }
-    }
+    /// <summary>The calling user; see <see cref="McpCallerIdentity"/>.</summary>
+    private string Owner => McpCallerIdentity.Owner(http);
 
     [McpServerTool(Name = "session_create")]
     [Description("Create and start an AgentHub session. Default mode is Interactive: tool requests "
@@ -57,7 +41,7 @@ public sealed class AgentHubMcpTools(
                      + "always appended, so it adds to the agent's instructions and never replaces "
                      + "them.")] string? systemPrompt = null,
         [Description("Interactive, Autonomous or Scheduled. Defaults to Interactive.")] string? mode = null,
-        [Description("Claude, Codex, Cursor or OpenClaw.")] string? agent = null,
+        [Description("Claude, Codex, Cursor, OpenClaw or OpenCode.")] string? agent = null,
         [Description("Repository URL to clone into the workspace. For more than one repository, or "
                      + "to clone with a connected provider's credentials, use `repos`.")] string? repoUrl = null,
         [Description("Branch for repoUrl.")] string? repoBranch = null,
@@ -84,6 +68,25 @@ public sealed class AgentHubMcpTools(
                      + "filesystem, so only turn it on for a task that genuinely needs tooling the "
                      + "image does not ship. The pod stays unprivileged either way.")]
         string? runAsRoot = null,
+        [Description("Delete the session on its own after this long, written with a unit: \"90m\", "
+                     + "\"12h\", \"3d\" (5 minutes to 365 days). Omit to keep the session until "
+                     + "somebody deletes it. The response's expiresAt says when it will go.")]
+        string? autoDeleteAfter = null,
+        [Description("What autoDeleteAfter counts from: \"lastActivity\" (default — anyone "
+                     + "attaching, typing or messaging restarts the countdown) or \"start\". A "
+                     + "Scheduled session only accepts \"start\".")]
+        string? autoDeleteFrom = null,
+        [Description("Id of the stored provider login (see credentials_list → accounts) a "
+                     + "Subscription session mounts. Omit for the default account.")]
+        string? credentialId = null,
+        [Description("Comma-separated ids of the stored git personal access tokens (see "
+                     + "credentials_list → gitPats) the session gets. Omit or \"*\" for every "
+                     + "stored token; \"none\" for no token at all.")]
+        string? gitPatIds = null,
+        [Description("\"auto\" (default) or \"off\". With auto, a running Subscription session whose "
+                     + "account hits its usage limit is moved to another available account of the "
+                     + "same provider; off keeps it on its account.")]
+        string? accountFailover = null,
         CancellationToken ct = default)
     {
         var request = new CreateSessionRequest
@@ -103,7 +106,12 @@ public sealed class AgentHubMcpTools(
             ParentSessionId = parentSessionId,
             Schedule = schedule,
             AutoApprove = ParseFlag(autoApprove),
-            RunAsRoot = ParseFlag(runAsRoot) ?? false
+            RunAsRoot = ParseFlag(runAsRoot) ?? false,
+            AutoDeleteAfterSeconds = ParseAutoDeleteAfter(autoDeleteAfter),
+            AutoDeleteFrom = autoDeleteFrom,
+            CredentialId = string.IsNullOrWhiteSpace(credentialId) ? null : credentialId.Trim(),
+            GitPatIds = ParseIdList(gitPatIds),
+            AccountFailover = string.IsNullOrWhiteSpace(accountFailover) ? null : accountFailover.Trim()
         };
         if (ParseRepos(repos) is { Count: > 0 } parsedRepos) request = request with { Repos = parsedRepos };
         if (!string.IsNullOrWhiteSpace(agent)) request = request with { Agent = ParseEnum(agent, AgentKind.Claude) };
@@ -119,22 +127,72 @@ public sealed class AgentHubMcpTools(
         return created;
     }
 
+    [McpServerTool(Name = "credentials_list")]
+    [Description("List the credentials a session may use: provider logins (accounts, keyed by agent) "
+                 + "with id, label and identity, stored git personal access tokens (id, kind, host — "
+                 + "never the token), and which API keys are stored. Pass an account id as "
+                 + "credentialId and git token ids as gitPatIds to session_create.")]
+    public async Task<RemoteCredentialListing> ListCredentials(CancellationToken ct = default)
+    {
+        var owner = Owner;
+        return RemoteCredentialListing.From(
+            await sessions.ListProviderAccountsAsync(owner, ct),
+            await sessions.GetCredentialStatusAsync(owner, ct));
+    }
+
+    [McpServerTool(Name = "account_status")]
+    [Description("Which provider account a session runs on, whether that account is at its usage limit "
+                 + "(isExhausted, exhaustedUntil), the session's accountFailover setting, and the other "
+                 + "stored accounts of the same provider as alternatives. Pass an alternative's id to "
+                 + "account_switch to move a running session.")]
+    public async Task<AccountStatus> GetAccountStatus([Description("Session id.")] string sessionId, CancellationToken ct = default)
+    {
+        var owner = Owner;
+        var session = await sessions.GetSessionAsync(owner, sessionId, ct) ?? throw new McpException("session_not_found");
+        return AccountStatus.From(session, await sessions.ListProviderAccountsAsync(owner, ct));
+    }
+
+    [McpServerTool(Name = "account_switch")]
+    [Description("Move a running Subscription session to another stored provider account (an id from "
+                 + "account_status or credentials_list). The agent restarts with the other login and "
+                 + "resumes its conversation. Fails with session_not_running when the session has no "
+                 + "live pod (set credentialId with the edit flow for the next start instead), "
+                 + "invalid_argument for an unknown account or an API-key session, and pod_refused "
+                 + "when the pod did not take the file.")]
+    public async Task<SessionInfo> SwitchAccount(
+        [Description("Session id.")] string sessionId,
+        [Description("The account to switch to.")] string credentialId,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            var switched = await sessions.SwitchSessionCredentialAsync(Owner, sessionId, credentialId?.Trim() ?? "", ct);
+            logger.LogInformation("MCP client switched session {SessionId} to account {Account}", sessionId, switched.CredentialId);
+            return switched;
+        }
+        catch (KeyNotFoundException) { throw new McpException("session_not_found"); }
+        catch (ArgumentException e) { throw new McpException("invalid_argument: " + e.Message); }
+        catch (InvalidOperationException e) { throw new McpException("session_not_running: " + e.Message); }
+        catch (HttpRequestException e) { throw new McpException("pod_refused: " + e.Message); }
+    }
+
     [McpServerTool(Name = "session_get")]
     [Description("Get one of your sessions by id.")]
     public async Task<SessionInfo> GetSession([Description("Session id.")] string id, CancellationToken ct = default)
         => await sessions.GetSessionAsync(Owner, id, ct) ?? throw new McpException("session_not_found");
 
     [McpServerTool(Name = "session_logs")]
-    [Description("Read a session's transcript — everything the agent printed. This is the only "
-                 + "place its actual output lives: the pod log shows just the launch command, and "
-                 + "a finished session's pod is gone. Returns the tail by default.")]
+    [Description("Read a session's transcript: the conversation as the agent recorded it (user, "
+                 + "assistant, tool turns), or the cleaned terminal output for sessions without "
+                 + "one. This is the only place its actual output lives: the pod log shows just "
+                 + "the launch command, and a finished session's pod is gone. Returns the tail by default.")]
     public async Task<string> GetSessionLogs(
         [Description("Session id.")] string id,
         [Description("Return at most this many characters from the end. Default 20000, max 200000. "
                      + "Pass 0 for the whole transcript.")] int? maxChars = null,
         CancellationToken ct = default)
     {
-        var transcript = await sessions.GetTranscriptAsync(Owner, id, ct)
+        var transcript = await SessionTranscripts.ReadableAsync(sessions, Owner, id, ct)
                          ?? throw new McpException("session_not_found");
         if (transcript.Length == 0) return "(the session has not written any output yet)";
 
@@ -167,7 +225,7 @@ public sealed class AgentHubMcpTools(
         // "finished" the caller already acted on.
         var session = await sessions.GetSessionAsync(Owner, id, ct)
                       ?? throw new McpException("session_not_found");
-        var transcript = await sessions.GetTranscriptAsync(Owner, id, ct)
+        var transcript = await SessionTranscripts.ReadableAsync(sessions, Owner, id, ct)
                          ?? throw new McpException("session_not_found");
         return TranscriptPage.From(session.Id, session.Phase, transcript, offset, maxChars);
     }
@@ -207,6 +265,38 @@ public sealed class AgentHubMcpTools(
         }
     }
 
+    [McpServerTool(Name = "session_convert")]
+    [Description("Continue a finished or paused Autonomous session as an Interactive one, so a person "
+                 + "can take the conversation on. Claude and Codex keep the conversation; Cursor and "
+                 + "OpenClaw start a new one in the same workspace. The session resumes right away "
+                 + "unless resume is \"false\". Fails with session_not_convertible while the session "
+                 + "is running or is not Autonomous.")]
+    public async Task<SessionInfo> ConvertSession(
+        [Description("Session id.")] string sessionId,
+        [Description("\"terminal\" (default) or \"chat\" (interactive Claude only).")] string? uiMode = null,
+        [Description("\"true\" or \"false\". Keep approving tool requests automatically. Off by "
+                     + "default: a person is now there to answer them.")] string? autoApprove = null,
+        [Description("\"true\" (default) or \"false\". False only changes the mode and leaves the "
+                     + "session stopped.")] string? resume = null,
+        CancellationToken ct = default)
+    {
+        var request = new ConvertSessionRequest
+        {
+            UiMode = uiMode,
+            AutoApprove = ParseFlag(autoApprove),
+            Resume = ParseFlag(resume) ?? true
+        };
+        try
+        {
+            var converted = await sessions.ConvertSessionAsync(Owner, sessionId, request, ct);
+            logger.LogInformation("MCP client converted session {SessionId} to interactive", sessionId);
+            return converted;
+        }
+        catch (KeyNotFoundException) { throw new McpException("session_not_found"); }
+        catch (InvalidOperationException e) { throw new McpException("session_not_convertible: " + e.Message); }
+        catch (ArgumentException e) { throw new McpException("invalid_argument: " + e.Message); }
+    }
+
     [McpServerTool(Name = "session_delete")]
     [Description("Delete a session, removing its pod and record. Does not cascade to child sessions.")]
     public async Task<string> DeleteSession([Description("Session id.")] string id, CancellationToken ct = default)
@@ -232,11 +322,17 @@ public sealed class AgentHubMcpTools(
 
     [McpServerTool(Name = "agent_send")]
     [Description("Send a message or task to one of your agents. \"to\" is a session id or a unique title; "
-                 + "scope the lookup with projectId. The agent reads it via its in-session agent_inbox tool.")]
+                 + "scope the lookup with projectId. By default the agent reads it via its in-session "
+                 + "agent_inbox tool; with priority the message is pushed straight into the running agent's "
+                 + "prompt. deliveredVia in the result says where it went: inbox, injected or mod.")]
     public async Task<AgentMessageResult> SendToAgent(
         [Description("Session id or unique agent title.")] string to,
         [Description("Message body, 1..4000 characters.")] string message,
         [Description("Narrows an ambiguous title to one project.")] string? projectId = null,
+        [Description("\"true\" to deliver into the running agent's prompt now instead of its inbox.")]
+        string? priority = null,
+        [Description("\"true\" to stop the agent's current work before delivering; implies priority.")]
+        string? interrupt = null,
         CancellationToken ct = default)
     {
         if (messages is null) throw new McpException("messaging_unavailable");
@@ -262,6 +358,7 @@ public sealed class AgentHubMcpTools(
             target = byTitle[0];
         }
 
+        var (isPriority, isInterrupt) = AgentMessaging.ResolveFlags(ParseFlag(priority), ParseFlag(interrupt));
         var record = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
@@ -269,14 +366,30 @@ public sealed class AgentHubMcpTools(
             FromSessionId = null,
             ToSessionId = target.Id,
             Owner = owner,
-            Body = body
+            Body = body,
+            Priority = isPriority,
+            Interrupt = isInterrupt
         };
         await messages.AddAsync(record, ct);
-        return new AgentMessageResult(record.Id, target.Id, target.Title);
+        var sent = await AgentMessageDispatch.PushAsync(delivery, target, record, null, ct);
+        return new AgentMessageResult(record.Id, target.Id, target.Title, sent.Via, sent.Reason);
     }
 
     private static TEnum ParseEnum<TEnum>(string? value, TEnum fallback) where TEnum : struct, Enum
         => Enum.TryParse<TEnum>(value, ignoreCase: true, out var parsed) ? parsed : fallback;
+
+    /// <summary>
+    /// A duration with a unit rather than a number of seconds: the caller is a language model,
+    /// and "12h" is what it writes. Reported rather than ignored when unreadable, because a
+    /// session silently created without the deadline it asked for is a session that is never
+    /// cleaned up (docs/session-expiry.md).
+    /// </summary>
+    private static int? ParseAutoDeleteAfter(string? text)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        try { return SessionExpiry.ParseDuration(text); }
+        catch (ArgumentException e) { throw new McpException(e.Message); }
+    }
 
     /// <summary>
     /// Reads the repository list, which arrives as JSON text for the same reason the boolean flags
@@ -320,8 +433,23 @@ public sealed class AgentHubMcpTools(
         "false" or "no" or "0" or "off" => false,
         _ => null
     };
+
+    /// <summary>
+    /// Reads an id list that arrives as text, for the reason given at <see cref="ParseFlag"/>.
+    /// Empty or <c>*</c> is "not specified" (every stored token, the session service's default);
+    /// <c>none</c> is the one way to ask for no token, since an empty string cannot carry it.
+    /// </summary>
+    public static List<string>? ParseIdList(string? value)
+    {
+        var text = value?.Trim();
+        if (string.IsNullOrEmpty(text) || text == "*") return null;
+        if (string.Equals(text, "none", StringComparison.OrdinalIgnoreCase)) return new List<string>();
+        return text.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Distinct(StringComparer.Ordinal).ToList();
+    }
 }
 
 public record AgentSummary(string Id, string Title, string? Description, string Phase, string? ProjectId);
 
-public record AgentMessageResult(string Id, string To, string Title);
+public record AgentMessageResult(string Id, string To, string Title, string DeliveredVia = MessageDeliveryVia.Inbox,
+    string? Reason = null);

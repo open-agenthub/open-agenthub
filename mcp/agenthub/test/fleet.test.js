@@ -37,6 +37,24 @@ test('sendAgentMessage posts to the remote messages endpoint with the bearer tok
   assert.deepEqual(JSON.parse(calls[0].init.body), { body: 'please review MR 42' });
 });
 
+test('sendAgentMessage passes priority and interrupt only when set', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const bodies = [];
+  const client = new AgentHubClient(env(), async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return Response.json({ id: 'm-1', to: 'rev-1', deliveredVia: 'injected' });
+  });
+
+  await client.sendAgentMessage('rev-1', 'now', { priority: true });
+  const result = await client.sendAgentMessage('rev-1', 'stop', { priority: false, interrupt: true });
+
+  assert.deepEqual(bodies, [
+    { body: 'now', priority: true },
+    { body: 'stop', priority: false, interrupt: true }
+  ]);
+  assert.equal(result.deliveredVia, 'injected');
+});
+
 test('resolveAgentTarget disambiguates only within the requested project scope', async () => {
   const { resolveAgentTarget } = await import('../resolve.mjs');
 

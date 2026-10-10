@@ -13,13 +13,10 @@ public static class CredentialSecretFactory
     private static readonly IReadOnlyDictionary<string, string> CredentialKeys = new Dictionary<string, string>
     {
         ["sshPrivateKey"] = "ssh_key",
-        ["gitlabToken"] = "gitlab_token",
-        ["gitlabHost"] = "gitlab_host",
-        ["githubToken"] = "github_token",
-        ["githubHost"] = "github_host",
         ["anthropicApiKey"] = "anthropic_api_key",
         ["openAiApiKey"] = "openai_api_key",
         ["cursorApiKey"] = "cursor_api_key",
+        ["openCodeApiKey"] = "opencode_api_key",
         ["gitKnownHosts"] = "known_hosts",
         ["gitUserName"] = "git_user_name",
         ["gitUserEmail"] = "git_user_email"
@@ -34,19 +31,15 @@ public static class CredentialSecretFactory
         IDictionary<string, byte[]>? existing, UserCredentials credentials)
     {
         var data = existing is null ? new Dictionary<string, byte[]>() : new Dictionary<string, byte[]>(existing);
-        // Validated here rather than when the session starts: a token carrying a newline would add
-        // an entry for an arbitrary host to the credential store, and a session that fails to start
-        // hours later gives the user nothing to act on.
-        ValidatePat(credentials.GitlabToken, credentials.GitlabHost, "GitLab");
-        ValidatePat(credentials.GithubToken, credentials.GithubHost, "GitHub");
+        // Any write is the moment the legacy per-provider PAT slots are folded into the list and
+        // dropped; reads only fold them in memory (see GitPatStore).
+        if (GitPatStore.HasLegacySlots(data))
+            GitPatStore.Write(data, GitPatStore.Read(data));
         Put(data, "ssh_key", Normalize(credentials.SshPrivateKey));
-        Put(data, "gitlab_token", credentials.GitlabToken);
-        Put(data, "gitlab_host", credentials.GitlabHost?.Trim());
-        Put(data, "github_token", credentials.GithubToken);
-        Put(data, "github_host", credentials.GithubHost?.Trim());
         Put(data, "anthropic_api_key", credentials.AnthropicApiKey);
         Put(data, "openai_api_key", credentials.OpenAiApiKey);
         Put(data, "cursor_api_key", credentials.CursorApiKey);
+        Put(data, "opencode_api_key", credentials.OpenCodeApiKey);
         Put(data, "known_hosts", credentials.GitKnownHosts);
         Put(data, "git_user_name", credentials.GitUserName);
         Put(data, "git_user_email", credentials.GitUserEmail);
@@ -55,9 +48,24 @@ public static class CredentialSecretFactory
             if (TryCredentialKey(field, out var key))
                 data.Remove(key);
 
-        RequireHostForTouchedPat(data, credentials, "gitlab", "GitLab", "gitlab.example.com");
-        RequireHostForTouchedPat(data, credentials, "github", "GitHub", "github.com");
+        return Secret(name, @namespace, ownerLabelValue, data);
+    }
 
+    /// <summary>Stores or rotates one PAT in the user's credential secret; see <see cref="GitPatStore.Upsert"/>.</summary>
+    public static (V1Secret Secret, GitPatInfo Info) UpsertGitPat(string name, string @namespace, string ownerLabelValue,
+        IDictionary<string, byte[]>? existing, UpsertGitPatRequest request)
+    {
+        var data = existing is null ? new Dictionary<string, byte[]>() : new Dictionary<string, byte[]>(existing);
+        var entry = GitPatStore.Upsert(data, request);
+        return (Secret(name, @namespace, ownerLabelValue, data), new GitPatInfo(entry.Id, entry.Kind, entry.Host));
+    }
+
+    /// <summary>Removes one PAT; the secret is returned unchanged in content when the id is unknown.</summary>
+    public static V1Secret RemoveGitPat(string name, string @namespace, string ownerLabelValue,
+        IDictionary<string, byte[]>? existing, string id)
+    {
+        var data = existing is null ? new Dictionary<string, byte[]>() : new Dictionary<string, byte[]>(existing);
+        GitPatStore.Remove(data, id);
         return Secret(name, @namespace, ownerLabelValue, data);
     }
 
@@ -65,90 +73,48 @@ public static class CredentialSecretFactory
         IDictionary<string, byte[]>? claudeSubscription = null,
         IDictionary<string, byte[]>? codexSubscription = null,
         IDictionary<string, byte[]>? cursorSubscription = null,
-        IDictionary<string, byte[]>? openclawSubscription = null) => new()
+        IDictionary<string, byte[]>? openclawSubscription = null,
+        IDictionary<string, byte[]>? opencodeSubscription = null) => new()
     {
         SshPrivateKey = data.ContainsKey("ssh_key"),
-        GitlabToken = data.ContainsKey("gitlab_token"),
-        GitlabHost = data.ContainsKey("gitlab_host"),
-        GithubToken = data.ContainsKey("github_token"),
-        GithubHost = data.ContainsKey("github_host"),
+        // Projected to id/kind/host: the status answer is the one place the list is read back,
+        // and the token must not be in it.
+        GitPats = GitPatStore.Read(data).Select(e => new GitPatInfo(e.Id, e.Kind, e.Host)).ToList(),
         AnthropicApiKey = data.ContainsKey("anthropic_api_key"),
         OpenAiApiKey = data.ContainsKey("openai_api_key"),
         CursorApiKey = data.ContainsKey("cursor_api_key"),
+        OpenCodeApiKey = data.ContainsKey("opencode_api_key"),
         GitKnownHosts = data.ContainsKey("known_hosts"),
         GitUserName = data.ContainsKey("git_user_name"),
         GitUserEmail = data.ContainsKey("git_user_email"),
-        ClaudeSubscription = claudeSubscription?.ContainsKey("credentials.json") == true,
-        CodexSubscription = codexSubscription?.ContainsKey("auth.json") == true,
-        // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
-        CursorSubscription = cursorSubscription?.ContainsKey("auth.json") == true,
-        // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
-        OpenclawSubscription = openclawSubscription?.ContainsKey("auth-profiles.json") == true
+        // Either layout counts: the bare file a secret had before accounts existed, or any
+        // <accountId>.<file> key of the layout described in docs/provider-accounts.md.
+        ClaudeSubscription = ProviderAccountSecret.HasAnyAccount(claudeSubscription, AgentKind.Claude),
+        CodexSubscription = ProviderAccountSecret.HasAnyAccount(codexSubscription, AgentKind.Codex),
+        CursorSubscription = ProviderAccountSecret.HasAnyAccount(cursorSubscription, AgentKind.Cursor),
+        OpenclawSubscription = ProviderAccountSecret.HasAnyAccount(openclawSubscription, AgentKind.OpenClaw),
+        OpencodeSubscription = ProviderAccountSecret.HasAnyAccount(opencodeSubscription, AgentKind.OpenCode)
     };
 
+    /// <summary>
+    /// A provider secret holding exactly one account. Kept for callers that store a login without
+    /// knowing about accounts; the result is the migrated layout, not the legacy single file, so
+    /// a secret this writes never needs migrating.
+    /// </summary>
     public static V1Secret CreateProviderSecret(string name, string @namespace, string ownerLabelValue,
         AgentKind agent, string json)
     {
         if (!ProviderCredentialValidator.Validate(agent, json))
             throw new ArgumentException("Invalid provider credential document.", nameof(json));
 
-        var fileName = agent switch
-        {
-            AgentKind.Claude => "credentials.json",
-            AgentKind.Codex => "auth.json",
-            // Pinned from Cursor Agent CLI file store: auth.json (domain "cursor").
-            AgentKind.Cursor => "auth.json",
-            // Pinned from OpenClaw 2026.7.1-2: auth-profiles.json (logical JSON / SQLite store_json).
-            AgentKind.OpenClaw => "auth-profiles.json",
-            _ => throw new ArgumentException("Unsupported agent kind.", nameof(agent))
-        };
-        return Secret(name, @namespace, ownerLabelValue, new Dictionary<string, byte[]>
-        {
-            [fileName] = Encoding.UTF8.GetBytes(json)
-        });
+        var set = new ProviderAccountSet();
+        ProviderAccountSecret.Attach(set, Encoding.UTF8.GetBytes(json), identity: null, mountedId: null);
+        return ProviderSecret(name, @namespace, ownerLabelValue, ProviderAccountSecret.Write(set, agent));
     }
 
-    private static void ValidatePat(string? token, string? host, string providerName)
-    {
-        if (!string.IsNullOrEmpty(token) && !ManualGitCredentials.IsValidToken(token))
-            throw new ArgumentException(
-                $"The {providerName} token must not contain whitespace or control characters and is "
-                + $"limited to {ManualGitCredentials.MaxTokenLength} characters.");
-        if (!string.IsNullOrWhiteSpace(host) && !ManualGitCredentials.IsValidHost(host.Trim()))
-            throw new ArgumentException(
-                $"The {providerName} host must be a hostname with an optional port, without a "
-                + "scheme or path.");
-    }
-
-    /// <summary>
-    /// A token the caller just touched must name its host.
-    ///
-    /// The host is what the credential is scoped to, and <see cref="ManualGitCredentials"/> falls
-    /// back to the public instance without one. For a self-hosted GitLab or GitHub that fallback is
-    /// silently wrong twice over: the clone gets no credential for the host it actually uses, and
-    /// `glab`/`gh` are configured for a host the user never named. The predecessor of this
-    /// mechanism — a host-less credential helper plus a GITLAB_TOKEN export — worked against any
-    /// host, so defaulting would have turned a working self-hosted setup into a broken one.
-    ///
-    /// Checked against the merged result and only when the request touched either field, so
-    /// rotating a token whose host is already stored still works, and a token stored before hosts
-    /// existed does not block an unrelated credential update.
-    /// </summary>
-    private static void RequireHostForTouchedPat(
-        IDictionary<string, byte[]> data, UserCredentials credentials, string prefix,
-        string providerName, string hostExample)
-    {
-        var touched = credentials.Clear.Any(f =>
-                          TryCredentialKey(f, out var k) && (k == $"{prefix}_token" || k == $"{prefix}_host"))
-                      || (prefix == "gitlab"
-                          ? !string.IsNullOrEmpty(credentials.GitlabToken) || !string.IsNullOrWhiteSpace(credentials.GitlabHost)
-                          : !string.IsNullOrEmpty(credentials.GithubToken) || !string.IsNullOrWhiteSpace(credentials.GithubHost));
-        if (!touched) return;
-        if (!data.ContainsKey($"{prefix}_token") || data.ContainsKey($"{prefix}_host")) return;
-        throw new ArgumentException(
-            $"Storing a {providerName} token also needs the host it belongs to (e.g. {hostExample}). "
-            + "The token is only ever sent to that host.");
-    }
+    /// <summary>A provider secret from already-encoded account data (see <see cref="ProviderAccountSecret.Write"/>).</summary>
+    public static V1Secret ProviderSecret(string name, string @namespace, string ownerLabelValue,
+        Dictionary<string, byte[]> data) => Secret(name, @namespace, ownerLabelValue, data);
 
     private static bool TryCredentialKey(string field, out string key) =>
         CredentialKeys.TryGetValue(JsonNamingPolicy.CamelCase.ConvertName(field), out key!);

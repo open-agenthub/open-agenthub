@@ -19,12 +19,24 @@ describe('GroupsPane', () => {
     mocks.api.setLibrarySettings.mockResolvedValue({ userSkillPublishing: true })
   })
 
-  it('renders the locked enterprise card on 402 instead of controls', async () => {
+  it('renders the license gate on 402 instead of controls', async () => {
     mocks.api.librarySettings.mockRejectedValue(err(402, '402 license required'))
     const wrapper = mount(GroupsPane)
     await flushPromises()
     const locked = wrapper.get('[data-library-locked]')
-    expect(locked.text()).toContain('enterprise feature')
+    expect(locked.attributes('data-license-gate')).toBeDefined()
+    expect(locked.text()).toContain('Enterprise feature')
+    expect(locked.text()).toContain('Publishing skills')
+    expect(wrapper.find('[data-skill-publishing-toggle]').exists()).toBe(false)
+  })
+
+  it('swaps the controls for the gate when saving is refused with 402', async () => {
+    mocks.api.setLibrarySettings.mockRejectedValue(err(402, '402 license required'))
+    const wrapper = mount(GroupsPane)
+    await flushPromises()
+    await wrapper.get('[data-skill-publishing-toggle]').setValue(true)
+    await flushPromises()
+    expect(wrapper.find('[data-license-gate]').exists()).toBe(true)
     expect(wrapper.find('[data-skill-publishing-toggle]').exists()).toBe(false)
   })
 

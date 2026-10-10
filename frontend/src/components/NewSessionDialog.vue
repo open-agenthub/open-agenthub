@@ -3,10 +3,15 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { api } from '../api.js'
 import {
   agentPayload, buildEphemeralApiSources, defaultAgentForm, defaultPolicy, ephemeralNameFromUrl,
-  filterAgentOptions, mcpBadgeLabel, policyFromForm, policyPayload, toolsPlaceholder, commandsPlaceholder
+  filterAgentOptions, gitPatIdsPayload, gitPatOptions, gitPatSelectionFor, mcpBadgeLabel, policyFromForm,
+  policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
+import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
+import GitPatPicker from './GitPatPicker.vue'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import AutoDeleteCard from './AutoDeleteCard.vue'
+import SystemPromptField from './SystemPromptField.vue'
 
 const emit = defineEmits(['close', 'created'])
 const props = defineProps({ embedded: { type: Boolean, default: false }, projects: { type: Array, default: () => [] } })
@@ -19,6 +24,12 @@ const MODES = [
 const repos = ref([])
 const advOpen = ref(false)
 const credentialStatus = ref({})
+// Stored provider logins per agent, shown in the card from the first one.
+const providerAccounts = ref({})
+// Stored git PATs; all ticked by default, which sends null = "every token, as before".
+const gitPats = computed(() => gitPatOptions(credentialStatus.value))
+const selectedGitPats = ref([])
+watch(gitPats, options => { selectedGitPats.value = gitPatSelectionFor(null, options) })
 const UI_MODES = [
   { key: 'terminal', label: 'Terminal', hint: 'the agent’s own console UI' },
   { key: 'chat', label: 'Chat', hint: 'a chat view like Claude Desktop (Claude only)' }
@@ -36,21 +47,27 @@ const form = ref({
   mode: 'Interactive',
   uiMode: 'terminal',
   prompt: '',
+  systemPrompt: '',
   schedule: '0 6 * * 1-5',
   projectId: '',
   mcpConfigJson: '',
   ...defaultAgentForm(),
+  credentialId: '',
   image: '',
   runAsRoot: false,
   autoApprove: false,
   cpu: '500m',
   memory: '1Gi'
 })
+const autoDelete = ref(autoDeleteForm(null))
 const busy = ref(false)
 const error = ref('')
 
 const needsPrompt = computed(() => form.value.mode !== 'Interactive')
 const needsSchedule = computed(() => form.value.mode === 'Scheduled')
+// A scheduled session can only count from its start; the card disables the other basis, and
+// the value follows so the backend is never sent a combination it refuses.
+watch(needsSchedule, scheduled => { if (scheduled) autoDelete.value = { ...autoDelete.value, from: 'start' } })
 const modeHint = computed(() => MODES.find(m => m.key === form.value.mode)?.hint)
 // Chat runs Claude in stream-json mode; other agents and automation stay terminal.
 const canChooseUi = computed(() => form.value.mode === 'Interactive' && form.value.agent === 'Claude')
@@ -60,6 +77,7 @@ watch(canChooseUi, allowed => { if (!allowed) form.value.uiMode = 'terminal' })
 
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* readiness stays advisory */ }
+  try { providerAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* one login needs no choice */ }
   try {
     const allowed = await api.getAllowedAgents()
     agentChoices.value = filterAgentOptions(allowed?.agents)
@@ -100,8 +118,12 @@ async function submit() {
       mode: form.value.mode,
       uiMode: form.value.uiMode,
       ...agentPayload(form.value),
+      // Null = the default account, resolved at each start; an id pins the session to that login.
+      credentialId: form.value.credentialId || null,
       repos: repos.value,
+      gitPatIds: gitPatIdsPayload(selectedGitPats.value, gitPats.value),
       prompt: form.value.prompt || null,
+      systemPrompt: form.value.systemPrompt.trim() || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
       projectId: form.value.projectId || null,
       mcpConfigJson: form.value.mcpConfigJson || null,
@@ -116,7 +138,8 @@ async function submit() {
       runAsRoot: form.value.runAsRoot,
       autoApprove: form.value.autoApprove,
       cpu: form.value.cpu,
-      memory: form.value.memory
+      memory: form.value.memory,
+      ...autoDeletePayload(autoDelete.value)
     })
     emit('created', session)
   } catch (e) {
@@ -150,7 +173,8 @@ async function submit() {
           <small class="hint">{{ modeHint }}</small>
         </div>
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
-          v-model:open-claw-api-key-source="form.openClawApiKeySource"
+          v-model:open-claw-api-key-source="form.openClawApiKeySource" v-model:credential-id="form.credentialId"
+          :accounts="providerAccounts"
           :mode="form.mode" :credential-status="credentialStatus" :options="agentChoices" />
         <div class="field" v-if="canChooseUi">
           <label>Interface</label>
@@ -168,6 +192,7 @@ async function submit() {
           <label>Task <span class="dim">— {{ isChatUi ? 'optional first message' : 'what should the agent do?' }}</span></label>
           <textarea v-model="form.prompt" class="task" placeholder="Describe the task in plain language — the agent figures out the rest."></textarea>
         </div>
+        <SystemPromptField v-model="form.systemPrompt" />
         <div class="field last">
           <label>Project</label>
           <select v-model="form.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select>
@@ -177,7 +202,10 @@ async function submit() {
       <div class="card sect">
         <label>Repositories <span class="dim">— optional, pick one or more</span></label>
         <RepoPicker v-model="repos" />
+        <GitPatPicker v-model="selectedGitPats" :options="gitPats" />
       </div>
+
+      <AutoDeleteCard v-model="autoDelete" :scheduled="needsSchedule" />
 
       <div class="card adv">
         <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">

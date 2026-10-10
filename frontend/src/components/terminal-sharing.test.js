@@ -8,20 +8,21 @@ const terminalMocks = vi.hoisted(() => ({ terminals: [], sockets: [], observers:
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
-    constructor(options) { this.options = options; this.cols = 80; this.rows = 24; terminalMocks.terminals.push(this) }
-    loadAddon() {} open() {} write() {} dispose() {}
+    constructor(options) { this.options = options; this.cols = 80; this.rows = 24; this.written = []; terminalMocks.terminals.push(this) }
+    loadAddon() {} open() {} write(value) { this.written.push(value) } dispose() {}
     onData(callback) { this.input = callback }
   }
 }))
 vi.mock('@xterm/addon-fit', () => ({ FitAddon: class { fit() {} } }))
 vi.mock('../api.js', () => ({
-  api: { getTranscript: vi.fn().mockResolvedValue('') },
+  api: { getTranscript: vi.fn().mockResolvedValue(''), getConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 }) },
   terminalUrl: vi.fn().mockResolvedValue('ws://terminal'),
   shellUrl: vi.fn().mockResolvedValue('ws://shell'),
   sharedTerminalUrl: vi.fn().mockReturnValue('ws://shared'),
   browserUrl: vi.fn().mockResolvedValue('ws://browser'),
   sharedBrowserUrl: vi.fn().mockReturnValue('ws://shared-browser'),
-  getSharedTranscript: vi.fn().mockResolvedValue('')
+  getSharedTranscript: vi.fn().mockResolvedValue(''),
+  getSharedConversation: vi.fn().mockResolvedValue({ source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 })
 }))
 
 class MockSocket {
@@ -53,6 +54,20 @@ describe('shared terminal capabilities', () => {
 
     expect(terminalMocks.terminals[0].input).toBeUndefined()
     expect(terminalMocks.sockets[0].sent).toEqual([])
+  })
+
+  it('converts bare line feeds only when replaying a saved transcript', async () => {
+    const { api } = await import('../api.js')
+    api.getTranscript.mockResolvedValueOnce('line one\nline two\n')
+    mount(TerminalPane, { props: { session: { id: 's1', phase: 'Succeeded' } } })
+    await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+
+    expect(terminalMocks.terminals[0].options.convertEol).toBe(true)
+    expect(terminalMocks.terminals[0].written).toEqual(['line one\nline two\n'])
+
+    mount(TerminalPane, { props: { session: { id: 's2', phase: 'Running' } } })
+    await Promise.resolve(); await Promise.resolve()
+    expect(terminalMocks.terminals[1].options.convertEol).toBe(false)
   })
 
   it('forwards collaborator input', async () => {

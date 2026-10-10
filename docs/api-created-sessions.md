@@ -17,7 +17,7 @@ prompt *and* keep the REPL.
 
 ## How each runtime is given its initial prompt
 
-Every one of the four CLIs can start interactively on a prompt, but no two spell it the same way.
+Every one of the five CLIs can start interactively on a prompt, but no two spell it the same way.
 
 | Runtime | Interactive initial prompt | Verified |
 |---|---|---|
@@ -25,8 +25,9 @@ Every one of the four CLIs can start interactively on a prompt, but no two spell
 | Codex | trailing positional argument | `codex [OPTIONS] [PROMPT]`, help calls it "Optional user prompt to start the session" |
 | Cursor | trailing positional argument | `agent [options] [command] [prompt...]`, "Initial prompt for the agent" |
 | OpenClaw | `tui --message <text>` | `tui` has no positional; `--message` is "Send an initial message after connecting" |
+| OpenCode | `--prompt <text>` | the TUI submits it once the model is ready (`packages/tui/src/routes/home.tsx`, 1.18.35) |
 
-Two rules hold for all four:
+Two rules hold for all five:
 
 - **Options come before the prompt.** Cursor's positional is variadic (`[prompt...]`), so any flag
   placed after it is swallowed as prompt text instead of parsed.
@@ -38,7 +39,7 @@ Two rules hold for all four:
 ## How each runtime is given the caller's system prompt
 
 `SystemPrompt` on the create request is the caller's standing rules for the session, as opposed to
-the task. Every one of the four CLIs offers a way to **replace** its system prompt, and every one of
+the task. Every one of the five CLIs offers a way to **replace** its system prompt, and every one of
 those is a trap: replacing takes the CLI's own tool, sandbox and environment instructions with it,
 so a caller adding one line of persona would get an agent that cannot use its tools. Each runtime
 therefore uses its *appending* path, and the replacing one is deliberately left alone.
@@ -49,13 +50,14 @@ therefore uses its *appending* path, and the replacing one is deliberately left 
 | Codex | `$CODEX_HOME/AGENTS.md`, the global project doc | `model.base_instructions` |
 | Cursor | `.cursor/rules/agenthub-session.mdc` with `alwaysApply: true` | — (no CLI option at all) |
 | OpenClaw | `<agentDir>/APPEND_SYSTEM.md` | `SYSTEM.md` |
+| OpenCode | `instructions` entry pointing at `~/.config/opencode/agenthub-session.md` | a custom agent `prompt` |
 
 Codex's global `AGENTS.md` is additive and provably so: `codex debug prompt-input` renders both docs
 inside one `<INSTRUCTIONS>` block — the global one first, then `--- project-doc ---`, then the
 checked-out repository's own `AGENTS.md`. A caller's instructions cannot silently drop the rules the
 repository ships.
 
-Codex and OpenClaw take the *global* location rather than a file in the workspace for the same
+Codex, OpenClaw and OpenCode take the *global* location rather than a file in the workspace for the same
 reason: with a single repository `AGENTHUB_WORKDIR` **is** the clone, so a file there would either
 overwrite the repository's own instructions or leave a stray in a tree the agent is about to commit.
 Leaving the project-scoped location free also means a repository that ships its own file still wins,
@@ -78,9 +80,38 @@ start. If an empty `AGENTHUB_SYSTEM_PROMPT` left the file alone, instructions fr
 incarnation of the session would keep applying, which looks like the agent inventing rules nobody
 gave it. Writing or removing on every start makes the file say exactly what the request said.
 
+### Changing it later, and copying it
+
+The system prompt started as a create-only field: an API caller set it once and the web app did
+not show it at all, so a person taking over a session could neither see the rules the caller had
+given nor correct them. It is now a field of the New, Edit and Duplicate dialogs, which needed two
+decisions on the backend.
+
+`PATCH /api/sessions/{id}` takes `systemPrompt` with the convention the other optional text fields
+use — omitted means unchanged, an empty string clears, anything else replaces, with the same
+trimming and 20 000-character cap as on create. The alternative, a dedicated endpoint or a
+`clearSystemPrompt` flag, was rejected because the description had already set the pattern and the
+edit dialog composes one PATCH body for everything; a second convention in the same body would be
+the kind of thing that gets one of them wrong. The change applies on the next start or resume and
+not to the running pod, and nothing else was needed to make that true: the value reaches the agent
+as a pod environment variable, and the resume path already rebuilds the create request from the
+stored record. For a **scheduled** session the field is rejected like the other runtime fields,
+because the CronJob carries the prompt in its pod template — accepting the update would change the
+record while every scheduled run kept the old text, which is the worst of both. The edit dialog
+shows the prompt read-only there and leaves it out of the body, so renaming a scheduled session is
+not turned into a 400.
+
+Duplication copies the prompt. The standing rules are part of the configuration being copied,
+unlike the conversation they shaped; copying `Prompt` but not `SystemPrompt` had been an oversight
+from when the field was added after the duplicate path. The duplicate request may also carry its
+own `systemPrompt`: `null` copies the source's, a string replaces it, and an empty string yields a
+copy without one (create-side normalization turns it into `null`). The dialog always sends the
+field, prefilled from the source, so a prompt the person deletes there is dropped and not quietly
+copied back in.
+
 ## Folder-trust dialogs, which are what actually blocked this
 
-Three of the four CLIs stop an interactive session on a trust question before running anything.
+Three of the five CLIs stop an interactive session on a trust question before running anything.
 Print mode skips it, which is why autonomous sessions never hit this and why it only surfaced once
 interactive sessions were given work to do. With nobody at the terminal the session sits on a dialog
 instead of working, and the person who receives it an hour later finds no progress.
@@ -91,6 +122,7 @@ instead of working, and the person who receives it an hour later finds no progre
 | Codex | "Trust this folder? Codex can read, edit, and run files here" | `[projects."<dir>"] trust_level = "trusted"` in `$CODEX_HOME/config.toml` |
 | Cursor | workspace-trust prompt | `--trust`, which the non-interactive branch already passed |
 | OpenClaw | none | — |
+| OpenCode | none | — |
 
 Nothing is consented to on the user's behalf that they had not already chosen: the directory is the
 workspace of a session their own account asked for, holding the repositories they named.
@@ -120,9 +152,37 @@ The stdio MCP server returns sessions through an allowlist, so `url` had to be n
 explicitly — a field the backend starts returning is dropped until it is listed, and without it a
 caller would be left holding an id it could not turn into a link.
 
+## Sharing the session from the same caller
+
+Handing a link to one person is the common case; the next one is letting a colleague watch or
+join. The web dialog could do that and the token API could not, so a script that created a
+session still had to ask a human to open the dialog. The sharing operations are now on the token
+surface and on both MCP servers — the reasoning, and what was deliberately left out, is in
+`session-sharing-api.md`. All of it is Enterprise: without a licence every call answers `402`
+(`license_required` over MCP).
+
+| Operation | Token API (`Authorization: Bearer oah_…`) | MCP tool |
+|---|---|---|
+| Who it is shared with | `GET /api/remote/sessions/{id}/shares` | `session_shares {sessionId}` |
+| Share with a user | `POST /api/remote/sessions/{id}/shares/users {recipient, role}` | `session_share {sessionId, recipient, role?}` |
+| Revoke a user | `DELETE /api/remote/sessions/{id}/shares/users/{recipient}` | `session_unshare {sessionId, recipient}` |
+| Mint a secret link | `POST /api/remote/sessions/{id}/shares/links {role, expiresAt?}` | `session_share_link {sessionId, role?, expiresAt?}` → `{url, linkId}` |
+| Revoke a link | `DELETE /api/remote/sessions/{id}/shares/links/{linkId}` | — (use the API with the id from `session_shares`) |
+| Shared with me | `GET /api/remote/sessions/shared` (also `GET /api/sessions/shared` in the app) | — |
+
+`role` is `Viewer` (watch the terminal, read the transcript) or `Collaborator` (also type); it
+defaults to Viewer. Outcomes: `404` for a session that is not the token owner's — the same answer
+as for one that does not exist, so ids cannot be probed — and `400 {error, code: "unknown_recipient"}`
+for a username that has never signed in to the instance. The MCP tools report the same three
+things as `session_not_found`, `unknown_recipient` and `license_required`.
+
+The link response's `url` is absolute, built from `FrontendOrigin` exactly like `SessionInfo.Url`
+above, because the caller has no browser origin to resolve a path against. It is the only time the
+token is returned; `session_shares` lists links by id and role and never repeats it.
+
 ## Where a runtime's MCP configuration lives
 
-Each CLI reads its own, and all four locations are outside the workspace:
+Each CLI reads its own, and all five locations are outside the workspace:
 
 | Runtime | Central location | Written by |
 |---|---|---|
@@ -130,6 +190,7 @@ Each CLI reads its own, and all four locations are outside the workspace:
 | Codex | `[mcp_servers.*]` in `$CODEX_HOME/config.toml` | `codex/mcp-config.js` |
 | Cursor | `$CURSOR_CONFIG_DIR/mcp.json` | `cursor/mcp-config.js` |
 | OpenClaw | `mcp.servers` in `$OPENCLAW_CONFIG_PATH` | `openclaw/mcp-config.js` |
+| OpenCode | `mcp` in `~/.config/opencode/opencode.json` | `opencode/user-config.js` |
 
 The effective config used to be copied to `$AGENTHUB_WORKDIR/.mcp.json` as well, which was wrong
 on both counts. With a single repository the working directory *is* the clone, so it left an
@@ -201,11 +262,36 @@ Whether the OpenClaw image *should* ship `sessions/` (orchestration) or `browser
 decision — `browser/` additionally depends on the browser-runtime sidecar — and is deliberately not
 settled here.
 
+## Which credentials the session gets
+
+`POST /api/remote/sessions` takes `credentialId` (a stored provider login) and `gitPatIds` (which
+stored git personal access tokens; omitted = all, `[]` = none) like the in-app create does, and
+`GET /api/remote/credentials` lists what the token may choose from — a token-authenticated caller
+cannot reach `GET /api/credentials/accounts`, which sits behind the interactive login. A personal
+API token can itself be restricted to some accounts and PATs; a request outside that restriction is
+a `403` whose body is a stable code (`credential_not_allowed`, `credential_required`,
+`agent_not_allowed`, `api_keys_not_allowed`, `git_pat_not_allowed`). The rules, and why a resume is
+not re-checked against the token, are in `docs/credential-scopes.md`.
+
+### Switching the account of a running session
+
+`PATCH /api/remote/sessions/{id}/credential {credentialId}` moves a running Subscription session
+to another stored account, with the same rules and status codes as the in-app header dropdown
+(`docs/provider-accounts.md`): 400 for an unknown account or an API-key session, 409 without a
+live pod, 502 when the pod refused the file. A restricted token may only switch to an account it
+is allowed to use (403 `credential_not_allowed`). `GET /api/remote/sessions/{id}/account` says
+which account the session runs on, whether that account is at its usage limit, and which
+alternatives exist — `accountFailover` (`auto`, the default, or `off`) on `POST` and `PATCH
+/api/remote/sessions/{id}` decides whether the hub makes that switch on its own when a limit is
+reported (`docs/account-limits.md`).
+
 ## Following a session without a websocket
 
 `GET /api/remote/sessions/{id}/transcript` and the `session_transcript` MCP tool page the transcript
 with an offset cursor. Re-fetching from zero on every poll would mean downloading a transcript that
-grows into the megabytes to read the few lines that changed.
+grows into the megabytes to read the few lines that changed. The text is the provider's own
+conversation rendered as role sections where the runtime records one, the cleaned terminal
+scrollback otherwise — `docs/transcripts.md` says why and what that means for offsets.
 
 Two decisions inside it are worth keeping in mind:
 
@@ -222,6 +308,34 @@ Two decisions inside it are worth keeping in mind:
 
 `running` is reported alongside the text rather than left to the caller to infer from the phase
 string, so a poller cannot loop forever on a phase name it does not recognise.
+
+## Sessions that clean up after themselves
+
+A caller that creates sessions by the dozen never comes back to delete them, so a create request
+can carry a deadline: `autoDeleteAfterSeconds` (300 to 31 536 000) and `autoDeleteFrom` (`start`,
+or `lastActivity`, the default). `SessionInfo` reports both plus the computed `expiresAt` and
+`lastActivityAt`. The deadline can be changed or switched off later with
+`PATCH /api/remote/sessions/{id}` — `{ "autoDeleteAfterSeconds": 0 }` switches it off, `null` leaves
+it alone — which takes only `title`, `description` and the two deadline fields: a token is for
+driving sessions, and letting it rewrite the image, root mode or repositories of one would widen
+what a leaked token can do far beyond what the feature needed.
+
+The MCP tools take the deadline as text with a unit (`autoDeleteAfter: "12h"`), because a model
+writes that and a wrong unit conversion is a session deleted twelve *minutes* later. What counts as
+activity, why `updated_at` could not be used, and how the sweep is made safe across replicas is in
+`docs/session-expiry.md`.
+
+## The other direction: an autonomous run handed to a person
+
+A caller that created an Autonomous session can later turn it into an Interactive one with
+`POST /api/remote/sessions/{id}/convert {mode:"interactive", uiMode?, autoApprove?, resume?}` (the
+same body as `POST /api/sessions/{id}/convert`, and the `session_convert` MCP tool). The session
+resumes in the same conversation on Claude and Codex, and in a fresh one on Cursor and OpenClaw;
+`401` without a token, `404` for a session the token's owner does not have, `409 {error}` while it
+is still running or is not Autonomous, `400 {error}` for a UI mode the agent does not support.
+`canConvertToInteractive` on the session says in advance whether the call will be accepted. The
+reasoning, the per-runtime table and the two runtime corrections it needed are in
+`docs/session-mode-conversion.md`.
 
 ## How these claims were verified
 

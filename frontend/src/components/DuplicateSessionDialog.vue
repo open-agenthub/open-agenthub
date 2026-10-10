@@ -2,19 +2,33 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import {
-  agentPayload, defaultAgentForm, filterAgentOptions, mcpBadgeLabel,
-  policyPayload, toolsPlaceholder, commandsPlaceholder
+  agentPayload, defaultAgentForm, filterAgentOptions, gitPatIdsChange, gitPatOptions, gitPatSelectionFor,
+  mcpBadgeLabel, policyPayload, toolsPlaceholder, commandsPlaceholder
 } from '../lib/agent.js'
+import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
+import AutoDeleteCard from './AutoDeleteCard.vue'
+import GitPatPicker from './GitPatPicker.vue'
+import SystemPromptField from './SystemPromptField.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'duplicated'])
 const title = ref('')
+const autoDelete = ref(autoDeleteForm(null))
+const scheduled = computed(() => props.session.mode === 'Scheduled')
 const projectId = ref('')
+const systemPrompt = ref('')
 const includeMcp = ref(true)
 const agentForm = ref({})
 const advOpen = ref(false)
 const credentialStatus = ref({})
+const providerAccounts = ref({})
+// The source's PAT selection, editable; unchanged means the backend copies it (null).
+const gitPats = computed(() => gitPatOptions(credentialStatus.value))
+const selectedGitPats = ref([])
+watch([gitPats, () => props.session.id], ([options]) => {
+  selectedGitPats.value = gitPatSelectionFor(props.session.gitPatIds, options)
+})
 const allowedAgents = ref([])
 const agentChoices = computed(() => filterAgentOptions(allowedAgents.value, { include: props.session?.agent }))
 // Saved MCP servers; selection overrides the copied list independently of includeMcp.
@@ -25,8 +39,10 @@ const automated = computed(() => props.session.mode !== 'Interactive')
 function reset(session) {
   title.value = `Copy of ${session.title}`
   projectId.value = session.projectId || ''
+  systemPrompt.value = session.systemPrompt || ''
   includeMcp.value = true
-  agentForm.value = defaultAgentForm(session)
+  agentForm.value = { ...defaultAgentForm(session), credentialId: session.credentialId || '' }
+  autoDelete.value = autoDeleteForm(session)
   selectedMcpIds.value = [...(session.mcpServerIds || [])]
   advOpen.value = false
   busy.value = false
@@ -36,6 +52,7 @@ reset(props.session)
 watch(() => props.session.id, () => reset(props.session))
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
+  try { providerAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* one login needs no choice */ }
   try {
     const allowed = await api.getAllowedAgents()
     allowedAgents.value = allowed?.agents || []
@@ -48,10 +65,19 @@ async function submit() {
     emit('duplicated', await api.duplicateSession(props.session.id, {
       title: title.value.trim() || `Copy of ${props.session.title}`,
       projectId: projectId.value || null,
+      // Always sent, so a prompt cleared in the dialog is dropped rather than copied back in.
+      systemPrompt: systemPrompt.value,
       includeMcp: includeMcp.value,   // inline JSON config copy only
       mcpServerIds: selectedMcpIds.value,
       ...agentPayload(agentForm.value),
-      policy: policyPayload(agentForm.value)
+      // Null lets the backend carry the source's account over (while the agent stays the same).
+      credentialId: agentForm.value.credentialId || null,
+      policy: policyPayload(agentForm.value),
+      // Always sent, prefilled from the source: 0 means a copy without a deadline, so a setting
+      // cleared in the dialog is dropped rather than copied back in (null would copy it).
+      ...autoDeletePayload(autoDelete.value, { off: 0 }),
+      // Omitted when unchanged, so the backend copies the source's selection.
+      ...gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds)
     }))
   }
   catch (e) { error.value = String(e.message || e) } finally { busy.value = false }
@@ -64,6 +90,7 @@ async function submit() {
     <div class="card sect">
       <div class="field"><label>Title</label><input v-model="title" /></div>
       <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
+      <SystemPromptField v-model="systemPrompt" />
       <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration <span class="dim">— inline JSON config</span></span></label>
       <div v-if="savedMcpServers.length" class="field mcp-field" data-mcp-picker>
         <label>Saved MCP servers <span class="dim">— from your library</span></label>
@@ -74,8 +101,13 @@ async function submit() {
       </div>
     </div>
     <AgentDecisionCard v-model:agent="agentForm.agent" v-model:auth-mode="agentForm.authMode"
-      v-model:open-claw-api-key-source="agentForm.openClawApiKeySource" :mode="session.mode"
+      v-model:open-claw-api-key-source="agentForm.openClawApiKeySource" v-model:credential-id="agentForm.credentialId"
+      :accounts="providerAccounts" :mode="session.mode"
       :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
+    <div v-if="gitPats.length" class="card sect">
+      <GitPatPicker v-model="selectedGitPats" :options="gitPats" />
+    </div>
+    <AutoDeleteCard v-model="autoDelete" :scheduled="scheduled" />
     <div v-if="automated" class="card adv">
       <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">
         <span><b>Advanced</b><span class="adv-sub">automation policy</span></span><span>{{ advOpen ? '▾' : '▸' }}</span>

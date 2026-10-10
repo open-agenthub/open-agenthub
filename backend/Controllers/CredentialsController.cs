@@ -30,6 +30,34 @@ public sealed class CredentialsController : ControllerBase
         return NoContent();
     }
 
+    /// <summary>
+    /// Stores a git personal access token for one host, or rotates the token already stored for
+    /// that host. The list has no fixed slots, so a second GitLab or GitHub host is just another
+    /// entry. Answers with id, kind and host — never the token.
+    /// </summary>
+    [HttpPost("git-pats")]
+    public async Task<ActionResult<GitPatInfo>> UpsertGitPat([FromBody] UpsertGitPatRequest request, CancellationToken ct)
+    {
+        try
+        {
+            return Ok(await _svc.UpsertGitPatAsync(Owner, request, ct));
+        }
+        catch (ArgumentException e)
+        {
+            // The message names the field the user got wrong; a bare 400 would send them guessing.
+            return BadRequest(e.Message);
+        }
+    }
+
+    /// <summary>Removes a stored git token. Always 204, so the status code cannot be used to
+    /// probe which ids exist.</summary>
+    [HttpDelete("git-pats/{id}")]
+    public async Task<IActionResult> DeleteGitPat(string id, CancellationToken ct)
+    {
+        await _svc.DeleteGitPatAsync(Owner, id, ct);
+        return NoContent();
+    }
+
     /// <summary>Which fields currently have a stored value — never the values themselves.</summary>
     [HttpGet]
     public async Task<ActionResult<CredentialStatus>> Status(CancellationToken ct)
@@ -50,6 +78,39 @@ public sealed class CredentialsController : ControllerBase
     {
         if (!Enum.IsDefined(agent)) return BadRequest("Unknown agent.");
         await _svc.DeleteProviderCredentialsAsync(Owner, agent, ct);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// The caller's stored provider logins as accounts, keyed by agent name — labels, identity
+    /// and timestamps, never the files (docs/provider-accounts.md).
+    /// </summary>
+    [HttpGet("accounts")]
+    public async Task<ActionResult<IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>>>> Accounts(CancellationToken ct)
+        => Ok(await _svc.ListProviderAccountsAsync(Owner, ct));
+
+    /// <summary>Renames an account or makes it the default for new sessions.</summary>
+    [HttpPatch("accounts/{agent}/{id}")]
+    public async Task<ActionResult<ProviderAccountInfo>> UpdateAccount(AgentKind agent, string id,
+        [FromBody] UpdateProviderAccountRequest req, CancellationToken ct)
+    {
+        if (!Enum.IsDefined(agent)) return BadRequest("Unknown agent.");
+        if (!ProviderAccountSecret.IsValidId(id)) return BadRequest("Invalid account id.");
+        try
+        {
+            var updated = await _svc.UpdateProviderAccountAsync(Owner, agent, id, req, ct);
+            return updated is null ? NotFound() : Ok(updated);
+        }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
+    /// <summary>Forgets one account. Always 204, for the same reason as <see cref="DeleteSubscription"/>.</summary>
+    [HttpDelete("accounts/{agent}/{id}")]
+    public async Task<IActionResult> DeleteAccount(AgentKind agent, string id, CancellationToken ct)
+    {
+        if (!Enum.IsDefined(agent)) return BadRequest("Unknown agent.");
+        if (!ProviderAccountSecret.IsValidId(id)) return BadRequest("Invalid account id.");
+        await _svc.DeleteProviderAccountAsync(Owner, agent, id, ct);
         return NoContent();
     }
 }

@@ -1,9 +1,11 @@
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentHub.Api.Ee.Sharing;
 using AgentHub.Api.Licensing;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -221,12 +223,66 @@ public class SessionAccessTests
             })
             .Build();
         var store = new SessionShareStore(configuration, NullLogger<SessionShareStore>.Instance);
-        var controller = new SharingController(store, new FakeLicense(enabled: false));
+        // The store points at a closed port with a one-second timeout: if the licence check did
+        // not come first, the call would fail on the connection rather than answer 402.
+        var controller = new SharingController(
+            new SessionSharingService(store, new FakeLicense(enabled: false), frontendOrigin: null))
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("preferred_username", "owner-1")], "test"))
+                }
+            }
+        };
 
         var response = await controller.List("session-1", CancellationToken.None);
 
         var paymentRequired = Assert.IsType<ObjectResult>(response);
         Assert.Equal(402, paymentRequired.StatusCode);
+    }
+
+    [Fact]
+    public async Task SecretLinkConversationApi_ServesTheOwnersConversationPage()
+    {
+        var session = Session();
+        session.Status = "Succeeded";
+        var access = new FakeAccessService
+        {
+            TokenResult = new SessionAccessResult(session, SessionAccessLevel.Viewer, session.Owner)
+        };
+        var sessions = new ConversationOnly(
+        [
+            new AgentHub.Api.Services.TranscriptEntry("user", "hello", null),
+            new AgentHub.Api.Services.TranscriptEntry("assistant", "hi", null)
+        ]);
+        var controller = new SharedSessionsController(access);
+
+        var response = await controller.GetConversation("secret-token", null, null, sessions, CancellationToken.None);
+
+        var page = Assert.IsType<AgentHub.Api.Services.ConversationPage>(Assert.IsType<OkObjectResult>(response.Result).Value);
+        Assert.Equal("native", page.Source);
+        Assert.Equal(["hello", "hi"], page.Entries.Select(e => e.Text));
+        Assert.False(page.Running);
+        Assert.Equal((session.Owner, session.Id), sessions.AskedFor);
+
+        var unknown = new FakeAccessService { TokenResult = null };
+        Assert.IsType<NotFoundResult>((await new SharedSessionsController(unknown)
+            .GetConversation("nope", null, null, sessions, CancellationToken.None)).Result);
+    }
+
+    private sealed class ConversationOnly(IReadOnlyList<AgentHub.Api.Services.TranscriptEntry> entries)
+        : RecordingWebhookSessionService
+    {
+        public (string Owner, string Id)? AskedFor { get; private set; }
+
+        public override Task<IReadOnlyList<AgentHub.Api.Services.TranscriptEntry>?> GetConversationAsync(
+            string owner, string id, CancellationToken ct = default)
+        {
+            AskedFor = (owner, id);
+            return Task.FromResult<IReadOnlyList<AgentHub.Api.Services.TranscriptEntry>?>(entries);
+        }
     }
 
     [Fact]

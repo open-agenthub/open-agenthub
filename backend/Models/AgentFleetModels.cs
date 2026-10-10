@@ -16,20 +16,44 @@ public sealed record ProjectAgentInfo(
     DateTime CreatedAt,
     bool Self);
 
-/// <summary>A delivered inbox message. <c>From</c> is null for messages sent from outside a session.</summary>
+/// <summary>
+/// A delivered inbox message. <c>From</c> is null for messages sent from outside a session.
+/// <c>DeliveredVia</c> says how it reached the agent (<see cref="MessageDeliveryVia"/>);
+/// null while it is still waiting in the inbox.
+/// </summary>
 public sealed record AgentMessageInfo(
     string Id,
     string? From,
     string? FromTitle,
     string Body,
     DateTime CreatedAt,
-    DateTime? DeliveredAt);
+    DateTime? DeliveredAt,
+    bool Priority = false,
+    bool Interrupt = false,
+    string? DeliveredVia = null);
 
-/// <summary>Body of the internal send endpoint: target session id + message text.</summary>
-public sealed record SendAgentMessageRequest(string? To, string? Body);
+/// <summary>Body of the internal send endpoint: target session id + message text. A priority
+/// message is pushed into the target's running agent instead of waiting in its inbox; interrupt
+/// additionally stops the agent's current work first and implies priority.</summary>
+public sealed record SendAgentMessageRequest(string? To, string? Body, bool? Priority = null, bool? Interrupt = null);
 
-/// <summary>Body of the remote send endpoint (target session id is in the path).</summary>
-public sealed record RemoteAgentMessageRequest(string? Body);
+/// <summary>Body of the remote and owner send endpoints (target session id is in the path).</summary>
+public sealed record RemoteAgentMessageRequest(string? Body, bool? Priority = null, bool? Interrupt = null);
+
+/// <summary>What the sender is told about where the message went.</summary>
+public sealed record AgentMessageSendResult(string Id, string To, string DeliveredVia, string? Reason = null);
+
+/// <summary>The ways a message reaches its agent, as reported back to the sender and stored in
+/// <c>session_messages.delivered_via</c>.</summary>
+public static class MessageDeliveryVia
+{
+    /// <summary>Waiting in, or taken from, the pull inbox (<c>agent_inbox</c>).</summary>
+    public const string Inbox = "inbox";
+    /// <summary>Written into the agent's terminal or chat pipe by the session agent.</summary>
+    public const string Injected = "injected";
+    /// <summary>Handed to the Claude Code mod running inside the agent process.</summary>
+    public const string Mod = "mod";
+}
 
 /// <summary>Shared limits and normalization for agent-to-agent messages.</summary>
 public static class AgentMessaging
@@ -47,5 +71,13 @@ public static class AgentMessaging
     {
         var trimmed = body?.Trim();
         return string.IsNullOrEmpty(trimmed) || trimmed.Length > MaxBodyChars ? null : trimmed;
+    }
+
+    /// <summary>Resolves the two flags: interrupt implies priority, so a sender cannot ask for an
+    /// interruption that then sits in the inbox.</summary>
+    public static (bool Priority, bool Interrupt) ResolveFlags(bool? priority, bool? interrupt)
+    {
+        var stop = interrupt == true;
+        return (stop || priority == true, stop);
     }
 }

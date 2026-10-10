@@ -34,18 +34,18 @@ function Assert-NotMatches {
 $powerShellSetup = Read-RepoFile 'setup-dev.ps1'
 $bashSetup = Read-RepoFile 'setup-dev.sh'
 
-if (($powerShellSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Matches.Count -ne 7) {
-    throw 'setup-dev.ps1 must build exactly seven development images.'
+if (($powerShellSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Matches.Count -ne 8) {
+    throw 'setup-dev.ps1 must build exactly eight development images.'
 }
-if (($bashSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Matches.Count -ne 7) {
-    throw 'setup-dev.sh must build exactly seven development images.'
+if (($bashSetup | Select-String -Pattern '(?m)^docker build ' -AllMatches).Matches.Count -ne 8) {
+    throw 'setup-dev.sh must build exactly eight development images.'
 }
 
 $checkedPowerShellBuilds = [regex]::Matches(
     $powerShellSetup,
     "(?m)^docker build [^\r\n]+\r?\nAssert-NativeSuccess '[^']+ image build'\s*$"
 )
-if ($checkedPowerShellBuilds.Count -ne 7) {
+if ($checkedPowerShellBuilds.Count -ne 8) {
     throw 'setup-dev.ps1 must stop immediately when any development image build fails.'
 }
 
@@ -68,6 +68,7 @@ foreach ($setup in @($powerShellSetup, $bashSetup)) {
     Assert-Matches $setup 'open-agenthub-dev/agent-runtime-codex:local' 'Local setup must build the Codex runtime image.'
     Assert-Matches $setup 'open-agenthub-dev/agent-runtime-cursor:local' 'Local setup must build the Cursor runtime image.'
     Assert-Matches $setup 'open-agenthub-dev/agent-runtime-openclaw:local' 'Local setup must build the OpenClaw runtime image.'
+    Assert-Matches $setup 'open-agenthub-dev/agent-runtime-opencode:local' 'Local setup must build the OpenCode runtime image.'
     Assert-Matches $setup 'open-agenthub-dev/browser:local' 'Local setup must build the browser runtime image.'
     Assert-NotMatches $setup 'open-agenthub-dev/agent-runtime:local' 'Local setup still builds the removed legacy runtime image.'
 }
@@ -76,10 +77,12 @@ Assert-Matches $powerShellSetup "'agent-runtime/claude/Dockerfile'.*'agent-runti
 Assert-Matches $powerShellSetup "'agent-runtime/codex/Dockerfile'.*'agent-runtime'" 'PowerShell setup must use the Codex Dockerfile with the agent-runtime context.'
 Assert-Matches $powerShellSetup "'agent-runtime/cursor/Dockerfile'.*'agent-runtime'" 'PowerShell setup must use the Cursor Dockerfile with the agent-runtime context.'
 Assert-Matches $powerShellSetup "'agent-runtime/openclaw/Dockerfile'.*'agent-runtime'" 'PowerShell setup must use the OpenClaw Dockerfile with the agent-runtime context.'
+Assert-Matches $powerShellSetup "'agent-runtime/opencode/Dockerfile'.*'agent-runtime'" 'PowerShell setup must use the OpenCode Dockerfile with the agent-runtime context.'
 Assert-Matches $bashSetup 'agent-runtime/claude/Dockerfile" --tag .*agent-runtime-claude:local.*"\$script_dir/agent-runtime"' 'Bash setup must use the Claude Dockerfile with the agent-runtime context.'
 Assert-Matches $bashSetup 'agent-runtime/codex/Dockerfile" --tag .*agent-runtime-codex:local.*"\$script_dir/agent-runtime"' 'Bash setup must use the Codex Dockerfile with the agent-runtime context.'
 Assert-Matches $bashSetup 'agent-runtime/cursor/Dockerfile" --tag .*agent-runtime-cursor:local.*"\$script_dir/agent-runtime"' 'Bash setup must use the Cursor Dockerfile with the agent-runtime context.'
 Assert-Matches $bashSetup 'agent-runtime/openclaw/Dockerfile" --tag .*agent-runtime-openclaw:local.*"\$script_dir/agent-runtime"' 'Bash setup must use the OpenClaw Dockerfile with the agent-runtime context.'
+Assert-Matches $bashSetup 'agent-runtime/opencode/Dockerfile" --tag .*agent-runtime-opencode:local.*"\$script_dir/agent-runtime"' 'Bash setup must use the OpenCode Dockerfile with the agent-runtime context.'
 
 Assert-Matches $powerShellSetup '\$requiredContext = ''docker-desktop''' 'PowerShell setup lost the docker-desktop context requirement.'
 Assert-Matches $bashSetup 'required_context=''docker-desktop''' 'Bash setup lost the docker-desktop context requirement.'
@@ -91,6 +94,7 @@ Assert-Matches $devValues 'claude:\s*open-agenthub-dev/agent-runtime-claude:loca
 Assert-Matches $devValues 'codex:\s*open-agenthub-dev/agent-runtime-codex:local' 'Development Helm values must select the locally built Codex runtime.'
 Assert-Matches $devValues 'cursor:\s*open-agenthub-dev/agent-runtime-cursor:local' 'Development Helm values must select the locally built Cursor runtime.'
 Assert-Matches $devValues 'openclaw:\s*open-agenthub-dev/agent-runtime-openclaw:local' 'Development Helm values must select the locally built OpenClaw runtime.'
+Assert-Matches $devValues 'opencode:\s*open-agenthub-dev/agent-runtime-opencode:local' 'Development Helm values must select the locally built OpenCode runtime.'
 Assert-Matches $devValues 'repository:\s*open-agenthub-dev/browser[\s\S]*tag:\s*local' 'Development Helm values must select the locally built browser runtime.'
 
 $plainManifest = Read-RepoFile 'k8s/20-backend.yaml'
@@ -98,6 +102,7 @@ Assert-Matches $plainManifest 'AgentHub__ClaudeAgentImage:\s*"registry\.example\
 Assert-Matches $plainManifest 'AgentHub__CodexAgentImage:\s*"registry\.example\.com/agenthub/agent-runtime-codex:latest"' 'Plain Kubernetes manifest must expose the Codex runtime image.'
 Assert-Matches $plainManifest 'AgentHub__CursorAgentImage:\s*"registry\.example\.com/agenthub/agent-runtime-cursor:latest"' 'Plain Kubernetes manifest must expose the Cursor runtime image.'
 Assert-Matches $plainManifest 'AgentHub__OpenClawAgentImage:\s*"registry\.example\.com/agenthub/agent-runtime-openclaw:latest"' 'Plain Kubernetes manifest must expose the OpenClaw runtime image.'
+Assert-Matches $plainManifest 'AgentHub__OpenCodeAgentImage:\s*"registry\.example\.com/agenthub/agent-runtime-opencode:latest"' 'Plain Kubernetes manifest must expose the OpenCode runtime image.'
 Assert-Matches $plainManifest 'Browser__Enabled:\s*"true"' 'Plain Kubernetes manifest must enable browser orchestration.'
 Assert-Matches $plainManifest 'Browser__Image:\s*"registry\.example\.com/agenthub/browser:latest"' 'Plain Kubernetes manifest must expose the browser runtime image.'
 
@@ -112,7 +117,7 @@ $buildWorkflow = Read-RepoFile '.github/workflows/build-images.yml'
 # per architecture and pushes it by digest only, so a component built but left out of the merge
 # job yields no manifest and therefore no usable tag — a deploy would find nothing to pull.
 # Checking only the build side would not catch that.
-foreach ($component in @('backend', 'frontend', 'agent-runtime-claude', 'agent-runtime-codex', 'agent-runtime-cursor', 'agent-runtime-openclaw', 'browser')) {
+foreach ($component in @('backend', 'frontend', 'agent-runtime-claude', 'agent-runtime-codex', 'agent-runtime-cursor', 'agent-runtime-openclaw', 'agent-runtime-opencode', 'browser')) {
     Assert-Matches $buildWorkflow ([regex]::Escape("- name: $component")) "Image workflow is missing the $component build matrix entry."
     Assert-Matches $buildWorkflow "(?m)^\s+- $([regex]::Escape($component))\s*$" "Image workflow is missing the $component manifest merge entry."
 }
@@ -120,18 +125,21 @@ Assert-Matches $buildWorkflow 'context:\s*\./agent-runtime[\s\S]*dockerfile:\s*\
 Assert-Matches $buildWorkflow 'context:\s*\./agent-runtime[\s\S]*dockerfile:\s*\./agent-runtime/codex/Dockerfile' 'Image workflow must map Codex to the shared runtime context and Codex Dockerfile.'
 Assert-Matches $buildWorkflow 'context:\s*\./agent-runtime[\s\S]*dockerfile:\s*\./agent-runtime/cursor/Dockerfile' 'Image workflow must map Cursor to the shared runtime context and Cursor Dockerfile.'
 Assert-Matches $buildWorkflow 'context:\s*\./agent-runtime[\s\S]*dockerfile:\s*\./agent-runtime/openclaw/Dockerfile' 'Image workflow must map OpenClaw to the shared runtime context and OpenClaw Dockerfile.'
+Assert-Matches $buildWorkflow 'context:\s*\./agent-runtime[\s\S]*dockerfile:\s*\./agent-runtime/opencode/Dockerfile' 'Image workflow must map OpenCode to the shared runtime context and OpenCode Dockerfile.'
 
 $testWorkflow = Read-RepoFile '.github/workflows/test.yml'
-Assert-Matches $testWorkflow 'working-directory:\s*agent-runtime/session-agent[\s\S]*npm test' 'Test workflow must run the full shared/Claude/Codex/Cursor/OpenClaw Node suite.'
+Assert-Matches $testWorkflow 'working-directory:\s*agent-runtime/session-agent[\s\S]*npm test' 'Test workflow must run the full shared/Claude/Codex/Cursor/OpenClaw/OpenCode Node suite.'
 Assert-Matches $testWorkflow 'agent-runtime/claude/Dockerfile' 'Test workflow must exercise the Claude Dockerfile.'
 Assert-Matches $testWorkflow 'agent-runtime/codex/Dockerfile' 'Test workflow must exercise the Codex Dockerfile.'
 Assert-Matches $testWorkflow 'agent-runtime/cursor/Dockerfile' 'Test workflow must exercise the Cursor Dockerfile.'
 Assert-Matches $testWorkflow 'agent-runtime/openclaw/Dockerfile' 'Test workflow must exercise the OpenClaw Dockerfile.'
+Assert-Matches $testWorkflow 'agent-runtime/opencode/Dockerfile' 'Test workflow must exercise the OpenCode Dockerfile.'
 Assert-Matches $testWorkflow 'working-directory:\s*browser-runtime[\s\S]*npm test' 'Test workflow must run browser runtime unit tests.'
 Assert-Matches $testWorkflow 'tests/helm/browser-values\.ps1' 'Test workflow must run browser Helm assertions.'
 Assert-Matches $testWorkflow 'tests/helm/codex-runtime-values\.ps1' 'Test workflow must run rendered Helm assertions.'
 Assert-Matches $testWorkflow 'tests/helm/cursor-runtime-values\.ps1' 'Test workflow must run Cursor Helm assertions.'
 Assert-Matches $testWorkflow 'tests/helm/openclaw-runtime-values\.ps1' 'Test workflow must run OpenClaw Helm assertions.'
+Assert-Matches $testWorkflow 'tests/helm/opencode-runtime-values\.ps1' 'Test workflow must run OpenCode Helm assertions.'
 Assert-Matches $testWorkflow 'tests/helm/files-values\.ps1' 'Test workflow must run session file Helm assertions.'
 Assert-Matches $testWorkflow 'tests/helm/deployment-parity\.ps1' 'Test workflow must run deployment parity assertions.'
 

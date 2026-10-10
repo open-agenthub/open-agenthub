@@ -121,8 +121,81 @@ test('Codex resume recognition rejects fresh and merely resume-like commands', (
   assert.equal(driver.isResumeCommand({
     cmd: 'bash', args: [path.join(runtimeDir, 'codex', 'device-login.sh')]
   }), false);
-  assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['resume', '--last'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon'] }), false);
+});
+
+function codexHomeFixture() {
+  const home = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'agenthub-codex-'));
+  return { home, cleanup: () => fs.rmSync(home, { recursive: true, force: true }) };
+}
+
+function writeRollout(home, id, mtimeMs, meta = true) {
+  const dir = path.join(home, 'sessions', '2026', '10', '10');
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, 'rollout-2026-10-10T10-00-00-' + id + '.jsonl');
+  const first = meta
+    ? JSON.stringify({ timestamp: 't', type: 'session_meta', payload: { id, cwd: '/workspace/repo' } })
+    : '{"type":"response_item","payload":{}}';
+  fs.writeFileSync(file, first + '\n{"type":"response_item","payload":{"type":"message"}}\n');
+  fs.utimesSync(file, new Date(mtimeMs), new Date(mtimeMs));
+  return file;
+}
+
+const THREAD_A = '11111111-1111-4111-8111-111111111111';
+const THREAD_B = '22222222-2222-4222-8222-222222222222';
+
+test('Codex discovers the rollout written after launch and remembers its thread id', () => {
+  const { home, cleanup } = codexHomeFixture();
+  try {
+    const env = environment({ CODEX_HOME: home });
+    const launchedAt = 1_700_000_000_000;
+    // A thread left behind by a shell-tab `codex` before this launch is not the session.
+    writeRollout(home, THREAD_A, launchedAt - 60_000);
+    assert.equal(driver.findTranscript({ env, fs, launchedAt }), null);
+
+    const current = writeRollout(home, THREAD_B, launchedAt + 5_000);
+    assert.equal(driver.findTranscript({ env, fs, launchedAt }), current);
+    assert.equal(fs.readFileSync(path.join(home, driver.THREAD_ID_FILE), 'utf8').trim(), THREAD_B);
+
+    // A file without session_meta is not a thread, whatever its name says.
+    const bogus = writeRollout(home, '33333333-3333-4333-8333-333333333333', launchedAt + 9_000, false);
+    assert.notEqual(driver.findTranscript({ env, fs, launchedAt }), bogus);
+  } finally {
+    cleanup();
+  }
+});
+
+test('Codex resumes by the remembered thread id and finds that rollout again, newest-wins otherwise', () => {
+  const { home, cleanup } = codexHomeFixture();
+  try {
+    const env = environment({ CODEX_HOME: home, AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1' });
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
+
+    fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), THREAD_A + '\n');
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] });
+    assert.deepEqual(driver.buildCommand(environment({
+      CODEX_HOME: home, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'go',
+      AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
+    }), true), {
+      cmd: 'codex',
+      args: ['exec', '--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust',
+        'resume', THREAD_A, 'go']
+    });
+    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] }), true);
+    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['resume', 'not-an-id'] }), false);
+
+    // The remembered id wins over anything newer: that is the whole point of recording it.
+    const mine = writeRollout(home, THREAD_A, 1_000);
+    writeRollout(home, THREAD_B, 2_000);
+    assert.equal(driver.findTranscript({ env, fs, launchedAt: 3_000 }), mine);
+
+    // A corrupt id file is ignored rather than passed to the CLI.
+    fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), 'garbage; rm -rf /\n');
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
+  } finally {
+    cleanup();
+  }
 });
 
 test('Codex missing-resume fallback requires representative missing-state output', () => {
@@ -132,15 +205,48 @@ test('Codex missing-resume fallback requires representative missing-state output
   assert.equal(driver.isMissingResume('No saved session found to resume', 0, 1), false);
 });
 
-test('Codex prepare scopes CODEX_API_KEY to autonomous child environment only', () => {
+test('Codex prepare scopes CODEX_API_KEY to the agent child in every mode', () => {
   const env = environment({ AGENTHUB_MODE: 'autonomous', CODEX_API_KEY: 'synthetic-key' });
   const result = driver.prepare(env);
   assert.equal(env.CODEX_API_KEY, undefined);
   assert.deepEqual(result, { childEnv: { CODEX_API_KEY: 'synthetic-key' } });
 
-  const interactive = environment({ CODEX_API_KEY: 'already-used-by-entrypoint' });
-  assert.equal(driver.prepare(interactive), undefined);
+  // An autonomous run converted to interactive keeps its API-key auth. The key used to be
+  // dropped here for interactive sessions on the assumption that those are subscription logins;
+  // when it reaches the driver it is the only credential the session has.
+  const interactive = environment({ CODEX_API_KEY: 'synthetic-key' });
+  assert.deepEqual(driver.prepare(interactive), { childEnv: { CODEX_API_KEY: 'synthetic-key' } });
   assert.equal(interactive.CODEX_API_KEY, undefined);
+
+  // The usual interactive case: the entrypoint logged in with the key and unset it.
+  const subscription = environment();
+  assert.equal(driver.prepare(subscription), undefined);
+});
+
+test('Codex continues a converted autonomous run as the same thread in the TUI', () => {
+  // docs/session-mode-conversion.md: the autonomous exec recorded its thread id into the state
+  // archive; the interactive resume after conversion names that thread and carries no prompt.
+  const { home, cleanup } = codexHomeFixture();
+  try {
+    const autonomous = driver.buildCommand(environment({
+      CODEX_HOME: home, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'triage the failing build'
+    }), true);
+    assert.equal(autonomous.args[0], 'exec');
+    assert.equal(autonomous.args.at(-1), 'triage the failing build');
+
+    writeRollout(home, THREAD_A, 2_000);
+    driver.findTranscript({ env: environment({ CODEX_HOME: home }), fs, launchedAt: 1_000 });
+
+    const converted = driver.buildCommand(environment({
+      CODEX_HOME: home, AGENTHUB_MODE: 'interactive', AGENTHUB_PROMPT: 'triage the failing build',
+      AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
+    }), true);
+    assert.deepEqual(converted, { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] });
+    assert.ok(!converted.args.includes('triage the failing build'));
+    assert.equal(driver.isResumeCommand(converted), true);
+  } finally {
+    cleanup();
+  }
 });
 
 test('Codex entrypoint owns config, auth mode, watcher, and stale-auth ordering', () => {

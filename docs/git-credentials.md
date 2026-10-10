@@ -42,10 +42,9 @@ Consequences worth knowing:
   scoped to. Defaulting to the public instance would be silently wrong twice for a self-hosted
   GitLab or GitHub: the clone gets no credential for the host it actually uses, and `glab`/`gh` end
   up configured for a host the user never named. The mechanism this replaced worked against any
-  host, so a quiet default would have turned a working self-hosted setup into a broken one. Rotating
-  a token whose host is already stored does not need the host restated, and a token stored before
-  hosts existed still falls back to the public instance rather than blocking unrelated credential
-  updates.
+  host, so a quiet default would have turned a working self-hosted setup into a broken one. A token
+  stored before hosts existed still migrates with the public instance as its host (see the list
+  section below) rather than blocking unrelated credential updates.
 - **The raw token no longer reaches the pod.** `gitlab_token` and `github_token` are not projected
   into `/secrets/creds` any more. The only form a PAT takes inside a session is a store line, so
   there is no file the agent can read and replay against a server of its choosing.
@@ -65,7 +64,59 @@ Consequences worth knowing:
 Tokens are still scoped to the repositories actually requested: `BuildCredentialStoreAsync` emits a
 line only for a provider some repository in the session names. A manual PAT is the exception — the
 user stored one token for one host, so it is included whether or not a repository uses it, which is
-what it did before.
+what it did before. Which PATs a session gets at all is now a per-session choice (`gitPatIds` on
+create, update and duplicate; null keeps "every stored token"), see `docs/credential-scopes.md`.
+
+## A list of tokens keyed by host, not one slot per provider
+
+The secret used to hold exactly one GitLab PAT and one GitHub PAT (`gitlab_token`/`gitlab_host`,
+`github_token`/`github_host`). That shape cannot express the common case it was built for: a
+company GitLab *and* a personal one, or a GitHub Enterprise host next to the public instance. A
+user with two hosts had to pick, and the merge-style `PUT /api/credentials` had no way to say
+"a second one".
+
+Tokens are now a JSON list in a single secret key, `git_pats`:
+
+```json
+[{"id":"…","kind":"gitlab","host":"gitlab.example.com","token":"…"},
+ {"id":"…","kind":"github","host":"github.your-org.example","token":"…"}]
+```
+
+with their own endpoints — `POST /api/credentials/git-pats {kind, host, token}` and
+`DELETE /api/credentials/git-pats/{id}` — and `GET /api/credentials` listing `gitPats` as
+`{id, kind, host}` only. The `PUT` no longer accepts the four legacy fields.
+
+- **Upsert per host, not append.** A `POST` for a host that is already stored replaces that
+  entry's token and keeps its id. The alternative, appending and letting the UI sort it out, fails
+  in git itself: the store helper answers with the *first* line matching a host, so a rotation that
+  appended would leave the stale token winning until the user found and removed the old line. The
+  host is the identity because it is what the credential is scoped to; the kind only decides the
+  user part of the store line (`oauth2` vs `x-access-token`), which is what `setup-cli-auth.sh`
+  keys on to configure `glab` or `gh`.
+- **Hosts are compared case-insensitively and stored lower-cased**, so `GitLab.Example.com` and
+  `gitlab.example.com` cannot become two entries that git would treat as one host.
+- **Legacy slots migrate lazily.** Reading the secret folds `gitlab_*`/`github_*` into the list in
+  memory; the next write of the secret — any credential save, a token add or remove — writes the
+  list and drops the slots. Reading never writes, so a user who only looks at their status page
+  keeps a secret an older backend still understands. The migrated entries get fixed ids
+  (`legacy-gitlab`, `legacy-github`) rather than random ones: the status page shows ids before
+  any write has happened, and a `DELETE` for a random id would miss on the next read. A legacy
+  token stored before hosts existed migrates with the public instance as its host, because that
+  is the host it was used against.
+- **Bounded at 32 entries.** The whole list is one key of a secret capped at 1 MiB; without a bound
+  a scripted caller could grow it until every credential write for that user fails.
+- **`glab` gets a default host.** Both CLIs keep one entry per host and pick the host from the git
+  remote they run in. Outside a repository `glab` falls back to `GITLAB_HOST`, then the top-level
+  `host:` key of its config, then the public instance — so `setup-cli-auth.sh` sets `host:` to the
+  first GitLab line in the store (connected providers come first). Without it a user whose only
+  GitLab is self-hosted would have `glab` talk to a host they never named. `gh` has no equivalent
+  config key, only `GH_HOST`, so it keeps its own default there.
+
+The credentials page mirrors the model: a list of stored hosts with a kind badge and a remove
+action that confirms inline (first click arms, second removes — no browser popup), and one inline
+row to add a token. Adds and removes apply immediately rather than on Save: the list is keyed by
+host, so the user needs to see the result of each add on its own, and a token must not sit in a
+form field waiting on an unrelated Save that may never come.
 
 ## Validation, and why it is at the edges
 

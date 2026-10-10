@@ -13,8 +13,8 @@ spawnMcpEnabled: true
 
 image:
   # Base path; component images use {registry}/{component}:{tag}. The agent runtime
-  # names are agent-runtime-claude, agent-runtime-codex, agent-runtime-cursor, and
-  # agent-runtime-openclaw unless overridden below.
+  # names are agent-runtime-claude, agent-runtime-codex, agent-runtime-cursor,
+  # agent-runtime-openclaw, and agent-runtime-opencode unless overridden below.
   registry: ghcr.io/open-agenthub/open-agenthub
   tag: latest
   pullPolicy: IfNotPresent
@@ -69,12 +69,13 @@ agent:
   gitCloneImage: alpine/git:2.45.2
   # Optional full image references. Empty values preserve image.registry/image.tag
   # compatibility and select agent-runtime-claude / agent-runtime-codex /
-  # agent-runtime-cursor / agent-runtime-openclaw respectively.
+  # agent-runtime-cursor / agent-runtime-openclaw / agent-runtime-opencode respectively.
   images:
     claude: ""
     codex: ""
     cursor: ""
     openclaw: ""
+    opencode: ""
   # Pull policy for agent runtime images in session pods. Use "Always" when
   # the image tag moves (e.g. :latest) so nodes don't serve a stale cache.
   pullPolicy: IfNotPresent

@@ -4,8 +4,17 @@ const crypto = require('node:crypto');
 const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
+const credentials = require('./credential-install');
+const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
+const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 
+// The scrollback window, in characters. The hub stores and pages exactly this much
+// (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
+// from the hub's copy comes back shorter than what this process uploaded.
 const MAX_BUFFER = 1_000_000;
+// How long a stopped agent gets to exit on its own before the restart forces it; long enough
+// for a CLI to flush its session file, short enough that a wedged one does not stall the swap.
+const RESTART_KILL_GRACE_MS = 8_000;
 // Upper bound for each archive/upload step of a persistence run.
 const PERSIST_STEP_SECONDS = 120;
 // Where an entrypoint records the pid of its credential watcher, and how long the server waits
@@ -15,6 +24,18 @@ const WATCHER_FLUSH_WAIT_MS = 6_000;
 const WATCHER_POLL_MS = 100;
 // Protocol chatter that the chat UI only needs live, never on replay.
 const TRANSIENT_CHAT_EVENTS = new Set(['stream_event', 'control_response', 'control_request']);
+// A fleet message as the hub posts it: a 4000-character body plus a few fields.
+const MAX_MESSAGE_BYTES = 64 * 1024;
+// How long after its last poll the provider's in-process mod counts as alive. It polls every 3 s; a
+// window of five polls survives a slow turn without handing a message to a mod that is gone.
+const MOD_HEARTBEAT_TTL_MS = 15_000;
+// A mod's limit report: kind, percent, reset time — small by construction.
+const MAX_LIMIT_REPORT_BYTES = 4 * 1024;
+// How long a restarted TUI gets to draw its prompt box before a message held back during the
+// restart is typed into it. Text written earlier lands in a terminal nothing reads yet.
+const RESTART_INPUT_DELAY_MS = 3_000;
+// The longest reason a credential swap may carry into the scrollback.
+const MAX_SWITCH_REASON_CHARS = 300;
 
 function createCommonServer(options = {}) {
   const env = options.env || process.env;
@@ -53,6 +74,7 @@ function createCommonServer(options = {}) {
   const token = env.AGENTHUB_CALLBACK_TOKEN || '';
   const statePut = env.AGENTHUB_STATE_PUT_URL || '';
   const scrollPut = env.AGENTHUB_SCROLLBACK_PUT_URL || '';
+  const transcriptPut = env.AGENTHUB_TRANSCRIPT_PUT_URL || '';
   const home = env.HOME || '/home/agent';
   const workdir = env.AGENTHUB_WORKDIR || (hasRepo ? '/workspace/repo' : '/workspace');
   const cwd = fs.existsSync(workdir) ? workdir : '/workspace';
@@ -75,8 +97,41 @@ function createCommonServer(options = {}) {
   let chatDelivery = Promise.resolve();
   let pendingChatDeliveries = 0;
   let promptSent = false;
+  let firstLaunchedAt = 0;
+  let transcriptFile = null;
+  let transcriptUploaded = { size: -1, mtimeMs: -1 };
+  // Set while the agent is being stopped on purpose so that its exit starts it again instead
+  // of ending the session: `{ text, subtype }`, the line the clients see and the agenthub event
+  // the chat UI gets for it.
+  let restartReason = null;
+  // Fleet messages that arrived while the agent was restarting; handed to the new agent once it
+  // is up, since the old PTY or pipe would have swallowed them (docs/account-limits.md).
+  let deferredMessages = [];
+  // The last size a client asked for, re-applied to a restarted PTY: the clients do not know
+  // the terminal was replaced and would not send a resize until their own window changes.
+  let lastSize = null;
   let persisting = false;
   let persistWaiters = null;
+  // Fleet messages waiting for the provider's in-process mod (docs/priority-messages.md), and when the
+  // mod last showed itself. The token is minted by the entrypoint and shared with the CLI
+  // process only, so nothing else on the pod's port can read the queue.
+  const modToken = env.AGENTHUB_MOD_TOKEN || '';
+  let modQueue = [];
+  let lastModHeartbeat = 0;
+  // The CLI's own usage-limit notice, read off its output (docs/account-limits.md). Armed once
+  // per agent start; the hub hears the first hit and nothing more until the next start.
+  const limitDetector = createLimitDetector({
+    patterns: driver.limitPatterns,
+    now,
+    onHit: hit => {
+      // A live mod reads the provider's rate-limit figures and reports them itself; a sentence
+      // matched in the terminal would be a second, vaguer report of the same limit.
+      if (modAlive()) return;
+      void reportLimit({ source: 'output', resetsAt: hit.resetsAt, detail: hit.detail });
+    }
+  });
+  // Mod reports already forwarded this start, keyed by window and reset time.
+  const forwardedLimits = new Set();
 
   function remember(chunk) {
     scrollback += chunk;
@@ -84,7 +139,7 @@ function createCommonServer(options = {}) {
   }
 
   function safeSend(socket, data) {
-    if (socket.readyState === socket.OPEN) {
+    if (socket && socket.readyState === socket.OPEN) {
       try { socket.send(data); } catch {}
     }
   }
@@ -122,6 +177,65 @@ function createCommonServer(options = {}) {
       'curl -fsS --max-time ' + PERSIST_STEP_SECONDS + ' ' + curlOption +
       '-T /tmp/scrollback.log "' + scrollPut + '"'
     ], () => done && done());
+  }
+
+  // The provider's own conversation file, once the driver can name it. Asked again on every
+  // persistence tick until found: providers create the file on the first turn or pick its
+  // name themselves after starting, so it does not exist when this process comes up.
+  function locateTranscript() {
+    if (transcriptFile || typeof driver.findTranscript !== 'function') return transcriptFile;
+    let found = null;
+    try {
+      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt });
+    } catch {}
+    // The path is interpolated into a shell command below; anything a driver could not have
+    // derived from a home directory, a slug and a uuid is not a transcript.
+    if (typeof found === 'string' && found && !/["'$`\\\s]/.test(found)) {
+      transcriptFile = found;
+      console.log('[agent] Transcript: ' + found);
+    }
+    return transcriptFile;
+  }
+
+  // The last `max` characters, cut at a line boundary so the first line the hub keeps is a
+  // whole JSON record rather than the tail of one.
+  function tailLines(text, max) {
+    if (text.length <= max) return text;
+    const cut = text.slice(-max);
+    const newline = cut.indexOf('\n');
+    return newline === -1 ? cut : cut.slice(newline + 1);
+  }
+
+  // Uploads the native transcript next to the scrollback: the whole file to S3, the capped
+  // tail to the hub's Postgres copy. Skipped while the file has not changed — most 30-second
+  // ticks of an idle session would otherwise re-upload megabytes for nothing.
+  function persistTranscript(done) {
+    const file = locateTranscript();
+    if (!file || (!transcriptPut && !callback)) return done && done();
+    let stat;
+    try { stat = fs.statSync(file); } catch { return done && done(); }
+    if (stat.size === transcriptUploaded.size && stat.mtimeMs === transcriptUploaded.mtimeMs) {
+      return done && done();
+    }
+    transcriptUploaded = { size: stat.size, mtimeMs: stat.mtimeMs };
+    const toHub = () => {
+      if (!callback) return done && done();
+      let text;
+      try { text = fs.readFileSync(file, 'utf8'); } catch { return done && done(); }
+      fetchImpl(callback + '/transcript', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': token },
+        body: tailLines(text, MAX_BUFFER)
+      }).catch(() => {}).finally(() => done && done());
+    };
+    if (!transcriptPut) return toHub();
+    // No shell here: the file name is whatever the CLI chose for its session file, and a quote
+    // or `$(` in it would otherwise become part of the command. The state upload above keeps
+    // its shell pipeline because every path in it is one this process picked itself.
+    execFile('curl', [
+      '-fsS', ...(curlOption ? ['-k'] : []), '--max-time', String(PERSIST_STEP_SECONDS),
+      '-T', file, transcriptPut
+    ], toHub);
   }
 
   function restoreScrollback(done) {
@@ -210,13 +324,14 @@ function createCommonServer(options = {}) {
     }
     persisting = true;
     postResources();
-    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistState(() => {
-      persisting = false;
-      const waiters = persistWaiters;
-      persistWaiters = null;
-      if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); });
-      if (done) done();
-    }))));
+    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
+      persistState(() => {
+        persisting = false;
+        const waiters = persistWaiters;
+        persistWaiters = null;
+        if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); });
+        if (done) done();
+      })))));
   }
 
   // The credential watcher runs beside this server, not under it: on pod stop only PID 1 — this
@@ -329,6 +444,40 @@ function createCommonServer(options = {}) {
     return JSON.stringify({ type: 'agenthub', subtype, ...fields }) + '\n';
   }
 
+  /**
+   * Tells the hub this session's account is at its usage limit. The hub decides what follows —
+   * marking the account, moving the session to another one — and answers with what it did;
+   * nothing here depends on that answer beyond a log line.
+   */
+  function reportLimit(report) {
+    if (!callback || !token) return Promise.resolve();
+    const body = {
+      source: report.source,
+      kind: report.kind || null,
+      percentUsed: typeof report.percentUsed === 'number' ? report.percentUsed : null,
+      resetsAt: report.resetsAt || null,
+      detail: report.detail || null
+    };
+    console.log('[agent] Usage limit reported to the hub (' + report.source +
+      (report.kind ? ', ' + report.kind : '') + (report.resetsAt ? ', resets ' + report.resetsAt : '') + ')');
+    return fetchImpl(callback + '/account-exhausted', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Agent-Token': token },
+      body: JSON.stringify(body)
+    }).then(response => {
+      if (!response || !response.ok) {
+        console.log('[agent] Usage limit report answered HTTP ' + (response && response.status));
+        return;
+      }
+      return response.json().then(answer => {
+        if (answer && answer.action) console.log('[agent] Hub action on the usage limit: ' + answer.action +
+          (answer.switchedTo ? ' (' + answer.switchedTo + ')' : ''));
+      }).catch(() => {});
+    }).catch(error => {
+      console.log('[agent] Usage limit report failed: ' + (error && error.message));
+    });
+  }
+
   function retryMessage() {
     if (chatMode) return agenthubEvent('info', { text: 'No saved conversation to resume — starting fresh.' });
     return '\r\n[agent] No saved conversation to resume — starting fresh.\r\n';
@@ -340,7 +489,50 @@ function createCommonServer(options = {}) {
       (signal ? ', signal ' + signal : '') + ').\r\n';
   }
 
+  function restartMessage(reason) {
+    const text = reason.text + ' — restarting the agent and resuming the conversation.';
+    if (chatMode) return agenthubEvent(reason.subtype || 'info', { text });
+    return '\r\n[agent] ' + text + '\r\n';
+  }
+
+  /**
+   * Stops the agent so that handleAgentExit starts it again with the provider's resume command.
+   * The conversation this pod ran is on its own disk, which is what the resume flags describe;
+   * a session that started fresh in this pod therefore resumes exactly like one restored from
+   * the archive would. `subtype` names the agenthub event the chat UI gets for the restart line.
+   */
+  function restartAgent(reason, subtype) {
+    if (exited || !term) return false;
+    // A provider that names its conversation itself does so only once it has written the file,
+    // and that name is what its resume command takes; looking now means the restarted agent
+    // resumes this conversation and not whichever one is newest on disk.
+    locateTranscript();
+    restartReason = { text: reason, subtype: subtype || 'info' };
+    env.AGENTHUB_RESUME = '1';
+    env.AGENTHUB_STATE_RESTORED = '1';
+    const stopping = term;
+    try { stopping.kill(); } catch {}
+    setTimeoutImpl(() => {
+      if (restartReason !== null && term === stopping) {
+        try { stopping.kill('SIGKILL'); } catch {}
+      }
+    }, RESTART_KILL_GRACE_MS);
+    return true;
+  }
+
   function handleAgentExit(exitCode, signal) {
+    if (restartReason !== null) {
+      const message = restartMessage(restartReason);
+      restartReason = null;
+      // The restart gets its own one-time fallback to a fresh start, as a cross-pod resume has.
+      retriedFresh = false;
+      remember(message);
+      broadcast(message);
+      startAgent(true);
+      flushDeferredMessages();
+      return;
+    }
+
     const elapsedMs = now() - launchedAt;
     if (attemptedResume && !retriedFresh &&
         driver.isMissingResume(attemptOutput, exitCode, elapsedMs)) {
@@ -395,13 +587,17 @@ function createCommonServer(options = {}) {
       while ((newline = pendingLine.indexOf('\n')) !== -1) {
         const line = pendingLine.slice(0, newline);
         pendingLine = pendingLine.slice(newline + 1);
-        if (line.trim()) deliverChatLine(line);
+        if (line.trim()) {
+          deliverChatLine(line);
+          limitDetector.feedChatLine(line);
+        }
       }
     });
 
     child.stderr.on('data', chunk => {
       const text = chunk.toString();
       attemptOutput += text;
+      limitDetector.feedStderr(text);
       const payload = agenthubEvent('stderr', { text });
       remember(payload);
       broadcast(payload);
@@ -458,7 +654,10 @@ function createCommonServer(options = {}) {
     const command = driver.buildCommand(env, allowResume);
     attemptedResume = driver.isResumeCommand(command);
     attemptOutput = '';
+    limitDetector.reset();
+    forwardedLimits.clear();
     launchedAt = now();
+    if (!firstLaunchedAt) firstLaunchedAt = launchedAt;
     chatMode = command.pipe === true;
     console.log('[agent] driver=' + driver.name + ' mode=' + mode + ' resume=' + attemptedResume +
       (chatMode ? ' ui=chat' : '') +
@@ -470,13 +669,15 @@ function createCommonServer(options = {}) {
     }
 
     term = pty.spawn(command.cmd, command.args, {
-      name: 'xterm-256color', cols: 120, rows: 32, cwd, env: agentEnv
+      name: 'xterm-256color', cols: lastSize ? lastSize.cols : 120, rows: lastSize ? lastSize.rows : 32,
+      cwd, env: agentEnv
     });
 
     term.onData(data => {
       attemptOutput += data;
       remember(data);
       broadcast(data);
+      limitDetector.feedTerminal(data);
     });
 
     term.onExit(({ exitCode, signal }) => handleAgentExit(exitCode, signal));
@@ -571,11 +772,288 @@ function createCommonServer(options = {}) {
       if (message.type === 'input' && typeof message.data === 'string') {
         term.write(message.data);
       } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
+        lastSize = { cols: message.cols, rows: message.rows };
         try { term.resize(message.cols, message.rows); } catch {}
       }
     });
     socket.on('close', () => clients.delete(socket));
     socket.on('error', () => clients.delete(socket));
+  }
+
+  async function readBoundedBody(request, maxBytes) {
+    const chunks = [];
+    let total = 0;
+    for await (const chunk of request) {
+      total += chunk.length;
+      if (total > maxBytes) return null;
+      chunks.push(chunk);
+    }
+    return Buffer.concat(chunks);
+  }
+
+  /**
+   * PUT /agenthub/credentials: the hub hands over another of the owner's logins for this
+   * provider. The request names no path — the file goes where the driver says and nowhere else
+   * (docs/provider-accounts.md, "Switching the account"). The watcher baseline is written first
+   * so the poll that follows the install does not upload the file straight back.
+   */
+  async function handleCredentialRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    if (request.method !== 'PUT') {
+      response.setHeader('Allow', 'PUT');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const provider = String(request.headers['x-agent-provider'] || '').toLowerCase();
+    if (provider !== driver.name.toLowerCase()) {
+      fileError(response, 409, 'provider_mismatch');
+      return;
+    }
+    if (exited) {
+      fileError(response, 409, 'agent_exited');
+      return;
+    }
+    const declaredLength = Number.parseInt(request.headers['content-length'] || '', 10);
+    if (Number.isFinite(declaredLength) && declaredLength > credentials.MAX_CREDENTIAL_BYTES) {
+      fileError(response, 413, 'credential_too_large');
+      request.resume();
+      return;
+    }
+    const body = await readBoundedBody(request, credentials.MAX_CREDENTIAL_BYTES);
+    if (!body) {
+      fileError(response, 413, 'credential_too_large');
+      return;
+    }
+    const valid = typeof driver.validCredential === 'function'
+      ? driver.validCredential(body)
+      : credentials.looksLikeJsonObject(body);
+    if (!valid) {
+      fileError(response, 400, 'invalid_credential');
+      return;
+    }
+
+    const target = credentials.credentialTarget(env, driver);
+    credentials.writeBaselineHash(credentials.baselineFile(env), credentials.sha256(body), fs);
+    if (typeof driver.installCredential === 'function') driver.installCredential(env, body, target, fs);
+    else credentials.writeCredentialFile(target, body, fs);
+    // A reason from the hub (the automatic failover says why) replaces the generic line and
+    // names the event, so a person reading the scrollback or the chat sees the switch happen.
+    const reason = switchReason(request.headers['x-agent-switch-reason']);
+    const restarting = reason
+      ? restartAgent(reason, 'account-switched')
+      : restartAgent('Provider account switched');
+    console.log('[agent] Provider credential replaced' + (restarting ? '; restarting with resume.' : '.'));
+    sendJson(response, 202, { installed: true, restarting });
+  }
+
+  // Percent-encoded by the hub so a label with any character survives the header; control
+  // characters are dropped so nothing in it can drive the terminal.
+  function switchReason(header) {
+    if (typeof header !== 'string' || !header) return null;
+    let text;
+    try { text = decodeURIComponent(header); } catch { text = header; }
+    text = stripAnsi(text).replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text) return null;
+    return text.length > MAX_SWITCH_REASON_CHARS ? text.slice(0, MAX_SWITCH_REASON_CHARS) : text;
+  }
+
+  // Messages held back during a restart go to the new agent: the mod queue keeps itself, the
+  // chat pipe buffers, and a TUI gets them typed once it has had time to draw its prompt.
+  function flushDeferredMessages() {
+    const held = deferredMessages;
+    deferredMessages = [];
+    for (const message of held) {
+      if (modAlive() && (message.priority || mode === 'interactive')) {
+        modQueue.push(message);
+      } else if (chatMode) {
+        if (chat) queueChatMessage(null, { text: formatFleetMessage(message) });
+      } else if (mode === 'interactive' && term) {
+        const target = term;
+        setTimeoutImpl(() => {
+          if (term !== target || exited) return;
+          void injectTerminalInput(target, formatFleetMessage(message), {
+            interrupt: false,
+            wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
+          });
+        }, RESTART_INPUT_DELAY_MS);
+      }
+    }
+  }
+
+  /**
+   * POST /agenthub/messages: the hub pushes a fleet message that should not wait for the agent's
+   * next inbox poll. Where it goes depends on how the agent runs (docs/priority-messages.md):
+   * the provider's in-process mod when one is alive, the chat pipe, the terminal as typed input — or
+   * nowhere, in which case the hub keeps it in the inbox and tells the sender so. Delivery here
+   * is the only place that knows those three channels; the hub only reads the answer.
+   */
+  async function handleMessageRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const raw = await readBoundedBody(request, MAX_MESSAGE_BYTES);
+    const message = raw && parseFleetMessage(raw);
+    if (!message) {
+      fileError(response, raw ? 400 : 413, raw ? 'invalid_message' : 'message_too_large');
+      return;
+    }
+    const unavailable = reason => sendJson(response, 200, { delivered: 'unavailable', reason });
+    if (exited) return unavailable('agent_exited');
+
+    // One channel per message. A mod that is alive takes priority messages always and plain
+    // ones in interactive sessions, where it can show them and hand them over with the next
+    // prompt; in an autonomous run nobody types a next prompt, so a plain message stays in the
+    // inbox for agent_inbox. Writing to the terminal as well would deliver it twice.
+    if (modAlive() && (message.priority || mode === 'interactive')) {
+      modQueue.push(message);
+      sendJson(response, 200, { delivered: 'queued-for-mod' });
+      return;
+    }
+    if (!message.priority) return unavailable('not_priority');
+    // The agent is being swapped out (an account switch): the pipe or PTY it is about to leave
+    // would swallow the text, so the message waits for the one that comes up. The answer names
+    // the channel it will take, since that is what the hub records.
+    const restarting = restartReason !== null;
+    if (chatMode) {
+      if (!chat) return unavailable('agent_not_started');
+      if (restarting) {
+        deferredMessages.push(message);
+        sendJson(response, 200, { delivered: 'chat', deferred: true });
+        return;
+      }
+      if (message.interrupt) chat.interrupt();
+      queueChatMessage(null, { text: formatFleetMessage(message) });
+      sendJson(response, 200, { delivered: 'chat' });
+      return;
+    }
+    // A -p run reads its prompt from the command line; keystrokes into its PTY reach nothing.
+    if (mode !== 'interactive') return unavailable('non_interactive');
+    if (!term) return unavailable('agent_not_started');
+    if (restarting) {
+      deferredMessages.push(message);
+      sendJson(response, 200, { delivered: 'pty', deferred: true });
+      return;
+    }
+    await injectTerminalInput(term, formatFleetMessage(message), {
+      interrupt: message.interrupt,
+      wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
+    });
+    sendJson(response, 200, { delivered: 'pty' });
+  }
+
+  function parseFleetMessage(raw) {
+    let parsed;
+    try { parsed = JSON.parse(raw.toString('utf8')); } catch { return null; }
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.body !== 'string' || !parsed.body.trim()) return null;
+    const text = field => typeof parsed[field] === 'string' && parsed[field] ? parsed[field] : null;
+    return {
+      id: text('id') || '',
+      from: text('from'),
+      fromTitle: text('fromTitle'),
+      body: parsed.body,
+      priority: parsed.priority === true,
+      interrupt: parsed.interrupt === true
+    };
+  }
+
+  function modAlive() {
+    return Boolean(modToken) && now() - lastModHeartbeat < MOD_HEARTBEAT_TTL_MS;
+  }
+
+  /**
+   * The in-process mod's side: GET /agenthub/mod/inbox hands over and clears the queue, POST
+   * /agenthub/mod/heartbeat only says "still here", POST /agenthub/mod/limit relays a rate-limit
+   * reading to the hub (docs/account-limits.md). All are loopback-only and carry the mod
+   * token, not the callback token: the hub's token never reaches the agent process, and the
+   * mod's token never leaves the pod.
+   */
+  async function handleModRequest(request, response, requestPath) {
+    if (!modToken) {
+      fileError(response, 404, 'not_found');
+      return;
+    }
+    const address = request.socket && request.socket.remoteAddress;
+    const header = String(request.headers['authorization'] || '');
+    const bearer = header.startsWith('Bearer ') ? header.slice('Bearer '.length) : '';
+    if (!isLoopback(address) || !secretMatches(modToken, bearer)) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    lastModHeartbeat = now();
+    if (requestPath === '/agenthub/mod/heartbeat') {
+      if (request.method !== 'POST') {
+        response.setHeader('Allow', 'POST');
+        fileError(response, 405, 'method_not_allowed');
+        return;
+      }
+      response.statusCode = 204;
+      response.end();
+      return;
+    }
+    if (requestPath === '/agenthub/mod/limit') {
+      if (request.method !== 'POST') {
+        response.setHeader('Allow', 'POST');
+        fileError(response, 405, 'method_not_allowed');
+        return;
+      }
+      const raw = await readBoundedBody(request, MAX_LIMIT_REPORT_BYTES);
+      const report = raw && parseLimitReport(raw);
+      if (!report) {
+        fileError(response, raw ? 400 : 413, raw ? 'invalid_report' : 'report_too_large');
+        return;
+      }
+      // The mod reports once per window and reset; this is the belt to that brace, so a mod
+      // that reloaded mid-session does not make the hub mark the same window twice.
+      const key = report.kind + '|' + (report.resetsAt || '');
+      if (!forwardedLimits.has(key)) {
+        forwardedLimits.add(key);
+        void reportLimit({ source: 'mod', ...report });
+      }
+      sendJson(response, 202, { accepted: true });
+      return;
+    }
+    if (request.method !== 'GET') {
+      response.setHeader('Allow', 'GET');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const messages = modQueue;
+    modQueue = [];
+    sendJson(response, 200, { messages });
+  }
+
+  function parseLimitReport(raw) {
+    let parsed;
+    try { parsed = JSON.parse(raw.toString('utf8')); } catch { return null; }
+    if (!parsed || typeof parsed !== 'object') return null;
+    const kind = typeof parsed.kind === 'string' && parsed.kind.trim() ? parsed.kind.trim().slice(0, 64) : null;
+    const percentUsed = typeof parsed.percentUsed === 'number' && Number.isFinite(parsed.percentUsed) ? parsed.percentUsed : null;
+    if (!kind && percentUsed === null) return null;
+    return { kind: kind || 'unknown', percentUsed, resetsAt: toIso(parsed.resetsAt) };
+  }
+
+  function isLoopback(address) {
+    return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+  }
+
+  function handleHttpRequest(request, response) {
+    const requestPath = (request.url || '').split('?')[0];
+    if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
+    if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
+    if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
+        requestPath === '/agenthub/mod/limit') {
+      return handleModRequest(request, response, requestPath);
+    }
+    return handleFileRequest(request, response);
   }
 
   function handleShell(socket) {
@@ -607,8 +1085,12 @@ function createCommonServer(options = {}) {
   }
 
   function tokenMatches(requestToken) {
-    if (!token || typeof requestToken !== 'string') return false;
-    const expected = Buffer.from(token);
+    return secretMatches(token, requestToken);
+  }
+
+  function secretMatches(secret, requestToken) {
+    if (!secret || typeof requestToken !== 'string') return false;
+    const expected = Buffer.from(secret);
     const received = Buffer.from(requestToken);
     const length = Math.max(expected.length, received.length, 1);
     const left = Buffer.alloc(length);
@@ -719,7 +1201,7 @@ function createCommonServer(options = {}) {
   }, 30_000);
 
   const httpServer = http.createServer((request, response) => {
-    Promise.resolve(handleFileRequest(request, response)).catch(() => {
+    Promise.resolve(handleHttpRequest(request, response)).catch(() => {
       if (!response.headersSent) fileError(response, 500, 'file_io_failed');
       else response.destroy();
     });
@@ -732,7 +1214,9 @@ function createCommonServer(options = {}) {
   });
 
   httpServer.listen(port);
-  console.log('[agent] Agent server listening on :' + port + ' (paths: /, /shell, /agenthub/files/:id)');
+  console.log('[agent] Agent server listening on :' + port +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/messages' +
+    (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 
   for (const signal of ['SIGTERM', 'SIGINT']) {

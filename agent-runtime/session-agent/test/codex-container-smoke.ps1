@@ -5,6 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 $fixturePath = Join-Path $PSScriptRoot "fixtures/codex-container"
 $policyFixturePath = Join-Path $PSScriptRoot "../fixtures/codex-policy-hook-smoke.js"
+$notifyFixturePath = Join-Path $PSScriptRoot "../fixtures/codex-turn-notify-smoke.js"
 
 function Invoke-Docker {
     param([string[]]$Arguments)
@@ -41,6 +42,7 @@ Invoke-Docker @(
 
 $mount = "type=bind,source=$fixturePath,target=/fixtures,readonly"
 $policyFixtureMount = "type=bind,source=$policyFixturePath,target=/policy-smoke.js,readonly"
+$notifyFixtureMount = "type=bind,source=$notifyFixturePath,target=/notify-smoke.js,readonly"
 $authFixture = Join-Path $fixturePath "subscription-auth.json"
 $mcpFixture = Join-Path $fixturePath "mcp.json"
 $authMount = "type=bind,source=$authFixture,target=/secrets/codex/auth.json,readonly"
@@ -59,6 +61,11 @@ Invoke-Docker @(
     "run", "--rm", "--mount", $policyFixtureMount,
     "--entrypoint", "node", $Image,
     "/policy-smoke.js"
+)
+Invoke-Docker @(
+    "run", "--rm", "--mount", $notifyFixtureMount,
+    "--entrypoint", "node", $Image,
+    "/notify-smoke.js"
 )
 
 $previousErrorAction = $ErrorActionPreference

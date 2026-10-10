@@ -111,6 +111,32 @@ test('Claude does not re-submit the prompt when resuming an interactive session'
   }), true).args, ['--session-id', 'fixed-session', 'triage the failing build']);
 });
 
+test('Claude continues a converted autonomous run as the same conversation, without the prompt', () => {
+  // docs/session-mode-conversion.md: the hub fixes the session id, so the autonomous -p run and
+  // the interactive resume after conversion share one conversation. The task must not be
+  // submitted again — it is the first turn of that conversation already.
+  const autonomous = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(autonomous.args,
+    ['--session-id', 'fixed-session', '-p', 'triage the failing build', '--permission-mode', 'acceptEdits']);
+
+  const terminal = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'interactive', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1', AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(terminal, { cmd: 'claude', args: ['--resume', 'fixed-session'] });
+
+  const chat = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'interactive', AGENTHUB_UI_MODE: 'chat', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1', AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(chat.args.slice(0, 2), ['--resume', 'fixed-session']);
+  assert.ok(!chat.args.includes('triage the failing build'));
+  assert.equal(chat.pipe, true);
+});
+
 test('Claude resume command requires requested resume, restored state, and fixed id', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1',
@@ -129,11 +155,38 @@ test('Claude resume command requires requested resume, restored state, and fixed
   });
 });
 
-test('Claude resume falls back for the same output and quick-exit conditions', () => {
-  assert.equal(driver.isMissingResume('No conversation found for session', 1, 15_000), true);
-  assert.equal(driver.isMissingResume('unexpected failure', 1, 9_999), true);
-  assert.equal(driver.isMissingResume('unexpected failure', 1, 10_000), false);
+test('Claude names its transcript from the fixed session id and the cwd slug', () => {
+  const home = '/home/agent';
+  const expected = path.join(home, '.claude', 'projects', '-workspace-repo', 'fixed-session.jsonl');
+  const seen = [];
+  const fakeFs = { existsSync(file) { seen.push(file); return file === expected; } };
+
+  assert.equal(driver.findTranscript({
+    env: environment({ AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session' }),
+    home, cwd: '/workspace/repo', fs: fakeFs
+  }), expected);
+  assert.deepEqual(seen, [expected]);
+
+  // Not written yet (first turn pending): asked again later rather than guessed.
+  assert.equal(driver.findTranscript({
+    env: environment({ AGENTHUB_CLAUDE_SESSION_ID: 'other' }), home, cwd: '/workspace/repo', fs: fakeFs
+  }), null);
+  // Without a fixed id there is nothing to look for.
+  assert.equal(driver.findTranscript({ env: environment(), home, cwd: '/workspace/repo', fs: fakeFs }), null);
+});
+
+test('Claude resume falls back only on the CLI saying the conversation is gone', () => {
+  assert.equal(driver.isMissingResume('No conversation found with session ID: abc', 1, 15_000), true);
+  assert.equal(driver.isMissingResume('No conversation found to continue', 1, 500), true);
   assert.equal(driver.isMissingResume('No conversation found for session', 0, 1), false);
+});
+
+test('Claude keeps --resume through a fast crash that is not about the conversation', () => {
+  // An expired login or an unreachable API dies within a second or two; that used to count as
+  // "no saved conversation" and the next launch dropped --resume along with the history.
+  assert.equal(driver.isMissingResume('Invalid API key · Please run /login', 1, 1_200), false);
+  assert.equal(driver.isMissingResume('fetch failed: ECONNREFUSED', 1, 300), false);
+  assert.equal(driver.isMissingResume('', 1, 0), false);
 });
 
 test('Claude chat command streams JSON on both ends through a pipe', () => {

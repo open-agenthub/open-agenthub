@@ -91,21 +91,61 @@ The same surface as the stdio server:
 | `session_create` | Create and start a session (defaults to Interactive) |
 | `session_get` | Fetch one session by id |
 | `session_logs` | Read a session's transcript — what the agent actually printed |
+| `session_transcript` | Poll the transcript from a cursor (`offset` → `nextOffset`), with `running` saying when to stop |
 | `session_list` | List your sessions, optionally filtered by parent or phase |
 | `session_wait` | Poll until a session reaches Succeeded or Failed |
 | `session_delete` | Delete a session; does not cascade to children |
+| `session_convert` | Continue a finished or paused Autonomous session as an Interactive one, in the same conversation where the runtime can (`docs/session-mode-conversion.md`) |
 | `agents_list` | Your agents with title, description and phase |
-| `agent_send` | Send a message/task to an agent by id or unique title |
+| `agent_send` | Send a message/task to an agent by id or unique title. `priority` pushes it into the running agent's prompt, `interrupt` stops its current work first; the result's `deliveredVia` says `inbox`, `injected` or `mod` (`docs/priority-messages.md`) |
+| `credentials_list` | Provider accounts, git PATs (ids, never tokens) and API-key presence a session may use; an account at its usage limit carries `isExhausted` |
+| `account_status` | The account a session runs on, whether it is at its usage limit, the session's `accountFailover` setting and the alternatives (`docs/account-limits.md`) |
+| `account_switch` | Move a running Subscription session to another stored account; the agent restarts with the other login and resumes |
+| `session_share` | Share a session with a user as Viewer (default) or Collaborator — Enterprise |
+| `session_unshare` | Revoke a user's access — Enterprise |
+| `session_share_link` | Mint a secret link; returns `{url, linkId}`, the url exactly once — Enterprise |
+| `session_shares` | Direct grants and links of a session (ids and roles, never link tokens) — Enterprise |
+
+The four sharing tools need an active enterprise licence and answer `license_required` without
+one; `session_not_found` covers a session that is not yours, `unknown_recipient` a username that
+has never signed in. They exist on this server and on the stdio one, but not on the in-session
+server an agent gets — an agent should not widen who can see its own session. Decisions in
+`session-sharing-api.md`.
+
+`session_create` takes `credentialId` (an account id from `credentials_list`) and `gitPatIds`
+(comma-separated PAT ids; `none` for no token) — the latter as text rather than a declared array,
+because a connected client keeps the schema it saw at connect time (`docs/credential-scopes.md`).
+A personal API token can be restricted to some of these credentials; the stdio server then lists
+and may use only that slice.
 
 `session_logs` is the only way to see what a session did. `kubectl logs` on the pod shows the
 entrypoint and the launch command but not the agent's output, which goes to the PTY; and once a
 session finishes its pod is gone. The transcript is read from object storage, falling back to
 the database copy, so it outlives the pod. It returns the tail by default — a long session's
-transcript runs to megabytes, and the part that says how it ended is at the end.
+transcript runs to megabytes, and the part that says how it ended is at the end. Where the
+runtime keeps its own conversation file (Claude Code, Codex), the text is that conversation
+rendered as `## User` / `## Assistant` / `## Tool: …` / `## Result` sections rather than the
+terminal output; sessions without one fall back to the cleaned terminal scrollback
+(`docs/transcripts.md`).
 
 `session_create` takes `runAsRoot` for tasks that need tooling the runtime image does not ship
 (it has `node` and `npm`, but no `dotnet`, `docker` or `trivy`). It is off by default because a
 root session gives up the read-only root filesystem; the pod stays unprivileged either way.
+
+`session_create` also takes `autoDeleteAfter` (`"90m"`, `"12h"`, `"3d"`; 5 minutes to 365 days)
+and `autoDeleteFrom` (`lastActivity`, the default, or `start`), after which the session deletes
+itself; `session_get` and `session_list` report the resulting `expiresAt`. The duration is text
+with a unit rather than a number of seconds on purpose: a wrong unit is a session gone twelve
+minutes instead of twelve hours later, and an unreadable value is an error rather than a session
+silently created without its deadline. The in-session `agenthub_sessions` server offers the same
+two parameters on its `session_create`. See `docs/session-expiry.md`.
+
+`session_convert {sessionId, uiMode?, autoApprove?, resume?}` is the step after an unattended
+run: the agent that started an Autonomous session hands it to a person as an Interactive one.
+Claude and Codex continue the same conversation; Cursor and OpenClaw start a new one in the same
+workspace. `autoApprove` is off after conversion unless asked for, because somebody is now there
+to answer. The in-pod server has the same tool, limited to the calling session's descendants like
+`session_get`. Running or non-Autonomous sessions fail with `session_not_convertible`.
 
 Every call runs as the user who approved the client, and the session service enforces that
 user's ownership exactly as it does for the REST API.

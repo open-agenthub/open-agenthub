@@ -61,3 +61,17 @@ test('sanitizeSession maps lists and delete results', async () => {
   assert.equal(list[0].mcpConfigJson, undefined);
   assert.equal(list[1].id, 'b');
 });
+
+test('sanitizeSession keeps the self-deletion setting and the deadline it yields', async () => {
+  const { sanitizeSession } = await import('../../sessions/sanitize.mjs');
+  const safe = sanitizeSession({
+    id: 's1', phase: 'Running',
+    autoDeleteAfterSeconds: 43200, autoDeleteFrom: 'start',
+    expiresAt: '2026-10-11T00:00:00Z', lastActivityAt: '2026-10-10T12:00:00Z',
+    callbackToken: 'tok'
+  });
+  assert.equal(safe.autoDeleteAfterSeconds, 43200);
+  assert.equal(safe.autoDeleteFrom, 'start');
+  assert.equal(safe.expiresAt, '2026-10-11T00:00:00Z');
+  assert.equal(safe.callbackToken, undefined);
+});

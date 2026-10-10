@@ -6,7 +6,8 @@ using k8s.Models;
 namespace AgentHub.Api.Services;
 
 public sealed record AgentRuntimeImages(
-    string ClaudeImage, string CodexImage, string CursorImage, string OpenClawImage, string PullPolicy);
+    string ClaudeImage, string CodexImage, string CursorImage, string OpenClawImage, string OpenCodeImage,
+    string PullPolicy);
 
 public sealed record AgentPodRuntimeSettings
 {
@@ -21,6 +22,9 @@ public sealed record AgentPodRuntimeSettings
     public bool NetworkMcpEnabled { get; init; }
     public bool TelemetryEnabled { get; init; }
     public string TelemetryOtlpEndpoint { get; init; } = "";
+    /// <summary>Percent of a rate-limit window at which Claude's mod reports the account as at
+    /// its limit (docs/account-limits.md); 100 = the limit itself.</summary>
+    public int AccountLimitThreshold { get; init; } = 100;
 }
 
 /// <summary>Non-secret inputs used to construct an agent pod.</summary>
@@ -32,13 +36,21 @@ public sealed record PodBuildContext
     public required string CodexCredentialSecretName { get; init; }
     public required string CursorCredentialSecretName { get; init; }
     public required string OpenClawCredentialSecretName { get; init; }
+    public required string OpenCodeCredentialSecretName { get; init; }
     public bool HasSelectedApiKey { get; init; }
     public bool HasSelectedSubscriptionCredential { get; init; }
+    /// <summary>
+    /// The account whose file the provider secret volume projects, or null for "no account could
+    /// be resolved". The volume then projects a key that does not exist — the mount comes up empty
+    /// and the entrypoint runs its in-session login path, exactly as for a user with no login.
+    /// </summary>
+    public string? SubscriptionAccountId { get; init; }
     public bool HasGitCredentials { get; init; }
     public required string CallbackUrl { get; init; }
     public required string StatePutUrl { get; init; }
     public required string StateGetUrl { get; init; }
     public required string ScrollbackPutUrl { get; init; }
+    public required string TranscriptPutUrl { get; init; }
     public bool S3Insecure { get; init; }
     public required AgentRuntimeImages RuntimeImages { get; init; }
     public AgentPodRuntimeSettings Runtime { get; init; } = new();
@@ -74,6 +86,17 @@ public static class AgentPodSpecFactory
         return new OpenClawApiKeyEnvBinding(envName, secretKey);
     }
 
+    /// <summary>
+    /// Whether the session's start has to look up a stored API key. Every ApiKey session needs
+    /// one, whatever its mode; an Auto session only bills the API when it runs unattended without
+    /// a subscription login. The mode used to gate both, on the assumption that an interactive
+    /// session is always a subscription login — untrue once an autonomous run can be converted
+    /// to interactive (docs/session-mode-conversion.md).
+    /// </summary>
+    public static bool ResolvesApiKey(SessionMode mode, AgentAuthMode authMode) =>
+        authMode == AgentAuthMode.ApiKey
+        || (mode is SessionMode.Autonomous or SessionMode.Scheduled && authMode == AgentAuthMode.Auto);
+
     public static string? MissingCredentialDiagnostic(SessionRecord record, PodBuildContext context)
     {
         if (record.Mode == SessionMode.Interactive) return null;
@@ -99,6 +122,7 @@ public static class AgentPodSpecFactory
             AgentKind.Codex => images.CodexImage,
             AgentKind.Cursor => images.CursorImage,
             AgentKind.OpenClaw => images.OpenClawImage,
+            AgentKind.OpenCode => images.OpenCodeImage,
             _ => images.ClaudeImage
         };
         var repos = NormalizeRepos(request);
@@ -115,6 +139,11 @@ public static class AgentPodSpecFactory
             RunAsNonRoot = !asRoot, RunAsUser = uid, RunAsGroup = uid, FsGroup = uid,
             SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
         };
+        // A raw string literal keeps the line endings of the source file, and a Windows checkout
+        // has CRLF. sh then reads a trailing "\" followed by CR as a literal backslash rather than a
+        // line continuation, and the Codex init container ran requirements.toml as a script of its
+        // own. The shell scripts below go through here so a CRLF build behaves like an LF one.
+        static string ShellScript(string script) => script.Replace("\r\n", "\n");
         V1SecurityContext ContainerSecurity() => new()
         {
             AllowPrivilegeEscalation = false, ReadOnlyRootFilesystem = !asRoot,
@@ -175,28 +204,44 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_RESUME", Value = string.IsNullOrEmpty(context.StateGetUrl) ? "0" : "1" },
             new() { Name = "AGENTHUB_PROMPT", Value = request.Prompt ?? "" },
             new() { Name = "AGENTHUB_SYSTEM_PROMPT", Value = request.SystemPrompt ?? "" },
-            // Claude and Codex read the flag off the session record on every tool call, so it can
-            // be toggled while they run. Cursor and OpenClaw have no per-call hook to ask through:
-            // their permission settings are fixed when the process starts, which is what this is
-            // for. A session that changes the flag has to be restarted for those two.
+            // Claude, Codex and OpenCode read the flag off the session record on every tool call, so
+            // it can be toggled while they run. Cursor and OpenClaw have no per-call hook to ask
+            // through: their permission settings are fixed when the process starts, which is what
+            // this is for. A session that changes the flag has to be restarted for those two.
             new() { Name = "AGENTHUB_AUTO_APPROVE", Value = record.AutoApprove ? "1" : "0" },
             new() { Name = "AGENTHUB_ALLOWED_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedTools) },
             new() { Name = "AGENTHUB_ALLOWED_MCP_TOOLS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedMcpTools) },
             new() { Name = "AGENTHUB_ALLOWED_COMMANDS", Value = System.Text.Json.JsonSerializer.Serialize(policy.AllowedCommands) },
             new() { Name = "AGENTHUB_CALLBACK_URL", Value = context.CallbackUrl },
             new() { Name = "AGENTHUB_CALLBACK_TOKEN", Value = record.CallbackToken },
+            new() { Name = "AGENTHUB_LIMIT_THRESHOLD", Value = context.Runtime.AccountLimitThreshold.ToString() },
             new() { Name = "AGENTHUB_S3_INSECURE", Value = context.S3Insecure ? "1" : "0" },
             new() { Name = "AGENTHUB_STATE_PUT_URL", Value = context.StatePutUrl },
             new() { Name = "AGENTHUB_STATE_GET_URL", Value = context.StateGetUrl },
-            new() { Name = "AGENTHUB_SCROLLBACK_PUT_URL", Value = context.ScrollbackPutUrl }
+            new() { Name = "AGENTHUB_SCROLLBACK_PUT_URL", Value = context.ScrollbackPutUrl },
+            new() { Name = "AGENTHUB_TRANSCRIPT_PUT_URL", Value = context.TranscriptPutUrl }
         };
 
         void AddSubscriptionVolume(string name, string secretName)
         {
+            // The secret holds every account of the user (docs/provider-accounts.md); the pod gets
+            // exactly one, projected under the file name the entrypoint has always looked for, so
+            // /secrets/<provider>/<file> is unchanged and the index and the other accounts' files
+            // never enter the pod. `Optional` doubles as "a missing key is skipped": a user with
+            // no login yet, or an account removed since, yields an empty mount rather than a pod
+            // that fails to set up its volumes.
+            var accountId = context.SubscriptionAccountId ?? ProviderAccountSecret.LegacyId;
             volumes.Add(new V1Volume
             {
                 Name = name,
-                Secret = new V1SecretVolumeSource { SecretName = secretName, Optional = true, DefaultMode = 0x1A0 }
+                Secret = new V1SecretVolumeSource
+                {
+                    SecretName = secretName, Optional = true, DefaultMode = 0x1A0,
+                    Items = new List<V1KeyToPath>
+                    {
+                        new() { Key = ProviderAccountSecret.Key(accountId, record.Agent), Path = ProviderAccountSecret.FileName(record.Agent) }
+                    }
+                }
             });
             mounts.Add(new V1VolumeMount { Name = name, MountPath = $"/secrets/{name}", ReadOnlyProperty = true });
         }
@@ -245,6 +290,12 @@ public static class AgentPodSpecFactory
                 AddApiKey(binding.EnvName, binding.SecretKey);
                 break;
             }
+            case (AgentKind.OpenCode, AgentAuthMode.Subscription):
+                AddSubscriptionVolume("opencode", context.OpenCodeCredentialSecretName);
+                break;
+            case (AgentKind.OpenCode, AgentAuthMode.ApiKey):
+                AddApiKey("OPENCODE_API_KEY", "opencode_api_key");
+                break;
             case (AgentKind.Claude, AgentAuthMode.Auto):
                 AddSubscriptionVolume("claude", context.ClaudeCredentialSecretName);
                 AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
@@ -274,6 +325,16 @@ public static class AgentPodSpecFactory
         {
             volumes.Add(new V1Volume { Name = "codex-system-config", EmptyDir = new V1EmptyDirVolumeSource() });
             mounts.Add(new V1VolumeMount { Name = "codex-system-config", MountPath = "/etc/codex", ReadOnlyProperty = true });
+        }
+
+        // OpenCode's managed config (/etc/opencode/opencode.json) outranks every config the agent
+        // can write, so it is where the policy plugin is registered. Under $HOME the agent could
+        // drop the plugin from its own config and every tool call would run unchecked; a read-only
+        // mount filled by an init container keeps it out of reach, as /etc/codex does for Codex.
+        if (record.Agent == AgentKind.OpenCode)
+        {
+            volumes.Add(new V1Volume { Name = "opencode-system-config", EmptyDir = new V1EmptyDirVolumeSource() });
+            mounts.Add(new V1VolumeMount { Name = "opencode-system-config", MountPath = "/etc/opencode", ReadOnlyProperty = true });
         }
 
         if (record.Agent == AgentKind.Claude && context.Runtime.TelemetryEnabled)
@@ -345,6 +406,20 @@ public static class AgentPodSpecFactory
                     chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/openclaw)"
                     echo "Runtime copied to /opt/agenthub."
                     """,
+                AgentKind.OpenCode => """
+                    set -e
+                    mkdir -p /opt/agenthub/bin /opt/agenthub/lib
+                    cp -r /opt/session-agent /opt/agenthub/session-agent
+                    cp /usr/local/bin/node /opt/agenthub/bin/node
+                    cp -r /usr/local/lib/node_modules /opt/agenthub/lib/node_modules
+                    cp /usr/local/bin/entrypoint.sh /opt/agenthub/entrypoint.sh
+                    # opencode launcher: resolve the symlink target of the global npm install and link it
+                    target=$(readlink -f /usr/local/bin/opencode)
+                    ln -sf "/opt/agenthub/${target#/usr/local/}" /opt/agenthub/bin/opencode
+                    chmod -R a+rX /opt/agenthub
+                    chmod +x /opt/agenthub/bin/node /opt/agenthub/entrypoint.sh "$(readlink -f /opt/agenthub/bin/opencode)"
+                    echo "Runtime copied to /opt/agenthub."
+                    """,
                 _ => """
                     set -e
                     mkdir -p /opt/agenthub/bin /opt/agenthub/lib
@@ -364,7 +439,7 @@ public static class AgentPodSpecFactory
             {
                 Name = "copy-runtime", Image = runtimeImage,
                 ImagePullPolicy = context.RuntimeImages.PullPolicy,
-                Command = new List<string> { "/bin/sh", "-c", copyScript },
+                Command = new List<string> { "/bin/sh", "-c", ShellScript(copyScript) },
                 VolumeMounts = new List<V1VolumeMount> { new() { Name = "runtime", MountPath = "/opt/agenthub" } },
                 SecurityContext = ContainerSecurity()
             });
@@ -382,10 +457,33 @@ public static class AgentPodSpecFactory
                 Name = "prepare-codex-system-config",
                 Image = runtimeImage,
                 ImagePullPolicy = context.RuntimeImages.PullPolicy,
-                Command = new List<string> { "/bin/sh", "-c", requirementsScript },
+                Command = new List<string> { "/bin/sh", "-c", ShellScript(requirementsScript) },
                 VolumeMounts = new List<V1VolumeMount>
                 {
                     new() { Name = "codex-system-config", MountPath = "/codex-system-config" }
+                },
+                SecurityContext = ContainerSecurity()
+            });
+        }
+
+        if (record.Agent == AgentKind.OpenCode)
+        {
+            // The plugin path is the one the agent container will see: a custom image runs the
+            // runtime copied to /opt/agenthub, the stock image its own /opt/session-agent.
+            var managedRuntime = customImage is null ? "/opt/session-agent/opencode" : "/opt/agenthub/session-agent/opencode";
+            var managedConfigScript = $"""
+                node /opt/session-agent/opencode/managed-config.js \
+                  /opencode-system-config/opencode.json {managedRuntime}
+                """;
+            initContainers.Add(new V1Container
+            {
+                Name = "prepare-opencode-system-config",
+                Image = runtimeImage,
+                ImagePullPolicy = context.RuntimeImages.PullPolicy,
+                Command = new List<string> { "/bin/sh", "-c", managedConfigScript },
+                VolumeMounts = new List<V1VolumeMount>
+                {
+                    new() { Name = "opencode-system-config", MountPath = "/opencode-system-config" }
                 },
                 SecurityContext = ContainerSecurity()
             });
@@ -423,7 +521,7 @@ public static class AgentPodSpecFactory
             initContainers.Add(new V1Container
             {
                 Name = "git-clone", Image = context.Runtime.GitCloneImage,
-                Command = new List<string> { "/bin/sh", "-c", cloneScript },
+                Command = new List<string> { "/bin/sh", "-c", ShellScript(cloneScript) },
                 Env = new List<V1EnvVar>
                 {
                     new() { Name = "REPOS", Value = reposEnv },

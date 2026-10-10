@@ -85,6 +85,14 @@ builder.Services.AddSingleton<SessionShareStore>();
 builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
+// Every sharing surface (web, token API, MCP) goes through this one service, which holds the
+// licence check — see docs/session-sharing-api.md. FrontendOrigin is what share-link URLs are
+// built from, for the same reason SessionInfo.Url is (never the request host).
+builder.Services.AddSingleton<ISessionShareStore>(sp => sp.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<ISessionSharingService>(sp => new SessionSharingService(
+    sp.GetRequiredService<ISessionShareStore>(),
+    sp.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>(),
+    builder.Configuration["FrontendOrigin"]));
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
@@ -101,6 +109,10 @@ var sessionFileOptions = builder.Configuration.GetSection("Files")
     .Get<AgentHub.Api.Files.SessionFileOptions>() ?? new AgentHub.Api.Files.SessionFileOptions();
 builder.Services.AddSingleton(sessionFileOptions);
 builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api.Files.AgentFileClient>();
+builder.Services.AddHttpClient<IAgentCredentialPusher, AgentCredentialPusher>();
+builder.Services.AddHttpClient<ISessionMessageDelivery, SessionMessageDelivery>();
+// A pod's usage-limit report: marks the account and moves the session (docs/account-limits.md).
+builder.Services.AddSingleton<IAccountFailover, AccountFailover>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileService, AgentHub.Api.Files.SessionFileService>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileCleanup, AgentHub.Api.Files.SessionFileCleanup>();
 builder.Services.AddHostedService<AgentHub.Api.Files.SessionFileSweepService>();
@@ -210,6 +222,11 @@ builder.Services.AddHostedService<AgentHub.Api.Chat.Signal.SignalReceiveService>
 // Safety net: expires pending permission prompts whose hook never called /expire.
 builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepService>();
 
+// Sessions with a self-deletion deadline (docs/session-expiry.md). The lock keeps two replicas
+// from deleting the same session at once.
+builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
+builder.Services.AddHostedService<SessionExpirySweepService>();
+
 // Runtime network port requests: agents ask for extra ports (agenthub_network MCP),
 // the owner approves via the permission channel, approved ports become NetworkPolicies.
 builder.Services.AddSingleton<AgentHub.Api.Network.IPortGrantStore, AgentHub.Api.Network.PortGrantStore>();
@@ -286,7 +303,9 @@ if (mcpOptions.IsConfigured)
     var mcpEncryptionCertificate = mcpKeys.GetEncryptionCertificateAsync().GetAwaiter().GetResult();
 
     builder.Services.AddAntiforgery();
-    builder.Services.AddMcpServer().WithHttpTransport().WithTools<AgentHubMcpTools>();
+    builder.Services.AddMcpServer().WithHttpTransport()
+        .WithTools<AgentHubMcpTools>()
+        .WithTools<SessionSharingMcpTools>();
 
     if (authEnabled)
     {
@@ -613,7 +632,11 @@ app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptio
     slackEnabled = slack.Enabled,
     // Same for the community Telegram/Signal integrations.
     telegramEnabled = telegramOpts.Enabled,
-    signalEnabled = signalOpts.Enabled
+    signalEnabled = signalOpts.Enabled,
+    // Shown in the sidebar footer and on the profile page so a deployment can be told apart
+    // from the release notes it is supposed to match.
+    version = AgentHub.Api.Services.AppVersion.Current,
+    repoUrl = AgentHub.Api.Services.AppVersion.RepoUrl
 })).AllowAnonymous();
 
 var agentPort = builder.Configuration.GetValue("AgentHub:AgentPort", 7681);
@@ -646,7 +669,10 @@ async Task ProxyResolvedWs(HttpContext ctx, SessionAccessResult resolved, ISessi
     if (live is null) { ctx.Response.StatusCode = 404; return; }
     if (resolved.Level == SessionAccessLevel.Owner)
         try { await sessions.ClearQuestionAsync(resolved.Session.Owner, resolved.Session.Id, ctx.RequestAborted); } catch { }
-    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level), lf, agentPort);
+    // Anyone allowed to type — owner or collaborator — keeps the idle countdown from running
+    // out; the proxy ignores the callback for a read-only viewer.
+    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level), lf, agentPort,
+        onActivity: ct => sessions.TouchActivityAsync(resolved.Session.Owner, resolved.Session.Id, ct));
 }
 
 async Task ProxySharedWs(HttpContext ctx, string id, ISessionAccessService access, ISessionService sessions, ILoggerFactory lf)

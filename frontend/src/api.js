@@ -13,6 +13,24 @@ function handle401() {
   throw new Error('401 Sign-in required')
 }
 
+// Builds the Error for a failed response. `.status` lets callers map specific failures (e.g.
+// 503) to inline messages; the message keeps the raw body because the chat relays and the
+// generic `.err` paragraphs still print it. A 402 additionally carries `.code`: every enterprise
+// endpoint answers it with `{error: "An active enterprise license is required."}`, and the
+// sharing service also sends `code: "license_required"` — the gate must not depend on which
+// of the two a given controller produces, so the code is normalised here, once.
+async function responseError(res) {
+  const text = await res.text()
+  const err = new Error(`${res.status} ${text}`)
+  err.status = res.status
+  if (res.status === 402) err.code = codeFromBody(text) || 'license_required'
+  return err
+}
+
+function codeFromBody(text) {
+  try { return JSON.parse(text)?.code || null } catch { return null }
+}
+
 async function req(method, path, body) {
   const res = await fetch(`/api${path}`, {
     method,
@@ -20,12 +38,7 @@ async function req(method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   })
   if (res.status === 401) handle401()
-  if (!res.ok) {
-    // `.status` lets callers map specific failures (e.g. 503) to inline messages.
-    const err = new Error(`${res.status} ${await res.text()}`)
-    err.status = res.status
-    throw err
-  }
+  if (!res.ok) throw await responseError(res)
   return res.status === 204 ? null : res.json()
 }
 
@@ -39,11 +52,7 @@ async function reqStatus(method, path, body) {
     body: body ? JSON.stringify(body) : undefined
   })
   if (res.status === 401) handle401()
-  if (!res.ok) {
-    const err = new Error(`${res.status} ${await res.text()}`)
-    err.status = res.status
-    throw err
-  }
+  if (!res.ok) throw await responseError(res)
   return res.status
 }
 async function uploadSessionFile(upload, body, options = {}) {
@@ -121,25 +130,48 @@ export const api = {
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
+  // Continues a finished autonomous session interactively; 409 while it runs or is not autonomous.
+  convertSession: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/convert`, data),
   // Recent agent-to-agent messages sent to a session (read-only fleet inbox view).
   listSessionMessages: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/messages`),
+  // The owner messages their own session: {body, priority?, interrupt?} → {id, to, deliveredVia, reason?}.
+  sendSessionMessage: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/messages`, data),
   // Pending tool-permission requests + in-app approval (mirrors the messenger buttons).
   listPermissions: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/permissions`),
   decidePermission: (id, reqId, decision) => req('POST', `/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(reqId)}`, { decision }),
   deleteSession: (id) => req('DELETE', `/sessions/${id}`),
   storeCredentials: (data) => req('PUT', '/credentials', data),
-  // Which credential fields have a stored value (booleans only, never values).
+  // Which credential fields have a stored value (booleans only, never values) plus the git
+  // token list as {id, kind, host} — never the tokens.
   getCredentialStatus: () => req('GET', '/credentials'),
+  // Git PATs are a list keyed by host, not merge fields of storeCredentials: adding one for a
+  // host that is already stored rotates that entry.
+  addGitPat: (data) => req('POST', '/credentials/git-pats', data),
+  deleteGitPat: (id) => req('DELETE', `/credentials/git-pats/${encodeURIComponent(id)}`),
   // A subscription login is captured from a session by its runtime rather than typed in here,
   // so this is the only way to get rid of one that stopped working.
   deleteSubscriptionCredential: (agent) =>
     req('DELETE', `/credentials/subscription/${encodeURIComponent(agent)}`),
+  // Stored provider logins as accounts, keyed by agent name ({ Claude: [...], Codex: [...] }):
+  // label, identity and default marker — never the credential files themselves.
+  listProviderAccounts: () => req('GET', '/credentials/accounts'),
+  updateProviderAccount: (agent, id, data) =>
+    req('PATCH', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`, data),
+  deleteProviderAccount: (agent, id) =>
+    req('DELETE', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`),
+  // Moves a running Subscription session to another account; the pod restarts its agent with resume.
+  switchSessionCredential: (id, credentialId) =>
+    req('PATCH', `/sessions/${encodeURIComponent(id)}/credential`, { credentialId }),
   // GDPR: irreversibly deletes the caller's account and all its data.
   deleteAccount: (confirm) => req('DELETE', `/account?confirm=${encodeURIComponent(confirm)}`),
   // Personal API tokens for driving sessions remotely.
   listApiTokens: () => req('GET', '/tokens'),
-  // Returns the plaintext token exactly once (in the `token` field).
-  createApiToken: (name) => req('POST', '/tokens', { name }),
+  // Returns the plaintext token exactly once (in the `token` field). `allowedCredentials`
+  // (optional) restricts what sessions created with the token may use — docs/credential-scopes.md.
+  createApiToken: (name, allowedCredentials = null) =>
+    req('POST', '/tokens', allowedCredentials ? { name, allowedCredentials } : { name }),
+  // Replaces the restriction; null lifts it.
+  updateApiToken: (id, allowedCredentials) => req('PATCH', `/tokens/${encodeURIComponent(id)}`, { allowedCredentials }),
   deleteApiToken: (id) => req('DELETE', `/tokens/${id}`),
   // Token/cost usage dashboard (fed by the agents' OpenTelemetry exporter).
   usageSummary: () => req('GET', '/usage/summary'),
@@ -227,8 +259,17 @@ export const api = {
     const res = await fetch(`/api/sessions/${id}/transcript`, { headers: await authHeaders() })
     if (res.status === 401) handle401()
     return res.ok ? res.text() : ''
-  }
+  },
+  // The Transcript tab's page: role-tagged entries from the provider's own transcript, or the
+  // cleaned scrollback as text when there is none. `offset` is the previous page's nextOffset.
+  getConversation: (id, offset) =>
+    req('GET', `/sessions/${encodeURIComponent(id)}/conversation${conversationQuery(offset)}`)
 }
+function conversationQuery(offset) {
+  return offset ? `?offset=${encodeURIComponent(offset)}` : ''
+}
+export const getSharedConversation = (token, offset) =>
+  sharedReq(`/shared/${encodeURIComponent(token)}/conversation${conversationQuery(offset)}`)
 export const getSharedFileCapabilities = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/capabilities`)
 export const listSharedSessionFiles = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files`)
 export const getSharedFilePresentation = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/presentation`)

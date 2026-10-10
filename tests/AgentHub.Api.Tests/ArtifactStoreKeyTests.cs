@@ -51,6 +51,14 @@ public class ArtifactStoreKeyTests
     }
 
     [Fact]
+    public void StateKey_OpenCodeUsesSeparateProviderKey()
+    {
+        Assert.Equal(
+            "sessions/alice/session-id/opencode-state.tgz",
+            IArtifactStore.StateKey("alice", "session-id", AgentKind.OpenCode));
+    }
+
+    [Fact]
     public void ProviderStateKeys_DoNotChangeOtherArtifactKeys()
     {
         Assert.Equal("sessions/alice/session-id/scrollback.log",

@@ -2,6 +2,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { SessionsBackendClient } from './client.mjs';
+import { withCredentialSelection } from './credentials.mjs';
+import { withExpiry } from './expiry.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
@@ -44,7 +46,19 @@ const createSchema = z.object({
   runAsRoot: z.boolean().optional(),
   autoApprove: z.boolean().optional(),
   cpu: z.string().max(32).optional(),
-  memory: z.string().max(32).optional()
+  memory: z.string().max(32).optional(),
+  // Text with a unit, converted to seconds before the HTTP call — see expiry.mjs for why.
+  autoDeleteAfter: z.string().max(16).optional(),
+  autoDeleteFrom: z.enum(['start', 'lastActivity']).optional(),
+  // Which stored provider login the child mounts (omitted = the owner's default account) and
+  // which stored git tokens it gets, as comma-separated ids — text, not an array, so an
+  // already-connected client's call does not fail schema validation (see credentials.mjs).
+  // Omitted or "*" = every stored token, "none" = no token.
+  credentialId: z.string().max(64).optional(),
+  gitPatIds: z.string().max(4096).optional(),
+  // Whether the hub moves the child to another account when its own hits a usage limit
+  // (docs/account-limits.md); omitted = auto.
+  accountFailover: z.enum(['auto', 'off']).optional()
 });
 
 register('session_create', {
@@ -57,9 +71,35 @@ register('session_create', {
     + 'Interactive session the same without making it unattended. A repo on a host this session '
     + 'already uses a connected Git provider for gets that provider, so the child can push; name '
     + 'providerId on a repo to choose one yourself. hasMcp in the result counts '
-    + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled.',
+    + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled. '
+    + 'autoDeleteAfter ("90m", "12h", "3d") makes the child delete itself after that long since '
+    + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start. '
+    + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
+    + 'token) the git tokens the child gets. accountFailover "off" keeps the child on its account '
+    + 'when that hits a usage limit; the default "auto" moves it to another available one.',
   inputSchema: createSchema
-}, async (body) => text(sanitizeSession(await client.create(body))));
+}, async (body) => text(sanitizeSession(await client.create(withCredentialSelection(withExpiry(body))))));
+
+register('account_status', {
+  description: 'Which provider account this session (no sessionId) or a descendant runs on, whether that '
+    + 'account is at its usage limit (isExhausted, exhaustedUntil), the accountFailover setting, and '
+    + 'the owner\'s other stored accounts of the same provider as alternatives. If your own output says '
+    + 'you hit a usage limit, call this and account_switch to an alternative.',
+  inputSchema: z.object({ sessionId: z.string().min(1).max(128).optional() })
+  // Not a session record; sanitizeSession's allowlist would strip all of it.
+}, async ({ sessionId }) => text(await client.accountStatus(sessionId)));
+
+register('account_switch', {
+  description: 'Move this session (no sessionId) or a running descendant to another stored provider '
+    + 'account (an id from account_status). The agent restarts with the other login and resumes its '
+    + 'conversation — switching yourself is allowed and ends your current turn. Fails with '
+    + 'sessions_backend_http_409 without a live pod, sessions_backend_http_400 for an unknown account '
+    + 'or an API-key session, sessions_backend_http_502 when the pod did not take the file.',
+  inputSchema: z.object({
+    sessionId: z.string().min(1).max(128).optional(),
+    credentialId: z.string().min(1).max(64)
+  })
+}, async ({ sessionId, credentialId }) => text(sanitizeSession(await client.switchAccount(sessionId, credentialId))));
 
 register('session_get', {
   description: 'Get a descendant session by id.',
@@ -86,6 +126,20 @@ register('session_delete', {
   inputSchema: z.object({ id: z.string().min(1).max(128) })
 }, async ({ id }) => text(sanitizeSession(await client.delete(id))));
 
+register('session_convert', {
+  description: 'Continue a finished or paused Autonomous descendant session as an Interactive one, so '
+    + 'a person can take its conversation on (hand them its id). Claude and Codex keep the conversation; '
+    + 'Cursor and OpenClaw start a new one in the same workspace. Resumes right away unless resume is '
+    + 'false. Fails with sessions_backend_http_409 while the session is running or is not Autonomous.',
+  inputSchema: z.object({
+    sessionId: z.string().min(1).max(128),
+    uiMode: z.enum(['terminal', 'chat']).optional(),
+    // Off by default: a person is now there to answer tool requests.
+    autoApprove: z.boolean().optional(),
+    resume: z.boolean().optional()
+  })
+}, async ({ sessionId, ...body }) => text(sanitizeSession(await client.convert(sessionId, body))));
+
 register('agents_list', {
   description: 'List the agents (sessions) of this session\'s project: id, title (= agent name), '
     + 'description (what the agent is for), phase. Also lists this session\'s parent chain and the '
@@ -96,12 +150,16 @@ register('agents_list', {
 register('agent_send', {
   description: 'Send a message/task to a peer agent (anyone in agents_list). "to" is a session id or a '
     + 'unique agent title (see agents_list); an ambiguous title fails with the candidate list. '
-    + 'The peer reads it via its agent_inbox tool.',
+    + 'By default the peer reads it via its agent_inbox tool. priority pushes it straight into the '
+    + 'peer\'s running prompt; interrupt also stops the peer\'s current work first (implies priority). '
+    + 'The result\'s deliveredVia says where it went: inbox, injected or mod.',
   inputSchema: z.object({
     to: z.string().min(1).max(256),
-    message: z.string().min(1).max(4000)
+    message: z.string().min(1).max(4000),
+    priority: z.boolean().optional(),
+    interrupt: z.boolean().optional()
   })
-}, async ({ to, message }) => {
+}, async ({ to, message, priority, interrupt }) => {
   const agents = await client.listProjectAgents();
   let targetId;
   try {
@@ -113,7 +171,7 @@ register('agent_send', {
       isError: true
     };
   }
-  return text(await client.sendAgentMessage(targetId, message));
+  return text(await client.sendAgentMessage(targetId, message, { priority, interrupt }));
 });
 
 register('agent_inbox', {
@@ -127,7 +185,7 @@ function safeError(error) {
   const message = error instanceof Error ? error.message : '';
   const stable = [
     'sessions_backend_not_configured', 'sessions_backend_invalid_url',
-    'sessions_backend_response_too_large', 'sessions_backend_invalid_json'
+    'sessions_backend_response_too_large', 'sessions_backend_invalid_json', 'autodelete_invalid_duration'
   ];
   return stable.find(code => message.includes(code)) ??
     (/sessions_backend_http_\d{3}/.exec(message)?.[0]) ?? 'sessions_operation_failed';

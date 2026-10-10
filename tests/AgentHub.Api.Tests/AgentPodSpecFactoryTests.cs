@@ -19,6 +19,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.OpenClaw, AgentAuthMode.ApiKey, "apikey-anthropic", "runtime-openclaw", null, "ANTHROPIC_API_KEY")]
     [InlineData(AgentKind.OpenClaw, AgentAuthMode.ApiKey, "apikey-openai", "runtime-openclaw", null, "OPENAI_API_KEY")]
     [InlineData(AgentKind.OpenClaw, AgentAuthMode.ApiKey, "apikey-cursor", "runtime-openclaw", null, "CURSOR_API_KEY")]
+    [InlineData(AgentKind.OpenCode, AgentAuthMode.Subscription, "subscription", "runtime-opencode", "opencode", null)]
+    [InlineData(AgentKind.OpenCode, AgentAuthMode.ApiKey, "apikey", "runtime-opencode", null, "OPENCODE_API_KEY")]
     public void Build_CredentialSelection_MountsOnlySelectedCredential(
         AgentKind agent, AgentAuthMode auth, string expectedAuthMode, string expectedImage, string? expectedVolume, string? expectedEnv)
     {
@@ -41,6 +43,8 @@ public class AgentPodSpecFactoryTests
         Assert.Equal(expectedVolume == "codex", pod.Volumes.Any(v => v.Name == "codex"));
         Assert.Equal(expectedVolume == "cursor", pod.Volumes.Any(v => v.Name == "cursor"));
         Assert.Equal(expectedVolume == "openclaw", pod.Volumes.Any(v => v.Name == "openclaw"));
+        Assert.Equal(expectedVolume == "opencode", pod.Volumes.Any(v => v.Name == "opencode"));
+        Assert.Equal(expectedEnv == "OPENCODE_API_KEY", container.Env.Any(e => e.Name == "OPENCODE_API_KEY"));
         Assert.Equal(expectedEnv == "ANTHROPIC_API_KEY", container.Env.Any(e => e.Name == "ANTHROPIC_API_KEY"));
         Assert.Equal(expectedEnv == "CODEX_API_KEY", container.Env.Any(e => e.Name == "CODEX_API_KEY"));
         Assert.Equal(expectedEnv == "OPENAI_API_KEY", container.Env.Any(e => e.Name == "OPENAI_API_KEY"));
@@ -56,6 +60,7 @@ public class AgentPodSpecFactoryTests
         Assert.DoesNotContain("anthropic_api_key", projectedCredentialKeys);
         Assert.DoesNotContain("openai_api_key", projectedCredentialKeys);
         Assert.DoesNotContain("cursor_api_key", projectedCredentialKeys);
+        Assert.DoesNotContain("opencode_api_key", projectedCredentialKeys);
         if (expectedEnv is not null)
         {
             var apiKey = Assert.Single(container.Env, e => e.Name == expectedEnv);
@@ -64,10 +69,53 @@ public class AgentPodSpecFactoryTests
             {
                 "CODEX_API_KEY" or "OPENAI_API_KEY" => "openai_api_key",
                 "CURSOR_API_KEY" => "cursor_api_key",
+                "OPENCODE_API_KEY" => "opencode_api_key",
                 _ => "anthropic_api_key"
             };
             Assert.Equal(expectedSecretKey, apiKey.ValueFrom?.SecretKeyRef?.Key);
         }
+    }
+
+    /// <summary>
+    /// The provider secret holds every account of the user; the pod must see exactly the chosen
+    /// one, under the file name the entrypoint has always read (docs/provider-accounts.md).
+    /// </summary>
+    [Theory]
+    [InlineData(AgentKind.Claude, "claude", "credentials.json")]
+    [InlineData(AgentKind.Codex, "codex", "auth.json")]
+    [InlineData(AgentKind.Cursor, "cursor", "auth.json")]
+    [InlineData(AgentKind.OpenClaw, "openclaw", "auth-profiles.json")]
+    [InlineData(AgentKind.OpenCode, "opencode", "auth.json")]
+    public void Build_ProjectsOnlyTheSelectedAccountUnderTheLegacyFileName(AgentKind agent, string volume, string file)
+    {
+        var record = Record(agent, AgentAuthMode.Subscription, SessionMode.Interactive);
+        var request = new CreateSessionRequest { Agent = agent, AuthMode = AgentAuthMode.Subscription };
+
+        var pod = AgentPodSpecFactory.Build(record, request, Context() with { SubscriptionAccountId = "3f9a1c2b" });
+
+        var source = Assert.Single(pod.Volumes, v => v.Name == volume).Secret;
+        Assert.True(source.Optional);
+        var item = Assert.Single(source.Items);
+        Assert.Equal($"3f9a1c2b.{file}", item.Key);
+        Assert.Equal(file, item.Path);
+    }
+
+    /// <summary>No account resolved: project a key that cannot exist, so the mount is empty and
+    /// the entrypoint runs its in-session login — not the whole secret, which would hand the pod
+    /// the index and every other account.</summary>
+    [Fact]
+    public void Build_WithoutAResolvedAccountProjectsAMissingKeyRatherThanTheWholeSecret()
+    {
+        var record = Record(AgentKind.Claude, AgentAuthMode.Subscription, SessionMode.Interactive);
+        var request = new CreateSessionRequest { Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription };
+
+        var pod = AgentPodSpecFactory.Build(record, request, Context() with { SubscriptionAccountId = null });
+
+        var source = Assert.Single(pod.Volumes, v => v.Name == "claude").Secret;
+        var item = Assert.Single(source.Items);
+        Assert.Equal("default.credentials.json", item.Key);
+        Assert.Equal("credentials.json", item.Path);
+        Assert.True(source.Optional);
     }
 
     [Theory]
@@ -79,6 +127,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey)]
     [InlineData(AgentKind.OpenClaw, AgentAuthMode.Subscription)]
     [InlineData(AgentKind.OpenClaw, AgentAuthMode.ApiKey)]
+    [InlineData(AgentKind.OpenCode, AgentAuthMode.Subscription)]
+    [InlineData(AgentKind.OpenCode, AgentAuthMode.ApiKey)]
     public void Build_GitCloneMountsOnlyWorkspaceHomeTmpAndGitCredentials(AgentKind agent, AgentAuthMode auth)
     {
         var pod = Build(agent, auth, request => request with { RepoUrl = "https://example.test/repo.git" });
@@ -117,6 +167,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Cursor, AgentAuthMode.ApiKey, "runtime-cursor", "agent")]
     [InlineData(AgentKind.OpenClaw, AgentAuthMode.Subscription, "runtime-openclaw", "openclaw")]
     [InlineData(AgentKind.OpenClaw, AgentAuthMode.ApiKey, "runtime-openclaw", "openclaw")]
+    [InlineData(AgentKind.OpenCode, AgentAuthMode.Subscription, "runtime-opencode", "opencode")]
+    [InlineData(AgentKind.OpenCode, AgentAuthMode.ApiKey, "runtime-opencode", "opencode")]
     public void Build_CustomImageCopyInitUsesSelectedRuntimeImage(
         AgentKind agent, AgentAuthMode auth, string expectedRuntimeImage, string expectedLauncher)
     {
@@ -142,6 +194,8 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Cursor, "custom/runtime:1", true)]
     [InlineData(AgentKind.OpenClaw, null, false)]
     [InlineData(AgentKind.OpenClaw, "custom/runtime:1", true)]
+    [InlineData(AgentKind.OpenCode, null, false)]
+    [InlineData(AgentKind.OpenCode, "custom/runtime:1", true)]
     public void Build_RuntimeMountIsReadOnlyForCustomAgentAndWritableOnlyForCopyInit(
         AgentKind agentKind, string? customImage, bool expectsInjectedRuntime)
     {
@@ -187,8 +241,55 @@ public class AgentPodSpecFactoryTests
         Assert.True(agentMount.ReadOnlyProperty);
         Assert.Equal("runtime-codex", requirements.Image);
         Assert.Contains("/etc/codex/requirements.toml", command);
+        // The script spans two lines joined by a backslash. On a CRLF checkout the raw string
+        // carries "\r\n", sh does not treat "\\\r" as a continuation, and the second line ran
+        // requirements.toml as a shell script (exit 125/127 in the init container).
+        Assert.DoesNotContain('\r', command);
+        Assert.Contains("\\\n", command);
         Assert.Contains("/opt/session-agent/codex/project-requirements.js", command);
         Assert.Contains(expectedManagedRuntime, command);
+    }
+
+    [Theory]
+    [InlineData(SessionMode.Interactive, null, "/opt/session-agent/opencode")]
+    [InlineData(SessionMode.Autonomous, null, "/opt/session-agent/opencode")]
+    [InlineData(SessionMode.Autonomous, "custom/runtime:1", "/opt/agenthub/session-agent/opencode")]
+    public void Build_OpenCodeRegistersThePolicyPluginInAReadOnlyManagedConfig(
+        SessionMode mode, string? customImage, string expectedManagedRuntime)
+    {
+        var pod = Build(AgentKind.OpenCode, AgentAuthMode.ApiKey, request => request with
+        {
+            Mode = mode,
+            Prompt = "work",
+            Image = customImage
+        });
+        var agent = Assert.Single(pod.Containers);
+        var prepare = Assert.Single(pod.InitContainers, c => c.Name == "prepare-opencode-system-config");
+        var command = Assert.Single(prepare.Command, value => value.Contains("managed-config.js"));
+
+        Assert.NotNull(Assert.Single(pod.Volumes, v => v.Name == "opencode-system-config").EmptyDir);
+        // Writable for the agent, the plugin could be dropped from the config and every tool call
+        // would run unchecked.
+        var agentMount = Assert.Single(agent.VolumeMounts, m => m.Name == "opencode-system-config");
+        Assert.Equal("/etc/opencode", agentMount.MountPath);
+        Assert.True(agentMount.ReadOnlyProperty);
+        var initMount = Assert.Single(prepare.VolumeMounts, m => m.Name == "opencode-system-config");
+        Assert.NotEqual(true, initMount.ReadOnlyProperty);
+        Assert.Equal("runtime-opencode", prepare.Image);
+        Assert.Contains("/opencode-system-config/opencode.json", command);
+        Assert.Contains(expectedManagedRuntime, command);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.Cursor)]
+    [InlineData(AgentKind.OpenClaw)]
+    public void Build_OnlyOpenCodeGetsTheOpenCodeManagedConfig(AgentKind agentKind)
+    {
+        var pod = Build(agentKind, AgentAuthMode.Subscription);
+        Assert.DoesNotContain(pod.Volumes, v => v.Name == "opencode-system-config");
+        Assert.DoesNotContain(pod.InitContainers ?? [], c => c.Name == "prepare-opencode-system-config");
     }
 
 
@@ -224,6 +325,7 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.OpenClaw)]
     [InlineData(AgentKind.Claude)]
     [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.OpenCode)]
     public void Build_PassesTheAutoApproveFlagToEveryRuntime(AgentKind agent)
     {
         var on = Build(agent, AgentAuthMode.ApiKey,
@@ -316,6 +418,21 @@ public class AgentPodSpecFactoryTests
 
         Assert.Same(pod, template.Spec);
     }
+
+    [Theory]
+    [InlineData(SessionMode.Autonomous, AgentAuthMode.ApiKey, true)]
+    [InlineData(SessionMode.Scheduled, AgentAuthMode.ApiKey, true)]
+    // An autonomous run converted to interactive keeps AuthMode ApiKey, and the key is the only
+    // credential it has. This used to be false: the mode alone gated the lookup.
+    [InlineData(SessionMode.Interactive, AgentAuthMode.ApiKey, true)]
+    [InlineData(SessionMode.Autonomous, AgentAuthMode.Auto, true)]
+    [InlineData(SessionMode.Scheduled, AgentAuthMode.Auto, true)]
+    // Auto bills the API only when unattended without a login; interactive Auto is a login.
+    [InlineData(SessionMode.Interactive, AgentAuthMode.Auto, false)]
+    [InlineData(SessionMode.Interactive, AgentAuthMode.Subscription, false)]
+    [InlineData(SessionMode.Autonomous, AgentAuthMode.Subscription, false)]
+    public void ResolvesApiKey_ForEveryApiKeySessionWhateverItsMode(SessionMode mode, AgentAuthMode auth, bool expected)
+        => Assert.Equal(expected, AgentPodSpecFactory.ResolvesApiKey(mode, auth));
 
     [Theory]
     [InlineData(SessionMode.Interactive, AgentKind.Codex, AgentAuthMode.Subscription, false, false, null)]
@@ -539,12 +656,14 @@ public class AgentPodSpecFactoryTests
         CodexCredentialSecretName = "codex-owner",
         CursorCredentialSecretName = "cursor-owner",
         OpenClawCredentialSecretName = "openclaw-owner",
+        OpenCodeCredentialSecretName = "opencode-owner",
         CallbackUrl = "http://callback/internal/sessions/session-id",
         StatePutUrl = "http://s3/state-put",
         StateGetUrl = "",
         ScrollbackPutUrl = "http://s3/scroll-put",
+        TranscriptPutUrl = "http://s3/transcript-put",
         RuntimeImages = new AgentRuntimeImages(
-            "runtime-claude", "runtime-codex", "runtime-cursor", "runtime-openclaw", "Always"),
+            "runtime-claude", "runtime-codex", "runtime-cursor", "runtime-openclaw", "runtime-opencode", "Always"),
         Runtime = new AgentPodRuntimeSettings
         {
             AgentPort = 7681,

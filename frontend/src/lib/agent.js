@@ -2,7 +2,8 @@ export const agentOptions = [
   { value: 'Claude', label: 'Claude', hint: 'Anthropic agent runtime' },
   { value: 'Codex', label: 'Codex', hint: 'OpenAI agent runtime' },
   { value: 'Cursor', label: 'Cursor', hint: 'Cursor agent runtime' },
-  { value: 'OpenClaw', label: 'OpenClaw', hint: 'OpenClaw agent runtime' }
+  { value: 'OpenClaw', label: 'OpenClaw', hint: 'OpenClaw agent runtime' },
+  { value: 'OpenCode', label: 'OpenCode', hint: 'OpenCode agent runtime (OpenCode Go)' }
 ]
 
 /** Filter the agent catalog by an allowlist. Empty/missing = unrestricted. */
@@ -46,6 +47,15 @@ export function defaultPolicy(agent) {
       allowedTools: ['Read', 'Edit'],
       allowedMcpTools: [],
       allowedCommands: ['git status', 'npm test', 'dotnet test']
+    }
+  }
+  if (agent === 'OpenCode') {
+    // OpenCode's tools arrive under the hub's names (bash → Bash, edit/apply_patch → Edit, …),
+    // and shell commands are matched by prefix like Codex's, so the same shape applies.
+    return {
+      allowedTools: ['Read', 'Edit', 'Glob', 'Grep'],
+      allowedMcpTools: [],
+      allowedCommands: ['git status', 'npm test']
     }
   }
   if (agent === 'Cursor') {
@@ -122,11 +132,90 @@ export function policyPayload(form) {
 export function toolsPlaceholder(agent) {
   if (agent === 'Cursor') return 'Shell(git status)\nRead(**)\nWrite(**)'
   if (agent === 'Codex') return 'Read\nEdit'
+  if (agent === 'OpenCode') return 'Read\nEdit\nGlob\nGrep'
   return 'Read\nEdit\nBash(git*)'
 }
 
 export function commandsPlaceholder(agent) {
-  return agent === 'Codex' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'
+  return agent === 'Codex' || agent === 'OpenCode' ? 'git status\nnpm test\ndotnet test' : 'git status\nnpm test'
+}
+
+/** The accounts stored for one agent out of the `{ Claude: [...], ... }` listing. */
+export function accountsFor(accounts, agent) {
+  const list = accounts && typeof accounts === 'object' ? accounts[agent] : null
+  return Array.isArray(list) ? list : []
+}
+
+/** The account a session without an explicit choice runs on: the default, else the first. */
+export function defaultAccountId(list) {
+  const accounts = Array.isArray(list) ? list : []
+  return (accounts.find(account => account?.isDefault) || accounts[0])?.id || ''
+}
+
+/** "Work — me@example.com · Example Org": the label plus whatever identity the login carried. */
+export function accountOptionLabel(account) {
+  if (!account) return ''
+  const identity = [account.email, account.organization].filter(Boolean).join(' · ')
+  return identity ? `${account.label} — ${identity}` : account.label
+}
+
+/** Whether a listing entry is at its usage limit right now (docs/account-limits.md). */
+export function isAccountExhausted(account) {
+  return !!account?.isExhausted
+}
+
+/** "at limit · resets 14:00": what the badges and dropdowns say about an exhausted account. */
+export function accountLimitLabel(account) {
+  if (!isAccountExhausted(account)) return ''
+  const until = account.exhaustedUntil ? new Date(account.exhaustedUntil) : null
+  if (!until || Number.isNaN(until.getTime())) return 'at limit'
+  const time = until.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  return `at limit · resets ${time}`
+}
+
+/** The accounts of a list a session could be moved to: not the current one, not exhausted. */
+export function availableAlternatives(list, currentId) {
+  return (Array.isArray(list) ? list : []).filter(account => account?.id !== currentId && !isAccountExhausted(account))
+}
+
+/** The stored git PATs ({id, kind, host}) out of the credential status; never a token. */
+export function gitPatOptions(status) {
+  return Array.isArray(status?.gitPats) ? status.gitPats : []
+}
+
+/** The ids a session's stored selection ticks: null ("all") ticks every option, a list ticks what still exists. */
+export function gitPatSelectionFor(current, options) {
+  const ids = options.map(pat => pat.id)
+  return Array.isArray(current) ? ids.filter(id => current.includes(id)) : ids
+}
+
+function everyPatTicked(selected, options) {
+  return options.length > 0 && options.every(pat => selected.includes(pat.id))
+}
+
+/**
+ * What a create sends: null when every stored token is ticked — "all, including ones added
+ * later", which is what every session got before a selection existed — else the ticked ids.
+ */
+export function gitPatIdsPayload(selected, options) {
+  if (!options.length || everyPatTicked(selected, options)) return null
+  return options.map(pat => pat.id).filter(id => selected.includes(id))
+}
+
+/**
+ * What an edit or duplicate sends: nothing when the selection matches the session's, `['*']`
+ * when a restricted session goes back to every token (null would mean "unchanged" there), else
+ * the ticked ids.
+ */
+export function gitPatIdsChange(selected, options, current) {
+  if (!options.length) return {}
+  const all = everyPatTicked(selected, options)
+  if (!Array.isArray(current)) return all ? {} : { gitPatIds: gitPatIdsPayload(selected, options) }
+  if (all) return { gitPatIds: ['*'] }
+  const chosen = options.map(pat => pat.id).filter(id => selected.includes(id))
+  const kept = gitPatSelectionFor(current, options)
+  const same = chosen.length === kept.length && chosen.every(id => kept.includes(id))
+  return same ? {} : { gitPatIds: chosen }
 }
 
 export function authLabel(authMode) {
@@ -147,6 +236,7 @@ export function credentialReadiness(agent, authMode, mode, status = {}, openClaw
       agent === 'Codex' ? 'codexSubscription'
         : agent === 'Cursor' ? 'cursorSubscription'
           : agent === 'OpenClaw' ? 'openclawSubscription'
+            : agent === 'OpenCode' ? 'opencodeSubscription'
             : 'claudeSubscription'
     ]
     if (ready) return { ready, text: `${agent} subscription login is stored.` }
@@ -159,6 +249,7 @@ export function credentialReadiness(agent, authMode, mode, status = {}, openClaw
     if (source === 'Cursor') return apiKeyReadiness('Cursor', 'cursorApiKey', status)
     return apiKeyReadiness('Anthropic', 'anthropicApiKey', status)
   }
+  if (agent === 'OpenCode') return apiKeyReadiness('OpenCode', 'openCodeApiKey', status)
   const provider = agent === 'Codex' ? 'OpenAI' : agent === 'Cursor' ? 'Cursor' : 'Anthropic'
   const statusKey = agent === 'Codex' ? 'openAiApiKey' : agent === 'Cursor' ? 'cursorApiKey' : 'anthropicApiKey'
   return apiKeyReadiness(provider, statusKey, status)

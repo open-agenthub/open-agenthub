@@ -1,6 +1,6 @@
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { api, auth } from './api.js'
+import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { api, auth, config } from './api.js'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TerminalView from './components/TerminalView.vue'
 import HomeView from './components/HomeView.vue'
@@ -14,7 +14,8 @@ import SettingsView from './components/SettingsView.vue'
 import AdminView from './components/AdminView.vue'
 import SharedSessionView from './components/SharedSessionView.vue'
 import SessionSearch from './components/SessionSearch.vue'
-import { sharedTokenFromPath } from './lib/routes.js'
+import { REPO_URL, versionLabel } from './lib/docs.js'
+import { SETTINGS_DEFAULT_TAB, settingsPath, settingsTabFromPath, sharedTokenFromPath } from './lib/routes.js'
 import { initials } from './lib/text.js'
 import { detectAlerts, showAlert } from './lib/desktop-notify.js'
 
@@ -25,7 +26,7 @@ const page = ref(null)
 const editId = ref(null)
 const error = ref('')
 const isAdmin = ref(false)
-const settingsTab = ref('credentials')
+const settingsTab = ref(SETTINGS_DEFAULT_TAB)
 const query = ref('')
 const searchBox = ref(null)
 const banner = ref(null) // { kind: 'ok' | 'warn' | 'error', text }
@@ -60,16 +61,36 @@ function openPage(name) { page.value = name; activeId.value = null }
 function openEdit(id) { editId.value = id; page.value = 'edit' }
 function openDuplicate(id) { editId.value = id; page.value = 'duplicate' }
 function openShare(id) { editId.value = id; page.value = 'share' }
-function openSettings(tab = 'credentials') { settingsTab.value = tab; page.value = 'settings' }
+function openSettings(tab = SETTINGS_DEFAULT_TAB) { settingsTab.value = tab; page.value = 'settings' }
 function closePage() { page.value = null; editId.value = null }
+// LicenseGate sits several levels deep (share dialog inside TerminalView, share controls inside
+// a library row); threading `isAdmin` and a navigation callback through every prop list would
+// couple panes that have nothing to do with licensing. Injected instead.
+provide('isAdmin', isAdmin)
+provide('openSettings', openSettings)
 async function resume(id) { await api.resumeSession(id); await refresh(); activeId.value = id }
+// The card already made the call; the list has to pick up the new mode before the session page
+// renders it, or the key'd TerminalView would keep showing the autonomous header.
+async function converted(id) { await refresh(); activeId.value = id }
 async function pause(id) { await api.pauseSession(id); await refresh() }
 async function remove(id) { if (!confirm('Really delete this session? (S3 artifacts are kept)')) return; await api.deleteSession(id); if (activeId.value === id) activeId.value = null; await refresh() }
 async function created(session) { closePage(); await refresh(); activeId.value = session.id }
 
+// Derives page + settings tab + session from the URL, on load and on every popstate.
 function restoreLocation() {
-  page.value = location.pathname === '/account' ? 'settings' : null
-  if (page.value === 'settings') settingsTab.value = 'account'
+  const tab = settingsTabFromPath(location.pathname)
+  if (tab) {
+    // Aliases (`/account` from the git OAuth redirect) and unknown tabs are rewritten to the
+    // canonical path in place, so that reload and the back button land on the same tab. The
+    // query string must survive: AccountDialog reads the `?git=` marker only after it mounts.
+    const canonical = settingsPath(tab)
+    if (location.pathname !== canonical) history.replaceState({}, '', canonical + location.search)
+    settingsTab.value = tab
+    page.value = 'settings'
+    // The active session is left untouched: closing the settings returns to it.
+    return
+  }
+  page.value = null
   activeId.value = sessionIdFromLocation()
 }
 
@@ -83,7 +104,8 @@ async function handleLicenseReturn() {
   if (location.pathname !== '/license/activate') return false
   const params = new URLSearchParams(location.search)
   const token = params.get('license')
-  history.replaceState({}, '', '/')
+  // Replace, not push: the entry behind us is the shop, and a reload must not re-activate.
+  history.replaceState({}, '', settingsPath('users'))
   if (token) {
     try {
       await api.activateLicense(token)
@@ -98,10 +120,12 @@ async function handleLicenseReturn() {
   return true
 }
 
-watch(activeId, id => {
-  const target = id ? `/s/${encodeURIComponent(id)}` : '/'
-  if (!id && location.pathname === '/account') return
-  if (location.pathname + location.search !== target) history.pushState({}, '', target)
+// The URL follows the state, never the other way round (except in restoreLocation). Only the
+// pathname is compared: a `?git=` or legacy `?session=` query on the same path must not push a
+// second entry before the component that reads it has mounted.
+watch([page, settingsTab, activeId], ([current, tab, id]) => {
+  const target = current === 'settings' ? settingsPath(tab) : (id ? `/s/${encodeURIComponent(id)}` : '/')
+  if (location.pathname !== target) history.pushState({}, '', target)
 })
 
 onMounted(async () => {
@@ -137,7 +161,7 @@ onBeforeUnmount(() => {
       </div>
       <ProjectSidebar class="side-sessions" :projects="projects" :sessions="sessions" :active="activeId" :query="query" @new="openPage('new')" @select="selectSession" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @share="openShare" @projects-changed="refresh" />
       <p v-if="error" class="err">{{ error }}</p>
-      <div class="side-foot">Open AgentHub · self-hosted</div>
+      <div class="side-foot" data-app-version>Open AgentHub {{ versionLabel(config.version) }} · <a :href="config.repoUrl || REPO_URL" target="_blank" rel="noopener" data-repo-link>GitHub ↗</a></div>
     </aside>
     <div class="main">
       <header class="topbar">
@@ -152,14 +176,14 @@ onBeforeUnmount(() => {
         <button class="ghost" @click="banner = null">✕</button>
       </div>
       <section class="content">
-        <SettingsView v-if="page === 'settings'" :initial-tab="settingsTab" :is-admin="isAdmin" @close="closePage" />
+        <SettingsView v-if="page === 'settings'" :initial-tab="settingsTab" :is-admin="isAdmin" @navigate="settingsTab = $event" @close="closePage" />
         <AdminView v-else-if="page === 'admin'" @close="closePage" />
         <div v-else-if="page === 'new'" class="page"><NewSessionDialog embedded :projects="projects" @close="closePage" @created="created" /></div>
         <div v-else-if="page === 'edit' && editSession" class="page"><EditSessionDialog :key="editSession.id" embedded :session="editSession" :projects="projects" @close="closePage" @updated="created" /></div>
         <div v-else-if="page === 'duplicate' && editSession" class="page"><DuplicateSessionDialog :key="editSession.id" embedded :session="editSession" :projects="projects" @close="closePage" @duplicated="created" /></div>
         <div v-else-if="page === 'share' && editSession" class="page"><ShareSessionDialog :key="editSession.id" embedded :session="editSession" @close="closePage" /></div>
-        <TerminalView v-else-if="activeSession" :key="activeSession.id" :session="activeSession" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" />
-        <SessionsView v-else-if="page === 'sessions'" :sessions="sessions" :projects="projects" :query="query" @select="selectSession" @new="openPage('new')" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" />
+        <TerminalView v-else-if="activeSession" :key="activeSession.id" :session="activeSession" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
+        <SessionsView v-else-if="page === 'sessions'" :sessions="sessions" :projects="projects" :query="query" @select="selectSession" @new="openPage('new')" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
         <UsageView v-else-if="page === 'usage'" />
         <HomeView v-else :sessions="sessions" @select="selectSession" @sessions="openPage('sessions')" @usage="openPage('usage')" @new="openPage('new')" @resume="resume" />
       </section>
@@ -188,6 +212,8 @@ onBeforeUnmount(() => {
 .wait-badge { font-family: var(--mono); font-size: 11px; background: #33302a; color: var(--warn); padding: 1px 7px; border-radius: 9px; }
 .side-sessions { flex: 1; min-height: 0; overflow-y: auto; }
 .side-foot { padding: 10px 12px 2px; font-size: 11px; color: var(--faint); white-space: nowrap; }
+.side-foot a { color: var(--faint); text-decoration: none; }
+.side-foot a:hover { color: var(--text); }
 .err { color: var(--danger); padding: 6px 12px; font: 12px var(--mono); }
 
 .main { flex: 1; display: flex; flex-direction: column; min-width: 0; }

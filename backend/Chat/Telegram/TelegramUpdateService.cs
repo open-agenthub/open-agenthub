@@ -368,7 +368,7 @@ public sealed class TelegramUpdateService : BackgroundService
         var pendingTool = await _permissions.GetPendingBySessionAsync(binding.SessionId, ct);
         var link = _frontendOrigin.Length == 0 ? null : $"{_frontendOrigin}/s/{binding.SessionId}";
         await ReplyAsync(u, ChatFormatting.StatusText(
-            live?.Phase ?? "Unknown", live?.QuestionPending ?? false, pendingTool, link), ct);
+            live?.Phase ?? "Unknown", live?.QuestionPending ?? false, pendingTool, link, live?.Agent), ct);
     }
 
     /// <summary>Plain reply: routed to a session and typed into its terminal.</summary>
@@ -399,18 +399,20 @@ public sealed class TelegramUpdateService : BackgroundService
         }
 
         await AgentTerminal.SendInputAsync(podIp, _agentPort, text, ct);
+        await _sessions.TouchActivityAsync(binding.Owner, binding.SessionId, ct);
         _log.LogInformation("Delivered Telegram reply to session {Id}", binding.SessionId);
 
         // A previous status message may still be up (second reply while working) — remove it first.
         if (binding.StatusRef is { } oldRef) await _tg.DeleteMessageAsync(binding.ChatId, oldRef, ct);
 
         // Show a lightweight "working…" indicator until the session's next event.
-        var statusId = await _tg.SendMessageAsync(binding.ChatId, WorkingIndicator.Frames[0], binding.ThreadId, null, ct);
+        var frames = WorkingIndicator.FramesFor(info.Agent);
+        var statusId = await _tg.SendMessageAsync(binding.ChatId, frames[0], binding.ThreadId, null, ct);
         if (statusId is not null)
         {
             await _bindings.SetStatusRefAsync("telegram", binding.SessionId, statusId, ct);
             var chatId = binding.ChatId;
-            _indicator.Start(binding.SessionId, (t, c) => _tg.EditMessageTextAsync(chatId, statusId, t, null, c));
+            _indicator.Start(binding.SessionId, (t, c) => _tg.EditMessageTextAsync(chatId, statusId, t, null, c), frames);
         }
     }
 

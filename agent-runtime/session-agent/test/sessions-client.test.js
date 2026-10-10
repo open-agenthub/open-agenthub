@@ -64,6 +64,47 @@ test('get and delete use peer path; listChildren uses children path', async () =
   ]);
 });
 
+test('convert posts to the peer convert route with the interactive target', async () => {
+  const { SessionsBackendClient } = await import('../../sessions/client.mjs');
+  const calls = [];
+  const client = new SessionsBackendClient(env(), async (url, init) => {
+    calls.push({ url, init });
+    return Response.json(sessionInfo({ mode: 'Interactive', phase: 'Pending', convertedFrom: 'Autonomous' }));
+  });
+
+  const result = await client.convert('child-1', { uiMode: 'terminal', resume: false });
+
+  assert.equal(result.convertedFrom, 'Autonomous');
+  assert.equal(calls[0].url, 'http://backend/internal/sessions/session-1/peer/child-1/convert');
+  assert.equal(calls[0].init.method, 'POST');
+  assert.equal(calls[0].init.headers['X-Agent-Token'], 'secret-token-never-leak');
+  assert.deepEqual(JSON.parse(calls[0].init.body), { mode: 'interactive', uiMode: 'terminal', resume: false });
+});
+
+test('account status and switch address this session without an id and a descendant through the peer route', async () => {
+  const { SessionsBackendClient } = await import('../../sessions/client.mjs');
+  const calls = [];
+  const client = new SessionsBackendClient(env(), async (url, init) => {
+    calls.push({ url, init });
+    if (init.method === 'PATCH') return Response.json(sessionInfo({ credentialId: 'home0002' }));
+    return Response.json({ sessionId: 'session-1', account: { id: 'work0001', isExhausted: true }, alternatives: [] });
+  });
+
+  assert.equal((await client.accountStatus()).account.isExhausted, true);
+  assert.equal((await client.accountStatus('child 1')).sessionId, 'session-1');
+  assert.equal((await client.switchAccount(undefined, 'home0002')).credentialId, 'home0002');
+  await client.switchAccount('child 1', 'home0002');
+
+  assert.deepEqual(calls.map(c => [c.init.method, c.url]), [
+    ['GET', 'http://backend/internal/sessions/session-1/account-status'],
+    ['GET', 'http://backend/internal/sessions/session-1/peer/child%201/account-status'],
+    ['PATCH', 'http://backend/internal/sessions/session-1/credential'],
+    ['PATCH', 'http://backend/internal/sessions/session-1/peer/child%201/credential']
+  ]);
+  assert.deepEqual(JSON.parse(calls[2].init.body), { credentialId: 'home0002' });
+  assert.equal(calls[2].init.headers['X-Agent-Token'], 'secret-token-never-leak');
+});
+
 test('rejects oversized backend responses with stable code', async () => {
   const { SessionsBackendClient } = await import('../../sessions/client.mjs');
   const client = new SessionsBackendClient(env(), async () =>

@@ -16,7 +16,7 @@ public enum SessionMode
     Scheduled
 }
 
-public enum AgentKind { Claude, Codex, Cursor, OpenClaw }
+public enum AgentKind { Claude, Codex, Cursor, OpenClaw, OpenCode }
 public enum AgentAuthMode { Auto, Subscription, ApiKey }
 public enum OpenClawApiKeySource { Anthropic, OpenAI, Cursor }
 
@@ -92,7 +92,7 @@ public static class AgentConfiguration
     private static void ValidateAgent(AgentKind agent)
     {
         if (agent is not AgentKind.Claude and not AgentKind.Codex and not AgentKind.Cursor
-            and not AgentKind.OpenClaw)
+            and not AgentKind.OpenClaw and not AgentKind.OpenCode)
             throw new ArgumentException("Unsupported agent kind.");
     }
 
@@ -312,6 +312,19 @@ public record CreateSessionRequest
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
     /// <summary>Which existing API key OpenClaw should use; required only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>
+    /// Which stored provider login (account) a Subscription session mounts. Null means the
+    /// default account, resolved at every start — so a default changed later applies to the next
+    /// resume — while an explicit id pins the session to that login. Checked against the user's
+    /// accounts when the session is created, so an unknown id fails the request, not the pod.
+    /// </summary>
+    public string? CredentialId { get; init; }
+    /// <summary>
+    /// Which stored git personal access tokens the session's credential store is built from
+    /// (docs/credential-scopes.md). Null means every stored PAT, as before; an empty list means
+    /// none; <c>["*"]</c> is accepted as a spelling of null. An unknown id fails the request.
+    /// </summary>
+    public List<string>? GitPatIds { get; init; }
     /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
     public AgentPolicy? Policy { get; init; }
     /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
@@ -342,6 +355,43 @@ public record CreateSessionRequest
 
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
+
+    /// <summary>
+    /// Delete the session on its own after this many seconds (300 to 365 days); null or 0 = never.
+    /// Measured from the point <see cref="AutoDeleteFrom"/> names. See docs/session-expiry.md.
+    /// </summary>
+    public int? AutoDeleteAfterSeconds { get; init; }
+    /// <summary><c>start</c> or <c>lastActivity</c> (default). A scheduled session only accepts
+    /// <c>start</c>: nobody attaches to a CronJob, so "last activity" would be its creation.</summary>
+    public string? AutoDeleteFrom { get; init; }
+
+    /// <summary>
+    /// <c>auto</c> (default): when the session's provider account hits a usage limit, the hub
+    /// moves the running session to another available account of the same provider.
+    /// <c>off</c> keeps it where it is (docs/account-limits.md).
+    /// </summary>
+    public string? AccountFailover { get; init; }
+}
+
+/// <summary>The two spellings of <see cref="CreateSessionRequest.AccountFailover"/> and how they
+/// are stored: null for the default, so a row from before the column reads as <c>auto</c>.</summary>
+public static class AccountFailoverMode
+{
+    public const string Auto = "auto";
+    public const string Off = "off";
+
+    /// <summary>The stored form: null for auto. Throws for anything but the two words.</summary>
+    public static string? Normalize(string? value)
+    {
+        var text = value?.Trim().ToLowerInvariant();
+        if (string.IsNullOrEmpty(text) || text == Auto) return null;
+        if (text == Off) return Off;
+        throw new ArgumentException("accountFailover must be \"auto\" or \"off\".");
+    }
+
+    public static bool IsOff(string? stored) => string.Equals(stored, Off, StringComparison.OrdinalIgnoreCase);
+
+    public static string Display(string? stored) => IsOff(stored) ? Off : Auto;
 }
 
 /// <summary>Session-scoped OpenAPI/GraphQL source registered on the in-process MCP gateway.</summary>
@@ -366,6 +416,15 @@ public record UpdateSessionRequest
     public string? Title { get; init; }
     /// <summary>Agent description; null = unchanged, empty string clears it. Applies immediately.</summary>
     public string? Description { get; init; }
+    /// <summary>
+    /// Extra system-prompt instructions (see <see cref="CreateSessionRequest.SystemPrompt"/>);
+    /// null = unchanged, empty string clears it. Same normalization and cap as on create.
+    ///
+    /// Takes effect on the next start or resume, not on the live pod: the value reaches the agent
+    /// as a pod environment variable, and the resume path rebuilds the create request from the
+    /// stored record, so the record is the only place that has to change.
+    /// </summary>
+    public string? SystemPrompt { get; init; }
     /// <summary>Custom container image; empty string resets to the default agent image.</summary>
     public string? Image { get; init; }
     public bool? RunAsRoot { get; init; }
@@ -389,9 +448,27 @@ public record UpdateSessionRequest
     public AgentAuthMode? AuthMode { get; init; }
     /// <summary>Which existing API key OpenClaw should use; only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>Provider account for the next start; null = unchanged, empty string = back to the
+    /// default account. A running session is switched live through the credential endpoint instead.</summary>
+    public string? CredentialId { get; init; }
+    /// <summary>Git PATs for the next start; null = unchanged, empty = none, <c>["*"]</c> = all.
+    /// The empty-string convention of the text fields cannot express "all" for a list, hence the
+    /// wildcard.</summary>
+    public List<string>? GitPatIds { get; init; }
     public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
+    /// <summary>
+    /// Self-deletion deadline; null = unchanged, 0 = off (the basis is cleared with it). Like
+    /// <see cref="AutoApprove"/> this is not a runtime field: nothing in the pod changes, so it
+    /// applies at once and is allowed on a scheduled session.
+    /// </summary>
+    public int? AutoDeleteAfterSeconds { get; init; }
+    /// <summary><c>start</c> or <c>lastActivity</c>; null = unchanged.</summary>
+    public string? AutoDeleteFrom { get; init; }
+    /// <summary><c>auto</c> or <c>off</c>; null = unchanged. Not a runtime field: the hub reads it
+    /// when a limit is reported, so it applies to the running session.</summary>
+    public string? AccountFailover { get; init; }
     /// <summary>Replacement project assignment; null removes the assignment when supplied.</summary>
     private string? _projectId;
     [JsonIgnore]
@@ -403,10 +480,63 @@ public record UpdateSessionRequest
     }
 }
 
+/// <summary>
+/// The subset of <see cref="UpdateSessionRequest"/> the token-authenticated remote API accepts.
+/// A separate type rather than the full request: the remote surface is for driving sessions,
+/// and letting a token rewrite the image, root mode or repositories of a session would widen
+/// what a leaked token can do far beyond what the feature needed.
+/// </summary>
+public sealed record RemoteUpdateSessionRequest
+{
+    public string? Title { get; init; }
+    public string? Description { get; init; }
+    /// <summary>Null = unchanged, 0 = off. See <see cref="UpdateSessionRequest.AutoDeleteAfterSeconds"/>.</summary>
+    public int? AutoDeleteAfterSeconds { get; init; }
+    public string? AutoDeleteFrom { get; init; }
+    /// <summary><c>auto</c> or <c>off</c>; null = unchanged (docs/account-limits.md).</summary>
+    public string? AccountFailover { get; init; }
+
+    public UpdateSessionRequest ToUpdate() => new()
+    {
+        Title = Title,
+        Description = Description,
+        AutoDeleteAfterSeconds = AutoDeleteAfterSeconds,
+        AutoDeleteFrom = AutoDeleteFrom,
+        AccountFailover = AccountFailover
+    };
+}
+
+/// <summary>
+/// Continues a finished or paused autonomous session as an interactive one, in the same
+/// conversation where the runtime can (docs/session-mode-conversion.md).
+/// </summary>
+public record ConvertSessionRequest
+{
+    /// <summary>Target mode. Only "interactive" is accepted; null means the same.</summary>
+    public string? Mode { get; init; }
+    /// <summary>"terminal" (default) or "chat" (interactive Claude only), validated like on create.</summary>
+    public string? UiMode { get; init; }
+    /// <summary>
+    /// Null takes the interactive default (off): the autonomous run approved everything because
+    /// nobody was there to ask; now somebody is. True keeps the run's setting.
+    /// </summary>
+    public bool? AutoApprove { get; init; }
+    /// <summary>Start the session right away (default). False only changes the record.</summary>
+    public bool Resume { get; init; } = true;
+}
+
+/// <param name="SystemPrompt">Replaces the copied system prompt; null copies the source's, an
+/// empty string yields a copy without one (create-side normalization turns it into null).</param>
+/// <param name="AutoDeleteAfterSeconds">Replaces the copied self-deletion deadline; null copies
+/// the source's setting, 0 yields a copy that never deletes itself.</param>
+/// <param name="GitPatIds">Replaces the copied PAT selection; null copies the source's.</param>
 public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bool IncludeMcp,
     AgentKind? Agent = null, AgentAuthMode? AuthMode = null, AgentPolicy? Policy = null,
     OpenClawApiKeySource? OpenClawApiKeySource = null,
-    List<string>? McpServerIds = null);
+    List<string>? McpServerIds = null,
+    string? SystemPrompt = null, string? CredentialId = null,
+    int? AutoDeleteAfterSeconds = null, string? AutoDeleteFrom = null,
+    List<string>? GitPatIds = null, string? AccountFailover = null);
 
 public static class SessionDuplication
 {
@@ -416,6 +546,15 @@ public static class SessionDuplication
         var authMode = request.AuthMode ?? source.AuthMode;
         return new()
         {
+            // An account belongs to one provider, so the source's choice only carries over while
+            // the copy keeps the agent; a copy switched to another agent falls back to its default.
+            // It is dropped for an API-key copy too: creation rejects any account on one, so
+            // carrying it over would turn "copy as API key" into a 400 about a field never shown.
+            CredentialId = request.CredentialId
+                ?? (agent == source.Agent && authMode != AgentAuthMode.ApiKey ? source.CredentialId : null),
+            // The PAT selection is configuration, not conversation, so a copy keeps it; the
+            // stored form is a JSON array or null, which the create side reads back the same way.
+            GitPatIds = request.GitPatIds ?? Services.GitPatSelection.Parse(source.GitPatIdsJson)?.ToList(),
             Title = request.Title,
             Description = source.Description,
             ProjectId = request.ProjectId,
@@ -424,6 +563,9 @@ public static class SessionDuplication
             Repos = Deserialize<List<RepoRef>>(source.ReposJson),
             RepoUrl = source.RepoUrl,
             Prompt = source.Prompt,
+            // The standing rules belong to the configuration being copied, unlike the
+            // conversation they shaped; the duplicate dialog shows them so they can be edited.
+            SystemPrompt = request.SystemPrompt ?? source.SystemPrompt,
             Schedule = source.Schedule,
             McpConfigJson = request.IncludeMcp ? source.McpConfigJson : null,
             // An explicit list (from the duplicate dialog's picker) wins; otherwise the
@@ -443,7 +585,14 @@ public static class SessionDuplication
             RunAsRoot = source.RunAsRoot,
             AutoApprove = source.AutoApprove,
             Cpu = source.Cpu,
-            Memory = source.Memory
+            Memory = source.Memory,
+            // The setting is configuration and copies; the timestamps are not, so the copy's
+            // countdown starts from its own creation. An explicit 0 means "no deadline" here as
+            // it does on PATCH; create-side normalization turns it into null.
+            AutoDeleteAfterSeconds = request.AutoDeleteAfterSeconds ?? source.AutoDeleteAfterSeconds,
+            AutoDeleteFrom = request.AutoDeleteFrom ?? source.AutoDeleteFrom,
+            // Configuration, like the deadline: a copy keeps the source's choice unless told otherwise.
+            AccountFailover = request.AccountFailover ?? source.AccountFailover
         };
     }
 
@@ -507,11 +656,22 @@ public record SessionInfo
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Auto;
     /// <summary>Which existing API key OpenClaw uses; set only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>The provider account this session is pinned to; null = the default account.</summary>
+    public string? CredentialId { get; init; }
+    /// <summary>The account the last start mounted — what an unpinned session actually runs on
+    /// (docs/account-limits.md). Null before the first start and for API-key sessions.</summary>
+    public string? ResolvedCredentialId { get; init; }
+    /// <summary>The stored git PATs this session is built with; null = all of them.</summary>
+    public IReadOnlyList<string>? GitPatIds { get; init; }
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>
     public bool CanResume { get; init; }
+    /// <summary>A finished or paused autonomous session can be continued interactively.</summary>
+    public bool CanConvertToInteractive { get; init; }
+    /// <summary>The mode this session was converted from, or null if it never was.</summary>
+    public SessionMode? ConvertedFrom { get; init; }
     /// <summary>Custom image of the session (null = default agent image).</summary>
     public string? Image { get; init; }
     public bool RunAsRoot { get; init; }
@@ -520,6 +680,18 @@ public record SessionInfo
     public string Cpu { get; init; } = "500m";
     public string Memory { get; init; } = "1Gi";
     public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
+    /// <summary>Self-deletion deadline in seconds; null = the session is kept.</summary>
+    public int? AutoDeleteAfterSeconds { get; init; }
+    /// <summary><c>start</c> or <c>lastActivity</c>; null when there is no deadline.</summary>
+    public string? AutoDeleteFrom { get; init; }
+    /// <summary>When the sweep will delete the session, computed from the two fields above and
+    /// the timestamps, so no client repeats the arithmetic. Null = never.</summary>
+    public DateTime? ExpiresAt { get; init; }
+    /// <summary>When somebody last used the session (docs/session-expiry.md says what counts).</summary>
+    public DateTime LastActivityAt { get; init; }
+    /// <summary><c>auto</c> or <c>off</c>: whether the hub moves this session to another account
+    /// when its own hits a usage limit (docs/account-limits.md).</summary>
+    public string AccountFailover { get; init; } = AccountFailoverMode.Auto;
 }
 
 /// <summary>
@@ -529,25 +701,15 @@ public record SessionInfo
 public record UserCredentials
 {
     public string? SshPrivateKey { get; init; }
-    public string? GitlabToken { get; init; }
-    /// <summary>
-    /// Host the stored GitLab token belongs to, e.g. <c>gitlab.example.com</c>. Hostname and
-    /// optional port only. Defaults to <c>gitlab.com</c>.
-    ///
-    /// The host is what scopes the token: it becomes one git-credential-store entry, so the token
-    /// is only ever offered to this server. Before it existed the PAT was installed as a global
-    /// credential helper and any host answering 401 could ask for it.
-    /// </summary>
-    public string? GitlabHost { get; init; }
-    /// <summary>Personal access token for GitHub, for users whose instance has no OAuth app
-    /// configured. Previously only GitLab had this, leaving no HTTPS route to GitHub.</summary>
-    public string? GithubToken { get; init; }
-    /// <summary>Host the stored GitHub token belongs to. Defaults to <c>github.com</c>. See
-    /// <see cref="GitlabHost"/> for why it is required rather than cosmetic.</summary>
-    public string? GithubHost { get; init; }
+    // Git personal access tokens are not part of this record. They live in a list keyed by host
+    // (see GitPatStore) and have their own endpoints, because a merge-style PUT with one fixed
+    // slot per provider cannot express "a second GitLab host".
     public string? AnthropicApiKey { get; init; }
     public string? OpenAiApiKey { get; init; }
     public string? CursorApiKey { get; init; }
+    /// <summary>OpenCode API key from the opencode.ai console. One key serves both the OpenCode Go
+    /// subscription and Zen pay-as-you-go; OpenCode reads it as OPENCODE_API_KEY.</summary>
+    public string? OpenCodeApiKey { get; init; }
     /// <summary>known_hosts entry of the git server (protects against MITM on the first clone).</summary>
     public string? GitKnownHosts { get; init; }
     public string? GitUserName { get; init; }
@@ -561,18 +723,51 @@ public record UserCredentials
 public record CredentialStatus
 {
     public bool SshPrivateKey { get; init; }
-    public bool GitlabToken { get; init; }
-    public bool GitlabHost { get; init; }
-    public bool GithubToken { get; init; }
-    public bool GithubHost { get; init; }
+    /// <summary>Stored git personal access tokens — kind and host only, never the token.</summary>
+    public IReadOnlyList<GitPatInfo> GitPats { get; init; } = Array.Empty<GitPatInfo>();
     public bool AnthropicApiKey { get; init; }
     public bool GitKnownHosts { get; init; }
     public bool OpenAiApiKey { get; init; }
     public bool CursorApiKey { get; init; }
+    public bool OpenCodeApiKey { get; init; }
     public bool GitUserName { get; init; }
     public bool GitUserEmail { get; init; }
     public bool ClaudeSubscription { get; init; }
     public bool CodexSubscription { get; init; }
     public bool CursorSubscription { get; init; }
     public bool OpenclawSubscription { get; init; }
+    public bool OpencodeSubscription { get; init; }
+}
+
+/// <summary>
+/// One stored git personal access token as the API reports it. <c>Kind</c> is
+/// <c>gitlab</c> or <c>github</c> (see <see cref="GitPatKind"/>); the token itself is never
+/// included.
+/// </summary>
+public record GitPatInfo(string Id, string Kind, string Host);
+
+/// <summary>The two kinds of PAT a session knows how to use; the kind decides the user part of
+/// the store line and therefore which CLI (<c>glab</c> or <c>gh</c>) is configured.</summary>
+public static class GitPatKind
+{
+    public const string GitLab = "gitlab";
+    public const string GitHub = "github";
+
+    public static bool IsValid(string? kind) => kind is GitLab or GitHub;
+}
+
+/// <summary>
+/// Stores or rotates a PAT. The host is the identity: a second request for a host that is
+/// already stored replaces that entry's token rather than adding a line, because git's store
+/// helper answers with the first entry matching the host and a stale one in front would keep
+/// winning after a rotation.
+/// </summary>
+public record UpsertGitPatRequest
+{
+    public string? Kind { get; init; }
+    /// <summary>Hostname with an optional port, e.g. <c>gitlab.example.com</c>. Required: the
+    /// token is only ever sent to this host, and defaulting to the public instance would be
+    /// silently wrong for a self-hosted one.</summary>
+    public string? Host { get; init; }
+    public string? Token { get; init; }
 }

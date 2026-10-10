@@ -298,26 +298,6 @@ onBeforeUnmount(() => {
 .bubble.user { align-self: flex-end; max-width: 85%; background: var(--panel-2); border: 1px solid var(--border-2); padding: 10px 14px; }
 .bubble.user pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 13px/1.6 var(--ui); color: var(--text); }
 .bubble.assistant { align-self: stretch; color: var(--text); display: flex; flex-direction: column; gap: 8px; }
-.md :deep(p) { margin: 0 0 8px; }
-.md :deep(p:last-child) { margin-bottom: 0; }
-.md :deep(h3), .md :deep(h4), .md :deep(h5) { margin: 10px 0 6px; font-size: 15px; }
-.md :deep(ul), .md :deep(ol) { margin: 0 0 8px; padding-left: 22px; }
-.md :deep(code) { background: var(--input); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; font: 12px var(--mono); }
-.md :deep(pre.md-code) { background: var(--input); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; overflow-x: auto; margin: 0 0 8px; }
-.md :deep(pre.md-code code) { background: none; border: none; padding: 0; font: 12.5px/1.55 var(--mono); color: #c9c4bb; }
-.md :deep(.md-table) { overflow-x: auto; margin: 0 0 8px; }
-.md :deep(table) { border-collapse: collapse; font-size: 13px; min-width: 60%; }
-.md :deep(th), .md :deep(td) { border: 1px solid var(--border-2); padding: 5px 10px; text-align: left; vertical-align: top; }
-.md :deep(th) { background: var(--panel-2); font-weight: 600; color: var(--strong); }
-.md :deep(tbody tr:nth-child(even) td) { background: var(--panel); }
-.md :deep(blockquote) { margin: 0 0 8px; padding: 2px 12px; border-left: 3px solid var(--border-3); color: var(--muted-2); }
-.md :deep(blockquote > :last-child) { margin-bottom: 0; }
-.md :deep(hr) { border: none; border-top: 1px solid var(--border-2); margin: 12px 0; }
-.md :deep(del) { color: var(--muted-3); }
-.md :deep(li.task) { list-style: none; margin-left: -18px; }
-.md :deep(li.task input) { margin-right: 6px; vertical-align: -1px; accent-color: var(--accent); }
-.md :deep(.md-mermaid-svg) { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; margin: 0 0 8px; overflow-x: auto; display: flex; justify-content: center; }
-.md :deep(.md-mermaid-svg svg) { max-width: 100%; height: auto; }
 .muted-md { color: var(--muted-2); font-size: 13px; }
 .fold { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); }
 .fold summary { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--muted-2); cursor: pointer; user-select: none; }
