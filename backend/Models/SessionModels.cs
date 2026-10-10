@@ -622,6 +622,9 @@ public record SessionInfo
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
     /// <summary>The provider account this session is pinned to; null = the default account.</summary>
     public string? CredentialId { get; init; }
+    /// <summary>The account the last start mounted — what an unpinned session actually runs on
+    /// (docs/account-limits.md). Null before the first start and for API-key sessions.</summary>
+    public string? ResolvedCredentialId { get; init; }
     /// <summary>The stored git PATs this session is built with; null = all of them.</summary>
     public IReadOnlyList<string>? GitPatIds { get; init; }
     public AgentPolicy Policy { get; init; } = new();

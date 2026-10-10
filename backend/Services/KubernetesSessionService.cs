@@ -175,10 +175,11 @@ public sealed class KubernetesSessionService : ISessionService
         string owner, CancellationToken ct = default)
     {
         var result = new Dictionary<string, IReadOnlyList<ProviderAccountInfo>>();
+        var now = DateTime.UtcNow;
         foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex, AgentKind.Cursor, AgentKind.OpenClaw })
         {
             var set = await ReadProviderAccountsAsync(owner, agent, ct);
-            result[agent.ToString()] = set.Accounts.Select(ProviderAccountInfo.From).ToList();
+            result[agent.ToString()] = set.Accounts.Select(a => ProviderAccountInfo.From(a, now)).ToList();
         }
         return result;
     }
@@ -191,8 +192,20 @@ public sealed class KubernetesSessionService : ISessionService
         if (account is null) return null;
         if (req.Label is not null) { account.Label = ProviderAccountSecret.NormalizeLabel(req.Label); set.Dirty = true; }
         if (req.IsDefault == true) ProviderAccountSecret.MakeDefault(set, id);
+        if (req.ClearExhausted == true) ProviderAccountSecret.ClearExhausted(set, id);
         await WriteProviderAccountsAsync(owner, agent, set, ct);
         return ProviderAccountInfo.From(account);
+    }
+
+    public async Task<ProviderAccountInfo?> MarkProviderAccountExhaustedAsync(string owner, AgentKind agent, string id,
+        DateTime until, string? reason, CancellationToken ct = default)
+    {
+        var set = await ReadProviderAccountsAsync(owner, agent, ct);
+        if (!ProviderAccountSecret.MarkExhausted(set, id, until, reason)) return null;
+        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        _log.LogInformation("Marked {Agent} account {Account} of {Owner} as at its usage limit until {Until}",
+            agent, id, owner, until);
+        return ProviderAccountInfo.From(set.Find(id)!);
     }
 
     public async Task DeleteProviderAccountAsync(string owner, AgentKind agent, string id, CancellationToken ct = default)
@@ -1235,12 +1248,20 @@ public sealed class KubernetesSessionService : ISessionService
         if (record.AuthMode is AgentAuthMode.Subscription or AgentAuthMode.Auto)
         {
             // Resolved at every start, so a session without a pinned account follows the default
-            // and a pinned one that was removed since is reported, not silently swapped.
+            // and a pinned one that was removed since is reported, not silently swapped. An
+            // unpinned session also steps around an account at its usage limit; a pinned one is
+            // mounted as pinned (docs/account-limits.md).
             var accounts = await ReadProviderAccountsAsync(owner, record.Agent, ct);
             accountId = record.CredentialId is not null
                 ? accounts.Find(record.CredentialId)?.Id
-                : ProviderAccountSecret.ResolveId(accounts, null);
+                : ProviderAccountSecret.ResolveId(accounts, null, DateTime.UtcNow);
             hasSubscription = accountId is not null;
+        }
+        // What was mounted, pinned or not: the limit report from this pod names this account.
+        if (record.ResolvedCredentialId != accountId)
+        {
+            record.ResolvedCredentialId = accountId;
+            await _store.SetResolvedCredentialIdAsync(record.Id, accountId, ct);
         }
         if (AgentPodSpecFactory.ResolvesApiKey(record.Mode, record.AuthMode))
         {
@@ -1330,7 +1351,7 @@ public sealed class KubernetesSessionService : ISessionService
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
-        CredentialId = r.CredentialId,
+        CredentialId = r.CredentialId, ResolvedCredentialId = r.ResolvedCredentialId,
         GitPatIds = GitPatSelection.Parse(r.GitPatIdsJson),
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,

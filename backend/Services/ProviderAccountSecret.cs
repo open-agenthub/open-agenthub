@@ -22,6 +22,10 @@ public sealed class ProviderAccountSet
 
     public ProviderAccount? Default =>
         Accounts.FirstOrDefault(a => a.IsDefault) ?? Accounts.FirstOrDefault();
+
+    /// <summary>The accounts not at a usage limit at <paramref name="now"/>, in index order.</summary>
+    public IEnumerable<ProviderAccount> Available(DateTime now) =>
+        Accounts.Where(a => !ProviderAccountSecret.IsExhausted(a, now));
 }
 
 /// <summary>What <see cref="ProviderAccountSecret.Attach"/> decided for an upload.</summary>
@@ -154,6 +158,60 @@ public static partial class ProviderAccountSecret
     /// <summary>The account a session should mount: the one it names, else the default, else none.</summary>
     public static string? ResolveId(ProviderAccountSet set, string? credentialId) =>
         set.Find(credentialId)?.Id ?? set.Default?.Id;
+
+    /// <summary>
+    /// The same, avoiding accounts at their usage limit (docs/account-limits.md): a pinned id
+    /// is honoured whatever its state, because the pin is a choice; without a pin the default
+    /// is taken when it is available, else the first available account, and only when every
+    /// account is exhausted the default after all — the session has to mount something.
+    /// </summary>
+    public static string? ResolveId(ProviderAccountSet set, string? credentialId, DateTime now)
+    {
+        if (set.Find(credentialId) is { } pinned) return pinned.Id;
+        var fallback = set.Default;
+        if (fallback is null) return null;
+        if (!IsExhausted(fallback, now)) return fallback.Id;
+        return set.Available(now).FirstOrDefault()?.Id ?? fallback.Id;
+    }
+
+    public static bool IsExhausted(ProviderAccount account, DateTime now) =>
+        account.ExhaustedUntil is { } until && until > now;
+
+    /// <summary>Marks an account as at its limit until <paramref name="until"/>. A later mark
+    /// replaces an earlier one, so a reset time learned later wins over the default hour.</summary>
+    public static bool MarkExhausted(ProviderAccountSet set, string id, DateTime until, string? reason)
+    {
+        var account = set.Find(id);
+        if (account is null) return false;
+        account.ExhaustedUntil = until;
+        account.ExhaustedReason = reason;
+        set.Dirty = true;
+        return true;
+    }
+
+    public static bool ClearExhausted(ProviderAccountSet set, string id)
+    {
+        var account = set.Find(id);
+        if (account is null) return false;
+        if (account.ExhaustedUntil is null && account.ExhaustedReason is null) return true;
+        account.ExhaustedUntil = null;
+        account.ExhaustedReason = null;
+        set.Dirty = true;
+        return true;
+    }
+
+    /// <summary>
+    /// The account a running session should be moved to when its own hit a limit: another of the
+    /// same agent that is available, default first, then the one used longest ago — which is the
+    /// one with the most of its window left, as far as the hub can guess without the provider's
+    /// numbers. Null when nothing qualifies.
+    /// </summary>
+    public static ProviderAccount? NextAvailable(ProviderAccountSet set, string? currentId, DateTime now) =>
+        set.Available(now)
+            .Where(a => a.Id != currentId)
+            .OrderByDescending(a => a.IsDefault)
+            .ThenBy(a => a.LastUsedAt ?? DateTime.MinValue)
+            .FirstOrDefault();
 
     /// <summary>
     /// Decides which account an uploaded file belongs to and stores it there. The order of the
