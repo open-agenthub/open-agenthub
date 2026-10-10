@@ -59,7 +59,8 @@ public sealed class BrowserRuntimeClientTests
     public async Task Paste_PostsTheTextToTheSupervisor()
     {
         var handler = new RecordingHandler();
-        var client = new BrowserRuntimeClient(new HttpClient(handler));
+        using var http = new HttpClient(handler);
+        var client = new BrowserRuntimeClient(http);
 
         await client.PasteAsync("10.0.0.9", "hello \"world\"\n");
 
@@ -73,7 +74,8 @@ public sealed class BrowserRuntimeClientTests
     public async Task Copy_ReturnsTheSelectionTheSupervisorRead()
     {
         var handler = new RecordingHandler(HttpStatusCode.OK, """{"text":"picked"}""");
-        var client = new BrowserRuntimeClient(new HttpClient(handler));
+        using var http = new HttpClient(handler);
+        var client = new BrowserRuntimeClient(http);
 
         Assert.Equal("picked", await client.CopyAsync("10.0.0.9", cut: true));
         Assert.Equal("http://10.0.0.9:6081/clipboard/copy", handler.Uri?.AbsoluteUri);
@@ -83,8 +85,8 @@ public sealed class BrowserRuntimeClientTests
     [Fact]
     public async Task Copy_KeepsTheRuntimeStatusForTheCaller()
     {
-        var client = new BrowserRuntimeClient(new HttpClient(
-            new RecordingHandler(HttpStatusCode.RequestEntityTooLarge)));
+        using var http = new HttpClient(new RecordingHandler(HttpStatusCode.RequestEntityTooLarge));
+        var client = new BrowserRuntimeClient(http);
 
         var error = await Assert.ThrowsAsync<HttpRequestException>(() =>
             client.CopyAsync("10.0.0.9", cut: false));
