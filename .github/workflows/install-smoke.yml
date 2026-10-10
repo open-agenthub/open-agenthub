@@ -22,7 +22,7 @@ jobs:
       AGENTHUB_CHART: ./helm/open-agenthub
       SCRIPTS: https://raw.githubusercontent.com/open-agenthub/open-agenthub.github.io/main
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Fetch the quickstart and its smoke test
         run: |

@@ -49,7 +49,7 @@ function json(res, status, value) {
   res.end(body);
 }
 
-test('create posts /api/remote/sessions with Bearer token and defaults mode Autonomous', async () => {
+test('create posts /api/remote/sessions with Bearer token and defaults mode Interactive', async () => {
   const { AgentHubClient } = await import('../client.mjs');
   const calls = [];
 
@@ -74,7 +74,7 @@ test('create posts /api/remote/sessions with Bearer token and defaults mode Auto
     assert.equal(calls[0].url, '/api/remote/sessions');
     assert.equal(calls[0].authorization, `Bearer ${TOKEN}`);
     const payload = JSON.parse(calls[0].body);
-    assert.equal(payload.mode, 'Autonomous');
+    assert.equal(payload.mode, 'Interactive');
     assert.equal(payload.title, 'Worker');
     assert.equal(payload.prompt, 'do work');
     assert.equal(result.id, 'sess-1');

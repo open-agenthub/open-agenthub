@@ -43,7 +43,9 @@ public sealed class AgentHubMcpTools(
     }
 
     [McpServerTool(Name = "session_create")]
-    [Description("Create and start an AgentHub session. Default mode is Autonomous.")]
+    [Description("Create and start an AgentHub session. Default mode is Interactive: tool requests "
+                 + "outside its allow list wait for a person's approval. Use Autonomous only for "
+                 + "unattended work, where they are approved automatically.")]
     public async Task<SessionInfo> CreateSession(
         [Description("Session title; also the agent name other agents address it by.")] string? title = null,
         [Description("What this agent is for.")] string? description = null,
@@ -54,7 +56,7 @@ public sealed class AgentHubMcpTools(
                      + "for the session, as opposed to the task. Supported on every agent; it is "
                      + "always appended, so it adds to the agent's instructions and never replaces "
                      + "them.")] string? systemPrompt = null,
-        [Description("Interactive, Autonomous or Scheduled. Defaults to Autonomous.")] string? mode = null,
+        [Description("Interactive, Autonomous or Scheduled. Defaults to Interactive.")] string? mode = null,
         [Description("Claude, Codex, Cursor or OpenClaw.")] string? agent = null,
         [Description("Repository URL to clone into the workspace. For more than one repository, or "
                      + "to clone with a connected provider's credentials, use `repos`.")] string? repoUrl = null,
@@ -90,9 +92,11 @@ public sealed class AgentHubMcpTools(
             Description = description,
             Prompt = prompt,
             SystemPrompt = systemPrompt,
-            // The stdio server defaults to Autonomous, because a caller driving sessions through
-            // a tool has no terminal to interact with. Keep both servers consistent.
-            Mode = ParseEnum(mode, SessionMode.Autonomous),
+            // Interactive, like the stdio and in-session servers: an Autonomous default
+            // auto-approved every tool request of a session the caller merely forgot to scope,
+            // and a person can still answer an interactive one through its url. Keep all three
+            // consistent.
+            Mode = ParseEnum(mode, SessionMode.Interactive),
             RepoUrl = repoUrl,
             RepoBranch = repoBranch,
             ProjectId = projectId,

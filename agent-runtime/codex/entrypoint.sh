@@ -9,6 +9,9 @@ fi
 source "$COMMON_ENTRYPOINT"
 
 export CODEX_HOME="${CODEX_HOME:-$HOME/.codex}"
+# Archives written before the driver excluded them can carry a half-installed app-server daemon
+# package; the TUI runs with --no-daemon now, so drop it rather than let it fill the home volume.
+rm -rf "$CODEX_HOME/packages" "$CODEX_HOME/app-server-daemon"
 mkdir -p "$CODEX_HOME"
 chmod 700 "$CODEX_HOME"
 umask 077

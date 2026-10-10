@@ -46,11 +46,19 @@ describe('renderMermaidBlocks', () => {
 
   it('initializes mermaid once with strict security', async () => {
     mocks.render.mockResolvedValue({ svg: '<svg></svg>' })
-    const root = mount(
-      '<pre class="md-mermaid"><code>a</code></pre><pre class="md-mermaid"><code>b</code></pre>')
+    // mermaid.js caches the loaded library at module level, so an earlier test has already
+    // run the one-time initialize — and Vitest clears mock call history between tests. A
+    // fresh module instance makes this test observe its own initialize call, independent
+    // of test order.
+    vi.resetModules()
+    const { renderMermaidBlocks: renderFresh } = await import('./mermaid.js')
 
-    await renderMermaidBlocks(root)
-    await renderMermaidBlocks(root)
+    // Separate roots: a rendered root has no placeholders left, so reusing it would make the
+    // second call return before it ever reaches the library loader.
+    await renderFresh(mount('<pre class="md-mermaid"><code>a</code></pre>'))
+    await renderFresh(mount('<pre class="md-mermaid"><code>b</code></pre>'))
+
+    expect(mocks.render).toHaveBeenCalledTimes(2)
 
     expect(mocks.initialize).toHaveBeenCalledTimes(1)
     expect(mocks.initialize.mock.calls[0][0]).toMatchObject({ startOnLoad: false, securityLevel: 'strict' })

@@ -13,6 +13,13 @@ const MAX_BUFFER = 1_000_000;
 // How long a stopped agent gets to exit on its own before the restart forces it; long enough
 // for a CLI to flush its session file, short enough that a wedged one does not stall the swap.
 const RESTART_KILL_GRACE_MS = 8_000;
+// Upper bound for each archive/upload step of a persistence run.
+const PERSIST_STEP_SECONDS = 120;
+// Where an entrypoint records the pid of its credential watcher, and how long the server waits
+// for that watcher's last upload: a little over the watcher's own 5s flush bound.
+const DEFAULT_WATCHER_PIDFILE = '/tmp/agenthub-auth-watcher.pid';
+const WATCHER_FLUSH_WAIT_MS = 6_000;
+const WATCHER_POLL_MS = 100;
 // Protocol chatter that the chat UI only needs live, never on replay.
 const TRANSIENT_CHAT_EVENTS = new Set(['stream_event', 'control_response', 'control_request']);
 
@@ -85,6 +92,8 @@ function createCommonServer(options = {}) {
   // The last size a client asked for, re-applied to a restarted PTY: the clients do not know
   // the terminal was replaced and would not send a resize until their own window changes.
   let lastSize = null;
+  let persisting = false;
+  let persistWaiters = null;
 
   function remember(chunk) {
     scrollback += chunk;
@@ -109,9 +118,17 @@ function createCommonServer(options = {}) {
       for (const entry of driver.stateExcludes) excludes.push(entry);
     }
     const excludeArgs = excludes.map(entry => '--exclude="' + entry + '"').join(' ');
+    // tar exits 1 when a file changed while it was read — the live transcript of a running
+    // agent always does — and the archive is still complete, so only >1 counts as a failure;
+    // treating 1 as one meant an active session never uploaded its state at all. It writes
+    // to a side file so an aborted run never replaces the last good archive, runs niced
+    // and bounded so a large state directory cannot starve the agent and its hooks.
     execFile('/bin/sh', ['-c',
-      'tar czf /tmp/state.tgz -C "' + home + '" ' + excludeArgs + ' "' + archive +
-      '" 2>/dev/null && curl -fsS ' + curlOption + '-T /tmp/state.tgz "' + statePut + '"'
+      'nice -n 10 timeout ' + PERSIST_STEP_SECONDS + ' tar czf /tmp/state.tgz.part -C "' + home +
+      '" ' + excludeArgs + ' "' + archive + '" 2>/dev/null; ' +
+      'if [ $? -le 1 ]; then mv -f /tmp/state.tgz.part /tmp/state.tgz && curl -fsS --max-time ' +
+      PERSIST_STEP_SECONDS + ' ' + curlOption + '-T /tmp/state.tgz "' + statePut + '"; ' +
+      'else rm -f /tmp/state.tgz.part; exit 1; fi'
     ], () => done && done());
   }
 
@@ -119,7 +136,8 @@ function createCommonServer(options = {}) {
     if (!scrollPut) return done && done();
     try { fs.writeFileSync('/tmp/scrollback.log', scrollback); } catch {}
     execFile('/bin/sh', ['-c',
-      'curl -fsS ' + curlOption + '-T /tmp/scrollback.log "' + scrollPut + '"'
+      'curl -fsS --max-time ' + PERSIST_STEP_SECONDS + ' ' + curlOption +
+      '-T /tmp/scrollback.log "' + scrollPut + '"'
     ], () => done && done());
   }
 
@@ -252,10 +270,63 @@ function createCommonServer(options = {}) {
     }
   }
 
+  // One run at a time. The 30s tick used to start a new run whether or not the previous one
+  // had finished, so once archiving a large state directory took longer than the tick, tar
+  // and gzip processes piled up by the thousand, all writing the same archive, and starved
+  // the pod until hooks timed out. A tick that finds a run in flight is skipped; a caller
+  // that needs the final state (exit, SIGTERM) gets one more run after the current one.
   function persistAll(done) {
+    if (persisting) {
+      if (done) (persistWaiters || (persistWaiters = [])).push(done);
+      return;
+    }
+    persisting = true;
     postResources();
-    syncSkillsUp(() => backupScrollback(() => persistScrollback(() =>
-      persistTranscript(() => persistState(done)))));
+    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
+      persistState(() => {
+        persisting = false;
+        const waiters = persistWaiters;
+        persistWaiters = null;
+        if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); });
+        if (done) done();
+      })))));
+  }
+
+  // The credential watcher runs beside this server, not under it: on pod stop only PID 1 — this
+  // server — gets SIGTERM, and once it exits the kernel kills the watcher before its own SIGTERM
+  // handler can upload a token the CLI rotated since the last poll. A provider that spends the
+  // old refresh token on rotation then leaves a dead credential in the secret. So the watcher is
+  // signalled here and given a bounded moment to finish, alongside the state persistence.
+  function flushCredentialWatcher(done) {
+    let pid;
+    try {
+      pid = Number.parseInt(String(fs.readFileSync(
+        env.AGENTHUB_AUTH_WATCHER_PIDFILE || DEFAULT_WATCHER_PIDFILE, 'utf8')).trim(), 10);
+    } catch {
+      return done();
+    }
+    if (!Number.isSafeInteger(pid) || pid <= 1) return done();
+    try { processLike.kill(pid, 'SIGTERM'); } catch { return done(); }
+    const deadline = now() + WATCHER_FLUSH_WAIT_MS;
+    (function wait() {
+      let alive = true;
+      try { processLike.kill(pid, 0); } catch { alive = false; }
+      if (!alive || now() >= deadline) return done();
+      setTimeoutImpl(wait, WATCHER_POLL_MS);
+    })();
+  }
+
+  let exitCallbacks = null;
+  function beforeExit(done) {
+    if (exitCallbacks) return void exitCallbacks.push(done);
+    exitCallbacks = [done];
+    let pending = 2;
+    const finish = () => {
+      if (--pending > 0) return;
+      for (const callback of exitCallbacks) callback();
+    };
+    flushCredentialWatcher(finish);
+    persistAll(finish);
   }
 
   // ---- Pod resource snapshot (CPU/memory from the cgroup, network from /proc/net/dev) ----
@@ -400,7 +471,7 @@ function createCommonServer(options = {}) {
       safeSend(socket, message);
       try { socket.close(1000); } catch {}
     }
-    persistAll(() => {
+    beforeExit(() => {
       postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
         setTimeoutImpl(() => processLike.exit(exitCode || 0), mode === 'interactive' ? 1500 : 200));
     });
@@ -853,7 +924,7 @@ function createCommonServer(options = {}) {
 
   for (const signal of ['SIGTERM', 'SIGINT']) {
     processLike.on(signal, () => {
-      persistAll(() => {
+      beforeExit(() => {
         try { term.kill(); } catch {}
         processLike.exit(0);
       });

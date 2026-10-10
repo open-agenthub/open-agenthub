@@ -1,4 +1,6 @@
+using System.Text.Json;
 using AgentHub.Api.Controllers;
+using AgentHub.Api.Library;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
@@ -36,6 +38,65 @@ public class InternalSessionSpawnTests
         Assert.NotNull(svc.CreateRequest);
         Assert.Equal(ParentId, svc.CreateRequest!.ParentSessionId);
         Assert.Equal("child", svc.CreateRequest.Title);
+    }
+
+    [Fact]
+    public async Task Spawn_WithoutProjectOrMcp_InheritsBothFromTheParent()
+    {
+        var svc = new RecordingSessionService();
+        var servers = new InMemoryMcpServerStore();
+        var wiki = servers.Add(Owner, "wiki");
+        var tracker = servers.Add(Owner, "tracker");
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+        parent.McpConfigJson = """{"mcpServers":{"wiki":{"command":"wiki-mcp"}}}""";
+        parent.McpServerIdsJson = JsonSerializer.Serialize(new[] { wiki.Id, tracker.Id });
+        var controller = Controller(parent, svc, servers: servers);
+
+        await controller.Spawn(ParentId, new CreateSessionRequest { Title = "child", Prompt = "p" },
+            CancellationToken.None);
+
+        Assert.Equal("proj-a", svc.CreateRequest!.ProjectId);
+        Assert.Equal(parent.McpConfigJson, svc.CreateRequest.McpConfigJson);
+        Assert.Equal([wiki.Id, tracker.Id], svc.CreateRequest.McpServerIds);
+    }
+
+    [Fact]
+    public async Task Spawn_InheritsOnlyTheParentServersThatAreStillAccessible()
+    {
+        var svc = new RecordingSessionService();
+        var servers = new InMemoryMcpServerStore();
+        var wiki = servers.Add(Owner, "wiki");
+        var foreign = servers.Add("someone-else", "private");
+        var parent = Parent();
+        parent.McpServerIdsJson = JsonSerializer.Serialize(new[] { "deleted-since", wiki.Id, foreign.Id });
+        var controller = Controller(parent, svc, servers: servers);
+
+        var result = await controller.Spawn(ParentId, new CreateSessionRequest { Title = "child", Prompt = "p" },
+            CancellationToken.None);
+
+        Assert.IsType<OkObjectResult>(result);
+        Assert.Equal([wiki.Id], svc.CreateRequest!.McpServerIds);
+    }
+
+    [Fact]
+    public async Task Spawn_WithOwnProjectAndMcp_KeepsThem()
+    {
+        var svc = new RecordingSessionService();
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+        parent.McpConfigJson = """{"mcpServers":{"wiki":{"command":"wiki-mcp"}}}""";
+        parent.McpServerIdsJson = """["lib-1"]""";
+        var controller = Controller(parent, svc);
+
+        await controller.Spawn(ParentId, new CreateSessionRequest
+        {
+            Title = "child", Prompt = "p", ProjectId = "proj-b", McpServerIds = ["lib-9"]
+        }, CancellationToken.None);
+
+        Assert.Equal("proj-b", svc.CreateRequest!.ProjectId);
+        Assert.Null(svc.CreateRequest.McpConfigJson);
+        Assert.Equal(["lib-9"], svc.CreateRequest.McpServerIds);
     }
 
     [Fact]
@@ -283,10 +344,13 @@ public class InternalSessionSpawnTests
         SessionRecord session,
         RecordingSessionService svc,
         string token = ParentToken,
-        bool spawnMcpEnabled = true)
+        bool spawnMcpEnabled = true,
+        InMemoryMcpServerStore? servers = null)
     {
+        var library = new LibraryAccessService(servers ?? new InMemoryMcpServerStore(), new InMemorySkillStore(),
+            new FakeLibraryShareReader(), new FakeEnterpriseLicense(false));
         var controller = new InternalController(
-            new CallbackSessionStore(session), [], svc, null!, [], [], null!, null!,
+            new CallbackSessionStore(session), [], svc, null!, [], [], null!, library,
             browsers: null, spawnMcpEnabled: spawnMcpEnabled)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }

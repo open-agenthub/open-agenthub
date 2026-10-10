@@ -37,6 +37,8 @@ if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ];
   AGENTHUB_CLAUDE_AUTH_EXPECT_CREATE="$AUTH_EXPECT_CREATE" \
     AGENTHUB_CLAUDE_AUTH_BASELINE_SHA256="$AUTH_BASELINE_SHA256" \
     node "$RUNTIME/claude/auth-watcher.js" &
+  # Only the server gets SIGTERM on pod stop; it reads this to let the watcher flush first.
+  echo "$!" > /tmp/agenthub-auth-watcher.pid
 fi
 
 AGENTHUB_RUNTIME="$RUNTIME/claude/hooks" \

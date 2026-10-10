@@ -119,6 +119,48 @@ describe('ChatPane', () => {
     expect(wrapper.find('[data-chat-stop]').exists()).toBe(false)
   })
 
+  it('follows streamed output only while the reader is at the bottom', async () => {
+    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    await flushPromises()
+    const socket = mocks.sockets[0]
+    socket.onopen()
+    const el = wrapper.get('[data-chat-scroll]').element
+    let contentHeight = 2000
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => contentHeight })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 600 })
+    const delta = text => socket.onmessage({ data: line({ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text }] } }) })
+
+    delta('first')
+    await flushPromises()
+    expect(el.scrollTop).toBe(2000)
+
+    // Reader scrolls up to read earlier output; further streaming must leave the view alone.
+    el.scrollTop = 300
+    await wrapper.get('[data-chat-scroll]').trigger('scroll')
+    for (const text of ['second', 'third', 'fourth']) {
+      contentHeight += 400
+      delta(text)
+      await flushPromises()
+      expect(el.scrollTop).toBe(300)
+    }
+
+    // Back near the bottom (inside the threshold): following resumes.
+    el.scrollTop = contentHeight - 600 - 20
+    await wrapper.get('[data-chat-scroll]').trigger('scroll')
+    contentHeight += 400
+    delta('fifth')
+    await flushPromises()
+    expect(el.scrollTop).toBe(contentHeight)
+
+    // Sending from a scrolled-up position re-pins, so the reply is visible.
+    el.scrollTop = 0
+    await wrapper.get('[data-chat-scroll]').trigger('scroll')
+    await wrapper.get('[data-chat-input]').setValue('next')
+    await wrapper.get('[data-chat-send]').trigger('click')
+    await flushPromises()
+    expect(el.scrollTop).toBe(contentHeight)
+  })
+
   it('hides the composer for read-only viewers', async () => {
     const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' }, readonly: true } })
     await flushPromises()
