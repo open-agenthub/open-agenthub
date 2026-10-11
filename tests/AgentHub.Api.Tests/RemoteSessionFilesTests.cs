@@ -24,7 +24,7 @@ public sealed class RemoteSessionFilesTests
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         builder.Services.AddControllers().AddApplicationPart(typeof(RemoteSessionFilesController).Assembly)
             .AddControllersAsServices();
-        var files = new RecordingFiles();
+        using var files = new RecordingFiles();
         builder.Services.AddTransient(_ => new RemoteSessionFilesController(
             (token, _) => Task.FromResult(token == "oah_valid" ? new RemoteCaller("alice", null) : null),
             new FixedAccess(), files));
@@ -50,7 +50,7 @@ public sealed class RemoteSessionFilesTests
     [InlineData("Bearer oah_invalid")]
     public async Task Personal_token_is_required_before_accessing_files(string? header)
     {
-        var files = new RecordingFiles();
+        using var files = new RecordingFiles();
         var controller = Controller(files, header);
         Assert.IsType<UnauthorizedResult>(await controller.List("s1", default));
         Assert.IsType<UnauthorizedResult>(await controller.Content("s1", "f1", default));
@@ -60,7 +60,7 @@ public sealed class RemoteSessionFilesTests
     [Fact]
     public async Task Inaccessible_sessions_reveal_neither_listing_nor_content()
     {
-        var files = new RecordingFiles();
+        using var files = new RecordingFiles();
         var controller = Controller(files);
         Assert.IsType<NotFoundResult>(await controller.List("other", default));
         Assert.IsType<NotFoundResult>(await controller.Content("other", "f1", default));
@@ -70,7 +70,7 @@ public sealed class RemoteSessionFilesTests
     [Fact]
     public async Task Viewer_can_list_and_download_without_write_permission_or_storage_redirect()
     {
-        var files = new RecordingFiles();
+        using var files = new RecordingFiles();
         var controller = Controller(files);
         var list = Assert.IsType<OkObjectResult>(await controller.List("s1", default));
         Assert.Single(Assert.IsType<SessionFileResponse[]>(list.Value));
@@ -92,7 +92,7 @@ public sealed class RemoteSessionFilesTests
         {
             User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("preferred_username", "alice")], "test"))
         };
-        var files = new RecordingFiles();
+        using var files = new RecordingFiles();
         var tools = new SessionFileMcpTools(new HttpContextAccessor { HttpContext = context }, new FixedAccess(), files);
         Assert.Single(await tools.ListFiles("s1"));
         var result = await tools.ReadFile("s1", "f1");
@@ -125,8 +125,10 @@ public sealed class RemoteSessionFilesTests
         public Task<SessionAccessResult?> ResolveTokenAsync(string token, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
-    private sealed class RecordingFiles : ISessionFileService
+    private sealed class RecordingFiles : ISessionFileService, IDisposable
     {
+        private readonly MemoryStream content = new([1, 2, 3]);
+        public void Dispose() => content.Dispose();
         public SessionFileActor? LastActor;
         public bool LastAllowRedirect = true;
         public long Size = 3;
@@ -141,7 +143,7 @@ public sealed class RemoteSessionFilesTests
         public Task<AgentHub.Api.Files.FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, bool allowRedirect = true, CancellationToken ct = default)
         {
             LastActor = actor; LastAllowRedirect = allowRedirect;
-            return Task.FromResult(new AgentHub.Api.Files.FileContentResult(new MemoryStream([1, 2, 3]), null, "image/png", "shot.png", 3));
+            return Task.FromResult(new AgentHub.Api.Files.FileContentResult(content, null, "image/png", "shot.png", 3));
         }
         public Task<ReserveFileResult> ReserveAsync(SessionFileActor actor, ReserveSessionFileCommand request, CancellationToken ct = default) => throw new NotSupportedException();
         public Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, long? contentLength = null, CancellationToken ct = default) => throw new NotSupportedException();
