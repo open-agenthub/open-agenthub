@@ -1,4 +1,7 @@
 const MAX_RESPONSE_BYTES = 64 * 1024;
+// Session collections grow with the owner's history; the single-object limit rejects even
+// modest installations before list() can apply its filters. Keep a separate bounded budget.
+const MAX_SESSION_LIST_BYTES = 4 * 1024 * 1024;
 // A transcript page is sized by the caller (maxChars, up to 1M characters); UTF-8 needs headroom
 // above that before the guard would reject a page that was asked for.
 const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
@@ -47,7 +50,7 @@ export class AgentHubClient {
   }
 
   async list(filters = {}) {
-    const sessions = await this.#request('GET', '/api/remote/sessions');
+    const sessions = await this.#request('GET', '/api/remote/sessions', undefined, MAX_SESSION_LIST_BYTES);
     const list = Array.isArray(sessions) ? sessions : [];
     return list.filter(session => {
       if (filters.parentSessionId !== undefined && session.parentSessionId !== filters.parentSessionId) {
@@ -129,7 +132,7 @@ export class AgentHubClient {
 
   /** Sessions other owners shared with the token owner, in the sanitised shared-session shape. */
   listSharedWithMe() {
-    return this.#request('GET', '/api/remote/sessions/shared');
+    return this.#request('GET', '/api/remote/sessions/shared', undefined, MAX_SESSION_LIST_BYTES);
   }
 
   listFiles(sessionId) {

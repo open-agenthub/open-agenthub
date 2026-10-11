@@ -296,3 +296,16 @@ test('transcript omits query parameters that were not asked for', async () => {
     assert.equal(urls[0], '/api/remote/sessions/sess-1/transcript');
   });
 });
+
+test('session collections accept responses above 64 KiB but remain bounded', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const records = Array.from({ length: 40 }, (_, i) => sessionInfo({ id: String(i), title: 'x'.repeat(2000) }));
+  for (const method of ['list', 'listSharedWithMe', 'listAgents']) {
+    const client = new AgentHubClient({ AGENTHUB_URL: 'https://example.com', AGENTHUB_TOKEN: TOKEN },
+      async () => Response.json(records));
+    assert.equal((await client[method]()).length, records.length);
+    const oversized = new AgentHubClient({ AGENTHUB_URL: 'https://example.com', AGENTHUB_TOKEN: TOKEN },
+      async () => new Response('x'.repeat(4 * 1024 * 1024 + 1)));
+    await assert.rejects(() => oversized[method](), /agenthub_response_too_large/);
+  }
+});
