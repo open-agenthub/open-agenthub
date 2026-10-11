@@ -199,7 +199,7 @@ module.exports = {
   name: 'Codex', stateDir: '.codex', authFilename: 'auth.json',
   limitPatterns,
   // The TUI log only grows and the tmp dirs are per-process scratch; neither is needed to
-  // resume, and every byte of them is re-compressed on each 30s persistence tick.
+  // resume, and every byte of them is re-compressed on each state archive.
   // packages/ is the TUI's app-server daemon install (~400 MB of binaries the image already
   // ships) and app-server-daemon/ its pid and lock files: neither belongs to a conversation.
   stateExcludes: ['.codex/log', '.codex/tmp', '.codex/.tmp', '.codex/packages', '.codex/app-server-daemon'],

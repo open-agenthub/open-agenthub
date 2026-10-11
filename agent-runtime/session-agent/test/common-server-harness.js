@@ -156,8 +156,9 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       WebSocketServer: FakeWebSocketServer,
       execFile(file, args, callback) {
         commands.push({ file, args });
-        if (harnessOptions.deferExec) pendingExec.push(callback);
-        else callback();
+        if (harnessOptions.deferExec) return void pendingExec.push(callback);
+        const result = harnessOptions.execResult?.(args[1], file) ?? {};
+        callback(result.error, result.stdout);
       },
       fs: {
         existsSync(file) { return exists.has(file); },

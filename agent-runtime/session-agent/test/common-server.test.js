@@ -265,12 +265,16 @@ test('common transport archives driver state without its subscription credential
   await tick();
 
   assert.deepEqual(harness.writes, [{ file: '/tmp/scrollback.log', data: 'saved output' }]);
-  assert.equal(harness.commands.length, 2);
+  assert.equal(harness.commands.length, 3);
   assert.match(harness.commands[0].args[1], /curl -fsS --max-time 120 -k -T \/tmp\/scrollback\.log/);
-  assert.match(harness.commands[1].args[1], /tar czf \/tmp\/state\.tgz/);
-  assert.match(harness.commands[1].args[1], /"\.test-agent"/);
-  assert.match(harness.commands[1].args[1], /--exclude="\.test-agent\/auth\.json"/);
-  assert.doesNotMatch(harness.commands[1].args[1], /cat |credentials\.json/);
+  assert.match(harness.commands[1].args[1], /find "\.test-agent" \\\( -path "\.test-agent\/auth\.json" \\\) -prune /);
+  assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$3\.part" -C "\$1" /);
+  assert.deepEqual(harness.commands[2].args.slice(2),
+    ['sh', '/home/agent', 'https://storage.invalid/state', '/tmp/state.tgz']);
+  assert.deepEqual(harness.commands[1].args.slice(2), ['sh', '/home/agent']);
+  assert.match(harness.commands[2].args[1], /"\.test-agent"/);
+  assert.match(harness.commands[2].args[1], /--exclude="\.test-agent\/auth\.json"/);
+  assert.doesNotMatch(harness.commands[2].args[1], /cat |credentials\.json/);
 });
 
 test('common transport applies optional stateExcludes as extra tar excludes', () => {
@@ -284,20 +288,25 @@ test('common transport applies optional stateExcludes as extra tar excludes', ()
     ]
   });
   harness.intervals[0].callback();
-  assert.equal(harness.commands.length, 1);
-  const command = harness.commands[0].args[1];
+  assert.equal(harness.commands.length, 2);
+  const command = harness.commands[1].args[1];
   assert.match(command, /--exclude="\.openclaw\/auth-profiles\.json"/);
   assert.match(command, /--exclude="\.openclaw\/agents\/main\/agent\/auth-profiles\.json"/);
   assert.match(command, /--exclude="\.openclaw\/agents\/\*\/agent\/openclaw-agent\.sqlite"/);
+  // The change signature has to leave out the same paths, or a credential refresh alone
+  // would count as changed state and trigger an archive that does not even contain it.
+  const signature = harness.commands[0].args[1];
+  assert.match(signature, /-path "\.openclaw\/auth-profiles\.json" -o /);
+  assert.match(signature, /-o -path "\.openclaw\/agents\/\*\/agent\/openclaw-agent\.sqlite" \\\) -prune /);
 });
 
 test('common transport keeps the last archive unless tar finished, accepting files changed while read', () => {
   const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' });
   harness.intervals[0].callback();
-  const command = harness.commands[0].args[1];
-  assert.match(command, /^nice -n 10 timeout 120 tar czf \/tmp\/state\.tgz\.part /);
-  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f \/tmp\/state\.tgz\.part \/tmp\/state\.tgz && curl -fsS --max-time 120 -T \/tmp\/state\.tgz/);
-  assert.match(command, /else rm -f \/tmp\/state\.tgz\.part; exit 1; fi$/);
+  const command = harness.commands[1].args[1];
+  assert.match(command, /^nice -n 10 timeout 120 tar -I 'gzip -1' -cf "\$3\.part" /);
+  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f "\$3\.part" "\$3" && curl -fsS --max-time 120 -T "\$3" "\$2"; /);
+  assert.match(command, /else rm -f "\$3\.part"; exit 1; fi$/);
 });
 
 test('common transport skips a persistence tick while the previous run is still archiving', () => {
@@ -308,9 +317,15 @@ test('common transport skips a persistence tick while the previous run is still 
   harness.intervals[0].callback();
   assert.equal(harness.commands.length, 1);
 
+  harness.pendingExec.shift()(null, SIGNATURE_A);
+  harness.intervals[0].callback();
+  harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 1);
+  assert.equal(harness.commands.length, 2);
+
   harness.pendingExec.shift()();
   harness.intervals[0].callback();
-  assert.equal(harness.commands.length, 2);
+  assert.equal(harness.commands.length, 2, 'the tick after an upload is inside the interval');
 });
 
 test('common transport runs one final persistence after an in-flight run on SIGTERM', () => {
@@ -322,13 +337,125 @@ test('common transport runs one final persistence after an in-flight run on SIGT
   assert.equal(harness.commands.length, 1);
   assert.deepEqual(harness.exits, []);
 
+  harness.pendingExec.shift()(null, SIGNATURE_A);
   harness.pendingExec.shift()();
-  assert.equal(harness.commands.length, 2, 'the state written since the tick is archived once more');
+  assert.equal(archives(harness).length, 2, 'the state written since the tick is archived once more');
   assert.deepEqual(harness.exits, []);
 
   harness.pendingExec.shift()();
   assert.deepEqual(harness.exits, [0, 0]);
-  assert.equal(harness.commands.length, 2);
+  assert.equal(harness.commands.length, 3, 'the final run does not spend time on a signature');
+});
+
+// What `sha256sum` prints for two different listings of the state directory.
+const SIGNATURE_A = 'a'.repeat(64) + '  -\n';
+const SIGNATURE_B = 'b'.repeat(64) + '  -\n';
+
+function archives(harness) {
+  return harness.commands.filter(command => /tar -I 'gzip -1' -cf/.test(command.args[1]));
+}
+
+function signatures(harness) {
+  return harness.commands.filter(command => /sha256sum$/.test(command.args[1]));
+}
+
+// A harness whose state directory reports `state.signature` and whose upload fails while
+// `state.uploadFails` is set.
+function archiveHarness(state) {
+  return createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' }, {}, {
+    execResult: command => /sha256sum$/.test(command)
+      ? { stdout: state.signature }
+      : { error: state.uploadFails ? new Error('curl: (22) 503') : null }
+  });
+}
+
+test('common transport archives the state on the first tick and not again while it is unchanged', () => {
+  const state = { signature: SIGNATURE_A };
+  const harness = archiveHarness(state);
+  for (let tick = 0; tick < 20; tick++) harness.intervals[0].callback();
+
+  assert.equal(archives(harness).length, 1, 'an idle session archives once');
+  // After the interval the signature is asked on every tick, so a change is at most one tick
+  // old when it is archived; inside the interval not even the listing runs.
+  assert.equal(signatures(harness).length, 1 + (19 - 3));
+});
+
+test('common transport archives changed state, at most once per interval', () => {
+  const state = { signature: SIGNATURE_A };
+  const harness = archiveHarness(state);
+  harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 1);
+
+  state.signature = SIGNATURE_B;
+  for (let tick = 0; tick < 3; tick++) harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 1, 'three ticks after an upload are inside the interval');
+  assert.equal(signatures(harness).length, 1);
+
+  harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 2);
+
+  // A session that changes on every tick still archives only every fourth one.
+  for (let tick = 0; tick < 8; tick++) {
+    state.signature = String(tick).repeat(64) + '  -\n';
+    harness.intervals[0].callback();
+  }
+  assert.equal(archives(harness).length, 4);
+});
+
+test('common transport retries a failed state upload on the next tick and does not remember it', () => {
+  const state = { signature: SIGNATURE_A, uploadFails: true };
+  const harness = archiveHarness(state);
+  harness.intervals[0].callback();
+  harness.intervals[0].callback();
+  harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 3, 'unchanged state is archived again until an upload succeeds');
+
+  state.uploadFails = false;
+  harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 4);
+  for (let tick = 0; tick < 8; tick++) harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 4, 'only the successful upload counts as done');
+});
+
+test('common transport archives when the change signature cannot be taken', () => {
+  for (const stdout of ['', undefined, 'sha256sum: not found\n']) {
+    const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' }, {}, {
+      execResult: command => /sha256sum$/.test(command) ? { stdout } : {}
+    });
+    for (let tick = 0; tick < 9; tick++) harness.intervals[0].callback();
+    assert.equal(archives(harness).length, 3, 'every interval, as before change detection existed');
+  }
+  const failing = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' }, {}, {
+    execResult: command => /sha256sum$/.test(command)
+      ? { error: new Error('timeout'), stdout: SIGNATURE_A } : {}
+  });
+  for (let tick = 0; tick < 9; tick++) failing.intervals[0].callback();
+  assert.equal(archives(failing).length, 3);
+});
+
+test('common transport always archives on SIGTERM, unchanged state and interval notwithstanding', () => {
+  const state = { signature: SIGNATURE_A };
+  const harness = archiveHarness(state);
+  harness.intervals[0].callback();
+  harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 1);
+
+  harness.signals.SIGTERM();
+  assert.equal(archives(harness).length, 2);
+  assert.equal(signatures(harness).length, 1, 'the final run does not consult the signature');
+  assert.deepEqual(harness.exits, [0]);
+});
+
+test('common transport always archives when the agent exits, unchanged state and interval notwithstanding', () => {
+  const state = { signature: SIGNATURE_A };
+  const harness = archiveHarness(state);
+  harness.intervals[0].callback();
+  harness.intervals[0].callback();
+  assert.equal(archives(harness).length, 1);
+
+  harness.terminals[0].emitExit({ exitCode: 0 });
+  assert.equal(archives(harness).length, 2);
+  assert.equal(signatures(harness).length, 1);
 });
 
 function watcherHarness(probesUntilGone, extra = {}) {
@@ -754,9 +881,9 @@ test('common transport production archive includes Codex state but excludes auth
     name: 'Codex', stateDir: '.codex', authFilename: 'auth.json'
   });
   harness.intervals[0].callback();
-  assert.equal(harness.commands.length, 1);
-  assert.match(harness.commands[0].args[1], /"\.codex"/);
-  assert.match(harness.commands[0].args[1], /--exclude="\.codex\/auth\.json"/);
+  assert.equal(harness.commands.length, 2);
+  assert.match(harness.commands[1].args[1], /"\.codex"/);
+  assert.match(harness.commands[1].args[1], /--exclude="\.codex\/auth\.json"/);
 });
 
 test('common transport uploads the native transcript next to the scrollback once the driver finds it', async () => {
