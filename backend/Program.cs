@@ -307,6 +307,7 @@ if (mcpOptions.IsConfigured)
     builder.Services.AddAntiforgery();
     builder.Services.AddMcpServer().WithHttpTransport()
         .WithTools<AgentHubMcpTools>()
+        .WithTools<SessionFileMcpTools>()
         .WithTools<SessionSharingMcpTools>();
 
     if (authEnabled)

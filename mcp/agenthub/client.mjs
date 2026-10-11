@@ -132,6 +132,22 @@ export class AgentHubClient {
     return this.#request('GET', '/api/remote/sessions/shared');
   }
 
+  listFiles(sessionId) {
+    return this.#request('GET', `/api/remote/sessions/${encodeURIComponent(sessionId)}/files`, undefined, 1_000_000);
+  }
+
+  async fileContent(sessionId, fileId, maxBytes = 52 * 1024 * 1024) {
+    const response = await this.fetchImpl(`${this.baseUrl}/api/remote/sessions/${encodeURIComponent(sessionId)}/files/${encodeURIComponent(fileId)}/content`, {
+      headers: { Authorization: `Bearer ${this.token}` },
+      redirect: 'error', signal: AbortSignal.timeout(300_000)
+    });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`agenthub_http_${response.status}`);
+    }
+    return readBounded(response, maxBytes);
+  }
+
   async #request(method, path, body, maxBytes = MAX_RESPONSE_BYTES) {
     const headers = {
       Authorization: `Bearer ${this.token}`,
@@ -174,8 +190,10 @@ function errorCode(bytes) {
 }
 
 async function readBounded(response, limit) {
-  if (Number(response.headers.get('content-length')) > limit)
+  if (Number(response.headers.get('content-length')) > limit) {
+    await response.body?.cancel();
     throw new Error('agenthub_response_too_large');
+  }
   if (!response.body) return new Uint8Array();
   const reader = response.body.getReader();
   const chunks = [];

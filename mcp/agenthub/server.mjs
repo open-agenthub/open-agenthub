@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { readSessionFile } from './files.mjs';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { AgentHubClient } from './client.mjs';
@@ -263,5 +264,15 @@ register('session_shares', {
     + 'exist (ids and roles, never the link tokens).',
   inputSchema: z.object({ sessionId: z.string().min(1).max(128) })
 }, ({ sessionId }) => sharing(async () => text(await client.listShares(sessionId))));
+
+register('list_files', {
+  description: 'List ready files in an accessible AgentHub session. Use read_file to download a file locally.',
+  inputSchema: z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/) })
+}, async ({ sessionId }) => text({ files: await client.listFiles(sessionId) }));
+
+register('read_file', {
+  description: 'Download an AgentHub session file to this computer and return localPath. Small images and text also appear inline.',
+  inputSchema: z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/), fileId: z.string().regex(/^[a-f0-9]{32}$/) })
+}, input => readSessionFile(client, input));
 
 await server.connect(new StdioServerTransport());
