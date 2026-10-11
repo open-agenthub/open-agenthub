@@ -22,6 +22,7 @@ builder.Services.AddControllers().AddJsonOptions(o =>
 builder.Services.AddSingleton<ISessionService, KubernetesSessionService>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileRegistry, AgentHub.Api.Files.PostgresSessionFileRegistry>();
 builder.Services.AddSingleton<AgentHub.Api.Files.IAgentCallbackAuthorizer, AgentHub.Api.Files.AgentCallbackAuthorizer>();
+builder.Services.AddSingleton<AgentHub.Api.Files.IProjectFileAccess, AgentHub.Api.Files.ProjectFileAccess>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionStore, AgentHub.Api.Persistence.PostgresSessionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionMessageStore, AgentHub.Api.Persistence.PostgresSessionMessageStore>();
 builder.Services.AddSingleton<AgentHub.Api.Browser.IBrowserLeaseStore, AgentHub.Api.Browser.PostgresBrowserLeaseStore>();
@@ -84,6 +85,7 @@ builder.Services.AddSingleton<AgentHub.Api.Library.SkillImporter>();
 builder.Services.AddSingleton<SessionShareStore>();
 builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<ISessionShareStatus>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
 // Every sharing surface (web, token API, MCP) goes through this one service, which holds the
 // licence check — see docs/session-sharing-api.md. FrontendOrigin is what share-link URLs are

@@ -80,7 +80,8 @@ public sealed class InternalSessionFilesTests
     private static InternalSessionFilesController Controller(
         IAgentCallbackAuthorizer authorizer,
         RecordingFiles files) => new(
-            authorizer, files, new NullArtifactStore(), new SessionFileOptions())
+            authorizer, files, new NullArtifactStore(), new SessionFileOptions(),
+            new ProjectFileAccess(new NoSessions(), new NeverShared()))
         {
             // Content writes response headers, so it needs a real HttpContext to write them to.
             ControllerContext = new ControllerContext
@@ -93,6 +94,25 @@ public sealed class InternalSessionFilesTests
     {
         Id = "s1", Owner = "alice", CallbackToken = "secret",
     };
+
+    private sealed class NeverShared : AgentHub.Api.Ee.Sharing.ISessionShareStatus
+    {
+        public Task<bool> IsSharedAsync(string sessionId, CancellationToken ct = default) => Task.FromResult(false);
+    }
+
+    private sealed class NoSessions : ISessionStore
+    {
+        public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
+        public Task UpsertAsync(SessionRecord r, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<SessionRecord?> GetAsync(string owner, string id, CancellationToken ct = default) => Task.FromResult<SessionRecord?>(null);
+        public Task<SessionRecord?> GetByCallbackTokenAsync(string token, CancellationToken ct = default) => Task.FromResult<SessionRecord?>(null);
+        public Task<IReadOnlyList<SessionRecord>> ListAsync(string owner, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<SessionRecord>>([]);
+        public Task UpdateStatusAsync(string id, string status, CancellationToken ct = default) => Task.CompletedTask;
+        public Task SetQuestionPendingAsync(string id, bool pending, CancellationToken ct = default) => Task.CompletedTask;
+        public Task SetScrollbackAsync(string id, string text, CancellationToken ct = default) => Task.CompletedTask;
+        public Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default) => Task.FromResult<string?>(null);
+        public Task DeleteAsync(string id, CancellationToken ct = default) => Task.CompletedTask;
+    }
 
     private sealed class FixedAuthorizer(SessionRecord? record) : IAgentCallbackAuthorizer
     {

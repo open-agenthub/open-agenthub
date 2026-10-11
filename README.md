@@ -650,6 +650,11 @@ HTML and SVG are download-only. A managed `files` MCP gives every supported agen
 provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,
 `upload_file`, `present_file`, and `dismiss_presentation`.
 
+Sessions of the same project can read each other's files: `list_project_files` shows what the
+other sessions of the project have made, and `fetch_project_file` copies one into the calling
+session's workspace. Read-only, same owner and same project only, and not for a session that is
+shared with someone — see [`docs/project-files.md`](docs/project-files.md).
+
 With S3 configured, session files are persistent. Without S3, their content lives only in
 the running agent pod and expires when that pod is gone; the capabilities endpoint reports
 the active storage mode and every format that can be displayed graphically. Limits default
