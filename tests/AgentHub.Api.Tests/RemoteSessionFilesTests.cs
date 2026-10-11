@@ -127,8 +127,8 @@ public sealed class RemoteSessionFilesTests
 
     private sealed class RecordingFiles : ISessionFileService, IDisposable
     {
-        private readonly MemoryStream content = new([1, 2, 3]);
-        public void Dispose() => content.Dispose();
+        private readonly MemoryStream testContent = new([1, 2, 3]);
+        public void Dispose() => testContent.Dispose();
         public SessionFileActor? LastActor;
         public bool LastAllowRedirect = true;
         public long Size = 3;
@@ -143,7 +143,7 @@ public sealed class RemoteSessionFilesTests
         public Task<AgentHub.Api.Files.FileContentResult> OpenContentAsync(SessionFileActor actor, string fileId, bool allowRedirect = true, CancellationToken ct = default)
         {
             LastActor = actor; LastAllowRedirect = allowRedirect;
-            return Task.FromResult(new AgentHub.Api.Files.FileContentResult(content, null, "image/png", "shot.png", 3));
+            return Task.FromResult(new AgentHub.Api.Files.FileContentResult(testContent, null, "image/png", "shot.png", 3));
         }
         public Task<ReserveFileResult> ReserveAsync(SessionFileActor actor, ReserveSessionFileCommand request, CancellationToken ct = default) => throw new NotSupportedException();
         public Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, long? contentLength = null, CancellationToken ct = default) => throw new NotSupportedException();
