@@ -60,8 +60,8 @@ public static class AgentMessaging
 {
     public const int MaxBodyChars = 4000;
 
-    /// <summary>Messages per inbox poll — small enough that a full batch stays well
-    /// under the in-pod MCP client's 64 KB response cap.</summary>
+    /// <summary>Messages per inbox poll — keep delivery batches small even when the
+    /// in-pod MCP client allows larger collection responses.</summary>
     public const int InboxBatchLimit = 4;
 
     public const int MaxWaitSeconds = 60;

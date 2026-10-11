@@ -140,3 +140,19 @@ test('requires callback url, token, and session id', async () => {
     /sessions_backend_invalid_url/
   );
 });
+
+test('collections accept large lists and JSON-escaped inbox batches while retaining a bound', async () => {
+  const { SessionsBackendClient } = await import('../../sessions/client.mjs');
+  const escapedBody = String.fromCharCode(92).concat('u4e00').repeat(4000);
+  const inboxJson = '{"messages":[' + Array.from({ length: 4 }, () => '{"body":"' + escapedBody + '"}').join(',') + ']}';
+  assert.ok(Buffer.byteLength(inboxJson) > 64 * 1024);
+  const inboxClient = new SessionsBackendClient(env(), async () => new Response(inboxJson));
+  assert.equal((await inboxClient.inbox()).messages[0].body.length, 4000);
+  for (const method of ['listChildren', 'listProjectAgents', 'inbox']) {
+    const records = Array.from({ length: 40 }, () => sessionInfo({ title: 'x'.repeat(2000) }));
+    const client = new SessionsBackendClient(env(), async () => Response.json(records));
+    assert.equal((await client[method]()).length, 40);
+    const oversized = new SessionsBackendClient(env(), async () => new Response('x'.repeat(4 * 1024 * 1024 + 1)));
+    await assert.rejects(() => oversized[method](), /sessions_backend_response_too_large/);
+  }
+});

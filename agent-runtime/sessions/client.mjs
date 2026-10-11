@@ -1,4 +1,7 @@
 const MAX_RESPONSE_BYTES = 64 * 1024;
+// Collections can exceed a single record's budget. Inbox JSON escaping can also expand
+// the four-message batch beyond 64 KiB; rejecting it after delivery would hide messages.
+const MAX_COLLECTION_BYTES = 4 * 1024 * 1024;
 
 export class SessionsBackendClient {
   constructor(env = process.env, fetchImpl = globalThis.fetch) {
@@ -29,7 +32,7 @@ export class SessionsBackendClient {
   }
 
   listChildren() {
-    return this.#request('GET', '/children');
+    return this.#request('GET', '/children', undefined, MAX_COLLECTION_BYTES);
   }
 
   async delete(childId) {
@@ -45,7 +48,7 @@ export class SessionsBackendClient {
 
   /** Directory of this session's project fleet (slim records, includes a `self` marker). */
   listProjectAgents() {
-    return this.#request('GET', '/project-agents');
+    return this.#request('GET', '/project-agents', undefined, MAX_COLLECTION_BYTES);
   }
 
   /** The account this session (no id) or a descendant runs on, with its limit state and the
@@ -71,10 +74,10 @@ export class SessionsBackendClient {
   /** Takes undelivered inbox messages, long-polling up to waitSeconds (0..60). */
   inbox(waitSeconds = 0) {
     const wait = Math.min(60, Math.max(0, Math.trunc(Number(waitSeconds) || 0)));
-    return this.#request('GET', `/messages?wait=${wait}`);
+    return this.#request('GET', `/messages?wait=${wait}`, undefined, MAX_COLLECTION_BYTES);
   }
 
-  async #request(method, path, body) {
+  async #request(method, path, body, maxBytes = MAX_RESPONSE_BYTES) {
     const headers = { 'X-Agent-Token': this.token, Accept: 'application/json' };
     const init = { method, headers, signal: AbortSignal.timeout(300_000) };
     if (body !== undefined) {
@@ -82,7 +85,7 @@ export class SessionsBackendClient {
       init.body = JSON.stringify(body);
     }
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, init);
-    const bytes = await readBounded(response, MAX_RESPONSE_BYTES);
+    const bytes = await readBounded(response, maxBytes);
     if (!response.ok) throw new Error(`sessions_backend_http_${response.status}`);
     if (response.status === 204 || bytes.length === 0) return null;
     try { return JSON.parse(new TextDecoder().decode(bytes)); }
