@@ -152,6 +152,32 @@ user's ownership exactly as it does for the REST API.
 
 ## Operational notes
 
+### Reading files from a workstation
+
+Both MCP transports expose `list_files(sessionId)` and `read_file(sessionId, fileId)`.
+They use the same session access checks as the web file API: owners and explicitly shared
+viewers/collaborators can read, and inaccessible sessions are reported as missing. Personal
+API tokens are accepted only on the remote API, not on the pod's internal callback routes.
+
+The stdio server downloads to `~/.agenthub/files/<sessionId>/<fileId>/download-*/<name>` and
+returns `localPath`. Each download gets a new directory to preserve existing local work.
+Images up to 20 MiB and text up to 64 KiB are also returned inline; other files remain on disk.
+Downloads are bounded to 52 MiB. The HTTP MCP cannot write to a client's disk, so its read tool
+returns images up to 20 MiB and text up to 64 KiB inline and directs larger or other files to
+the stdio client.
+
+The personal-token endpoints are `GET /api/remote/sessions/{id}/files` and
+`GET /api/remote/sessions/{id}/files/{fileId}/content`. Content is streamed through AgentHub
+for both pod-backed and object-storage files. It never redirects to an internal storage URL:
+a workstation may reach the hub without reaching storage, and the personal token must not
+travel to a second host. These endpoints are read-only; they grant no upload or deletion.
+
+Files from another accessible session can be read by supplying that session's id. The pod's
+same-project callback access remains a separate surface; importing a transcript does not
+copy pod tokens or browser logins to a workstation.
+
+### OAuth persistence
+
 Registered clients live in Postgres (`mcp_clients`, `mcp_client_approvals`) and are replayed
 into the in-memory OpenIddict store at startup. Without that replay, every restart would
 invalidate existing registrations and clients would fail their next silent reconnect with
