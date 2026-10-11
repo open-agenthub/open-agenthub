@@ -7,6 +7,7 @@ const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
+const { PERSIST_STEP_SECONDS, signatureCommand, archiveCommand } = require('./state-archive');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -15,8 +16,11 @@ const MAX_BUFFER = 1_000_000;
 // How long a stopped agent gets to exit on its own before the restart forces it; long enough
 // for a CLI to flush its session file, short enough that a wedged one does not stall the swap.
 const RESTART_KILL_GRACE_MS = 8_000;
-// Upper bound for each archive/upload step of a persistence run.
-const PERSIST_STEP_SECONDS = 120;
+// How many 30s persistence ticks pass between two state archives. Scrollback and transcript are
+// small and go up on every tick; the state directory is tens of megabytes to compress, and a
+// resume needs it only as recent as the last turn. Two minutes bounds what a pod that dies
+// without its SIGTERM loses, at a quarter of the compression (docs/state-archive.md).
+const STATE_ARCHIVE_EVERY_TICKS = 4;
 // Where an entrypoint records the pid of its credential watcher, and how long the server waits
 // for that watcher's last upload: a little over the watcher's own 5s flush bound.
 const DEFAULT_WATCHER_PIDFILE = '/tmp/agenthub-auth-watcher.pid';
@@ -112,6 +116,10 @@ function createCommonServer(options = {}) {
   let lastSize = null;
   let persisting = false;
   let persistWaiters = null;
+  // Starts at the interval so the first tick archives: a session that dies in its first two
+  // minutes would otherwise leave nothing to resume from.
+  let stateTicksSinceUpload = STATE_ARCHIVE_EVERY_TICKS - 1;
+  let uploadedStateSignature = null;
   // Fleet messages waiting for the provider's in-process mod (docs/priority-messages.md), and when the
   // mod last showed itself. The token is minted by the entrypoint and shared with the CLI
   // process only, so nothing else on the pod's port can read the queue.
@@ -148,26 +156,33 @@ function createCommonServer(options = {}) {
     for (const socket of clients) safeSend(socket, data);
   }
 
-  function persistState(done) {
+  // The periodic run archives only when the interval has passed and the state differs from
+  // what the last successful upload held; an idle session used to compress and upload the same
+  // tens of megabytes every 30s around the clock. Only a successful upload is remembered, so a
+  // failed one is retried on the next tick instead of waiting out the interval. The final run
+  // (agent exit, SIGTERM) archives without asking: it is the last chance, and it must not
+  // depend on the change detection being right.
+  function persistState(final, done) {
     if (!statePut) return done && done();
-    const archive = driver.stateDir;
-    const excludes = [driver.stateDir + '/' + driver.authFilename];
-    if (Array.isArray(driver.stateExcludes)) {
-      for (const entry of driver.stateExcludes) excludes.push(entry);
-    }
-    const excludeArgs = excludes.map(entry => '--exclude="' + entry + '"').join(' ');
-    // tar exits 1 when a file changed while it was read — the live transcript of a running
-    // agent always does — and the archive is still complete, so only >1 counts as a failure;
-    // treating 1 as one meant an active session never uploaded its state at all. It writes
-    // to a side file so an aborted run never replaces the last good archive, runs niced
-    // and bounded so a large state directory cannot starve the agent and its hooks.
-    execFile('/bin/sh', ['-c',
-      'nice -n 10 timeout ' + PERSIST_STEP_SECONDS + ' tar czf /tmp/state.tgz.part -C "' + home +
-      '" ' + excludeArgs + ' "' + archive + '" 2>/dev/null; ' +
-      'if [ $? -le 1 ]; then mv -f /tmp/state.tgz.part /tmp/state.tgz && curl -fsS --max-time ' +
-      PERSIST_STEP_SECONDS + ' ' + curlOption + '-T /tmp/state.tgz "' + statePut + '"; ' +
-      'else rm -f /tmp/state.tgz.part; exit 1; fi'
-    ], () => done && done());
+    const shell = (command, callback) => execFile('/bin/sh', ['-c', command], callback);
+    const archive = signature => shell(
+      archiveCommand({ home, driver, statePut, curlOption }), error => {
+        if (!error) {
+          uploadedStateSignature = signature;
+          stateTicksSinceUpload = 0;
+        }
+        if (done) done();
+      });
+    if (final) return archive(null);
+    if (++stateTicksSinceUpload < STATE_ARCHIVE_EVERY_TICKS) return done && done();
+    // The signature is taken before the archive, so a file written while tar runs makes the
+    // next signature differ and is picked up then rather than lost.
+    shell(signatureCommand({ home, driver }), (error, stdout) => {
+      const match = error ? null : /^[0-9a-f]{64}\b/.exec(String(stdout || ''));
+      const signature = match ? match[0] : null;
+      if (signature && signature === uploadedStateSignature) return done && done();
+      archive(signature);
+    });
   }
 
   function persistScrollback(done) {
@@ -317,19 +332,19 @@ function createCommonServer(options = {}) {
   // and gzip processes piled up by the thousand, all writing the same archive, and starved
   // the pod until hooks timed out. A tick that finds a run in flight is skipped; a caller
   // that needs the final state (exit, SIGTERM) gets one more run after the current one.
-  function persistAll(done) {
+  function persistAll(done, final = false) {
     if (persisting) {
-      if (done) (persistWaiters || (persistWaiters = [])).push(done);
+      if (final && done) (persistWaiters || (persistWaiters = [])).push(done);
       return;
     }
     persisting = true;
     postResources();
     syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
-      persistState(() => {
+      persistState(final, () => {
         persisting = false;
         const waiters = persistWaiters;
         persistWaiters = null;
-        if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); });
+        if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); }, true);
         if (done) done();
       })))));
   }
@@ -368,7 +383,7 @@ function createCommonServer(options = {}) {
       for (const callback of exitCallbacks) callback();
     };
     flushCredentialWatcher(finish);
-    persistAll(finish);
+    persistAll(finish, true);
   }
 
   // ---- Pod resource snapshot (CPU/memory from the cgroup, network from /proc/net/dev) ----

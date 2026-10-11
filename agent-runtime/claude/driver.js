@@ -183,6 +183,12 @@ module.exports = {
   name: 'Claude',
   stateDir: '.claude',
   authFilename: '.credentials.json',
+  // The CLI's checkout of its plugin marketplace: more than half of a typical state directory,
+  // and fetched again on start whenever it is missing — known_marketplaces.json, which stays in
+  // the archive, is what tells it to. Installed plugins (plugins/cache) and the skills are
+  // kept: nothing was shown to bring back a plugin the user installed, and a skill written in
+  // the session exists nowhere else until the library sync has taken it.
+  stateExcludes: ['.claude/plugins/marketplaces'],
   limitPatterns,
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),

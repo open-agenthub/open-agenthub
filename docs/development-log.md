@@ -9,6 +9,29 @@ when the fake in the test is more forgiving than production.
 
 ---
 
+## 2026-10-11 — The state archive compressed 33 MB every 30 seconds, idle or not
+
+Every persistence tick ran `tar czf` over the agent's whole state directory and uploaded it:
+1.4 s of CPU and 11 MB per tick in a Claude session, around the clock. Nobody saw it because it
+worked — the session resumed, the run was niced, and the cost only showed as a pod that was
+never quite idle. Fixed by skipping unchanged state, archiving every two minutes instead of every
+tick, leaving out the plugin marketplace checkout and compressing at level 1
+(`docs/state-archive.md` has the numbers and the rejected alternatives).
+
+**The obvious change signal was wrong.** `tar -cvvf /dev/null` lists exactly what the archive
+would contain without reading a file, and `--full-time` promises full-resolution timestamps. It
+prints whole seconds, in the default and the pax format alike (GNU tar 1.34). A same-size rewrite within the second of the
+previous check — any SQLite file — would have been missed for good. The listing comes from
+`find -printf '%T@ %C@'` instead, and `test/state-archive.test.js` rewrites a file to the same
+size at once to hold that.
+
+**Do differently:** a "has it changed" check is a correctness feature, not an optimisation; test
+it against the real filesystem with the change it is most likely to miss. And measure the idle
+case of anything on a timer — the per-run cost looked acceptable for as long as nobody multiplied
+it by 2880 runs a day.
+
+---
+
 ## 2026-10-02 — Auto-approve was switched on, stored, defaulted, tested — and never asked
 
 An autonomous session was told to research something on the web. It came back having fetched
