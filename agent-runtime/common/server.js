@@ -7,7 +7,7 @@ const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
-const { PERSIST_STEP_SECONDS, signatureCommand, archiveCommand } = require('./state-archive');
+const { PERSIST_STEP_SECONDS, signatureScript, archiveScript } = require('./state-archive');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -164,9 +164,8 @@ function createCommonServer(options = {}) {
   // depend on the change detection being right.
   function persistState(final, done) {
     if (!statePut) return done && done();
-    const shell = (argv, callback) => execFile('/bin/sh', argv, callback);
-    const archive = signature => shell(
-      archiveCommand({ home, driver, statePut, curlOption }), error => {
+    const archive = signature => execFile('/bin/sh',
+      ['-c', archiveScript(driver, curlOption), 'sh', home, statePut, '/tmp/state.tgz'], error => {
         if (!error) {
           uploadedStateSignature = signature;
           stateTicksSinceUpload = 0;
@@ -177,7 +176,7 @@ function createCommonServer(options = {}) {
     if (++stateTicksSinceUpload < STATE_ARCHIVE_EVERY_TICKS) return done && done();
     // The signature is taken before the archive, so a file written while tar runs makes the
     // next signature differ and is picked up then rather than lost.
-    shell(signatureCommand({ home, driver }), (error, stdout) => {
+    execFile('/bin/sh', ['-c', signatureScript(driver), 'sh', home], (error, stdout) => {
       const match = error ? null : /^[0-9a-f]{64}\b/.exec(String(stdout || ''));
       const signature = match ? match[0] : null;
       if (signature && signature === uploadedStateSignature) return done && done();

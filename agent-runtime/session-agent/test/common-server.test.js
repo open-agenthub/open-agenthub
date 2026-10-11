@@ -268,7 +268,10 @@ test('common transport archives driver state without its subscription credential
   assert.equal(harness.commands.length, 3);
   assert.match(harness.commands[0].args[1], /curl -fsS --max-time 120 -k -T \/tmp\/scrollback\.log/);
   assert.match(harness.commands[1].args[1], /find "\.test-agent" \\\( -path "\.test-agent\/auth\.json" \\\) -prune /);
-  assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf \/tmp\/state\.tgz/);
+  assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$3\.part" -C "\$1" /);
+  assert.deepEqual(harness.commands[2].args.slice(2),
+    ['sh', '/home/agent', 'https://storage.invalid/state', '/tmp/state.tgz']);
+  assert.deepEqual(harness.commands[1].args.slice(2), ['sh', '/home/agent']);
   assert.match(harness.commands[2].args[1], /"\.test-agent"/);
   assert.match(harness.commands[2].args[1], /--exclude="\.test-agent\/auth\.json"/);
   assert.doesNotMatch(harness.commands[2].args[1], /cat |credentials\.json/);
@@ -301,9 +304,9 @@ test('common transport keeps the last archive unless tar finished, accepting fil
   const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' });
   harness.intervals[0].callback();
   const command = harness.commands[1].args[1];
-  assert.match(command, /^nice -n 10 timeout 120 tar -I 'gzip -1' -cf \/tmp\/state\.tgz\.part /);
-  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f \/tmp\/state\.tgz\.part \/tmp\/state\.tgz && curl -fsS --max-time 120 -T \/tmp\/state\.tgz/);
-  assert.match(command, /else rm -f \/tmp\/state\.tgz\.part; exit 1; fi$/);
+  assert.match(command, /^nice -n 10 timeout 120 tar -I 'gzip -1' -cf "\$3\.part" /);
+  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f "\$3\.part" "\$3" && curl -fsS --max-time 120 -T "\$3" "\$2"; /);
+  assert.match(command, /else rm -f "\$3\.part"; exit 1; fi$/);
 });
 
 test('common transport skips a persistence tick while the previous run is still archiving', () => {
