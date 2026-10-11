@@ -2,6 +2,12 @@
 
 // The shell commands of the periodic state archive (docs/state-archive.md), kept apart from the
 // server so a test can run them against a real directory and the entrypoint's restore command.
+//
+// Each is returned as the argument list for /bin/sh. The home directory and the upload url come
+// from the environment and reach the script as positional parameters, never as part of its
+// text: a quote or `$(` in either would otherwise be executed. What is spliced into the text
+// is the driver's own state directory and excludes, which driver-contract.js restricts to safe
+// relative paths.
 
 // Upper bound for each archive/upload step of a persistence run.
 const PERSIST_STEP_SECONDS = 120;
@@ -23,9 +29,9 @@ function stateExcludes(driver) {
 // The exit status is part of the digest so an unreadable subtree cannot pass for a quiet one.
 function signatureCommand({ home, driver }) {
   const prune = stateExcludes(driver).map(entry => '-path "' + entry + '"').join(' -o ');
-  return 'cd "' + home + '" && { timeout ' + PERSIST_STEP_SECONDS + ' find "' + driver.stateDir +
+  return ['-c', 'cd "$1" && { timeout ' + PERSIST_STEP_SECONDS + ' find "' + driver.stateDir +
     '" \\( ' + prune + " \\) -prune -o -printf '%T@ %C@ %s %y %p\\n'; echo \"exit $?\"; } 2>&1 | " +
-    'LC_ALL=C sort | sha256sum';
+    'LC_ALL=C sort | sha256sum', 'sh', home];
 }
 
 // tar exits 1 when a file changed while it was read — the live transcript of a running
@@ -38,12 +44,12 @@ function signatureCommand({ home, driver }) {
 // `tar xzf` in an older runtime's entrypoint restores it and this one restores an older archive.
 function archiveCommand({ home, driver, statePut, curlOption = '', archivePath = '/tmp/state.tgz' }) {
   const excludeArgs = stateExcludes(driver).map(entry => '--exclude="' + entry + '"').join(' ');
-  return 'nice -n 10 timeout ' + PERSIST_STEP_SECONDS +
-    " tar -I 'gzip -1' -cf " + archivePath + '.part -C "' + home + '" ' + excludeArgs + ' "' +
+  return ['-c', 'nice -n 10 timeout ' + PERSIST_STEP_SECONDS +
+    " tar -I 'gzip -1' -cf " + archivePath + '.part -C "$1" ' + excludeArgs + ' "' +
     driver.stateDir + '" 2>/dev/null; ' +
     'if [ $? -le 1 ]; then mv -f ' + archivePath + '.part ' + archivePath +
     ' && curl -fsS --max-time ' + PERSIST_STEP_SECONDS + ' ' + curlOption + '-T ' + archivePath +
-    ' "' + statePut + '"; else rm -f ' + archivePath + '.part; exit 1; fi';
+    ' "$2"; else rm -f ' + archivePath + '.part; exit 1; fi', 'sh', home, statePut];
 }
 
 module.exports = { PERSIST_STEP_SECONDS, stateExcludes, signatureCommand, archiveCommand };

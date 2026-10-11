@@ -21,8 +21,9 @@ const driver = {
   stateExcludes: ['.test-agent/cache', '.test-agent/agents/*/agent.sqlite']
 };
 
+// Takes the argument list the server hands to /bin/sh, or a plain script.
 function shell(command) {
-  return new Promise(resolve => execFile('/bin/sh', ['-c', command],
+  return new Promise(resolve => execFile('/bin/sh', Array.isArray(command) ? command : ['-c', command],
     (error, stdout) => resolve({ error, stdout: String(stdout) })));
 }
 
@@ -130,7 +131,7 @@ test('a failed upload fails the run and keeps no side file', async t => {
   const { root, home } = fixture(t);
   const received = await storage(t, 503);
   const archivePath = path.join(root, 'state.tgz');
-  const run = await shell(archiveCommand({ home, driver, statePut: received.url, archivePath }) + ' 2>/dev/null');
+  const run = await shell(archiveCommand({ home, driver, statePut: received.url, archivePath }));
   assert.ok(run.error, 'the server must not remember this run as uploaded');
   assert.ok(!fs.existsSync(archivePath + '.part'));
 });
@@ -145,6 +146,26 @@ test('a missing state directory fails the run and leaves the last good archive a
   assert.ok(run.error);
   assert.equal(fs.readFileSync(archivePath, 'utf8'), 'last good archive');
   assert.equal(received.bodies.length, 0);
+});
+
+test('a home directory or url with shell syntax in it is data, not script', async t => {
+  const { root } = fixture(t);
+  const home = path.join(root, 'ho"me $(touch injected-by-home)');
+  fs.renameSync(path.join(root, 'home'), home);
+  const received = await storage(t);
+  const archivePath = path.join(root, 'state.tgz');
+  const cwd = process.cwd();
+  process.chdir(root);
+  t.after(() => process.chdir(cwd));
+
+  assert.match((await shell(signatureCommand({ home, driver }))).stdout, /^[0-9a-f]{64}\b/);
+  const run = await shell(archiveCommand({ home, driver, statePut: received.url, archivePath }));
+  assert.equal(run.error, null);
+  assert.equal(received.bodies.length, 1);
+  // curl refuses this url; what matters is that the shell never evaluated it.
+  await shell(archiveCommand({
+    home, driver, statePut: received.url + '?x=$(touch injected-by-url)', archivePath }));
+  assert.deepEqual(fs.readdirSync(root).filter(name => name.startsWith('injected')), []);
 });
 
 test('the signature is stable while nothing changes and across archive runs', async t => {

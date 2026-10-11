@@ -164,7 +164,7 @@ function createCommonServer(options = {}) {
   // depend on the change detection being right.
   function persistState(final, done) {
     if (!statePut) return done && done();
-    const shell = (command, callback) => execFile('/bin/sh', ['-c', command], callback);
+    const shell = (argv, callback) => execFile('/bin/sh', argv, callback);
     const archive = signature => shell(
       archiveCommand({ home, driver, statePut, curlOption }), error => {
         if (!error) {
