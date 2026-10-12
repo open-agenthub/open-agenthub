@@ -66,13 +66,15 @@ public sealed class RemoteGitControllerTests
         foreach(var scope in new[]{new ApiTokenScope(),new ApiTokenScope{GitPats=["*"]}})
         {
             var git=new Git(); var c=Controller(git,scope:scope);
-            foreach(var result in new[]{(await c.Providers(default)).Result,(await c.Projects("gitlab-work",null,default)).Result})
-            {
-                var denied=Assert.IsType<ObjectResult>(result);
-                Assert.Equal(403,denied.StatusCode); Assert.Equal(RemoteGitController.OAuthNotAllowed,denied.Value);
-            }
+            AssertOAuthDenied((await c.Providers(default)).Result);
+            AssertOAuthDenied((await c.Projects("gitlab-work",null,default)).Result);
             Assert.Equal(0,git.Calls);
         }
+    }
+    private static void AssertOAuthDenied(ActionResult? result)
+    {
+        var denied=Assert.IsType<ObjectResult>(result);
+        Assert.Equal(403,denied.StatusCode); Assert.Equal(RemoteGitController.OAuthNotAllowed,denied.Value);
     }
     [Fact]
     public async Task ArbitraryProviderUrlAndOversizedQueryNeverReachUpstream()
