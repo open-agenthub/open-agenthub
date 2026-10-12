@@ -56,9 +56,9 @@ public class SessionSoftLimitTests
     [Theory]
     [InlineData(0)]
     [InlineData(-5)]
-    public void NormalizeMax_RequiresPositive_DefaultsTo20(int configured)
+    public void NormalizeMax_RequiresPositive_FallsBackToTheDefault(int configured)
     {
-        Assert.Equal(20, SessionSoftLimit.NormalizeMax(configured));
+        Assert.Equal(SessionSoftLimit.DefaultMax, SessionSoftLimit.NormalizeMax(configured));
     }
 
     private static SessionRecord Rec(string id, string status) => new()
