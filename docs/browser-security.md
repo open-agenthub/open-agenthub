@@ -62,6 +62,18 @@ copy and paste text between their own clipboard and the remote page. Ctrl/Cmd+V,
 the browser pane are taken out of the VNC stream; the frontend calls
 `/api/sessions/{id}/browser/clipboard/{paste,copy}` (or the `/api/shared/{token}/…` twin), and
 the backend relays to the browser supervisor on TCP 6081, which only the backend can reach.
+Both CDP connections preserve native focus rather than emulating it. With focus emulation,
+every tab reports itself focused and visible: in 0.13.0 the supervisor could select the initial
+blank tab, acknowledge the paste, and insert nothing into the page being viewed. The same
+selection error affected copy. Keeping native focus lets the focused-frame check select the
+page the viewer is controlling, including a field inside a frame.
+
+The real browser regression runs paste, copy and cut over the supervisor HTTP route with
+the initial blank tab still open, both CDP clients connected, and a focused field inside a
+frame. CI runs it on a virtual display; locally run `npm test` in `browser-runtime` with
+`AGENTHUB_TEST_BROWSER_EXECUTABLE` set to a browser executable and `DISPLAY` set to a
+running X display. Without that executable setting, only this real browser test is skipped.
+
 Paste inserts the text into the focused element with CDP `Input.insertText`. Copy reads the
 selection of the focused frame, then lets Chromium run its own copy or cut command, so a cut
 removes what it handed over and the page still sees the shortcut. Password fields yield
