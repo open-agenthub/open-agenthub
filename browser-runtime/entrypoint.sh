@@ -63,6 +63,14 @@ while [ ! -e "$X11_SOCKET_DIR/X99" ]; do
   sleep 0.1
 done
 
+# --enable-unsafe-swiftshader: a browser pod has no GPU, so Chromium runs its GPU process on the
+# Mesa software GL that Xvfb pulls in, and it blocklists WebGL on that. It used to switch to its
+# bundled SwiftShader by itself; that fallback is now opt-in, and without the switch every
+# getContext('webgl'|'webgl2') returns null. Only WebGL moves to SwiftShader: compositing and
+# raster stay on the software path they were on. --use-angle=swiftshader and
+# --ignore-gpu-blocklist also yield a context, but put every page's compositing on a CPU
+# rasteriser and more than double the CPU of a page that never asks for WebGL.
+# docs/browser-security.md says what "unsafe" means for this pod.
 start_child chromium \
   --display=:99 \
   --remote-debugging-address=127.0.0.1 \
@@ -74,6 +82,7 @@ start_child chromium \
   --disable-background-networking \
   --disable-component-update \
   --disable-sync \
+  --enable-unsafe-swiftshader \
   about:blank
 # -nosel: x11vnc would otherwise push every copy made in Chromium to all connected viewers,
 # view-only ones included. The clipboard goes through the supervisor instead, per request and

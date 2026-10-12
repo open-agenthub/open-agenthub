@@ -1,6 +1,10 @@
 FROM node:26-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+# The two test -s lines: WebGL in a pod without a GPU is rendered by the software rasteriser
+# that the distribution's chromium-common happens to ship. Nothing declares that as a
+# dependency, so a package update that drops it would build fine and only show up as pages
+# without a WebGL context. Fail the build instead.
 RUN set -eux; \
     apt-get update; \
     chromium_version="$(apt-cache policy chromium | awk '/Candidate:/ {print $2}')"; \
@@ -15,6 +19,8 @@ RUN set -eux; \
       "chromium=${chromium_version}" "xvfb=${xvfb_version}" \
       "x11vnc=${x11vnc_version}" "x11-xserver-utils=${xrandr_version}" "websockify=${websockify_version}" \
       "socat=${socat_version}" "curl=${curl_version}" "ca-certificates=${ca_version}"; \
+    test -s /usr/lib/chromium/libvk_swiftshader.so; \
+    test -s /usr/lib/chromium/vk_swiftshader_icd.json; \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/browser
