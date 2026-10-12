@@ -83,6 +83,11 @@ jobs:
         run: npm ci
       - working-directory: browser-runtime
         run: npm test
+      - name: Build browser runtime
+        run: docker build --tag open-agenthub-dev/browser:test browser-runtime
+      - name: Smoke browser runtime
+        shell: pwsh
+        run: ./browser-runtime/smoke.ps1 -Image open-agenthub-dev/browser:test
       - name: Build Claude runtime
         run: docker build --file agent-runtime/claude/Dockerfile --tag open-agenthub-dev/agent-runtime-claude:test agent-runtime
       - name: Smoke Claude CLI
