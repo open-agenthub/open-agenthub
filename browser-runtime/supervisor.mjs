@@ -95,7 +95,9 @@ export class BrowserSupervisor {
     this.checkpointSeconds = positiveInt(options.checkpointSeconds ?? process.env.AGENTHUB_BROWSER_COOKIE_CHECKPOINT_SECONDS, 60);
     this.cdpUrl = options.cdpUrl ?? 'http://127.0.0.1:9223';
     this.fetch = options.fetch ?? globalThis.fetch;
-    this.connect = options.connect ?? (url => chromium.connectOverCDP(url));
+    // Emulated focus makes every tab look active, so clipboard input can land in the
+    // initial blank tab instead of the page the viewer is controlling.
+    this.connect = options.connect ?? (url => chromium.connectOverCDP(url, { noDefaults: true }));
     this.setInterval = options.setInterval ?? globalThis.setInterval;
     this.clearInterval = options.clearInterval ?? globalThis.clearInterval;
     this.execFile = options.execFile ?? execFile;

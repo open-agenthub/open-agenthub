@@ -82,7 +82,11 @@ jobs:
       - working-directory: browser-runtime
         run: npm ci
       - working-directory: browser-runtime
-        run: npm test
+        run: npx playwright-core install --with-deps chromium
+      - working-directory: browser-runtime
+        run: |
+          export AGENTHUB_TEST_BROWSER_EXECUTABLE="$(node --input-type=module -e 'import { chromium } from "playwright-core"; process.stdout.write(chromium.executablePath())')"
+          xvfb-run -a npm test
       - name: Build browser runtime
         run: docker build --tag open-agenthub-dev/browser:test browser-runtime
       - name: Smoke browser runtime
