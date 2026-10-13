@@ -98,12 +98,17 @@ function chooseAgent(agent) {
 </template>
 
 <style scoped>
+/* The agent column gets two thirds: five agents need about 376px and half of the card is 291px,
+   so on equal columns the fifth chip ran 58px into Billing. Billing has two or three short
+   options and does not need the room. */
 .agent-card {
-  display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 18px;
+  display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 14px 18px;
   padding: 14px; margin: 2px 0 14px; border: 1px solid var(--border-2); border-radius: var(--radius-lg); background: var(--input);
 }
 .decision-label { margin-bottom: 7px; color: var(--muted-2); font-size: 12px; }
-.chips-box { display: inline-flex; max-width: 100%; gap: 2px; padding: 3px; border: 1px solid var(--border-2); border-radius: var(--radius); background: var(--panel); }
+/* Wrapping is what keeps this correct for any number of options. max-width alone only capped the
+   box; without a wrap the chips kept their single row and painted past it. */
+.chips-box { display: inline-flex; flex-wrap: wrap; max-width: 100%; gap: 2px; padding: 3px; border: 1px solid var(--border-2); border-radius: var(--radius); background: var(--panel); }
 .chip { padding: 6px 12px; border: none; border-radius: 8px; background: none; color: var(--muted-3); font-size: 12px; font-weight: 700; }
 .chip:hover { color: var(--text); }
 .chip.on { background: var(--border-2); color: var(--strong); }
@@ -113,9 +118,11 @@ small { display: block; margin-top: 5px; color: var(--muted-3); font-size: 11px;
 .readiness { grid-column: 1 / -1; margin: 0; padding-top: 10px; border-top: 1px solid var(--border); color: var(--warn); font-size: 12px; line-height: 1.45; }
 .readiness.ready { color: var(--ok); }
 @media (max-width: 600px) {
-  .agent-card { grid-template-columns: 1fr; }
+  /* A bare 1fr track is minmax(auto, 1fr) and grows to its content's minimum width, which
+     pushed every group past the card as soon as the chips were wider than the screen. */
+  .agent-card { grid-template-columns: minmax(0, 1fr); }
   .source-group, .readiness { grid-column: 1; }
   .chips-box { display: flex; }
-  .chip { flex: 1; }
+  .chip { flex: 1 1 auto; }
 }
 </style>

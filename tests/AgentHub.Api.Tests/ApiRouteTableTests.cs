@@ -27,6 +27,8 @@ public class ApiRouteTableTests
     /// refactor.</summary>
     public static TheoryData<string, string> RemoteTransferRoutes => new()
     {
+        { "GET", "api/remote/git/providers" },
+        { "GET", "api/remote/git/projects" },
         { "GET", "api/remote/sessions" },
         { "GET", "api/remote/sessions/{id}" },
         { "POST", "api/remote/sessions" },

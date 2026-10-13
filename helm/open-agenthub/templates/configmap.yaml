@@ -30,7 +30,7 @@ data:
   AgentHub__CallbackBaseUrl: "http://agenthub-backend.{{ .Release.Namespace }}.svc.cluster.local"
   AgentHub__TelemetryEnabled: {{ .Values.telemetry.enabled | default false | quote }}
   AgentHub__TelemetryOtlpEndpoint: {{ .Values.telemetry.otlpEndpoint | default "" | quote }}
-  AgentHub__MaxRunningSessionsPerOwner: {{ .Values.maxRunningSessionsPerOwner | default 20 | quote }}
+  AgentHub__MaxRunningSessionsPerOwner: {{ .Values.maxRunningSessionsPerOwner | default 50 | quote }}
   AgentHub__SpawnMcpEnabled: {{ .Values.spawnMcpEnabled | quote }}
   Network__Enabled: {{ .Values.agent.portRequests.enabled | quote }}
   # One string (not indexed keys): an empty list must yield an EMPTY allowlist in the

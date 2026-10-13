@@ -153,3 +153,17 @@ function, so the controller stays thin and the rules are tested without a databa
 - **No per-session choice of SSH key or API key.** Both are single values per user, see above.
 - **No expiry on tokens.** It was listed as missing alongside scopes, and it is still missing; it is
   orthogonal and would deserve its own column and sweep.
+
+## Remote Git OAuth discovery
+
+Unrestricted personal API tokens can read `GET /api/remote/git/providers` and search the owner's
+connected repositories with `GET /api/remote/git/projects?provider=<configured-id>&q=<search>`.
+The results use the same metadata-only shapes as the interactive Git picker; OAuth credentials
+are never returned. Provider IDs must refer to server-configured providers, and searches are
+limited to 256 characters. Disconnected providers return 409 `git_provider_not_connected`.
+
+Restricted tokens receive 403 `git_oauth_not_allowed` on both routes, including tokens whose
+`gitPats` contains `*`: a stored Git PAT grant is not an OAuth connection grant. The current scope
+format has no OAuth-provider permission, so exposing connected project names to restricted
+tokens would silently broaden their access. Use the interactive JWT picker for those tokens;
+these endpoints neither connect nor disconnect an OAuth provider.

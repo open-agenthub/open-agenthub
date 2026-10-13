@@ -39,3 +39,29 @@ export function fileSize(bytes) {
   if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KiB`
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`
 }
+
+// Saves bytes we already hold under the file's own name. Session content is reached with a bearer
+// header, so a plain link to the content endpoint would arrive unauthenticated; the bytes have to
+// be fetched first and handed to the browser from memory.
+//
+// The blob is relabelled application/octet-stream before it gets a URL. A blob: URL lives on this
+// app's origin and is served with the blob's own type, so an uploaded text/html or image/svg+xml
+// file — the types the backend marks download_only — would run as a document of ours if anything
+// ever navigated to that URL instead of saving it (a browser ignoring the download attribute, a
+// user opening the link in a new tab). Labelled octet-stream it can only be saved. slice() relabels
+// without copying, so what lands on disk is the original bytes; the name comes from the download
+// attribute, not from the type.
+export function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob.slice(0, blob.size, 'application/octet-stream'))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = name || 'download'
+  link.rel = 'noopener'
+  link.hidden = true
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  // Revoking in the same task cancels the save in browsers that start reading the blob
+  // asynchronously after the click.
+  setTimeout(() => URL.revokeObjectURL(url), 60_000)
+}

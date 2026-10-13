@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 
 const runtimeDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-test('entrypoint waits for Xvfb and enables xrandr resize for both VNC servers', async t => {
+test('entrypoint waits for Xvfb, enables xrandr resize for both VNC servers and opts Chromium into software WebGL', async t => {
   try {
     await access('/bin/sh');
   } catch {
@@ -43,7 +43,7 @@ if [ ! -e "$AGENTHUB_BROWSER_X11_SOCKET_DIR/X99" ]; then
   exit 42
 fi
 echo "$name" >> "$AGENTHUB_TEST_EVENTS"
-if [ "$name" = "x11vnc" ]; then echo "x11vnc-args:$*" >> "$AGENTHUB_TEST_EVENTS"; fi
+if [ "$name" = "x11vnc" ] || [ "$name" = "chromium" ]; then echo "$name-args:$*" >> "$AGENTHUB_TEST_EVENTS"; fi
 trap 'exit 0' TERM INT
 while :; do sleep 1; done
 `;
@@ -93,6 +93,21 @@ while :; do sleep 1; done
       `x11vnc processes do not track XRandR resizes: ${vncArguments.join(', ')}`);
     assert.ok(vncArguments.every(event => / -nosel /.test(event)),
       `x11vnc processes would share the browser clipboard with every viewer: ${vncArguments.join(', ')}`);
+
+    const chromiumArguments = events.filter(event => event.startsWith('chromium-args:'));
+    assert.equal(chromiumArguments.length, 1, `Expected one Chromium process: ${events.join(', ')}`);
+    const switches = chromiumArguments[0].slice('chromium-args:'.length).split(' ');
+    // A pod has no GPU, and without this opt-in Chromium hands out no WebGL context at all.
+    assert.ok(switches.includes('--enable-unsafe-swiftshader'),
+      `Chromium is not opted into software WebGL, so getContext('webgl') returns null: ${switches.join(' ')}`);
+    // These also produce a WebGL context, which is why they are tempting, but they move the
+    // compositing of every page onto a CPU rasteriser. Measured: 2.2x to 2.6x the CPU of a
+    // page that never touches WebGL.
+    for (const prefix of ['--use-angle', '--use-gl', '--ignore-gpu-blocklist']) {
+      assert.ok(!switches.some(value => value === prefix || value.startsWith(`${prefix}=`)),
+        `${prefix} routes all compositing through a software GL: ${switches.join(' ')}`);
+    }
+    assert.ok(switches.includes('--no-sandbox'), `Chromium cannot start in the pod without --no-sandbox: ${switches.join(' ')}`);
 
     const readyIndex = events.indexOf('Xvfb-ready');
     for (const name of ['chromium', 'x11vnc', 'websockify', 'socat', 'node']) {
