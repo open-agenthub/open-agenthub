@@ -1,8 +1,8 @@
 <script setup>
 import { computed, ref, watch, onBeforeUnmount } from 'vue'
-import { fileIcon, fileSize } from '../lib/files.js'
+import { fileIcon, fileSize, saveBlob } from '../lib/files.js'
 import { createAttachmentQueue } from '../lib/attachments.js'
-import { api } from '../api.js'
+import { api, getSessionFileContent, getSharedSessionFileContent } from '../api.js'
 import FilePreview from './FilePreview.vue'
 import ChatAttachments from './ChatAttachments.vue'
 
@@ -76,6 +76,31 @@ watch(() => props.sessionId, () => {
   uploadVersion.value += 1
 })
 onBeforeUnmount(() => { void queue.cancelAll() })
+
+const downloading = ref(new Set())
+const downloadError = ref('')
+
+// Always the file's own id, fetched whole: the preview next door may be holding the first 1 MiB
+// of a text file or the PDF rendered from an Office document, and neither is the file. Reading is
+// all this needs, so a viewer of a shared session gets it through the same token the listing and
+// the preview already use.
+async function download(file) {
+  if (downloading.value.has(file.id)) return
+  downloading.value = new Set(downloading.value).add(file.id)
+  downloadError.value = ''
+  try {
+    const blob = props.sharedToken
+      ? await getSharedSessionFileContent(props.sharedToken, file.id)
+      : await getSessionFileContent(props.sessionId, file.id)
+    saveBlob(blob, file.name)
+  } catch {
+    downloadError.value = `${file.name} could not be downloaded.`
+  } finally {
+    const rest = new Set(downloading.value)
+    rest.delete(file.id)
+    downloading.value = rest
+  }
+}
 </script>
 
 <template>
@@ -101,16 +126,27 @@ onBeforeUnmount(() => { void queue.cancelAll() })
         <ChatAttachments :items="uploadItems" :retry="queue.retry" :remove="queue.dismiss" />
         <button type="button" class="clear-done" data-files-clear @click="clearFinished">Clear finished</button>
       </div>
-      <button v-for="file in files" :key="file.id" type="button" class="file-row"
-        :class="{ active: file.id === selectedId }" :data-file="file.id" @click="$emit('select', file.id)">
-        <span class="file-icon">{{ fileIcon(file) }}</span>
-        <span class="file-name"><strong>{{ file.name }}</strong><small>{{ fileSize(file.size) }}</small></span>
-      </button>
+      <!-- Two sibling buttons, not one inside the other: a nested button is invalid markup and
+           a click on the download would select the row as well. -->
+      <div v-for="file in files" :key="file.id" class="file-row" :class="{ active: file.id === selectedId }">
+        <button type="button" class="file-select" :class="{ active: file.id === selectedId }" :data-file="file.id"
+          :aria-current="file.id === selectedId || undefined" @click="$emit('select', file.id)">
+          <span class="file-icon">{{ fileIcon(file) }}</span>
+          <span class="file-name"><strong>{{ file.name }}</strong><small>{{ fileSize(file.size) }}</small></span>
+        </button>
+        <button v-if="file.state !== 'Expired'" type="button" class="file-download" :data-file-download="file.id"
+          :disabled="downloading.has(file.id)" :title="`Download ${file.name}`"
+          :aria-label="`Download ${file.name}`" @click="download(file)">↓</button>
+      </div>
     </aside>
     <div class="file-main">
       <header class="file-toolbar">
-        <span>{{ selected?.name || 'Preview' }}</span>
+        <span class="toolbar-title">{{ selected?.name || 'Preview' }}</span>
+        <span v-if="downloadError" class="download-error" role="alert" data-files-download-error>{{ downloadError }}</span>
         <span class="toolbar-actions">
+          <button v-if="selected && selected.state !== 'Expired'" type="button" data-files-download
+            :disabled="downloading.has(selected.id)" @click="download(selected)">
+            {{ downloading.has(selected.id) ? 'Downloading…' : 'Download' }}</button>
           <button v-if="presented && canWrite" type="button" data-files-dismiss @click="$emit('dismiss')">Dismiss for everyone</button>
           <button type="button" data-files-close aria-label="Close files" @click="$emit('close')">×</button>
         </span>
@@ -132,8 +168,12 @@ onBeforeUnmount(() => { void queue.cancelAll() })
 .file-rail { min-width: 0; overflow-y: auto; border-right: 1px solid #29303a; background: #121821; }
 .file-rail > header { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; height: 34px; padding: 0 10px; border-bottom: 1px solid #29303a; background: #171c24; font: 10px var(--mono); text-transform: uppercase; }
 .file-rail > header span { color: #738094; }
-.file-row { width: 100%; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 8px; align-items: center; padding: 8px 9px; border: 0; border-bottom: 1px solid #202936; border-radius: 0; color: #aeb8c8; background: transparent; text-align: left; }
+.file-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; border-bottom: 1px solid #202936; color: #aeb8c8; }
 .file-row:hover { background: #18212d; }
+.file-select { min-width: 0; display: grid; grid-template-columns: 32px minmax(0, 1fr); gap: 8px; align-items: center; padding: 8px 9px; border: 0; border-radius: 0; color: inherit; background: transparent; text-align: left; }
+.file-download { margin-right: 6px; padding: 4px 8px; border: 1px solid transparent; border-radius: 6px; color: #8e9bad; background: transparent; font-size: 12px; }
+.file-download:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.file-download:disabled { opacity: .45; }
 .file-row.active { color: white; background: #1c2938; box-shadow: inset 2px 0 var(--accent); }
 .file-icon { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #354255; border-radius: 6px; color: var(--accent); font: 700 8px var(--mono); }
 .file-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -142,8 +182,10 @@ onBeforeUnmount(() => { void queue.cancelAll() })
 .empty { padding: 18px 12px; color: #738094; font-size: 11px; line-height: 1.5; }
 .file-main { min-width: 0; min-height: 0; display: grid; grid-template-rows: 34px minmax(0, 1fr); }
 .file-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px; border-bottom: 1px solid #29303a; background: #171c24; color: #aeb8c8; font: 10px var(--mono); }
-.toolbar-actions { display: flex; align-items: center; gap: 5px; }
+.toolbar-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.download-error { min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--danger); }
+.toolbar-actions { flex: none; display: flex; align-items: center; gap: 5px; }
 .file-toolbar button { padding: 3px 7px; border: 0; color: #8e9bad; background: transparent; font-size: 10px; }
 .file-toolbar button:hover { color: white; background: #252e3a; }
-@media (max-width: 520px) { .files-pane { grid-template-columns: 110px minmax(0, 1fr); } .file-icon { display: none; } .file-row { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .files-pane { grid-template-columns: 110px minmax(0, 1fr); } .file-icon { display: none; } .file-select { grid-template-columns: 1fr; } }
 </style>
