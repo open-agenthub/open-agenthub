@@ -73,7 +73,7 @@ provide('openSettings', openSettings)
 async function resume(id) { await api.resumeSession(id); await refresh(); selectSession(id) }
 // The card already made the call; the list has to pick up the new mode before the session page
 // renders it, or the key'd TerminalView would keep showing the autonomous header.
-async function converted(id) { await refresh(); selectSession(id) }
+async function converted(id, surface) { await refresh(); selectSession(id); initialUi.value = surface || null }
 async function pause(id) { await api.pauseSession(id); await refresh() }
 async function remove(id) { if (!confirm('Really delete this session? (S3 artifacts are kept)')) return; await api.deleteSession(id); if (activeId.value === id) activeId.value = null; await refresh() }
 async function created(session, ui) { closePage(); await refresh(); initialUi.value = ui || null; activeId.value = session.id }

@@ -21,7 +21,7 @@ import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
-defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
+const emit = defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 // A stopped autonomous run is offered as an interactive continuation next to the plain Resume;
@@ -352,6 +352,13 @@ async function selectTab(tab) {
   if (conversationVisible.value && conversation.value === null && !transcriptBusy.value) await loadTranscript()
 }
 
+// The session keeps its id, so this view is not remounted and initialUi is not read again:
+// the surface the person picked on the card is selected here.
+function onConverted(id, surface) {
+  selectTab(surface === 'terminal' ? 'agent' : 'workspace')
+  emit('converted', id, surface)
+}
+
 function toggleDrawer(kind) {
   if (kind === 'shell') shellOpened.value = true
   terminalOpened.value = !(terminalOpened.value && drawerKind.value === kind)
@@ -414,7 +421,7 @@ function interruptWorkspaceAgent() {
         <ShareSessionDialog embedded :session="session" @close="shareOpen = false" />
       </div>
     </div>
-    <ConvertSessionCard v-if="showConvert" :session="session" @converted="$emit('converted', $event)" />
+    <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
       <div class="perm-text">

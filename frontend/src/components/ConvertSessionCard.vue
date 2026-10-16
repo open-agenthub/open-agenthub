@@ -1,7 +1,8 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { canOpenChat, conversionErrorText, conversionHint } from '../lib/conversion.js'
+import { conversionErrorText, conversionHint, conversionUiMode } from '../lib/conversion.js'
+import { preferredUi } from '../lib/ui-preference.js'
 
 // Inline card offering to continue a finished autonomous run interactively. One component for
 // the session page and the sessions list, so the two cannot drift on what they send.
@@ -17,20 +18,21 @@ const keepAutoApprove = ref(false)
 const busy = ref('')
 const error = ref('')
 const hint = computed(() => conversionHint(props.session?.agent))
-const chat = computed(() => canOpenChat(props.session))
+// The saved interface preference decides which button is the primary one.
+const preferred = preferredUi()
 const finished = computed(() => props.session?.phase === 'Paused' ? 'is paused' : 'has finished')
 
 watch(() => props.session?.id, () => { keepAutoApprove.value = false; busy.value = ''; error.value = '' })
 
-async function convert(uiMode) {
+async function convert(surface) {
   if (busy.value) return
-  busy.value = uiMode
+  busy.value = surface
   error.value = ''
   try {
     await api.convertSession(props.session.id, {
-      mode: 'interactive', uiMode, autoApprove: keepAutoApprove.value
+      mode: 'interactive', uiMode: conversionUiMode(props.session?.agent, surface), autoApprove: keepAutoApprove.value
     })
-    emit('converted', props.session.id)
+    emit('converted', props.session.id, surface)
   } catch (e) {
     // Shown where the buttons are, never as a popup: a 409 here means "pause or wait first"
     // and the person should read it next to the thing they clicked.
@@ -53,11 +55,11 @@ async function convert(uiMode) {
       Keep auto-approve
     </label>
     <div class="actions">
-      <button class="bar-btn primary" data-convert-terminal :disabled="!!busy" @click="convert('terminal')">
-        {{ busy === 'terminal' ? 'Starting…' : 'Open terminal' }}
+      <button class="bar-btn" :class="{ primary: preferred === 'workspace' }" data-convert-workspace :disabled="!!busy" @click="convert('workspace')">
+        {{ busy === 'workspace' ? 'Starting…' : 'Open workspace' }}
       </button>
-      <button v-if="chat" class="bar-btn" data-convert-chat :disabled="!!busy" @click="convert('chat')">
-        {{ busy === 'chat' ? 'Starting…' : 'Open chat' }}
+      <button class="bar-btn" :class="{ primary: preferred === 'terminal' }" data-convert-terminal :disabled="!!busy" @click="convert('terminal')">
+        {{ busy === 'terminal' ? 'Starting…' : 'Open terminal' }}
       </button>
       <button v-if="dismissible" class="bar-btn" data-convert-cancel :disabled="!!busy" @click="$emit('cancel')">Not now</button>
     </div>
