@@ -18,10 +18,12 @@ public sealed class SessionsController : ControllerBase
     private readonly PermissionStore _permissions;
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly ISessionMessageStore? _messages;
+    private readonly ISessionMessageDelivery? _delivery;
 
     public SessionsController(ISessionService svc, PermissionStore permissions,
-        IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMessageStore? messages = null)
-    { _svc = svc; _permissions = permissions; _promptEditors = promptEditors; _messages = messages; }
+        IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMessageStore? messages = null,
+        ISessionMessageDelivery? delivery = null)
+    { _svc = svc; _permissions = permissions; _promptEditors = promptEditors; _messages = messages; _delivery = delivery; }
 
     private string Owner =>
         User.FindFirstValue("preferred_username")
@@ -79,6 +81,22 @@ public sealed class SessionsController : ControllerBase
         }
     }
 
+    /// <summary>
+    /// Moves a running Subscription session to another stored provider account; the pod swaps
+    /// the file and restarts its agent with resume. 409 when the session is not running (the
+    /// account then applies at the next start, via PATCH), 502 when the pod refused the file.
+    /// </summary>
+    [HttpPatch("{id}/credential")]
+    public async Task<ActionResult<SessionInfo>> SwitchCredential(string id,
+        [FromBody] SwitchSessionCredentialRequest body, CancellationToken ct)
+    {
+        try { return Ok(await _svc.SwitchSessionCredentialAsync(Owner, id, body.CredentialId, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (HttpRequestException e) { return StatusCode(StatusCodes.Status502BadGateway, e.Message); }
+    }
+
     [HttpPost("{id}/duplicate")]
     public async Task<ActionResult<SessionInfo>> Duplicate(string id, [FromBody] DuplicateSessionRequest request, CancellationToken ct)
     {
@@ -98,6 +116,21 @@ public sealed class SessionsController : ControllerBase
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
+    }
+
+    /// <summary>
+    /// Continues a finished or paused autonomous session interactively, in the same conversation
+    /// where the runtime can (docs/session-mode-conversion.md). 409 when the session is not
+    /// autonomous or still running, 400 for a UI mode the agent does not support.
+    /// </summary>
+    [HttpPost("{id}/convert")]
+    public async Task<ActionResult<SessionInfo>> Convert(string id, [FromBody] ConvertSessionRequest req, CancellationToken ct)
+    {
+        try { return Ok(await _svc.ConvertSessionAsync(Owner, id, req, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (ArgumentException e) { return BadRequest(new { error = e.Message }); }
+        catch (InvalidOperationException e) { return Conflict(new { error = e.Message }); }
     }
 
     [HttpPost("{id}/pause")]
@@ -185,7 +218,40 @@ public sealed class SessionsController : ControllerBase
         return Ok(recent.Select(m => new AgentMessageInfo(
             m.Id, m.FromSessionId,
             m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId),
-            m.Body, m.CreatedAt, m.DeliveredAt)).ToList());
+            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia)).ToList());
+    }
+
+    /// <summary>
+    /// The owner messages their own session from the web app. Stored like a remote-API message
+    /// (no sender session) and, when priority, pushed into the running agent — this is how a
+    /// person reaches a chat-mode or autonomous session that has no terminal to type into.
+    /// </summary>
+    [HttpPost("{id}/messages")]
+    public async Task<IActionResult> SendMessage(string id, [FromBody] RemoteAgentMessageRequest req, CancellationToken ct)
+    {
+        var target = await _svc.GetSessionAsync(Owner, id, ct);
+        if (target is null) return NotFound();
+        if (_messages is null) return NotFound();
+
+        var text = AgentMessaging.NormalizeBody(req.Body);
+        if (text is null)
+            return BadRequest($"A message body of 1..{AgentMessaging.MaxBodyChars} characters is required.");
+
+        var (priority, interrupt) = AgentMessaging.ResolveFlags(req.Priority, req.Interrupt);
+        var message = new SessionMessageRecord
+        {
+            Id = Guid.NewGuid().ToString("n")[..12],
+            ProjectId = target.ProjectId,
+            FromSessionId = null,
+            ToSessionId = target.Id,
+            Owner = Owner,
+            Body = text,
+            Priority = priority,
+            Interrupt = interrupt
+        };
+        await _messages.AddAsync(message, ct);
+        var delivery = await AgentMessageDispatch.PushAsync(_delivery, target, message, null, ct);
+        return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));
     }
 
     public record PermissionDecisionBody(string Decision);

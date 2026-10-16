@@ -44,3 +44,11 @@ type = "command"
 command = "node /opt/session-agent/codex/skill-reminder-hook.js"
 timeout = 10
 statusMessage = "Checking for reusable knowledge"
+
+# Tells the chat relays (Slack/Telegram/Signal) that an interactive turn ended and the agent
+# waits — the event that opens the session's thread. The hook itself stays silent in exec
+# mode, where the end of the turn is the end of the process and "finished" follows.
+[[hooks.Stop.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/turn-notify-hook.js"
+timeout = 10

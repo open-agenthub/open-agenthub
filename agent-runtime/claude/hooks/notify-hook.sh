@@ -15,8 +15,15 @@ body="$(printf '%s' "$payload" | "$NODE_BIN" -e '
   let d = "";
   process.stdin.on("data", c => d += c).on("end", () => {
     let p = {}; try { p = JSON.parse(d); } catch {}
-    // Tool-permission notifications are handled by the PreToolUse flow — skip.
-    if (/permission/i.test(p.message || "")) return;
+    // The CLI names the kind of notification (2.1.x: permission_prompt, idle_prompt,
+    // auth_success, elicitation_dialog, …). Only the permission prompt is handled
+    // elsewhere; a completed login is not a question either. Everything else is the
+    // agent waiting on a person. Matching the message text instead used to drop any
+    // assistant question that happened to contain the word "permission".
+    const kind = typeof p.notification_type === "string" ? p.notification_type : "";
+    if (kind === "permission_prompt" || kind === "auth_success") return;
+    // Older CLIs sent no notification_type; their permission prompt is the one fixed phrase.
+    if (!kind && /^Claude needs your permission\b/.test(p.message || "")) return;
     let msg = p.message || "The agent is waiting for your reply.";
     try {
       const fs = require("fs");

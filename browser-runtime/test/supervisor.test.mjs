@@ -265,6 +265,103 @@ test('shutdown stops periodic work, checkpoints once, disconnects, and is idempo
   assert.deepEqual(events, [['clear', { fake: true }], ['checkpoint'], ['close']]);
 });
 
+
+test('clipboard paste inserts text into the focused page, not a background tab', async () => {
+  const { context, events } = clipboardContext([
+    { id: 'background', frames: [{ focused: false, visible: false, text: '' }] },
+    { id: 'visible', frames: [{ focused: true, visible: true, text: '' }, { focused: false, visible: true, text: '' }] },
+  ]);
+  const supervisor = makeSupervisor({ context });
+
+  await supervisor.paste('hello\nworld');
+
+  assert.deepEqual(events, [
+    ['session', 'visible'], ['visible', 'Input.insertText', { text: 'hello\nworld' }], ['detach', 'visible'],
+  ]);
+});
+
+test('clipboard paste falls back to the visible tab when no frame reports focus', async () => {
+  const { context, events } = clipboardContext([
+    { id: 'hidden', frames: [{ focused: false, visible: false, text: '' }] },
+    { id: 'shown', frames: [{ focused: false, visible: true, text: '' }] },
+  ]);
+  await makeSupervisor({ context }).paste('x');
+  assert.deepEqual(events[0], ['session', 'shown']);
+});
+
+test('clipboard copy reads the focused frame before Chromium runs its copy or cut command', async () => {
+  const { context, events } = clipboardContext([
+    { id: 'page', frames: [{ focused: false, visible: true, text: 'outer' }, { focused: true, visible: true, text: 'inner' }] },
+  ]);
+  const supervisor = makeSupervisor({ context });
+
+  assert.equal(await supervisor.copy(false), 'inner');
+  assert.equal(await supervisor.copy(true), 'inner');
+
+  const commands = events.filter(event => event[1] === 'Input.dispatchKeyEvent').map(event => [event[2].type, event[2].commands, event[2].key, event[2].modifiers]);
+  assert.deepEqual(commands, [
+    ['rawKeyDown', ['copy'], 'c', 2], ['keyUp', undefined, 'c', 2],
+    ['rawKeyDown', ['cut'], 'x', 2], ['keyUp', undefined, 'x', 2],
+  ]);
+});
+
+test('clipboard copy with nothing selected leaves the page untouched', async () => {
+  const { context, events } = clipboardContext([{ id: 'page', frames: [{ focused: true, visible: true, text: '' }] }]);
+  assert.equal(await makeSupervisor({ context }).copy(true), '');
+  assert.deepEqual(events, []);
+});
+
+test('clipboard HTTP handler validates input and keeps clipboard text out of logs', async () => {
+  const supervisor = makeSupervisor();
+  const pasted = [];
+  supervisor.paste = async text => { pasted.push(text); };
+  supervisor.copy = async cut => (cut ? 'cut text' : 'copied text');
+
+  assert.equal((await invokeClipboard(supervisor, '/clipboard/paste', JSON.stringify({ text: 'p' }))).status, 204);
+  assert.deepEqual(pasted, ['p']);
+  assert.equal((await invokeClipboard(supervisor, '/clipboard/paste', JSON.stringify({}))).status, 400);
+  assert.equal((await invokeClipboard(supervisor, '/clipboard/paste', '{broken')).status, 400);
+  assert.equal((await invokeClipboard(supervisor, '/clipboard/paste',
+    JSON.stringify({ text: 'x'.repeat(supervisorModule.MAX_CLIPBOARD_CHARS + 1) }))).status, 413);
+
+  const copied = await invokeClipboard(supervisor, '/clipboard/copy', JSON.stringify({ cut: true }));
+  assert.equal(copied.status, 200);
+  assert.equal(copied.headers['Cache-Control'], 'no-store');
+  assert.deepEqual(JSON.parse(copied.body), { text: 'cut text' });
+
+  const warnings = [];
+  const warn = console.warn;
+  console.warn = message => warnings.push(message);
+  try {
+    supervisor.paste = async () => { throw new Error('CDP closed'); };
+    assert.equal((await invokeClipboard(supervisor, '/clipboard/paste', JSON.stringify({ text: 'very private' }))).status, 500);
+  } finally {
+    console.warn = warn;
+  }
+  assert.equal(warnings.length, 1);
+  assert.ok(!warnings[0].includes('very private'));
+});
+
+test('frame selection reads input ranges, document selections and never a password', () => {
+  const previous = globalThis.document;
+  const doc = active => ({
+    activeElement: active, hasFocus: () => true, visibilityState: 'visible',
+    getSelection: () => ({ toString: () => 'page text' }),
+  });
+  try {
+    globalThis.document = doc({ tagName: 'INPUT', type: 'text', value: 'alpha beta', selectionStart: 6, selectionEnd: 10 });
+    assert.deepEqual(supervisorModule.readFrameSelection(), { focused: true, visible: true, text: 'beta' });
+    globalThis.document = doc({ tagName: 'INPUT', type: 'password', value: 'secret', selectionStart: 0, selectionEnd: 6 });
+    assert.equal(supervisorModule.readFrameSelection().text, '');
+    globalThis.document = doc({ tagName: 'BODY' });
+    assert.equal(supervisorModule.readFrameSelection().text, 'page text');
+    globalThis.document = doc({ tagName: 'IFRAME' });
+    assert.equal(supervisorModule.readFrameSelection().focused, false);
+  } finally {
+    globalThis.document = previous;
+  }
+});
+
 async function invokeViewport(supervisor, body) {
   const request = Readable.from([Buffer.from(body)]);
   request.method = 'PUT';
@@ -286,4 +383,37 @@ function fakeContext(cookies = []) {
 }
 function jsonResponse(value) {
   return new Response(JSON.stringify(value), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
+
+async function invokeClipboard(supervisor, url, body) {
+  const request = Readable.from([Buffer.from(body)]);
+  request.method = 'POST';
+  request.url = url;
+  const response = {
+    status: 0, headers: {}, body: '',
+    writeHead(status, headers = {}) { this.status = status; this.headers = headers; },
+    end(chunk = '') { this.body = String(chunk); },
+  };
+  await supervisor.handleRequest(request, response);
+  return response;
+}
+function clipboardContext(pages) {
+  const events = [];
+  const fakePages = pages.map(page => ({
+    id: page.id,
+    frames: () => page.frames.map(state => ({ evaluate: async () => state })),
+  }));
+  return {
+    events,
+    context: {
+      pages: () => fakePages,
+      async newCDPSession(page) {
+        events.push(['session', page.id]);
+        return {
+          async send(method, params) { events.push([page.id, method, params]); return {}; },
+          async detach() { events.push(['detach', page.id]); },
+        };
+      },
+    },
+  };
 }

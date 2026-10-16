@@ -7,7 +7,10 @@ COPY backend/AgentHub.Api.csproj backend/
 RUN dotnet restore backend/AgentHub.Api.csproj
 COPY backend/ backend/
 COPY ee/ ee/
-RUN dotnet publish backend/AgentHub.Api.csproj -c Release -o /app --no-restore
+# The release tag (or short commit) the CI workflow passes in; it surfaces as the
+# version in /api/config. "dev" marks a local build that was never tagged.
+ARG APP_VERSION=dev
+RUN dotnet publish backend/AgentHub.Api.csproj -c Release -o /app --no-restore -p:InformationalVersion=$APP_VERSION
 
 # ---- runtime (non-root) ----
 FROM mcr.microsoft.com/dotnet/aspnet:10.0

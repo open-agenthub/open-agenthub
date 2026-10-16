@@ -2,7 +2,16 @@
 const SAFE_KEYS = [
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
-  'createdAt', 'hasMcp'
+  'createdAt', 'hasMcp', 'autoApprove',
+  // The self-deletion setting and the deadline it yields (docs/session-expiry.md).
+  'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt',
+  // What session_convert changes and whether it can be called.
+  'uiMode', 'canConvertToInteractive', 'convertedFrom',
+  // Ids of the login and git tokens the session runs with, never the secrets, so a parent can
+  // read back that its child was created the way it asked.
+  'credentialId', 'gitPatIds',
+  // The account the last start mounted and the failover setting (docs/account-limits.md).
+  'resolvedCredentialId', 'accountFailover'
 ];
 
 /**
@@ -34,6 +43,8 @@ function pickRepos(info) {
       if (!repo || typeof repo !== 'object' || typeof repo.url !== 'string') continue;
       const entry = { url: repo.url };
       if (typeof repo.branch === 'string') entry.branch = repo.branch;
+      // Not a secret, and the only way a caller sees whether a repository is authenticated.
+      if (typeof repo.providerId === 'string') entry.providerId = repo.providerId;
       repos.push(entry);
     }
     return repos;

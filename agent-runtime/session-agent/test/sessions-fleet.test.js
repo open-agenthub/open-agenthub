@@ -47,6 +47,24 @@ test('fleet client calls project-agents, messages send, and inbox long-poll', as
   }
 });
 
+test('sendAgentMessage passes priority and interrupt only when set', async () => {
+  const { SessionsBackendClient } = await import('../../sessions/client.mjs');
+  const bodies = [];
+  const client = new SessionsBackendClient(env(), async (url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return Response.json({ id: 'm-1', to: 'rev-1', deliveredVia: 'mod' });
+  });
+
+  await client.sendAgentMessage('rev-1', 'now', { priority: true });
+  const result = await client.sendAgentMessage('rev-1', 'stop', { interrupt: true });
+
+  assert.deepEqual(bodies, [
+    { to: 'rev-1', body: 'now', priority: true },
+    { to: 'rev-1', body: 'stop', interrupt: true }
+  ]);
+  assert.equal(result.deliveredVia, 'mod');
+});
+
 test('inbox clamps waitSeconds to 0..60', async () => {
   const { SessionsBackendClient } = await import('../../sessions/client.mjs');
   const urls = [];

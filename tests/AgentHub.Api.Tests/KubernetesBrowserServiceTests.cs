@@ -245,6 +245,10 @@ public sealed class KubernetesBrowserServiceTests
             Viewport = viewport;
             return Error is null ? Task.CompletedTask : Task.FromException(Error);
         }
+        public Task PasteAsync(string podIp, string text, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task<string> CopyAsync(string podIp, bool cut, CancellationToken ct = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class RecordingBrowserCluster : IBrowserClusterClient

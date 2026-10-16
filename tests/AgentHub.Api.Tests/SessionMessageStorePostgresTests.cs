@@ -119,16 +119,19 @@ internal sealed class PostgresMessageDatabase : IAsyncDisposable
     private readonly string _schema;
 
     private PostgresMessageDatabase(string baseConnectionString, string schema,
-        PostgresSessionMessageStore messages, PostgresSessionStore sessions)
+        PostgresSessionMessageStore messages, PostgresSessionStore sessions, string connectionString)
     {
         _baseConnectionString = baseConnectionString;
         _schema = schema;
         Messages = messages;
         Sessions = sessions;
+        ConnectionString = connectionString;
     }
 
     public PostgresSessionMessageStore Messages { get; }
     public PostgresSessionStore Sessions { get; }
+    /// <summary>Scoped to this test's schema, for raw SQL a test needs beside the stores.</summary>
+    public string ConnectionString { get; }
 
     public static async Task<PostgresMessageDatabase> CreateAsync()
     {
@@ -162,7 +165,7 @@ internal sealed class PostgresMessageDatabase : IAsyncDisposable
         {
             await messages.InitializeAsync();
             await sessions.InitializeAsync();
-            return new PostgresMessageDatabase(baseConnectionString, schema, messages, sessions);
+            return new PostgresMessageDatabase(baseConnectionString, schema, messages, sessions, builder.ConnectionString);
         }
         catch
         {

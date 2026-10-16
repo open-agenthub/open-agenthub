@@ -59,6 +59,17 @@ if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ];
     || echo "[entrypoint] WARN: local skill import failed - continuing."
 fi
 
+# The agenthub-fleet mod (docs/claude-code-mods.md) delivers pushed fleet messages into the
+# CLI. The token guards the loopback queue it polls on the session agent; minted per pod and
+# shared with the CLI process only (both inherit it from here), never with the hub. The plugin
+# directory is resolved through $RUNTIME so a custom image, which gets the runtime copied to
+# /opt/agenthub, loads the mod from there — the image's own ENV would point into nothing.
+FLEET_MOD="$RUNTIME/claude/mods/agenthub-fleet"
+if [ -d "$FLEET_MOD" ]; then
+  export CLAUDE_CODE_PLUGIN_DIRS="$FLEET_MOD"
+  export AGENTHUB_MOD_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(24).toString("hex"))')"
+fi
+
 export AGENTHUB_DRIVER="$RUNTIME/claude/driver.js"
 echo "[entrypoint] Starting session-agent (mode=${AGENTHUB_MODE:-interactive}, resume=${AGENTHUB_RESUME:-0}, runtime=$RUNTIME)"
 exec node "$RUNTIME/common/server.js"

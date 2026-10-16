@@ -82,7 +82,16 @@ jobs:
       - working-directory: browser-runtime
         run: npm ci
       - working-directory: browser-runtime
-        run: npm test
+        run: npx playwright-core install --with-deps chromium
+      - working-directory: browser-runtime
+        run: |
+          export AGENTHUB_TEST_BROWSER_EXECUTABLE="$(node --input-type=module -e 'import { chromium } from "playwright-core"; process.stdout.write(chromium.executablePath())')"
+          xvfb-run -a npm test
+      - name: Build browser runtime
+        run: docker build --tag open-agenthub-dev/browser:test browser-runtime
+      - name: Smoke browser runtime
+        shell: pwsh
+        run: ./browser-runtime/smoke.ps1 -Image open-agenthub-dev/browser:test
       - name: Build Claude runtime
         run: docker build --file agent-runtime/claude/Dockerfile --tag open-agenthub-dev/agent-runtime-claude:test agent-runtime
       - name: Smoke Claude CLI
@@ -100,6 +109,10 @@ jobs:
         run: docker build --file agent-runtime/openclaw/Dockerfile --tag open-agenthub-dev/agent-runtime-openclaw:test agent-runtime
       - name: Smoke OpenClaw CLI
         run: docker run --rm --entrypoint openclaw open-agenthub-dev/agent-runtime-openclaw:test --version
+      - name: Build OpenCode runtime
+        run: docker build --file agent-runtime/opencode/Dockerfile --tag open-agenthub-dev/agent-runtime-opencode:test agent-runtime
+      - name: Smoke OpenCode CLI
+        run: docker run --rm --entrypoint opencode open-agenthub-dev/agent-runtime-opencode:test --version
 
   helm:
     runs-on: ubuntu-latest
@@ -117,6 +130,9 @@ jobs:
       - name: Verify OpenClaw runtime images
         shell: pwsh
         run: ./tests/helm/openclaw-runtime-values.ps1
+      - name: Verify OpenCode runtime images
+        shell: pwsh
+        run: ./tests/helm/opencode-runtime-values.ps1
       - name: Verify browser values and RBAC
         shell: pwsh
         run: ./tests/helm/browser-values.ps1

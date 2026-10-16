@@ -1,9 +1,10 @@
 using System.Collections.Concurrent;
+using AgentHub.Api.Models;
 
 namespace AgentHub.Api.Chat;
 
 /// <summary>
-/// In-memory "Claude is working…" animator: per session one loop that invokes an
+/// In-memory "&lt;agent&gt; is working…" animator: per session one loop that invokes an
 /// edit callback with the next frame until stopped, the edit is rejected (message
 /// gone), or maxDuration elapses. The message itself (creation/deletion) is owned
 /// by the platform adapters; deletion works cross-replica via the persisted status
@@ -11,8 +12,14 @@ namespace AgentHub.Api.Chat;
 /// </summary>
 public sealed class WorkingIndicator
 {
-    public static IReadOnlyList<string> Frames { get; } =
-        new[] { "⏳ Claude is working …", "⌛ Claude is working ‥", "⏳ Claude is working .", "⌛ Claude is working ‥" };
+    /// <summary>Frames naming the session's agent; the adapters know which one they talk to.</summary>
+    public static IReadOnlyList<string> FramesFor(AgentKind? agent)
+    {
+        var name = ChatFormatting.AgentName(agent);
+        return [$"⏳ {name} is working …", $"⌛ {name} is working ‥", $"⏳ {name} is working .", $"⌛ {name} is working ‥"];
+    }
+
+    public static IReadOnlyList<string> Frames { get; } = FramesFor(null);
 
     private readonly TimeSpan _interval, _maxDuration;
     private readonly ILogger<WorkingIndicator>? _log;
@@ -29,8 +36,10 @@ public sealed class WorkingIndicator
     /// returns false when the platform rejected the edit (e.g. the status message
     /// was deleted by another replica) — the loop then exits on its own.
     /// </summary>
-    public void Start(string sessionId, Func<string, CancellationToken, Task<bool>> edit)
+    public void Start(string sessionId, Func<string, CancellationToken, Task<bool>> edit,
+        IReadOnlyList<string>? frames = null)
     {
+        frames ??= Frames;
         if (_loops.TryRemove(sessionId, out var prev)) Cancel(prev);
         var cts = new CancellationTokenSource(_maxDuration);
         if (!_loops.TryAdd(sessionId, cts)) { cts.Cancel(); cts.Dispose(); return; } // concurrent Start won — back off
@@ -44,7 +53,7 @@ public sealed class WorkingIndicator
                 {
                     await Task.Delay(_interval, token);
                     token.ThrowIfCancellationRequested();
-                    if (!await edit(Frames[++i % Frames.Count], token)) break;
+                    if (!await edit(frames[++i % frames.Count], token)) break;
                 }
             }
             catch (OperationCanceledException) { /* stopped or maxDuration elapsed */ }

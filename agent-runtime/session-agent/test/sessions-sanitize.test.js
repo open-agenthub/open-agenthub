@@ -29,7 +29,8 @@ test('sanitizeSession omits mcpConfigJson and other secrets', async () => {
     memory: '4Gi',
     runAsRoot: true,
     browser: { state: 'running', vncPassword: 'nope' },
-    repos: [{ url: 'https://example.com/r.git', branch: 'main', extra: 'drop' }],
+    repos: [{ url: 'https://example.com/r.git', branch: 'main', providerId: 'github', extra: 'drop' }],
+    autoApprove: true,
     callbackToken: 'tok'
   };
 
@@ -38,7 +39,8 @@ test('sanitizeSession omits mcpConfigJson and other secrets', async () => {
   assert.equal(safe.description, 'Implements tasks handed over by the reviewer.');
   assert.equal(safe.prompt, 'do work');
   assert.equal(safe.hasMcp, true);
-  assert.deepEqual(safe.repos, [{ url: 'https://example.com/r.git', branch: 'main' }]);
+  assert.deepEqual(safe.repos, [{ url: 'https://example.com/r.git', branch: 'main', providerId: 'github' }]);
+  assert.equal(safe.autoApprove, true);
   assert.equal(safe.mcpConfigJson, undefined);
   assert.equal(safe.podIp, undefined);
   assert.equal(safe.policy, undefined);
@@ -58,4 +60,18 @@ test('sanitizeSession maps lists and delete results', async () => {
   assert.equal(list.length, 2);
   assert.equal(list[0].mcpConfigJson, undefined);
   assert.equal(list[1].id, 'b');
+});
+
+test('sanitizeSession keeps the self-deletion setting and the deadline it yields', async () => {
+  const { sanitizeSession } = await import('../../sessions/sanitize.mjs');
+  const safe = sanitizeSession({
+    id: 's1', phase: 'Running',
+    autoDeleteAfterSeconds: 43200, autoDeleteFrom: 'start',
+    expiresAt: '2026-10-11T00:00:00Z', lastActivityAt: '2026-10-10T12:00:00Z',
+    callbackToken: 'tok'
+  });
+  assert.equal(safe.autoDeleteAfterSeconds, 43200);
+  assert.equal(safe.autoDeleteFrom, 'start');
+  assert.equal(safe.expiresAt, '2026-10-11T00:00:00Z');
+  assert.equal(safe.callbackToken, undefined);
 });

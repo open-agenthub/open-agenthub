@@ -79,7 +79,7 @@ test('every runtime ships the proxy and wires it up', () => {
   // skills/ skips the step instead of aborting the entrypoint on MODULE_NOT_FOUND.
   assert.match(common, /merge_builtin_mcp skills configure\.mjs/);
   assert.match(cursor, /skills\/configure\.mjs/);
-  for (const provider of ['claude', 'codex', 'cursor', 'openclaw']) {
+  for (const provider of ['claude', 'codex', 'cursor', 'openclaw', 'opencode']) {
     const dockerfile = fs.readFileSync(path.join(runtimeRoot, provider, 'Dockerfile'), 'utf8');
     assert.match(dockerfile, /COPY skills \/opt\/session-agent\/skills/);
   }

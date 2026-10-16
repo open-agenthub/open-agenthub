@@ -39,12 +39,14 @@ public class SessionShareStorePostgresTests
         await database.AddSessionAsync("owner-a", "session-a");
         await database.AddUserAsync("owner-a");
 
-        var unknown = await Assert.ThrowsAsync<ArgumentException>(() =>
+        // Its own type, so API clients can branch on it; still an ArgumentException underneath.
+        var unknown = await Assert.ThrowsAsync<UnknownRecipientException>(() =>
             database.Shares.UpsertDirectAsync(
                 "owner-a",
                 "session-a",
                 "unknown-user",
                 ShareRole.Viewer));
+        Assert.Equal("unknown-user", unknown.Recipient);
         var selfShare = await Assert.ThrowsAsync<ArgumentException>(() =>
             database.Shares.UpsertDirectAsync(
                 "owner-a",
@@ -388,6 +390,14 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
     }
 
     public SessionShareStore Shares { get; }
+
+    /// <summary>The session store itself, for tests of its own operations (touch, expiry listing).</summary>
+    public PostgresSessionStore Sessions => _sessions;
+
+    /// <summary>Configuration pointing at this test schema, for components built from one.</summary>
+    public IConfiguration Configuration => new ConfigurationBuilder()
+        .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Postgres"] = _connectionString })
+        .Build();
 
     public static async Task<PostgresSharingDatabase> CreateAsync()
     {

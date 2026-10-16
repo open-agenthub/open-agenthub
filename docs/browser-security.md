@@ -55,6 +55,120 @@ Public session responses expose only browser phase, screen size, and a non-secre
 code. They never expose callback or lease tokens, pod IPs, CDP URLs, presigned URLs, or
 cookie contents.
 
+## Clipboard
+
+A viewer who may control the browser (owner, collaborator, or a collaborator share link) can
+copy and paste text between their own clipboard and the remote page. Ctrl/Cmd+V, C and X over
+the browser pane are taken out of the VNC stream; the frontend calls
+`/api/sessions/{id}/browser/clipboard/{paste,copy}` (or the `/api/shared/{token}/…` twin), and
+the backend relays to the browser supervisor on TCP 6081, which only the backend can reach.
+Both CDP connections preserve native focus rather than emulating it. With focus emulation,
+every tab reports itself focused and visible: in 0.13.0 the supervisor could select the initial
+blank tab, acknowledge the paste, and insert nothing into the page being viewed. The same
+selection error affected copy. Keeping native focus lets the focused-frame check select the
+page the viewer is controlling, including a field inside a frame.
+
+The real browser regression runs paste, copy and cut over the supervisor HTTP route with
+the initial blank tab still open, both CDP clients connected, and a focused field inside a
+frame. CI runs it on a virtual display; locally run `npm test` in `browser-runtime` with
+`AGENTHUB_TEST_BROWSER_EXECUTABLE` set to a browser executable and `DISPLAY` set to a
+running X display. Without that executable setting, only this real browser test is skipped.
+
+Paste inserts the text into the focused element with CDP `Input.insertText`. Copy reads the
+selection of the focused frame, then lets Chromium run its own copy or cut command, so a cut
+removes what it handed over and the page still sees the shortcut. Password fields yield
+nothing, as they do for a native copy. Text is limited to 256 Ki characters and never logged.
+
+The alternative was the RFB clipboard that x11vnc and noVNC already speak. It was rejected
+because x11vnc sends every change of the X selection to all connected viewers, the view-only
+endpoint included, so a copy made by one user would reach everybody watching. Both x11vnc
+processes therefore run with `-nosel`, and the clipboard travels only per request, after the
+same access check as keyboard input.
+
+Text only: images and rich formats are not carried. Paste reads the local clipboard from the
+browser's paste event, which needs no permission; only when the browser raises none is the
+Clipboard API asked. Copy writes through the Clipboard API, and where the browser refuses
+(insecure origin, denied permission) the pane says so instead of failing silently.
+
+## WebGL
+
+A browser pod has no GPU, and none is requested. Pages still get WebGL 1 and 2: Chromium is
+started with `--enable-unsafe-swiftshader`, which lets it render WebGL on the CPU with the
+software rasteriser bundled in its own package (reported to pages as
+`ANGLE (…, Vulkan 1.3.0 (SwiftShader Device …), SwiftShader driver)`).
+
+Without the switch, `canvas.getContext('webgl')` and `getContext('webgl2')` return `null`.
+Chromium finds only the software OpenGL that the virtual X server brings along, runs its GPU
+process on it, and blocklists WebGL there (`WebGL1 blocklisted` / `WebGL2 blocklisted` in the
+pod log, `WebGL: Disabled` on `chrome://gpu`). Earlier versions then fell back to the bundled
+rasteriser on their own; current ones do so only when asked. No library was missing — the
+rasteriser and its Vulkan loader manifest are part of the pinned Chromium package for both
+architectures, and the image build now fails if they ever are not.
+
+### What "unsafe" means here
+
+The switch is named that way because the rasteriser compiles shaders — which any page can
+supply — to machine code and runs it in Chromium's GPU process, and upstream no longer wants
+that reachable from the web without a decision. The decision here:
+
+- It adds attack surface, not privilege. A page that breaks the shader compiler gets code
+  execution in a process of the browser pod. Chromium's own sandbox is already off in this pod
+  (`--no-sandbox`: its namespace sandbox needs privileges the pod does not have, and granting
+  them would weaken the pod), so a compromised renderer was never confined by it either.
+- What confines both is the pod, and that is unchanged: non-root, no capabilities, no
+  privilege escalation, read-only root filesystem, RuntimeDefault seccomp, no service-account
+  token, and the lease's NetworkPolicies. No device is mounted and nothing in the pod spec
+  changes.
+- What such a process can reach is what the [trust boundary](#trust-boundary) already assumes
+  a hostile page may reach: the pages and cookies of that one session.
+
+A deployment that would rather have no WebGL than this surface removes the switch from
+`browser-runtime/entrypoint.sh` in its own image. There is no chart value for it.
+
+### Cost
+
+Only WebGL moves to the rasteriser. Compositing and raster of ordinary pages stay on the
+software path they used before, so a page that never asks for a WebGL context costs what it
+did. Measured with the image's Chromium on three cores, CPU time summed over all browser
+processes:
+
+| Start switches | Idle plain page, 30 s | Animated, scrolling plain page, 15 s |
+|---|---|---|
+| before (no WebGL) | 0.17–0.36 s | 1.8–2.0 s |
+| `--enable-unsafe-swiftshader` | 0.22–0.41 s | 1.9–2.2 s |
+| `--use-gl=angle --use-angle=swiftshader` | 0.20–0.35 s | 4.9–5.0 s |
+| `--ignore-gpu-blocklist` | 0.31 s | 4.2 s |
+
+A page that does draw pays for it: a full-canvas animated shader took about 0.2 cores at
+300×150 and about 0.6 cores at 1280×720, at 55–60 frames per second. With the default limit of
+one CPU, a heavy 3D scene will be slow rather than broken. Raise `browser.resources.limits.cpu`
+for sessions that need more.
+
+### Alternatives that were rejected
+
+- **Leaving WebGL off.** Maps, charts, 3D viewers and many canvas libraries then fail with an
+  error the agent cannot fix from inside the page, and the user watching the browser sees a
+  blank widget.
+- **`--use-angle=swiftshader` (with `--use-gl=angle`).** Also yields a context, and without
+  the "unsafe" opt-in. But it puts *all* compositing and raster on the rasteriser, not just
+  WebGL: 2.6 times the CPU on an ordinary animated page, paid by every session to serve the
+  few pages that need WebGL. The shader compiler is exposed to pages just the same, so the
+  nicer name buys nothing.
+- **The system software OpenGL (llvmpipe) via `--ignore-gpu-blocklist`.** Works today, at 2.2
+  times the CPU on ordinary pages for the same reason. It also depends on a library the image
+  installs only as a transitive dependency of the X server, in whatever version the
+  distribution carries, and the switch disables *every* blocklist entry, including those that
+  exist for driver bugs. Installing a full system GL/Vulkan stack on purpose would grow the
+  image for a renderer Chromium does not test against.
+- **GPU passthrough.** It would need GPU nodes, a device plugin, a device mounted into a pod
+  that runs untrusted web content, and a scheduler constraint on a pod meant to start anywhere
+  within seconds. A kernel GPU driver is a far larger surface than a userspace rasteriser, and
+  the feature would silently differ between nodes.
+
+`browser-runtime/test/entrypoint.test.mjs` pins the switch and refuses the two CPU-heavy ones;
+`browser-runtime/smoke.ps1` draws with WebGL 1 and 2 in the built image, read-only and as uid
+1000, and checks the pixel.
+
 ## Cookie persistence
 
 When S3-compatible storage is configured, the browser supervisor periodically checkpoints

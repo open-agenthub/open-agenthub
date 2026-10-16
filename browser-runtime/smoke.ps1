@@ -48,6 +48,12 @@ try {
         }
     }
 
+    # Piped rather than copied in: the root filesystem is read-only, and the script must not
+    # become part of the image just to be run here.
+    Get-Content -Raw (Join-Path $PSScriptRoot "webgl-smoke.mjs") |
+        docker exec -i -w /opt/browser $container node --input-type=module -
+    if ($LASTEXITCODE -ne 0) { throw "WebGL is unavailable in the browser runtime" }
+
     $uid = docker exec $container id -u
     if ($uid.Trim() -ne "1000") { throw "Container is not running as UID 1000" }
     docker exec $container sh -c "touch /root-write-test" 2>$null

@@ -31,8 +31,6 @@ export function createChatLog() {
     items: [],
     drafts: [],
     busy: false,
-    model: '',
-    lastResult: null,
 
     feed(text) {
       for (const line of String(text).split('\n')) {
@@ -48,8 +46,6 @@ export function createChatLog() {
       log.items = []
       log.drafts = []
       log.busy = false
-      log.model = ''
-      log.lastResult = null
       toolsById.clear()
     }
   }
@@ -125,15 +121,10 @@ export function createChatLog() {
     else if (event.type === 'user') handleUser(event)
     else if (event.type === 'stream_event') handleStream(event)
     else if (event.type === 'result') {
+      // Cost and duration ride on this event too; the Usage view gets them from the hub's
+      // own accounting, so nothing here reads them.
       log.drafts = []
       log.busy = false
-      log.lastResult = {
-        isError: event.is_error === true,
-        costUsd: typeof event.total_cost_usd === 'number' ? event.total_cost_usd : null,
-        durationMs: typeof event.duration_api_ms === 'number' ? event.duration_api_ms : null
-      }
-    } else if (event.type === 'system') {
-      if (event.subtype === 'init' && event.model) log.model = event.model
     } else if (event.type === 'agenthub') {
       if (event.subtype === 'stderr') pushNote('stderr', event.text || '')
       else if (event.subtype === 'info') pushNote('info', event.text || '')

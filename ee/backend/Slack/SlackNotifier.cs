@@ -55,7 +55,8 @@ public sealed class SlackNotifier : INotifier
                 await _threads.SetStatusTsAsync(s.Id, null, ct);
             }
 
-            if (eventType is "finished" or "failed")
+            // An expiry is terminal like the other two: the thread learns the session is gone.
+            if (eventType is "finished" or "failed" or "session-expired")
             {
                 if (thread is not null)
                     await _slack.PostMessageAsync(thread.Channel, $":checkered_flag: *{eventType}* — {message}", thread.ThreadTs, ct);
@@ -75,7 +76,7 @@ public sealed class SlackNotifier : INotifier
                              "_Your coding agent needs you. Reply in this thread to answer it._";
                 var ts = await _slack.PostMessageAsync(channel, header, null, ct);
                 if (ts is null) return;
-                thread = new SlackThread(s.Id, s.Owner, channel, ts, 0);
+                thread = new SlackThread(s.Id, s.Owner, channel, ts);
                 await _threads.UpsertAsync(thread, ct);
             }
 

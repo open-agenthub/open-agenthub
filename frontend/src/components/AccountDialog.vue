@@ -19,7 +19,8 @@ async function load() {
 async function connect(p) {
   try {
     const { url } = await api.gitConnectUrl(p.id)
-    // Full-page navigation to the provider; it redirects back to /account.
+    // Full-page navigation to the provider; it redirects back to /account, which the app
+    // canonicalises to /settings/account.
     location.href = url
   } catch (e) { error.value = String(e.message || e) }
 }
@@ -34,7 +35,7 @@ onMounted(() => {
   load()
   // Clean up the ?git=connected|error marker left by the OAuth callback redirect.
   const q = new URLSearchParams(location.search)
-  if (q.has('git')) { error.value = q.get('git') === 'error' ? 'Connecting the account failed.' : ''; history.replaceState(null, '', '/account') }
+  if (q.has('git')) { error.value = q.get('git') === 'error' ? 'Connecting the account failed.' : ''; history.replaceState(null, '', '/settings/account') }
 })
 </script>
 

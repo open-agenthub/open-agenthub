@@ -12,7 +12,10 @@ public sealed class SessionLimitExceededException(string message) : InvalidOpera
 /// </summary>
 public static class SessionSoftLimit
 {
-    public const int DefaultMax = 20;
+    // A guard against a runaway spawn loop, not a quota: an owner who coordinates a fleet of
+    // child sessions next to their own long-lived ones reached the former 20 in normal use.
+    // Capacity is the cluster's to enforce; operators size this with maxRunningSessionsPerOwner.
+    public const int DefaultMax = 50;
 
     private static readonly HashSet<string> RunningStatuses = new(StringComparer.OrdinalIgnoreCase)
     {

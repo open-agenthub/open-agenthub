@@ -20,6 +20,9 @@ const localRequire = createRequire(import.meta.url);
 const { LocalFileStore } = localRequire('./local-store.js');
 
 const id = z.string().regex(/^[a-f0-9]{32}$/);
+// Session ids are issued by the backend and only ever travel back to it url-encoded; the pattern
+// is here to turn a pasted title or path into a clear schema error, not to guard the route.
+const sessionId = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
 const empty = z.object({}).strict();
 const upload = z.object({
   path: z.string().min(1).max(4096),
@@ -67,7 +70,9 @@ export function createFilesToolHandlers(options = {}) {
   const schemas = {
     list_display_capabilities: empty, list_files: empty,
     read_file: z.object({ fileId: id }).strict(), upload_file: upload,
-    present_file: present, dismiss_presentation: empty
+    present_file: present, dismiss_presentation: empty,
+    list_project_files: z.object({ sessionId: sessionId.optional() }).strict(),
+    fetch_project_file: z.object({ sessionId, fileId: id }).strict()
   };
 
   async function uploadPath(input) {
@@ -117,7 +122,7 @@ export function createFilesToolHandlers(options = {}) {
    * after PresignMinutes, so a read later than the listing failed with a signature error the agent
    * could only report as a missing file.
    */
-  async function localise(file) {
+  async function localise(file, open = () => client.contentStream(file.id)) {
     if (file.localPath) return file.localPath;
 
     const existing = await store.head(file.id);
@@ -128,7 +133,7 @@ export function createFilesToolHandlers(options = {}) {
       await store.remove(file.id).catch(() => {});
     }
 
-    const body = await client.contentStream(file.id);
+    const body = await open();
     const stream = typeof Readable.fromWeb === 'function'
       ? Readable.fromWeb(body)
       : Readable.from(body);
@@ -182,6 +187,18 @@ export function createFilesToolHandlers(options = {}) {
     }
   }
 
+  // The project routes answer 404 for "no such file" and "not yours to read" alike, on purpose.
+  // Passing the status through would invite the agent to guess at which; file_not_found is all
+  // it can know. Scoped to those routes so the session's own tools report what they always did.
+  async function projectCall(call) {
+    try { return await call(); }
+    catch (error) {
+      if (error instanceof Error && error.message.includes('files_backend_http_404'))
+        throw new Error('file_not_found');
+      throw error;
+    }
+  }
+
   const handlers = {
     list_display_capabilities: async () => metadata(await client.capabilities()),
     // The listing is metadata only, and a file id on its own does not tell the agent how to get
@@ -217,7 +234,41 @@ export function createFilesToolHandlers(options = {}) {
       const file = input.path ? await uploadPath(input) : { id: input.fileId };
       return metadata(await client.present(file.id));
     },
-    dismiss_presentation: async () => metadata(await client.dismiss())
+    dismiss_presentation: async () => metadata(await client.dismiss()),
+    list_project_files: async input => {
+      const listed = await projectCall(() => client.projectFiles(input.sessionId));
+      return metadata({
+        files: listed?.files ?? [],
+        truncated: Boolean(listed?.truncated),
+        hint: listed?.truncated
+          ? 'The listing was cut short. Pass sessionId to list one session\'s files completely.'
+          : 'Call fetch_project_file with a sessionId and fileId to copy that file onto this pod\'s '
+            + 'disk. Empty when this session has no project, is shared with someone, or no other '
+            + 'session of the project has files.'
+      });
+    },
+    // Never inline, unlike read_file. The point of sharing across sessions is to hand finished
+    // output — screenshots, reports — from the session that made it to the one that uses it, and
+    // that hand-over should cost a path, not the bytes of every screenshot in the model's context.
+    // An agent that does want to look at one opens the path with its own tools.
+    fetch_project_file: async input => {
+      const listed = await projectCall(() => client.projectFiles(input.sessionId));
+      // Name, type and size come from the backend's listing, not from the caller: the size is
+      // the ceiling the download is cut off at, so it must not be something the model supplies.
+      const entry = (listed?.files ?? []).find(
+        file => file.id === input.fileId && file.sessionId === input.sessionId);
+      if (!entry) throw new Error('file_not_found');
+      const localPath = await projectCall(() => localise(
+        entry, () => client.projectContentStream(input.sessionId, input.fileId)));
+      return metadata({
+        file: {
+          id: entry.id, name: entry.name, mimeType: entry.mimeType, size: entry.size,
+          sessionId: entry.sessionId, sessionTitle: entry.sessionTitle
+        },
+        localPath,
+        hint: 'The file is on disk at localPath — read, search, or copy it with your own file tools.'
+      });
+    }
   };
   return { handlers, schemas };
 }
@@ -237,7 +288,18 @@ export function createFilesServer(options = {}) {
       + 'search or copy it. Small images and text files also come back inline.',
     upload_file: 'Upload a file from the workspace or managed output directory.',
     present_file: 'Present an existing session file or upload and present a local file.',
-    dismiss_presentation: 'Dismiss the shared file presentation.'
+    dismiss_presentation: 'Dismiss the shared file presentation.',
+    // Two tools of their own instead of a flag on list_files and read_file. A connected client
+    // caches a tool's input schema, so a parameter added to an existing tool is invisible to
+    // every session already running (docs/development-log.md, 2026-09-29), and a flag would make
+    // "whose file is this" a detail of every call rather than a choice of tool. As new tools the
+    // existing two keep answering for this session alone, exactly as before.
+    list_project_files: 'List ready files of the other sessions in this session\'s project (same '
+      + 'owner): session id and title, file id, name, type and size. Read-only. Optional sessionId '
+      + 'narrows it to one session.',
+    fetch_project_file: 'Copy a file from another session of this project onto this pod\'s disk and '
+      + 'return its path. The content is not returned inline. Take sessionId and fileId from '
+      + 'list_project_files.'
   };
   for (const name of Object.keys(handlers)) {
     server.registerTool(name, { description: descriptions[name], inputSchema: schemas[name] }, async input => {

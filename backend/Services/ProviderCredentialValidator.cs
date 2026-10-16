@@ -35,6 +35,16 @@ public static class ProviderCredentialValidator
                 AgentKind.OpenClaw => root.TryGetProperty("profiles", out var profiles) &&
                     profiles.ValueKind == JsonValueKind.Object &&
                     profiles.EnumerateObject().Any(),
+                // Pinned from OpenCode 1.18.34 (packages/opencode/src/auth): a map keyed by provider
+                // id, each entry { type: "api" | "oauth" | "wellknown", ... }. At least one entry,
+                // and every entry typed — an empty map is what a logout leaves behind, and storing
+                // it would replace a working login with nothing.
+                AgentKind.OpenCode => root.EnumerateObject().Any() &&
+                    root.EnumerateObject().All(entry =>
+                        entry.Value.ValueKind == JsonValueKind.Object &&
+                        entry.Value.TryGetProperty("type", out var type) &&
+                        type.ValueKind == JsonValueKind.String &&
+                        type.GetString() is "api" or "oauth" or "wellknown"),
                 _ => false
             };
         }

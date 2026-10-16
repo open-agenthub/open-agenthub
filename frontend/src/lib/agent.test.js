@@ -1,16 +1,50 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentOptions, agentPayload, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy,
-  filterAgentOptions, needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload
+  filterAgentOptions, gitPatIdsChange, gitPatIdsPayload, gitPatOptions, gitPatSelectionFor,
+  needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload
 } from './agent.js'
+
+/// A session's git token selection (docs/credential-scopes.md): null = every stored token,
+/// including later ones; a list = exactly these; '*' = back to all on an update.
+describe('git PAT selection helpers', () => {
+  const two = [{ id: 'a', kind: 'gitlab', host: 'gitlab.example.com' }, { id: 'b', kind: 'github', host: 'github.com' }]
+
+  it('reads the options from the credential status and ticks a session\'s selection', () => {
+    expect(gitPatOptions({ gitPats: two })).toEqual(two)
+    expect(gitPatOptions({})).toEqual([])
+    expect(gitPatOptions(null)).toEqual([])
+    expect(gitPatSelectionFor(null, two)).toEqual(['a', 'b'])
+    expect(gitPatSelectionFor(['b', 'gone'], two)).toEqual(['b'])
+    expect(gitPatSelectionFor([], two)).toEqual([])
+  })
+
+  it('sends null for "every token" on create and the ids otherwise', () => {
+    expect(gitPatIdsPayload(['a', 'b'], two)).toBeNull()
+    expect(gitPatIdsPayload(['b'], two)).toEqual(['b'])
+    expect(gitPatIdsPayload([], two)).toEqual([])
+    // Nothing stored: nothing to choose, so nothing is sent.
+    expect(gitPatIdsPayload([], [])).toBeNull()
+  })
+
+  it('sends an edit only when the selection changed, and the wildcard to go back to all', () => {
+    expect(gitPatIdsChange(['a', 'b'], two, null)).toEqual({})
+    expect(gitPatIdsChange(['a'], two, null)).toEqual({ gitPatIds: ['a'] })
+    expect(gitPatIdsChange(['a'], two, ['a'])).toEqual({})
+    expect(gitPatIdsChange(['a', 'b'], two, ['a'])).toEqual({ gitPatIds: ['*'] })
+    expect(gitPatIdsChange([], two, ['a'])).toEqual({ gitPatIds: [] })
+    expect(gitPatIdsChange([], two, [])).toEqual({})
+    expect(gitPatIdsChange([], [], ['a'])).toEqual({})
+  })
+})
 
 describe('agent session helpers', () => {
   it('defaults new sessions to Claude subscription', () => {
     expect(defaultAgentForm()).toMatchObject({ agent: 'Claude', authMode: 'Subscription' })
   })
 
-  it('includes OpenClaw in agent options', () => {
-    expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor', 'OpenClaw'])
+  it('includes OpenClaw and OpenCode in agent options', () => {
+    expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode'])
   })
 
   it('filterAgentOptions keeps every agent when the allowlist is empty or missing', () => {
@@ -29,7 +63,7 @@ describe('agent session helpers', () => {
   })
 
   it('offers both public agents and auth modes without Auto', () => {
-    expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor', 'OpenClaw'])
+    expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode'])
     expect(authOptions('Codex').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
     expect(authOptions('Cursor').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
     expect(authOptions('OpenClaw').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
@@ -165,5 +199,24 @@ describe('agent session helpers', () => {
 
   it('uses Claude-like policy defaults for OpenClaw', () => {
     expect(defaultPolicy('OpenClaw')).toEqual(defaultPolicy('Claude'))
+  })
+
+  it('uses Codex-shaped policy defaults for OpenCode', () => {
+    expect(defaultPolicy('OpenCode')).toEqual({
+      allowedTools: ['Read', 'Edit', 'Glob', 'Grep'],
+      allowedMcpTools: [],
+      allowedCommands: ['git status', 'npm test']
+    })
+    expect(policyPayload({ agent: 'OpenCode', allowedToolsRaw: 'Read', allowedMcpToolsRaw: '', allowedCommandsRaw: 'git status' }))
+      .toEqual({ allowedTools: ['Read'], allowedMcpTools: [], allowedCommands: ['git status'] })
+  })
+
+  it('checks the OpenCode key and login for OpenCode sessions', () => {
+    expect(credentialReadiness('OpenCode', 'ApiKey', 'Autonomous', { openCodeApiKey: true }).ready).toBe(true)
+    expect(credentialReadiness('OpenCode', 'ApiKey', 'Autonomous', { anthropicApiKey: true }))
+      .toMatchObject({ ready: false, text: expect.stringContaining('No OpenCode API key') })
+    expect(credentialReadiness('OpenCode', 'Subscription', 'Autonomous', { opencodeSubscription: true }).ready).toBe(true)
+    expect(credentialReadiness('OpenCode', 'Subscription', 'Interactive', {}).text).toContain('sign in inside the session')
+    expect(agentPayload({ agent: 'OpenCode', authMode: 'ApiKey' })).toEqual({ agent: 'OpenCode', authMode: 'ApiKey' })
   })
 })

@@ -52,7 +52,8 @@ public sealed class TelegramNotifier : INotifier
                 await _bindings.SetStatusRefAsync("telegram", s.Id, null, ct);
             }
 
-            if (eventType is "finished" or "failed")
+            // An expiry is terminal like the other two: the thread learns the session is gone.
+            if (eventType is "finished" or "failed" or "session-expired")
             {
                 if (binding is not null)
                     await _tg.SendMessageAsync(binding.ChatId, $"🏁 {eventType} — {message}", binding.ThreadId, null, ct);

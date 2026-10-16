@@ -2,6 +2,7 @@
 import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { authLabel } from '../lib/agent.js'
+import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 
 defineProps({ sessions: Array, active: String })
 defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'])
@@ -12,7 +13,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
     <div class="info">
       <div class="title">{{ s.title }}</div>
       <div v-if="s.description" class="desc" data-session-description>{{ s.description }}</div>
-      <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span></div>
+      <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · ⌛ {{ formatRemaining(s.expiresAt) }}</span></div>
     </div>
     <span v-if="sessionCapabilities(s).canManage" class="acts">
       <button v-if="canPause(s)" class="act" title="Pause session" @click.stop="$emit('pause', s.id)">❚❚</button>
@@ -39,6 +40,8 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
 .st { font-weight: 700; }
 .role, .owner { color: var(--accent); }
 .cron { color: var(--sched); }
+.expires { color: var(--muted); }
+.expires.soon { color: var(--warn); font-weight: 700; }
 .acts { display: flex; gap: 1px; flex-shrink: 0; margin-top: 1px; opacity: 0; transition: opacity .12s; }
 li:hover .acts, li.active .acts { opacity: 1; }
 .act { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 10px; border-radius: 6px; border: none; background: none; color: var(--muted-3); padding: 0; font-weight: 400; }

@@ -55,6 +55,7 @@ docker build --file "$script_dir/agent-runtime/claude/Dockerfile" --tag 'open-ag
 docker build --file "$script_dir/agent-runtime/codex/Dockerfile" --tag 'open-agenthub-dev/agent-runtime-codex:local' "$script_dir/agent-runtime"
 docker build --file "$script_dir/agent-runtime/cursor/Dockerfile" --tag 'open-agenthub-dev/agent-runtime-cursor:local' "$script_dir/agent-runtime"
 docker build --file "$script_dir/agent-runtime/openclaw/Dockerfile" --tag 'open-agenthub-dev/agent-runtime-openclaw:local' "$script_dir/agent-runtime"
+docker build --file "$script_dir/agent-runtime/opencode/Dockerfile" --tag 'open-agenthub-dev/agent-runtime-opencode:local' "$script_dir/agent-runtime"
 docker build --tag 'open-agenthub-dev/browser:local' "$script_dir/browser-runtime"
 
 decode_base64() {

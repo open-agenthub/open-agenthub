@@ -405,7 +405,7 @@ public class InternalAgentFleetTests
     private static RemoteController RemoteControllerFor(FleetWorld world, string token)
     {
         var controller = new RemoteController(
-            (t, _) => Task.FromResult<string?>(t == "oah_valid" ? Owner : null),
+            (t, _) => Task.FromResult(t == "oah_valid" ? new RemoteCaller(Owner, null) : null),
             world.Service, world.Messages)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
@@ -500,6 +500,16 @@ public class InternalAgentFleetTests
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>(Recent
                 .Where(m => m.ToSessionId == toSessionId)
                 .OrderByDescending(m => m.CreatedAt).Take(limit).ToList());
+
+        public Task MarkDeliveredAsync(string id, string via, CancellationToken ct = default)
+        {
+            foreach (var m in Added.Concat(Pending).Where(m => m.Id == id && m.DeliveredAt is null))
+            {
+                m.DeliveredAt = DateTime.UtcNow;
+                m.DeliveredVia = via;
+            }
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class ListSessionStore(List<SessionRecord> records) : ISessionStore

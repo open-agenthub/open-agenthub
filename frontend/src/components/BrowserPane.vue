@@ -1,6 +1,10 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { browserUrl, resizeBrowserViewport, sharedBrowserUrl } from '../api.js'
+import {
+  browserUrl, copyBrowserClipboard, copySharedBrowserClipboard, pasteBrowserClipboard,
+  pasteSharedBrowserClipboard, resizeBrowserViewport, sharedBrowserUrl
+} from '../api.js'
+import { attachBrowserClipboard } from '../lib/browser-clipboard.js'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -9,9 +13,11 @@ const props = defineProps({
 })
 const host = ref(null)
 const connectionState = ref('waiting')
+const clipboardNotice = ref('')
 const MIN_VIEWPORT = { width: 480, height: 320 }
 const MAX_VIEWPORT = { width: 2560, height: 1600 }
 const RESIZE_DELAY = 250
+const NOTICE_DURATION = 4000
 let rfb
 let reconnectTimer
 let reconnectAttempt = 0
@@ -22,6 +28,8 @@ let resizeTimer
 let latestViewport
 let lastSubmittedViewport
 let inFlightViewport
+let clipboard
+let noticeTimer
 
 const phase = computed(() => props.session?.browser?.phase || 'Stopped')
 const statusLabel = computed(() => {
@@ -80,6 +88,27 @@ function queueViewportResize() {
       if (inFlightViewport === currentKey) inFlightViewport = undefined
     }
   }, RESIZE_DELAY)
+}
+
+// Only a viewer who may control the browser gets its clipboard, and only while the picture is
+// live: the backend refuses everyone else as well, this just keeps their shortcuts untouched.
+function clipboardEnabled() {
+  return !disposed && props.canWrite && phase.value === 'Running' && connectionState.value === 'connected'
+}
+function showClipboardNotice(message) {
+  clipboardNotice.value = message
+  if (noticeTimer) clearTimeout(noticeTimer)
+  noticeTimer = setTimeout(() => { clipboardNotice.value = '' }, NOTICE_DURATION)
+}
+function pasteRemote(text) {
+  return props.sharedToken
+    ? pasteSharedBrowserClipboard(props.sharedToken, text)
+    : pasteBrowserClipboard(props.session.id, text)
+}
+function copyRemote(cut) {
+  return props.sharedToken
+    ? copySharedBrowserClipboard(props.sharedToken, cut)
+    : copyBrowserClipboard(props.session.id, cut)
 }
 
 function clearReconnect() {
@@ -147,6 +176,12 @@ function syncConnection() {
 onMounted(() => {
   resizeObserver = new ResizeObserver(queueViewportResize)
   resizeObserver.observe(host.value)
+  clipboard = attachBrowserClipboard(host.value, {
+    paste: pasteRemote,
+    copy: copyRemote,
+    enabled: clipboardEnabled,
+    notify: showClipboardNotice
+  })
   syncConnection()
 })
 watch([
@@ -163,6 +198,8 @@ onBeforeUnmount(() => {
   disposed = true
   clearViewportTimer()
   resizeObserver?.disconnect()
+  clipboard?.dispose()
+  if (noticeTimer) clearTimeout(noticeTimer)
   closeRfb()
 })
 </script>
@@ -171,7 +208,8 @@ onBeforeUnmount(() => {
   <section data-browser-pane class="browser-pane" :class="`is-${phase.toLowerCase()}`" :aria-label="statusLabel">
     <div class="browser-strip">
       <span class="browser-mark"><i></i>Browser</span>
-      <span class="browser-state">{{ statusLabel }}</span>
+      <span v-if="clipboardNotice" class="browser-state is-notice" role="status">{{ clipboardNotice }}</span>
+      <span v-else class="browser-state">{{ statusLabel }}</span>
     </div>
     <div ref="host" class="browser-canvas"></div>
     <div v-if="phase !== 'Running' || connectionState !== 'connected'" class="browser-overlay" aria-live="polite">
@@ -188,6 +226,7 @@ onBeforeUnmount(() => {
 .browser-mark { display: inline-flex; align-items: center; gap: 7px; color: #eef5ff; font-weight: 700; text-transform: uppercase; }
 .browser-mark i { width: 7px; height: 7px; border-radius: 2px; background: var(--accent); box-shadow: 0 0 0 3px rgba(90,169,245,.12); }
 .browser-state { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browser-state.is-notice { color: var(--warn); }
 .browser-canvas { flex: 1; min-height: 0; overflow: hidden; background: #0b0f15; }
 .browser-canvas :deep(canvas) { outline: none; }
 .browser-overlay { position: absolute; inset: 34px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 24px; text-align: center; color: #dce5f1; background: radial-gradient(circle at 50% 42%, rgba(90,169,245,.09), transparent 34%), #10151c; }

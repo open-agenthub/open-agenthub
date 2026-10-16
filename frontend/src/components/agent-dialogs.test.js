@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
     createSession: vi.fn(), updateSession: vi.fn(), duplicateSession: vi.fn(),
     getCredentialStatus: vi.fn(), storeCredentials: vi.fn(),
     deleteSubscriptionCredential: vi.fn(),
+    addGitPat: vi.fn(), deleteGitPat: vi.fn(),
     getAllowedAgents: vi.fn()
   },
   config: { gitEnabled: false }
@@ -33,7 +34,7 @@ describe('agent-aware session dialogs', () => {
     mocks.api.updateSession.mockResolvedValue({ id: 's1' })
     mocks.api.duplicateSession.mockResolvedValue({ id: 'copy' })
     mocks.api.storeCredentials.mockResolvedValue(null)
-    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex', 'Cursor', 'OpenClaw'] })
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode'] })
   })
 
   it('hides disallowed agents in New Session', async () => {
@@ -92,6 +93,25 @@ describe('agent-aware session dialogs', () => {
       agent: 'Cursor', authMode: 'ApiKey',
       policy: expect.objectContaining({ allowedCommands: [] })
     }))
+  })
+
+  it('creates an OpenCode API-key autonomous session with hub-named tools and commands', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="OpenCode"]').trigger('click')
+    await wrapper.get('[data-auth-option="ApiKey"]').trigger('click')
+    expect(wrapper.find('[data-openclaw-source]').exists()).toBe(false)
+    await wrapper.findAll('[data-mode-option]').find(button => button.text() === 'Autonomous').trigger('click')
+    await wrapper.get('[data-advanced]').trigger('click')
+    expect(wrapper.get('[data-policy="allowedTools"]').attributes('placeholder')).toContain('Glob')
+    expect(wrapper.find('[data-policy="allowedCommands"]').exists()).toBe(true)
+    await wrapper.get('[data-submit]').trigger('click')
+
+    const payload = mocks.api.createSession.mock.calls[0][0]
+    expect(payload).toMatchObject({
+      agent: 'OpenCode', authMode: 'ApiKey',
+      policy: { allowedTools: ['Read', 'Edit', 'Glob', 'Grep'], allowedCommands: ['git status', 'npm test'] }
+    })
+    expect(payload).not.toHaveProperty('openClawApiKeySource')
   })
 
   it('creates an OpenClaw API-key session with a selected key source', async () => {
@@ -348,6 +368,68 @@ describe('agent-aware session dialogs', () => {
     })
   })
 
+  it('offers the system prompt in Interactive too and sends it on create', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    // Unlike the task, the standing rules are not tied to automation, so no mode toggle is needed.
+    expect(wrapper.find('[data-system-prompt]').exists()).toBe(true)
+    await wrapper.get('[data-system-prompt]').setValue('  You review, you do not commit.  ')
+    expect(wrapper.get('[data-system-prompt-count]').text()).toMatch(/^34 \/ 20[,.  ]?000$/)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      systemPrompt: 'You review, you do not commit.'
+    }))
+  })
+
+  it('sends no system prompt when the field is left blank on create', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].systemPrompt).toBeNull()
+  })
+
+  it('prefills the system prompt on edit and sends an empty string to clear it', async () => {
+    const wrapper = mount(EditSessionDialog, {
+      props: { session: { ...baseSession, systemPrompt: 'be terse' }, projects: [] },
+      ...mountOptions
+    })
+    expect(wrapper.get('[data-system-prompt]').element.value).toBe('be terse')
+    await wrapper.get('[data-system-prompt]').setValue('be precise')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession).toHaveBeenCalledWith('s1', expect.objectContaining({ systemPrompt: 'be precise' }))
+
+    mocks.api.updateSession.mockClear()
+    await wrapper.get('[data-system-prompt]').setValue('')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[0][1].systemPrompt).toBe('')
+  })
+
+  it('shows a scheduled session’s system prompt read-only and leaves it out of the payload', async () => {
+    const wrapper = mount(EditSessionDialog, {
+      props: { session: { ...baseSession, mode: 'Scheduled', systemPrompt: 'be terse' }, projects: [] },
+      ...mountOptions
+    })
+    const field = wrapper.get('[data-system-prompt]')
+    expect(field.element.value).toBe('be terse')
+    expect(field.attributes('readonly')).toBeDefined()
+    expect(wrapper.text()).toContain('Fixed by the CronJob spec')
+    await wrapper.get('[data-submit]').trigger('click')
+    // The backend rejects the field for scheduled sessions; sending it would turn a rename into a 400.
+    expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('systemPrompt')
+  })
+
+  it('carries the system prompt into a duplicate and lets it be edited first', async () => {
+    const wrapper = mount(DuplicateSessionDialog, {
+      props: { session: { ...baseSession, systemPrompt: 'be terse' }, projects: [] }
+    })
+    expect(wrapper.get('[data-system-prompt]').element.value).toBe('be terse')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({ systemPrompt: 'be terse' }))
+
+    mocks.api.duplicateSession.mockClear()
+    await wrapper.get('[data-system-prompt]').setValue('new rules')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession).toHaveBeenCalledWith('s1', expect.objectContaining({ systemPrompt: 'new rules' }))
+  })
+
   it('shows non-blocking Interactive subscription login guidance and automation readiness', async () => {
     const interactive = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await flushPromises()
@@ -388,36 +470,268 @@ describe('Git credentials', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.getCredentialStatus.mockResolvedValue({
-      gitlabToken: true, sshPrivateKey: true, gitKnownHosts: true, gitUserName: true, gitUserEmail: true
+      sshPrivateKey: true, gitKnownHosts: true, gitUserName: true, gitUserEmail: true
     })
     mocks.api.storeCredentials.mockResolvedValue(null)
   })
 
-  it('removes a stored GitLab token via the clear control', async () => {
+  it('removes a stored SSH key via the clear control', async () => {
     const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
     await flushPromises()
-    const chip = wrapper.get('[data-clear="gitlabToken"]')
+    const chip = wrapper.get('[data-clear="sshPrivateKey"]')
     expect(chip.text()).toContain('stored')
     await chip.trigger('click')
-    expect(wrapper.get('[data-clear="gitlabToken"]').text()).toContain('remove')
+    expect(wrapper.get('[data-clear="sshPrivateKey"]').text()).toContain('remove')
     await wrapper.get('[data-save-credentials]').trigger('click')
-    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['gitlabToken'] })
+    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['sshPrivateKey'] })
   })
 
   it('offers a clear control for every stored git credential', async () => {
     const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
     await flushPromises()
-    for (const field of ['gitlabToken', 'sshPrivateKey', 'gitKnownHosts', 'gitUserName', 'gitUserEmail'])
+    for (const field of ['sshPrivateKey', 'gitKnownHosts', 'gitUserName', 'gitUserEmail'])
       expect(wrapper.find(`[data-clear="${field}"]`).exists()).toBe(true)
   })
 
-  it('toggling the clear control twice keeps the stored token', async () => {
+  it('toggling the clear control twice keeps the stored key', async () => {
     const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
     await flushPromises()
-    await wrapper.get('[data-clear="gitlabToken"]').trigger('click')
-    await wrapper.get('[data-clear="gitlabToken"]').trigger('click')
+    await wrapper.get('[data-clear="sshPrivateKey"]').trigger('click')
+    await wrapper.get('[data-clear="sshPrivateKey"]').trigger('click')
     await wrapper.get('[data-save-credentials]').trigger('click')
     expect(mocks.api.storeCredentials).toHaveBeenCalledWith({})
+  })
+
+  it('groups the page into git, API key and provider login cards with labelled inputs', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    expect(wrapper.find('[data-card="git"]').exists()).toBe(true)
+    expect(wrapper.find('[data-card="api-keys"]').exists()).toBe(true)
+    expect(wrapper.find('[data-card="logins"]').exists()).toBe(true)
+    // Every input is reachable through a label, so nothing is two unlabelled boxes glued together.
+    for (const input of wrapper.findAll('input, textarea, select')) {
+      const id = input.attributes('id')
+      expect(id, `input ${input.attributes('data-credential') || input.attributes('data-git-pat-host') || ''} has an id`).toBeTruthy()
+      expect(wrapper.find(`label[for="${id}"]`).exists(), `label for ${id}`).toBe(true)
+    }
+  })
+})
+
+/// Git tokens are a list keyed by host, not fixed per-provider slots: a company GitLab and the
+/// public one can both be stored. Each add and remove is applied immediately, not on Save.
+describe('Git personal access tokens', () => {
+  const two = [
+    { id: 'a', kind: 'gitlab', host: 'gitlab.example.com' },
+    { id: 'b', kind: 'github', host: 'github.com' }
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.storeCredentials.mockResolvedValue(null)
+  })
+
+  it('renders one row per stored token with its kind and host, never a token', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: two })
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    const rows = wrapper.findAll('[data-git-pat]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('GitLab')
+    expect(rows[0].text()).toContain('gitlab.example.com')
+    expect(rows[1].text()).toContain('GitHub')
+    expect(rows[1].text()).toContain('github.com')
+    expect(wrapper.find('[data-git-pat-empty]').exists()).toBe(false)
+    // There is no password field with a value anywhere in the list.
+    expect(wrapper.get('[data-git-pat-token]').element.value).toBe('')
+  })
+
+  it('shows an empty state and a disabled Add until host and token are filled in', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({})
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    expect(wrapper.find('[data-git-pat-empty]').exists()).toBe(true)
+    expect(wrapper.get('[data-git-pat-add]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-git-pat-host]').setValue('gitlab.example.com')
+    expect(wrapper.get('[data-git-pat-add]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-git-pat-token]').setValue('glpat-x')
+    expect(wrapper.get('[data-git-pat-add]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('posts a new token immediately and re-reads the list', async () => {
+    mocks.api.getCredentialStatus
+      .mockResolvedValueOnce({ gitPats: [] })
+      .mockResolvedValueOnce({ gitPats: [two[1]] })
+    mocks.api.addGitPat.mockResolvedValue({ id: 'b', kind: 'github', host: 'github.com' })
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+
+    await wrapper.get('[data-git-pat-kind]').setValue('github')
+    await wrapper.get('[data-git-pat-host]').setValue(' github.com ')
+    await wrapper.get('[data-git-pat-token]').setValue('ghp_secret')
+    await wrapper.get('[data-git-pat-add]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.addGitPat).toHaveBeenCalledWith({ kind: 'github', host: 'github.com', token: 'ghp_secret' })
+    expect(wrapper.findAll('[data-git-pat]')).toHaveLength(1)
+    // The token field is emptied so it cannot be re-submitted or left on screen.
+    expect(wrapper.get('[data-git-pat-token]').element.value).toBe('')
+    expect(wrapper.get('[data-git-pat-host]').element.value).toBe('')
+    // Not part of the staged Save payload.
+    expect(mocks.api.storeCredentials).not.toHaveBeenCalled()
+  })
+
+  it('shows the backend validation message inline when adding fails', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: [] })
+    mocks.api.addGitPat.mockRejectedValue(new Error('A token needs the host it belongs to'))
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    await wrapper.get('[data-git-pat-host]').setValue('bad host')
+    await wrapper.get('[data-git-pat-token]').setValue('glpat-x')
+    await wrapper.get('[data-git-pat-add]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-git-pat-error]').text()).toContain('needs the host')
+    // The input keeps what the user typed so they can fix it.
+    expect(wrapper.get('[data-git-pat-host]').element.value).toBe('bad host')
+  })
+
+  it('removes a token only after an inline confirmation, without a popup', async () => {
+    mocks.api.getCredentialStatus
+      .mockResolvedValueOnce({ gitPats: two })
+      .mockResolvedValueOnce({ gitPats: [two[1]] })
+    mocks.api.deleteGitPat.mockResolvedValue(null)
+    // happy-dom 20 ships no confirm(); the spy still has to prove the dialog never calls one.
+    if (typeof window.confirm !== 'function') window.confirm = () => true
+    const confirmSpy = vi.spyOn(window, 'confirm')
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+
+    const remove = wrapper.get('[data-git-pat="gitlab.example.com"] [data-git-pat-remove]')
+    await remove.trigger('click')
+    expect(mocks.api.deleteGitPat).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-git-pat="gitlab.example.com"] [data-git-pat-remove]').text()).toContain('Really remove')
+    expect(wrapper.find('[data-git-pat="gitlab.example.com"] [data-git-pat-keep]').exists()).toBe(true)
+
+    await wrapper.get('[data-git-pat="gitlab.example.com"] [data-git-pat-remove]').trigger('click')
+    await flushPromises()
+
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(mocks.api.deleteGitPat).toHaveBeenCalledWith('a')
+    expect(wrapper.findAll('[data-git-pat]')).toHaveLength(1)
+    expect(wrapper.find('[data-git-pat="gitlab.example.com"]').exists()).toBe(false)
+    confirmSpy.mockRestore()
+  })
+
+  it('Keep disarms the pending removal', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: two })
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    await wrapper.get('[data-git-pat="github.com"] [data-git-pat-remove]').trigger('click')
+    await wrapper.get('[data-git-pat="github.com"] [data-git-pat-keep]').trigger('click')
+    expect(wrapper.get('[data-git-pat="github.com"] [data-git-pat-remove]').text()).toBe('Remove')
+    expect(wrapper.find('[data-git-pat-keep]').exists()).toBe(false)
+    expect(mocks.api.deleteGitPat).not.toHaveBeenCalled()
+  })
+})
+
+/// A session chooses which stored git tokens it is built with (docs/credential-scopes.md). The
+/// picker appears from the first stored token; every token ticked means "all, as before".
+describe('Git token selection per session', () => {
+  const two = [
+    { id: 'a', kind: 'gitlab', host: 'gitlab.example.com' },
+    { id: 'b', kind: 'github', host: 'github.com' }
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // Reset, not clear: an earlier block may have queued a mockResolvedValueOnce it never consumed.
+    mocks.api.getCredentialStatus.mockReset()
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: two })
+    mocks.api.createSession.mockResolvedValue({ id: 'new' })
+    mocks.api.updateSession.mockResolvedValue({ id: 's1' })
+    mocks.api.duplicateSession.mockResolvedValue({ id: 'copy' })
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude'] })
+  })
+
+  it('lists every stored token ticked and sends null (= all) when left alone', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    const boxes = wrapper.findAll('[data-git-pat-option]')
+    expect(boxes).toHaveLength(2)
+    expect(boxes.every(box => box.element.checked)).toBe(true)
+    expect(wrapper.get('[data-git-pat-picker]').text()).toContain('gitlab.example.com')
+    expect(wrapper.get('[data-git-pat-picker]').text()).toContain('GitHub')
+    expect(wrapper.get('[data-git-pat-hint]').text()).toContain('next start or resume')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].gitPatIds).toBeNull()
+  })
+
+  it('sends the ticked ids once one is unticked, and an empty list when none is', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    await wrapper.get('[data-git-pat-option="a"]').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].gitPatIds).toEqual(['b'])
+
+    await wrapper.get('[data-git-pat-option="b"]').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[1][0].gitPatIds).toEqual([])
+  })
+
+  it('is absent when no token is stored, and then sends nothing about tokens', async () => {
+    mocks.api.getCredentialStatus.mockResolvedValue({})
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.find('[data-git-pat-picker]').exists()).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].gitPatIds).toBeNull()
+  })
+
+  it('prefills a restricted session on edit and sends only a change, with "*" to go back to all', async () => {
+    const session = { ...baseSession, mode: 'Interactive', gitPatIds: ['b'] }
+    const wrapper = mount(EditSessionDialog, { props: { session, projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.get('[data-git-pat-option="a"]').element.checked).toBe(false)
+    expect(wrapper.get('[data-git-pat-option="b"]').element.checked).toBe(true)
+
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('gitPatIds')
+
+    await wrapper.get('[data-git-pat-option="a"]').setValue(true)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[1][1].gitPatIds).toEqual(['*'])
+
+    await wrapper.get('[data-git-pat-option="a"]').setValue(false)
+    await wrapper.get('[data-git-pat-option="b"]').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[2][1].gitPatIds).toEqual([])
+  })
+
+  it('does not restrict an unrestricted session on an untouched save', async () => {
+    const session = { ...baseSession, mode: 'Interactive', gitPatIds: null }
+    const wrapper = mount(EditSessionDialog, { props: { session, projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.findAll('[data-git-pat-option]').every(box => box.element.checked)).toBe(true)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('gitPatIds')
+    // A scheduled session never sends it: the backend rejects runtime fields there.
+    const scheduled = mount(EditSessionDialog, { props: { session: { ...session, mode: 'Scheduled' }, projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(scheduled.find('[data-git-pat-picker]').exists()).toBe(false)
+  })
+
+  it('carries the source selection into a duplicate and lets it be changed', async () => {
+    const session = { ...baseSession, gitPatIds: ['a'] }
+    const wrapper = mount(DuplicateSessionDialog, { props: { session, projects: [] } })
+    await flushPromises()
+    expect(wrapper.get('[data-git-pat-option="a"]').element.checked).toBe(true)
+    expect(wrapper.get('[data-git-pat-option="b"]').element.checked).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    // Unchanged: omitted, so the backend copies the source's selection.
+    expect(mocks.api.duplicateSession.mock.calls[0][1]).not.toHaveProperty('gitPatIds')
+
+    await wrapper.get('[data-git-pat-option="a"]').setValue(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.duplicateSession.mock.calls[1][1].gitPatIds).toEqual([])
   })
 })
 
@@ -439,6 +753,28 @@ describe('Cursor credentials', () => {
     await wrapper.get('[data-clear="cursorApiKey"]').trigger('click')
     await wrapper.get('[data-save-credentials]').trigger('click')
     expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['cursorApiKey'] })
+  })
+})
+
+describe('OpenCode credentials', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.getCredentialStatus.mockResolvedValue({ openCodeApiKey: true, opencodeSubscription: true })
+    mocks.api.storeCredentials.mockResolvedValue(null)
+  })
+
+  it('stores and clears the OpenCode API key without reading it back', async () => {
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    const input = wrapper.get('[data-credential="openCodeApiKey"]')
+    expect(input.attributes('type')).toBe('password')
+    expect(input.element.value).toBe('')
+    expect(wrapper.get('[data-credential-hint="openCodeApiKey"]').text()).toContain('OpenCode Go')
+    expect(wrapper.find('[data-credential-status="opencodeSubscription"]').exists()).toBe(true)
+    expect(wrapper.find('[data-remove-subscription="OpenCode"]').exists()).toBe(true)
+    await wrapper.get('[data-clear="openCodeApiKey"]').trigger('click')
+    await wrapper.get('[data-save-credentials]').trigger('click')
+    expect(mocks.api.storeCredentials).toHaveBeenCalledWith({ clear: ['openCodeApiKey'] })
   })
 })
 

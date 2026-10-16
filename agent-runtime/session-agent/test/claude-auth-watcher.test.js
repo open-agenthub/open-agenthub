@@ -174,3 +174,69 @@ test('a missing credential file is tolerated and picked up once it appears', asy
     assert.equal(JSON.parse(requests[0].body).claudeAiOauth.accessToken, 'first-login');
   });
 });
+
+// A swap by the session agent writes the new file's hash to the baseline file before the file
+// itself. The watcher adopts it, so the just-installed account is never uploaded back — and the
+// old file, still on disk for a moment, is not mistaken for a rotation either.
+test('a baseline written by the session agent suppresses the upload of a swapped-in credential', async () => {
+  const source = tempSource('.credentials.json');
+  const baselineFile = path.join(path.dirname(source), '.agenthub', 'credential-baseline');
+  fs.writeFileSync(source, fixture('restored-token'));
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source, callbackUrl, callbackToken: 'synthetic-callback-token', intervalMs: 60_000, baselineFile
+    });
+    await watcher.ready;
+    const swapped = fixture('swapped-in-by-the-hub');
+    fs.mkdirSync(path.dirname(baselineFile), { recursive: true });
+    fs.writeFileSync(baselineFile, crypto.createHash('sha256').update(swapped).digest('hex') + '\n');
+    await watcher.poll(); // baseline known, old file still on disk
+    fs.writeFileSync(source, swapped);
+    await watcher.poll();
+    assert.equal(requests.length, 0);
+    fs.writeFileSync(source, fixture('rotated-after-the-swap'));
+    await watcher.poll();
+    watcher.stop();
+    assert.equal(requests.length, 1);
+    assert.equal(JSON.parse(requests[0].body).claudeAiOauth.accessToken, 'rotated-after-the-swap');
+  });
+});
+
+test('the upload carries the identity from ~/.claude.json when there is one', async () => {
+  const source = tempSource('.credentials.json');
+  const identitySource = path.join(path.dirname(source), '.claude.json');
+  fs.writeFileSync(source, fixture('restored-token'));
+  fs.writeFileSync(identitySource, JSON.stringify({
+    oauthAccount: { accountUuid: 'acc', organizationUuid: 'org', emailAddress: 'me@example.com', organizationName: 'Örg' }
+  }));
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source, identitySource, callbackUrl, callbackToken: 'synthetic-callback-token', intervalMs: 60_000
+    });
+    await watcher.ready;
+    fs.writeFileSync(source, fixture('rotated-token'));
+    await watcher.poll();
+    watcher.stop();
+    assert.equal(requests.length, 1);
+    const header = requests[0].headers['x-agent-identity'];
+    assert.deepEqual(JSON.parse(Buffer.from(header, 'base64url').toString('utf8')),
+      { key: 'acc:org', email: 'me@example.com', organization: 'Örg' });
+  });
+});
+
+test('no identity file means no identity header, not a failed upload', async () => {
+  const source = tempSource('.credentials.json');
+  fs.writeFileSync(source, fixture('restored-token'));
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source, identitySource: path.join(path.dirname(source), 'missing.json'),
+      callbackUrl, callbackToken: 'synthetic-callback-token', intervalMs: 60_000
+    });
+    await watcher.ready;
+    fs.writeFileSync(source, fixture('rotated-token'));
+    await watcher.poll();
+    watcher.stop();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].headers['x-agent-identity'], undefined);
+  });
+});

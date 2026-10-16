@@ -8,9 +8,13 @@ using Npgsql;
 
 namespace AgentHub.Api.Ee.Slack;
 
-public sealed record SlackThread(string SessionId, string Owner, string Channel, string ThreadTs, int PostedLen, string? StatusTs = null);
+public sealed record SlackThread(string SessionId, string Owner, string Channel, string ThreadTs, string? StatusTs = null);
 
-/// <summary>Maps a session to its Slack thread and tracks how much transcript was already posted.</summary>
+/// <summary>
+/// Maps a session to its Slack thread. The table still has a <c>posted_len</c> column from a
+/// design that streamed the transcript into the thread; nothing has written it for a long time
+/// and the relay posts events, not transcript, so the column is left alone at its default.
+/// </summary>
 public sealed class SlackThreadStore
 {
     private readonly NpgsqlDataSource _db;
@@ -48,11 +52,11 @@ public sealed class SlackThreadStore
     public async Task UpsertAsync(SlackThread t, CancellationToken ct = default)
     {
         const string sql = """
-            INSERT INTO slack_threads (session_id, owner, channel, thread_ts, posted_len, status_ts)
-            VALUES (@id, @owner, @channel, @ts, @len, @status)
+            INSERT INTO slack_threads (session_id, owner, channel, thread_ts, status_ts)
+            VALUES (@id, @owner, @channel, @ts, @status)
             ON CONFLICT (session_id) DO UPDATE SET
                 owner = EXCLUDED.owner, channel = EXCLUDED.channel,
-                thread_ts = EXCLUDED.thread_ts, posted_len = EXCLUDED.posted_len,
+                thread_ts = EXCLUDED.thread_ts,
                 status_ts = EXCLUDED.status_ts;
             """;
         await using var cmd = _db.CreateCommand(sql);
@@ -60,16 +64,7 @@ public sealed class SlackThreadStore
         cmd.Parameters.AddWithValue("owner", t.Owner);
         cmd.Parameters.AddWithValue("channel", t.Channel);
         cmd.Parameters.AddWithValue("ts", t.ThreadTs);
-        cmd.Parameters.AddWithValue("len", t.PostedLen);
         cmd.Parameters.AddWithValue("status", (object?)t.StatusTs ?? DBNull.Value);
-        await cmd.ExecuteNonQueryAsync(ct);
-    }
-
-    public async Task SetPostedLenAsync(string sessionId, int len, CancellationToken ct = default)
-    {
-        await using var cmd = _db.CreateCommand("UPDATE slack_threads SET posted_len = @len WHERE session_id = @id");
-        cmd.Parameters.AddWithValue("len", len);
-        cmd.Parameters.AddWithValue("id", sessionId);
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -84,12 +79,12 @@ public sealed class SlackThreadStore
 
     private async Task<SlackThread?> QueryOne(string where, string p, string v, CancellationToken ct)
     {
-        await using var cmd = _db.CreateCommand($"SELECT session_id, owner, channel, thread_ts, posted_len, status_ts FROM slack_threads {where}");
+        await using var cmd = _db.CreateCommand($"SELECT session_id, owner, channel, thread_ts, status_ts FROM slack_threads {where}");
         cmd.Parameters.AddWithValue(p, v);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         return await r.ReadAsync(ct)
-            ? new SlackThread(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3), r.GetInt32(4),
-                await r.IsDBNullAsync(5, ct) ? null : r.GetString(5))
+            ? new SlackThread(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3),
+                await r.IsDBNullAsync(4, ct) ? null : r.GetString(4))
             : null;
     }
 }

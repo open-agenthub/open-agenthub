@@ -81,15 +81,88 @@ test('forwards a genuine waiting-for-input notification', async () => {
   }
 });
 
-test('drops tool-permission notifications (PreToolUse flow handles those)', async () => {
+test('drops tool-permission notifications by their type (PreToolUse flow handles those)', async () => {
+  const server = await startCallbackServer();
+  try {
+    for (const payload of [
+      { message: 'Claude needs your permission to use Bash', notification_type: 'permission_prompt' },
+      { message: 'Permission required for Bash command', notification_type: 'permission_prompt' },
+      { message: 'Logged in', notification_type: 'auth_success' },
+      // An older CLI without notification_type: only its one fixed phrase is a permission prompt.
+      { message: 'Claude needs your permission to use Bash' }
+    ]) {
+      const { code } = await runHook(payload, { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_CALLBACK_TOKEN: 'tok' });
+      assert.equal(code, 0);
+    }
+    assert.equal(server.requests.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test('forwards a question that merely mentions permission', async () => {
+  // The old filter matched /permission/i against the message text and swallowed exactly the
+  // questions it was meant to deliver.
+  const server = await startCallbackServer();
+  try {
+    await runHook(
+      { message: 'Claude is waiting for your input', notification_type: 'idle_prompt' },
+      { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_CALLBACK_TOKEN: 'tok' }
+    );
+    await runHook(
+      { message: 'Do I have permission to force-push, or should I open a PR?', notification_type: 'elicitation_dialog' },
+      { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_CALLBACK_TOKEN: 'tok' }
+    );
+    assert.deepEqual(server.requests.map(r => r.body.message), [
+      'Claude is waiting for your input',
+      'Do I have permission to force-push, or should I open a PR?'
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('replaces the generic message with the last assistant text from transcript_path', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-notify-'));
+  const transcript = path.join(dir, 'session.jsonl');
+  fs.writeFileSync(transcript, [
+    JSON.stringify({ type: 'user', message: { role: 'user', content: 'deploy it' } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'Earlier answer.' }] } }),
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [
+      { type: 'text', text: 'Two targets exist.' },
+      { type: 'text', text: 'Which one, staging or production?' }
+    ] } }),
+    // The latest assistant line is a tool call with no text: not what a person should read.
+    JSON.stringify({ type: 'assistant', message: { role: 'assistant', content: [{ type: 'tool_use', name: 'Bash', input: {} }] } }),
+    JSON.stringify({ type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'ok' }] } }),
+    '{"type":"assistant","message":{"content":[{"type":"text","text":"cut off'
+  ].join('\n') + '\n');
   const server = await startCallbackServer();
   try {
     const { code } = await runHook(
-      { message: 'Claude needs your permission to use Bash' },
+      { message: 'Claude is waiting for your input', notification_type: 'idle_prompt', transcript_path: transcript },
       { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_CALLBACK_TOKEN: 'tok' }
     );
     assert.equal(code, 0);
-    assert.equal(server.requests.length, 0);
+    assert.equal(server.requests.length, 1);
+    assert.equal(server.requests[0].body.message, 'Two targets exist.\nWhich one, staging or production?');
+    assert.equal(server.requests[0].body.event, 'question');
+  } finally {
+    await server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('keeps the notification message when transcript_path cannot be read', async () => {
+  const server = await startCallbackServer();
+  try {
+    await runHook(
+      { message: 'Claude is waiting for your input', notification_type: 'idle_prompt', transcript_path: '/nonexistent/x.jsonl' },
+      { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_CALLBACK_TOKEN: 'tok' }
+    );
+    assert.equal(server.requests[0].body.message, 'Claude is waiting for your input');
   } finally {
     await server.close();
   }

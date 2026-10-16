@@ -11,6 +11,13 @@ namespace AgentHub.Api.WebSockets;
 /// </summary>
 public static class TerminalProxy
 {
+    /// <summary>
+    /// How often a held socket renews the session's last-activity timestamp. One write a minute
+    /// per socket is nothing; one per keystroke would be thousands for a value the sweep reads
+    /// once a minute (docs/session-expiry.md).
+    /// </summary>
+    public static readonly TimeSpan ActivityInterval = TimeSpan.FromMinutes(1);
+
     public static async Task HandleAsync(HttpContext ctx, string owner, string sessionId,
         ISessionService sessions, ILoggerFactory lf, int agentPort, string upstreamPath = "/")
     {
@@ -44,17 +51,27 @@ public static class TerminalProxy
             return;
         }
 
+        // The attach itself and anything typed afterwards is the owner using the session.
+        var activity = new ActivityThrottle(ct => sessions.TouchActivityAsync(owner, sessionId, ct), ActivityInterval);
+        await activity.SignalAsync(ctx.RequestAborted);
+
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
-        var pumpToAgent = Pump(client, upstream, cts.Token);
+        var pumpToAgent = Pump(client, upstream, cts.Token, activity);
         var pumpToBrowser = Pump(upstream, client, cts.Token);
 
         await Task.WhenAny(pumpToAgent, pumpToBrowser);
         cts.Cancel();
     }
 
-    /// <summary>Proxy for an already access-checked session (sharing): read-only unless canWrite.</summary>
+    /// <summary>
+    /// Proxy for an already access-checked session (sharing): read-only unless canWrite.
+    /// <paramref name="onActivity"/> is called on attach and, throttled, for every frame the
+    /// browser sends into the session; null when nothing should be recorded (a read-only viewer
+    /// is watching, not using).
+    /// </summary>
     public static async Task HandleAsync(HttpContext ctx, SessionInfo session, bool canWrite,
-        ILoggerFactory lf, int agentPort, string upstreamPath = "/")
+        ILoggerFactory lf, int agentPort, string upstreamPath = "/",
+        Func<CancellationToken, Task>? onActivity = null)
     {
         var log = lf.CreateLogger("TerminalProxy");
         if (string.IsNullOrEmpty(session.PodIp) || session.Phase != "Running")
@@ -73,17 +90,20 @@ public static class TerminalProxy
             await client.CloseAsync(WebSocketCloseStatus.EndpointUnavailable, "agent unreachable", CancellationToken.None);
             return;
         }
+        var activity = onActivity is null || !canWrite ? null : new ActivityThrottle(onActivity, ActivityInterval);
+        if (activity is not null) await activity.SignalAsync(ctx.RequestAborted);
+
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
         var toBrowser = Pump(upstream, client, cts.Token);
         if (canWrite)
         {
-            var toAgent = Pump(client, upstream, cts.Token);
+            var toAgent = Pump(client, upstream, cts.Token, activity);
             await Task.WhenAny(toAgent, toBrowser);
         }
         else await toBrowser;
         cts.Cancel();
     }
-    private static async Task Pump(WebSocket from, WebSocket to, CancellationToken ct)
+    private static async Task Pump(WebSocket from, WebSocket to, CancellationToken ct, ActivityThrottle? activity = null)
     {
         var buf = new byte[16 * 1024];
         try
@@ -99,6 +119,10 @@ public static class TerminalProxy
                 }
                 if (to.State == WebSocketState.Open)
                     await to.SendAsync(new ArraySegment<byte>(buf, 0, msg.Count), msg.MessageType, msg.EndOfMessage, ct);
+                // After the forward, so a slow touch never delays what was typed. Resize and
+                // keepalive frames count too; distinguishing them would mean parsing every frame
+                // for a timestamp that is renewed once a minute anyway.
+                if (activity is not null) await activity.SignalAsync(ct);
             }
         }
         catch (OperationCanceledException) { }

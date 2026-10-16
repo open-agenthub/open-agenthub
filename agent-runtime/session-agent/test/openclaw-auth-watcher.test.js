@@ -193,3 +193,30 @@ test('OpenClaw watcher rejects invalid shape and content over backend 64 KiB lim
     assert.equal(requests.length, 1);
   });
 });
+
+// A swap by the session agent writes the new file's hash to the baseline file before the file
+// itself; the watcher adopts it and neither the old file nor the installed one is uploaded.
+test('a baseline written by the session agent suppresses the upload of a swapped-in credential', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'watcher-baseline-'));
+  const source = path.join(directory, 'auth.json');
+  const baselineFile = path.join(directory, '.agenthub', 'credential-baseline');
+  fs.writeFileSync(source, fixture('restored-token'));
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source, callbackUrl, callbackToken: 'synthetic-callback-token', intervalMs: 60_000, baselineFile,
+      exportImpl: () => false
+    });
+    await watcher.ready;
+    const swapped = fixture('swapped-in-by-the-hub');
+    fs.mkdirSync(path.dirname(baselineFile), { recursive: true });
+    fs.writeFileSync(baselineFile, crypto.createHash('sha256').update(swapped).digest('hex') + '\n');
+    await watcher.poll();
+    fs.writeFileSync(source, swapped);
+    await watcher.poll();
+    assert.equal(requests.length, 0);
+    fs.writeFileSync(source, fixture('rotated-after-the-swap'));
+    await watcher.poll();
+    watcher.stop();
+    assert.equal(requests.length, 1);
+  });
+});

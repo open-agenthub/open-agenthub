@@ -1,3 +1,5 @@
+using AgentHub.Api.Models;
+
 namespace AgentHub.Api.Chat;
 
 /// <summary>Platform-neutral chat text helpers: session tags, headers, splitting.</summary>
@@ -150,12 +152,20 @@ public static class ChatFormatting
         }).ToList();
     }
 
-    public static string StatusText(string phase, bool questionPending, string? pendingTool, string? link)
+    /// <summary>
+    /// How a session's agent is named in chat text. Null (session gone) reads as "The agent":
+    /// the relays serve every runtime, and naming one provider for all of them was wrong for
+    /// three of the four.
+    /// </summary>
+    public static string AgentName(AgentKind? agent) => agent?.ToString() ?? "The agent";
+
+    public static string StatusText(string phase, bool questionPending, string? pendingTool, string? link,
+        AgentKind? agent = null)
     {
         var lines = new List<string> { $"Status: {phase}" };
         if (questionPending) lines.Add("💬 Waiting for your reply.");
         if (pendingTool is not null) lines.Add($"🔒 Permission pending: {pendingTool}");
-        if (!questionPending && pendingTool is null && phase == "Running") lines.Add("⏳ Claude is working.");
+        if (!questionPending && pendingTool is null && phase == "Running") lines.Add($"⏳ {AgentName(agent)} is working.");
         if (!string.IsNullOrEmpty(link)) lines.Add(link);
         return string.Join("\n", lines);
     }

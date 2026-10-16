@@ -100,6 +100,57 @@ public class InternalSessionSpawnTests
     }
 
     [Fact]
+    public async Task Spawn_GivesAChildRepoTheProviderItsParentUsesForThatHost()
+    {
+        var svc = new RecordingSessionService();
+        var parent = Parent();
+        parent.ReposJson = JsonSerializer.Serialize(new[]
+        {
+            new RepoRef { Url = "https://git.example.com/team/app.git", ProviderId = "github" }
+        });
+        var controller = Controller(parent, svc);
+
+        await controller.Spawn(ParentId, new CreateSessionRequest
+        {
+            Title = "child", Prompt = "p",
+            Repos =
+            [
+                new RepoRef { Url = "https://GIT.example.com/team/other.git", Branch = "main" },
+                new RepoRef { Url = "https://elsewhere.example.com/x.git" },
+                new RepoRef { Url = "git@git.example.com:team/app.git" },
+                new RepoRef { Url = "https://git.example.com/team/own.git", ProviderId = "gitlab" }
+            ]
+        }, CancellationToken.None);
+
+        var repos = svc.CreateRequest!.Repos;
+        // Same host over https: inherits, and keeps its own branch.
+        Assert.Equal("github", repos[0].ProviderId);
+        Assert.Equal("main", repos[0].Branch);
+        // A host the parent has no provider for, and an SSH remote, stay as they were.
+        Assert.Null(repos[1].ProviderId);
+        Assert.Null(repos[2].ProviderId);
+        // A provider the caller named is never overridden.
+        Assert.Equal("gitlab", repos[3].ProviderId);
+    }
+
+    [Fact]
+    public async Task Spawn_WithAParentThatHasNoProvider_LeavesTheChildReposAnonymous()
+    {
+        var svc = new RecordingSessionService();
+        var parent = Parent();
+        parent.ReposJson = """[{"Url":"https://git.example.com/team/app.git"}]""";
+        var controller = Controller(parent, svc);
+
+        await controller.Spawn(ParentId, new CreateSessionRequest
+        {
+            Title = "child", Prompt = "p",
+            Repos = [new RepoRef { Url = "https://git.example.com/team/app.git" }]
+        }, CancellationToken.None);
+
+        Assert.Null(Assert.Single(svc.CreateRequest!.Repos).ProviderId);
+    }
+
+    [Fact]
     public async Task Spawn_WithWrongToken_ReturnsUnauthorized()
     {
         var svc = new RecordingSessionService();
@@ -310,6 +361,61 @@ public class InternalSessionSpawnTests
     }
 
     [Fact]
+    public async Task ConvertPeer_Descendant_ConvertsAsTheOwner()
+    {
+        // An orchestrator hands a finished child to a person: same descendant rule as GetPeer.
+        var svc = new RecordingSessionService
+        {
+            Sessions = [Info("child-a", ParentId), Info("grandchild", "child-a")]
+        };
+        var controller = Controller(Parent(), svc);
+
+        var result = await controller.ConvertPeer(ParentId, "grandchild",
+            new ConvertSessionRequest { AutoApprove = true }, CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result);
+        Assert.Equal(SessionMode.Interactive, Assert.IsType<SessionInfo>(ok.Value).Mode);
+        var call = Assert.Single(svc.ConvertCalls);
+        Assert.Equal((Owner, "grandchild"), (call.Owner, call.Id));
+        Assert.True(call.Request.AutoApprove);
+    }
+
+    [Fact]
+    public async Task ConvertPeer_Sibling_ReturnsNotFoundWithoutTouchingTheService()
+    {
+        var childA = new SessionRecord
+        {
+            Id = "child-a", Owner = Owner, CallbackToken = "child-a-token",
+            Mode = SessionMode.Autonomous, ParentSessionId = ParentId, Title = "child-a"
+        };
+        var svc = new RecordingSessionService
+        {
+            Sessions = [Info(ParentId, null), Info("child-a", ParentId), Info("child-b", ParentId)]
+        };
+        var controller = Controller(childA, svc, token: "child-a-token");
+
+        var result = await controller.ConvertPeer("child-a", "child-b", new ConvertSessionRequest(), CancellationToken.None);
+
+        Assert.IsType<NotFoundResult>(result);
+        Assert.Empty(svc.ConvertCalls);
+    }
+
+    [Fact]
+    public async Task ConvertPeer_MapsARefusalToConflict()
+    {
+        var svc = new RecordingSessionService
+        {
+            Sessions = [Info("child-a", ParentId)],
+            ConvertException = new InvalidOperationException("Pause the session first.")
+        };
+
+        var result = await Controller(Parent(), svc).ConvertPeer(ParentId, "child-a",
+            new ConvertSessionRequest(), CancellationToken.None);
+
+        Assert.IsType<ConflictObjectResult>(result);
+    }
+
+    [Fact]
     public async Task Children_WrongToken_ReturnsUnauthorized()
     {
         var controller = Controller(Parent(), new RecordingSessionService(), token: "bad");
@@ -425,6 +531,17 @@ public class InternalSessionSpawnTests
             throw new NotSupportedException();
         public Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default) =>
             throw new NotSupportedException();
+
+        public Exception? ConvertException { get; init; }
+        public List<(string Owner, string Id, ConvertSessionRequest Request)> ConvertCalls { get; } = [];
+
+        public Task<SessionInfo> ConvertSessionAsync(string owner, string id, ConvertSessionRequest req, CancellationToken ct = default)
+        {
+            ConvertCalls.Add((owner, id, req));
+            if (ConvertException is not null) throw ConvertException;
+            var source = Sessions.First(s => s.Owner == owner && s.Id == id);
+            return Task.FromResult(source with { Mode = SessionMode.Interactive, ConvertedFrom = source.Mode, Phase = "Pending" });
+        }
 
         public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionInfo>>(Sessions.Where(s => s.Owner == owner).ToList());

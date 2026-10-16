@@ -2,6 +2,8 @@
 import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import { initials } from '../lib/text.js'
+import { isLicenseError } from '../lib/license.js'
+import LicenseGate from './LicenseGate.vue'
 
 const props = defineProps({ session: Object, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])
@@ -9,6 +11,10 @@ const data = ref({ users: [], links: [], policy: { blockedServers: [], blockedTo
 const recipient = ref(''); const role = ref('Viewer'); const expiresAt = ref('')
 const blockedServers = ref(''); const blockedTools = ref(''); const oneTimeUrl = ref(''); const error = ref('')
 const linkDrafts = ref({})
+// 'load' — the overview itself answered 402, so there is nothing to edit and the gate replaces
+// the form. 'save' — the overview loaded but a change was refused (the license lapsed in the
+// meantime): the gate appears above the form, which keeps the entries the owner can still see.
+const licenseLock = ref(null)
 const people = computed(() => data.value.users || data.value.directShares || [])
 let loadGeneration = 0
 const links = computed(() => data.value.links || [])
@@ -22,22 +28,44 @@ async function load() {
     if (generation !== loadGeneration || sessionId !== props.session.id) return
     data.value = result
     linkDrafts.value = Object.fromEntries((result.links || []).map(link => [link.id, { role: link.role, expiresAt: link.expiresAt ? link.expiresAt.slice(0, 16) : '' }]))
-    blockedServers.value = (result.policy?.blockedServers || []).join('\n')
-    blockedTools.value = (result.policy?.blockedTools || []).join('\n')
+    // The overview spells it mcpPolicy (SessionSharingOverview). Reading `policy` here meant the
+    // textareas came up empty on every open, and saving one restriction dropped the others.
+    blockedServers.value = (result.mcpPolicy?.blockedServers || []).join('\n')
+    blockedTools.value = (result.mcpPolicy?.blockedTools || []).join('\n')
   } catch (e) {
-    if (generation === loadGeneration) error.value = String(e.message || e)
+    if (generation !== loadGeneration) return
+    if (isLicenseError(e)) licenseLock.value = 'load'
+    else error.value = String(e.message || e)
   }
 }
-async function addPerson() { if (!recipient.value.trim()) return; await api.createShareUser(props.session.id, { recipient: recipient.value.trim(), role: role.value }); recipient.value = ''; await load() }
+// Every change goes through here: a 402 raises the gate, anything else lands in the error line.
+// Before, the handlers had no catch at all and a refused change surfaced only in the console.
+async function change(action) {
+  error.value = ''
+  try { await action(); await load() }
+  catch (e) {
+    if (isLicenseError(e)) licenseLock.value = licenseLock.value || 'save'
+    else error.value = String(e.message || e)
+  }
+}
+async function addPerson() {
+  if (!recipient.value.trim()) return
+  await change(async () => { await api.createShareUser(props.session.id, { recipient: recipient.value.trim(), role: role.value }); recipient.value = '' })
+}
 async function changePerson(person, value) {
   if (value === 'Remove') { await removePerson(person); return }
-  await api.updateShareUser(props.session.id, person.recipient || person.owner, { role: value }); await load()
+  await change(() => api.updateShareUser(props.session.id, person.recipient || person.owner, { role: value }))
 }
-async function removePerson(person) { await api.deleteShareUser(props.session.id, person.recipient || person.owner); await load() }
-async function createLink() { const result = await api.createShareLink(props.session.id, { role: role.value, expiresAt: expiresAt.value || null }); oneTimeUrl.value = result.url || result.oneTimeUrl || ''; await load() }
-async function saveLink(link) { const draft = linkDrafts.value[link.id]; await api.updateShareLink(props.session.id, link.id, { role: draft.role, expiresAt: draft.expiresAt || null }); await load() }
-async function removeLink(link) { await api.deleteShareLink(props.session.id, link.id); await load() }
-async function savePolicy() { await api.updateMcpPolicy(props.session.id, { blockedServers: list(blockedServers.value), blockedTools: list(blockedTools.value) }); await load() }
+async function removePerson(person) { await change(() => api.deleteShareUser(props.session.id, person.recipient || person.owner)) }
+async function createLink() {
+  await change(async () => {
+    const result = await api.createShareLink(props.session.id, { role: role.value, expiresAt: expiresAt.value || null })
+    oneTimeUrl.value = result.url || result.oneTimeUrl || ''
+  })
+}
+async function saveLink(link) { const draft = linkDrafts.value[link.id]; await change(() => api.updateShareLink(props.session.id, link.id, { role: draft.role, expiresAt: draft.expiresAt || null })) }
+async function removeLink(link) { await change(() => api.deleteShareLink(props.session.id, link.id)) }
+async function savePolicy() { await change(() => api.updateMcpPolicy(props.session.id, { blockedServers: list(blockedServers.value), blockedTools: list(blockedTools.value) })) }
 async function copyLink() { await navigator.clipboard?.writeText(oneTimeUrl.value) }
 onMounted(load)
 function reset() {
@@ -49,6 +77,7 @@ function reset() {
   blockedTools.value = ''
   oneTimeUrl.value = ''
   error.value = ''
+  licenseLock.value = null
   linkDrafts.value = {}
   load()
 }
@@ -57,6 +86,8 @@ watch(() => props.session.id, reset)
 <template>
   <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')"><div :class="embedded ? 'embed-inner share-inner' : 'modal'">
     <h3 v-if="!embedded" class="form-title">Share session</h3>
+    <LicenseGate v-if="licenseLock" class="gate" feature="Sharing sessions with other users" />
+    <template v-if="licenseLock !== 'load'">
     <p class="note">Roles control terminal input. Session settings, shell access, projects, and sharing remain owner-only.</p>
 
     <section>
@@ -86,10 +117,11 @@ watch(() => props.session.id, reset)
       <div class="sect-title">MCP security</div>
       <p class="sub">Restrictions apply to every participant, including you, on the next MCP call. Earlier transcript content may already contain tool results.</p>
       <p v-if="serverNames.length" class="servers">Configured servers: {{ serverNames.join(', ') }}</p>
-      <div class="field"><label>Blocked servers (one per line)</label><textarea v-model="blockedServers" placeholder="server-name"></textarea></div>
-      <div class="field"><label>Blocked exact tool names (one per line)</label><textarea v-model="blockedTools" placeholder="mcp__server__tool"></textarea></div>
+      <div class="field"><label>Blocked servers (one per line)</label><textarea v-model="blockedServers" data-blocked-servers placeholder="server-name"></textarea></div>
+      <div class="field"><label>Blocked exact tool names (one per line)</label><textarea v-model="blockedTools" data-blocked-tools placeholder="mcp__server__tool"></textarea></div>
       <button @click="savePolicy">Save MCP policy</button>
     </section>
+    </template>
 
     <p v-if="error" class="err">{{ error }}</p>
     <div v-if="!embedded" class="row"><button @click="$emit('close')">Close</button></div>
@@ -100,6 +132,7 @@ watch(() => props.session.id, reset)
 .modal { width: 640px; max-width: 100%; padding: 22px; border: 1px solid var(--border-2); border-radius: var(--radius-lg); background: var(--panel); }
 .share-inner { padding: 14px 20px 20px; }
 .form-title { font-size: 18px; margin: 0 0 6px; }
+.gate { margin-bottom: 12px; }
 .note, .sub { color: var(--muted-2); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
 .sub { margin: 2px 0 0; }
 .sect-title { font-weight: 600; font-size: 13px; color: var(--text); }

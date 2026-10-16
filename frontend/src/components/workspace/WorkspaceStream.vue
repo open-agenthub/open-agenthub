@@ -277,10 +277,10 @@ onBeforeUnmount(() => {
           </div>
           <div v-else-if="item.kind === 'assistant'" class="bubble assistant" data-chat-assistant>
             <template v-for="(block, j) in item.blocks" :key="j">
-              <div v-if="block.type === 'text'" class="workspace-markdown" v-html="renderMarkdown(block.text)"></div>
+              <div v-if="block.type === 'text'" class="md" v-html="renderMarkdown(block.text)"></div>
               <details v-else-if="block.type === 'thinking'" class="fold thinking">
                 <summary>Thinking</summary>
-                <div class="workspace-markdown muted-md" v-html="renderMarkdown(block.text)"></div>
+                <div class="md muted-md" v-html="renderMarkdown(block.text)"></div>
               </details>
               <WorkLog v-else-if="block.type === 'tool'" :label="block.name" :failed="block.isError"
                 :state="block.isError ? 'failed' : block.result === null ? 'running…' : 'done'" :data-chat-tool="block.name">
@@ -299,9 +299,9 @@ onBeforeUnmount(() => {
           <template v-for="draft in drafts" :key="draft.index">
             <details v-if="draft.type === 'thinking'" class="fold thinking" open>
               <summary>Thinking…</summary>
-              <div class="workspace-markdown muted-md" v-html="renderMarkdown(draft.text)"></div>
+              <div class="md muted-md" v-html="renderMarkdown(draft.text)"></div>
             </details>
-            <div v-else class="workspace-markdown" v-html="renderMarkdown(draft.text)"></div>
+            <div v-else class="md" v-html="renderMarkdown(draft.text)"></div>
           </template>
         </div>
         <div v-else-if="busy" class="typing" data-chat-busy><span></span><span></span><span></span></div>
@@ -341,7 +341,7 @@ onBeforeUnmount(() => {
 .fold summary { display: flex; align-items: center; gap: 8px; padding: 7px 12px; font-size: 12px; font-weight: 600; color: var(--muted-2); cursor: pointer; user-select: none; }
 .fold summary:hover { color: var(--text); }
 .fold[open] summary { border-bottom: 1px solid var(--border); }
-.fold > .workspace-markdown { padding: 10px 12px; }
+.fold > .md { padding: 10px 12px; }
 .note { align-self: center; color: var(--muted-3); font-size: 12px; }
 .note.err { align-self: stretch; color: var(--danger); }
 .note.err pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); }

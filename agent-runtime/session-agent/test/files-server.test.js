@@ -16,8 +16,13 @@ test('files tools expose exact strict schemas and safe metadata results', async 
   const { handlers, schemas } = createFilesToolHandlers({ client });
 
   assert.deepEqual(Object.keys(handlers).sort(), [
-    'dismiss_presentation', 'list_display_capabilities', 'list_files', 'present_file', 'read_file', 'upload_file'
+    'dismiss_presentation', 'fetch_project_file', 'list_display_capabilities', 'list_files',
+    'list_project_files', 'present_file', 'read_file', 'upload_file'
   ]);
+  // The session's own two tools take what they always took. A project parameter on either would
+  // be invisible to clients that cached the old schema, and would let one call mean two things.
+  assert.equal(schemas.list_files.safeParse({ sessionId: 's2' }).success, false);
+  assert.equal(schemas.read_file.safeParse({ fileId: 'a'.repeat(32), sessionId: 's2' }).success, false);
   assert.equal(schemas.upload_file.safeParse({ path: '/workspace/a', extra: true }).success, false);
   const listed = await handlers.list_files({});
   assert.deepEqual(listed.structuredContent.files[0].name, 'shot.png');
@@ -266,4 +271,126 @@ test('read_file advertises that it returns a path', async t => {
 
   assert.match(tools.read_file.description, /path/);
   assert.match(tools.list_files.description, /read_file/);
+});
+
+// Project files: what a sibling session of the same project made. These use the real LocalFileStore
+// for the same reason as the object-storage tests above — the claim is that the bytes land on disk.
+
+function projectClient(overrides = {}) {
+  const entry = {
+    sessionId: 'sib1', sessionTitle: 'Screenshots', id: 'f'.repeat(32),
+    name: 'home.png', mimeType: 'image/png', size: 8, completedAt: '2026-10-01T00:00:00Z'
+  };
+  const calls = [];
+  return {
+    entry, calls,
+    projectFiles: async sessionId => { calls.push(['projectFiles', sessionId]); return { files: [entry], truncated: false }; },
+    projectContentStream: async (sessionId, fileId) => {
+      calls.push(['projectContentStream', sessionId, fileId]);
+      return new Response(Buffer.from('PNGBYTES')).body;
+    },
+    // Present so a test can prove the session's own routes are never used for a sibling's file.
+    contentStream: async () => { throw new Error('own_content_route_used'); },
+    materialize: async () => { throw new Error('own_materialize_route_used'); },
+    ...overrides
+  };
+}
+
+async function projectRoot(t) {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agenthub-files-project-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true }));
+  return root;
+}
+
+test('list_project_files names the source session of every file and how to fetch one', async () => {
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const client = projectClient();
+  const { handlers, schemas } = createFilesToolHandlers({ client });
+
+  const all = await handlers.list_project_files({});
+  await handlers.list_project_files({ sessionId: 'sib1' });
+
+  assert.deepEqual(all.structuredContent.files, [client.entry]);
+  assert.equal(all.structuredContent.files[0].sessionTitle, 'Screenshots');
+  assert.equal(all.structuredContent.truncated, false);
+  assert.match(all.structuredContent.hint, /fetch_project_file/);
+  assert.deepEqual(client.calls, [['projectFiles', undefined], ['projectFiles', 'sib1']]);
+  assert.equal(schemas.list_project_files.safeParse({ sessionId: '../other' }).success, false);
+  assert.equal(schemas.list_project_files.safeParse({ projectId: 'p2' }).success, false);
+});
+
+test('list_project_files says when the listing was cut short', async () => {
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const client = projectClient({ projectFiles: async () => ({ files: [], truncated: true }) });
+  const { handlers } = createFilesToolHandlers({ client });
+
+  const result = await handlers.list_project_files({});
+
+  assert.equal(result.structuredContent.truncated, true);
+  assert.match(result.structuredContent.hint, /sessionId/);
+});
+
+test('fetch_project_file writes the file to disk and returns a path, never the bytes', async t => {
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const managedRoot = await projectRoot(t);
+  const client = projectClient();
+  const { handlers } = createFilesToolHandlers({ client, managedRoot });
+
+  const result = await handlers.fetch_project_file({ sessionId: 'sib1', fileId: client.entry.id });
+
+  const { localPath, file } = result.structuredContent;
+  assert.equal(await fs.promises.readFile(localPath, 'utf8'), 'PNGBYTES');
+  assert.ok(localPath.startsWith(await fs.promises.realpath(managedRoot)));
+  assert.equal(file.sessionId, 'sib1');
+  assert.equal(file.sessionTitle, 'Screenshots');
+  // An image small enough for read_file to inline is still not inlined here: the hand-over between
+  // sessions is meant to cost a path, not a screenshot's worth of context.
+  assert.deepEqual(result.content.map(block => block.type), ['text']);
+  assert.ok(!JSON.stringify(result).includes(Buffer.from('PNGBYTES').toString('base64')));
+  assert.deepEqual(client.calls, [
+    ['projectFiles', 'sib1'], ['projectContentStream', 'sib1', client.entry.id]
+  ]);
+});
+
+test('fetch_project_file refuses a file the backend does not list for that session', async t => {
+  // The listing is the backend's answer to "what may this session read". An id that is not in
+  // it must not reach the download route at all, whatever the model was told the id is.
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const managedRoot = await projectRoot(t);
+  const client = projectClient();
+  const { handlers } = createFilesToolHandlers({ client, managedRoot });
+
+  await assert.rejects(
+    () => handlers.fetch_project_file({ sessionId: 'sib1', fileId: 'e'.repeat(32) }), /file_not_found/);
+  assert.ok(!client.calls.some(call => call[0] === 'projectContentStream'));
+});
+
+test('a 404 from the project routes is file_not_found, whatever was behind it', async t => {
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const managedRoot = await projectRoot(t);
+  const refused = projectClient({ projectFiles: async () => { throw new Error('files_backend_http_404'); } });
+  const vanished = projectClient({ projectContentStream: async () => { throw new Error('files_backend_http_404'); } });
+
+  await assert.rejects(
+    () => createFilesToolHandlers({ client: refused, managedRoot }).handlers
+      .fetch_project_file({ sessionId: 'other', fileId: 'f'.repeat(32) }), /^Error: file_not_found$/);
+  await assert.rejects(
+    () => createFilesToolHandlers({ client: refused, managedRoot }).handlers
+      .list_project_files({ sessionId: 'other' }), /^Error: file_not_found$/);
+  await assert.rejects(
+    () => createFilesToolHandlers({ client: vanished, managedRoot }).handlers
+      .fetch_project_file({ sessionId: 'sib1', fileId: 'f'.repeat(32) }), /^Error: file_not_found$/);
+});
+
+test('fetch_project_file discards a download that is not the size the backend listed', async t => {
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const managedRoot = await projectRoot(t);
+  const client = projectClient({
+    projectContentStream: async () => new Response(Buffer.from('PNG')).body
+  });
+  const { handlers } = createFilesToolHandlers({ client, managedRoot });
+
+  await assert.rejects(
+    () => handlers.fetch_project_file({ sessionId: 'sib1', fileId: client.entry.id }), /file_not_found/);
+  assert.deepEqual(await fs.promises.readdir(managedRoot), []);
 });

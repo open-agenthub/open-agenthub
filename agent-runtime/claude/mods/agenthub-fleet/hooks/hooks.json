@@ -1,0 +1,4 @@
+{
+  "description": "The agenthub-fleet hooks module: polls the session agent's mod inbox and delivers fleet messages",
+  "modules": ["./register.js"]
+}

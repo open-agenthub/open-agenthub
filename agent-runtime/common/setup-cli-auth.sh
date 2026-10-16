@@ -2,6 +2,15 @@
 # Authorize the gh/glab CLIs from the git credential store so agents can push
 # and open PRs/MRs with the same tokens git uses. Rewrites the CLI config
 # files on every start (tokens are refreshed per session spawn).
+#
+# Several hosts of one kind are fine: both CLIs keep per-host entries (gh in
+# hosts.yml, glab under `hosts:` in config.yml) and pick the host from the git
+# remote of the repository they run in. Outside a repository glab falls back to
+# GITLAB_HOST, then the top-level `host:` key, then the public instance — so
+# `host:` is set to the first GitLab host in the store (OAuth lines come first),
+# or a user whose only GitLab is self-hosted would have `glab` talk to a host
+# they never named. gh has no equivalent config key (only GH_HOST), so it keeps
+# its own default there.
 set -euo pipefail
 
 CRED_FILE="${1:-$HOME/.git-credentials}"
@@ -43,7 +52,7 @@ while IFS= read -r line; do
     oauth2) # GitLab-style provider
       if [ "$glab_written" = 0 ]; then
         mkdir -p "${glab_cfg%/*}"
-        printf 'git_protocol: https\nhosts:\n' > "$glab_cfg"
+        printf 'git_protocol: https\nhost: %s\nhosts:\n' "$host" > "$glab_cfg"
         chmod 600 "$glab_cfg"
         glab_written=1
       fi

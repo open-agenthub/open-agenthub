@@ -60,8 +60,13 @@ test('workspace chat sends, receives, interrupts, replays, and uploads native hi
     });
   `;
   runtime = createCommonServer({
+    // Built from scratch rather than spread from process.env: inside a session pod the runner's
+    // own AGENTHUB_* values (session id, callback url and token) leaked in, so the test passed
+    // there and failed on CI with attachment_backend_not_configured — and could have called the
+    // real hub. PATH is the one value the provider child needs from the host.
     env: {
-      ...process.env, HOME: directory, AGENTHUB_WORKDIR: directory, AGENTHUB_PORT: '0',
+      PATH: process.env.PATH, HOME: directory, AGENTHUB_WORKDIR: directory, AGENTHUB_PORT: '0',
+      AGENTHUB_SESSION_ID: 'fixture-session',
       AGENTHUB_MODE: 'interactive', AGENTHUB_RESUME: '0', AGENTHUB_PROMPT: '',
       AGENTHUB_CALLBACK_URL: `http://127.0.0.1:${hub.address().port}`, AGENTHUB_CALLBACK_TOKEN: 'fixture-session-token',
       AGENTHUB_FILE_ROOT: path.join(directory, 'files'), FIXTURE_TRANSCRIPT: transcriptPath,

@@ -20,6 +20,7 @@ describe('renderMermaidBlocks', () => {
   beforeEach(() => {
     document.body.innerHTML = ''
     mocks.render.mockReset()
+    mocks.initialize.mockReset()
   })
 
   it('replaces mermaid placeholders with the rendered SVG', async () => {

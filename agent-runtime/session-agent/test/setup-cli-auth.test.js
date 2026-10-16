@@ -77,6 +77,41 @@ test('handles multiple hosts of both kinds', () => {
   assert.match(config, /token: glpat-three/);
 });
 
+// A PAT list can hold two GitLab hosts (a company instance and the public one). glab keeps one
+// entry per host and picks the host from the git remote; outside a repository it falls back to
+// the top-level `host:` key, which must therefore name a stored host rather than the default
+// public instance.
+test('writes one glab host entry per GitLab host and defaults glab to the first', () => {
+  const { home, result } = runScript([
+    'https://oauth2:glpat-work@gitlab.example.com',
+    'https://oauth2:glpat-personal@gitlab.com',
+    ''
+  ].join('\n'));
+  assert.equal(result.status, 0, result.stderr);
+
+  const config = readIfExists(path.join(home, '.config', 'glab-cli', 'config.yml'));
+  assert.ok(config, 'config.yml missing');
+  assert.match(config, /^host: gitlab\.example\.com$/m);
+  assert.equal(config.match(/^host:/gm).length, 1, 'top-level host written once');
+  assert.match(config, /^    gitlab\.example\.com:\n        token: glpat-work$/m);
+  assert.match(config, /^    gitlab\.com:\n        token: glpat-personal$/m);
+  assert.equal(config.match(/^        token: /gm).length, 2);
+});
+
+test('writes one gh host entry per GitHub host', () => {
+  const { home, result } = runScript([
+    'https://x-access-token:ghp_public@github.com',
+    'https://x-access-token:ghp_ent@github.your-org.example',
+    ''
+  ].join('\n'));
+  assert.equal(result.status, 0, result.stderr);
+
+  const hosts = readIfExists(path.join(home, '.config', 'gh', 'hosts.yml'));
+  assert.ok(hosts, 'hosts.yml missing');
+  assert.match(hosts, /^github\.com:\n    oauth_token: ghp_public$/m);
+  assert.match(hosts, /^github\.your-org\.example:\n    oauth_token: ghp_ent$/m);
+});
+
 test('percent-decodes escaped tokens', () => {
   const { home, result } = runScript('https://oauth2:glpat%2Dabc%3Ddef@gitlab.com\n');
   assert.equal(result.status, 0, result.stderr);

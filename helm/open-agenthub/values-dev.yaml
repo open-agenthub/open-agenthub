@@ -40,6 +40,7 @@ agent:
     codex: open-agenthub-dev/agent-runtime-codex:local
     cursor: open-agenthub-dev/agent-runtime-cursor:local
     openclaw: open-agenthub-dev/agent-runtime-openclaw:local
+    opencode: open-agenthub-dev/agent-runtime-opencode:local
 
 browser:
   image:

@@ -53,7 +53,7 @@ watch([() => props.items, query], async () => {
           </WorkLog>
           <article v-else class="message" :class="'message-' + item.role" :data-workspace-role="item.role">
             <span class="message-label">{{ item.label }}</span>
-            <div v-if="item.role === 'assistant'" class="workspace-markdown" v-html="renderMarkdown(item.text)"></div>
+            <div v-if="item.role === 'assistant'" class="md" v-html="renderMarkdown(item.text)"></div>
             <pre v-else>{{ item.text }}</pre>
             <MessageActions :text="item.text" :can-quote="canQuote" @quote="$emit('quote', $event)" />
           </article>

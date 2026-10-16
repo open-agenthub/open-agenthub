@@ -112,3 +112,40 @@ describe('session file API', () => {
     })
   })
 })
+
+describe('error mapping', () => {
+  const failing = (status, body) => vi.fn().mockResolvedValue({
+    ok: false, status, text: vi.fn().mockResolvedValue(body), json: vi.fn()
+  })
+
+  it('marks a 402 as license_required even when the body carries no code', async () => {
+    // Most enterprise controllers answer with the message only; the gate keys on the code.
+    globalThis.fetch = failing(402, '{"error":"An active enterprise license is required."}')
+    const err = await api.listSessionShares('s1').catch(e => e)
+    expect(err.status).toBe(402)
+    expect(err.code).toBe('license_required')
+    expect(err.message).toBe('402 {"error":"An active enterprise license is required."}')
+  })
+
+  it('keeps a code the body sends and ignores bodies that are not JSON', async () => {
+    globalThis.fetch = failing(402, '{"error":"x","code":"seat_limit"}')
+    expect((await api.listSessionShares('s1').catch(e => e)).code).toBe('seat_limit')
+
+    globalThis.fetch = failing(402, 'Payment Required')
+    expect((await api.listSessionShares('s1').catch(e => e)).code).toBe('license_required')
+  })
+
+  it('sets no code on other failures', async () => {
+    globalThis.fetch = failing(404, '{"error":"not found","code":"session_not_found"}')
+    const err = await api.listSessionShares('s1').catch(e => e)
+    expect(err.status).toBe(404)
+    expect(err.code).toBeUndefined()
+  })
+
+  it('applies the same mapping on the status-returning variant', async () => {
+    globalThis.fetch = failing(402, '{"error":"license"}')
+    const err = await api.setSignalPrefs({}).catch(e => e)
+    expect(err.status).toBe(402)
+    expect(err.code).toBe('license_required')
+  })
+})

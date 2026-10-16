@@ -1,7 +1,8 @@
 'use strict';
 
-const crypto = require('node:crypto');
 const fs = require('node:fs');
+
+const { KnownHashes, baselineFile, sha256 } = require('../common/credential-install');
 
 const MAX_CREDENTIAL_BYTES = 64 * 1024;
 
@@ -21,7 +22,7 @@ function watchCredential(options) {
     source, callbackUrl, callbackToken, intervalMs = 30_000,
     fetchImpl = globalThis.fetch, logger = console,
     fsImpl = fs, setIntervalImpl = setInterval, clearIntervalImpl = clearInterval,
-    unrefTimer = true, expectCreate = false, baselineHash
+    unrefTimer = true, expectCreate = false, baselineHash, baselineFile: baselinePath
   } = options || {};
   if (!source || !callbackUrl || !callbackToken || typeof fetchImpl !== 'function') {
     throw new Error('Credential watcher requires source, callback URL, callback token, and fetch');
@@ -29,7 +30,9 @@ function watchCredential(options) {
 
   const hasBaseline = typeof baselineHash === 'string' && /^[a-f0-9]{64}$/.test(baselineHash);
   let initialized = hasBaseline;
-  let lastUploadedHash = hasBaseline ? baselineHash : undefined;
+  // Everything in here has either been uploaded or was installed by the hub itself (the
+  // entrypoint's restore, or a swap by the session agent) and must not be echoed back.
+  const known = new KnownHashes(hasBaseline ? baselineHash : undefined);
   let stopped = false;
   let active = Promise.resolve();
 
@@ -48,6 +51,7 @@ function watchCredential(options) {
 
   async function runPoll() {
     if (stopped) return;
+    if (baselinePath && known.adopt(baselinePath, fsImpl)) initialized = true;
     let body;
     try {
       body = await readBounded();
@@ -64,15 +68,15 @@ function watchCredential(options) {
       return;
     }
 
-    const hash = crypto.createHash('sha256').update(body).digest('hex');
+    const hash = sha256(body);
     if (!initialized) {
       initialized = true;
       if (!expectCreate) {
-        lastUploadedHash = hash;
+        known.add(hash);
         return;
       }
     }
-    if (hash === lastUploadedHash) return;
+    if (known.has(hash)) return;
 
     try {
       const response = await fetchImpl(callbackUrl.replace(/\/$/, '') + '/codex-credentials', {
@@ -81,7 +85,7 @@ function watchCredential(options) {
         body
       });
       if (!response || !response.ok) throw new Error('Credential upload rejected');
-      lastUploadedHash = hash;
+      known.add(hash);
       logger.info('[codex-auth] Credential backup updated.');
     } catch {
       logger.warn('[codex-auth] Credential backup failed; it will be retried.');
@@ -109,6 +113,7 @@ function watchCredential(options) {
 if (require.main === module) {
   const watcher = watchCredential({
     source: process.env.CODEX_HOME + '/auth.json',
+    baselineFile: baselineFile(process.env),
     callbackUrl: process.env.AGENTHUB_CALLBACK_URL,
     callbackToken: process.env.AGENTHUB_CALLBACK_TOKEN,
     expectCreate: process.env.AGENTHUB_CODEX_AUTH_EXPECT_CREATE === '1',

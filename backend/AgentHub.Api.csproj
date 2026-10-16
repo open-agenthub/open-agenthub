@@ -5,6 +5,10 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>AgentHub.Api</RootNamespace>
+    <!-- The image build passes -p:InformationalVersion=<tag>; anything else (dotnet run, the
+         test host) would otherwise report the SDK default "1.0.0" and look like a release. -->
+    <InformationalVersion Condition="'$(InformationalVersion)' == ''">dev</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
 
   <!-- Enterprise Edition sources (source-available under ee/LICENSE, not AGPL). -->

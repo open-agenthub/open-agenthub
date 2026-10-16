@@ -34,12 +34,31 @@ test('sanitizeSession omits mcpConfigJson and other secrets', () => {
   assert.equal(safe.callbackToken, undefined);
 });
 
+test('sanitizeSession keeps what session_convert changes and whether it applies', () => {
+  const safe = sanitizeSession({
+    id: 's1', mode: 'Interactive', uiMode: 'chat', canConvertToInteractive: false,
+    convertedFrom: 'Autonomous', canResume: true
+  });
+  assert.equal(safe.uiMode, 'chat');
+  assert.equal(safe.canConvertToInteractive, false);
+  assert.equal(safe.convertedFrom, 'Autonomous');
+});
+
 test('sanitizeSession maps lists and delete results', () => {
   assert.deepEqual(sanitizeSession({ deleted: true }), { deleted: true });
   const list = sanitizeSession([
     { id: 'a', phase: 'Running', mcpConfigJson: 'secret' }
   ]);
   assert.equal(list[0].mcpConfigJson, undefined);
+});
+
+test('sanitizeSession keeps the credential ids so a caller can read back what it asked for', () => {
+  const safe = sanitizeSession({ id: 's1', credentialId: 'acct1', gitPatIds: ['p1'], owner: 'u' });
+  assert.equal(safe.credentialId, 'acct1');
+  assert.deepEqual(safe.gitPatIds, ['p1']);
+  // Null ("every token") is still a value worth reporting; undefined is simply absent.
+  assert.equal(sanitizeSession({ id: 's1', gitPatIds: null }).gitPatIds, null);
+  assert.equal('gitPatIds' in sanitizeSession({ id: 's1' }), false);
 });
 
 test('sanitizeSession keeps the session url a caller hands to a person', () => {
@@ -53,5 +72,19 @@ test('sanitizeSession keeps the session url a caller hands to a person', () => {
   });
   assert.equal(safe.url, 'https://agenthub.example.com/s/s1');
   assert.equal(safe.systemPrompt, 'You review, you do not commit.');
+  assert.equal(safe.callbackToken, undefined);
+});
+
+test('sanitizeSession keeps the self-deletion setting and the deadline it yields', () => {
+  const safe = sanitizeSession({
+    id: 's1', phase: 'Running',
+    autoDeleteAfterSeconds: 43200, autoDeleteFrom: 'lastActivity',
+    expiresAt: '2026-10-11T00:00:00Z', lastActivityAt: '2026-10-10T12:00:00Z',
+    callbackToken: 'tok'
+  });
+  assert.equal(safe.autoDeleteAfterSeconds, 43200);
+  assert.equal(safe.autoDeleteFrom, 'lastActivity');
+  assert.equal(safe.expiresAt, '2026-10-11T00:00:00Z');
+  assert.equal(safe.lastActivityAt, '2026-10-10T12:00:00Z');
   assert.equal(safe.callbackToken, undefined);
 });

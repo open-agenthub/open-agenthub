@@ -48,6 +48,7 @@ updates:
       - /agent-runtime/codex
       - /agent-runtime/cursor
       - /agent-runtime/openclaw
+      - /agent-runtime/opencode
     schedule:
       interval: weekly
     groups:

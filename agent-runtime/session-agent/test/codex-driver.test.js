@@ -121,7 +121,7 @@ test('Codex resume recognition rejects fresh and merely resume-like commands', (
   assert.equal(driver.isResumeCommand({
     cmd: 'bash', args: [path.join(runtimeDir, 'codex', 'device-login.sh')]
   }), false);
-  assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['resume', '--last'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon'] }), false);
 });
 
@@ -173,9 +173,7 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
     assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
 
     fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), THREAD_A + '\n');
-    const resume = driver.buildCommand(env, true);
-    assert.deepEqual(resume, { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] });
-    assert.equal(driver.isResumeCommand(resume), true);
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] });
     assert.deepEqual(driver.buildCommand(environment({
       CODEX_HOME: home, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'go',
       AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
@@ -184,7 +182,8 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
       args: ['exec', '--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust',
         'resume', THREAD_A, 'go']
     });
-    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', 'not-an-id'] }), false);
+    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] }), true);
+    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['resume', 'not-an-id'] }), false);
 
     // The remembered id wins over anything newer: that is the whole point of recording it.
     const mine = writeRollout(home, THREAD_A, 1_000);
@@ -206,15 +205,48 @@ test('Codex missing-resume fallback requires representative missing-state output
   assert.equal(driver.isMissingResume('No saved session found to resume', 0, 1), false);
 });
 
-test('Codex prepare scopes CODEX_API_KEY to autonomous child environment only', () => {
+test('Codex prepare scopes CODEX_API_KEY to the agent child in every mode', () => {
   const env = environment({ AGENTHUB_MODE: 'autonomous', CODEX_API_KEY: 'synthetic-key' });
   const result = driver.prepare(env);
   assert.equal(env.CODEX_API_KEY, undefined);
   assert.deepEqual(result, { childEnv: { CODEX_API_KEY: 'synthetic-key' } });
 
-  const interactive = environment({ CODEX_API_KEY: 'already-used-by-entrypoint' });
-  assert.equal(driver.prepare(interactive), undefined);
+  // An autonomous run converted to interactive keeps its API-key auth. The key used to be
+  // dropped here for interactive sessions on the assumption that those are subscription logins;
+  // when it reaches the driver it is the only credential the session has.
+  const interactive = environment({ CODEX_API_KEY: 'synthetic-key' });
+  assert.deepEqual(driver.prepare(interactive), { childEnv: { CODEX_API_KEY: 'synthetic-key' } });
   assert.equal(interactive.CODEX_API_KEY, undefined);
+
+  // The usual interactive case: the entrypoint logged in with the key and unset it.
+  const subscription = environment();
+  assert.equal(driver.prepare(subscription), undefined);
+});
+
+test('Codex continues a converted autonomous run as the same thread in the TUI', () => {
+  // docs/session-mode-conversion.md: the autonomous exec recorded its thread id into the state
+  // archive; the interactive resume after conversion names that thread and carries no prompt.
+  const { home, cleanup } = codexHomeFixture();
+  try {
+    const autonomous = driver.buildCommand(environment({
+      CODEX_HOME: home, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'triage the failing build'
+    }), true);
+    assert.equal(autonomous.args[0], 'exec');
+    assert.equal(autonomous.args.at(-1), 'triage the failing build');
+
+    writeRollout(home, THREAD_A, 2_000);
+    driver.findTranscript({ env: environment({ CODEX_HOME: home }), fs, launchedAt: 1_000 });
+
+    const converted = driver.buildCommand(environment({
+      CODEX_HOME: home, AGENTHUB_MODE: 'interactive', AGENTHUB_PROMPT: 'triage the failing build',
+      AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
+    }), true);
+    assert.deepEqual(converted, { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] });
+    assert.ok(!converted.args.includes('triage the failing build'));
+    assert.equal(driver.isResumeCommand(converted), true);
+  } finally {
+    cleanup();
+  }
 });
 
 test('Codex entrypoint owns config, auth mode, watcher, and stale-auth ordering', () => {

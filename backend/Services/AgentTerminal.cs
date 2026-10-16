@@ -7,37 +7,12 @@ namespace AgentHub.Api.Services;
 
 /// <summary>
 /// Talks to an agent pod's terminal WebSocket (same endpoint the browser proxy
-/// uses): reads the current scrollback and injects input, so a chat reply drives
-/// the session exactly like typing in the web terminal.
+/// uses) to inject input, so a chat reply drives the session exactly like typing
+/// in the web terminal. Also owns the control-sequence stripping the transcript
+/// endpoints apply.
 /// </summary>
 public static class AgentTerminal
 {
-    public static async Task<string> ReadScrollbackAsync(string podIp, int port, CancellationToken ct)
-    {
-        using var ws = new ClientWebSocket();
-        ws.Options.AddSubProtocol("tty");
-        await ws.ConnectAsync(new Uri($"ws://{podIp}:{port}/"), ct);
-
-        var sb = new StringBuilder();
-        var buf = new byte[16 * 1024];
-        // The agent sends the whole scrollback on connect; read until a short idle gap.
-        while (true)
-        {
-            using var idle = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            idle.CancelAfter(TimeSpan.FromMilliseconds(500));
-            try
-            {
-                var msg = await ws.ReceiveAsync(buf, idle.Token);
-                if (msg.MessageType == WebSocketMessageType.Close) break;
-                sb.Append(Encoding.UTF8.GetString(buf, 0, msg.Count));
-                if (sb.Length > 500_000) break;
-            }
-            catch (OperationCanceledException) when (!ct.IsCancellationRequested) { break; } // idle → done
-        }
-        try { await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", CancellationToken.None); } catch { }
-        return sb.ToString();
-    }
-
     public static async Task SendInputAsync(string podIp, int port, string text, CancellationToken ct)
     {
         using var ws = new ClientWebSocket();

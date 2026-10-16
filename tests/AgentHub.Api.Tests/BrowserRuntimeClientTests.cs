@@ -55,8 +55,46 @@ public sealed class BrowserRuntimeClientTests
             client.ResizeAsync("10.0.0.9", new BrowserViewport(800, 600)));
     }
 
+    [Fact]
+    public async Task Paste_PostsTheTextToTheSupervisor()
+    {
+        var handler = new RecordingHandler();
+        using var http = new HttpClient(handler);
+        var client = new BrowserRuntimeClient(http);
+
+        await client.PasteAsync("10.0.0.9", "hello \"world\"\n");
+
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Equal("http://10.0.0.9:6081/clipboard/paste", handler.Uri?.AbsoluteUri);
+        var payload = JsonSerializer.Deserialize<JsonElement>(handler.Body);
+        Assert.Equal("hello \"world\"\n", payload.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task Copy_ReturnsTheSelectionTheSupervisorRead()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK, """{"text":"picked"}""");
+        using var http = new HttpClient(handler);
+        var client = new BrowserRuntimeClient(http);
+
+        Assert.Equal("picked", await client.CopyAsync("10.0.0.9", cut: true));
+        Assert.Equal("http://10.0.0.9:6081/clipboard/copy", handler.Uri?.AbsoluteUri);
+        Assert.True(JsonSerializer.Deserialize<JsonElement>(handler.Body).GetProperty("cut").GetBoolean());
+    }
+
+    [Fact]
+    public async Task Copy_KeepsTheRuntimeStatusForTheCaller()
+    {
+        using var http = new HttpClient(new RecordingHandler(HttpStatusCode.RequestEntityTooLarge));
+        var client = new BrowserRuntimeClient(http);
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() =>
+            client.CopyAsync("10.0.0.9", cut: false));
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, error.StatusCode);
+    }
+
     private sealed class RecordingHandler(
-        HttpStatusCode statusCode = HttpStatusCode.NoContent) : HttpMessageHandler
+        HttpStatusCode statusCode = HttpStatusCode.NoContent, string? responseJson = null) : HttpMessageHandler
     {
         public HttpMethod? Method { get; private set; }
         public Uri? Uri { get; private set; }
@@ -70,7 +108,12 @@ public sealed class BrowserRuntimeClientTests
             Body = request.Content is null
                 ? ""
                 : await request.Content.ReadAsStringAsync(cancellationToken);
-            return new HttpResponseMessage(statusCode);
+            return new HttpResponseMessage(statusCode)
+            {
+                Content = responseJson is null
+                    ? null
+                    : new StringContent(responseJson, System.Text.Encoding.UTF8, "application/json")
+            };
         }
     }
 }

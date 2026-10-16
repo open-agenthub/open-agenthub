@@ -133,8 +133,13 @@ function isResumeCommand(command) {
   return command.args.includes('--resume');
 }
 
-function isMissingResume(output, exitCode, elapsedMs) {
-  return exitCode !== 0 && (output.includes('No conversation found') || elapsedMs < 10_000);
+// Only the CLI's own words ("No conversation found with session ID: …", "No conversation found
+// to continue") mean the saved conversation is gone. This used to treat any non-zero exit within
+// ten seconds the same way, so an expired login or an unreachable API — the two fastest ways
+// for a resume to die — restarted the session fresh and dropped --resume along with the whole
+// history, when a plain retry after the person fixed the cause would have kept it.
+function isMissingResume(output, exitCode) {
+  return exitCode !== 0 && output.includes('No conversation found');
 }
 
 // Claude Code files a conversation under the directory it was started in, with every character
@@ -151,15 +156,48 @@ function findTranscript({ env, home, cwd, fs: fileSystem }) {
   return fileSystem.existsSync(file) ? file : null;
 }
 
+// The CLI's own words when a plan window is used up, read from the string table of
+// @anthropic-ai/claude-code 2.1.285 ("You've hit your limit", "You've hit your usage limit",
+// "Usage limit reached", "You're out of extra usage"; the runtime pins 2.1.287). Fallback
+// only: with the agenthub-fleet mod alive the session agent ignores these, because the mod
+// reports the rate-limit windows themselves (docs/account-limits.md). The reset is read off
+// the CLI's own "resets at 3pm" / "resets in 2h" suffix when it prints one.
+const RESET_SUFFIX = /resets?\s+(?:at|in)\s+([^.\n\r)]{1,40})/i;
+const limitPatterns = [
+  { pattern: /You've hit your (?:\w+ )?(?:usage )?limit/i, resetsAt: (match, text) => resetFromText(text, match.index) },
+  { pattern: /\bUsage limit reached\b/, resetsAt: (match, text) => resetFromText(text, match.index) },
+  { pattern: /You're out of extra usage/, resetsAt: (match, text) => resetFromText(text, match.index) }
+];
+
+// A "resets at 3pm" is in the person's time zone, not the pod's, and "resets in 2h" has no
+// anchor the hub could trust; both stay in the matched line for a person to read, and the
+// hub applies its default. Only an ISO timestamp in the line is handed over as a time.
+function resetFromText(text, from) {
+  const window = text.slice(from, from + 300);
+  const suffix = RESET_SUFFIX.exec(window);
+  if (!suffix) return null;
+  return /^\d{4}-\d{2}-\d{2}T/.test(suffix[1].trim()) ? suffix[1].trim() : null;
+}
+
 module.exports = {
   name: 'Claude',
   stateDir: '.claude',
   authFilename: '.credentials.json',
+  // The CLI's checkout of its plugin marketplace: more than half of a typical state directory,
+  // and fetched again on start whenever it is missing — known_marketplaces.json, which stays in
+  // the archive, is what tells it to. Installed plugins (plugins/cache) and the skills are
+  // kept: nothing was shown to bring back a plugin the user installed, and a skill written in
+  // the session exists nowhere else until the library sync has taken it.
+  stateExcludes: ['.claude/plugins/marketplaces'],
+  limitPatterns,
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand,
   isResumeCommand,
   isMissingResume,
   findTranscript,
-  prepare
+  prepare,
+  // Same shape check the watcher applies before uploading, so a swap never installs a file the
+  // watcher would then refuse to back up.
+  validCredential: require('./auth-watcher').validCredential
 };

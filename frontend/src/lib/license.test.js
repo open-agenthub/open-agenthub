@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest'
-import { licenseBadge, licenseBadgeLabel, seatOverbooked } from './license.js'
+import { LICENSE_SETTINGS_PATH, isLicenseError, licenseBadge, licenseBadgeLabel, seatOverbooked } from './license.js'
+
+describe('isLicenseError', () => {
+  it('recognises the 402 the api layer throws, by status or by code', () => {
+    expect(isLicenseError(Object.assign(new Error('402 x'), { status: 402 }))).toBe(true)
+    expect(isLicenseError({ code: 'license_required' })).toBe(true)
+  })
+
+  it('is false for other failures and for nothing at all', () => {
+    expect(isLicenseError(Object.assign(new Error('403 x'), { status: 403 }))).toBe(false)
+    expect(isLicenseError(new Error('boom'))).toBe(false)
+    expect(isLicenseError(null)).toBe(false)
+    expect(isLicenseError(undefined)).toBe(false)
+  })
+
+  it('points at the admin license tab', () => {
+    expect(LICENSE_SETTINGS_PATH).toBe('/settings/license')
+  })
+})
 
 describe('licenseBadge', () => {
   it('is off when there is no license at all', () => {

@@ -1,9 +1,11 @@
+using System.Security.Claims;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using AgentHub.Api.Ee.Sharing;
 using AgentHub.Api.Licensing;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -221,7 +223,19 @@ public class SessionAccessTests
             })
             .Build();
         var store = new SessionShareStore(configuration, NullLogger<SessionShareStore>.Instance);
-        var controller = new SharingController(store, new FakeLicense(enabled: false));
+        // The store points at a closed port with a one-second timeout: if the licence check did
+        // not come first, the call would fail on the connection rather than answer 402.
+        var controller = new SharingController(
+            new SessionSharingService(store, new FakeLicense(enabled: false), frontendOrigin: null))
+        {
+            ControllerContext = new ControllerContext
+            {
+                HttpContext = new DefaultHttpContext
+                {
+                    User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("preferred_username", "owner-1")], "test"))
+                }
+            }
+        };
 
         var response = await controller.List("session-1", CancellationToken.None);
 

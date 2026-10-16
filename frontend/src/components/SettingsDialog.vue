@@ -3,6 +3,8 @@ import { ref, computed, onMounted } from 'vue'
 import { api, config } from '../api.js'
 import { desktopNotifyEnabled, desktopNotifySupported, setDesktopNotify } from '../lib/desktop-notify.js'
 import { docsUrl } from '../lib/docs.js'
+import { draftFromScope, emptyScopeDraft, scopeFromDraft, scopeSummary } from '../lib/token-scope.js'
+import TokenScopeEditor from './TokenScopeEditor.vue'
 
 const emit = defineEmits(['close'])
 // section: 'all' (legacy combined view) or 'notifications' | 'tokens' for a single settings tab.
@@ -179,6 +181,22 @@ const copied = ref(false)
 
 const origin = location.origin
 
+// --- Credential restriction (docs/credential-scopes.md) ---
+// What the checkboxes offer: the stored provider logins and git tokens. Loaded once with the
+// token list; a backend without the listings leaves both empty, and the card then only offers
+// the API-key switch.
+const scopeAccounts = ref({})
+const scopePats = ref([])
+// Create form: the card is opened by a toggle, so an unrestricted token stays one click.
+const restrict = ref(false)
+const newScope = ref(emptyScopeDraft())
+// Editing an existing token's restriction, one token at a time.
+const editingId = ref('')
+const editScope = ref(emptyScopeDraft())
+const scopeBusy = ref(false)
+// Inline two-step delete (no confirm() popup): the first click arms, the second deletes.
+const confirmingId = ref('')
+
 async function load() {
   loading.value = true; error.value = ''
   try { tokens.value = await api.listApiTokens() }
@@ -186,27 +204,58 @@ async function load() {
   finally { loading.value = false }
 }
 
-onMounted(() => { load(); loadSlack(); loadChat() })
+async function loadScopeSources() {
+  if (!showTokens.value) return
+  try { scopeAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* older backend */ }
+  try { scopePats.value = (await api.getCredentialStatus())?.gitPats || [] } catch { /* older backend */ }
+}
+
+onMounted(() => { load(); loadScopeSources(); loadSlack(); loadChat() })
+
+const summaryOf = (t) => scopeSummary(t.allowedCredentials, scopeAccounts.value, scopePats.value)
 
 async function create() {
   const name = newName.value.trim()
   if (!name) return
   creating.value = true; error.value = ''
   try {
-    const res = await api.createApiToken(name)
+    const res = await api.createApiToken(name, restrict.value ? scopeFromDraft(newScope.value) : null)
     freshToken.value = res.token
     copied.value = false
     newName.value = ''
+    restrict.value = false
+    newScope.value = emptyScopeDraft()
     await load()
   } catch (e) { error.value = String(e.message || e) }
   finally { creating.value = false }
 }
 
+function startEdit(t) {
+  editingId.value = t.id
+  editScope.value = draftFromScope(t.allowedCredentials, scopeAccounts.value, scopePats.value)
+  confirmingId.value = ''
+}
+
+function cancelEdit() { editingId.value = '' }
+
+async function saveScope(t, scope) {
+  scopeBusy.value = true; error.value = ''
+  try {
+    await api.updateApiToken(t.id, scope)
+    editingId.value = ''
+    await load()
+  } catch (e) { error.value = String(e.message || e) }
+  finally { scopeBusy.value = false }
+}
+
 async function remove(t) {
-  if (!confirm(`Delete token "${t.name}"? Any remote clients using it will stop working.`)) return
+  if (confirmingId.value !== t.id) { confirmingId.value = t.id; editingId.value = ''; return }
+  confirmingId.value = ''
   try { await api.deleteApiToken(t.id); await load() }
   catch (e) { error.value = String(e.message || e) }
 }
+
+function keep() { confirmingId.value = '' }
 
 async function copyToken() {
   try { await navigator.clipboard.writeText(freshToken.value); copied.value = true }
@@ -365,6 +414,11 @@ const mcpSnippet = computed(() =>
           {{ creating ? 'Creating…' : 'Create token' }}
         </button>
       </div>
+      <label class="check restrict">
+        <input type="checkbox" v-model="restrict" data-token-restrict :disabled="creating" />
+        <span>Restrict to credentials <span class="dim">— limit which logins and git tokens sessions created with this token may use</span></span>
+      </label>
+      <TokenScopeEditor v-if="restrict" v-model="newScope" :accounts="scopeAccounts" :pats="scopePats" data-token-create-scope />
 
       <div v-if="freshToken" class="fresh">
         <p class="fresh-label">New token — copy it now, it will not be shown again:</p>
@@ -377,16 +431,30 @@ const mcpSnippet = computed(() =>
       <div class="list">
         <p v-if="loading" class="muted">Loading…</p>
         <p v-else-if="!tokens.length" class="muted">No tokens yet.</p>
-        <div v-for="t in tokens" :key="t.id" class="token">
-          <div class="token-main">
-            <span class="token-name">{{ t.name }}</span>
-            <code class="token-prefix">{{ t.prefix }}…</code>
+        <div v-for="t in tokens" :key="t.id" class="token-card" :data-token="t.id">
+          <div class="token">
+            <div class="token-main">
+              <span class="token-name">{{ t.name }}</span>
+              <code class="token-prefix">{{ t.prefix }}…</code>
+              <span class="token-scope" :class="{ restricted: !!t.allowedCredentials }" data-token-scope>{{ summaryOf(t) }}</span>
+            </div>
+            <div class="token-meta">
+              <span>created {{ fmt(t.createdAt) }}</span>
+              <span>last used {{ fmt(t.lastUsedAt) }}</span>
+            </div>
+            <button v-if="editingId !== t.id" data-token-edit-scope @click="startEdit(t)">Restrict</button>
+            <button class="del" data-token-delete @click="remove(t)">{{ confirmingId === t.id ? 'Really delete' : 'Delete' }}</button>
+            <button v-if="confirmingId === t.id" data-token-keep @click="keep">Keep</button>
           </div>
-          <div class="token-meta">
-            <span>created {{ fmt(t.createdAt) }}</span>
-            <span>last used {{ fmt(t.lastUsedAt) }}</span>
+          <p v-if="confirmingId === t.id" class="muted" data-token-delete-note>Any remote client using this token stops working.</p>
+          <div v-if="editingId === t.id" data-token-edit>
+            <TokenScopeEditor v-model="editScope" :accounts="scopeAccounts" :pats="scopePats" />
+            <div class="scope-actions">
+              <button class="primary" :disabled="scopeBusy" data-token-scope-save @click="saveScope(t, scopeFromDraft(editScope))">Save restriction</button>
+              <button v-if="t.allowedCredentials" :disabled="scopeBusy" data-token-scope-lift @click="saveScope(t, null)">Remove restriction</button>
+              <button :disabled="scopeBusy" data-token-scope-cancel @click="cancelEdit">Cancel</button>
+            </div>
           </div>
-          <button class="del" @click="remove(t)">Delete</button>
         </div>
       </div>
 
@@ -424,10 +492,17 @@ const mcpSnippet = computed(() =>
 .fresh-label { margin: 0; flex-basis: 100%; font-size: 12px; color: var(--accent); }
 .fresh-value { font-family: var(--mono); font-size: 12px; word-break: break-all; flex: 1; min-width: 200px; }
 .list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
-.token { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.token-card { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+.token { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .token-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .token-name { font-weight: 600; }
 .token-prefix { font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.token-scope { font-size: 11px; color: var(--faint); }
+.token-scope.restricted { color: var(--warn); }
+.restrict { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 13px; }
+.restrict input { width: auto; }
+.dim { color: var(--faint); font-weight: 400; }
+.scope-actions { display: flex; gap: 10px; margin-top: -4px; margin-bottom: 4px; }
 .token-meta { margin-left: auto; display: flex; flex-direction: column; gap: 2px; text-align: right; font-size: 11px; color: var(--muted); font-family: var(--mono); }
 .del { color: var(--danger); border-color: var(--border); }
 .del:hover { border-color: var(--danger); }

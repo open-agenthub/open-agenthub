@@ -73,7 +73,9 @@ re-upload megabytes every half minute.
   line. The driver scans for rollouts touched since the agent was launched, reads the id from
   `session_meta` and records it in `$CODEX_HOME/agenthub-thread-id` — inside the state directory,
   so the archive a pause uploads carries it to the next resume.
-- **Cursor and OpenClaw** have no `findTranscript`; they keep the scrollback fallback.
+- **Cursor, OpenClaw and OpenCode** have no `findTranscript`; they keep the scrollback fallback.
+  OpenCode keeps its conversation in its own database under `~/.opencode`, not in a JSONL file
+  the reader could serve.
 
 **Codex resumes by id, not `--last`.** `codex resume --last` means "newest rollout in this
 directory wins". A `codex` someone ran from the shell tab, or a thread the TUI opened with `/new`,
@@ -123,6 +125,22 @@ conversation. A separate `ISessionStore` interface member for every fake in the 
 avoided by giving the new store and service members default implementations; only the real
 implementations override them.
 
+## The Transcript tab renders prose as markdown, everything else verbatim
+
+A native page's `user` and `assistant` entries are what the person and the model wrote, and
+both write markdown: headings, lists, fenced code, tables, the occasional mermaid diagram. The
+tab renders those two roles through the same escape-first renderer the chat pane uses
+(`lib/markdown.js`, diagrams via `lib/mermaid.js`), so a turn looks the same whether it is read
+live in the chat or later in the transcript. The styles for rendered markdown live in
+`style.css` for that reason — they used to be scoped to the chat pane, and a second copy would
+have drifted.
+
+Tool calls, tool results and the scrollback fallback stay in a `<pre>`. A diff, a shell listing
+or a stack trace contains `*`, `_`, `#` and `|` in positions that are not markup, and the
+renderer would turn an honest `git diff` into stray emphasis and broken tables. The renderer is
+escape-first, so this is a presentation choice, not a safety one: agent text cannot inject
+markup either way.
+
 ## The Transcript tab follows a running session
 
 The tab used to load once when opened and never again while the session ran; a person reading
@@ -141,7 +159,42 @@ offset, or the source switching from `scrollback` to `native` (the first upload 
 tab opened) all mean the cursor no longer points into the history the tab holds, and the tab
 reloads from the start. Stitching the two would show a conversation that never happened.
 
-**Compatibility.** Nothing changes for sessions created before this: no `transcript.jsonl` exists,
+## The notification hook filters by type, not by the word "permission"
+
+`agent-runtime/claude/hooks/notify-hook.sh` is the one place a real JSONL transcript was already
+read: it replaces the CLI's generic "waiting for your input" with the last assistant text from
+`transcript_path`, so the chat relays quote the actual question. It dropped notifications whose
+message matched `/permission/i`, meant to keep the permission prompt (handled by the PreToolUse
+hook) out of the messengers. The regex also swallowed every genuine question that contained the
+word — "do I have permission to force-push?" never reached anyone.
+
+The pinned CLI sends `notification_type` with every notification (verified in the 2.1.28x binary:
+`permission_prompt`, `idle_prompt`, `auth_success`, `elicitation_dialog`, …). The hook now drops
+`permission_prompt` and `auth_success` by type and forwards everything else; a payload without the
+field (an older CLI) is matched against the one fixed phrase `Claude needs your permission`, not a
+substring. The extraction itself is now under test with a fixture transcript: the last assistant
+line that has *text* wins, a trailing tool call or a half-written line does not.
+
+## Smaller things fixed on the way
+
+- **A fast crash no longer forfeits the resume.** The Claude driver treated any non-zero exit
+  within ten seconds of a `--resume` launch as "no saved conversation" and relaunched fresh,
+  dropping `--resume` for good. An expired login and an unreachable API are the two fastest ways
+  for a resume to die, and both used to cost the history. Only the CLI's own "No conversation
+  found" counts now; the Codex, Cursor and OpenClaw drivers already matched their CLIs' words.
+- **The ended-terminal replay sets `convertEol`.** The saved transcript comes back with control
+  sequences and carriage returns stripped, so its lines end in a bare `\n`, which xterm renders
+  as a staircase. The option is set only for the replay: a live PTY sends its own `\r\n`, and
+  converting there would alter raw-mode output.
+- **Dead code removed:** `AgentTerminal.ReadScrollbackAsync` (a websocket scrape of the pod
+  nothing called since transcripts moved to storage), `SlackThread.PostedLen` and
+  `SetPostedLenAsync` (from a design that streamed transcript into the thread; the column stays
+  in the table at its default), and the `model`/`lastResult` bookkeeping in the chat log that no
+  component displayed.
+
+## Compatibility
+
+Nothing changes for sessions created before this: no `transcript.jsonl` exists,
 `GetConversationAsync` returns null, and every surface serves what it served before. A runtime
 image older than the hub ignores `AGENTHUB_TRANSCRIPT_PUT_URL`; a hub older than the image answers
 the new `PUT …/transcript` with 404, which the agent treats like any other failed best-effort

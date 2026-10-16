@@ -25,6 +25,8 @@ test('Claude driver exposes its state and subscription-auth contract', () => {
   assert.equal(driver.name, 'Claude');
   assert.equal(driver.stateDir, '.claude');
   assert.equal(driver.authFilename, '.credentials.json');
+  // Only what the CLI fetches again by itself; installed plugins and skills stay in the archive.
+  assert.deepEqual(driver.stateExcludes, ['.claude/plugins/marketplaces']);
   assert.deepEqual(driver.attachmentCapabilities, {
     nativeImages: false,
     localImagePaths: true,
@@ -111,6 +113,32 @@ test('Claude does not re-submit the prompt when resuming an interactive session'
   }), true).args, ['--session-id', 'fixed-session', 'triage the failing build']);
 });
 
+test('Claude continues a converted autonomous run as the same conversation, without the prompt', () => {
+  // docs/session-mode-conversion.md: the hub fixes the session id, so the autonomous -p run and
+  // the interactive resume after conversion share one conversation. The task must not be
+  // submitted again — it is the first turn of that conversation already.
+  const autonomous = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(autonomous.args,
+    ['--session-id', 'fixed-session', '-p', 'triage the failing build', '--permission-mode', 'acceptEdits']);
+
+  const terminal = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'interactive', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1', AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(terminal, { cmd: 'claude', args: ['--resume', 'fixed-session'] });
+
+  const chat = driver.buildCommand(environment({
+    AGENTHUB_MODE: 'interactive', AGENTHUB_UI_MODE: 'chat', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1', AGENTHUB_CLAUDE_SESSION_ID: 'fixed-session'
+  }), true);
+  assert.deepEqual(chat.args.slice(0, 2), ['--resume', 'fixed-session']);
+  assert.ok(!chat.args.includes('triage the failing build'));
+  assert.equal(chat.pipe, true);
+});
+
 test('Claude resume command requires requested resume, restored state, and fixed id', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1',
@@ -149,11 +177,18 @@ test('Claude names its transcript from the fixed session id and the cwd slug', (
   assert.equal(driver.findTranscript({ env: environment(), home, cwd: '/workspace/repo', fs: fakeFs }), null);
 });
 
-test('Claude resume falls back for the same output and quick-exit conditions', () => {
-  assert.equal(driver.isMissingResume('No conversation found for session', 1, 15_000), true);
-  assert.equal(driver.isMissingResume('unexpected failure', 1, 9_999), true);
-  assert.equal(driver.isMissingResume('unexpected failure', 1, 10_000), false);
+test('Claude resume falls back only on the CLI saying the conversation is gone', () => {
+  assert.equal(driver.isMissingResume('No conversation found with session ID: abc', 1, 15_000), true);
+  assert.equal(driver.isMissingResume('No conversation found to continue', 1, 500), true);
   assert.equal(driver.isMissingResume('No conversation found for session', 0, 1), false);
+});
+
+test('Claude keeps --resume through a fast crash that is not about the conversation', () => {
+  // An expired login or an unreachable API dies within a second or two; that used to count as
+  // "no saved conversation" and the next launch dropped --resume along with the history.
+  assert.equal(driver.isMissingResume('Invalid API key · Please run /login', 1, 1_200), false);
+  assert.equal(driver.isMissingResume('fetch failed: ECONNREFUSED', 1, 300), false);
+  assert.equal(driver.isMissingResume('', 1, 0), false);
 });
 
 test('Claude chat command streams JSON on both ends through a pipe', () => {

@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { chromium } from 'playwright-core';
+import { connectBrowser } from './connection.mjs';
 import { z } from 'zod';
 import { BrowserBackendClient } from './client.mjs';
 import { SnapshotRefs, accessibilitySnapshot } from './snapshot.mjs';
@@ -22,7 +23,7 @@ class BrowserSession {
   async start() {
     const connection = await this.backend.start();
     if (!this.browser?.isConnected()) {
-      this.browser = await chromium.connectOverCDP(connection.cdpEndpoint, { timeout: 30_000 });
+      this.browser = await connectBrowser(chromium, connection.cdpEndpoint);
       this.context = this.browser.contexts()[0] ?? await this.browser.newContext();
       this.page = this.context.pages().at(-1) ?? await this.context.newPage();
       this.#watch(this.page);

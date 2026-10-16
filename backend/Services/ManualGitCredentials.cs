@@ -1,5 +1,5 @@
-using System.Text;
 using System.Text.RegularExpressions;
+using AgentHub.Api.Models;
 
 namespace AgentHub.Api.Services;
 
@@ -26,6 +26,8 @@ namespace AgentHub.Api.Services;
 /// </summary>
 public static class ManualGitCredentials
 {
+    /// <summary>Hosts a legacy token stored before hosts existed migrates with; a new token always
+    /// names its host.</summary>
     public const string DefaultGitLabHost = "gitlab.com";
     public const string DefaultGitHubHost = "github.com";
 
@@ -59,30 +61,26 @@ public static class ManualGitCredentials
         !token.Any(c => char.IsWhiteSpace(c) || char.IsControl(c));
 
     /// <summary>
-    /// Store lines for the PATs present in a user's credential secret, GitHub first then GitLab.
-    /// Invalid entries are skipped rather than throwing — the values are validated when they are
-    /// stored, so anything invalid here predates that validation and must not stop a session from
-    /// starting.
+    /// One store line per stored PAT, in list order (see <see cref="GitPatStore"/>; legacy slots
+    /// are folded in). Invalid entries are skipped rather than throwing — the values are validated
+    /// when they are stored, so anything invalid here predates that validation and must not stop a
+    /// session from starting.
     /// </summary>
-    public static IReadOnlyList<string> Lines(IDictionary<string, byte[]>? data)
+    public static IReadOnlyList<string> Lines(IDictionary<string, byte[]>? data) => Lines(GitPatStore.Read(data));
+
+    /// <summary>The store lines of an already-read (and possibly narrowed, see
+    /// <see cref="GitPatSelection"/>) list of entries.</summary>
+    public static IReadOnlyList<string> Lines(IReadOnlyList<GitPatStore.Entry> entries)
     {
-        if (data is null) return Array.Empty<string>();
-        var lines = new List<string>(2);
-        Add(lines, Value(data, "github_token"), Value(data, "github_host"), DefaultGitHubHost, GitHubUser);
-        Add(lines, Value(data, "gitlab_token"), Value(data, "gitlab_host"), DefaultGitLabHost, GitLabUser);
+        var lines = new List<string>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (!IsValidToken(entry.Token) || !IsValidHost(entry.Host)) continue;
+            var user = entry.Kind == GitPatKind.GitHub ? GitHubUser : GitLabUser;
+            lines.Add($"https://{Uri.EscapeDataString(user)}:{Uri.EscapeDataString(entry.Token)}@{entry.Host}");
+        }
         return lines;
     }
-
-    private static void Add(List<string> lines, string? token, string? host, string defaultHost, string user)
-    {
-        if (!IsValidToken(token)) return;
-        var effectiveHost = string.IsNullOrWhiteSpace(host) ? defaultHost : host.Trim();
-        if (!IsValidHost(effectiveHost)) return;
-        lines.Add($"https://{Uri.EscapeDataString(user)}:{Uri.EscapeDataString(token!)}@{effectiveHost}");
-    }
-
-    private static string? Value(IDictionary<string, byte[]> data, string key) =>
-        data.TryGetValue(key, out var raw) ? Encoding.UTF8.GetString(raw) : null;
 
     /// <summary>
     /// Joins connected-provider lines and manual PAT lines into one store, or null when there are
