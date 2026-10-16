@@ -33,14 +33,21 @@ export function parseInbox(text) {
 /**
  * Sorts one poll's messages into what happens now and what waits. `abort` is true when any
  * priority message asks for an interrupt while a turn runs — one abort serves them all, since
- * the turn is gone after the first. Priority messages are submitted in arrival order; the rest
- * join the waiting list for the status line and /inbox.
+ * the turn is gone after the first. Priority messages are submitted in arrival order.
+ *
+ * Plain messages, together with those `held` from earlier polls, are `release`d as one
+ * prompt of their own when no turn runs, and otherwise keep `waiting` for the turn to end (or
+ * to ride along with a prompt the person sends meanwhile). Holding them for the person's next
+ * prompt alone is what #98 was: the session agent had already answered "queued-for-mod", the
+ * hub had marked them delivered, and an idle agent that nobody typed to never saw them.
  */
-export function planDelivery(messages, turnRunning) {
+export function planDelivery(messages, turnRunning, held = []) {
   const submit = messages.filter(message => message.priority);
-  const waiting = messages.filter(message => !message.priority);
+  const plain = [...held, ...messages.filter(message => !message.priority)];
   const abort = turnRunning && submit.some(message => message.interrupt);
-  return { submit, waiting, abort };
+  return turnRunning
+    ? { submit, release: [], waiting: plain, abort }
+    : { submit, release: plain, waiting: [], abort };
 }
 
 // ---- usage limits (docs/account-limits.md) ---------------------------------------------------
@@ -85,7 +92,8 @@ export function inboxStatus(count) {
   return '📨 ' + count + ' fleet message' + (count === 1 ? '' : 's') + ' — /inbox';
 }
 
-/** What /inbox prints and what a prompt.submit hook attaches: every waiting message, headed. */
+/** What /inbox prints, what a prompt.submit hook attaches, and the prompt released waiting
+ * messages become: every message, headed. */
 export function inboxText(messages) {
   if (!messages.length) return 'No fleet messages are waiting.';
   return messages.map(formatFleetMessage).join('\n\n');

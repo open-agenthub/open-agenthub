@@ -54,16 +54,31 @@ test('the inbox answer is parsed defensively', async () => {
   ]);
 });
 
-test('a poll is planned: priority submits, interrupt aborts only during a turn, the rest waits', async () => {
+test('a poll is planned: priority submits, interrupt aborts only during a turn, plain waits for the turn', async () => {
   const { planDelivery } = await lib();
   const urgent = { body: 'a', priority: true, interrupt: false };
   const stop = { body: 'b', priority: true, interrupt: true };
   const plain = { body: 'c', priority: false, interrupt: false };
 
-  assert.deepEqual(planDelivery([urgent, plain], true), { submit: [urgent], waiting: [plain], abort: false });
-  assert.deepEqual(planDelivery([stop], true), { submit: [stop], waiting: [], abort: true });
-  assert.deepEqual(planDelivery([stop], false), { submit: [stop], waiting: [], abort: false });
-  assert.deepEqual(planDelivery([], true), { submit: [], waiting: [], abort: false });
+  assert.deepEqual(planDelivery([urgent, plain], true), { submit: [urgent], release: [], waiting: [plain], abort: false });
+  assert.deepEqual(planDelivery([stop], true), { submit: [stop], release: [], waiting: [], abort: true });
+  assert.deepEqual(planDelivery([stop], false), { submit: [stop], release: [], waiting: [], abort: false });
+  assert.deepEqual(planDelivery([], true), { submit: [], release: [], waiting: [], abort: false });
+});
+
+// #98: holding a plain message for the person's next prompt left an idle agent that nobody
+// typed to without it, although the hub had already marked it delivered.
+test('plain messages are released as soon as no turn runs, held ones first', async () => {
+  const { planDelivery } = await lib();
+  const urgent = { body: 'a', priority: true, interrupt: false };
+  const earlier = { body: 'held', priority: false, interrupt: false };
+  const plain = { body: 'c', priority: false, interrupt: false };
+
+  assert.deepEqual(planDelivery([plain], false), { submit: [], release: [plain], waiting: [], abort: false });
+  assert.deepEqual(planDelivery([], false, [earlier]), { submit: [], release: [earlier], waiting: [], abort: false });
+  assert.deepEqual(planDelivery([urgent, plain], false, [earlier]),
+    { submit: [urgent], release: [earlier, plain], waiting: [], abort: false });
+  assert.deepEqual(planDelivery([plain], true, [earlier]), { submit: [], release: [], waiting: [earlier, plain], abort: false });
 });
 
 test('the threshold is read defensively and bounded', async () => {
