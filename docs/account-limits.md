@@ -1,7 +1,8 @@
 # Usage limits per account: detect, remember, switch
 
 A subscription login has a quota — Claude's five-hour and seven-day windows, Codex's primary and
-secondary windows, Cursor's dollar budget, whatever OpenClaw's upstream provider meters — and a
+secondary windows, Cursor's dollar budget, OpenCode Go's windows and Zen's free tier, whatever
+OpenClaw's upstream provider meters — and a
 session that runs into it stops in a way nobody built for. An interactive session shows the CLI's
 own notice and waits; an autonomous `-p` run prints the same notice and exits as *Failed*, and the
 person who started it finds out in the morning. Meanwhile the same user has a second login stored
@@ -90,7 +91,7 @@ two simpler events already carry.
 
 ### Everyone else: the session agent reads the output
 
-Codex, Cursor and OpenClaw have no in-process mods and their hooks expose no quota, so the
+Codex, Cursor, OpenClaw and OpenCode have no in-process mods and their hooks expose no quota, so the
 session agent (`agent-runtime/common/limit-detector.js`) watches what the CLI prints: the PTY
 stream, stripped of ANSI sequences and cut into lines; the stdout lines of a chat-mode pipe
 (stream-json `result` events with `is_error`, and the `error` events); and stderr. Each driver
@@ -107,12 +108,29 @@ holds them; `…` marks text that varies (a plan name, a time):
 |---|---|---|---|
 | Codex | `@openai/codex@0.160.0` (the pinned version; strings read from the `win32-x64` binary in that package) | `You've hit your usage limit.` / `You've hit your usage limit for …`; `Usage limit reached` (TUI headline) and `You've reached your usage limit.`; `exec --json` error codes `usage_limit_reached`, `rate_limit_reached`, `workspace_owner_usage_limit_reached`, `workspace_member_usage_limit_reached`, `quota_exceeded` | `Try again at …` in the TUI text; `resets_at` / `reset_at` / `reset_after_seconds` in the JSON error body |
 | OpenClaw | `openclaw@2026.7.1-2` (the pinned version; strings in `dist/*.js`) | `Your Codex usage limit is reached.`, `… Codex usage limit is reached`, `… check your account for subscription or usage limits, then try again.`, `API rate limit reached. Please try again later.`, `The model provider returned HTTP 429 before replying.` | none printed; default |
+| OpenCode | `opencode-ai@1.18.35` (the pinned version; strings read from the `linux-x64` binary, and the Go and free-tier notices reproduced with the real CLI against a mock model answering 429 `GoUsageLimitError` / `FreeUsageLimitError`) | `… usage limit reached. It will reset in …. To continue using this model now, enable usage from your available balance` (OpenCode Go); `Free usage exceeded, subscribe to Go` (Zen free tier); `Quota exceeded. Check your plan and billing details.` (OpenAI `insufficient_quota`; read, not reproduced) | `It will reset in 2 hours 15 minutes` — a duration, read relative to now |
 | Claude (fallback only, when no mod heartbeat is alive) | `@anthropic-ai/claude-code@2.1.285` (the locally installed binary; the runtime pins 2.1.287, whose string table was not read) | `You've hit your limit`, `You've hit your usage limit`, `Usage limit reached`, `You're out of extra usage`; `-p` result lines with `subtype: "error_during_execution"` whose text matches those | `resets at …` / `resets in …` / `resets …` as the CLI formats them |
 | Cursor | **unverified** — the CLI is unpinned (`docs/agent-runtime-updates.md`); the `2026.10.01` package served by `cursor.com/install` was unpacked and its JavaScript contains no usage-limit sentence of its own, only `budget_exceeded` for a run's dollar budget, so the limit text seen in a terminal comes from the API response the CLI prints verbatim | conservative: `usage limit`, `hit your … limit`, `budget_exceeded` | none |
 
 None of the Claude strings is in a test as a Claude *expectation*: the Claude runtime reports
 through the mod, and the fallback exists for a CLI started without one (a custom image, a
 mod the user disabled). The output path is the fallback for Claude, not the mechanism.
+
+OpenCode does not stop at a Go or free-tier limit. It puts the session into its retry status
+with the sentence above and retries — for a Go window after the response's `retry-after`, which
+can be hours — so an autonomous run neither fails nor exits; it waits. The TUI shows that status
+(cut to 80 characters, which keeps the reset duration), but `opencode run` prints nothing while
+it waits, so an unattended session would never show the detector a line. The policy plugin
+already loaded into every OpenCode session receives the same status as a `session.status`
+event, and in unattended mode `opencode/limit-notice.mjs` writes its sentence to stderr once,
+prefixed `[agenthub]`, where the PTY carries it to the detector. It does so only for the two
+retry reasons OpenCode gives an account limit (`account_rate_limit`, `free_tier_limit`), not
+for an overloaded provider. The alternative was a report from the plugin straight to the session
+agent's mod route, which carries a reset time as a timestamp; it was rejected because a call on
+that route marks a mod as alive, and a live mod changes how fleet messages are delivered
+(`docs/priority-messages.md`) for a runtime that has no mod to read them. Every other limit
+message OpenCode shows is the provider's own text passed through (`Rate limit exceeded`,
+`Too Many Requests`), which is no OpenCode sentence to pin to and stays undetected.
 
 ### Where the detection is weak
 
@@ -125,8 +143,8 @@ CLI's whole sentences and not the words `rate limit` — GitHub's API prints tho
 third `gh` call — and why a Claude session with a live mod ignores the patterns entirely: the
 mod's figures come from response headers, not from text.
 
-The other weakness is the reset time. Only the mod and Codex's JSON error carry one the hub can
-parse; a TUI line such as `Try again at 3:15 PM` is in the user's locale and time zone, which the
+The other weakness is the reset time. Only the mod, Codex's JSON error and OpenCode's
+`It will reset in …` duration carry one the hub can parse; a TUI line such as `Try again at 3:15 PM` is in the user's locale and time zone, which the
 pod does not share with the person, so it is kept as `detail` and the default hour applies.
 An hour is short enough that a wrong guess costs little and long enough that the session is
 not switched back and forth within one five-hour window.
@@ -159,7 +177,8 @@ have the session stop than drift.
 
 An autonomous `-p` run is switched like any other: the pod is Running until the CLI exits, and
 the restart uses the provider's resume command. For Claude that continues the same
-conversation (`--resume <fixed session id>`), for Codex the recorded thread
+conversation (`--resume <fixed session id>`), for Codex the recorded thread, for OpenCode the
+newest conversation of the workspace (`run --continue`, which is handed the prompt once more)
 (`docs/session-mode-conversion.md` has the table). Cursor and OpenClaw resume into a fresh
 conversation in the same workspace, so their autonomous run starts its prompt from the top on
 the new account — which is still the run finishing, rather than the run failing at 03:00

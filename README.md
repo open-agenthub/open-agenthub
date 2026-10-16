@@ -541,6 +541,7 @@ exhausted account. How the hub finds out depends on the runtime
 |---|---|
 | Claude | the `agenthub-fleet` mod reads the rate-limit windows Claude Code reports and posts a window at 100 % (`AGENTHUB_LIMIT_THRESHOLD`) |
 | Codex, OpenClaw | the session agent matches the CLI's own usage-limit notice in its output (strings verified against the pinned versions) |
+| OpenCode | the same, for OpenCode's Go and free-tier notices; `opencode run` waits silently at a limit, so the policy plugin prints the notice in unattended sessions |
 | Cursor | output patterns, conservative and unverified — the unpinned CLI prints the API's text verbatim |
 
 `account_status` and `account_switch` (every MCP server) and `PATCH /api/remote/sessions/{id}/credential`
