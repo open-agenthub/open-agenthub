@@ -123,8 +123,12 @@ public sealed class InternalController : ControllerBase
         if (rec is null) return Unauthorized();
 
         await _store.SetQuestionPendingAsync(id, true, ct);
+        // Codex's and Cursor's turn hooks send the agent's last message, which may quote a secret
+        // the agent just read; the relays post it to a chat that outlives the session.
         await NotifyAllAsync(rec, body.Event ?? "question",
-            string.IsNullOrWhiteSpace(body.Message) ? "The agent is waiting for your reply." : body.Message, ct);
+            string.IsNullOrWhiteSpace(body.Message)
+                ? "The agent is waiting for your reply."
+                : await _svc.MaskSessionSecretsAsync(id, body.Message, ct), ct);
         return NoContent();
     }
 
@@ -406,6 +410,26 @@ public sealed class InternalController : ControllerBase
             McpConfigJson = inheritMcp ? rec.McpConfigJson : req.McpConfigJson,
             McpServerIds = inheritMcp ? await AccessibleParentServerIdsAsync(rec, ct) : req.McpServerIds
         };
+        // A child carries at most the secrets its parent has (docs/session-secrets.md). Asking for
+        // more is refused, not quietly narrowed: the agent asked for a secret by id, and a child
+        // started without it would fail later on a missing variable with nothing pointing here.
+        var parentSecrets = await _svc.ResolveSessionSecretIdsAsync(rec.Owner, rec.ProjectId,
+            SessionSecretSelection.Parse(rec.SecretIdsJson), ct);
+        var requestedSecrets = req.SecretIds?.Select(s => s?.Trim() ?? "").Where(s => s.Length > 0).ToList();
+        if (requestedSecrets is null || requestedSecrets.Contains(SessionSecretSelection.FollowProject))
+        {
+            // Without a list the child inherits, written out explicitly: left at null it would
+            // follow its project's selection, which can be wider than the parent's. A child moved
+            // to another project keeps only what that project selects as well.
+            var inherited = forced.ProjectId is null
+                ? parentSecrets
+                : parentSecrets.Intersect(await _svc.ResolveSessionSecretIdsAsync(rec.Owner, forced.ProjectId, null, ct)).ToList();
+            forced = forced with { SecretIds = inherited.ToList() };
+        }
+        else if (requestedSecrets.Any(s => !parentSecrets.Contains(s)))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, CredentialScopeException.SecretNotAllowed);
+        }
         try
         {
             return Ok(await _svc.CreateSessionAsync(rec.Owner, forced, ct));

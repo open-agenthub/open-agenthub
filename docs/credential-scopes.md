@@ -145,6 +145,12 @@ function, so the controller stays thin and the rules are tested without a databa
 `providerAccounts` are matched case-insensitively and stored as the canonical `AgentKind` name, so
 `claude` and `Claude` do not become two different restrictions.
 
+## Session secrets
+
+The same scope document has a `secrets` part — an allow list of secret ids, `["*"]` for all,
+missing for none — and `session_create` over MCP passes at most the parent's secrets. Both are
+described with the store itself in docs/session-secrets.md.
+
 ## What is deliberately not done
 
 - **No scope on which sessions a token may read, pause or delete.** The token still acts as its owner

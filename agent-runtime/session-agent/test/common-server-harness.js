@@ -169,6 +169,12 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
           if (harnessOptions.files && file in harnessOptions.files) return harnessOptions.files[file];
           throw new Error('ENOENT: ' + file);
         },
+        readdirSync(dir) {
+          const names = Object.keys(harnessOptions.files || {})
+            .filter(file => path.dirname(file) === dir).map(file => path.basename(file));
+          if (names.length === 0) throw new Error('ENOENT: ' + dir);
+          return names;
+        },
         statSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) {
             return { size: harnessOptions.files[file].length, mtimeMs: harnessOptions.mtimeMs || 1 };

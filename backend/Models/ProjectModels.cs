@@ -2,11 +2,15 @@ using System.Text.RegularExpressions;
 
 namespace AgentHub.Api.Models;
 
-public sealed record ProjectInfo(string Id, string Name, string? Color, int SortOrder);
+/// <param name="SecretIds">The stored secrets the project's sessions receive and the most they can
+/// narrow to (docs/session-secrets.md); empty = none.</param>
+public sealed record ProjectInfo(string Id, string Name, string? Color, int SortOrder,
+    IReadOnlyList<string>? SecretIds = null);
 
-public sealed record CreateProjectRequest(string Name, string? Color);
+public sealed record CreateProjectRequest(string Name, string? Color, List<string>? SecretIds = null);
 
-public sealed record UpdateProjectRequest(string? Name, string? Color, int? SortOrder);
+/// <param name="SecretIds">Replaces the secret selection; null = unchanged, empty = none.</param>
+public sealed record UpdateProjectRequest(string? Name, string? Color, int? SortOrder, List<string>? SecretIds = null);
 
 public static class ProjectValidation
 {

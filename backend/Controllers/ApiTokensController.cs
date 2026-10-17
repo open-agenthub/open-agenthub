@@ -83,7 +83,10 @@ public sealed class ApiTokensController : ControllerBase
         if (scope is null) return null;
         var accounts = await _sessions.ListProviderAccountsAsync(Owner, ct);
         var status = await _sessions.GetCredentialStatusAsync(Owner, ct);
-        return ApiTokenScope.Normalize(scope, accounts, status.GitPats);
+        var secrets = scope.Secrets is null
+            ? null
+            : (await _sessions.ListSessionSecretsAsync(Owner, ct)).Select(s => s.Id).ToList();
+        return ApiTokenScope.Normalize(scope, accounts, status.GitPats, secrets);
     }
 
     /// <summary>Format: "oah_" + 32 random bytes as lowercase hex.</summary>
