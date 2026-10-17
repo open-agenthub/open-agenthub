@@ -14,6 +14,15 @@ public interface IAgentCredentialPusher
     /// as an <c>account-switched</c> event instead of the generic "account switched"
     /// (docs/account-limits.md). Null keeps the generic line.</summary>
     Task PushAsync(string podIp, string callbackToken, AgentKind agent, byte[] file, string? reason, CancellationToken ct);
+
+    /// <summary>
+    /// Hands the pod the same login with tokens the hub renewed, installed without restarting the
+    /// agent (docs/provider-accounts.md, "The hub owns each login"). False when the pod cannot
+    /// take it that way — an image from before the route (404) or a CLI that would need a restart
+    /// (409) — which is never worth interrupting a session for.
+    /// </summary>
+    Task<bool> RefreshAsync(string podIp, string callbackToken, AgentKind agent, byte[] file, CancellationToken ct)
+        => Task.FromResult(false);
 }
 
 public sealed class AgentCredentialPusher : IAgentCredentialPusher
@@ -38,19 +47,35 @@ public sealed class AgentCredentialPusher : IAgentCredentialPusher
 
     public async Task PushAsync(string podIp, string callbackToken, AgentKind agent, byte[] file, string? reason, CancellationToken ct)
     {
-        var uri = new UriBuilder("http", podIp, _agentPort, "agenthub/credentials").Uri;
-        using var request = new HttpRequestMessage(HttpMethod.Put, uri);
-        request.Headers.Add("X-Agent-Token", callbackToken);
-        request.Headers.Add(ProviderHeader, agent.ToString().ToLowerInvariant());
+        using var request = Request(podIp, "agenthub/credentials", callbackToken, agent, file);
         // A header carries only Latin-1 safely; the labels in a reason can be anything, so the
         // text goes out percent-encoded and the pod decodes it.
         if (!string.IsNullOrWhiteSpace(reason)) request.Headers.Add(ReasonHeader, Uri.EscapeDataString(reason.Trim()));
-        request.Content = new ByteArrayContent(file);
-        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (!response.IsSuccessStatusCode)
             throw new HttpRequestException(
                 $"The session pod did not accept the credential (HTTP {(int)response.StatusCode}).",
                 null, response.StatusCode);
+    }
+
+    public async Task<bool> RefreshAsync(string podIp, string callbackToken, AgentKind agent, byte[] file, CancellationToken ct)
+    {
+        using var request = Request(podIp, "agenthub/credentials/refresh", callbackToken, agent, file);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (response.IsSuccessStatusCode) return true;
+        if (response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Conflict) return false;
+        throw new HttpRequestException(
+            $"The session pod did not accept the renewed credential (HTTP {(int)response.StatusCode}).",
+            null, response.StatusCode);
+    }
+
+    private HttpRequestMessage Request(string podIp, string path, string callbackToken, AgentKind agent, byte[] file)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Put, new UriBuilder("http", podIp, _agentPort, path).Uri);
+        request.Headers.Add("X-Agent-Token", callbackToken);
+        request.Headers.Add(ProviderHeader, agent.ToString().ToLowerInvariant());
+        request.Content = new ByteArrayContent(file);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        return request;
     }
 }

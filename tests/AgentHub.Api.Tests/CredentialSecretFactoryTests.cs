@@ -39,7 +39,7 @@ public class CredentialSecretFactoryTests
     {
         var json = agent switch
         {
-            AgentKind.Claude => "{\"claudeAiOauth\":{}}",
+            AgentKind.Claude => "{\"claudeAiOauth\":{\"accessToken\":\"synthetic-test-token-not-real\"}}",
             AgentKind.Codex => "{\"tokens\":{}}",
             AgentKind.OpenCode => "{\"opencode-go\":{\"type\":\"api\",\"key\":\"synthetic-key-not-real\"}}",
             AgentKind.OpenClaw => "{\"version\":1,\"profiles\":{\"anthropic:default\":{\"type\":\"api_key\",\"provider\":\"anthropic\",\"key\":\"synthetic-key-not-real\"}}}",

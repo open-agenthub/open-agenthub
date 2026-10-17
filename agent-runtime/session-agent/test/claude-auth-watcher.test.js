@@ -143,6 +143,32 @@ test('validCredential accepts only an object carrying a claudeAiOauth object', (
   assert.equal(validCredential(Buffer.alloc(MAX_CREDENTIAL_BYTES + 1, 0x20)), false);
 });
 
+// The shape Claude Code 2.1.287 writes over its own file when a refresh is answered with
+// invalid_grant (issue #116).
+const BLANKED = JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '', expiresAt: 0, scopes: ['user:inference'] } });
+
+test('validCredential rejects the file the CLI leaves behind after a rejected refresh', () => {
+  assert.equal(validCredential(Buffer.from(BLANKED)), false);
+  assert.equal(validCredential(Buffer.from(JSON.stringify({ claudeAiOauth: { accessToken: 'a', refreshToken: '' } }))), false);
+  assert.equal(validCredential(Buffer.from(JSON.stringify({ claudeAiOauth: {} }))), false);
+});
+
+test('a blanked credential file is never uploaded over the stored login', async () => {
+  const source = tempSource('.credentials.json');
+  fs.writeFileSync(source, fixture('restored-token'));
+  await withServer([], async (callbackUrl, requests) => {
+    const watcher = watchCredential({
+      source, callbackUrl, callbackToken: 'synthetic-callback-token', intervalMs: 60_000
+    });
+    await watcher.ready;
+    fs.writeFileSync(source, BLANKED);
+    await watcher.poll();
+    await watcher.flush();
+    watcher.stop();
+    assert.equal(requests.length, 0);
+  });
+});
+
 test('an oversized credential file is never uploaded', async () => {
   const source = tempSource('.credentials.json');
   fs.writeFileSync(source, fixture('restored-token'));

@@ -14,9 +14,13 @@ function validCredential(buffer) {
   if (!Buffer.isBuffer(buffer) || buffer.length === 0 || buffer.length > MAX_CREDENTIAL_BYTES) return false;
   try {
     const value = JSON.parse(buffer.toString('utf8'));
-    return value !== null && !Array.isArray(value) && typeof value === 'object' &&
-      value.claudeAiOauth !== null && !Array.isArray(value.claudeAiOauth) &&
-      typeof value.claudeAiOauth === 'object';
+    if (value === null || Array.isArray(value) || typeof value !== 'object') return false;
+    const oauth = value.claudeAiOauth;
+    if (oauth === null || Array.isArray(oauth) || typeof oauth !== 'object') return false;
+    // When the provider answers a refresh with invalid_grant, the CLI blanks its own file
+    // (empty tokens, expiresAt 0). Uploading that would overwrite the stored account, and every
+    // session started afterwards would come up logged out (issue #116).
+    return typeof oauth.accessToken === 'string' && oauth.accessToken !== '' && oauth.refreshToken !== '';
   } catch {
     return false;
   }

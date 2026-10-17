@@ -1120,3 +1120,59 @@ test('driver contract rejects credential hooks that are not functions', () => {
   assert.throws(() => validateDriver({ ...base, validCredential: true }), /validCredential/);
   assert.throws(() => validateDriver({ ...base, installCredential: {} }), /installCredential/);
 });
+
+// ---- PUT /agenthub/credentials/refresh: the same login with tokens the hub renewed -------------
+
+test('refresh route installs the renewed file without restarting a driver that reloads it live', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, { reloadsCredentialLive: true });
+  const body = '{"a":2}';
+
+  const response = await requestHttp(harness, 'PUT', '/agenthub/credentials/refresh', credentialHeaders, body);
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(JSON.parse(response.body), { installed: true, restarting: false });
+  const expectedHash = require('node:crypto').createHash('sha256').update(body).digest('hex');
+  assert.equal(harness.writes[0].file, path.join('/home/agent', '.agenthub', 'credential-baseline'));
+  assert.equal(harness.writes[0].data, expectedHash + '\n');
+  assert.equal(harness.writes[1].data.toString(), body);
+  assert.equal(harness.renames[0].to, path.resolve('/home/agent', '.test-agent', 'auth.json'));
+  assert.equal(harness.terminals[0].killed, false);
+  assert.equal(harness.terminals.length, 1);
+});
+
+test('refresh route refuses a driver whose CLI is not known to re-read its file, and checks like the swap', async () => {
+  const plain = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' });
+  const unsupported = await requestHttp(plain, 'PUT', '/agenthub/credentials/refresh', credentialHeaders, '{"a":1}');
+  assert.equal(unsupported.status, 409);
+  assert.match(unsupported.body, /live_reload_unsupported/);
+  assert.equal(plain.writes.length, 0);
+
+  const live = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, { reloadsCredentialLive: true });
+  const wrongToken = await requestHttp(live, 'PUT', '/agenthub/credentials/refresh',
+    { ...credentialHeaders, 'X-Agent-Token': 'wrong' }, '{"a":1}');
+  const otherProvider = await requestHttp(live, 'PUT', '/agenthub/credentials/refresh',
+    { ...credentialHeaders, 'X-Agent-Provider': 'other' }, '{"a":1}');
+  const junk = await requestHttp(live, 'PUT', '/agenthub/credentials/refresh', credentialHeaders, 'nope');
+  assert.deepEqual([wrongToken.status, otherProvider.status, junk.status], [401, 409, 400]);
+  assert.equal(live.writes.length, 0);
+});
+
+test('refresh route still installs after the agent exited, for whatever starts it next', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, { reloadsCredentialLive: true });
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+
+  const response = await requestHttp(harness, 'PUT', '/agenthub/credentials/refresh', credentialHeaders, '{"a":3}');
+
+  assert.equal(response.status, 200);
+  assert.equal(harness.renames.length, 1);
+});
+
+test('common transport validates reloadsCredentialLive when a driver declares it', () => {
+  const base = {
+    name: 'Example', stateDir: '.example', authFilename: 'auth.json',
+    attachmentCapabilities: { nativeImages: false, localImagePaths: true, mcpImages: true },
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
+  };
+  assert.throws(() => validateDriver({ ...base, reloadsCredentialLive: 'yes' }), /reloadsCredentialLive must be a boolean/);
+  assert.equal(validateDriver({ ...base, reloadsCredentialLive: true }).reloadsCredentialLive, true);
+});

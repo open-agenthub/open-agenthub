@@ -38,6 +38,16 @@ public sealed class ProviderAccount
     public DateTime? ExhaustedUntil { get; set; }
     /// <summary>What reported the limit (a rate-limit window, the CLI line that matched).</summary>
     public string? ExhaustedReason { get; set; }
+    /// <summary>When the hub last renewed the login's tokens itself (docs/provider-accounts.md,
+    /// "The hub owns each login"). Keeps a provider whose tokens live shorter than the refresh
+    /// margin from being refreshed on every pass.</summary>
+    public DateTime? RefreshedAt { get; set; }
+    /// <summary>
+    /// When the provider refused the stored refresh token. From then on the refresher leaves the
+    /// account alone — retrying a spent token cannot succeed — until a new file for it arrives,
+    /// which clears the mark: a sign-in in a session, or a newer token from a pod.
+    /// </summary>
+    public DateTime? LoginRejectedAt { get; set; }
 }
 
 /// <summary>
@@ -48,7 +58,8 @@ public sealed class ProviderAccount
 public sealed record ProviderAccountInfo(
     string Id, string Label, string? Email, string? Organization,
     DateTime CreatedAt, DateTime? LastUsedAt, bool IsDefault,
-    DateTime? ExhaustedUntil = null, string? ExhaustedReason = null, bool IsExhausted = false)
+    DateTime? ExhaustedUntil = null, string? ExhaustedReason = null, bool IsExhausted = false,
+    bool NeedsLogin = false)
 {
     public static ProviderAccountInfo From(ProviderAccount account, DateTime? now = null)
     {
@@ -56,7 +67,8 @@ public sealed record ProviderAccountInfo(
         return new(
             account.Id, account.Label, account.Identity?.Email, account.Identity?.Organization,
             account.CreatedAt, account.LastUsedAt, account.IsDefault,
-            exhausted ? account.ExhaustedUntil : null, exhausted ? account.ExhaustedReason : null, exhausted);
+            exhausted ? account.ExhaustedUntil : null, exhausted ? account.ExhaustedReason : null, exhausted,
+            account.LoginRejectedAt is not null);
     }
 }
 
