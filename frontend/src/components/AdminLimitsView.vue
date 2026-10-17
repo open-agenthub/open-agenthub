@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api.js'
+import { errorText } from '../lib/errors.js'
 import { agentOptions } from '../lib/agent.js'
 import { isLicenseError } from '../lib/license.js'
 import { formatCost } from '../lib/usage.js'
@@ -35,7 +36,7 @@ onMounted(load)
 // them — on load or on a later save, once the license lapsed — swaps the pane for the gate.
 function fail(e) {
   if (isLicenseError(e)) needsLicense.value = true
-  else error.value = String(e.message || e)
+  else error.value = errorText(e)
 }
 
 const globalLimit = computed(() => limits.value.find(l => l.scope === 'global'))
@@ -80,10 +81,26 @@ async function removeLimit(l) {
   await run(async () => { await api.eeDeleteLimit(l.scope, l.target); return limits.value.filter(x => !(x.scope === l.scope && x.target === l.target)) })
 }
 
+const newGroup = ref('')
+const newGroupRole = ref('admin')
+
+// Free entry: a group nobody has signed in with yet still gets a mapping, so the first
+// member of e.g. a new admin group is an admin on their very first request.
+async function addGroupRole() {
+  const name = newGroup.value.trim()
+  if (!name) { error.value = 'Enter a group name.'; return }
+  await setRole(name, newGroupRole.value)
+  if (!error.value) newGroup.value = ''
+}
+
 async function setRole(group, role) {
   busy.value = true; error.value = ''
   try { groups.value = await api.eeSetGroupRole(group, role || null) }
-  catch (e) { fail(e) }
+  catch (e) {
+    fail(e)
+    // A refused change (409: it would leave no admin) must not stay visible in the select.
+    try { groups.value = await api.eeListGroups() } catch { /* the error above already shows */ }
+  }
   finally { busy.value = false }
 }
 
@@ -136,7 +153,7 @@ async function saveAllowedAgents() {
 
       <div class="card block" data-group-roles>
         <div class="block-head">Groups &amp; roles</div>
-        <p class="muted intro">Groups are read from the <code>groups</code> claim of the OAuth token at sign-in. Members of an <b>admin</b> group get access to this admin area.</p>
+        <p class="muted intro">Groups are read from the OAuth token at sign-in (claim <code>Ee:Groups:Claim</code>, default <code>groups</code>). Members of an <b>admin</b> group get access to this admin area; a <b>user</b> group only labels its members and does not restrict sign-in. Admin wins when someone is in both, and a role set for a user under <i>Users &amp; seats</i> wins over every group.</p>
         <div v-for="g in groups" :key="g.name" class="rowline bordered" :data-group-row="g.name">
           <span class="grow mono">{{ g.name }}</span>
           <span class="members">{{ g.memberCount }} member{{ g.memberCount === 1 ? '' : 's' }}</span>
@@ -147,6 +164,11 @@ async function saveAllowedAgents() {
           </select>
         </div>
         <p v-if="!groups.length" class="muted">No groups seen yet — they appear after users sign in with a token that carries a groups claim.</p>
+        <div class="rowline add">
+          <input v-model="newGroup" class="grow" placeholder="group name (as the IdP sends it)" data-new-group />
+          <select v-model="newGroupRole"><option value="admin">admin</option><option value="user">user</option></select>
+          <button class="sm" :disabled="busy" data-add-group-role @click="addGroupRole">Map</button>
+        </div>
       </div>
 
       <div class="card block" data-allowed-agents>

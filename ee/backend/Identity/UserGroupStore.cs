@@ -126,6 +126,31 @@ public sealed class UserGroupStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    /// <summary>The owner's groups that carry a role mapping, as (group, role) pairs.</summary>
+    public async Task<IReadOnlyList<(string Group, string Role)>> GetMappedGroupsAsync(string owner, CancellationToken ct = default)
+    {
+        const string sql = """
+            SELECT ug.group_name, gr.role FROM user_groups ug
+            JOIN group_roles gr ON gr.group_name = ug.group_name
+            WHERE ug.owner = @o
+            ORDER BY ug.group_name
+            """;
+        await using var cmd = _db.CreateCommand(sql);
+        cmd.Parameters.AddWithValue("o", owner);
+        var list = new List<(string, string)>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct)) list.Add((r.GetString(0), r.GetString(1)));
+        return list;
+    }
+
+    /// <summary>The role currently mapped to a group, or null.</summary>
+    public async Task<string?> GetGroupRoleAsync(string group, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("SELECT role FROM group_roles WHERE group_name = @g");
+        cmd.Parameters.AddWithValue("g", group);
+        return await cmd.ExecuteScalarAsync(ct) as string;
+    }
+
     /// <summary>True when the owner belongs to a group mapped to the admin role.</summary>
     public async Task<bool> IsInAdminGroupAsync(string owner, CancellationToken ct = default)
     {
