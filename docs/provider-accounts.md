@@ -106,6 +106,8 @@ decides which account the upload belongs to, in this order:
    account rotating its token. Update it in place. This is the common case and the one the
    refresh-token rotation makes mandatory — a token Anthropic hands out replaces the one it was
    redeemed with, so the account must track it or it dies.
+   For Claude the upload must not be older than the stored file (newer wins, by `expiresAt`;
+   see "The hub owns each login").
 2. **The session has an account mounted but the identity key differs**: the user ran `/login`
    inside the session and signed in as someone else. Overwriting the mounted account would
    silently rename it; instead a new account is created and the session's `credential_id` is moved
@@ -235,6 +237,110 @@ conditional per provider.
 The restart reuses the server's existing "retry fresh" path for a resume the CLI does not
 recognise: a swap whose resume fails for a provider that cannot find its session starts the agent
 fresh exactly once, as a cross-pod resume already does, rather than leaving the pod with no agent.
+
+The reservation above is about moving a session to a *different* account. Installing new tokens
+of the *same* login does not have it — the organisation metadata does not change — and since issue
+#116 that case is verified and handled without a restart; see the next section.
+
+## The hub owns each login (Claude)
+
+### What went wrong
+
+Stored Claude logins expired: a session failed seconds after start with "OAuth session expired and
+could not be refreshed", and the account had to be linked again. Issue #116 has the full
+investigation. It was done against the pinned CLI (2.1.287) and a local mock of the token, profile
+and Messages endpoints with single-use refresh tokens; no real login was involved. In short:
+
+- The CLI refreshes on its own when its access token is within **five minutes** of expiry. Each
+  refresh hands out a new refresh token and spends the old one. The CLI's own code assumes this:
+  it saves with a compare-and-swap on the refresh token it redeemed and keeps a list of known dead
+  tokens.
+- Every session of an account starts from the same stored file. The first session to refresh
+  spends the refresh token that all the others hold. The next one to refresh is answered
+  `invalid_grant`, prints exactly the error above, and **overwrites its own credential file with
+  empty tokens and `expiresAt: 0`**.
+- The watcher uploaded that blanked file, and the backend stored it over the account: the
+  validator only checked that `claudeAiOauth` was an object, and the last upload always won.
+  Every session started afterwards came up with no token.
+- The secret was written with a plain replace, so two writebacks landing together lost one of
+  them, which could be a rotation.
+- Nothing refreshed a login that no session used. Refresh tokens have a lifetime of their own; the
+  CLI parses `refresh_token_expires_in`, but its real value cannot be measured without a real login.
+
+Ruled out: the CLI does refresh a restored, expired access token before its first request.
+PR #58, which flushes the watcher on pod stop, was necessary but not enough: it keeps a rotation,
+but not one rotation per session.
+
+### What the hub does now
+
+The backend is the one party that spends refresh tokens:
+
+1. **A refresher** (`ClaudeLoginRefresher`, every five minutes) renews every stored Claude account
+   whose access token expires within 60 minutes. That includes accounts no session uses. It holds
+   a Postgres advisory lock per login, so two backend replicas never redeem the same refresh
+   token. It writes the result only if the account still holds the refresh token it redeemed,
+   the same compare-and-swap the CLI does. The 60 minutes are far ahead of the CLI's five, so a
+   session whose hub is up never gets to refresh on its own. The request is the one the CLI
+   sends: a JSON body with `grant_type=refresh_token`, the refresh token, the CLI's client id and
+   the stored scopes. Every other field of the file is kept as it was.
+2. **The new file goes into every running session of the account** through
+   `PUT /agenthub/credentials/refresh` on the session agent. This route writes the watcher baseline
+   and the file exactly like the swap route, but **does not restart the agent**. Only drivers that
+   declare `reloadsCredentialLive` accept it; that is Claude. It was verified on the real CLI:
+   - turn 1 used the old access token;
+   - the file was replaced by rename and the old token revoked at the mock;
+   - turn 2 went out with the new token, with no 401 and no refresh of its own.
+
+   A restart would have cost the user the running turn every few hours, for nothing. A pod from an
+   older image answers 404 here and is left as it is.
+3. **Writeback is newer-wins.** For Claude, an upload whose `expiresAt` is earlier than the stored
+   file's is an older generation of the login. Its refresh token is already spent, so the stored
+   file is kept. A blanked file is refused twice: by the watcher, which no longer uploads it, and
+   by the validator, which refuses an empty access token or an empty refresh token. A newer upload
+   is still taken: a pod that refreshed on its own because the hub was down, or a sign-in in a
+   session. It then goes to the account's other running sessions, and a session whose upload lost
+   gets the stored file back.
+4. **All writes of a provider secret are conditional.** They carry the resourceVersion of the
+   read and are retried from a fresh read on a 409. That covers writebacks, label edits,
+   usage-limit marks and switches as well as the refresher.
+5. **A refresh answered with `invalid_grant` marks the account** (`loginRejectedAt`, shown as
+   `needsLogin` in the account listing). The refresher stops trying until a new file for the
+   account arrives; retrying a spent token cannot succeed. A network error, a 5xx or any other
+   400 (`invalid_scope`) is retried next pass. A mistake on the hub's side must never mark a
+   working login as needing a sign-in.
+
+Token values are never logged. The token client logs no requests, the provider's error
+description is dropped, and only the OAuth error code, in its snake_case form, reaches a log line.
+
+Configuration (`AgentHub:ClaudeLoginRefresh`): `Enabled`, `Margin` (60 min), `Interval` (5 min),
+`MinInterval` (15 min: a login renewed this recently is skipped, so tokens that live shorter than
+the margin are not renewed on every pass), `TokenUrl` and `ClientId`. The last two default to the
+values the pinned CLI uses and exist for a CLI bump that moves them.
+
+### Alternatives that were rejected
+
+- **`claude setup-token`.** It was read in the 2.1.287 bundle:
+  - It runs the browser OAuth flow (an authorize URL, then a pasted code) asking for a one-year
+    token with the scope `user:inference` only. A person has to be in a browser for every token,
+    so it cannot run in the background, which was the point.
+  - The CLI itself calls such tokens inference-only. Remote Control refuses them, the browser
+    integration is disabled for them, and the profile endpoint needs `user:profile`. So the plan
+    and organisation the account list shows would be gone.
+  - It has no refresh token. After a year it is dead, and a person is needed again.
+
+  It moves the problem a year out instead of solving it.
+- **Leave refreshing to the sessions and only add newer-wins to the writeback.** That fixes the
+  stored account, not the sessions. With rotation, two sessions on one login still spend each
+  other's tokens: whichever refreshes second fails mid-session. Nothing renews a login no session
+  uses. Newer-wins is kept, but as the fallback for when the hub is down.
+- **Push the renewed file through the existing swap route.** That restarts the agent with resume.
+  It is correct for a different account, whose organisation metadata changes. For the same login
+  it interrupts a running turn every few hours, for a token the CLI picks up by itself.
+- **Stop the CLI from refreshing at all** (no refresh token in the pod's file). The CLI then fails
+  as soon as its access token expires whenever the hub is late: during a backend outage, or in a
+  pod it cannot reach. The hub refreshing first is enough to keep the CLI from refreshing. Keeping
+  the refresh token in the pod keeps a session alive through an outage, and newer-wins brings its
+  rotation back.
 
 ## What is deliberately not done
 

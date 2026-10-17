@@ -24,6 +24,11 @@ public class ProviderCredentialValidatorTests
     [InlineData(AgentKind.Claude, "{\"tokens\":{}}", false)]
     [InlineData(AgentKind.Codex, "{\"claudeAiOauth\":{}}", false)]
     [InlineData(AgentKind.Claude, "{\"accessToken\":\"x\"}", false)]
+    [InlineData(AgentKind.Claude, "{\"claudeAiOauth\":{}}", false)]
+    // What Claude Code 2.1.287 leaves behind after a refresh answered with invalid_grant.
+    [InlineData(AgentKind.Claude, "{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"\",\"expiresAt\":0}}", false)]
+    [InlineData(AgentKind.Claude, "{\"claudeAiOauth\":{\"accessToken\":\"x\",\"refreshToken\":\"\"}}", false)]
+    [InlineData(AgentKind.Claude, "{\"claudeAiOauth\":{\"accessToken\":\"x\",\"refreshToken\":\"r\",\"expiresAt\":1}}", true)]
     [InlineData(AgentKind.Cursor, "{\"tokens\":{}}", false)]
     [InlineData(AgentKind.Cursor, "{\"accessToken\":\"\"}", false)]
     [InlineData(AgentKind.Cursor, "{\"cursorAuth\":{\"accessToken\":\"x\"}}", false)]

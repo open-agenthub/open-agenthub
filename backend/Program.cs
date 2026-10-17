@@ -233,6 +233,18 @@ builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepServic
 builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
 builder.Services.AddHostedService<SessionExpirySweepService>();
 
+// The hub renews every stored Claude login before it expires and hands the new tokens to the
+// running sessions on it (docs/provider-accounts.md, "The hub owns each login", issue #116).
+var claudeLoginRefresh = builder.Configuration.GetSection("AgentHub:ClaudeLoginRefresh")
+    .Get<ClaudeLoginRefreshOptions>() ?? new ClaudeLoginRefreshOptions();
+builder.Services.AddSingleton(claudeLoginRefresh);
+builder.Services.AddSingleton<IProviderLoginRepository>(sp => (KubernetesSessionService)sp.GetRequiredService<ISessionService>());
+builder.Services.AddSingleton<IProviderLoginLock, PostgresProviderLoginLock>();
+builder.Services.AddHttpClient<IClaudeTokenEndpoint, ClaudeTokenEndpoint>().RemoveAllLoggers();
+builder.Services.AddSingleton<ClaudeLoginRefresher>();
+builder.Services.AddSingleton<IClaudeLoginSync>(sp => sp.GetRequiredService<ClaudeLoginRefresher>());
+builder.Services.AddHostedService<ClaudeLoginRefreshService>();
+
 // Runtime network port requests: agents ask for extra ports (agenthub_network MCP),
 // the owner approves via the permission channel, approved ports become NetworkPolicies.
 builder.Services.AddSingleton<AgentHub.Api.Network.IPortGrantStore, AgentHub.Api.Network.PortGrantStore>();

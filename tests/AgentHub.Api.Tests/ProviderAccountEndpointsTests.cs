@@ -80,6 +80,35 @@ public sealed class ProviderAccountEndpointsTests
         Assert.Equal(1, service.StoreCalls);
     }
 
+    [Fact]
+    public async Task Writeback_RefusesTheBlankedFileTheCliLeavesAfterARejectedRefresh()
+    {
+        var service = new RecordingSessionService { ReturnAccountId = "mounted1" };
+        var sync = new RecordingLoginSync();
+        var controller = Internal(new CallbackSessionStore(Session(credentialId: "mounted1")), service,
+            "{\"claudeAiOauth\":{\"accessToken\":\"\",\"refreshToken\":\"\",\"expiresAt\":0}}", loginSync: sync);
+
+        var result = await controller.ProviderCredentials("session-1", "claude", CancellationToken.None);
+
+        Assert.IsType<BadRequestResult>(result);
+        Assert.Equal(0, service.StoreCalls);
+        Assert.Empty(sync.Calls);
+    }
+
+    [Fact]
+    public async Task Writeback_HandsTheStoredLoginOnToTheAccountsSessions()
+    {
+        var service = new RecordingSessionService { ReturnAccountId = "mounted1" };
+        var sync = new RecordingLoginSync();
+        const string body = "{\"claudeAiOauth\":{\"accessToken\":\"t\",\"refreshToken\":\"r\"}}";
+        var controller = Internal(new CallbackSessionStore(Session(credentialId: "mounted1")), service, body, loginSync: sync);
+
+        await controller.ProviderCredentials("session-1", "claude", CancellationToken.None);
+
+        var call = Assert.Single(sync.Calls);
+        Assert.Equal(("session-1", "mounted1", body), (call.Session, call.Account, call.Body));
+    }
+
     // ------------------------------------------------------------------ account endpoints
 
     [Fact]
@@ -172,9 +201,9 @@ public sealed class ProviderAccountEndpointsTests
     };
 
     private static InternalController Internal(CallbackSessionStore store, RecordingSessionService service, string body,
-        AgentKind agent = AgentKind.Claude, string? identityHeader = null)
+        AgentKind agent = AgentKind.Claude, string? identityHeader = null, IClaudeLoginSync? loginSync = null)
     {
-        var controller = new InternalController(store, [], service, null!, [], [], null!, null!);
+        var controller = new InternalController(store, [], service, null!, [], [], null!, null!, loginSync: loginSync);
         controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
         controller.Request.Headers["X-Agent-Token"] = "callback-token";
         if (identityHeader is not null) controller.Request.Headers[ProviderAccountIdentityReader.HeaderName] = identityHeader;
@@ -193,6 +222,17 @@ public sealed class ProviderAccountEndpointsTests
             }
         };
         return controller;
+    }
+
+    private sealed class RecordingLoginSync : IClaudeLoginSync
+    {
+        public List<(string Session, string Account, string Body)> Calls { get; } = new();
+
+        public Task SyncAfterWritebackAsync(SessionRecord session, string accountId, byte[] uploaded, CancellationToken ct)
+        {
+            Calls.Add((session.Id, accountId, Encoding.UTF8.GetString(uploaded)));
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class CallbackSessionStore(SessionRecord session) : ISessionStore

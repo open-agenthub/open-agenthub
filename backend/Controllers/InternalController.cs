@@ -40,6 +40,7 @@ public sealed class InternalController : ControllerBase
     private readonly ISessionMessageStore? _messages;
     private readonly ISessionMessageDelivery? _delivery;
     private readonly IAccountFailover? _accountFailover;
+    private readonly IClaudeLoginSync? _loginSync;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
@@ -47,8 +48,10 @@ public sealed class InternalController : ControllerBase
         ILibraryAccess library, IBrowserService? browsers = null, bool? spawnMcpEnabled = null,
         IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null,
         IUsageStore? usage = null, ISessionMessageStore? messages = null,
-        ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null)
+        ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null,
+        IClaudeLoginSync? loginSync = null)
     {
+        _loginSync = loginSync;
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
         _library = library;
@@ -185,6 +188,10 @@ public sealed class InternalController : ControllerBase
         // login of a session that had none, re-points the session so later rotations land there.
         if (accountId is not null && accountId != rec.CredentialId)
             await _store.SetCredentialIdAsync(rec.Id, accountId, ct);
+        // Not awaited: the pod's watcher is waiting on this answer, and handing a login to the
+        // account's other pods can take each of them up to the push timeout.
+        if (accountId is not null && _loginSync is not null)
+            _ = _loginSync.SyncAfterWritebackAsync(rec, accountId, System.Text.Encoding.UTF8.GetBytes(json), CancellationToken.None);
         return NoContent();
     }
 
