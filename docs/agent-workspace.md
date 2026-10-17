@@ -1,8 +1,9 @@
 # One session, two surfaces
 
 The session's **Workspace** tab puts the conversation above a docked composer and an optional
-agent terminal or shell. **Terminal**, **Shell**, and **Transcript** remain available for terminal
-sessions. Switching
+agent terminal or shell. **Terminal** and **Shell** remain available for terminal sessions; the
+saved conversation is read in the Workspace only (the Transcript tab was removed, see
+`transcripts.md`). Switching
 surfaces does not change the session's execution mode, start another provider, or replay a task.
 
 ## UI provenance
@@ -78,10 +79,10 @@ Three adjustments came with the merge:
   (`chat` for Claude in the Workspace, `terminal` otherwise) and the session opens on the
   surface that was picked; see `session-mode-conversion.md`.
 - **A failed history load is an error with Retry**, not main's "[no saved transcript]". In the
-  Transcript tab the two looked the same; in the Workspace an empty conversation over a running
+  former Transcript tab the two looked the same; in the Workspace an empty conversation over a running
   agent reads as "nothing happened yet", and a 503 must not say that.
 - **The session title keeps at least 240 px.** The bar now holds the account picker, Files,
-  four tabs and the actions; with the title allowed to shrink to nothing, it was cut to its
+  the tabs and the actions; with the title allowed to shrink to nothing, it was cut to its
   first letter on a phone and to "Works…" at 1440 px. The controls wrap onto a second line
   instead.
 

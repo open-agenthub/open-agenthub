@@ -19,7 +19,7 @@ public static class SessionTranscripts
     }
 
     /// <summary>
-    /// One page for the web app's Transcript tab. Null when the session is unknown.
+    /// One page for the web app's Workspace. Null when the session is unknown.
     /// </summary>
     public static async Task<ConversationPage?> PageAsync(
         ISessionService sessions, string owner, string id, string phase, int? offset, int? max, CancellationToken ct)
