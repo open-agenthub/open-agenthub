@@ -77,7 +77,7 @@ public sealed class RemoteReadHttpPostgresTests
         var library = new LibraryAccessService(catalog, new InMemorySkillStore(),
             new FakeLibraryShareReader(), new FakeEnterpriseLicense(false));
         var sessions = DispatchProxy.Create<ISessionService, SessionReads>();
-        ((SessionReads)(object)sessions).Store = db.Sessions;
+        ((SessionReads)sessions).Store = db.Sessions;
         var builder = WebApplication.CreateBuilder();
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
