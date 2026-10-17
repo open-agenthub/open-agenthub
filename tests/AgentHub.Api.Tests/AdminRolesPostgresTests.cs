@@ -51,7 +51,8 @@ public class AdminRolesPostgresTests
         var audit = await db.Roles.ListAuditAsync(10);
 
         Assert.Equal(["leads", "bob"], audit.Select(a => a.Subject));
-        Assert.Equal(("group", "admin", (string?)null), (audit[0].SubjectKind, audit[0].OldRole, audit[0].NewRole));
+        Assert.Equal(("group", "admin"), (audit[0].SubjectKind, audit[0].OldRole));
+        Assert.Null(audit[0].NewRole);
         Assert.Equal("alice", audit[1].Actor);
     }
 
@@ -105,8 +106,8 @@ public class AdminRolesPostgresTests
         Assert.Equal(("user", RoleSources.Default), Row(body, "alice"));
         Assert.False(await access.IsAdminAsync("alice")); // takes effect on the next request
         var entry = Assert.Single(await db.Roles.ListAuditAsync(10));
-        Assert.Equal(("alice", "user", "bob", (string?)null, "admin"),
-            (entry.Actor, entry.SubjectKind, entry.Subject, entry.OldRole, entry.NewRole));
+        Assert.Equal(("alice", "user", "bob", "admin"), (entry.Actor, entry.SubjectKind, entry.Subject, entry.NewRole));
+        Assert.Null(entry.OldRole);
     }
 
     [PostgreSqlFact]
@@ -191,8 +192,8 @@ public class AdminRolesPostgresTests
         Assert.IsType<OkObjectResult>(await controller.SetGroupRole("%2Fteam%2Fsub", new("user"), default));
         Assert.Equal("user", await db.Groups.GetGroupRoleAsync("team/sub"));
         var entry = (await db.Roles.ListAuditAsync(10)).Single(a => a.Subject == "staff");
-        Assert.Equal(("alice", "group", "staff", (string?)null, "user"),
-            (entry.Actor, entry.SubjectKind, entry.Subject, entry.OldRole, entry.NewRole));
+        Assert.Equal(("alice", "group", "staff", "user"), (entry.Actor, entry.SubjectKind, entry.Subject, entry.NewRole));
+        Assert.Null(entry.OldRole);
     }
 
     private static (string, string) Row(AdminRolesController.RolesOverview body, string owner)
