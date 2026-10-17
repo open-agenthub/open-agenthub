@@ -36,7 +36,7 @@ const nativePage = entries => ({
 
 function mountView(props = {}) {
   return mount(TerminalView, {
-    props: { session, ...props },
+    props: { session, initialUi: 'terminal', ...props },
     global: {
       stubs: {
         TerminalPane: true,
@@ -141,13 +141,14 @@ describe('transcript tab', () => {
     expect(wrapper.findAll('.transcript-bubble')).toHaveLength(0)
   })
 
-  it('shows the empty state rather than an error when the request fails', async () => {
+  it('shows a retryable error instead of reporting missing history when the request fails', async () => {
     mocks.api.getConversation.mockRejectedValue(new Error('503'))
     const wrapper = mountView()
 
     await openTranscript(wrapper)
 
-    expect(wrapper.find('.transcript-state').text()).toBe('[no saved transcript]')
+    expect(wrapper.find('[role=alert]').text()).toContain('Could not load the conversation.')
+    expect(wrapper.find('[role=alert] button').text()).toBe('Retry')
   })
 
   describe('while the session runs', () => {

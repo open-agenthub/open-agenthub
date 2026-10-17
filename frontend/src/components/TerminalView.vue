@@ -2,8 +2,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
-import ChatPane from './ChatPane.vue'
+import WorkspaceStream from './workspace/WorkspaceStream.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
+import ConversationTimeline from './workspace/ConversationTimeline.vue'
+import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
@@ -16,20 +18,31 @@ import { renderMarkdown } from '../lib/markdown.js'
 import { renderMermaidBlocks } from '../lib/mermaid.js'
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
+import { preferredUi } from '../lib/ui-preference.js'
 
-const props = defineProps({ session: Object, sharedToken: { type: String, default: null } })
-defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
+const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
+const emit = defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 // A stopped autonomous run is offered as an interactive continuation next to the plain Resume;
 // the backend's own flag decides, so the card never appears where the call would answer 409.
 const showConvert = computed(() => !props.sharedToken && capabilities.value.canManage && canConvert(props.session))
 const converted = computed(() => convertedLabel(props.session))
-// Chat sessions render the structured stream; their agent pane already replays
-// history, so the raw Transcript tab stays terminal-only.
+// Older 'chat' records use the streaming transport, now rendered only in Workspace.
 const isChat = computed(() => props.session?.uiMode === 'chat')
-const activeTab = ref('agent')
-watch(isChat, chat => { if (chat && activeTab.value === 'transcript') activeTab.value = 'agent' })
+const activeTab = ref(isChat.value || (props.initialUi || preferredUi()) === 'workspace' ? 'workspace' : 'agent')
+const modern = computed(() => activeTab.value === 'workspace')
+const workspaceOpened = ref(activeTab.value === 'workspace')
+const conversationVisible = computed(() => activeTab.value === 'transcript' || (modern.value && !isChat.value))
+const terminalOpened = ref(false)
+const drawerKind = ref('agent')
+const agentTerminal = ref(null)
+const composer = ref(null)
+const transcriptError = ref('')
+const transcriptBusy = ref(false)
+const canCompose = computed(() => capabilities.value.canWrite && isLive.value &&
+  String(props.session?.mode).toLowerCase() === 'interactive' && statuses.agent === 'connected')
+watch(isChat, chat => { if (chat) activeTab.value = 'workspace' })
 const shellOpened = ref(false)
 const shareOpen = ref(false)
 // The Transcript tab's page: null until first loaded. `source` is 'native' (role-tagged turns
@@ -248,6 +261,7 @@ async function confirmAccountSwitch() {
 }
 
 onMounted(() => {
+  if (conversationVisible.value) void loadTranscript()
   refreshPermissions()
   refreshMessages()
   loadAccounts()
@@ -259,6 +273,11 @@ watch(() => props.session?.id, () => {
   agentMessages.value = []
   dismissedMessages.value = new Set()
   conversation.value = null
+  transcriptError.value = ''
+  terminalOpened.value = false
+  shellOpened.value = false
+  drawerKind.value = 'agent'
+  statuses.agent = 'connecting…'
   switchedTo.value = ''
   pendingAccountId.value = ''
   accountNote.value = ''
@@ -266,7 +285,7 @@ watch(() => props.session?.id, () => {
   refreshPermissions()
   refreshMessages()
   loadAccounts()
-  if (activeTab.value === 'transcript') loadTranscript()
+  if (conversationVisible.value) loadTranscript()
 })
 // The session agent uploads once more as it exits; one final fetch after the phase settles
 // picks that tail up instead of leaving the tab on the last live poll.
@@ -283,13 +302,28 @@ async function fetchConversation(offset) {
 
 async function loadTranscript() {
   const sessionId = props.session?.id
+  const token = props.sharedToken
+  transcriptBusy.value = true
+  transcriptError.value = ''
   try {
     const page = await fetchConversation()
-    if (sessionId !== props.session?.id) return
+    if (sessionId !== props.session?.id || token !== props.sharedToken) return
     conversation.value = conversationState(page)
+    // Finished conversations can span more than one page too. Drain the saved history
+    // without waiting for the live-session poll, which never runs after completion.
+    while (conversation.value.nextOffset < conversation.value.length) {
+      const current = conversation.value
+      const next = await fetchConversation(current.nextOffset)
+      if (sessionId !== props.session?.id || token !== props.sharedToken || conversation.value !== current) return
+      const merged = mergeConversationPage(current, next)
+      if (!merged || merged.nextOffset <= current.nextOffset) break
+      conversation.value = merged
+    }
   } catch {
     if (sessionId !== props.session?.id) return
-    conversation.value = { source: 'scrollback', entries: [], text: '', nextOffset: 0, length: 0 }
+    transcriptError.value = 'Could not load the conversation.'
+  } finally {
+    if (sessionId === props.session?.id && token === props.sharedToken) transcriptBusy.value = false
   }
 }
 
@@ -299,7 +333,8 @@ async function loadTranscript() {
 // hub one small page while a push would still need the same read to find out what is new.
 async function refreshTranscript(force = false) {
   const current = conversation.value
-  if (!current || activeTab.value !== 'transcript' || (!isLive.value && !force)) return
+  if (transcriptBusy.value || !conversationVisible.value || (!isLive.value && !force)) return
+  if (!current) return loadTranscript()
   const sessionId = props.session?.id
   try {
     const page = await fetchConversation(current.nextOffset)
@@ -311,13 +346,35 @@ async function refreshTranscript(force = false) {
 }
 
 async function selectTab(tab) {
+  if (tab === 'workspace') workspaceOpened.value = true
   if (tab === 'shell') shellOpened.value = true
   activeTab.value = tab
-  if (tab === 'transcript' && conversation.value === null) await loadTranscript()
+  if (conversationVisible.value && conversation.value === null && !transcriptBusy.value) await loadTranscript()
+}
+
+// The session keeps its id, so this view is not remounted and initialUi is not read again:
+// the surface the person picked on the card is selected here.
+function onConverted(id, surface) {
+  selectTab(surface === 'terminal' ? 'agent' : 'workspace')
+  emit('converted', id, surface)
+}
+
+function toggleDrawer(kind) {
+  if (kind === 'shell') shellOpened.value = true
+  terminalOpened.value = !(terminalOpened.value && drawerKind.value === kind)
+  drawerKind.value = kind
+}
+function sendWorkspaceMessage(text) {
+  if (!canCompose.value || !agentTerminal.value) throw new Error('Agent is disconnected. Your draft is still here.')
+  return agentTerminal.value.submitMessage(text)
+}
+function interruptWorkspaceAgent() {
+  if (!canCompose.value || !agentTerminal.value) throw new Error('Agent is disconnected')
+  return agentTerminal.value.interruptAgent()
 }
 </script>
 <template>
-  <div class="term-wrap">
+  <div class="term-wrap" :class="{ 'modern-workspace': modern }">
     <div class="term-bar">
       <button v-if="!sharedToken" class="back" title="Back" @click="$emit('back')">‹</button>
       <div class="head-main">
@@ -345,7 +402,8 @@ async function selectTab(tab) {
       </label>
       <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
       <nav class="tabs">
-        <button :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">{{ tabLabel('agent') }}</button>
+        <button :class="{ on: modern }" data-open-workspace @click="selectTab('workspace')">Workspace</button>
+        <button v-if="!isChat" :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">Terminal</button>
         <button v-if="isLive && capabilities.canShell" :class="{ on: activeTab === 'shell' }" @click="selectTab('shell')">{{ tabLabel('shell') }}</button>
         <button v-if="!isChat" :class="{ on: activeTab === 'transcript' }" @click="selectTab('transcript')">Transcript</button>
       </nav>
@@ -357,13 +415,13 @@ async function selectTab(tab) {
         <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
-      <span class="status">{{ statuses[activeTab] }}</span>
+      <span class="status">{{ modern ? statuses.agent : statuses[activeTab] }}</span>
       <div v-if="shareOpen" class="share-pop">
         <div class="share-head"><span>Share session</span><button class="ghost" @click="shareOpen = false">✕</button></div>
         <ShareSessionDialog embedded :session="session" @close="shareOpen = false" />
       </div>
     </div>
-    <ConvertSessionCard v-if="showConvert" :session="session" @converted="$emit('converted', $event)" />
+    <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
       <div class="perm-text">
@@ -403,7 +461,7 @@ async function selectTab(tab) {
       </div>
     </div>
     <div v-if="session.questionPending && capabilities.canWrite" class="asking">
-      <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ isChat ? 'below' : 'in the terminal below' }}.
+      <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ modern || isChat ? 'below' : 'in the terminal below' }}.
     </div>
     <div v-if="autoApprove && isLive && capabilities.canManage && !sharedToken" class="perm auto-on">
       <span class="ask-dot"></span>
@@ -477,13 +535,31 @@ async function selectTab(tab) {
     </div>
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
       <div class="terminal-stack">
-        <ChatPane v-if="isChat" v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
-        <TerminalPane v-else v-show="activeTab === 'agent'" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :active="activeTab === 'agent'" @status="statuses.agent = $event" />
-        <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell'" :session="session" kind="shell" :active="activeTab === 'shell'" @status="statuses.shell = $event" />
+        <ConversationTimeline v-if="modern && !isChat" :key="session.id" :items="transcriptItems" :loading="transcriptBusy"
+          :error="transcriptError" :source="conversation?.source" :can-quote="canCompose"
+          @retry="loadTranscript" @quote="composer?.quote($event)" />
+        <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
+        <div v-if="modern" class="drawer-toolbar">
+          <span v-if="!isChat" class="sync-note">Saved conversation · updates about every 30 seconds</span>
+          <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>
+          <button v-if="isLive && capabilities.canShell" type="button" :aria-expanded="terminalOpened && drawerKind === 'shell'" data-drawer-shell @click="toggleDrawer('shell')">›_ Shell</button>
+        </div>
+        <div v-if="!isChat || (isLive && capabilities.canShell && shellOpened)" class="terminal-host"
+          :class="{ 'terminal-drawer': modern }" v-show="activeTab === 'agent' || activeTab === 'shell' || (modern && terminalOpened)">
+          <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
+            :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
+            :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event" />
+          <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
+            :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
+        </div>
+        <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
+          ref="composer" :session-id="session.id" :enabled="canCompose" :status="statuses.agent" :agent="session.agent"
+          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" />
         <section v-if="activeTab === 'transcript'" class="transcript" aria-labelledby="transcript-heading">
           <div class="transcript-inner">
             <h3 id="transcript-heading">What happened so far</h3>
-            <p v-if="conversation === null" class="transcript-state">Loading…</p>
+            <p v-if="transcriptError" class="transcript-state" role="alert">{{ transcriptError }} <button @click="loadTranscript">Retry</button></p>
+            <p v-else-if="conversation === null" class="transcript-state">Loading…</p>
             <p v-else-if="!transcriptItems.length" class="transcript-state">[no saved transcript]</p>
             <ol v-else ref="transcriptList" class="transcript-list" :aria-label="conversation.source === 'native' ? 'Conversation' : 'Terminal transcript'"
                 :data-transcript-source="conversation.source">
@@ -505,7 +581,10 @@ async function selectTab(tab) {
 .term-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--bg); position: relative; flex-wrap: wrap; }
 .back { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 9px; border: none; background: none; color: var(--muted); font-size: 16px; padding: 0; flex-shrink: 0; }
 .back:hover { background: var(--panel-2); color: var(--text); }
-.head-main { min-width: 0; flex: 1; }
+/* A floor for the title: with account, Files, four tabs and the actions in one bar, a zero
+   min-width let the flex row squeeze the session name to its first letter; the controls wrap
+   onto the next line instead. */
+.head-main { min-width: min(240px, 100%); flex: 1 1 240px; }
 .title { font-family: var(--display); font-size: 17px; font-weight: 700; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { display: flex; align-items: center; gap: 7px; margin-top: 2px; font-size: 11px; color: var(--muted-3); white-space: nowrap; overflow: hidden; }
 .st { font-weight: 700; }
@@ -573,6 +652,14 @@ async function selectTab(tab) {
 .messages-empty { padding: 14px 20px; color: var(--muted); font-size: 12px; }
 .msg-body { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
 .terminal-stack { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.terminal-host { flex: 1; display: flex; min-width: 0; min-height: 0; }
+.terminal-host.terminal-drawer { flex: 0 0 32%; min-height: 140px; border-block: 1px solid var(--border); }
+.modern-workspace { background: var(--bg); }
+.drawer-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 16px; border-top: 1px solid var(--border); background: var(--bg); }
+.drawer-toolbar button { border: 0; background: transparent; color: var(--muted-2); font-size: 11px; padding: 5px 8px; }
+.drawer-toolbar button[aria-expanded=true] { color: var(--strong); background: var(--panel-2); }
+.sync-note { margin-right: auto; color: var(--muted-3); font-size: 10px; }
+@media(max-width: 640px) { .sync-note { max-width: 45%; line-height: 1.4; } .perm-actions { flex-wrap: wrap; } }
 .transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }
 .transcript-inner { max-width: 760px; margin: 0 auto; padding: 26px 24px; }
 .transcript-inner h3 { font-size: 20px; margin: 0 0 14px; }

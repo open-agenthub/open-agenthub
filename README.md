@@ -46,6 +46,11 @@ shift.
 
 ## Features
 
+- **Conversation workspace alongside the terminal** — the Workspace tab combines readable
+  conversation history, compact tool activity, copy/quote actions, a message composer, files,
+  and an optional terminal drawer. Settings save your preferred Workspace or Terminal view
+  in this browser. Claude Workspace sessions stream live; terminal sessions show
+  their saved native conversation where available. Switch views without restarting the agent.
 - **Interactive, autonomous, or scheduled sessions** — watch and answer live, hand off a
   prompt for unattended work, or run recurring jobs as CronJobs. Your agent works the
   night shift.
@@ -648,8 +653,8 @@ Results flow back via `git push` or as artifacts to S3. What is persisted:
 
 ### Session files and visual previews
 
-The Chat UI accepts images and documents by file picker, paste, and drag-and-drop. Images,
-PDF, Markdown, and plain text can be opened in the Files workspace beside Chat or Terminal.
+Claude's streaming Workspace accepts images and documents by file picker, paste, and drag-and-drop.
+Images, PDF, Markdown, and plain text can be opened in Files beside Workspace or Terminal.
 HTML and SVG are download-only. A managed `files` MCP gives every supported agent the same
 provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,
 `upload_file`, `present_file`, and `dismiss_presentation`.
@@ -699,7 +704,7 @@ tool. Whether the conversation survives depends on the runtime:
 
 | Runtime | Converted to interactive | Keeps the conversation |
 |---|---|---|
-| Claude | terminal or chat pane | **yes** — same fixed session id, `--resume` |
+| Claude | Workspace or terminal | **yes** — same fixed session id, `--resume` |
 | Codex | TUI | **yes** — the thread id recorded in the state archive |
 | Cursor | TUI | no — new conversation in the restored workspace |
 | OpenClaw | TUI | no — new conversation in the restored workspace |

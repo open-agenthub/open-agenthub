@@ -72,6 +72,47 @@ describe('terminal fit/resize stability', () => {
     globalThis.cancelAnimationFrame = () => {}
   })
 
+  it('uses bracketed paste and a delayed Enter on the existing connection for workspace messages', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = await mountRunningPane()
+      const delivery = wrapper.vm.submitMessage('first line\nsecond line\u001b[201~')
+      expect(mocks.sockets).toHaveLength(1)
+      expect(mocks.sockets[0].sent.at(-1)).toEqual({ type: 'input', data: '\u001b[200~first line\nsecond line[201~\u001b[201~' })
+      await vi.advanceTimersByTimeAsync(150)
+      await delivery
+      expect(mocks.sockets[0].sent.at(-1)).toEqual({ type: 'input', data: '\r' })
+      wrapper.vm.interruptAgent()
+      expect(mocks.sockets[0].sent.at(-1)).toEqual({ type: 'input', data: '\u0003' })
+      wrapper.unmount()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('cancels the pending Enter when the session switches', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = await mountRunningPane()
+      const socket = mocks.sockets[0]
+      const delivery = wrapper.vm.submitMessage('old prompt')
+      const rejected = expect(delivery).rejects.toThrow('Connection changed')
+      await wrapper.setProps({ session: { id: 's2', phase: 'Running' } })
+      await rejected
+      await vi.advanceTimersByTimeAsync(150)
+      expect(socket.sent.filter(value => value.data === '\r')).toEqual([])
+      expect(mocks.sockets[1].sent.filter(value => value.type === 'input')).toEqual([])
+      wrapper.unmount()
+    } finally { vi.useRealTimers() }
+  })
+
+  it('rejects workspace input and interrupts after write access is revoked', async () => {
+    const wrapper = await mountRunningPane()
+    await wrapper.setProps({ readonly: true })
+    await expect(wrapper.vm.submitMessage('forbidden')).rejects.toThrow('disconnected')
+    expect(() => wrapper.vm.interruptAgent()).toThrow('disconnected')
+    expect(mocks.sockets[0].sent.filter(value => value.type === 'input')).toEqual([])
+    wrapper.unmount()
+  })
+
   it('sends the initial size once on socket open', async () => {
     await mountRunningPane()
     expect(mocks.sockets[0].sent).toEqual([{ type: 'resize', cols: 80, rows: 24 }])

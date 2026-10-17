@@ -35,7 +35,8 @@ two values.
    own — and an interactive one is already what it is asked to become. The direction is one-way:
    an interactive session has no task to run unattended.
 2. **`uiMode`** is validated with the create rule (`chat` is interactive Claude only; `400`
-   otherwise), so a converted Claude run can come back in the chat pane.
+   otherwise), so a converted Claude run can come back on the streaming transport behind its
+   Workspace (docs/agent-workspace.md).
 3. **`autoApprove` defaults to off**, the interactive default. The autonomous run had it on
    because nobody was there to answer a prompt; now somebody is, and an agent that keeps running
    everything without asking is not what "interactive" promises. `autoApprove: true` keeps it —
@@ -101,8 +102,12 @@ edit to the interactive branch.
 ## Where it is exposed
 
 - Web app: an inline card on a finished or paused autonomous session ("This autonomous run has
-  finished. Continue it interactively?") with *Open terminal*, *Open chat* (Claude only) and a
-  *keep auto-approve* checkbox; the same card unfolds under a row of the sessions list. No
+  finished. Continue it interactively?") with *Open workspace*, *Open terminal* and a
+  *keep auto-approve* checkbox. The surface decides the transport the way New session does:
+  Workspace on Claude asks for `uiMode: chat`, everything else for `terminal`, and the session
+  opens on the surface that was picked. The card used to offer *Open chat* (Claude only); the
+  separate chat surface is gone, and a Workspace button for Claude alone would have left every
+  other agent's converted run opening in the terminal regardless of the person's preference; the same card unfolds under a row of the sessions list. No
   dialog, per the frontend rules.
 - `POST /api/sessions/{id}/convert` and `POST /api/remote/sessions/{id}/convert`.
 - `session_convert {sessionId, uiMode?, autoApprove?, resume?}` on the remote MCP server, the

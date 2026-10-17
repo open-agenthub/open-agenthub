@@ -18,7 +18,7 @@ const emit = defineEmits(['select', 'new', 'remove', 'resume', 'pause', 'edit', 
 // The row whose "Continue interactively" card is folded out; one at a time, and no dialog.
 const convertingId = ref(null)
 function toggleConvert(id) { convertingId.value = convertingId.value === id ? null : id }
-function converted(id) { convertingId.value = null; emit('converted', id) }
+function converted(id, surface) { convertingId.value = null; emit('converted', id, surface) }
 
 const GROUP_BYS = ['Project', 'Repository', 'Status', 'None']
 const FILTERS = ['All', 'Running', 'Waiting', 'Scheduled', 'Paused', 'Done', 'Failed']

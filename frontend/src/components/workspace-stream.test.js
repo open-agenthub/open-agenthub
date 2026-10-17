@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
-import ChatPane from './ChatPane.vue'
+import WorkspaceStream from './workspace/WorkspaceStream.vue'
+import { chatDrafts } from '../lib/session-drafts.js'
 
 const mocks = vi.hoisted(() => ({ sockets: [], transcript: '', uploadError: null }))
 
@@ -20,19 +21,36 @@ vi.mock('../api.js', () => ({
 
 class MockSocket {
   static OPEN = 1
-  constructor(url) { this.url = url; this.readyState = MockSocket.OPEN; this.sent = []; mocks.sockets.push(this) }
+  constructor(url) {
+    this.url = url; this.readyState = MockSocket.OPEN; this.sent = []; mocks.sockets.push(this)
+    queueMicrotask(() => this.onopen?.())
+  }
   send(value) { this.sent.push(JSON.parse(value)) }
   close() {}
 }
 
 const line = value => JSON.stringify(value) + '\n'
 
-describe('ChatPane', () => {
+describe('WorkspaceStream', () => {
+  afterEach(() => vi.unstubAllGlobals())
   beforeEach(() => {
+    chatDrafts.clear()
     mocks.sockets.length = 0
     mocks.transcript = ''
     mocks.uploadError = null
     globalThis.WebSocket = MockSocket
+  })
+
+  it('restores text when switching away from and back to a keyed chat session', async () => {
+    const session = { id: 'draft-session', phase: 'Running' }
+    const first = mount(WorkspaceStream, { props: { session } })
+    await flushPromises()
+    await first.get('[data-chat-input]').setValue('Unsent chat task')
+    first.unmount()
+    const restored = mount(WorkspaceStream, { props: { session } })
+    await flushPromises()
+    expect(restored.get('[data-chat-input]').element.value).toBe('Unsent chat task')
+    restored.unmount()
   })
 
   it('replays a finished session from the transcript as chat items', async () => {
@@ -40,7 +58,7 @@ describe('ChatPane', () => {
       line({ type: 'user', agenthub_echo: true, message: { content: [{ type: 'text', text: 'fix the bug' }] } }) +
       line({ type: 'assistant', message: { id: 'm1', content: [{ type: 'text', text: 'Done — see `app.js`.' }] } }) +
       line({ type: 'agenthub', subtype: 'exit', code: 0, signal: null })
-    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Succeeded' } } })
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Succeeded' } } })
     await flushPromises()
     expect(wrapper.find('[data-chat-user]').text()).toContain('fix the bug')
     expect(wrapper.find('[data-chat-assistant]').html()).toContain('<code>app.js</code>')
@@ -50,7 +68,8 @@ describe('ChatPane', () => {
   })
 
   it('sends composer input as a chat message over the socket', async () => {
-    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) })
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Running' } } })
     await flushPromises()
     mocks.sockets[0].onopen()
     await wrapper.find('[data-chat-input]').setValue('hello agent')
@@ -58,6 +77,7 @@ describe('ChatPane', () => {
     const sent = mocks.sockets[0].sent[0]
     expect(sent).toMatchObject({ type: 'chat', text: 'hello agent' })
     expect(sent.clientTurnId).toBeTypeOf('string')
+    expect(sent.clientTurnId).toMatch(/^[a-f0-9]{32}$/)
     expect(wrapper.find('[data-chat-input]').element.value).toBe('hello agent')
     mocks.sockets[0].onmessage({ data: line({ type: 'agenthub', subtype: 'chat_delivered', clientTurnId: sent.clientTurnId }) })
     await flushPromises()
@@ -65,7 +85,7 @@ describe('ChatPane', () => {
   })
 
   it('pastes an image, uploads it, and sends its ready file id', async () => {
-    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Running' } } })
     await flushPromises()
     const file = new File([new Uint8Array(12)], 'shot.png', { type: 'image/png', lastModified: 1 })
     await wrapper.get('[data-chat-input]').trigger('paste', { clipboardData: { files: [file] } })
@@ -93,7 +113,7 @@ describe('ChatPane', () => {
 
   it('keeps the draft and gates send when an upload fails', async () => {
     mocks.uploadError = Object.assign(new Error('failed'), { code: 'content_type_mismatch' })
-    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Running' } } })
     await flushPromises()
     await wrapper.get('[data-chat-input]').setValue('keep me')
     const file = new File([new Uint8Array(12)], 'bad.png', { type: 'image/png', lastModified: 1 })
@@ -105,7 +125,7 @@ describe('ChatPane', () => {
   })
 
   it('renders streamed events and offers Stop while the agent works', async () => {
-    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Running' } } })
     await flushPromises()
     const socket = mocks.sockets[0]
     socket.onopen()
@@ -120,7 +140,7 @@ describe('ChatPane', () => {
   })
 
   it('follows streamed output only while the reader is at the bottom', async () => {
-    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Running' } } })
     await flushPromises()
     const socket = mocks.sockets[0]
     socket.onopen()
@@ -162,12 +182,12 @@ describe('ChatPane', () => {
   })
 
   it('hides the composer for read-only viewers', async () => {
-    const wrapper = mount(ChatPane, { props: { session: { id: 's1', phase: 'Running' }, readonly: true } })
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Running' }, readonly: true } })
     await flushPromises()
     expect(wrapper.find('[data-chat-input]').exists()).toBe(false)
   })
   it('keeps shared writable chat text while withholding authenticated upload controls', async () => {
-    const wrapper = mount(ChatPane, { props: {
+    const wrapper = mount(WorkspaceStream, { props: {
       session: { id: 's1', phase: 'Running' }, sharedToken: 'share-token'
     } })
     await flushPromises()
@@ -175,5 +195,40 @@ describe('ChatPane', () => {
     await wrapper.get('[data-chat-input]').setValue('shared message')
     await wrapper.get('[data-chat-send]').trigger('click')
     expect(mocks.sockets[0].sent[0]).toMatchObject({ type: 'chat', text: 'shared message' })
+  })
+
+  it('renders the modern streaming activity and quotes a response without submitting IME input', async () => {
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Running', agent: 'Claude' } } })
+    await flushPromises()
+    mocks.sockets[0].onmessage({ data: line({ type: 'assistant', message: { id: 'm1', content: [
+      { type: 'text', text: 'Use this approach' },
+      { type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'npm test' } }
+    ] } }) })
+    await flushPromises()
+    expect(wrapper.get('[data-work-log]').text()).toContain('Bash')
+    await wrapper.get('[aria-label="Quote message"]').trigger('click')
+    expect(wrapper.get('textarea').element.value).toBe('> Use this approach\n\n')
+    await wrapper.get('textarea').trigger('keydown', { key: 'Enter', isComposing: true })
+    expect(mocks.sockets[0].sent).toEqual([])
+    wrapper.unmount()
+  })
+
+  it('keeps an unconfirmed draft after disconnect and isolates drafts when switching sessions', async () => {
+    const wrapper = mount(WorkspaceStream, { props: { session: { id: 's1', phase: 'Running' } } })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('First draft')
+    await wrapper.get('[data-chat-send]').trigger('click')
+    mocks.sockets[0].onclose()
+    await flushPromises()
+    expect(wrapper.get('[data-chat-send]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[role=alert]').text()).toContain('before delivery was confirmed')
+    await wrapper.setProps({ session: { id: 's2', phase: 'Running' } })
+    await flushPromises()
+    expect(wrapper.get('textarea').element.value).toBe('')
+    await wrapper.get('textarea').setValue('Second draft')
+    await wrapper.setProps({ session: { id: 's1', phase: 'Running' } })
+    await flushPromises()
+    expect(wrapper.get('textarea').element.value).toBe('First draft')
+    wrapper.unmount()
   })
 })

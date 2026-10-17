@@ -71,7 +71,7 @@ describe('continuing an autonomous session interactively', () => {
     await flushPromises()
 
     expect(mocks.api.convertSession).toHaveBeenCalledWith('s1', { mode: 'interactive', uiMode: 'terminal', autoApprove: false })
-    expect(wrapper.emitted('converted')).toEqual([['s1']])
+    expect(wrapper.emitted('converted')).toEqual([['s1', 'terminal']])
   })
 
   it('keeps auto-approve when the checkbox is ticked', async () => {
@@ -83,18 +83,30 @@ describe('continuing an autonomous session interactively', () => {
     expect(mocks.api.convertSession).toHaveBeenCalledWith('s1', expect.objectContaining({ autoApprove: true }))
   })
 
-  it('offers the chat pane for Claude only, and asks for it as uiMode chat', async () => {
+  it('opens the workspace on every agent, streaming only for Claude', async () => {
     const claude = mountTerminal(finished({ agent: 'Claude' }))
-    expect(claude.find('[data-convert-chat]').exists()).toBe(true)
-    await claude.find('[data-convert-chat]').trigger('click')
+    await claude.find('[data-convert-workspace]').trigger('click')
     await flushPromises()
-    expect(mocks.api.convertSession).toHaveBeenCalledWith('s1', expect.objectContaining({ uiMode: 'chat' }))
+    expect(mocks.api.convertSession).toHaveBeenLastCalledWith('s1', expect.objectContaining({ uiMode: 'chat' }))
+    expect(claude.emitted('converted')).toEqual([['s1', 'workspace']])
 
-    for (const agent of ['Codex', 'Cursor', 'OpenClaw']) {
+    // The backend refuses uiMode chat for anything but Claude, so the others keep the TUI
+    // transport and read their saved conversation in the workspace.
+    for (const agent of ['Codex', 'Cursor', 'OpenClaw', 'OpenCode']) {
       const other = mountTerminal(finished({ agent }))
-      expect(other.find('[data-convert-card]').exists()).toBe(true)
-      expect(other.find('[data-convert-chat]').exists()).toBe(false)
+      await other.find('[data-convert-workspace]').trigger('click')
+      await flushPromises()
+      expect(mocks.api.convertSession).toHaveBeenLastCalledWith('s1', expect.objectContaining({ uiMode: 'terminal' }))
+      expect(other.emitted('converted')).toEqual([['s1', 'workspace']])
     }
+  })
+
+  it('switches the open session to the surface picked on the card', async () => {
+    const wrapper = mountTerminal(finished({ agent: 'Codex' }), { initialUi: 'terminal' })
+    expect(wrapper.find('[data-open-workspace]').classes()).not.toContain('on')
+    await wrapper.find('[data-convert-workspace]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-open-workspace]').classes()).toContain('on')
   })
 
   it('says per agent whether the conversation survives', () => {
@@ -168,7 +180,7 @@ describe('the sessions list', () => {
     await flushPromises()
 
     expect(mocks.api.convertSession).toHaveBeenCalledWith('s1', { mode: 'interactive', uiMode: 'terminal', autoApprove: false })
-    expect(wrapper.emitted('converted')).toEqual([['s1']])
+    expect(wrapper.emitted('converted')).toEqual([['s1', 'terminal']])
     expect(wrapper.find('[data-convert-card]').exists()).toBe(false)
   })
 })
