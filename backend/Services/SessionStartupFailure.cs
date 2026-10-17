@@ -45,10 +45,19 @@ public sealed record SessionStartupFailure(string Step, string Message, bool Ter
         try
         {
             using var status = JsonDocument.Parse(message);
-            if (status.RootElement.TryGetProperty("message", out var detail) && detail.ValueKind == JsonValueKind.String)
+            if (status.RootElement.ValueKind == JsonValueKind.Object &&
+                status.RootElement.TryGetProperty("message", out var detail) && detail.ValueKind == JsonValueKind.String)
                 message = detail.GetString()!;
         }
-        catch (JsonException) { }
+        catch (JsonException)
+        {
+            return AdmissionText(message);
+        }
+        return AdmissionText(message);
+    }
+
+    private static SessionStartupFailure AdmissionText(string message)
+    {
         var quota = message.Contains("quota", StringComparison.OrdinalIgnoreCase);
         return Failure(quota ? "quota" : "scheduling", quota
             ? $"Quota: {message}. Free resources or ask an administrator to increase the quota."
@@ -84,16 +93,15 @@ public sealed record SessionStartupFailure(string Step, string Message, bool Ter
         if (string.IsNullOrWhiteSpace(message)) return "";
         // Git helpers sometimes repeat a password outside its URL. Remove the exact value
         // wherever it occurs, including percent-decoded credentials, before removing userinfo.
-        foreach (Match credential in Regex.Matches(message, @"(?i)[a-z][a-z0-9+.-]*://([^\s/]+)@"))
+        var secrets = Regex.Matches(message, @"(?i)[a-z][a-z0-9+.-]*://([^\s/]+)@")
+            .Select(credential => credential.Groups[1].Value)
+            .Select(userinfo => userinfo.Contains(':') ? userinfo[(userinfo.IndexOf(':') + 1)..] : userinfo)
+            .Where(secret => secret.Length > 0);
+        foreach (var secret in secrets)
         {
-            var userinfo = credential.Groups[1].Value;
-            var secret = userinfo.Contains(':') ? userinfo[(userinfo.IndexOf(':') + 1)..] : userinfo;
-            if (secret.Length > 0)
-            {
-                message = message.Replace(secret, "[redacted]", StringComparison.Ordinal);
-                var decoded = Uri.UnescapeDataString(secret);
-                if (decoded.Length > 0) message = message.Replace(decoded, "[redacted]", StringComparison.Ordinal);
-            }
+            message = message.Replace(secret, "[redacted]", StringComparison.Ordinal);
+            var decoded = Uri.UnescapeDataString(secret);
+            if (decoded.Length > 0) message = message.Replace(decoded, "[redacted]", StringComparison.Ordinal);
         }
         var text = Regex.Replace(message, @"(?i)([a-z][a-z0-9+.-]*://)[^\s/]*@", "$1[redacted]@");
         text = Regex.Replace(text, @"(?im)(\b(?:authorization|proxy-authorization|cookie|set-cookie|x-[a-z-]*(?:token|key))\s*[:=]\s*)[^\r\n]+", "$1[redacted]");

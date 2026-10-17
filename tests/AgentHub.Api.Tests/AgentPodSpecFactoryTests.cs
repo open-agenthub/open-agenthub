@@ -609,7 +609,7 @@ public class AgentPodSpecFactoryTests
     public async Task CloneScript_RealMissingBranchPreservesExitCodeAndDefaultBranch()
     {
         if (OperatingSystem.IsWindows()) return;
-        var scratch = Path.Combine(Path.GetTempPath(), "clone-proof-" + Guid.NewGuid().ToString("N"));
+        var scratch = Path.Join(Path.GetTempPath(), "clone-proof-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
         try
         {
@@ -628,22 +628,22 @@ public class AgentPodSpecFactoryTests
             Assert.Equal(0, (await Run("git", "-C", "seed", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "seed")).Code);
             Assert.Equal(0, (await Run("git", "-C", "seed", "push", "origin", "instagram")).Code);
             var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription, request => request with {
-                Repos = [new RepoRef { Url = Path.Combine(scratch, "origin.git"), Branch = "main" }]
+                Repos = [new RepoRef { Url = Path.Join(scratch, "origin.git"), Branch = "main" }]
             });
             var clone = Assert.Single(pod.InitContainers, c => c.Name == "git-clone");
             var script = clone.Command[2].Replace("/workspace/", scratch + "/workspace/");
-            Directory.CreateDirectory(Path.Combine(scratch, "workspace"));
+            Directory.CreateDirectory(Path.Join(scratch, "workspace"));
             var start = new System.Diagnostics.ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true, RedirectStandardError = true };
             start.ArgumentList.Add("-c"); start.ArgumentList.Add(script);
             start.Environment["HOME"] = scratch;
-            start.Environment["REPOS"] = "repo\tmain\t" + Path.Combine(scratch, "origin.git");
-            start.Environment["TERMINATION_MESSAGE_PATH"] = Path.Combine(scratch, "termination");
+            start.Environment["REPOS"] = "repo\tmain\t" + Path.Join(scratch, "origin.git");
+            start.Environment["TERMINATION_MESSAGE_PATH"] = Path.Join(scratch, "termination");
             using var process = System.Diagnostics.Process.Start(start)!;
             var output = process.StandardOutput.ReadToEndAsync();
             var error = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
             Assert.Equal(128, process.ExitCode);
-            var diagnostic = await File.ReadAllTextAsync(Path.Combine(scratch, "termination"));
+            var diagnostic = await File.ReadAllTextAsync(Path.Join(scratch, "termination"));
             Assert.Contains("repository-index: 1", diagnostic);
             Assert.Contains("default-branch: instagram", diagnostic);
             Assert.Contains("fatal: Remote branch main not found in upstream origin", diagnostic);
@@ -657,11 +657,11 @@ public class AgentPodSpecFactoryTests
     public async Task CloneScript_RedactsCredentialsBeforeLogsAndTerminationMessage()
     {
         if (OperatingSystem.IsWindows()) return;
-        var scratch = Path.Combine(Path.GetTempPath(), "clone-secrets-" + Guid.NewGuid().ToString("N"));
+        var scratch = Path.Join(Path.GetTempPath(), "clone-secrets-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(scratch);
         try
         {
-            var git = Path.Combine(scratch, "git");
+            var git = Path.Join(scratch, "git");
             await File.WriteAllTextAsync(git, "#!/bin/sh\ncase \"$1\" in clone) printf '%s\\n' 'https://user:private-value@example.com/repo private-value' 'aUtHoRiZaTiOn: Bearer header-value' 'ToKeN=query-value ghp_knownvalue glpat-knownvalue' >&2; exit 128;; *) exit 0;; esac\n");
             File.SetUnixFileMode(git, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription, request => request with {
@@ -673,13 +673,13 @@ public class AgentPodSpecFactoryTests
             start.Environment["HOME"] = scratch;
             start.Environment["PATH"] = scratch + ":" + Environment.GetEnvironmentVariable("PATH");
             start.Environment["REPOS"] = "repo\tmain\thttps://user:private-value@example.com/repo";
-            start.Environment["TERMINATION_MESSAGE_PATH"] = Path.Combine(scratch, "termination");
+            start.Environment["TERMINATION_MESSAGE_PATH"] = Path.Join(scratch, "termination");
             using var process = System.Diagnostics.Process.Start(start)!;
             var output = process.StandardOutput.ReadToEndAsync();
             var error = process.StandardError.ReadToEndAsync();
             await process.WaitForExitAsync();
             Assert.Equal(128, process.ExitCode);
-            var visible = await output + await error + await File.ReadAllTextAsync(Path.Combine(scratch, "termination"));
+            var visible = await output + await error + await File.ReadAllTextAsync(Path.Join(scratch, "termination"));
             Assert.DoesNotContain("private-value", visible);
             Assert.DoesNotContain("header-value", visible);
             Assert.DoesNotContain("query-value", visible);

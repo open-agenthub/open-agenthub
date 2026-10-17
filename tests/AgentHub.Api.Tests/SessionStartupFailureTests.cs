@@ -86,6 +86,13 @@ public class SessionStartupFailureTests
         Assert.Contains("Free resources", failure.Message);
     }
 
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("plain unknown refusal")]
+    public void AdmissionPassesThroughUnknownResponseShapes(string response)
+        => Assert.Contains(response, SessionStartupFailure.Admission(response).Message);
+
     [PostgreSqlFact]
     public async Task FailureReasonSurvivesPersistenceAndTargetedUpdates()
     {
