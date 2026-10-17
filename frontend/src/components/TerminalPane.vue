@@ -31,8 +31,9 @@ function send(value) {
 function submitMessage(text) {
   const socket = ws
   const generation = connectionGeneration
+  // retryable: nothing was written, so the composer may send the same text again later.
   if (!canSend.value || socket?.readyState !== WebSocket.OPEN || cancelSubmission)
-    return Promise.reject(new Error('Agent is disconnected. Your draft is still here.'))
+    return Promise.reject(Object.assign(new Error('Agent is disconnected. Your draft is still here.'), { retryable: true }))
   // Bracketed paste preserves multiline prompts as one edit instead of executing each line.
   // Strip terminal controls from pasted text so it cannot close its own paste envelope.
   const value = String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')

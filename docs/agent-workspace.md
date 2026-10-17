@@ -56,6 +56,25 @@ sends Ctrl+C to that same agent connection. Login and interactive CLI menus rema
 in the drawer. Terminal-mode attachments are not offered because they do not have chat-mode
 delivery receipts.
 
+**A message written while the session starts is queued (#115).** Send used to stay disabled until
+the agent socket connected, while the person could already type. The composer now accepts a
+message while the session is Pending (starting or resuming) or the socket is not connected yet,
+shows it as *Queued · will be sent when the agent is ready* with Edit and Withdraw, and sends the
+queue in order once the socket is connected — one message at a time, the next only after the
+previous was submitted, because two pastes interleaved in the CLI's input box would arrive as one
+turn. "Ready" is the connected socket and nothing later: verified against Claude Code 2.1.287,
+where the composer's paste-and-Enter sent the instant the socket opened, before the CLI had drawn
+anything, still became the first user turn — the PTY holds the bytes until the CLI reads them.
+Waiting for a provider-specific "prompt drawn" signal would have meant parsing every CLI's screen
+for a guarantee the PTY already gives.
+
+Exactly once: a queued message leaves the queue only when its send resolved. A send that failed
+before writing anything (the socket dropped) is kept and retried on the next connect; one that
+failed after the paste may have reached the terminal goes back into the draft with the reason,
+since a retry could not tell whether it would be the second copy. When the session stops taking
+input without having started — it failed, or was stopped — the queue goes back into the draft.
+The queue is kept per session in memory, like drafts, so switching sessions does not lose it.
+
 Only connected, writable interactive sessions can use the terminal composer. Viewers get the
 conversation and read-only agent terminal; the shell stays owner-only. Read-only markup is
 still escaped before Markdown rendering. Tool content is text, never executable HTML.
