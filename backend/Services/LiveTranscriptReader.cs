@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Text;
+using AgentHub.Api.Browser;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 
@@ -40,6 +41,11 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
     // of a long session up in one poll, and whatever is left comes with the next one.
     private const int MaxRoundsPerRead = 4;
 
+    private const int MaxChunkBytes = 8 * 1024 * 1024;
+    // Parsing also allocates: two concurrent 8 MiB readers exhausted the backend heap budget
+    // in the 24-view probe. Serialize catch-up reads; docs/transcripts.md records the result.
+    private readonly SemaphoreSlim _downloads = new(1, 1);
+    private readonly IAgentPodIdentityResolver _pods;
     private readonly HttpClient _http;
     private readonly ISessionStore _sessions;
     private readonly int _agentPort;
@@ -48,9 +54,10 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
     private DateTime _lastSweep;
 
     public LiveTranscriptReader(HttpClient http, ISessionStore sessions, IConfiguration configuration,
-        Func<DateTime>? now = null)
+        IAgentPodIdentityResolver pods, Func<DateTime>? now = null)
     {
         _http = http;
+        _pods = pods;
         _sessions = sessions;
         _agentPort = configuration.GetValue("AgentHub:AgentPort", 7681);
         _now = now ?? (() => DateTime.UtcNow);
@@ -84,8 +91,11 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
         Sweep();
         var follow = _follows.GetOrAdd(session.Id, _ => new Follow());
         await follow.Gate.WaitAsync(ct);
+        var downloadAcquired = false;
         try
         {
+            await _downloads.WaitAsync(ct);
+            downloadAcquired = true;
             follow.LastUsed = _now();
             if (follow.PodIp != session.PodIp) follow.Reset(session.PodIp);
             if (follow.UnsupportedUntil > _now()) return null;
@@ -98,6 +108,12 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
 
             for (var round = 0; round < MaxRoundsPerRead; round++)
             {
+                // Status can outlive a pod and its IP can be reused by another session.
+                // Confirm immediately before each request; caching would reopen that window.
+                using var confirmation = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                confirmation.CancelAfter(TimeSpan.FromSeconds(5));
+                if (!IPAddress.TryParse(session.PodIp, out var address) ||
+                    !await _pods.IsLiveSessionPodAsync(session.Id, address, confirmation.Token)) return null;
                 var chunk = await FetchAsync(session.PodIp, follow.Token, follow.NextByte, ct);
                 if (chunk is null)
                 {
@@ -124,12 +140,13 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
             }
             return follow.Entries.Length > 0 ? follow.Entries : null;
         }
-        catch (Exception e) when (e is HttpRequestException or TaskCanceledException && !ct.IsCancellationRequested)
+        catch (Exception e) when ((e is HttpRequestException or OperationCanceledException or k8s.Autorest.HttpOperationException) && !ct.IsCancellationRequested)
         {
             return null;
         }
         finally
         {
+            if (downloadAcquired) _downloads.Release();
             follow.Gate.Release();
         }
     }
@@ -144,15 +161,26 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
         }.Uri;
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         request.Headers.Add("X-Agent-Token", token);
-        using var response = await _http.SendAsync(request, ct);
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         if (response.StatusCode == HttpStatusCode.NotFound) return new Chunk(true, 0, 0, "");
         if (!response.IsSuccessStatusCode) return null;
         if (!TryHeader(response, "X-Transcript-Size", out var size) ||
             !TryHeader(response, "X-Transcript-Next", out var next)) return null;
         // The pod cuts every chunk after a newline, and a newline byte never occurs inside a
         // UTF-8 sequence, so each chunk decodes on its own.
-        var bytes = await response.Content.ReadAsByteArrayAsync(ct);
-        return new Chunk(false, size, next, Encoding.UTF8.GetString(bytes));
+        // Bound the wire body too: an oversized response must not allocate without limit.
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(TimeSpan.FromSeconds(5));
+        await using var stream = await response.Content.ReadAsStreamAsync(timeout.Token);
+        using var body = new MemoryStream();
+        var buffer = new byte[64 * 1024];
+        int count;
+        while ((count = await stream.ReadAsync(buffer, timeout.Token)) > 0)
+        {
+            if (body.Length + count > MaxChunkBytes) return null;
+            body.Write(buffer, 0, count);
+        }
+        return new Chunk(false, size, next, Encoding.UTF8.GetString(body.GetBuffer(), 0, (int)body.Length));
     }
 
     private static bool TryHeader(HttpResponseMessage response, string name, out long value)

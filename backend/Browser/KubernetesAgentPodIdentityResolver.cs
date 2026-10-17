@@ -18,6 +18,12 @@ public sealed class KubernetesAgentPodIdentityResolver : IAgentPodIdentityResolv
         _kubernetes = new Kubernetes(clientConfiguration);
     }
 
+    public KubernetesAgentPodIdentityResolver(Kubernetes kubernetes, string podNamespace)
+    {
+        _kubernetes = kubernetes;
+        _namespace = podNamespace;
+    }
+
     public async Task<bool> IsLiveSessionPodAsync(string sessionId, IPAddress sourceIp,
         CancellationToken ct = default)
     {

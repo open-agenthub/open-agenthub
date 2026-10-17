@@ -114,10 +114,13 @@ builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api
 builder.Services.AddHttpClient<IAgentCredentialPusher, AgentCredentialPusher>();
 builder.Services.AddHttpClient<ISessionMessageDelivery, SessionMessageDelivery>();
 // A singleton, unlike the typed clients above: it holds each followed session's offset and entries.
-builder.Services.AddHttpClient(nameof(LiveTranscriptReader));
+// A redirect target has not passed the live-pod identity check.
+builder.Services.AddHttpClient(nameof(LiveTranscriptReader))
+    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<ILiveTranscriptReader>(sp => new LiveTranscriptReader(
     sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(LiveTranscriptReader)),
-    sp.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>(), sp.GetRequiredService<IConfiguration>()));
+    sp.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>(), sp.GetRequiredService<IConfiguration>(),
+    sp.GetRequiredService<AgentHub.Api.Browser.IAgentPodIdentityResolver>()));
 // A pod's usage-limit report: marks the account and moves the session (docs/account-limits.md).
 builder.Services.AddSingleton<IAccountFailover, AccountFailover>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileService, AgentHub.Api.Files.SessionFileService>();
