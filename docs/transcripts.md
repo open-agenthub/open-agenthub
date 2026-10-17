@@ -1,6 +1,6 @@
 # Transcripts: what a session "said", and where that comes from
 
-A session's conversation is read in four places: the Transcript tab of the web app, a shared link,
+A session's conversation is read in four places: the Workspace of the web app, a shared link,
 the token-authenticated remote API and the MCP tools (`session_logs`, `session_transcript`). The
 chat relays also quote from it. This file records how that text is sourced and why; the three
 design notes under `docs/superpowers/specs/` (`2026-07-27-clean-transcripts-design.md`,
@@ -96,7 +96,7 @@ resume on a cluster should be watched for `Transcript: …` in the pod log.
 `TranscriptEntry` rows — `user`, `assistant`, `tool` (with the tool name), `result` — and every
 surface falls back to the cleaned scrollback when there are none.
 
-- The web app's Transcript tab and shared links read `GET …/conversation`, a `ConversationPage`
+- The web app's Workspace and shared links read `GET …/conversation`, a `ConversationPage`
   whose `source` says which shape it carries. For `native` the page holds entries and the offsets
   count entries; for `scrollback` it holds text and the offsets count characters, exactly like the
   remote `TranscriptPage`. The frontend treats `nextOffset` as opaque and renders roles only for
@@ -125,13 +125,14 @@ conversation. A separate `ISessionStore` interface member for every fake in the 
 avoided by giving the new store and service members default implementations; only the real
 implementations override them.
 
-## The Transcript tab renders prose as markdown, everything else verbatim
+## The Workspace renders prose as markdown, everything else verbatim
 
 A native page's `user` and `assistant` entries are what the person and the model wrote, and
 both write markdown: headings, lists, fenced code, tables, the occasional mermaid diagram. The
-tab renders those two roles through the same escape-first renderer the Workspace uses
-(`lib/markdown.js`, diagrams via `lib/mermaid.js`), so a turn looks the same whether it is read
-live in the Workspace or later in the transcript. The styles for rendered markdown live in
+saved conversation renders those two roles through the same escape-first renderer the streaming
+Workspace uses (`lib/markdown.js`, diagrams via `lib/mermaid.js`), so a turn looks the same
+whichever transport delivered it. (This was the Transcript tab's rule; the Workspace timeline
+rendered only the model's turns as markdown and took the person's over when the tab went, #113.) The styles for rendered markdown live in
 `style.css` under `.md` for that reason — they used to be scoped to the chat pane, and the
 workspace branch had grown a second global copy (`.workspace-markdown`) that was dropped when it
 was merged, before the two could drift.
@@ -142,11 +143,11 @@ renderer would turn an honest `git diff` into stray emphasis and broken tables. 
 escape-first, so this is a presentation choice, not a safety one: agent text cannot inject
 markup either way.
 
-## The Workspace and the Transcript tab follow a running session
+## The Workspace follows a running session
 
-The tab used to load once when opened and never again while the session ran; a person reading
-it saw the state of the first click. It now polls `…/conversation` every second from the cursor
-of the last page while the view is shown, the browser tab is visible and the session is live,
+The Transcript tab used to load once when opened and never again while the session ran; a person
+reading it saw the state of the first click. The Workspace polls `…/conversation` every second
+from the cursor of the last page while it is shown, the browser tab is visible and the session is live,
 appends what comes back (`mergeConversationPage`), and fetches once more when the phase settles —
 the session agent uploads a last time as it exits, and that tail would otherwise be missing until
 the next visit.
@@ -198,8 +199,38 @@ check needs no new column.
 
 A page that cannot be appended is not appended: `length` going down, the server clamping the
 offset, or the source switching from `scrollback` to `native` (the first upload landing after the
-tab opened) all mean the cursor no longer points into the history the tab holds, and the tab
+view opened) all mean the cursor no longer points into the history the view holds, and it
 reloads from the start. Stitching the two would show a conversation that never happened.
+
+## No separate Transcript tab
+
+The session view had a Transcript tab next to Workspace and Terminal. Since the Workspace became
+the default surface (`docs/agent-workspace.md`), both read the same `…/conversation` page
+through the same `loadTranscript`/`refreshTranscript` code and showed it twice, once as cards
+and once as a timeline. The tab was removed (#113); nothing the backend serves changed.
+
+What the tab had and where it is now:
+
+- **The conversation, native or scrollback, with markdown and diagrams**: the Workspace timeline,
+  which already drew both sources (*Conversation* / *Terminal history*) and mermaid diagrams. It
+  now renders the person's turns as markdown too, as the tab did.
+- **"[no saved transcript]" for a session with nothing saved**: the timeline used to invite "Give
+  your agent a task" whenever it was empty, also on a finished run or a read-only share, where no
+  composer exists. It now says *No saved conversation.* unless the person can give this session a
+  task.
+- **Retry on a failed load and following a running session**: already shared code.
+- **Download, a raw/clean switch and search** were not features of the tab. Search exists in the
+  Workspace (*Find in conversation*); the cleaned terminal text of an ended session is still
+  replayed in the Terminal view (`GET …/transcript`); the raw scrollback stays an internal
+  resume input, as above.
+
+Kept, because they do not depend on the tab: a shared link (it renders the same session view,
+read-only, and opens on the Workspace by default), the remote API and the MCP tools
+(`session_logs`, `session_transcript`), and the chat relays.
+
+Rejected: keeping the tab for read-only viewers only. They get the Workspace without a composer,
+which is the same page, and a second rendering of the conversation is a second place for the
+two to drift apart, as the markdown styles already had once.
 
 ## The notification hook filters by type, not by the word "permission"
 

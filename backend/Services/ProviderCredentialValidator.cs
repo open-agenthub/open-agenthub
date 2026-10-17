@@ -23,7 +23,14 @@ public static class ProviderCredentialValidator
 
             return agent switch
             {
-                AgentKind.Claude => root.TryGetProperty("claudeAiOauth", out var oauth) && oauth.ValueKind == JsonValueKind.Object,
+                // Pinned from Claude Code 2.1.287: a non-empty accessToken, and a refreshToken that is
+                // not "". After invalid_grant the CLI writes both as "" over its own file; storing that
+                // would replace the account every later session starts from with nothing (issue #116).
+                AgentKind.Claude => root.TryGetProperty("claudeAiOauth", out var oauth) && oauth.ValueKind == JsonValueKind.Object &&
+                    oauth.TryGetProperty("accessToken", out var access) && access.ValueKind == JsonValueKind.String &&
+                    !string.IsNullOrEmpty(access.GetString()) &&
+                    !(oauth.TryGetProperty("refreshToken", out var refresh) && refresh.ValueKind == JsonValueKind.String &&
+                        refresh.GetString() == ""),
                 AgentKind.Codex => root.TryGetProperty("tokens", out var tokens) && tokens.ValueKind == JsonValueKind.Object,
                 // Pinned from Cursor Agent CLI file store (2026.07.23-e383d2b): auth.json
                 // shape is { accessToken, refreshToken, apiKey?, bedrockCredentials? }.

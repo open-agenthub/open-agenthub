@@ -158,7 +158,7 @@ export function mergeConversationPage(current, page) {
   return next
 }
 
-// What the Transcript tab renders from one conversation page. A native page carries the
+// What the Workspace renders from one conversation page. A native page carries the
 // provider's own turns and needs no guessing; the scrollback fallback goes through the
 // terminal heuristics above, which exist only because terminal output has no roles.
 export function toTranscriptItems(page) {

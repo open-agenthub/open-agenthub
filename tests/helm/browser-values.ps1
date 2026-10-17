@@ -81,8 +81,11 @@ Assert-NotContains $disabled 'port: 9222'
 # requests would then be unable to manage the policies it creates.
 Assert-Contains $disabled 'resources: ["networkpolicies"]'
 
-# Least privilege still holds: with neither feature enabled there is nothing to manage.
-$noPolicies = Render @('--set', 'browser.enabled=false', '--set', 'agent.portRequests.enabled=false')
+# Least privilege still holds: with none of the three features enabled there is nothing to
+# manage. Session containers count as one: the session pod's egress to its helper namespace is a
+# per-session policy (tests/helm/session-containers-values.ps1).
+$noPolicies = Render @('--set', 'browser.enabled=false', '--set', 'agent.portRequests.enabled=false',
+    '--set', 'sessionContainers.enabled=false')
 Assert-NotContains $noPolicies 'resources: ["networkpolicies"]'
 
 Write-Output 'Browser Helm values and least-privilege RBAC assertions passed.'

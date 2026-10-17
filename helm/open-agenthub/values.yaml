@@ -121,6 +121,37 @@ agent:
       - "9000-9100"   # MinIO, php-fpm
       - "27017"       # MongoDB
 
+# Helper containers an agent starts over MCP (a database, a queue, a service under test),
+# each session in a namespace of its own (docs/session-containers.md). The agent never gets
+# Kubernetes API access: the hub builds every pod itself, with the session's security context,
+# Pod Security Admission "restricted" ("baseline" for a session that itself runs as root) and
+# the session's egress policy. Needs spawnMcpEnabled (the tools live on agenthub_sessions)
+# and Kubernetes 1.30+ (ValidatingAdmissionPolicy confines the backend's new cluster rights to
+# the namespaces it created). Set enabled: false to install none of the cluster-wide RBAC.
+sessionContainers:
+  enabled: true
+  # Session namespaces are "<prefix><sessionId>". Empty = "<sessionsNamespace>-".
+  namespacePrefix: ""
+  # Registry hosts a helper image may come from, e.g. [docker.io, registry.example.com].
+  # [] = any registry, as for a custom session image.
+  allowedRegistries: []
+  # Accept only image@sha256:... references.
+  requireDigest: false
+  # ResourceQuota of one session namespace. Every helper requests what it limits, so these are
+  # hard sums. Per owner this is bounded by maxRunningSessionsPerOwner times the quota.
+  quota:
+    pods: 5
+    cpu: "2"
+    memory: 4Gi
+    ephemeralStorage: 10Gi
+  # Per helper container. maxVolumeSize bounds each emptyDir and the helper's ephemeral storage.
+  container:
+    defaultCpu: 250m
+    defaultMemory: 256Mi
+    maxCpu: "1"
+    maxMemory: 2Gi
+    maxVolumeSize: 2Gi
+
 files:
   maxImageBytes: 20971520
   maxDocumentBytes: 52428800
@@ -280,8 +311,10 @@ telemetry:
 
 # Enterprise features (require a valid license).
 ee:
-  # Comma-separated list of admin usernames (preferred_username). Empty = every
-  # signed-in user is an admin (bootstrap; lock this down for real deployments).
+  # Comma-separated list of admin usernames (preferred_username): break-glass admins that
+  # the admin area cannot demote. Everyone else can be made an admin or a regular user in
+  # Admin → Users & seats without a redeploy. Empty and nobody designated there (or via an
+  # admin group) = every signed-in user is an admin (bootstrap). See docs/admin-roles.md.
   admins: ""
   # Optional link to the billing portal (Stripe customer portal via the license service),
   # surfaced in the Admin area for subscription/invoice management.

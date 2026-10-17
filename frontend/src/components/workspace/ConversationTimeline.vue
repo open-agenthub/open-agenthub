@@ -5,7 +5,10 @@ import { renderMermaidBlocks } from '../../lib/mermaid.js'
 import WorkLog from './WorkLog.vue'
 import MessageActions from './MessageActions.vue'
 
-const props = defineProps({ items: { type: Array, default: () => [] }, loading: Boolean, error: String, canQuote: Boolean, source: String })
+// inviting: the person can give this session a task. Otherwise — a finished run, a read-only
+// share, an autonomous session — an empty conversation is a record with nothing saved in it,
+// and "Give your agent a task" would point at a composer that is not there.
+const props = defineProps({ items: { type: Array, default: () => [] }, loading: Boolean, error: String, canQuote: Boolean, source: String, inviting: Boolean })
 defineEmits(['quote', 'retry'])
 const scroller = ref(null)
 const query = ref('')
@@ -41,6 +44,7 @@ watch([() => props.items, query], async () => {
       <div class="timeline">
         <p v-if="loading && !items.length" class="empty" role="status">Loading conversation…</p>
         <div v-else-if="error" class="empty" role="alert">{{ error }} <button type="button" @click="$emit('retry')">Retry</button></div>
+        <p v-else-if="!items.length && !inviting" class="empty" data-conversation-empty>No saved conversation.</p>
         <div v-else-if="!items.length" class="empty">
           <span class="empty-symbol" aria-hidden="true">✳</span>
           <h2>Your agent’s workspace</h2>
@@ -53,7 +57,9 @@ watch([() => props.items, query], async () => {
           </WorkLog>
           <article v-else class="message" :class="'message-' + item.role" :data-workspace-role="item.role">
             <span class="message-label">{{ item.label }}</span>
-            <div v-if="item.role === 'assistant'" class="md" v-html="renderMarkdown(item.text)"></div>
+            <!-- What the person or the model wrote is markdown, as in the streaming Workspace;
+                 scrollback text stays verbatim, where markdown rules would mangle a listing. -->
+            <div v-if="item.role === 'assistant' || item.role === 'user'" class="md" v-html="renderMarkdown(item.text)"></div>
             <pre v-else>{{ item.text }}</pre>
             <MessageActions :text="item.text" :can-quote="canQuote" @quote="$emit('quote', $event)" />
           </article>

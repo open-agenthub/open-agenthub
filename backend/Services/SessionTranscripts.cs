@@ -19,7 +19,7 @@ public static class SessionTranscripts
     }
 
     /// <summary>
-    /// One page for the web app's Workspace and Transcript tab. Null when the session is unknown.
+    /// One page for the web app's Workspace. Null when the session is unknown.
     /// <paramref name="live"/> reads a running session's transcript from its pod; when it has
     /// nothing, the page comes from the stored copy.
     /// </summary>

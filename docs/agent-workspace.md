@@ -1,8 +1,9 @@
 # One session, two surfaces
 
 The session's **Workspace** tab puts the conversation above a docked composer and an optional
-agent terminal or shell. **Terminal**, **Shell**, and **Transcript** remain available for terminal
-sessions. Switching
+agent terminal or shell. **Terminal** and **Shell** remain available for terminal sessions; the
+saved conversation is read in the Workspace only (the Transcript tab was removed, see
+`transcripts.md`). Switching
 surfaces does not change the session's execution mode, start another provider, or replay a task.
 
 ## UI provenance
@@ -96,12 +97,32 @@ Three adjustments came with the merge:
   (always `terminal` since #114) and the session opens on the surface that was picked; see
   `session-mode-conversion.md`.
 - **A failed history load is an error with Retry**, not main's "[no saved transcript]". In the
-  Transcript tab the two looked the same; in the Workspace an empty conversation over a running
+  former Transcript tab the two looked the same; in the Workspace an empty conversation over a running
   agent reads as "nothing happened yet", and a 503 must not say that.
 - **The session title keeps at least 240 px.** The bar now holds the account picker, Files,
-  four tabs and the actions; with the title allowed to shrink to nothing, it was cut to its
+  the tabs and the actions; with the title allowed to shrink to nothing, it was cut to its
   first letter on a phone and to "Works…" at 1440 px. The controls wrap onto a second line
   instead.
+
+## Closing the browser and Files panes
+
+Both panes close from an × on their own tab in the companion strip, and with Escape while focus
+is in the pane's chrome. That strip is shown at every width, so desktop and phone get the same
+control; the phone's Files/Browser/Agent switcher only switches. *Files* and *Browser* in the
+session bar open them again.
+
+Closing only hides the pane in this view. The alternatives were rejected for what they break:
+
+- **Stopping the browser on close** would end the page the agent is driving in the middle of its
+  task; the lease is the agent's, and other viewers of a shared session would lose it too.
+- **Dismissing the presentation on close** is what *Dismiss for everyone* already does, for every
+  viewer. Closing for oneself must not reach anyone else.
+- **Escape inside the remote browser** is not taken. There the keyboard is forwarded to the page,
+  and capturing Escape would make a dialog inside that page impossible to dismiss.
+- **Keeping the choice per tab in `TerminalView`** would reopen the pane on every switch between
+  Workspace and Terminal. `SessionWorkspace` wraps both surfaces, so the choice is kept there, for
+  the session that is open. A browser that stops and is requested again is a new lease and shows
+  again; a file the agent presents again opens Files again, as before.
 
 ## Limits of this integration
 

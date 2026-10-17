@@ -199,5 +199,8 @@ module.exports = {
   prepare,
   // Same shape check the watcher applies before uploading, so a swap never installs a file the
   // watcher would then refuse to back up.
-  validCredential: require('./auth-watcher').validCredential
+  validCredential: require('./auth-watcher').validCredential,
+  // Verified with 2.1.287: a running CLI keys its token cache on the file's mtime and sends the
+  // next request with a file swapped in by rename, without a 401 first (issue #116).
+  reloadsCredentialLive: true
 };

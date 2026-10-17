@@ -1,0 +1,158 @@
+{{- if .Values.sessionContainers.enabled }}
+{{- $backend := printf "system:serviceaccount:%s:agenthub-backend" .Release.Namespace }}
+{{- $prefix := include "agenthub.sessionContainerPrefix" . }}
+{{- $role := include "agenthub.sessionContainerRole" . }}
+{{- $levels := ternary (list "restricted" "baseline") (list "restricted") .Values.agent.allowRootSessions }}
+# Session containers (docs/session-containers.md): each session that starts a helper gets a
+# namespace of its own. Creating namespaces is a cluster-wide right, more than the backend held
+# before, so it comes in three parts:
+#   1. this ClusterRole — namespaces, and RoleBindings to exactly one ClusterRole (bind is
+#      limited by resourceNames);
+#   2. the per-namespace ClusterRole below, which the backend binds to itself in each namespace
+#      it creates, so its pod rights exist only where a session's helpers live;
+#   3. two ValidatingAdmissionPolicies. RBAC cannot select by label, so on its own (1) would let
+#      the backend create RoleBindings — and with them pods — in any namespace. The policies
+#      admit the backend's writes only in namespaces that carry this release's label and prefix,
+#      and only with a PSA level of restricted (or baseline when root sessions are allowed).
+#      The backend cannot add that label to an existing namespace: it holds no update right on
+#      namespaces, so the only labelled namespaces are the ones it created itself.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $role }}-namespaces
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["rolebindings"]
+    verbs: ["create"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles"]
+    verbs: ["bind"]
+    resourceNames: [{{ $role | quote }}]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $role }}-namespaces
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $role }}-namespaces
+subjects:
+  - kind: ServiceAccount
+    name: agenthub-backend
+    namespace: {{ .Release.Namespace }}
+---
+# Bound per session namespace by a RoleBinding the backend creates there; never cluster-wide.
+# No secrets, configmaps, serviceaccounts, pods/exec or roles: a helper is built from the
+# request alone, and none of those is needed to run it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $role }}
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["services", "resourcequotas", "limitranges"]
+    verbs: ["get", "list", "create", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "create", "delete"]
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $role }}-namespaces
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["*"]
+        resources: ["namespaces"]
+        operations: ["CREATE", "UPDATE", "DELETE"]
+  matchConditions:
+    - name: backend-only
+      expression: request.userInfo.username == {{ $backend | quote }}
+  variables:
+    - name: ns
+      expression: 'request.operation == "DELETE" ? oldObject : object'
+    - name: labels
+      expression: 'has(variables.ns.metadata.labels) ? variables.ns.metadata.labels : {}'
+  validations:
+    - expression: variables.ns.metadata.name.startsWith({{ $prefix | quote }})
+      message: {{ printf "the backend may only manage namespaces named %s<session>" $prefix | quote }}
+    - expression: '"agenthub.dev/session-containers" in variables.labels && variables.labels["agenthub.dev/session-containers"] == {{ .Release.Namespace | quote }}'
+      message: the backend may only manage session-container namespaces of its own release
+    - expression: 'request.operation == "DELETE" || ("pod-security.kubernetes.io/enforce" in variables.labels && variables.labels["pod-security.kubernetes.io/enforce"] in {{ toJson $levels }})'
+      message: {{ printf "a session-container namespace must enforce Pod Security %s" (join " or " $levels) | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $role }}-namespaces
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $role }}-namespaces
+  validationActions: [Deny]
+---
+# Every namespaced write of the backend outside its two own namespaces must land in one of its
+# session-container namespaces, and a RoleBinding there may only grant the per-namespace role
+# to the backend itself.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $role }}-scope
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [{{ .Release.Namespace | quote }}, {{ .Values.sessionsNamespace | quote }}]
+    resourceRules:
+      - apiGroups: ["*"]
+        apiVersions: ["*"]
+        # "*/*" rather than "*": only it includes subresources (pods/exec, pods/ephemeralcontainers),
+        # and the API server refuses a list that has both.
+        resources: ["*/*"]
+        operations: ["CREATE", "UPDATE", "DELETE", "CONNECT"]
+        scope: Namespaced
+  matchConditions:
+    - name: backend-only
+      expression: request.userInfo.username == {{ $backend | quote }}
+  validations:
+    - expression: >-
+        namespaceObject != null && has(namespaceObject.metadata.labels)
+        && "agenthub.dev/session-containers" in namespaceObject.metadata.labels
+        && namespaceObject.metadata.labels["agenthub.dev/session-containers"] == {{ .Release.Namespace | quote }}
+      message: the backend may only write into session-container namespaces of its own release
+    - expression: >-
+        request.resource.resource != "rolebindings" || request.operation == "DELETE"
+        || (object.roleRef.kind == "ClusterRole" && object.roleRef.name == {{ $role | quote }}
+            && has(object.subjects) && object.subjects.all(s, s.kind == "ServiceAccount"
+               && s.name == "agenthub-backend" && s.namespace == {{ .Release.Namespace | quote }}))
+      message: {{ printf "a RoleBinding of the backend may only grant %s to the backend itself" $role | quote }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $role }}-scope
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $role }}-scope
+  validationActions: [Deny]
+{{- end }}

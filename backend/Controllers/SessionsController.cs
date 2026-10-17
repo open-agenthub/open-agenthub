@@ -147,7 +147,7 @@ public sealed class SessionsController : ControllerBase
 
     /// <summary>
     /// The cleaned terminal scrollback. The ended-terminal replay and the chat pane's history
-    /// read this; the Transcript tab reads <see cref="Conversation"/>.
+    /// read this; the Workspace reads <see cref="Conversation"/>.
     /// </summary>
     [HttpGet("{id}/transcript")]
     public async Task<IActionResult> Transcript(string id, CancellationToken ct)
@@ -157,7 +157,7 @@ public sealed class SessionsController : ControllerBase
     }
 
     /// <summary>
-    /// The conversation for the Transcript tab, paged by an opaque cursor so the tab can follow a
+    /// The conversation for the Workspace, paged by an opaque cursor so the view can follow a
     /// running session without re-downloading what it already shows. See <see cref="ConversationPage"/>.
     /// </summary>
     [HttpGet("{id}/conversation")]

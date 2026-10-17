@@ -840,8 +840,13 @@ function createCommonServer(options = {}) {
    * provider. The request names no path — the file goes where the driver says and nowhere else
    * (docs/provider-accounts.md, "Switching the account"). The watcher baseline is written first
    * so the poll that follows the install does not upload the file straight back.
+   *
+   * PUT /agenthub/credentials/refresh (`live`): the same login with tokens the hub renewed
+   * (docs/provider-accounts.md, "The hub owns each login"). Installed without a restart, and only
+   * for a driver whose CLI is known to re-read its file; an older pod answers 404 here, which the
+   * hub takes as "not this time" rather than falling back to a restart.
    */
-  async function handleCredentialRequest(request, response) {
+  async function handleCredentialRequest(request, response, live = false) {
     if (!tokenMatches(request.headers['x-agent-token'])) {
       fileError(response, 401, 'unauthorized');
       return;
@@ -856,7 +861,12 @@ function createCommonServer(options = {}) {
       fileError(response, 409, 'provider_mismatch');
       return;
     }
-    if (exited) {
+    if (live && driver.reloadsCredentialLive !== true) {
+      fileError(response, 409, 'live_reload_unsupported');
+      return;
+    }
+    // A refresh still lands after the agent exited: whatever starts it next reads the file.
+    if (exited && !live) {
       fileError(response, 409, 'agent_exited');
       return;
     }
@@ -883,6 +893,13 @@ function createCommonServer(options = {}) {
     credentials.writeBaselineHash(credentials.baselineFile(env), credentials.sha256(body), fs);
     if (typeof driver.installCredential === 'function') driver.installCredential(env, body, target, fs);
     else credentials.writeCredentialFile(target, body, fs);
+    if (live) {
+      // The same login with new tokens: the CLI notices the file changed and uses it on its
+      // next request, so a restart would only cost the user a running turn.
+      console.log('[agent] Provider credential refreshed by the hub.');
+      sendJson(response, 200, { installed: true, restarting: false });
+      return;
+    }
     // A reason from the hub (the automatic failover says why) replaces the generic line and
     // names the event, so a person reading the scrollback or the chat sees the switch happen.
     const reason = switchReason(request.headers['x-agent-switch-reason']);
@@ -1145,6 +1162,7 @@ function createCommonServer(options = {}) {
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
+    if (requestPath === '/agenthub/credentials/refresh') return handleCredentialRequest(request, response, true);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
     if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||

@@ -1,5 +1,5 @@
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
 import WorkspaceStream from './workspace/WorkspaceStream.vue'
@@ -14,8 +14,6 @@ import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
 import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
-import { renderMarkdown } from '../lib/markdown.js'
-import { renderMermaidBlocks } from '../lib/mermaid.js'
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
@@ -24,6 +22,9 @@ const props = defineProps({ session: Object, sharedToken: { type: String, defaul
 const emit = defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
+// Reopens a browser pane the person closed; it stays offered while the pane is open because on a
+// phone it is also the quickest way back to the browser from the agent.
+const browserRunning = computed(() => (props.session?.browser?.phase || 'Stopped') !== 'Stopped')
 // A stopped autonomous run is offered as an interactive continuation next to the plain Resume;
 // the backend's own flag decides, so the card never appears where the call would answer 409.
 const showConvert = computed(() => !props.sharedToken && capabilities.value.canManage && canConvert(props.session))
@@ -33,34 +34,28 @@ const isChat = computed(() => props.session?.uiMode === 'chat')
 const activeTab = ref(isChat.value || (props.initialUi || preferredUi()) === 'workspace' ? 'workspace' : 'agent')
 const modern = computed(() => activeTab.value === 'workspace')
 const workspaceOpened = ref(activeTab.value === 'workspace')
-const conversationVisible = computed(() => activeTab.value === 'transcript' || (modern.value && !isChat.value))
+// The Workspace is the one place the saved conversation is shown; a separate Transcript tab
+// duplicated it and was removed (#113). Streaming sessions render their own frames instead.
+const conversationVisible = computed(() => modern.value && !isChat.value)
 const terminalOpened = ref(false)
 const drawerKind = ref('agent')
 const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
 const transcriptBusy = ref(false)
-const canCompose = computed(() => capabilities.value.canWrite && isLive.value &&
-  String(props.session?.mode).toLowerCase() === 'interactive' && statuses.agent === 'connected')
+const canTask = computed(() => capabilities.value.canWrite && isLive.value &&
+  String(props.session?.mode).toLowerCase() === 'interactive')
+const canCompose = computed(() => canTask.value && statuses.agent === 'connected')
 watch(isChat, chat => { if (chat) activeTab.value = 'workspace' })
 const shellOpened = ref(false)
 const shareOpen = ref(false)
-// The Transcript tab's page: null until first loaded. `source` is 'native' (role-tagged turns
+// The Workspace conversation's page: null until first loaded. `source` is 'native' (role-tagged turns
 // from the provider's own transcript) or 'scrollback' (cleaned terminal text, rendered through
 // the heuristics in lib/transcript.js because terminal output has no roles).
 const conversation = ref(null)
 const transcriptItems = computed(() => toTranscriptItems(conversation.value))
-// A native turn is what the person or the model wrote, so it is markdown like the chat pane's
-// bubbles; tool calls, results and scrollback text are shown verbatim, because a diff or a
-// shell listing would only be mangled by markdown rules.
-const isProse = item => item.role === 'user' || item.role === 'assistant'
-const transcriptList = ref(null)
-watch(transcriptItems, async () => {
-  await nextTick()
-  if (transcriptList.value) void renderMermaidBlocks(transcriptList.value)
-})
 const workspace = ref(null)
-const statuses = reactive({ agent: 'connecting…', shell: '', transcript: '' })
+const statuses = reactive({ agent: 'connecting…', shell: '' })
 
 // In-app approval of tool-permission requests (in addition to the messengers).
 const pendingPermissions = ref([])
@@ -291,7 +286,7 @@ watch(() => props.session?.id, () => {
   if (conversationVisible.value) loadTranscript()
 })
 // The session agent uploads once more as it exits; one final fetch after the phase settles
-// picks that tail up instead of leaving the tab on the last live poll.
+// picks that tail up instead of leaving the conversation on the last live poll.
 watch(isLive, (live, wasLive) => { if (!live && wasLive) refreshTranscript(true) })
 watch(() => props.session?.credentialId, id => { if (id && id === switchedTo.value) switchedTo.value = '' })
 
@@ -406,11 +401,11 @@ function interruptWorkspaceAgent() {
         </select>
       </label>
       <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
+      <button v-if="browserRunning" class="bar-btn" data-open-browser @click="workspace?.openBrowser()">Browser</button>
       <nav class="tabs">
         <button :class="{ on: modern }" data-open-workspace @click="selectTab('workspace')">Workspace</button>
         <button v-if="!isChat" :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">Terminal</button>
         <button v-if="isLive && capabilities.canShell" :class="{ on: activeTab === 'shell' }" @click="selectTab('shell')">{{ tabLabel('shell') }}</button>
-        <button v-if="!isChat" :class="{ on: activeTab === 'transcript' }" @click="selectTab('transcript')">Transcript</button>
       </nav>
       <span v-if="!capabilities.canWrite" class="readonly">Read-only</span>
       <template v-if="capabilities.canManage">
@@ -541,7 +536,7 @@ function interruptWorkspaceAgent() {
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :items="transcriptItems" :loading="transcriptBusy"
-          :error="transcriptError" :source="conversation?.source" :can-quote="canCompose"
+          :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
           @retry="loadTranscript" @quote="composer?.quote($event)" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
         <div v-if="modern" class="drawer-toolbar">
@@ -560,23 +555,6 @@ function interruptWorkspaceAgent() {
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
           ref="composer" :session-id="session.id" :enabled="canCompose" :status="statuses.agent" :agent="session.agent"
           :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" />
-        <section v-if="activeTab === 'transcript'" class="transcript" aria-labelledby="transcript-heading">
-          <div class="transcript-inner">
-            <h3 id="transcript-heading">What happened so far</h3>
-            <p v-if="transcriptError" class="transcript-state" role="alert">{{ transcriptError }} <button @click="loadTranscript">Retry</button></p>
-            <p v-else-if="conversation === null" class="transcript-state">Loading…</p>
-            <p v-else-if="!transcriptItems.length" class="transcript-state">[no saved transcript]</p>
-            <ol v-else ref="transcriptList" class="transcript-list" :aria-label="conversation.source === 'native' ? 'Conversation' : 'Terminal transcript'"
-                :data-transcript-source="conversation.source">
-              <li v-for="(item, index) in transcriptItems" :key="index" class="transcript-bubble" :class="'role-' + item.role"
-                  :data-transcript-role="item.role">
-                <span class="transcript-label">{{ item.label }}</span>
-                <div v-if="isProse(item)" class="md transcript-text transcript-md" data-transcript-markdown v-html="renderMarkdown(item.text)"></div>
-                <pre v-else class="transcript-text">{{ item.text }}</pre>
-              </li>
-            </ol>
-          </div>
-        </section>
       </div>
     </SessionWorkspace>
   </div>
@@ -665,16 +643,4 @@ function interruptWorkspaceAgent() {
 .drawer-toolbar button[aria-expanded=true] { color: var(--strong); background: var(--panel-2); }
 .sync-note { margin-right: auto; color: var(--muted-3); font-size: 10px; }
 @media(max-width: 640px) { .sync-note { max-width: 45%; line-height: 1.4; } .perm-actions { flex-wrap: wrap; } }
-.transcript { flex: 1; overflow-y: auto; min-height: 0; background: var(--bg); }
-.transcript-inner { max-width: 760px; margin: 0 auto; padding: 26px 24px; }
-.transcript-inner h3 { font-size: 20px; margin: 0 0 14px; }
-.transcript-list { display: flex; flex-direction: column; gap: 12px; list-style: none; margin: 0; padding: 0; }
-.transcript-bubble { padding: 12px 14px 14px; background: var(--panel); border: 1px solid var(--border-2); border-left: 3px solid var(--accent); border-radius: 12px; }
-.transcript-bubble.role-user { border-left-color: var(--accent-2); background: var(--panel-2); }
-.transcript-bubble.role-tool, .transcript-bubble.role-result { border-left-color: var(--border-3); }
-.transcript-bubble.role-tool pre, .transcript-bubble.role-result pre { color: var(--muted); font-size: 12px; }
-.transcript-label { display: block; color: var(--muted-2); font: 700 10px/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
-.transcript-bubble pre { margin: 7px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font: 13px/1.6 var(--mono); color: #c9c4bb; }
-.transcript-md { margin-top: 7px; font-size: 14px; line-height: 1.6; color: var(--text); overflow-wrap: anywhere; }
-.transcript-state { margin: 0; color: var(--muted-3); font: 13px/1.6 var(--mono); }
 </style>

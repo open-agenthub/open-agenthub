@@ -32,6 +32,23 @@ data:
   AgentHub__TelemetryOtlpEndpoint: {{ .Values.telemetry.otlpEndpoint | default "" | quote }}
   AgentHub__MaxRunningSessionsPerOwner: {{ .Values.maxRunningSessionsPerOwner | default 50 | quote }}
   AgentHub__SpawnMcpEnabled: {{ .Values.spawnMcpEnabled | quote }}
+  SessionContainers__Enabled: {{ .Values.sessionContainers.enabled | quote }}
+  SessionContainers__HubId: {{ .Release.Namespace | quote }}
+  SessionContainers__NamespacePrefix: {{ include "agenthub.sessionContainerPrefix" . | quote }}
+  SessionContainers__ClusterRoleName: {{ include "agenthub.sessionContainerRole" . | quote }}
+  # One string, like Network__RequestablePorts: an empty list must stay empty.
+  SessionContainers__AllowedRegistries: {{ join "," .Values.sessionContainers.allowedRegistries | quote }}
+  SessionContainers__RequireDigest: {{ .Values.sessionContainers.requireDigest | quote }}
+  SessionContainers__EgressPorts: {{ include "agenthub.agentEgressTcpPorts" . | quote }}
+  SessionContainers__MaxPods: {{ .Values.sessionContainers.quota.pods | quote }}
+  SessionContainers__QuotaCpu: {{ .Values.sessionContainers.quota.cpu | quote }}
+  SessionContainers__QuotaMemory: {{ .Values.sessionContainers.quota.memory | quote }}
+  SessionContainers__QuotaEphemeralStorage: {{ .Values.sessionContainers.quota.ephemeralStorage | quote }}
+  SessionContainers__DefaultCpu: {{ .Values.sessionContainers.container.defaultCpu | quote }}
+  SessionContainers__DefaultMemory: {{ .Values.sessionContainers.container.defaultMemory | quote }}
+  SessionContainers__MaxCpu: {{ .Values.sessionContainers.container.maxCpu | quote }}
+  SessionContainers__MaxMemory: {{ .Values.sessionContainers.container.maxMemory | quote }}
+  SessionContainers__MaxVolumeSize: {{ .Values.sessionContainers.container.maxVolumeSize | quote }}
   Network__Enabled: {{ .Values.agent.portRequests.enabled | quote }}
   # One string (not indexed keys): an empty list must yield an EMPTY allowlist in the
   # backend instead of falling back to the compiled-in defaults.

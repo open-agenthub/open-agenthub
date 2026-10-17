@@ -22,7 +22,7 @@ namespace AgentHub.Api.Services;
 /// Security: no root, no capabilities, read-only rootfs, dedicated namespace,
 /// the agent pod gets no S3 creds (only presigned URLs) and no K8s token.
 /// </summary>
-public sealed class KubernetesSessionService : ISessionService
+public sealed class KubernetesSessionService : ISessionService, IProviderLoginRepository
 {
     private readonly Kubernetes _k8s;
     private readonly ISessionStore _store;
@@ -39,6 +39,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly ISessionFileCleanup? _fileCleanup;
     private readonly Network.INetworkSessionCleanup? _networkCleanup;
     private readonly IAgentCredentialPusher? _credentialPusher;
+    private readonly Containers.ISessionContainerCleanup? _containerCleanup;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -47,6 +48,7 @@ public sealed class KubernetesSessionService : ISessionService
     private readonly bool _browserEnabled;
     private readonly bool _spawnMcpEnabled;
     private readonly bool _networkMcpEnabled;
+    private readonly bool _containersEnabled;
     private readonly int _maxRunningSessionsPerOwner;
     private readonly string? _frontendOrigin;
 
@@ -61,9 +63,11 @@ public sealed class KubernetesSessionService : ISessionService
         ILibraryAccess library, IMcpServerStore mcpServers, IEphemeralApiMcpStore ephemeralApiMcps,
         IMcpGatewayTokenService mcpGatewayTokens, ILogger<KubernetesSessionService> log,
         ISessionFileCleanup? fileCleanup = null, Network.INetworkSessionCleanup? networkCleanup = null,
-        IAgentCredentialPusher? credentialPusher = null)
+        IAgentCredentialPusher? credentialPusher = null,
+        Containers.ISessionContainerCleanup? containerCleanup = null)
     {
         _log = log;
+        _containerCleanup = containerCleanup;
         _credentialPusher = credentialPusher;
         _store = store;
         _projects = projects;
@@ -91,6 +95,7 @@ public sealed class KubernetesSessionService : ISessionService
         _browserEnabled = cfg.GetValue("Browser:Enabled", true);
         _spawnMcpEnabled = cfg.GetValue("AgentHub:SpawnMcpEnabled", true);
         _networkMcpEnabled = cfg.GetValue("Network:Enabled", true);
+        _containersEnabled = cfg.GetValue("SessionContainers:Enabled", false);
         _maxRunningSessionsPerOwner = SessionSoftLimit.NormalizeMax(
             cfg.GetValue("AgentHub:MaxRunningSessionsPerOwner", SessionSoftLimit.DefaultMax));
         // Origin of the session link returned to an API or MCP caller. See SessionUrl for why this
@@ -164,11 +169,11 @@ public sealed class KubernetesSessionService : ISessionService
     {
         if (!ProviderCredentialValidator.Validate(agent, json))
             throw new ArgumentException("Invalid provider credential document.", nameof(json));
-        var set = await ReadProviderAccountsAsync(owner, agent, ct);
-        var attached = ProviderAccountSecret.Attach(set, Encoding.UTF8.GetBytes(json), identity, mountedCredentialId);
-        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        var attached = await MutateProviderAccountsAsync(owner, agent,
+            set => ProviderAccountSecret.Attach(set, Encoding.UTF8.GetBytes(json), identity, mountedCredentialId, agent: agent), ct);
         _log.LogInformation("Saved {Agent} login for {Owner} into account {Account} ({Outcome})",
-            agent, owner, attached.AccountId, attached.Created ? "new" : "updated");
+            agent, owner, attached.AccountId,
+            attached.Created ? "new" : attached.Stale ? "older than the stored one, kept the stored one" : "updated");
         return attached.AccountId;
     }
 
@@ -188,32 +193,33 @@ public sealed class KubernetesSessionService : ISessionService
     public async Task<ProviderAccountInfo?> UpdateProviderAccountAsync(string owner, AgentKind agent, string id,
         UpdateProviderAccountRequest req, CancellationToken ct = default)
     {
-        var set = await ReadProviderAccountsAsync(owner, agent, ct);
-        var account = set.Find(id);
-        if (account is null) return null;
-        if (req.Label is not null) { account.Label = ProviderAccountSecret.NormalizeLabel(req.Label); set.Dirty = true; }
-        if (req.IsDefault == true) ProviderAccountSecret.MakeDefault(set, id);
-        if (req.ClearExhausted == true) ProviderAccountSecret.ClearExhausted(set, id);
-        await WriteProviderAccountsAsync(owner, agent, set, ct);
-        return ProviderAccountInfo.From(account);
+        var label = req.Label is null ? null : ProviderAccountSecret.NormalizeLabel(req.Label);
+        var account = await MutateProviderAccountsAsync(owner, agent, set =>
+        {
+            var found = set.Find(id);
+            if (found is null) return null;
+            if (label is not null) { found.Label = label; set.Dirty = true; }
+            if (req.IsDefault == true) ProviderAccountSecret.MakeDefault(set, id);
+            if (req.ClearExhausted == true) ProviderAccountSecret.ClearExhausted(set, id);
+            return found;
+        }, ct);
+        return account is null ? null : ProviderAccountInfo.From(account);
     }
 
     public async Task<ProviderAccountInfo?> MarkProviderAccountExhaustedAsync(string owner, AgentKind agent, string id,
         DateTime until, string? reason, CancellationToken ct = default)
     {
-        var set = await ReadProviderAccountsAsync(owner, agent, ct);
-        if (!ProviderAccountSecret.MarkExhausted(set, id, until, reason)) return null;
-        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        var account = await MutateProviderAccountsAsync(owner, agent,
+            set => ProviderAccountSecret.MarkExhausted(set, id, until, reason) ? set.Find(id) : null, ct);
+        if (account is null) return null;
         _log.LogInformation("Marked {Agent} account {Account} of {Owner} as at its usage limit until {Until}",
             agent, id, owner, until);
-        return ProviderAccountInfo.From(set.Find(id)!);
+        return ProviderAccountInfo.From(account);
     }
 
     public async Task DeleteProviderAccountAsync(string owner, AgentKind agent, string id, CancellationToken ct = default)
     {
-        var set = await ReadProviderAccountsAsync(owner, agent, ct);
-        if (!ProviderAccountSecret.Remove(set, id)) return;
-        await WriteProviderAccountsAsync(owner, agent, set, ct);
+        if (!await MutateProviderAccountsAsync(owner, agent, set => ProviderAccountSecret.Remove(set, id), ct)) return;
         _log.LogInformation("Deleted {Agent} account for {Owner}", agent, owner);
     }
 
@@ -224,15 +230,54 @@ public sealed class KubernetesSessionService : ISessionService
     /// </summary>
     private async Task<ProviderAccountSet> ReadProviderAccountsAsync(string owner, AgentKind agent, CancellationToken ct)
     {
-        var data = (await ReadSecretOrNullAsync(ProviderSecretName(owner, agent), ct))?.Data;
-        var set = ProviderAccountSecret.Read(data, agent);
-        if (set.Dirty && data is not null)
+        for (var attempt = 1; ; attempt++)
         {
-            await WriteProviderAccountsAsync(owner, agent, set, ct);
-            _log.LogInformation("Normalised the {Agent} login secret of {Owner} to the account layout", agent, owner);
+            var secret = await ReadSecretOrNullAsync(ProviderSecretName(owner, agent), ct);
+            var set = ProviderAccountSecret.Read(secret?.Data, agent);
+            set.ResourceVersion = secret?.Metadata?.ResourceVersion;
+            if (!set.Dirty || secret?.Data is null) return set;
+            try
+            {
+                await WriteProviderAccountsAsync(owner, agent, set, ct);
+                _log.LogInformation("Normalised the {Agent} login secret of {Owner} to the account layout", agent, owner);
+                return set;
+            }
+            catch (ProviderSecretConflictException) when (attempt < MaxSecretWriteAttempts)
+            {
+                // Most likely the same normalisation from another request; the next read sees it.
+                _log.LogDebug("The {Agent} login secret of {Owner} changed while it was normalised; reading again", agent, owner);
+            }
         }
-        return set;
     }
+
+    /// <summary>
+    /// Read, change, write — again from the read if the secret changed in between. Several
+    /// writers share one secret: every pod of the owner uploading its login, the background
+    /// refresher, the user editing a label, a usage-limit mark. A plain replace lets the last of
+    /// two concurrent writers drop the other's change without a trace, and when the dropped change
+    /// is a rotated token, the account is left holding a refresh token that was already spent.
+    /// </summary>
+    private async Task<T> MutateProviderAccountsAsync<T>(string owner, AgentKind agent,
+        Func<ProviderAccountSet, T> change, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            var set = await ReadProviderAccountsAsync(owner, agent, ct);
+            var result = change(set);
+            if (!set.Dirty) return result;
+            try
+            {
+                await WriteProviderAccountsAsync(owner, agent, set, ct);
+                return result;
+            }
+            catch (ProviderSecretConflictException) when (attempt < MaxSecretWriteAttempts)
+            {
+                _log.LogDebug("The {Agent} login secret of {Owner} changed concurrently; applying the change again", agent, owner);
+            }
+        }
+    }
+
+    private const int MaxSecretWriteAttempts = 5;
 
     private async Task WriteProviderAccountsAsync(string owner, AgentKind agent, ProviderAccountSet set, CancellationToken ct)
     {
@@ -241,10 +286,106 @@ public sealed class KubernetesSessionService : ISessionService
             await DeleteProviderCredentialsAsync(owner, agent, ct);
             return;
         }
-        await UpsertSecretAsync(CredentialSecretFactory.ProviderSecret(
-            ProviderSecretName(owner, agent), _opts.Namespace, Sanitize(owner),
-            ProviderAccountSecret.Write(set, agent)), ct);
+        await WriteProviderSecretAsync(ProviderSecretName(owner, agent), Sanitize(owner), agent, set, ct);
+    }
+
+    /// <summary>
+    /// Writes the set only if the secret is still the version it was read at: a create when it was
+    /// read as absent, a replace carrying the read's resourceVersion otherwise. The apiserver
+    /// answers a mismatch with 409, surfaced as <see cref="ProviderSecretConflictException"/>.
+    /// </summary>
+    private async Task WriteProviderSecretAsync(string name, string ownerLabel, AgentKind agent, ProviderAccountSet set,
+        CancellationToken ct)
+    {
+        var secret = CredentialSecretFactory.ProviderSecret(name, _opts.Namespace, ownerLabel, ProviderAccountSecret.Write(set, agent));
+        V1Secret written;
+        try
+        {
+            if (set.ResourceVersion is null)
+            {
+                written = await _k8s.CoreV1.CreateNamespacedSecretAsync(secret, _opts.Namespace, cancellationToken: ct);
+            }
+            else
+            {
+                secret.Metadata.ResourceVersion = set.ResourceVersion;
+                written = await _k8s.CoreV1.ReplaceNamespacedSecretAsync(secret, name, _opts.Namespace, cancellationToken: ct);
+            }
+        }
+        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.Conflict)
+        {
+            throw new ProviderSecretConflictException();
+        }
+        set.ResourceVersion = written.Metadata?.ResourceVersion;
         set.Dirty = false;
+    }
+
+    // ---------------------------------------------------------------- IProviderLoginRepository
+
+    private static string ProviderSecretPrefix(AgentKind agent) => $"{agent.ToString().ToLowerInvariant()}-";
+
+    public async Task<IReadOnlyList<string>> ListSecretNamesAsync(AgentKind agent, CancellationToken ct)
+    {
+        var prefix = ProviderSecretPrefix(agent);
+        var secrets = await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace, labelSelector: OwnerLabel,
+            resourceVersion: "0", cancellationToken: ct);
+        return secrets.Items
+            .Select(s => s.Metadata?.Name)
+            .Where(n => n is not null && n.StartsWith(prefix + "u-", StringComparison.Ordinal))
+            .Select(n => n!)
+            .ToList();
+    }
+
+    public async Task<ProviderLoginSnapshot?> ReadAsync(string secretName, AgentKind agent, CancellationToken ct)
+    {
+        if (!secretName.StartsWith(ProviderSecretPrefix(agent), StringComparison.Ordinal)) return null;
+        var secret = await ReadSecretOrNullAsync(secretName, ct);
+        if (secret?.Data is null) return null;
+        var set = ProviderAccountSecret.Read(secret.Data, agent);
+        set.ResourceVersion = secret.Metadata?.ResourceVersion;
+        return new ProviderLoginSnapshot(secretName, set);
+    }
+
+    public async Task<bool> TryWriteAsync(ProviderLoginSnapshot snapshot, AgentKind agent, CancellationToken ct)
+    {
+        var prefix = ProviderSecretPrefix(agent);
+        if (!snapshot.SecretName.StartsWith(prefix, StringComparison.Ordinal) || snapshot.Accounts.Accounts.Count == 0
+            || snapshot.Accounts.ResourceVersion is null)
+            return false;
+        try
+        {
+            await WriteProviderSecretAsync(snapshot.SecretName, snapshot.SecretName[prefix.Length..], agent, snapshot.Accounts, ct);
+            return true;
+        }
+        catch (ProviderSecretConflictException)
+        {
+            return false;
+        }
+    }
+
+    public async Task<IReadOnlyList<ProviderLoginSession>> ListRunningSessionsAsync(string secretName, AgentKind agent,
+        string accountId, CancellationToken ct)
+    {
+        var prefix = ProviderSecretPrefix(agent);
+        if (!secretName.StartsWith(prefix, StringComparison.Ordinal)) return Array.Empty<ProviderLoginSession>();
+        // The secret is named after the owner label, which is all that is needed to find the
+        // owner's pods; the owner's name itself is not recoverable from it and not needed.
+        var pods = await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace,
+            labelSelector: $"{OwnerLabel}={secretName[prefix.Length..]},{ComponentLabel}=agent",
+            resourceVersion: "0", cancellationToken: ct);
+        var running = pods.Items
+            .Where(pod => pod.Status?.Phase == "Running" && !string.IsNullOrEmpty(pod.Status.PodIP)
+                && pod.Metadata?.Labels?.ContainsKey(SessionLabel) == true)
+            .Select(pod => (Ip: pod.Status.PodIP, SessionId: pod.Metadata.Labels[SessionLabel]));
+        var sessions = new List<ProviderLoginSession>();
+        foreach (var (ip, sessionId) in running)
+        {
+            var record = await _store.GetByIdAsync(sessionId, ct);
+            // The account a session is on: the one it is pinned to, else the one resolved at start.
+            var onAccount = record is not null && record.Agent == agent && record.AuthMode != AgentAuthMode.ApiKey
+                && (record.CredentialId ?? record.ResolvedCredentialId) == accountId;
+            if (onAccount) sessions.Add(new ProviderLoginSession(record!.Id, ip, record.CallbackToken));
+        }
+        return sessions;
     }
 
     /// <summary>Checks that a requested account exists for the agent; null passes through as "default".</summary>
@@ -305,9 +446,13 @@ public sealed class KubernetesSessionService : ISessionService
         rec.ResolvedCredentialId = account.Id;
         await _credentialPusher.PushAsync(pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, reason, ct);
 
-        account.LastUsedAt = DateTime.UtcNow;
-        set.Dirty = true;
-        await WriteProviderAccountsAsync(owner, rec.Agent, set, ct);
+        await MutateProviderAccountsAsync(owner, rec.Agent, latest =>
+        {
+            if (latest.Find(account.Id) is not { } current) return false;
+            current.LastUsedAt = DateTime.UtcNow;
+            latest.Dirty = true;
+            return true;
+        }, ct);
         _log.LogInformation("Switched session {Id} to {Agent} account {Account}", id, rec.Agent, account.Id);
         return await ToInfoAsync(rec, pod.Status.Phase, pod.Status.PodIP, await _browsers.GetSummaryAsync(id, ct), ct);
     }
@@ -787,6 +932,9 @@ public sealed class KubernetesSessionService : ISessionService
             throw new ArgumentException("Scheduled sessions cannot be paused; they run on their schedule.");
 
         await _browsers.StopAsync(id, ct);
+        // Helpers do not survive a pause: their storage is emptyDir, and a paused session holding
+        // a database's quota would keep it from every session that runs.
+        if (_containerCleanup is not null) await _containerCleanup.CleanupSessionAsync(id, ct);
 
         // Longer grace than a plain delete so the graceful state upload can finish
         // before the container is killed (the k8s default of 30s is plenty; the
@@ -1237,6 +1385,7 @@ public sealed class KubernetesSessionService : ISessionService
         await _browsers.DeleteStateAsync(rec, ct);
         // Dynamic port-request NetworkPolicies (and their grant rows) die with the session.
         if (_networkCleanup is not null) await _networkCleanup.CleanupSessionAsync(id, ct);
+        if (_containerCleanup is not null) await _containerCleanup.CleanupSessionAsync(id, ct);
         await TryDeletePodAsync($"session-{id}", ct);
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
@@ -1331,6 +1480,7 @@ public sealed class KubernetesSessionService : ISessionService
                 BrowserEnabled = _browserEnabled,
                 SpawnMcpEnabled = _spawnMcpEnabled,
                 NetworkMcpEnabled = _networkMcpEnabled,
+                ContainersEnabled = _containersEnabled,
                 GitCloneImage = _opts.GitCloneImage,
                 ImagePullSecret = _opts.ImagePullSecret,
                 RuntimeClassName = _opts.RuntimeClassName,

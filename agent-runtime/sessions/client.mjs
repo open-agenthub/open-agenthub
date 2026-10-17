@@ -77,6 +77,27 @@ export class SessionsBackendClient {
     return this.#request('GET', `/messages?wait=${wait}`, undefined, MAX_COLLECTION_BYTES);
   }
 
+  /** Helper containers of this session (docs/session-containers.md). */
+  containerRun(body) {
+    return this.#request('POST', '/containers', body);
+  }
+
+  containerList() {
+    return this.#request('GET', '/containers');
+  }
+
+  containerLogs(name, { tail, previous } = {}) {
+    const query = new URLSearchParams();
+    if (tail !== undefined) query.set('tail', String(tail));
+    if (previous) query.set('previous', 'true');
+    const suffix = query.size ? `?${query}` : '';
+    return this.#request('GET', `/containers/${encodeURIComponent(name)}/logs${suffix}`);
+  }
+
+  containerStop(name) {
+    return this.#request('DELETE', `/containers/${encodeURIComponent(name)}`);
+  }
+
   async #request(method, path, body, maxBytes = MAX_RESPONSE_BYTES) {
     const headers = { 'X-Agent-Token': this.token, Accept: 'application/json' };
     const init = { method, headers, signal: AbortSignal.timeout(300_000) };
@@ -86,11 +107,25 @@ export class SessionsBackendClient {
     }
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, init);
     const bytes = await readBounded(response, maxBytes);
-    if (!response.ok) throw new Error(`sessions_backend_http_${response.status}`);
+    if (!response.ok) {
+      const error = new Error(`sessions_backend_http_${response.status}`);
+      // The backend's own sentence, when it sent one; the message itself stays the stable code
+      // every existing caller matches on.
+      const detail = errorDetail(bytes);
+      if (detail) error.detail = detail;
+      throw error;
+    }
     if (response.status === 204 || bytes.length === 0) return null;
     try { return JSON.parse(new TextDecoder().decode(bytes)); }
     catch { throw new Error('sessions_backend_invalid_json'); }
   }
+}
+
+function errorDetail(bytes) {
+  try {
+    const parsed = JSON.parse(new TextDecoder().decode(bytes));
+    return typeof parsed?.error === 'string' ? parsed.error.slice(0, 1000) : undefined;
+  } catch { return undefined; }
 }
 
 async function readBounded(response, limit) {

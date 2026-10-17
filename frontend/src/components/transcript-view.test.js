@@ -34,9 +34,11 @@ const nativePage = entries => ({
   source: 'native', entries, text: '', offset: 0, nextOffset: entries.length, length: entries.length, running: false
 })
 
+// The saved conversation is read in the Workspace (#113 removed the Transcript tab that showed
+// the same page a second time), so these tests open the Workspace and read its timeline.
 function mountView(props = {}) {
   return mount(TerminalView, {
-    props: { session, initialUi: 'terminal', ...props },
+    props: { session, initialUi: 'workspace', ...props },
     global: {
       stubs: {
         TerminalPane: true,
@@ -47,13 +49,14 @@ function mountView(props = {}) {
   })
 }
 
-async function openTranscript(wrapper) {
-  const button = wrapper.findAll('.tabs button').find(item => item.text() === 'Transcript')
-  await button.trigger('click')
+async function openTranscript() {
   await flushPromises()
 }
+// Turns in document order: messages and the tool/result work logs between them.
+const turns = wrapper => wrapper.findAll('[data-workspace-role], [data-work-log]')
+const texts = wrapper => turns(wrapper).map(item => item.find('.md, pre').text())
 
-describe('transcript tab', () => {
+describe('saved conversation in the Workspace', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.api.getConversation.mockResolvedValue(scrollbackPage(''))
@@ -74,13 +77,10 @@ describe('transcript tab', () => {
     await openTranscript(wrapper)
 
     expect(mocks.api.getConversation).toHaveBeenCalledWith('terminal-1', undefined)
-    expect(wrapper.find('.transcript-list').attributes('data-transcript-source')).toBe('native')
-    expect(wrapper.findAll('.transcript-label').map(item => item.text()))
+    expect(wrapper.get('.conversation-toolbar').text()).toContain('Conversation')
+    expect(turns(wrapper).map(item => item.find('.message-label, .work-label').text()))
       .toEqual(['User', 'Agent', 'Tool · Bash', 'Result', 'Agent'])
-    expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text()))
-      .toEqual(['Fix the build', 'Looking.', 'ls', 'ok', 'Done.'])
-    expect(wrapper.findAll('.transcript-bubble').map(item => item.attributes('data-transcript-role')))
-      .toEqual(['user', 'assistant', 'tool', 'result', 'assistant'])
+    expect(texts(wrapper)).toEqual(['Fix the build', 'Looking.', 'ls', 'ok', 'Done.'])
   })
 
   it('renders what the person and the model wrote as markdown, tool output verbatim', async () => {
@@ -94,7 +94,7 @@ describe('transcript tab', () => {
 
     await openTranscript(wrapper)
 
-    const prose = wrapper.findAll('[data-transcript-markdown]')
+    const prose = wrapper.findAll('[data-workspace-role] .md')
     expect(prose).toHaveLength(2)
     expect(prose[0].find('strong').text()).toBe('the build')
     expect(prose[0].find('code').text()).toBe('ci.yml')
@@ -103,9 +103,9 @@ describe('transcript tab', () => {
     expect(prose[1].findAll('li').map(item => item.text())).toEqual(['one', 'two'])
     expect(prose[1].find('pre code').text()).toBe('npm test')
 
-    const verbatim = wrapper.findAll('.transcript-bubble pre.transcript-text')
+    const verbatim = wrapper.findAll('[data-work-log] pre')
     expect(verbatim.map(item => item.text())).toEqual(['**not** markdown', '<b>escaped</b>'])
-    expect(wrapper.find('.transcript-bubble b').exists()).toBe(false)
+    expect(wrapper.find('[data-work-log] b').exists()).toBe(false)
   })
 
   it('falls back to neutral terminal bubbles for a session without a native transcript', async () => {
@@ -114,11 +114,9 @@ describe('transcript tab', () => {
 
     await openTranscript(wrapper)
 
-    expect(wrapper.find('.transcript-list').attributes('data-transcript-source')).toBe('scrollback')
-    expect(wrapper.findAll('.transcript-bubble').map(item => item.find('.transcript-text').text())).toEqual([
-      'first\n\nsecond'
-    ])
-    expect(wrapper.findAll('.transcript-label').map(item => item.text())).toEqual(['Terminal'])
+    expect(wrapper.get('.conversation-toolbar').text()).toContain('Terminal history')
+    expect(turns(wrapper).map(item => item.find('pre').text())).toEqual(['first\n\nsecond'])
+    expect(wrapper.findAll('.message-label').map(item => item.text())).toEqual(['Terminal'])
   })
 
   it('uses the same rendering for shared transcripts', async () => {
@@ -129,16 +127,18 @@ describe('transcript tab', () => {
 
     expect(mocks.getSharedConversation).toHaveBeenCalledWith('shared-token', undefined)
     expect(mocks.api.getConversation).not.toHaveBeenCalled()
-    expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['shared hello'])
+    expect(texts(wrapper)).toEqual(['shared hello'])
   })
 
-  it('keeps the existing empty transcript state', async () => {
+  // A finished run has no composer, so the Workspace's "give your agent a task" invitation
+  // would point at nothing; it says that nothing was saved, as the Transcript tab used to.
+  it('says there is no saved conversation for a finished session', async () => {
     const wrapper = mountView()
 
     await openTranscript(wrapper)
 
-    expect(wrapper.find('.transcript-state').text()).toBe('[no saved transcript]')
-    expect(wrapper.findAll('.transcript-bubble')).toHaveLength(0)
+    expect(wrapper.get('[data-conversation-empty]').text()).toBe('No saved conversation.')
+    expect(turns(wrapper)).toHaveLength(0)
   })
 
   it('shows a retryable error instead of reporting missing history when the request fails', async () => {
@@ -165,19 +165,19 @@ describe('transcript tab', () => {
         .mockResolvedValueOnce({ source: 'native', entries: [], text: '', offset: 2, nextOffset: 2, length: 2, running: true })
       const wrapper = mountView({ session: running })
       await openTranscript(wrapper)
-      expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['first'])
+      expect(texts(wrapper)).toEqual(['first'])
 
       await vi.advanceTimersByTimeAsync(1000)
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 1)
-      expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['first', 'second'])
+      expect(texts(wrapper)).toEqual(['first', 'second'])
 
       // Nothing new: the cursor stays and nothing is duplicated.
       await vi.advanceTimersByTimeAsync(1000)
       await flushPromises()
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 2)
-      expect(wrapper.findAll('.transcript-bubble .transcript-text')).toHaveLength(2)
+      expect(turns(wrapper)).toHaveLength(2)
     })
 
     it('appends scrollback text for sessions without a native transcript', async () => {
@@ -191,7 +191,7 @@ describe('transcript tab', () => {
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 11)
-      expect(wrapper.find('.transcript-bubble .transcript-text').text()).toBe('hello world and more')
+      expect(texts(wrapper)).toEqual(['hello world and more'])
     })
 
     it('reloads from the start when the cursor went stale', async () => {
@@ -207,10 +207,10 @@ describe('transcript tab', () => {
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', undefined)
-      expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['only'])
+      expect(texts(wrapper)).toEqual(['only'])
     })
 
-    it('does not poll a finished session or an inactive tab', async () => {
+    it('does not poll a finished session or while the Terminal view is open', async () => {
       mocks.api.getConversation.mockResolvedValue(nativePage([entry('first')]))
       const finished = mountView()
       await openTranscript(finished)
@@ -219,7 +219,7 @@ describe('transcript tab', () => {
       expect(mocks.api.getConversation).toHaveBeenCalledTimes(1)
 
       mocks.api.getConversation.mockClear()
-      mountView({ session: running })
+      mountView({ session: running, initialUi: 'terminal' })
       await vi.advanceTimersByTimeAsync(8000)
       await flushPromises()
       expect(mocks.api.getConversation).not.toHaveBeenCalled()
@@ -259,22 +259,20 @@ describe('transcript tab', () => {
       await wrapper.setProps({ session: { ...running, phase: 'Succeeded' } })
       await flushPromises()
 
-      expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['working', 'done'])
+      expect(texts(wrapper)).toEqual(['working', 'done'])
     })
   })
 
-  it('shows loading while the transcript request is pending', async () => {
+  it('shows loading while the conversation request is pending', async () => {
     let resolveTranscript
     mocks.api.getConversation.mockImplementation(() => new Promise(resolve => { resolveTranscript = resolve }))
     const wrapper = mountView()
-    const button = wrapper.findAll('.tabs button').find(item => item.text() === 'Transcript')
+    await wrapper.vm.$nextTick()
 
-    await button.trigger('click')
-
-    expect(wrapper.find('.transcript-state').text()).toBe('Loading…')
+    expect(wrapper.get('[role=status]').text()).toBe('Loading conversation…')
 
     resolveTranscript(scrollbackPage('ready'))
     await flushPromises()
-    expect(wrapper.find('.transcript-bubble .transcript-text').text()).toBe('ready')
+    expect(texts(wrapper)).toEqual(['ready'])
   })
 })

@@ -145,6 +145,10 @@ builder.Services.AddSingleton<AgentHub.Api.Licensing.LicenseStore>();
 builder.Services.AddSingleton<AgentHub.Api.Licensing.ILicenseStore>(sp =>
     sp.GetRequiredService<AgentHub.Api.Licensing.LicenseStore>());
 builder.Services.AddSingleton<AgentHub.Api.Licensing.IEnterpriseLicense, AgentHub.Api.Licensing.EnterpriseLicense>();
+// Per-user roles set in the admin area (community) and the audit of every role change.
+builder.Services.AddSingleton<AgentHub.Api.Admin.UserRoleStore>();
+builder.Services.AddSingleton<AgentHub.Api.Admin.IUserRoleStore>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>());
 builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
 // Enterprise: user groups from OAuth token claims, group→role mapping and admin usage limits.
 // Registered unconditionally — every provider self-gates on the license at call time.
@@ -234,6 +238,18 @@ builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepServic
 builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
 builder.Services.AddHostedService<SessionExpirySweepService>();
 
+// The hub renews every stored Claude login before it expires and hands the new tokens to the
+// running sessions on it (docs/provider-accounts.md, "The hub owns each login", issue #116).
+var claudeLoginRefresh = builder.Configuration.GetSection("AgentHub:ClaudeLoginRefresh")
+    .Get<ClaudeLoginRefreshOptions>() ?? new ClaudeLoginRefreshOptions();
+builder.Services.AddSingleton(claudeLoginRefresh);
+builder.Services.AddSingleton<IProviderLoginRepository>(sp => (KubernetesSessionService)sp.GetRequiredService<ISessionService>());
+builder.Services.AddSingleton<IProviderLoginLock, PostgresProviderLoginLock>();
+builder.Services.AddHttpClient<IClaudeTokenEndpoint, ClaudeTokenEndpoint>().RemoveAllLoggers();
+builder.Services.AddSingleton<ClaudeLoginRefresher>();
+builder.Services.AddSingleton<IClaudeLoginSync>(sp => sp.GetRequiredService<ClaudeLoginRefresher>());
+builder.Services.AddHostedService<ClaudeLoginRefreshService>();
+
 // Runtime network port requests: agents ask for extra ports (agenthub_network MCP),
 // the owner approves via the permission channel, approved ports become NetworkPolicies.
 builder.Services.AddSingleton<AgentHub.Api.Network.IPortGrantStore, AgentHub.Api.Network.PortGrantStore>();
@@ -241,6 +257,14 @@ builder.Services.AddSingleton<AgentHub.Api.Network.INetworkPolicyClient, AgentHu
 builder.Services.AddSingleton<AgentHub.Api.Network.NetworkPortService>();
 builder.Services.AddSingleton<AgentHub.Api.Network.INetworkSessionCleanup>(sp =>
     sp.GetRequiredService<AgentHub.Api.Network.NetworkPortService>());
+
+// Helper containers a session starts over MCP, each session in its own namespace
+// (docs/session-containers.md).
+builder.Services.AddSingleton<AgentHub.Api.Containers.ISessionContainerCluster, AgentHub.Api.Containers.KubernetesSessionContainerCluster>();
+builder.Services.AddSingleton<AgentHub.Api.Containers.SessionContainerService>();
+builder.Services.AddSingleton<AgentHub.Api.Containers.ISessionContainerCleanup>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Containers.SessionContainerService>());
+builder.Services.AddHostedService<AgentHub.Api.Containers.SessionContainerReconcileService>();
 
 builder.Services.AddHealthChecks();
 
@@ -447,6 +471,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Network.IPortGrantStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Usage.UsageLimitStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Agents.AllowedAgentsStore>().InitializeAsync();

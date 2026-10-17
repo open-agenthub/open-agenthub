@@ -215,6 +215,10 @@ export const api = {
   openBillingPortal: () => req('POST', '/admin/billing-portal'),
   deactivateLicense: () => req('DELETE', '/admin/license'),
   setUserSeat: (owner, licensed) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/license`, { licensed }),
+  // Who is an admin and why; role 'admin' | 'user' | null (null = groups decide). 409 = last admin.
+  adminRoles: () => req('GET', '/admin/roles'),
+  setUserRole: (owner, role) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/role`, { role }),
+  adminRoleAudit: () => req('GET', '/admin/roles/audit'),
   // Personal library: MCP catalog (raw/api) + skills.
   mcpServers: () => req('GET', '/mcp-servers'),
   createMcpServer: (data) => req('POST', '/mcp-servers', data),
@@ -260,7 +264,7 @@ export const api = {
     if (res.status === 401) handle401()
     return res.ok ? res.text() : ''
   },
-  // The Transcript tab's page: role-tagged entries from the provider's own transcript, or the
+  // The Workspace conversation's page: role-tagged entries from the provider's own transcript, or the
   // cleaned scrollback as text when there is none. `offset` is the previous page's nextOffset.
   getConversation: (id, offset) =>
     req('GET', `/sessions/${encodeURIComponent(id)}/conversation${conversationQuery(offset)}`)

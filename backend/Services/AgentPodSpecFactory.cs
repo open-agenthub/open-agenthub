@@ -20,6 +20,9 @@ public sealed record AgentPodRuntimeSettings
     public bool BrowserEnabled { get; init; }
     public bool SpawnMcpEnabled { get; init; }
     public bool NetworkMcpEnabled { get; init; }
+    /// <summary>Helper containers (docs/session-containers.md); their tools live on the
+    /// agenthub_sessions server, so they need SpawnMcpEnabled as well.</summary>
+    public bool ContainersEnabled { get; init; }
     public bool TelemetryEnabled { get; init; }
     public string TelemetryOtlpEndpoint { get; init; } = "";
     /// <summary>Percent of a rate-limit window at which Claude's mod reports the account as at
@@ -130,26 +133,16 @@ public static class AgentPodSpecFactory
         var hasMcp = !string.IsNullOrWhiteSpace(request.McpConfigJson);
         var customImage = string.IsNullOrWhiteSpace(request.Image) ? null : request.Image;
         var asRoot = request.RunAsRoot;
-        var uid = asRoot ? 0L : 1000L;
         var home = asRoot ? "/root" : "/home/agent";
         var policy = AgentConfiguration.ResolvePolicy(request.Policy, request.AllowedTools);
 
-        var podSecurity = new V1PodSecurityContext
-        {
-            RunAsNonRoot = !asRoot, RunAsUser = uid, RunAsGroup = uid, FsGroup = uid,
-            SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
-        };
+        var podSecurity = PodSecurity(asRoot);
         // A raw string literal keeps the line endings of the source file, and a Windows checkout
         // has CRLF. sh then reads a trailing "\" followed by CR as a literal backslash rather than a
         // line continuation, and the Codex init container ran requirements.toml as a script of its
         // own. The shell scripts below go through here so a CRLF build behaves like an LF one.
         static string ShellScript(string script) => script.Replace("\r\n", "\n");
-        V1SecurityContext ContainerSecurity() => new()
-        {
-            AllowPrivilegeEscalation = false, ReadOnlyRootFilesystem = !asRoot,
-            RunAsNonRoot = !asRoot, RunAsUser = uid,
-            Capabilities = asRoot ? null : new V1Capabilities { Drop = new List<string> { "ALL" } }
-        };
+        V1SecurityContext ContainerSecurity() => AgentPodSpecFactory.ContainerSecurity(asRoot);
 
         var credentialItems = new List<V1KeyToPath>
         {
@@ -201,6 +194,7 @@ public static class AgentPodSpecFactory
             new() { Name = "AGENTHUB_BROWSER_ENABLED", Value = context.Runtime.BrowserEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_SPAWN_MCP_ENABLED", Value = context.Runtime.SpawnMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_NETWORK_MCP_ENABLED", Value = context.Runtime.NetworkMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
+            new() { Name = "AGENTHUB_CONTAINERS_ENABLED", Value = context.Runtime.ContainersEnabled && context.Runtime.SpawnMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_RESUME", Value = string.IsNullOrEmpty(context.StateGetUrl) ? "0" : "1" },
             new() { Name = "AGENTHUB_PROMPT", Value = request.Prompt ?? "" },
             new() { Name = "AGENTHUB_SYSTEM_PROMPT", Value = request.SystemPrompt ?? "" },
@@ -566,6 +560,30 @@ public static class AgentPodSpecFactory
             RuntimeClassName = string.IsNullOrEmpty(context.Runtime.RuntimeClassName) ? null : context.Runtime.RuntimeClassName
         };
     }
+
+    /// <summary>
+    /// The pod-level security context of a session pod. Public because the helper containers a
+    /// session starts (docs/session-containers.md) get exactly this one: a second copy would
+    /// drift, and a helper must never be more privileged than the session that started it.
+    /// </summary>
+    public static V1PodSecurityContext PodSecurity(bool asRoot)
+    {
+        var uid = asRoot ? 0L : 1000L;
+        return new V1PodSecurityContext
+        {
+            RunAsNonRoot = !asRoot, RunAsUser = uid, RunAsGroup = uid, FsGroup = uid,
+            SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
+        };
+    }
+
+    /// <summary>The container-level security context of every container in a session pod; see
+    /// <see cref="PodSecurity"/> for why it is shared.</summary>
+    public static V1SecurityContext ContainerSecurity(bool asRoot) => new()
+    {
+        AllowPrivilegeEscalation = false, ReadOnlyRootFilesystem = !asRoot,
+        RunAsNonRoot = !asRoot, RunAsUser = asRoot ? 0L : 1000L,
+        Capabilities = asRoot ? null : new V1Capabilities { Drop = new List<string> { "ALL" } }
+    };
 
     private static V1KeyToPath ProjectCredential(string key) =>
         new() { Key = key, Path = key };

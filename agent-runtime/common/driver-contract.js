@@ -41,6 +41,11 @@ function validateDriver(driver) {
       throw new Error('Agent driver ' + key + ' must be a function when present');
     }
   }
+  // Optional: true when the CLI re-reads its credential file on its own, so a token the hub
+  // renewed can be installed without restarting it (PUT /agenthub/credentials/refresh).
+  if (driver.reloadsCredentialLive !== undefined && typeof driver.reloadsCredentialLive !== 'boolean') {
+    throw new Error('Agent driver reloadsCredentialLive must be a boolean when present');
+  }
   // Optional: the CLI's own usage-limit notices as `{ pattern: RegExp, resetsAt?: fn }`
   // (common/limit-detector.js). A runtime whose CLI reports limits some other way leaves it out.
   if (driver.limitPatterns !== undefined) {

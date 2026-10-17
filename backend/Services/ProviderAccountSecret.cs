@@ -16,6 +16,9 @@ public sealed class ProviderAccountSet
     public List<ProviderAccount> Accounts { get; } = new();
     public Dictionary<string, byte[]> Files { get; } = new(StringComparer.Ordinal);
     public bool Dirty { get; set; }
+    /// <summary>The secret's resourceVersion at the read; null when it did not exist. A write
+    /// carries it so a change made by someone else in between is not overwritten.</summary>
+    public string? ResourceVersion { get; set; }
 
     public ProviderAccount? Find(string? id) =>
         id is null ? null : Accounts.FirstOrDefault(a => a.Id == id);
@@ -28,8 +31,12 @@ public sealed class ProviderAccountSet
         Accounts.Where(a => !ProviderAccountSecret.IsExhausted(a, now));
 }
 
-/// <summary>What <see cref="ProviderAccountSecret.Attach"/> decided for an upload.</summary>
-public sealed record ProviderAccountAttachment(string AccountId, bool Created);
+/// <summary>The provider secret changed between a read and the write that was based on it.</summary>
+public sealed class ProviderSecretConflictException() : Exception("The provider secret was changed concurrently.");
+
+/// <summary>What <see cref="ProviderAccountSecret.Attach"/> decided for an upload. <paramref name="Stale"/>:
+/// the upload was an older generation of the account's login and the stored file was kept.</summary>
+public sealed record ProviderAccountAttachment(string AccountId, bool Created, bool Stale = false);
 
 /// <summary>
 /// Layout of a provider secret with several accounts, as pure operations on the secret's data
@@ -221,7 +228,7 @@ public static partial class ProviderAccountSecret
     /// becomes a new account").
     /// </summary>
     public static ProviderAccountAttachment Attach(ProviderAccountSet set, byte[] file,
-        ProviderAccountIdentity? identity, string? mountedId, DateTime? now = null)
+        ProviderAccountIdentity? identity, string? mountedId, DateTime? now = null, AgentKind? agent = null)
     {
         var stamp = now ?? DateTime.UtcNow;
         identity = identity is { IsEmpty: true } ? null : identity;
@@ -230,20 +237,20 @@ public static partial class ProviderAccountSecret
         if (mounted is not null)
         {
             var sameLogin = identity?.Key is null || mounted.Identity?.Key is null || mounted.Identity.Key == identity.Key;
-            if (sameLogin) return Update(set, mounted, file, identity, stamp);
+            if (sameLogin) return Update(set, mounted, file, identity, stamp, agent);
         }
 
         if (identity?.Key is not null)
         {
             var byIdentity = set.Accounts.FirstOrDefault(a => a.Identity?.Key == identity.Key);
-            if (byIdentity is not null) return Update(set, byIdentity, file, identity, stamp);
+            if (byIdentity is not null) return Update(set, byIdentity, file, identity, stamp, agent);
         }
 
         if (mounted is null && identity is null)
         {
             var sameBytes = set.Accounts.FirstOrDefault(a =>
                 set.Files.TryGetValue(a.Id, out var existing) && existing.AsSpan().SequenceEqual(file));
-            if (sameBytes is not null) return Update(set, sameBytes, file, identity, stamp);
+            if (sameBytes is not null) return Update(set, sameBytes, file, identity, stamp, agent);
         }
 
         var id = NewId();
@@ -291,8 +298,15 @@ public static partial class ProviderAccountSecret
     }
 
     private static ProviderAccountAttachment Update(ProviderAccountSet set, ProviderAccount account, byte[] file,
-        ProviderAccountIdentity? identity, DateTime stamp)
+        ProviderAccountIdentity? identity, DateTime stamp, AgentKind? agent)
     {
+        set.Files.TryGetValue(account.Id, out var stored);
+        // Newer wins. A pod that slept through a refresh the hub (or another pod) performed
+        // uploads a token whose refresh token is already spent; last-writer-wins would put that
+        // dead token back into the account every later session starts from (issue #116).
+        if (agent == AgentKind.Claude && stored is not null && ClaudeCredentialFile.IsOlder(file, stored))
+            return new ProviderAccountAttachment(account.Id, Created: false, Stale: true);
+        if (stored is null || !stored.AsSpan().SequenceEqual(file)) account.LoginRejectedAt = null;
         set.Files[account.Id] = file;
         // An identity learned later is kept; one already known is refreshed from the newer file.
         if (identity is not null)

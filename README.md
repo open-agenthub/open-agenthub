@@ -729,6 +729,12 @@ browser→agent for app development) via the built-in `agenthub_network` MCP ser
 session owner approves each request and approved ports become per-session NetworkPolicies.
 See [Dynamic network port requests](docs/network-ports.md).
 
+Agents can also start helper containers — a database, a queue, a service under test — with the
+`container_run`/`container_list`/`container_logs`/`container_stop` tools of `agenthub_sessions`.
+The hub builds each pod itself in a namespace of the session's own, with the session's security
+context, Pod Security Admission `restricted`, a ResourceQuota and the session's egress policy;
+`sessionContainers.enabled` switches it off. See [Session containers](docs/session-containers.md).
+
 AgentHub can also be driven *as* an MCP server: enable `mcp.enabled` and AI clients create and
 steer sessions on behalf of a signed-in user, authenticated through an OAuth 2.1 server the
 instance runs itself. Off by default. See [Remote MCP server](docs/mcp-server.md).
