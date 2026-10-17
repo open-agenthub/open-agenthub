@@ -35,3 +35,10 @@ The stdio tools are `projects_list`, `project_get`, `mcp_servers_list`, `session
 `session_conversation`, with the same parameters and responses. The API contract fixture directory
 contains a miniature external spec for gateway tests, not a snapshot of this API; these routes are
 therefore documented here rather than added to that unrelated fixture.
+
+Inbox cursors continue toward **older** messages, not new arrivals. For lossless polling, retain
+the newest successfully processed message id as an anchor. Each round starts without a cursor,
+then follows every `nextCursor` until it reaches that previous anchor (or the end). Only advance
+the anchor after processing succeeds, and deduplicate by id on retries. This catches more than one
+page of arrivals between rounds; reusing the last older-history cursor would miss new messages.
+An empty page has `messages: []` and `nextCursor: null`.
