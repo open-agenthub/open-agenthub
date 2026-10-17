@@ -80,7 +80,10 @@ shift.
   so agents grow a shared, versioned knowledge base as they work.
 - **Visible browser on demand** — the built-in `agenthub_browser` MCP starts one isolated
   Chromium only when the agent needs it. The same desktop appears beside the chat through
-  noVNC, while idle sessions consume no browser CPU or memory.
+  noVNC, while idle sessions consume no browser CPU or memory. Copy and paste work between
+  your own machine and the remote page: Ctrl/Cmd+C, X and V over the browser pane carry
+  plain text both ways for anyone allowed to control it
+  ([`docs/browser-security.md`](docs/browser-security.md#clipboard)).
 - **Community Edition projects and session duplication** — organize sessions into personal projects and duplicate reusable settings into an independent session without copying conversation state or credentials.
 - **Sessions that delete themselves** — set a deadline per session (hours or days, counted
   from its start or from the last time anyone used it) in the web app, the remote API or the
@@ -699,6 +702,7 @@ tool. Whether the conversation survives depends on the runtime:
 | Codex | TUI | **yes** — the thread id recorded in the state archive |
 | Cursor | TUI | no — new conversation in the restored workspace |
 | OpenClaw | TUI | no — new conversation in the restored workspace |
+| OpenCode | TUI | **yes** — `--continue` resumes the newest top-level session in the restored `~/.opencode` database, which is the run's |
 
 Auto-approve is switched off by conversion unless asked to stay: somebody is now there to answer.
 Details and the alternatives rejected: [`docs/session-mode-conversion.md`](docs/session-mode-conversion.md).
