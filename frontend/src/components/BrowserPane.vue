@@ -211,7 +211,7 @@ onBeforeUnmount(() => {
       <span v-if="clipboardNotice" class="browser-state is-notice" role="status">{{ clipboardNotice }}</span>
       <span v-else class="browser-state">{{ statusLabel }}</span>
     </div>
-    <div ref="host" class="browser-canvas"></div>
+    <div ref="host" class="browser-canvas" data-browser-canvas></div>
     <div v-if="phase !== 'Running' || connectionState !== 'connected'" class="browser-overlay" aria-live="polite">
       <span class="orbit" aria-hidden="true"></span>
       <strong>{{ statusLabel }}</strong>

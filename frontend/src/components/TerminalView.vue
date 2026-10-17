@@ -24,6 +24,9 @@ const props = defineProps({ session: Object, sharedToken: { type: String, defaul
 const emit = defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
+// Reopens a browser pane the person closed; it stays offered while the pane is open because on a
+// phone it is also the quickest way back to the browser from the agent.
+const browserRunning = computed(() => (props.session?.browser?.phase || 'Stopped') !== 'Stopped')
 // A stopped autonomous run is offered as an interactive continuation next to the plain Resume;
 // the backend's own flag decides, so the card never appears where the call would answer 409.
 const showConvert = computed(() => !props.sharedToken && capabilities.value.canManage && canConvert(props.session))
@@ -401,6 +404,7 @@ function interruptWorkspaceAgent() {
         </select>
       </label>
       <button class="bar-btn" data-open-files @click="workspace?.openFiles()">Files</button>
+      <button v-if="browserRunning" class="bar-btn" data-open-browser @click="workspace?.openBrowser()">Browser</button>
       <nav class="tabs">
         <button :class="{ on: modern }" data-open-workspace @click="selectTab('workspace')">Workspace</button>
         <button v-if="!isChat" :class="{ on: activeTab === 'agent' }" @click="selectTab('agent')">Terminal</button>

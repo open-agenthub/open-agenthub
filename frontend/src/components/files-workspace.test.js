@@ -45,7 +45,7 @@ describe('files workspace', () => {
       global: { stubs: { BrowserPane: true, FilePreview: true } }
     })
     await flushPromises()
-    expect(wrapper.get('[data-workspace-tab="files"]').classes()).toContain('active')
+    expect(wrapper.get('[data-workspace-tab="files"]').element.parentElement.classList).toContain('active')
     expect(wrapper.get('[data-file="f1"]').classes()).toContain('active')
   })
 
@@ -79,6 +79,33 @@ describe('files workspace', () => {
     await flushPromises()
     await wrapper.get('[data-files-dismiss]').trigger('click')
     expect(mocks.dismiss).toHaveBeenCalledWith('s1', null)
+  })
+
+  // Issue #110: with the browser open, closing Files used to leave its tab behind, so the pane
+  // looked closed only until the next click.
+  it('closes Files next to a running browser and leaves the browser open', async () => {
+    const wrapper = mount(SessionWorkspace, {
+      props: { session: { id: 's1', browser: { phase: 'Running' } }, canWrite: true },
+      slots: { default: '<div data-terminal>terminal</div>' },
+      global: { stubs: { BrowserPane: true, FilePreview: true } }
+    })
+    await flushPromises()
+    await wrapper.get('[data-files-close]').trigger('click')
+    expect(wrapper.find('[data-workspace-tab="files"]').exists()).toBe(false)
+    expect(wrapper.get('[data-workspace-tab="browser"]').element.parentElement.classList).toContain('active')
+    expect(mocks.dismiss).not.toHaveBeenCalled()
+  })
+
+  it('closes Files on Escape from the file list', async () => {
+    const wrapper = mount(SessionWorkspace, {
+      props: { session: { id: 's1', browser: { phase: 'Stopped' } }, canWrite: true },
+      slots: { default: '<div data-terminal>terminal</div>' },
+      global: { stubs: { BrowserPane: true, FilePreview: true } }
+    })
+    await flushPromises()
+    await wrapper.get('[data-file="f1"]').trigger('keydown', { key: 'Escape' })
+    expect(wrapper.find('[data-files-pane]').exists()).toBe(false)
+    expect(mocks.dismiss).not.toHaveBeenCalled()
   })
 
   describe('live refresh', () => {

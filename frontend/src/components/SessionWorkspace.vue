@@ -19,7 +19,13 @@ const props = defineProps({
 })
 const splitPercent = ref(50)
 const mobilePane = ref((props.session?.browser?.phase || 'Stopped') !== 'Stopped' ? 'browser' : 'agent')
-const browserVisible = computed(() => (props.session?.browser?.phase || 'Stopped') !== 'Stopped')
+const browserRunning = computed(() => (props.session?.browser?.phase || 'Stopped') !== 'Stopped')
+// Hiding is local to this view and leaves the lease alone: stopping the browser would end the
+// agent's page mid-task, and the agent is the one that asked for it. The flag lives here rather
+// than in TerminalView's tabs because this component wraps both surfaces, so switching between
+// Workspace and Terminal keeps the person's choice instead of popping the pane back open.
+const browserHidden = ref(false)
+const browserVisible = computed(() => browserRunning.value && !browserHidden.value)
 let dragging = false
 const activeCompanion = ref(browserVisible.value ? 'browser' : 'files')
 const filesOpen = ref(false)
@@ -37,7 +43,8 @@ let eventStream
 const LIVE_FALLBACK_POLL_MS = 30_000
 const liveConnected = ref(false)
 const selectedFile = computed(() => files.value.find(file => file.id === selectedId.value) || null)
-const companionVisible = computed(() => browserVisible.value || filesOpen.value || Boolean(selectedFile.value))
+const filesVisible = computed(() => filesOpen.value || Boolean(selectedFile.value))
+const companionVisible = computed(() => browserVisible.value || filesVisible.value)
 const isPresented = computed(() => Boolean(selectedId.value && presentation.value?.fileId === selectedId.value))
 
 function capabilitiesRequest() {
@@ -142,13 +149,35 @@ async function dismissPresentation() {
     closeFiles()
   } catch { /* keep the current presentation visible */ }
 }
+function closeBrowser() {
+  browserHidden.value = true
+  if (filesVisible.value) { activeCompanion.value = 'files'; mobilePane.value = 'files' } else mobilePane.value = 'agent'
+}
+function openBrowser() {
+  if (!browserRunning.value) return
+  browserHidden.value = false
+  activeCompanion.value = 'browser'; mobilePane.value = 'browser'
+}
+function closeCompanion(which) {
+  if (which === 'browser') closeBrowser()
+  else closeFiles()
+}
+// Escape closes the pane only from its own chrome — tabs, file list, preview toolbar. While the
+// remote browser's canvas has focus, keys are forwarded to the page the agent is driving, and
+// taking Escape there would make it impossible to dismiss a dialog inside that page.
+function onCompanionKey(event) {
+  if (event.key !== 'Escape' || event.defaultPrevented) return
+  if (event.target?.closest?.('[data-browser-canvas]')) return
+  event.preventDefault()
+  closeCompanion(activeCompanion.value)
+}
 async function openFiles() {
   await refreshFiles()
   filesOpen.value = true
   if (!selectedId.value && files.value.length) selectedId.value = files.value[0].id
   activeCompanion.value = 'files'; mobilePane.value = 'files'
 }
-defineExpose({ openFiles })
+defineExpose({ openFiles, openBrowser })
 
 function clamp(value) { return Math.min(75, Math.max(25, value)) }
 function resizeBy(delta) { splitPercent.value = clamp(splitPercent.value + delta) }
@@ -177,9 +206,12 @@ function startDragging(event) {
 }
 onMounted(initializeFiles)
 watch(() => props.session.id, () => {
-  files.value = []; selectedId.value = null; filesOpen.value = false
+  files.value = []; selectedId.value = null; filesOpen.value = false; browserHidden.value = false
   presentation.value = null; presentationRevision = -1; void initializeFiles()
 })
+// A browser that stops and is requested again is a new lease the agent wants seen, so the
+// person's earlier "hide" does not carry over to it.
+watch(browserRunning, running => { if (!running) browserHidden.value = false })
 watch(browserVisible, visible => {
   if (visible && !filesOpen.value && !selectedFile.value) { activeCompanion.value = 'browser'; mobilePane.value = 'browser' }
   else if (!visible && activeCompanion.value === 'browser') activeCompanion.value = 'files'
@@ -196,20 +228,28 @@ onBeforeUnmount(() => {
 <template>
   <div v-if="companionVisible" class="workspace-shell">
     <nav class="workspace-tabs" aria-label="Session view">
-      <button v-if="filesOpen || selectedFile" data-mobile-workspace-tab="files" :class="{ active: mobilePane === 'files' }" @click="mobilePane = 'files'; activeCompanion = 'files'">Files</button>
+      <button v-if="filesVisible" data-mobile-workspace-tab="files" :class="{ active: mobilePane === 'files' }" @click="mobilePane = 'files'; activeCompanion = 'files'">Files</button>
       <button v-if="browserVisible" data-mobile-workspace-tab="browser" :class="{ active: mobilePane === 'browser' }" @click="mobilePane = 'browser'; activeCompanion = 'browser'">Browser</button>
       <button data-mobile-workspace-tab="agent" :class="{ active: mobilePane === 'agent' }" @click="mobilePane = 'agent'">Agent</button>
     </nav>
     <div data-session-split class="session-split" :style="{ '--browser-width': `${splitPercent}%` }">
-      <div class="companion-side" :class="{ 'mobile-hidden': mobilePane === 'agent' }">
+      <div class="companion-side" :class="{ 'mobile-hidden': mobilePane === 'agent' }" @keydown="onCompanionKey">
+        <!-- Each pane closes from its own tab, which is the one row present for both panes at every
+             width; the phone tab strip above only switches between panes and the agent. -->
         <nav class="companion-tabs" aria-label="Companion view">
-          <button data-workspace-tab="files" :class="{ active: activeCompanion === 'files' }" @click="activeCompanion = 'files'">Files</button>
-          <button v-if="browserVisible" data-workspace-tab="browser" :class="{ active: activeCompanion === 'browser' }" @click="activeCompanion = 'browser'">Browser</button>
+          <span v-if="filesVisible" class="companion-tab" :class="{ active: activeCompanion === 'files' }">
+            <button data-workspace-tab="files" @click="activeCompanion = 'files'">Files</button>
+            <button type="button" class="tab-close" data-files-close aria-label="Close files" title="Close files (Esc)" @click="closeFiles">×</button>
+          </span>
+          <span v-if="browserVisible" class="companion-tab" :class="{ active: activeCompanion === 'browser' }">
+            <button data-workspace-tab="browser" @click="activeCompanion = 'browser'">Browser</button>
+            <button type="button" class="tab-close" data-browser-close aria-label="Close browser" title="Close browser (Esc) — the agent keeps it" @click="closeBrowser">×</button>
+          </span>
         </nav>
         <div class="companion-body">
           <FilesPane v-show="activeCompanion === 'files'" :session-id="session.id" :files="files" :selected-id="selectedId"
             :capabilities="fileCapabilities" :can-write="canWrite && !sharedToken" :shared-token="sharedToken"
-            :presented="isPresented" @select="selectFile" @close="closeFiles" @dismiss="dismissPresentation"
+            :presented="isPresented" @select="selectFile" @dismiss="dismissPresentation"
             @uploaded="refreshFiles()" />
           <BrowserPane v-if="browserVisible" v-show="activeCompanion === 'browser'" :session="session" :can-write="canWrite" :shared-token="sharedToken" />
         </div>
@@ -226,8 +266,12 @@ onBeforeUnmount(() => {
 .session-split { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .companion-side { flex: 0 0 var(--browser-width); display: grid; grid-template-rows: 34px minmax(0, 1fr); min-width: 0; min-height: 0; background: #111721; }
 .companion-tabs { display: flex; align-items: end; gap: 2px; padding: 4px 8px 0; border-bottom: 1px solid #29303a; background: #171c24; }
-.companion-tabs button { height: 29px; padding: 4px 10px; border: 0; border-radius: 6px 6px 0 0; color: #738094; background: transparent; font: 700 10px var(--mono); text-transform: uppercase; }
-.companion-tabs button.active { color: #eef5ff; background: #222b37; box-shadow: inset 0 -2px var(--accent); }
+.companion-tab { display: inline-flex; align-items: center; height: 29px; border-radius: 6px 6px 0 0; }
+.companion-tab.active { background: #222b37; box-shadow: inset 0 -2px var(--accent); }
+.companion-tab button { height: 29px; padding: 4px 6px 4px 10px; border: 0; color: #738094; background: transparent; font: 700 10px var(--mono); text-transform: uppercase; }
+.companion-tab.active button { color: #eef5ff; }
+.companion-tab .tab-close { min-width: 26px; padding: 0 8px 0 4px; font: 15px/1 var(--ui); text-transform: none; }
+.companion-tab .tab-close:hover, .companion-tab .tab-close:focus-visible { color: var(--accent); }
 .companion-body { min-width: 0; min-height: 0; }
 .terminal-side { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; }
 .split-seam { position: relative; flex: 0 0 9px; cursor: col-resize; background: #151719; border-inline: 1px solid #292a29; outline: none; touch-action: none; }
@@ -241,6 +285,8 @@ onBeforeUnmount(() => {
   .session-split { display: block; }
   .companion-side, .terminal-side { width: 100%; height: 100%; }
   .split-seam { display: none; }
+  /* A finger needs more than the 26px a pointer gets. */
+  .companion-tab .tab-close { min-width: 40px; }
   .mobile-hidden { display: none; }
 }
 </style>

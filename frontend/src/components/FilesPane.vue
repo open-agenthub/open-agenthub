@@ -15,7 +15,7 @@ const props = defineProps({
   sharedToken: { type: String, default: null },
   presented: { type: Boolean, default: false }
 })
-const emit = defineEmits(['select', 'close', 'dismiss', 'uploaded'])
+const emit = defineEmits(['select', 'dismiss', 'uploaded'])
 const selected = computed(() => props.files.find(file => file.id === props.selectedId) || null)
 
 // Uploading is the same reserve/upload/complete flow the chat pane uses; the difference
@@ -148,7 +148,6 @@ async function download(file) {
             :disabled="downloading.has(selected.id)" @click="download(selected)">
             {{ downloading.has(selected.id) ? 'Downloading…' : 'Download' }}</button>
           <button v-if="presented && canWrite" type="button" data-files-dismiss @click="$emit('dismiss')">Dismiss for everyone</button>
-          <button type="button" data-files-close aria-label="Close files" @click="$emit('close')">×</button>
         </span>
       </header>
       <FilePreview :session-id="sessionId" :file="selected" :capabilities="capabilities" :shared-token="sharedToken" />

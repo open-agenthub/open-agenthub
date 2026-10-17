@@ -55,4 +55,40 @@ describe('browser workspace', () => {
     for (let index = 0; index < 30; index += 1) await separator.trigger('keydown', { key: 'ArrowRight' })
     expect(separator.attributes('aria-valuenow')).toBe('75')
   })
+  // Issue #110: once open, the pane could only be closed by the agent or a reload.
+  describe('closing the browser pane', () => {
+    const mountRunning = () => mount(SessionWorkspace, {
+      props: { session: { id: 's1', browser: { phase: 'Running' } }, canWrite: true },
+      slots: { default: '<div data-terminal>terminal</div>' }, global: { stubs: { BrowserPane: true } }, attachTo: document.body
+    })
+    it('hides the pane without touching the lease and reopens it on request', async () => {
+      const wrapper = mountRunning()
+      await wrapper.get('[data-browser-close]').trigger('click')
+      expect(wrapper.find('[data-session-split]').exists()).toBe(false)
+      expect(wrapper.find('[data-terminal]').exists()).toBe(true)
+      expect(novnc.instances.every(instance => !instance.disconnected)).toBe(true)
+      wrapper.vm.openBrowser()
+      await flushPromises()
+      expect(wrapper.find('[data-workspace-tab="browser"]').exists()).toBe(true)
+      wrapper.unmount()
+    })
+    it('closes on Escape from the pane chrome but not from the remote canvas', async () => {
+      const wrapper = mount(SessionWorkspace, {
+        props: { session: { id: 's1', browser: { phase: 'Running' } }, canWrite: true },
+        slots: { default: '<div data-terminal>terminal</div>' }, global: { stubs: { BrowserPane: { template: '<section><div data-browser-canvas tabindex="0"></div></section>' } } }
+      })
+      await wrapper.get('[data-browser-canvas]').trigger('keydown', { key: 'Escape' })
+      expect(wrapper.find('[data-workspace-tab="browser"]').exists()).toBe(true)
+      await wrapper.get('[data-workspace-tab="browser"]').trigger('keydown', { key: 'Escape' })
+      expect(wrapper.find('[data-workspace-tab="browser"]').exists()).toBe(false)
+    })
+    it('shows a new lease again after the hidden one stopped', async () => {
+      const wrapper = mountRunning()
+      await wrapper.get('[data-browser-close]').trigger('click')
+      await wrapper.setProps({ session: { id: 's1', browser: { phase: 'Stopped' } } })
+      await wrapper.setProps({ session: { id: 's1', browser: { phase: 'Running' } } })
+      expect(wrapper.find('[data-workspace-tab="browser"]').exists()).toBe(true)
+      wrapper.unmount()
+    })
+  })
 })
