@@ -68,7 +68,10 @@ public sealed class SessionContainerService : ISessionContainerCleanup
         }
         if (service is not null) await RetryForbiddenAsync(async () => { await _cluster.CreateServiceAsync(service, ct); return true; }, ct);
 
-        _log.LogInformation("Started helper container {Name} ({Image}) for session {Session}", request.Name, request.Image, session.Id);
+        // Both passed Validate's patterns, which admit no line breaks; stripping them anyway keeps
+        // the log line forged-entry-proof should those patterns ever widen.
+        _log.LogInformation("Started helper container {Name} ({Image}) for session {Session}",
+            OneLine(request.Name), OneLine(request.Image), session.Id);
         return new ContainerInfo(request.Name, request.Image, "Pending", false, 0, null,
             service is null ? null : SessionContainerSpecFactory.HostName(request.Name, ns),
             request.Ports ?? [], DateTime.UtcNow);
@@ -195,11 +198,16 @@ public sealed class SessionContainerService : ISessionContainerCleanup
         {
             var status = System.Text.Json.JsonSerializer.Deserialize<V1Status>(error.Response.Content ?? "",
                 new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-            if (!string.IsNullOrWhiteSpace(status?.Message)) return status.Message;
+            return string.IsNullOrWhiteSpace(status?.Message) ? "forbidden" : status.Message;
         }
-        catch (System.Text.Json.JsonException) { }
-        return "forbidden";
+        catch (System.Text.Json.JsonException)
+        {
+            // Not a Status body (a proxy in front of the API server, say): the code is all there is.
+            return "forbidden";
+        }
     }
+
+    private static string OneLine(string value) => value.Replace("\r", "").Replace("\n", "");
 
     private static string? Label(V1ObjectMeta meta, string key) =>
         meta.Labels is not null && meta.Labels.TryGetValue(key, out var value) ? value : null;

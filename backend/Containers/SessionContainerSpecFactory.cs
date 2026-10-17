@@ -287,6 +287,7 @@ public static partial class SessionContainerSpecFactory
         return host is "index.docker.io" or "registry-1.docker.io" ? "docker.io" : host;
     }
 
+    /// <summary>The helper pod, and its Service when the request declares ports.</summary>
     /// <param name="sessionRunsAsRoot">Read off the namespace's PSA label, not the session
     /// record: a session switched to root takes effect at its next start, and until then its
     /// namespace — and so its helpers — stay restricted.</param>
@@ -395,7 +396,10 @@ public static partial class SessionContainerSpecFactory
         if (string.IsNullOrWhiteSpace(value)) return;
         decimal requested;
         try { requested = new ResourceQuantity(value).ToDecimal(); }
-        catch (Exception) { throw new ContainerRequestException($"invalid {what} '{value}'."); }
+        catch (Exception error) when (error is FormatException or ArgumentException or OverflowException)
+        {
+            throw new ContainerRequestException($"invalid {what} '{value}'.");
+        }
         if (requested <= 0 || requested > new ResourceQuantity(max).ToDecimal())
             throw new ContainerRequestException($"{what} must be more than 0 and at most {max}.");
     }
