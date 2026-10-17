@@ -21,16 +21,22 @@ const driver = {
   stateExcludes: ['.test-agent/cache', '.test-agent/agents/*/agent.sqlite']
 };
 
-// Runs a script the way the server does: its text fixed, every path and url a parameter.
+// Runs a script the way the server does: its text fixed, every path a parameter.
 function shell(script, ...parameters) {
   return new Promise(resolve => execFile('/bin/sh', ['-c', script, 'sh', ...parameters],
     (error, stdout) => resolve({ error, stdout: String(stdout) })));
 }
 
+// The archive and signature scripts run in the home directory, as the server runs them.
+function inHome(script, home, ...parameters) {
+  return new Promise(resolve => execFile('/bin/sh', ['-c', script, 'sh', ...parameters], { cwd: home },
+    (error, stdout) => resolve({ error, stdout: String(stdout || '') })));
+}
+
 // The server's two steps: the script writes the archive, then curl uploads it with the url as
 // an argument — never inside the shell.
 async function archiveAndUpload(home, url, archivePath, archiveDriver = driver) {
-  const built = await shell(archiveScript(archiveDriver), home, archivePath);
+  const built = await inHome(archiveScript(archiveDriver), home, archivePath);
   if (built.error) return built;
   return new Promise(resolve => execFile('curl', uploadArgs(archivePath, url),
     error => resolve({ error })));
@@ -167,7 +173,7 @@ test('a home directory or url with shell syntax in it is data, not script', asyn
   process.chdir(root);
   t.after(() => process.chdir(cwd));
 
-  assert.match((await shell(signatureScript(driver), home)).stdout, /^[0-9a-f]{64}\b/);
+  assert.match((await inHome(signatureScript(driver), home)).stdout, /^[0-9a-f]{64}\b/);
   const run = await archiveAndUpload(home, received.url, archivePath);
   assert.equal(run.error, null);
   assert.equal(received.bodies.length, 1);
@@ -179,15 +185,15 @@ test('a home directory or url with shell syntax in it is data, not script', asyn
 test('the signature is stable while nothing changes and across archive runs', async t => {
   const { root, home } = fixture(t);
   const received = await storage(t);
-  const first = await shell(signatureScript(driver), home);
+  const first = await inHome(signatureScript(driver), home);
   assert.match(first.stdout, /^[0-9a-f]{64}\b/);
   await archiveAndUpload(home, received.url, path.join(root, 'state.tgz'));
-  assert.equal((await shell(signatureScript(driver), home)).stdout, first.stdout);
+  assert.equal((await inHome(signatureScript(driver), home)).stdout, first.stdout);
 });
 
 test('the signature changes with every kind of change to archived state', async t => {
   const { home } = fixture(t);
-  const signature = async () => (await shell(signatureScript(driver), home)).stdout;
+  const signature = async () => (await inHome(signatureScript(driver), home)).stdout;
   let last = await signature();
   const changed = async what => {
     const next = await signature();
@@ -212,19 +218,19 @@ test('the signature changes with every kind of change to archived state', async 
 
 test('the signature ignores what the archive leaves out', async t => {
   const { home } = fixture(t);
-  const before = (await shell(signatureScript(driver), home)).stdout;
+  const before = (await inHome(signatureScript(driver), home)).stdout;
   write(home, '.test-agent/auth.json', '{"token":"rotated-synthetic"}');
   write(home, '.test-agent/cache/large.bin', 'rewritten');
   write(home, '.test-agent/cache/deeper/new.bin', 'new');
   write(home, '.test-agent/agents/main/agent.sqlite', 'rewritten by the agent');
   write(home, 'outside.txt', 'changed');
-  assert.equal((await shell(signatureScript(driver), home)).stdout, before);
+  assert.equal((await inHome(signatureScript(driver), home)).stdout, before);
 });
 
 test('the signature of an unreadable or missing state directory differs from a readable one', async t => {
   const { home } = fixture(t);
-  const readable = (await shell(signatureScript(driver), home)).stdout;
-  const missing = (await shell(signatureScript({ ...driver, stateDir: '.missing' }), home)).stdout;
+  const readable = (await inHome(signatureScript(driver), home)).stdout;
+  const missing = (await inHome(signatureScript({ ...driver, stateDir: '.missing' }), home)).stdout;
   assert.notEqual(missing, readable);
-  assert.equal((await shell(signatureScript(driver), path.join(home, 'nowhere'))).stdout, '');
+  assert.equal((await inHome(signatureScript(driver), path.join(home, 'nowhere'))).stdout, '');
 });

@@ -270,12 +270,15 @@ test('common transport archives driver state without its subscription credential
   assert.deepEqual(harness.commands[0], { file: 'curl',
     args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/scrollback.log', 'https://storage.invalid/scrollback'] });
   assert.match(harness.commands[1].args[1], /find "\.test-agent" \\\( -path "\.test-agent\/auth\.json" \\\) -prune /);
-  assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$2\.part" -C "\$1" /);
-  assert.deepEqual(harness.commands[2].args.slice(2), ['sh', '/home/agent', '/tmp/state.tgz']);
+  assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$1\.part" /);
+  assert.deepEqual(harness.commands[2].args.slice(2), ['sh', '/tmp/state.tgz']);
+  // The home directory is the working directory, not an argument a shell would see.
+  assert.deepEqual(harness.commands[2].options, { cwd: '/home/agent' });
+  assert.deepEqual(harness.commands[1].options, { cwd: '/home/agent' });
   assert.doesNotMatch(harness.commands[2].args[1], /curl|storage\.invalid/);
   assert.deepEqual(harness.commands[3], { file: 'curl',
     args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/state.tgz', 'https://storage.invalid/state'] });
-  assert.deepEqual(harness.commands[1].args.slice(2), ['sh', '/home/agent']);
+  assert.deepEqual(harness.commands[1].args.slice(2), []);
   assert.match(harness.commands[2].args[1], /"\.test-agent"/);
   assert.match(harness.commands[2].args[1], /--exclude="\.test-agent\/auth\.json"/);
   assert.doesNotMatch(harness.commands[2].args[1], /cat |credentials\.json/);
@@ -308,9 +311,9 @@ test('common transport keeps the last archive unless tar finished, accepting fil
   const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' });
   harness.intervals[0].callback();
   const command = harness.commands[1].args[1];
-  assert.match(command, /^nice -n 10 timeout 120 tar -I 'gzip -1' -cf "\$2\.part" /);
-  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f "\$2\.part" "\$2"; /);
-  assert.match(command, /else rm -f "\$2\.part"; exit 1; fi$/);
+  assert.match(command, /^nice -n 10 timeout 120 tar -I 'gzip -1' -cf "\$1\.part" /);
+  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f "\$1\.part" "\$1"; /);
+  assert.match(command, /else rm -f "\$1\.part"; exit 1; fi$/);
 });
 
 test('common transport skips a persistence tick while the previous run is still archiving', () => {

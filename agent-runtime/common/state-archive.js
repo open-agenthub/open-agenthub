@@ -26,10 +26,11 @@ function stateExcludes(driver) {
 // then look unchanged for good. find anchors a pattern that tar matches anywhere in the path,
 // so find can only ever see more files than tar archives: an extra archive, never a missed one.
 // The exit status is part of the digest so an unreadable subtree cannot pass for a quiet one.
-// $1: home directory.
+// Runs with the home directory as its working directory, which keeps that environment-derived
+// path out of the shell's arguments altogether.
 function signatureScript(driver) {
   const prune = stateExcludes(driver).map(entry => '-path "' + entry + '"').join(' -o ');
-  return 'cd "$1" && { timeout ' + PERSIST_STEP_SECONDS + ' find "' + driver.stateDir +
+  return '{ timeout ' + PERSIST_STEP_SECONDS + ' find "' + driver.stateDir +
     '" \\( ' + prune + " \\) -prune -o -printf '%T@ %C@ %s %y %p\\n'; echo \"exit $?\"; } 2>&1 | " +
     'LC_ALL=C sort | sha256sum';
 }
@@ -42,15 +43,15 @@ function signatureScript(driver) {
 // gzip runs at level 1 through -I rather than a pipe, which would hide tar's exit status:
 // about half the CPU of the default level for a tenth more bytes, and still plain gzip, so
 // `tar xzf` in an older runtime's entrypoint restores it and this one restores an older archive.
-// $1: home directory, $2: where the archive is written. The upload is a separate step
-// (uploadArgs): the url is refreshed from the hub while the pod runs (#111), and a value that
-// arrives over the network is never handed to a shell, not even as a positional parameter.
+// Runs in the home directory, like signatureScript; $1: where the archive is written. The
+// upload is a separate step (uploadArgs): the url is refreshed from the hub while the pod runs
+// (#111), and a value that arrives over the network is never handed to a shell.
 function archiveScript(driver) {
   const excludeArgs = stateExcludes(driver).map(entry => '--exclude="' + entry + '"').join(' ');
   return 'nice -n 10 timeout ' + PERSIST_STEP_SECONDS +
-    ' tar -I \'gzip -1\' -cf "$2.part" -C "$1" ' + excludeArgs + ' "' +
+    ' tar -I \'gzip -1\' -cf "$1.part" ' + excludeArgs + ' "' +
     driver.stateDir + '" 2>/dev/null; ' +
-    'if [ $? -le 1 ]; then mv -f "$2.part" "$2"; else rm -f "$2.part"; exit 1; fi';
+    'if [ $? -le 1 ]; then mv -f "$1.part" "$1"; else rm -f "$1.part"; exit 1; fi';
 }
 
 // curl's argument list for one presigned PUT, run without a shell.
