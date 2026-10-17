@@ -48,10 +48,11 @@ seconds with the token the entrypoint minted (`AGENTHUB_MOD_TOKEN`); the poll is
 heartbeat that tells the session agent a mod is alive, so it queues there instead of typing.
 Priority messages are submitted as prompts, after `$.turn.abort` when an interrupt was asked
 for and a turn is running (the id comes from `turn.start`, cleared by `turn.complete`). Plain
-messages set a status line, are printed by `/inbox`, and ride along as `context` with the
-next prompt the person sends. Its logic without the mods API sits in `hooks/lib.mjs`, so the
-session-agent node suite tests it; the hooks themselves are tested with `claude plugin test`,
-which the image build runs.
+messages are submitted as a prompt too, but only once no turn runs; until then they set a
+status line, are printed by `/inbox`, and ride along as `context` with a prompt the person
+sends first (`docs/priority-messages.md` explains why they no longer wait for that prompt).
+Its logic without the mods API sits in `hooks/lib.mjs`, so the session-agent node suite tests
+it; the hooks themselves are tested with `claude plugin test`, which the image build runs.
 
 The mod polls rather than being pushed to because a mod cannot listen: it has `$.http.fetch`
 and no server. Three seconds is the latency a person perceives as "now" for a message typed

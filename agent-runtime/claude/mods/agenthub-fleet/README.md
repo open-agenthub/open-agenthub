@@ -12,8 +12,10 @@ What it does:
 - A **priority** message is submitted as the next prompt, headed
   `[AgentHub message from agent "<title>" (<id>)]`. With **interrupt**, the running turn is
   aborted first.
-- A plain message sets a status line (`📨 1 fleet message — /inbox`), is printed by `/inbox`,
-  and otherwise rides along as context with the next prompt the person sends.
+- A plain message is submitted as a prompt of its own as soon as no turn runs, so an idle
+  agent gets it without anyone typing. During a turn it sets a status line
+  (`📨 1 fleet message — /inbox`), is printed by `/inbox`, and rides along as context with a
+  prompt the person sends; otherwise the first poll after the turn submits it.
 - Watches the rate-limit windows Claude Code reports (`session.measure`, and a fresh
   `$.session.usage()` after a turn that ended on an API error). A window at or past
   `AGENTHUB_LIMIT_THRESHOLD` percent (default 100) is posted once per reset to
