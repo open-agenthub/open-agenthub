@@ -63,7 +63,7 @@ runs. The hub reads one word back:
 
 | Agent runs as | Priority message | Plain message |
 |---|---|---|
-| Claude with the fleet mod alive (`docs/claude-code-mods.md`) | queued for the mod, which submits it as the next prompt (aborting the running turn on interrupt) | interactive: queued for the mod, shown as a status line and attached to the next prompt; autonomous: inbox |
+| Claude with the fleet mod alive (`docs/claude-code-mods.md`) | queued for the mod, which submits it as the next prompt (aborting the running turn on interrupt) | interactive: queued for the mod, which submits it as a prompt of its own once no turn runs; during a turn it waits on the status line and goes with the person's prompt if one comes first; autonomous: inbox |
 | Chat UI (`claude -p --input-format stream-json`) | written as a `user` event, after a `control_request interrupt` when asked | inbox |
 | Interactive terminal (any runtime) | typed into the PTY: optional Escape, 300 ms, text, 300 ms, Enter | inbox |
 | Autonomous or scheduled `-p` run without a mod | `unavailable` → inbox | inbox |
@@ -110,9 +110,40 @@ delivered, which is the one window where a message can be lost. It is the same w
 PTY has (text written into a process that dies before reading it), so it is accepted rather
 than fenced with acknowledgements.
 
-Plain messages reach the mod only in interactive sessions. In an autonomous run the mod has
-no "next prompt" to attach them to and nobody runs `/inbox`, so there they stay in the inbox
-for `agent_inbox`, where an autonomous fleet agent looks for its tasks.
+Plain messages reach the mod only in interactive sessions. An autonomous fleet agent looks
+for its tasks with `agent_inbox`, so there they stay in the inbox, where that call finds them;
+the change below leaves this routing as it was.
+
+### A plain message the mod took is shown without anyone typing
+
+The first version held plain messages in the mod until the person sent their next prompt and
+attached them to it as context. The session agent had answered `queued-for-mod` the moment
+the mod polled, so the hub marked them delivered, and `agent_inbox` returned nothing — but an
+idle agent nobody typed to never saw them (#98). That is the common case the fleet exists
+for: a coordinator waiting for its children's reports.
+
+The mod now submits them as a prompt of its own as soon as no turn runs: on the poll that
+fetched them when the agent is idle, otherwise on the first poll after the running turn ends
+(at most 3 s later). While a turn runs they stay on the status line, `/inbox` still prints
+them, and a prompt the person sends meanwhile still carries them as context — whichever comes
+first takes them, once. A submit Claude Code refuses puts them back on that list for the next
+idle poll. They are framed as the plugin's message, not as the person's words, so the model
+can tell a peer's report from its owner's instruction.
+
+Rejected on the way:
+
+- **Leaving plain messages in the inbox for mod sessions too.** Nothing would be marked
+  delivered early, but an idle agent does not call `agent_inbox` either, so the report would
+  wait just the same — only invisibly, without the status line.
+- **Submitting them at once, also during a turn.** Claude Code would queue the prompt behind
+  the running turn, which works, but costs a turn of its own for a message that can ride along
+  with the person's next prompt when there is one. Holding them only while a turn runs keeps
+  that, and the poll after the turn closes the gap.
+- **An acknowledgement from the mod before the hub marks the row.** The mod cannot know the
+  model read a prompt any better than the engine's `prompt.submit` resolving tells it, and
+  the window this would close — the CLI dying between the poll and the submit — is the one
+  the section above accepts for every channel. It would add a second round trip and a backend
+  state for no case this issue saw.
 
 ## The mod queue is loopback only
 

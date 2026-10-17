@@ -1,7 +1,7 @@
 // Pure helpers for continuing an autonomous session interactively (docs/session-mode-conversion.md).
 
 /** Runtimes whose CLI resumes the same conversation after the mode flips. */
-const KEEPS_CONVERSATION = new Set(['Claude', 'Codex'])
+const KEEPS_CONVERSATION = new Set(['Claude', 'Codex', 'OpenCode'])
 
 export function keepsConversation(agent) {
   return KEEPS_CONVERSATION.has(agent)

@@ -2,9 +2,9 @@
 // (docs/priority-messages.md, docs/claude-code-mods.md) and reports the account's usage
 // limits to the hub (docs/account-limits.md). The session agent beside the CLI queues pushed
 // messages at a loopback endpoint; this mod polls it, submits priority messages as prompts
-// (aborting the running turn when asked), and holds plain ones behind /inbox. It also watches
-// the rate-limit windows Claude Code reports and tells the session agent when one is used up;
-// the hub, not the mod, decides what to do about it.
+// (aborting the running turn when asked), and submits plain ones once no turn runs. It also
+// watches the rate-limit windows Claude Code reports and tells the session agent when one is
+// used up; the hub, not the mod, decides what to do about it.
 import { formatFleetMessage, inboxStatus, inboxText, limitKey, parseInbox, parseThreshold, planDelivery, planLimitReports } from './lib.mjs'
 
 const POLL_MS = 3000
@@ -12,7 +12,8 @@ const INBOX_URL = 'http://127.0.0.1:7681/agenthub/mod/inbox'
 const HEARTBEAT_URL = 'http://127.0.0.1:7681/agenthub/mod/heartbeat'
 const LIMIT_URL = 'http://127.0.0.1:7681/agenthub/mod/limit'
 
-// Plain messages not yet shown to Claude; a prompt.submit hook or /inbox drains them.
+// Plain messages that arrived during a turn and are not yet shown to Claude; the first idle
+// poll releases them as a prompt, unless a prompt.submit hook or /inbox drained them first.
 let waiting = []
 // The id turn.start handed us, while that turn runs; what $.turn.abort needs.
 let runningTurn = null
@@ -129,7 +130,10 @@ async function poll($) {
       $.ui.log('fleet inbox answered HTTP ' + response.status, { to: 'debug' })
       return
     }
-    const plan = planDelivery(parseInbox(response.text), runningTurn !== null)
+    const plan = planDelivery(parseInbox(response.text), runningTurn !== null, waiting)
+    // Taken over before the first await: a prompt the person submits meanwhile attaches and
+    // clears the list, and must not find messages this poll is about to release as well.
+    waiting = plan.waiting
     if (plan.abort) {
       // The turn id is checked by the engine; a turn that ended between the check and the
       // call rejects, and the prompt below is then simply the next one.
@@ -144,13 +148,23 @@ async function poll($) {
         $.ui.log('fleet prompt failed: ' + describe(error), { to: 'debug' })
       })
     }
-    if (plan.waiting.length) {
-      waiting = [...waiting, ...plan.waiting]
-      $.ui.status(inboxStatus(waiting.length))
-    }
+    if (plan.release.length) release($, plan.release)
+    else if (waiting.length) $.ui.status(inboxStatus(waiting.length))
   } catch (error) {
     $.ui.log('fleet poll failed: ' + describe(error), { to: 'debug' })
   }
+}
+
+// The session is idle and the session agent has already told the hub these were delivered, so
+// they become a turn now rather than wait for a prompt nobody may type (#98). A submit the
+// engine refuses puts them back: they stay on the status line and go with the next prompt.
+function release($, messages) {
+  $.ui.status(undefined)
+  $.prompt.submit({ text: inboxText(messages) }).catch(error => {
+    $.ui.log('fleet prompt failed: ' + describe(error), { to: 'debug' })
+    waiting = [...messages, ...waiting]
+    $.ui.status(inboxStatus(waiting.length))
+  })
 }
 
 function describe(error) {

@@ -21,7 +21,8 @@ function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MO
     statuses: [] as (string | undefined)[],
     logs: [] as string[],
     usage: { context: { window: 200000, tokens: 1000, percent: 1 }, rateLimits: [] as unknown[] },
-    limitStatus: 202
+    limitStatus: 202,
+    refuseSubmit: false
   }
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: undefined }))
@@ -42,6 +43,7 @@ function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MO
     return { value: { status, ok: status < 300, headers: {}, text: JSON.stringify({ messages: reply.messages ?? [] }) } }
   })
   on('prompt.submit', ($, e) => {
+    if (calls.refuseSubmit) return { deny: 'session closed' }
     calls.submits.push(e.text)
     calls.contexts.push(e.context)
     return { text: e.text }
@@ -103,34 +105,91 @@ test('an interrupt after the turn completed submits without aborting anything', 
   expect(calls.submits.length).toBe(1)
 })
 
-test('a plain message only sets the status line and is handed over by /inbox', async ($, on) => {
+const plainText = '[AgentHub message from agent "Code Reviewer" (rev-1)]\nwhen you have a minute'
+
+// #98: the message was held for a prompt the person might never type, after the session agent
+// had told the hub it was delivered. An idle agent has to get it without anyone typing.
+test('a plain message arriving while no turn runs becomes a prompt of its own', async ($, on) => {
   const { clock, calls } = world(on, [{ messages: [plain] }])
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await clock.advance(3000)
 
+  expect(calls.submits).toEqual([plainText])
+  expect(calls.aborts).toEqual([])
+  expect(calls.statuses).toEqual([undefined])
+
+  const answer = await $.command.run({ command: 'inbox', args: '', origin: { kind: 'composer' } })
+  expect(answer.text).toBe('No fleet messages are waiting.')
+})
+
+test('a plain message during a turn waits on the status line and goes once the turn is over', async ($, on) => {
+  const { clock, calls } = world(on, [{ messages: [plain] }])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'refactor everything', turnId: 'turn-7' })
+  await clock.advance(3000)
   expect(calls.submits).toEqual([])
   expect(calls.statuses).toEqual(['📨 1 fleet message — /inbox'])
 
-  const answer = await $.command.run({ command: 'inbox', args: '', origin: { kind: 'composer' } })
-  expect(answer.text).toBe('[AgentHub message from agent "Code Reviewer" (rev-1)]\nwhen you have a minute')
+  await $.turn.complete({ turnId: 'turn-7', answer: 'done', durationMs: 10, isAborted: false, reason: 'answer' })
+  await clock.advance(3000)
+  expect(calls.submits).toEqual([plainText])
   expect(calls.statuses[1]).toBeUndefined()
 
-  const again = await $.command.run({ command: 'inbox', args: '', origin: { kind: 'composer' } })
-  expect(again.text).toBe('No fleet messages are waiting.')
+  // Released once: later idle polls find nothing to submit.
+  await clock.advance(6000)
+  expect(calls.submits.length).toBe(1)
+})
+
+test('during a turn /inbox hands the waiting messages over instead', async ($, on) => {
+  const { clock, calls } = world(on, [{ messages: [plain] }])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'refactor everything', turnId: 'turn-7' })
+  await clock.advance(3000)
+
+  const answer = await $.command.run({ command: 'inbox', args: '', origin: { kind: 'composer' } })
+  expect(answer.text).toBe(plainText)
+  expect(calls.statuses[1]).toBeUndefined()
+
+  await $.turn.complete({ turnId: 'turn-7', answer: 'done', durationMs: 10, isAborted: false, reason: 'answer' })
+  await clock.advance(3000)
+  expect(calls.submits).toEqual([])
 })
 
 test('waiting messages ride along as context with the next prompt, once', async ($, on) => {
   const { clock, calls } = world(on, [{ messages: [plain] }])
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'refactor everything', turnId: 'turn-7' })
   await clock.advance(3000)
   await $.prompt.submit({ text: 'carry on' })
   await $.prompt.submit({ text: 'and again' })
 
   expect(calls.submits).toEqual(['carry on', 'and again'])
-  expect(calls.contexts[0]).toEqual(['[AgentHub message from agent "Code Reviewer" (rev-1)]\nwhen you have a minute'])
+  expect(calls.contexts[0]).toEqual([plainText])
   expect(calls.contexts[1]).toBeUndefined()
+
+  // Already handed over with the prompt: the end of the turn releases nothing more.
+  await $.turn.complete({ turnId: 'turn-7', answer: 'done', durationMs: 10, isAborted: false, reason: 'answer' })
+  await clock.advance(3000)
+  expect(calls.submits.length).toBe(2)
+})
+
+test('a release the engine refuses keeps the message and tries again on the next idle poll', async ($, on) => {
+  const { clock, calls } = world(on, [{ messages: [plain] }])
+  calls.refuseSubmit = true
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await clock.advance(3000)
+  expect(calls.submits).toEqual([])
+  expect(calls.logs.some(line => /fleet prompt failed/.test(line))).toBe(true)
+  expect(calls.statuses.at(-1)).toBe('📨 1 fleet message — /inbox')
+
+  calls.refuseSubmit = false
+  await clock.advance(3000)
+  expect(calls.submits).toEqual([plainText])
 })
 
 test('a failed poll is a debug line and the timer keeps going', async ($, on) => {

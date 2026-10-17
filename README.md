@@ -85,7 +85,10 @@ shift.
   so agents grow a shared, versioned knowledge base as they work.
 - **Visible browser on demand** — the built-in `agenthub_browser` MCP starts one isolated
   Chromium only when the agent needs it. The same desktop appears beside the chat through
-  noVNC, while idle sessions consume no browser CPU or memory.
+  noVNC, while idle sessions consume no browser CPU or memory. Copy and paste work between
+  your own machine and the remote page: Ctrl/Cmd+C, X and V over the browser pane carry
+  plain text both ways for anyone allowed to control it
+  ([`docs/browser-security.md`](docs/browser-security.md#clipboard)).
 - **Community Edition projects and session duplication** — organize sessions into personal projects and duplicate reusable settings into an independent session without copying conversation state or credentials.
 - **Sessions that delete themselves** — set a deadline per session (hours or days, counted
   from its start or from the last time anyone used it) in the web app, the remote API or the
@@ -546,6 +549,7 @@ exhausted account. How the hub finds out depends on the runtime
 |---|---|
 | Claude | the `agenthub-fleet` mod reads the rate-limit windows Claude Code reports and posts a window at 100 % (`AGENTHUB_LIMIT_THRESHOLD`) |
 | Codex, OpenClaw | the session agent matches the CLI's own usage-limit notice in its output (strings verified against the pinned versions) |
+| OpenCode | the same, for OpenCode's Go and free-tier notices; `opencode run` waits silently at a limit, so the policy plugin prints the notice in unattended sessions |
 | Cursor | output patterns, conservative and unverified — the unpinned CLI prints the API's text verbatim |
 
 `account_status` and `account_switch` (every MCP server) and `PATCH /api/remote/sessions/{id}/credential`
@@ -704,6 +708,7 @@ tool. Whether the conversation survives depends on the runtime:
 | Codex | TUI | **yes** — the thread id recorded in the state archive |
 | Cursor | TUI | no — new conversation in the restored workspace |
 | OpenClaw | TUI | no — new conversation in the restored workspace |
+| OpenCode | TUI | **yes** — `--continue` resumes the newest top-level session in the restored `~/.opencode` database, which is the run's |
 
 Auto-approve is switched off by conversion unless asked to stay: somebody is now there to answer.
 Details and the alternatives rejected: [`docs/session-mode-conversion.md`](docs/session-mode-conversion.md).

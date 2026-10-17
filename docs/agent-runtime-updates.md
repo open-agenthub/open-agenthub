@@ -42,7 +42,7 @@ The nightly job reports a new OpenClaw release but does not rewrite the pin.
 **OpenCode is held back for the same kind of reason.** Its approval gate is a plugin hooked into
 `tool.execute.before`, and the credential watcher reads `auth.json` in the 1.18.x layout. A newer
 CLI that still installs and prints its version proves neither. Before raising
-`OPENCODE_VERSION`, check four things against the new release:
+`OPENCODE_VERSION`, check five things against the new release:
 
 1. **The gate still fires and still blocks.** Run `opencode run` against a fake OpenAI-compatible
    endpoint that answers with one `bash` tool call, with the managed config pointing at
@@ -60,6 +60,13 @@ CLI that still installs and prints its version proves neither. Before raising
    chat relay (`opencode/turn-notify.mjs`) depends on both and on `parentID` marking subagent
    sessions. In an interactive `opencode run` with a fake `/notify`, exactly one `question`
    must arrive with the final text, also when the model ran a `task` subagent.
+5. **A Go limit still arrives as a retry status with its sentence.** Have the fake endpoint answer
+   429 with `retry-after` and a body naming `GoUsageLimitError` (and once `FreeUsageLimitError`).
+   `opencode/limit-notice.mjs` waits for `session.status` with `type: "retry"` and the reasons
+   `account_rate_limit` / `free_tier_limit`, and the OpenCode `limitPatterns` in
+   `opencode/driver.js` match the sentence: `… usage limit reached. It will reset in …` and
+   `Free usage exceeded, subscribe to Go`. Read the new binary for both, as
+   `docs/account-limits.md` describes; a reworded notice is a limit nobody detects.
 
 The image also chooses the OpenCode binary itself rather than leaving it to the package's
 `postinstall`. That script probes the *build* machine for AVX2. On a runner that has AVX2 it
