@@ -1631,7 +1631,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         }
         catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
         {
-            _log.LogDebug("Secret {Name} was already gone", name);
+            // The name is built from a route id and stays out of the log line, where a crafted
+            // value could forge entries.
+            _log.LogDebug("A secret to delete was already gone");
         }
     }
 
