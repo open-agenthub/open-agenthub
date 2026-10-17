@@ -30,6 +30,36 @@ public interface ISessionService
     Task DeleteGitPatAsync(string owner, string id, CancellationToken ct = default)
         => throw new NotSupportedException();
 
+    /// <summary>The owner's stored secrets (docs/session-secrets.md): names, delivery and
+    /// description, never a value. Default empty for test doubles that store none.</summary>
+    Task<IReadOnlyList<SessionSecretInfo>> ListSessionSecretsAsync(string owner, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<SessionSecretInfo>>(Array.Empty<SessionSecretInfo>());
+    /// <summary>Stores a secret or updates the one with the same name, then brings every running
+    /// session that receives it up to date. Throws <see cref="ArgumentException"/> for an invalid
+    /// name, delivery or value.</summary>
+    Task<SessionSecretInfo> UpsertSessionSecretAsync(string owner, UpsertSessionSecretRequest request,
+        CancellationToken ct = default) => throw new NotSupportedException();
+    /// <summary>Removes a secret, from the store and from every running session. Idempotent.</summary>
+    Task DeleteSessionSecretAsync(string owner, string id, CancellationToken ct = default)
+        => throw new NotSupportedException();
+    /// <summary>
+    /// The secret ids a session in <paramref name="projectId"/> with the given selection receives
+    /// right now — what a token scope and a spawning parent are checked against. Lenient, like a
+    /// spawn: removed ids and ids outside the project drop out rather than throw, because it also
+    /// answers for stored selections; a create request is validated strictly on its own. Default
+    /// empty, so a test double without secrets hands none on.
+    /// </summary>
+    Task<IReadOnlyList<string>> ResolveSessionSecretIdsAsync(string owner, string? projectId,
+        IReadOnlyList<string>? requested, CancellationToken ct = default)
+        => Task.FromResult<IReadOnlyList<string>>(Array.Empty<string>());
+    /// <summary>Rewrites the secret copies of the owner's sessions from the current store, project
+    /// and session selections — after a project's selection changed. Default no-op.</summary>
+    Task SyncSessionSecretsAsync(string owner, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>The text with the values of the secrets this session holds masked, for messages a
+    /// hook sends on to the chat relays. Default unchanged, for test doubles without secrets.</summary>
+    Task<string> MaskSessionSecretsAsync(string sessionId, string text, CancellationToken ct = default)
+        => Task.FromResult(text);
+
     /// <summary>
     /// Stores a login a session pod uploaded, into the account it belongs to — the one the session
     /// had mounted, one with the same identity, or a new one (docs/provider-accounts.md). Returns

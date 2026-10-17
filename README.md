@@ -502,6 +502,9 @@ as user `dev`.
 1. **Credentials** (SSH key, Git token, provider API keys, and provider subscription
    files) are stored per user in general and provider-specific Kubernetes Secrets. API fields are
    write-only and credential values cannot be read back through the public API.
+   Named **session secrets** are stored the same way and reach a session as environment variables
+   or files in `~/.secrets`, selected per project and narrowed per session; their values are
+   masked in uploaded scrollback, transcripts and chat relays ([docs/session-secrets.md](docs/session-secrets.md)).
 2. **Start a session**: pick agent, billing source, and mode. A repo may be cloned into
    `/workspace/repo`; optional MCP and structured policy configuration follows the
    selected provider. A custom glibc image can receive the selected provider runtime by

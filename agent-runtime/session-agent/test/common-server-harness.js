@@ -38,7 +38,7 @@ class FakeChildProcess {
       this.stdinWrites.push(data);
       if (callback) queueMicrotask(() => callback(null));
       return true;
-    }, on() {} };
+    }, on() {}, end: () => { this.stdinEnded = true; } };
     this.stdout = { on: (event, handler) => { if (event === 'data') this.stdoutHandlers.push(handler); } };
     this.stderr = { on: (event, handler) => { if (event === 'data') this.stderrHandlers.push(handler); } };
   }
@@ -169,6 +169,12 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
         readFileSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) return harnessOptions.files[file];
           throw new Error('ENOENT: ' + file);
+        },
+        readdirSync(dir) {
+          const names = Object.keys(harnessOptions.files || {})
+            .filter(file => path.dirname(file) === dir).map(file => path.basename(file));
+          if (names.length === 0) throw new Error('ENOENT: ' + dir);
+          return names;
         },
         statSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) {
