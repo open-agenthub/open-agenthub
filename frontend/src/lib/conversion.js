@@ -14,15 +14,6 @@ export function conversionHint(agent) {
     : `${agent || 'This runtime'} starts a new conversation in the same workspace; the files stay, the chat history does not.`
 }
 
-/**
- * The runtime transport a conversion asks for: the CLI's PTY whatever surface was picked, as for
- * a new session, so the converted run keeps its terminal, /login and menus (#114). The surface
- * only selects the first view (docs/agent-workspace.md).
- */
-export function conversionUiMode() {
-  return 'terminal'
-}
-
 /** Whether the card belongs on this session: the backend's own predicate, never re-derived here. */
 export function canConvert(session) {
   return session?.canConvertToInteractive === true

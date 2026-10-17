@@ -93,7 +93,7 @@ test('upload urls are refreshed from the hub every six hours and used by the nex
   for (let i = 0; i < 719; i++) harness.intervals[0].callback();
   await tick();
   assert.equal(refreshes().length, 0);
-  assert.ok(harness.commands.some(c => c.args[1] && c.args[1].includes('sig=old')));
+  assert.ok(harness.commands.some(c => c.file === 'curl' && c.args.includes('https://storage.invalid/scroll?sig=old')));
 
   harness.intervals[0].callback();
   await tick();
@@ -104,18 +104,18 @@ test('upload urls are refreshed from the hub every six hours and used by the nex
   harness.commands.length = 0;
   harness.intervals[0].callback();
   await tick();
-  const upload = harness.commands.find(c => c.args[1] && c.args[1].includes('scrollback.log'));
-  assert.match(upload.args[1], /sig=new/);
+  const upload = harness.commands.find(c => c.file === 'curl' && c.args.includes('/tmp/scrollback.log'));
+  assert.equal(upload.args.at(-1), 'https://storage.invalid/scroll?sig=new');
 });
 
-test('a refreshed url that could break out of the upload command is not taken', async () => {
+test('a refreshed value that is not an http(s) url is not taken', async () => {
   const harness = createHarness({
     AGENTHUB_CALLBACK_URL: 'https://backend.invalid/internal/session',
     AGENTHUB_CALLBACK_TOKEN: 'correct-token',
     AGENTHUB_SCROLLBACK_PUT_URL: 'https://storage.invalid/scroll?sig=old'
   }, {}, {
     fetchResponse: url => url.endsWith('/artifact-urls')
-      ? { ok: true, json: async () => ({ scrollbackPutUrl: 'https://x.invalid/"; touch /tmp/p; "' }) }
+      ? { ok: true, json: async () => ({ scrollbackPutUrl: '--output=/home/agent/.bashrc' }) }
       : undefined
   });
   for (let i = 0; i < 720; i++) harness.intervals[0].callback();
@@ -123,6 +123,6 @@ test('a refreshed url that could break out of the upload command is not taken', 
   harness.commands.length = 0;
   harness.intervals[0].callback();
   await tick();
-  const upload = harness.commands.find(c => c.args[1] && c.args[1].includes('scrollback.log'));
-  assert.match(upload.args[1], /sig=old/);
+  const upload = harness.commands.find(c => c.file === 'curl' && c.args.includes('/tmp/scrollback.log'));
+  assert.equal(upload.args.at(-1), 'https://storage.invalid/scroll?sig=old');
 });

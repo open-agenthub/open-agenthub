@@ -42,14 +42,20 @@ function signatureScript(driver) {
 // gzip runs at level 1 through -I rather than a pipe, which would hide tar's exit status:
 // about half the CPU of the default level for a tenth more bytes, and still plain gzip, so
 // `tar xzf` in an older runtime's entrypoint restores it and this one restores an older archive.
-// $1: home directory, $2: upload url, $3: where the archive is written before it is uploaded.
-function archiveScript(driver, curlOption = '') {
+// $1: home directory, $2: where the archive is written. The upload is a separate step
+// (uploadArgs): the url is refreshed from the hub while the pod runs (#111), and a value that
+// arrives over the network is never handed to a shell, not even as a positional parameter.
+function archiveScript(driver) {
   const excludeArgs = stateExcludes(driver).map(entry => '--exclude="' + entry + '"').join(' ');
   return 'nice -n 10 timeout ' + PERSIST_STEP_SECONDS +
-    ' tar -I \'gzip -1\' -cf "$3.part" -C "$1" ' + excludeArgs + ' "' +
+    ' tar -I \'gzip -1\' -cf "$2.part" -C "$1" ' + excludeArgs + ' "' +
     driver.stateDir + '" 2>/dev/null; ' +
-    'if [ $? -le 1 ]; then mv -f "$3.part" "$3" && curl -fsS --max-time ' + PERSIST_STEP_SECONDS +
-    ' ' + curlOption + '-T "$3" "$2"; else rm -f "$3.part"; exit 1; fi';
+    'if [ $? -le 1 ]; then mv -f "$2.part" "$2"; else rm -f "$2.part"; exit 1; fi';
 }
 
-module.exports = { PERSIST_STEP_SECONDS, stateExcludes, signatureScript, archiveScript };
+// curl's argument list for one presigned PUT, run without a shell.
+function uploadArgs(file, url, insecure = false) {
+  return ['-fsS', ...(insecure ? ['-k'] : []), '--max-time', String(PERSIST_STEP_SECONDS), '-T', file, url];
+}
+
+module.exports = { PERSIST_STEP_SECONDS, stateExcludes, signatureScript, archiveScript, uploadArgs };

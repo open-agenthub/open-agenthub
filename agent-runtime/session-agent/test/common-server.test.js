@@ -265,12 +265,16 @@ test('common transport archives driver state without its subscription credential
   await tick();
 
   assert.deepEqual(harness.writes, [{ file: '/tmp/scrollback.log', data: 'saved output' }]);
-  assert.equal(harness.commands.length, 3);
-  assert.match(harness.commands[0].args[1], /curl -fsS --max-time 120 -k -T \/tmp\/scrollback\.log/);
+  assert.equal(harness.commands.length, 4);
+  // Every presigned url goes to curl as an argument, never through a shell.
+  assert.deepEqual(harness.commands[0], { file: 'curl',
+    args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/scrollback.log', 'https://storage.invalid/scrollback'] });
   assert.match(harness.commands[1].args[1], /find "\.test-agent" \\\( -path "\.test-agent\/auth\.json" \\\) -prune /);
-  assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$3\.part" -C "\$1" /);
-  assert.deepEqual(harness.commands[2].args.slice(2),
-    ['sh', '/home/agent', 'https://storage.invalid/state', '/tmp/state.tgz']);
+  assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$2\.part" -C "\$1" /);
+  assert.deepEqual(harness.commands[2].args.slice(2), ['sh', '/home/agent', '/tmp/state.tgz']);
+  assert.doesNotMatch(harness.commands[2].args[1], /curl|storage\.invalid/);
+  assert.deepEqual(harness.commands[3], { file: 'curl',
+    args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/state.tgz', 'https://storage.invalid/state'] });
   assert.deepEqual(harness.commands[1].args.slice(2), ['sh', '/home/agent']);
   assert.match(harness.commands[2].args[1], /"\.test-agent"/);
   assert.match(harness.commands[2].args[1], /--exclude="\.test-agent\/auth\.json"/);
@@ -288,7 +292,7 @@ test('common transport applies optional stateExcludes as extra tar excludes', ()
     ]
   });
   harness.intervals[0].callback();
-  assert.equal(harness.commands.length, 2);
+  assert.equal(harness.commands.length, 3);
   const command = harness.commands[1].args[1];
   assert.match(command, /--exclude="\.openclaw\/auth-profiles\.json"/);
   assert.match(command, /--exclude="\.openclaw\/agents\/main\/agent\/auth-profiles\.json"/);
@@ -304,9 +308,9 @@ test('common transport keeps the last archive unless tar finished, accepting fil
   const harness = createHarness({ AGENTHUB_STATE_PUT_URL: 'https://storage.invalid/state' });
   harness.intervals[0].callback();
   const command = harness.commands[1].args[1];
-  assert.match(command, /^nice -n 10 timeout 120 tar -I 'gzip -1' -cf "\$3\.part" /);
-  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f "\$3\.part" "\$3" && curl -fsS --max-time 120 -T "\$3" "\$2"; /);
-  assert.match(command, /else rm -f "\$3\.part"; exit 1; fi$/);
+  assert.match(command, /^nice -n 10 timeout 120 tar -I 'gzip -1' -cf "\$2\.part" /);
+  assert.match(command, /if \[ \$\? -le 1 \]; then mv -f "\$2\.part" "\$2"; /);
+  assert.match(command, /else rm -f "\$2\.part"; exit 1; fi$/);
 });
 
 test('common transport skips a persistence tick while the previous run is still archiving', () => {
@@ -323,9 +327,15 @@ test('common transport skips a persistence tick while the previous run is still 
   assert.equal(archives(harness).length, 1);
   assert.equal(harness.commands.length, 2);
 
+  // The archive is written; its upload is the next command, and the run is still in flight.
   harness.pendingExec.shift()();
   harness.intervals[0].callback();
-  assert.equal(harness.commands.length, 2, 'the tick after an upload is inside the interval');
+  assert.equal(harness.commands.length, 3);
+  assert.equal(harness.commands[2].file, 'curl');
+
+  harness.pendingExec.shift()();
+  harness.intervals[0].callback();
+  assert.equal(harness.commands.length, 3, 'the tick after an upload is inside the interval');
 });
 
 test('common transport runs one final persistence after an in-flight run on SIGTERM', () => {
@@ -339,12 +349,14 @@ test('common transport runs one final persistence after an in-flight run on SIGT
 
   harness.pendingExec.shift()(null, SIGNATURE_A);
   harness.pendingExec.shift()();
+  harness.pendingExec.shift()();
   assert.equal(archives(harness).length, 2, 'the state written since the tick is archived once more');
   assert.deepEqual(harness.exits, []);
 
   harness.pendingExec.shift()();
+  harness.pendingExec.shift()();
   assert.deepEqual(harness.exits, [0, 0]);
-  assert.equal(harness.commands.length, 3, 'the final run does not spend time on a signature');
+  assert.equal(harness.commands.length, 5, 'the final run does not spend time on a signature');
 });
 
 // What `sha256sum` prints for two different listings of the state directory.
@@ -881,7 +893,7 @@ test('common transport production archive includes Codex state but excludes auth
     name: 'Codex', stateDir: '.codex', authFilename: 'auth.json'
   });
   harness.intervals[0].callback();
-  assert.equal(harness.commands.length, 2);
+  assert.equal(harness.commands.length, 3);
   assert.match(harness.commands[1].args[1], /"\.codex"/);
   assert.match(harness.commands[1].args[1], /--exclude="\.codex\/auth\.json"/);
 });

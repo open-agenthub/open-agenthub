@@ -185,8 +185,10 @@ entries and the hub served one.
 Two changes, because pods already running cannot be changed:
 
 - **The session agent re-mints its urls** every six hours through `POST /internal/sessions/{id}/artifact-urls`,
-  half the signing period, so one failed refresh leaves time for the next. Only a url the hub
-  returned replaces one, and only one that cannot break out of the shell command it is used in.
+  half the signing period, so one failed refresh leaves time for the next. Only an http(s) url the
+  hub returned replaces one. Because these urls now arrive over the network, none of them reaches
+  a shell any more: the state archive is built by the shell script and uploaded by `curl` run
+  with an argument list, as the scrollback and transcript are.
 - **The hub reads both copies** (`TranscriptReader.ReadTranscriptAsync` / `ReadScrollbackAsync`).
   The pod writes Postgres after S3 on every tick, so a Postgres copy that S3 does not contain is the
   newer one. For the scrollback both are the same window and Postgres is taken; for the transcript

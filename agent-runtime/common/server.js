@@ -7,7 +7,7 @@ const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
-const { PERSIST_STEP_SECONDS, signatureScript, archiveScript } = require('./state-archive');
+const { PERSIST_STEP_SECONDS, signatureScript, archiveScript, uploadArgs } = require('./state-archive');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -90,7 +90,7 @@ function createCommonServer(options = {}) {
   const home = env.HOME || '/home/agent';
   const workdir = env.AGENTHUB_WORKDIR || (hasRepo ? '/workspace/repo' : '/workspace');
   const cwd = fs.existsSync(workdir) ? workdir : '/workspace';
-  const curlOption = env.AGENTHUB_S3_INSECURE === '1' ? '-k ' : '';
+  const insecureStorage = env.AGENTHUB_S3_INSECURE === '1';
   const configuredFileMax = Number.parseInt(env.AGENTHUB_FILE_MAX_BYTES || '', 10);
   const fileMaxBytes = Number.isSafeInteger(configuredFileMax) && configuredFileMax > 0
     ? configuredFileMax : 50 * 1024 * 1024;
@@ -173,12 +173,15 @@ function createCommonServer(options = {}) {
   function persistState(final, done) {
     if (!statePut) return done && done();
     const archive = signature => execFile('/bin/sh',
-      ['-c', archiveScript(driver, curlOption), 'sh', home, statePut, '/tmp/state.tgz'], error => {
-        if (!error) {
-          uploadedStateSignature = signature;
-          stateTicksSinceUpload = 0;
-        }
-        if (done) done();
+      ['-c', archiveScript(driver), 'sh', home, '/tmp/state.tgz'], archiveError => {
+        if (archiveError) return done && done();
+        execFile('curl', uploadArgs('/tmp/state.tgz', statePut, insecureStorage), error => {
+          if (!error) {
+            uploadedStateSignature = signature;
+            stateTicksSinceUpload = 0;
+          }
+          if (done) done();
+        });
       });
     if (final) return archive(null);
     if (++stateTicksSinceUpload < STATE_ARCHIVE_EVERY_TICKS) return done && done();
@@ -195,10 +198,7 @@ function createCommonServer(options = {}) {
   function persistScrollback(done) {
     if (!scrollPut) return done && done();
     try { fs.writeFileSync('/tmp/scrollback.log', scrollback); } catch {}
-    execFile('/bin/sh', ['-c',
-      'curl -fsS --max-time ' + PERSIST_STEP_SECONDS + ' ' + curlOption +
-      '-T /tmp/scrollback.log "' + scrollPut + '"'
-    ], () => done && done());
+    execFile('curl', uploadArgs('/tmp/scrollback.log', scrollPut, insecureStorage), () => done && done());
   }
 
   // The provider's own conversation file, once the driver can name it. Asked again on every
@@ -252,18 +252,15 @@ function createCommonServer(options = {}) {
     };
     if (!transcriptPut) return toHub();
     // No shell here: the file name is whatever the CLI chose for its session file, and a quote
-    // or `$(` in it would otherwise become part of the command. The state upload above keeps
-    // its shell pipeline because every path in it is one this process picked itself.
-    execFile('curl', [
-      '-fsS', ...(curlOption ? ['-k'] : []), '--max-time', String(PERSIST_STEP_SECONDS),
-      '-T', file, transcriptPut
-    ], toHub);
+    // or `$(` in it would otherwise become part of the command.
+    execFile('curl', uploadArgs(file, transcriptPut, insecureStorage), toHub);
   }
 
   // The presigned urls in the environment expire twelve hours after the pod was created, and
   // every upload after that failed with a 403 nobody saw: the state a resume unpacks and the
   // transcript the Workspace reads both froze there (#111). Only a url the hub actually
-  // returned replaces one, so a failed refresh keeps the current set for the next attempt.
+  // returned replaces one, so a failed refresh keeps the current set for the next attempt; and
+  // only an http(s) url, since curl would read anything starting with a dash as an option.
   function refreshArtifactUrls() {
     if (!callback || !token || !(statePut || scrollPut || transcriptPut)) return;
     fetchImpl(callback + '/artifact-urls', { method: 'POST', headers: { 'X-Agent-Token': token } })
@@ -272,7 +269,7 @@ function createCommonServer(options = {}) {
         return response.json();
       })
       .then(urls => {
-        const usable = value => typeof value === 'string' && /^https?:\/\/[^\s"'`$\\]+$/.test(value);
+        const usable = value => typeof value === 'string' && /^https?:\/\/\S+$/.test(value);
         let replaced = 0;
         if (statePut && usable(urls.statePutUrl)) { statePut = urls.statePutUrl; replaced++; }
         if (scrollPut && usable(urls.scrollbackPutUrl)) { scrollPut = urls.scrollbackPutUrl; replaced++; }
