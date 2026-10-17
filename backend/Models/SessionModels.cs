@@ -635,6 +635,7 @@ public record SessionInfo
     public string? McpConfigJson { get; init; }
     /// <summary>Catalog MCP servers included in this session.</summary>
     public IReadOnlyList<string> McpServerIds { get; init; } = Array.Empty<string>();
+    public string? FailureReason { get; init; }
     public required string Phase { get; init; }       // Pending | Running | Paused | Succeeded | Failed | Scheduled
     public string? PodIp { get; init; }
     public DateTime CreatedAt { get; init; }

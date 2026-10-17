@@ -503,12 +503,61 @@ public static class AgentPodSpecFactory
                   cp /secrets/gitcreds/credentials "$HOME/.git-credentials" && chmod 600 "$HOME/.git-credentials"
                   git config --global credential.helper store
                 fi
+                # Git may echo credential-bearing remotes. Capture in memory and sanitize before
+                # writing either logs or the termination message consumed by the backend.
+                redact() {
+                  awk '
+                    function collect(url, value, n, parts) {
+                      if (url !~ /:\/\// || url !~ /@/) return
+                      sub(/^[^:]*:\/\//, "", url); sub(/@.*/, "", url)
+                      n = split(url, parts, ":"); value = parts[n]
+                      if (length(value)) secrets[value] = 1
+                    }
+                    function remove(line, secret, pos, result) {
+                      result = ""
+                      while ((pos = index(line, secret)) > 0) {
+                        result = result substr(line, 1, pos - 1) "[redacted]"
+                        line = substr(line, pos + length(secret))
+                      }
+                      return result line
+                    }
+                    BEGIN {
+                      count = split(ENVIRON["REPOS"], rows, "\n")
+                      for (i = 1; i <= count; i++) { split(rows[i], fields, "\t"); collect(fields[3]) }
+                      file = ENVIRON["HOME"] "/.git-credentials"
+                      while ((getline credential < file) > 0) collect(credential)
+                      close(file)
+                    }
+                    { line = $0; for (secret in secrets) line = remove(line, secret); print line }
+                  ' | sed -E \
+                    -e 's#([a-zA-Z][a-zA-Z0-9+.-]*://)[^ /]*@#\1[redacted]@#g' \
+                    -e 's/([Aa]uthorization|[Pp]roxy-[Aa]uthorization|[Cc]ookie|[Ss]et-[Cc]ookie|[Xx]-[^ :]*(Token|token|Key|key))[ :=].*/\1: [redacted]/g' \
+                    -e 's/(Bearer|Basic) [^ ,;]+/[redacted]/g' \
+                    -e 's/([a-zA-Z_]*(token|TOKEN|password|PASSWORD|secret|SECRET|api_key|API_KEY|signature)[a-zA-Z_]*[=:] *)[^ &;,]+/\1[redacted]/g' \
+                    -e 's/(gh[pousr]_[a-zA-Z0-9_]+|github_pat_[a-zA-Z0-9_]+|glpat-[a-zA-Z0-9_-]+|sk-[a-zA-Z0-9_-]+)/[redacted]/g'
+                }
                 TAB=$(printf '\t')
-                printf '%s\n' "$REPOS" | while IFS="$TAB" read -r dest branch url; do
+                index=0
+                printf '%s\n' "$REPOS" | while IFS= read -r row; do
+                  # read with tab IFS collapses empty fields, turning a default-branch URL into
+                  # the branch. Split explicitly so an omitted branch remains empty.
+                  dest=${row%%"$TAB"*}; rest=${row#*"$TAB"}
+                  branch=${rest%%"$TAB"*}; url=${rest#*"$TAB"}
                   [ -z "$url" ] && continue
-                  echo "Cloning $url (branch: ${branch:-default}) -> /workspace/$dest"
-                  if [ -n "$branch" ]; then git clone --branch "$branch" "$url" "/workspace/$dest"
-                  else git clone "$url" "/workspace/$dest"; fi
+                  index=$((index + 1))
+                  code=0
+                  if [ -n "$branch" ]; then output=$(git clone --branch "$branch" "$url" "/workspace/$dest" 2>&1) || code=$?
+                  else output=$(git clone "$url" "/workspace/$dest" 2>&1) || code=$?; fi
+                  if [ "$code" -ne 0 ]; then
+                    default_branch=$(git ls-remote --symref "$url" HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\([^[:space:]]*\).*#\1#p') || true
+                    { printf 'repository-index: %s\n' "$index"
+                      [ -z "$default_branch" ] || printf 'default-branch: %s\n' "$default_branch"
+                      printf '%s\n' "$output"
+                    } | redact | head -c 3500 > "${TERMINATION_MESSAGE_PATH:-/dev/termination-log}"
+                    cat "${TERMINATION_MESSAGE_PATH:-/dev/termination-log}"
+                    exit "$code"
+                  fi
+                  printf '%s\n' "$output" | redact
                 done
                 echo "Clone finished."
                 """;
