@@ -159,6 +159,9 @@ export const api = {
     req('PATCH', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`, data),
   deleteProviderAccount: (agent, id) =>
     req('DELETE', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`),
+  // Chooses the git tokens of a session (one per host); a running pod takes them without a restart.
+  switchSessionGitPats: (id, gitPatIds) =>
+    req('PATCH', `/sessions/${encodeURIComponent(id)}/git-pats`, { gitPatIds }),
   // Moves a running Subscription session to another account; the pod restarts its agent with resume.
   switchSessionCredential: (id, credentialId) =>
     req('PATCH', `/sessions/${encodeURIComponent(id)}/credential`, { credentialId }),

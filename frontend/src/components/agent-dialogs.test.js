@@ -633,6 +633,79 @@ describe('Git personal access tokens', () => {
   })
 })
 
+
+/// Several tokens for one host (issue #132): told apart by label, one marked default.
+describe('Git tokens sharing a host', () => {
+  const sameHost = [
+    { id: 'p', kind: 'gitlab', host: 'gitlab.example.com', label: 'personal', isDefault: true },
+    { id: 'g', kind: 'gitlab', host: 'gitlab.example.com', label: 'group: platform', isDefault: false,
+      authorName: 'Platform Bot', authorEmail: 'platform-bot@example.com' },
+    { id: 'h', kind: 'github', host: 'github.com', isDefault: true }
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.getCredentialStatus.mockReset()
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: sameHost })
+    mocks.api.createSession.mockResolvedValue({ id: 'new' })
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude'] })
+  })
+
+  it('lists label, default and author, and offers "Make default" only where it changes something', async () => {
+    mocks.api.addGitPat.mockResolvedValue({})
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+
+    const group = wrapper.get('[data-git-pat-id="g"]')
+    expect(group.get('[data-git-pat-label]').text()).toBe('group: platform')
+    expect(group.get('[data-git-pat-author]').text()).toBe('commits as Platform Bot <platform-bot@example.com>')
+    expect(wrapper.get('[data-git-pat-id="p"] [data-git-pat-default]').text()).toBe('default')
+    // Alone on its host, a token has no default to speak of.
+    expect(wrapper.find('[data-git-pat-id="h"] [data-git-pat-default]').exists()).toBe(false)
+    expect(wrapper.find('[data-git-pat-id="h"] [data-git-pat-make-default]').exists()).toBe(false)
+    expect(wrapper.find('[data-git-pat-id="p"] [data-git-pat-make-default]').exists()).toBe(false)
+
+    await group.get('[data-git-pat-make-default]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.addGitPat).toHaveBeenCalledWith({ id: 'g', default: true })
+  })
+
+  it('adds a labelled token with its author, and leaves empty optional fields out', async () => {
+    mocks.api.addGitPat.mockResolvedValue({})
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    await wrapper.get('[data-git-pat-host]').setValue('gitlab.example.com')
+    await wrapper.get('[data-git-pat-token]').setValue('glpat-bot')
+    await wrapper.get('[data-git-pat-label-input]').setValue(' project bot ')
+    await wrapper.get('[data-git-pat-author-email]').setValue('bot@example.com')
+    await wrapper.get('[data-git-pat-add]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.addGitPat).toHaveBeenCalledWith({
+      kind: 'gitlab', host: 'gitlab.example.com', token: 'glpat-bot', label: 'project bot', authorEmail: 'bot@example.com'
+    })
+  })
+
+  it('offers one choice per host in a new session, starting on the default', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    const select = wrapper.get('[data-git-pat-host="gitlab.example.com"]')
+    expect(select.element.value).toBe('p')
+    expect(select.text()).toContain('personal (default)')
+    expect(select.text()).toContain('group: platform')
+    expect(wrapper.get('[data-git-pat-option="h"]').element.checked).toBe(true)
+
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].gitPatIds).toBeNull()
+
+    await select.setValue('g')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[1][0].gitPatIds).toEqual(['g', 'h'])
+
+    await select.setValue('')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[2][0].gitPatIds).toEqual(['h'])
+  })
+})
 /// A session chooses which stored git tokens it is built with (docs/credential-scopes.md). The
 /// picker appears from the first stored token; every token ticked means "all, as before".
 describe('Git token selection per session', () => {

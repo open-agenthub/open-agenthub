@@ -9,6 +9,7 @@ const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject')
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs } = require('./state-archive');
 const { createSecretMask } = require('./secret-mask');
+const gitIdentity = require('./git-identity');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -80,6 +81,8 @@ function createCommonServer(options = {}) {
   const attachmentMaterializer = supplied.attachmentMaterializer ||
     new AttachmentMaterializer({ env, fetch: fetchImpl, store: fileStore });
   const secretMask = supplied.secretMask || createSecretMask({ env, fs });
+  const installGitIdentity = supplied.installGitIdentity ||
+    (payload => gitIdentity.install(payload, { setupCliAuth: require('node:path').join(__dirname, 'setup-cli-auth.sh') }));
 
   const preparation = driver.prepare(env);
   const childEnv = preparation && preparation.childEnv;
@@ -947,6 +950,45 @@ function createCommonServer(options = {}) {
     sendJson(response, 202, { installed: true, restarting });
   }
 
+  /**
+   * PUT /agenthub/git-credentials: the owner chose another stored git token for this session
+   * (docs/git-credentials.md, "Switching the token of a running session"). Body
+   * `{credentials, authors}` — the whole store and the per-host authors, rebuilt by the hub the
+   * same way as at spawn. Nothing restarts: git reads the store and its config on every command,
+   * and gh/glab read theirs on every call, so the next push already uses the new token.
+   */
+  async function handleGitCredentialRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    if (request.method !== 'PUT') {
+      response.setHeader('Allow', 'PUT');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    // Room for the store plus the authors list around it.
+    const body = await readBoundedBody(request, gitIdentity.MAX_CREDENTIALS_BYTES * 2);
+    if (!body) {
+      fileError(response, 413, 'git_credentials_too_large');
+      return;
+    }
+    let payload;
+    try { payload = gitIdentity.parsePayload(body); } catch (error) {
+      fileError(response, 400, error.message);
+      return;
+    }
+    try {
+      installGitIdentity({ home: env.HOME || '/home/agent', ...payload });
+    } catch (error) {
+      console.error('[agent] Installing git credentials failed:', error.message);
+      fileError(response, 500, 'git_credentials_install_failed');
+      return;
+    }
+    console.log('[agent] Git credentials replaced by the hub.');
+    sendJson(response, 200, { installed: true });
+  }
+
   // Percent-encoded by the hub so a label with any character survives the header; control
   // characters are dropped so nothing in it can drive the terminal.
   function switchReason(header) {
@@ -1200,6 +1242,7 @@ function createCommonServer(options = {}) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
     if (requestPath === '/agenthub/credentials/refresh') return handleCredentialRequest(request, response, true);
+    if (requestPath === '/agenthub/git-credentials') return handleGitCredentialRequest(request, response);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
     if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
@@ -1412,7 +1455,7 @@ function createCommonServer(options = {}) {
 
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
-    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/messages, /agenthub/transcript' +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 

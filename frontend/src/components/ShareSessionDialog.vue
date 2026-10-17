@@ -3,7 +3,51 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import { initials } from '../lib/text.js'
 import { isLicenseError } from '../lib/license.js'
+import { gitPatHosts, gitPatName, gitPatSelectionFor } from '../lib/agent.js'
 import LicenseGate from './LicenseGate.vue'
+
+// Which git identity the session pushes with (issue #132). Shared work usually belongs under a
+// group or project token rather than the owner's personal one, and this is the moment the owner
+// decides who it is shared with — so the dialog says which token is in use and offers the switch
+// here rather than in the session settings. Collaborators never see a token, only the owner does
+// this, and only labels and hosts are shown.
+const gitPats = ref([])
+const gitIds = ref(null)
+const gitDraft = ref({})
+const gitNote = ref('')
+const gitBusy = ref(false)
+const gitHosts = computed(() => gitPatHosts(gitPats.value))
+const gitInUse = computed(() => {
+  const chosen = gitPatSelectionFor(gitIds.value, gitPats.value)
+  return gitPats.value.filter(pat => chosen.includes(pat.id))
+})
+const gitDraftIds = computed(() => Object.values(gitDraft.value).filter(Boolean))
+const gitChanged = computed(() => {
+  const inUse = gitInUse.value.map(pat => pat.id)
+  return gitDraftIds.value.length !== inUse.length || gitDraftIds.value.some(id => !inUse.includes(id))
+})
+function resetGitDraft() {
+  gitDraft.value = Object.fromEntries(gitHosts.value.map(group =>
+    [group.host, group.tokens.find(pat => gitInUse.value.includes(pat))?.id || '']))
+}
+async function loadGit() {
+  gitIds.value = Array.isArray(props.session.gitPatIds) ? props.session.gitPatIds : null
+  try { gitPats.value = (await api.getCredentialStatus())?.gitPats || [] } catch { gitPats.value = [] }
+  resetGitDraft()
+}
+async function applyGit() {
+  gitBusy.value = true; gitNote.value = ''; error.value = ''
+  try {
+    const result = await api.switchSessionGitPats(props.session.id, gitDraftIds.value)
+    gitIds.value = Array.isArray(result?.session?.gitPatIds) ? result.session.gitPatIds : gitDraftIds.value
+    gitNote.value = result?.appliedNow ? 'Switched — the next push already uses it.' : 'Saved — applies at the next start or resume.'
+    resetGitDraft()
+  } catch (e) {
+    error.value = String(e.message || e)
+  } finally {
+    gitBusy.value = false
+  }
+}
 
 const props = defineProps({ session: Object, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])
@@ -67,7 +111,7 @@ async function saveLink(link) { const draft = linkDrafts.value[link.id]; await c
 async function removeLink(link) { await change(() => api.deleteShareLink(props.session.id, link.id)) }
 async function savePolicy() { await change(() => api.updateMcpPolicy(props.session.id, { blockedServers: list(blockedServers.value), blockedTools: list(blockedTools.value) })) }
 async function copyLink() { await navigator.clipboard?.writeText(oneTimeUrl.value) }
-onMounted(load)
+onMounted(() => { load(); loadGit() })
 function reset() {
   data.value = { users: [], links: [], policy: { blockedServers: [], blockedTools: [] } }
   recipient.value = ''
@@ -79,7 +123,9 @@ function reset() {
   error.value = ''
   licenseLock.value = null
   linkDrafts.value = {}
+  gitNote.value = ''
   load()
+  loadGit()
 }
 watch(() => props.session.id, reset)
 </script>
@@ -111,6 +157,24 @@ watch(() => props.session.id, reset)
         <button :data-save-link="link.id" @click="saveLink(link)">Save</button>
         <button class="danger" @click="removeLink(link)">Revoke</button>
       </div>
+    </section>
+
+    <section v-if="gitPats.length" class="bordered" data-share-git>
+      <div class="sect-title">Git identity</div>
+      <p class="sub">What work in this session is pushed with, whoever types. Collaborators never see the token.</p>
+      <p v-for="pat in gitInUse" :key="pat.id" class="git-in-use" data-share-git-in-use>
+        Pushes as <strong>{{ gitPatName(pat) }}</strong> on <code>{{ pat.host }}</code>
+      </p>
+      <p v-if="!gitInUse.length" class="git-in-use" data-share-git-none>No stored token is used by this session.</p>
+      <div v-for="group in gitHosts" :key="group.host" class="add-row git-row">
+        <code class="git-host">{{ group.host }}</code>
+        <select v-model="gitDraft[group.host]" class="fit" :data-share-git-host="group.host">
+          <option v-for="pat in group.tokens" :key="pat.id" :value="pat.id">{{ gitPatName(pat) }}{{ pat.isDefault ? ' (default)' : '' }}</option>
+          <option value="">No token</option>
+        </select>
+      </div>
+      <button data-share-git-apply :disabled="!gitChanged || gitBusy" @click="applyGit">Use for this session</button>
+      <p v-if="gitNote" class="sub" data-share-git-note>{{ gitNote }}</p>
     </section>
 
     <section class="bordered">
@@ -152,6 +216,9 @@ section.bordered { border-top: 1px solid var(--border); margin-top: 14px; paddin
 .one-time .copy { margin-left: 8px; padding: 3px 10px; font-size: 11px; }
 .one-time code { display: block; overflow-wrap: anywhere; margin-top: 6px; color: var(--accent); font-family: var(--mono); }
 .servers { font: 12px var(--mono); color: var(--muted-2); }
+.git-in-use { font-size: 13px; margin: 8px 0 0; }
+.git-row { margin: 6px 0; }
+.git-host { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--mono); font-size: 12px; }
 .row { display: flex; justify-content: flex-end; margin-top: 16px; }
 .err { color: var(--danger); font: 12px var(--mono); }
 @media (max-width: 760px) { .person.link-edit { align-items: stretch; flex-direction: column; } .person.link-edit select, .person.link-edit input { width: 100%; } }
