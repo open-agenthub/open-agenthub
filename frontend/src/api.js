@@ -215,6 +215,10 @@ export const api = {
   openBillingPortal: () => req('POST', '/admin/billing-portal'),
   deactivateLicense: () => req('DELETE', '/admin/license'),
   setUserSeat: (owner, licensed) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/license`, { licensed }),
+  // Who is an admin and why; role 'admin' | 'user' | null (null = groups decide). 409 = last admin.
+  adminRoles: () => req('GET', '/admin/roles'),
+  setUserRole: (owner, role) => req('PUT', `/admin/users/${encodeURIComponent(owner)}/role`, { role }),
+  adminRoleAudit: () => req('GET', '/admin/roles/audit'),
   // Personal library: MCP catalog (raw/api) + skills.
   mcpServers: () => req('GET', '/mcp-servers'),
   createMcpServer: (data) => req('POST', '/mcp-servers', data),

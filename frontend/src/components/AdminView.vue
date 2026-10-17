@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { api, auth } from '../api.js'
 import { licenseBadge, licenseBadgeLabel, seatOverbooked } from '../lib/license.js'
+import UserRolesCard from './UserRolesCard.vue'
 
 defineEmits(['close'])
 const props = defineProps({
@@ -263,6 +264,8 @@ function fmtDateTime(d) {
               </div>
             </div>
           </section>
+
+          <UserRolesCard v-if="showSeats" />
 
           <!-- Billing -->
           <section v-if="showBilling" class="card">

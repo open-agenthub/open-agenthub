@@ -184,8 +184,9 @@ public class AdminRolesPostgresTests
         Assert.IsType<ConflictObjectResult>(refused);
         Assert.Equal("admin", await db.Groups.GetGroupRoleAsync("leads"));
 
-        // Free entry: a group nobody has signed in with yet.
-        Assert.IsType<OkObjectResult>(await controller.SetGroupRole("staff", new("user"), default));
+        // Free entry: a group nobody has signed in with yet, typed the way Keycloak sends paths.
+        Assert.IsType<OkObjectResult>(await controller.SetGroupRole(" /staff ", new("user"), default));
+        Assert.Equal("user", await db.Groups.GetGroupRoleAsync("staff"));
         var entry = Assert.Single(await db.Roles.ListAuditAsync(10));
         Assert.Equal(("alice", "group", "staff", (string?)null, "user"),
             (entry.Actor, entry.SubjectKind, entry.Subject, entry.OldRole, entry.NewRole));

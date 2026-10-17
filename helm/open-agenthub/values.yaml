@@ -280,8 +280,10 @@ telemetry:
 
 # Enterprise features (require a valid license).
 ee:
-  # Comma-separated list of admin usernames (preferred_username). Empty = every
-  # signed-in user is an admin (bootstrap; lock this down for real deployments).
+  # Comma-separated list of admin usernames (preferred_username): break-glass admins that
+  # the admin area cannot demote. Everyone else can be made an admin or a regular user in
+  # Admin → Users & seats without a redeploy. Empty and nobody designated there (or via an
+  # admin group) = every signed-in user is an admin (bootstrap). See docs/admin-roles.md.
   admins: ""
   # Optional link to the billing portal (Stripe customer portal via the license service),
   # surfaced in the Admin area for subscription/invoice management.

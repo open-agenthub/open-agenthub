@@ -47,8 +47,9 @@ public static class GroupClaims
             .ToList();
     }
 
-    /// <summary>Keycloak group paths come as "/team/sub"; store them without the leading slash.</summary>
-    private static string Normalize(string group)
+    /// <summary>Keycloak group paths come as "/team/sub"; store them without the leading slash. Also
+    /// applied to names an admin types in, or "/team" would be mapped and never match a member.</summary>
+    public static string Normalize(string group)
     {
         var g = group.Trim();
         return g.StartsWith('/') ? g[1..] : g;

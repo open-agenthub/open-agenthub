@@ -183,6 +183,28 @@ describe('AdminLimitsView', () => {
     expect(mocks.api.eeSetGroupRole).toHaveBeenCalledWith('devs', 'admin')
   })
 
+  it('maps a group nobody has signed in with yet', async () => {
+    mocks.api.eeSetGroupRole.mockResolvedValue([{ name: 'new-admins', role: 'admin', memberCount: 0 }])
+    const wrapper = mount(AdminLimitsView)
+    await flushPromises()
+    await wrapper.get('[data-new-group]').setValue(' new-admins ')
+    await wrapper.get('[data-add-group-role]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.eeSetGroupRole).toHaveBeenCalledWith('new-admins', 'admin')
+    expect(wrapper.get('[data-group-row="new-admins"] select').element.value).toBe('admin')
+    expect(wrapper.get('[data-new-group]').element.value).toBe('')
+  })
+
+  it('shows a refused group change and restores the stored role', async () => {
+    mocks.api.eeSetGroupRole.mockRejectedValue(Object.assign(new Error('This would leave no admin.'), { status: 409 }))
+    const wrapper = mount(AdminLimitsView)
+    await flushPromises()
+    await wrapper.get('[data-group-row="leads"] select').setValue('')
+    await flushPromises()
+    expect(wrapper.text()).toContain('This would leave no admin.')
+    expect(wrapper.get('[data-group-row="leads"] select').element.value).toBe('admin')
+  })
+
   it('loads allowed-agent checkboxes from the admin API', async () => {
     mocks.api.adminGetAllowedAgents.mockResolvedValue({ agents: ['Claude', 'Codex'] })
     const wrapper = mount(AdminLimitsView)

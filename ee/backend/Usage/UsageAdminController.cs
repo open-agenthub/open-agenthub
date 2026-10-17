@@ -109,7 +109,8 @@ public sealed class UsageAdminController : ControllerBase
         if (string.IsNullOrWhiteSpace(group)) return BadRequest(new { error = "Group name is required." });
         if (req.Role is not (null or UserGroupStore.AdminRole or UserGroupStore.UserRole))
             return BadRequest(new { error = $"Unknown role '{req.Role}'." });
-        var name = group.Trim();
+        var name = GroupClaims.Normalize(group);
+        if (name.Length == 0) return BadRequest(new { error = "Group name is required." });
 
         await using (await _roles.LockAsync(ct))
         {
