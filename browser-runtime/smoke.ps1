@@ -54,6 +54,10 @@ try {
         docker exec -i -w /opt/browser $container node --input-type=module -
     if ($LASTEXITCODE -ne 0) { throw "WebGL is unavailable in the browser runtime" }
 
+    Get-Content -Raw (Join-Path $PSScriptRoot "font-smoke.mjs") |
+        docker exec -i -w /opt/browser $container node --input-type=module -
+    if ($LASTEXITCODE -ne 0) { throw "Symbol font is unavailable in the browser runtime" }
+
     $uid = docker exec $container id -u
     if ($uid.Trim() -ne "1000") { throw "Container is not running as UID 1000" }
     docker exec $container sh -c "touch /root-write-test" 2>$null
