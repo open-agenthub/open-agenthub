@@ -171,10 +171,18 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
         },
         statSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) {
-            return { size: harnessOptions.files[file].length, mtimeMs: harnessOptions.mtimeMs || 1 };
+            return { size: Buffer.byteLength(harnessOptions.files[file]), mtimeMs: harnessOptions.mtimeMs || 1 };
           }
           throw new Error('ENOENT: ' + file);
-        }
+        },
+        openSync(file) {
+          if (harnessOptions.files && file in harnessOptions.files) return file;
+          throw new Error('ENOENT: ' + file);
+        },
+        readSync(fd, buffer, offset, length, position) {
+          return Buffer.from(harnessOptions.files[fd]).copy(buffer, offset, position, position + length);
+        },
+        closeSync() {}
       },
       fetch(url, options = {}) {
         requests.push({ url, options });

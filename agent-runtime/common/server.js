@@ -38,6 +38,13 @@ const MAX_LIMIT_REPORT_BYTES = 4 * 1024;
 // How long a restarted TUI gets to draw its prompt box before a message held back during the
 // restart is typed into it. Text written earlier lands in a terminal nothing reads yet.
 const RESTART_INPUT_DELAY_MS = 3_000;
+// How many 30s persistence ticks pass between two refreshes of the presigned upload urls: six
+// hours, half of the twelve the hub signs them for, so one failed refresh still leaves time
+// for the next before the old urls stop working.
+const URL_REFRESH_EVERY_TICKS = 720;
+// The most transcript one GET /agenthub/transcript returns. A first read of a long session
+// takes a few of these; the hub asks again from where the last one stopped.
+const MAX_TRANSCRIPT_CHUNK = 8 * 1024 * 1024;
 // The longest reason a credential swap may carry into the scrollback.
 const MAX_SWITCH_REASON_CHARS = 300;
 
@@ -76,9 +83,10 @@ function createCommonServer(options = {}) {
   const hasRepo = env.AGENTHUB_HAS_REPO === '1';
   const callback = env.AGENTHUB_CALLBACK_URL || '';
   const token = env.AGENTHUB_CALLBACK_TOKEN || '';
-  const statePut = env.AGENTHUB_STATE_PUT_URL || '';
-  const scrollPut = env.AGENTHUB_SCROLLBACK_PUT_URL || '';
-  const transcriptPut = env.AGENTHUB_TRANSCRIPT_PUT_URL || '';
+  // Replaced by refreshArtifactUrls before they expire; the environment only holds the first set.
+  let statePut = env.AGENTHUB_STATE_PUT_URL || '';
+  let scrollPut = env.AGENTHUB_SCROLLBACK_PUT_URL || '';
+  let transcriptPut = env.AGENTHUB_TRANSCRIPT_PUT_URL || '';
   const home = env.HOME || '/home/agent';
   const workdir = env.AGENTHUB_WORKDIR || (hasRepo ? '/workspace/repo' : '/workspace');
   const cwd = fs.existsSync(workdir) ? workdir : '/workspace';
@@ -250,6 +258,28 @@ function createCommonServer(options = {}) {
       '-fsS', ...(curlOption ? ['-k'] : []), '--max-time', String(PERSIST_STEP_SECONDS),
       '-T', file, transcriptPut
     ], toHub);
+  }
+
+  // The presigned urls in the environment expire twelve hours after the pod was created, and
+  // every upload after that failed with a 403 nobody saw: the state a resume unpacks and the
+  // transcript the Workspace reads both froze there (#111). Only a url the hub actually
+  // returned replaces one, so a failed refresh keeps the current set for the next attempt.
+  function refreshArtifactUrls() {
+    if (!callback || !token || !(statePut || scrollPut || transcriptPut)) return;
+    fetchImpl(callback + '/artifact-urls', { method: 'POST', headers: { 'X-Agent-Token': token } })
+      .then(response => {
+        if (!response || !response.ok) throw new Error('HTTP ' + (response && response.status));
+        return response.json();
+      })
+      .then(urls => {
+        const usable = value => typeof value === 'string' && /^https?:\/\/[^\s"'`$\\]+$/.test(value);
+        let replaced = 0;
+        if (statePut && usable(urls.statePutUrl)) { statePut = urls.statePutUrl; replaced++; }
+        if (scrollPut && usable(urls.scrollbackPutUrl)) { scrollPut = urls.scrollbackPutUrl; replaced++; }
+        if (transcriptPut && usable(urls.transcriptPutUrl)) { transcriptPut = urls.transcriptPutUrl; replaced++; }
+        console.log('[agent] Upload urls refreshed: ' + replaced);
+      })
+      .catch(error => console.log('[agent] Upload urls not refreshed (' + error.message + ')'));
   }
 
   function restoreScrollback(done) {
@@ -904,6 +934,59 @@ function createCommonServer(options = {}) {
    * nowhere, in which case the hub keeps it in the inbox and tells the sender so. Delivery here
    * is the only place that knows those three channels; the hub only reads the answer.
    */
+  // The provider's transcript from a byte offset, for the hub to follow a running session live
+  // instead of waiting for the next 30-second upload (#111, docs/transcripts.md). Answers only
+  // whole lines: the CLI may be mid-write, and a half line would be parsed as nothing and then
+  // skipped for good, since the hub's next read starts after it. X-Transcript-Size lets the hub
+  // see a file that got shorter than its cursor and start over.
+  function handleTranscriptRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    if (request.method !== 'GET') {
+      response.setHeader('Allow', 'GET');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const query = new URLSearchParams((request.url || '').split('?')[1] || '');
+    const from = /^\d{1,15}$/.test(query.get('from') || '0') ? Number(query.get('from') || '0') : -1;
+    if (from < 0) {
+      fileError(response, 400, 'invalid_offset');
+      return;
+    }
+    const send = (size, next, body) => {
+      response.statusCode = 200;
+      response.setHeader('Content-Type', 'application/x-ndjson');
+      response.setHeader('X-Transcript-Size', String(size));
+      response.setHeader('X-Transcript-Next', String(next));
+      response.setHeader('Content-Length', body.length);
+      response.end(body);
+    };
+    const file = locateTranscript();
+    let size;
+    try { size = file ? fs.statSync(file).size : 0; } catch { size = 0; }
+    if (!file || from >= size) return send(size, Math.min(from, size), Buffer.alloc(0));
+    const length = Math.min(size - from, MAX_TRANSCRIPT_CHUNK);
+    const chunk = Buffer.alloc(length);
+    let read = 0;
+    let fd;
+    try {
+      fd = fs.openSync(file, 'r');
+      while (read < length) {
+        const n = fs.readSync(fd, chunk, read, length - read, from + read);
+        if (n <= 0) break;
+        read += n;
+      }
+    } catch {
+      return send(size, from, Buffer.alloc(0));
+    } finally {
+      if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+    }
+    const whole = chunk.lastIndexOf(0x0a, read - 1) + 1;
+    send(size, from + whole, chunk.subarray(0, whole));
+  }
+
   async function handleMessageRequest(request, response) {
     if (!tokenMatches(request.headers['x-agent-token'])) {
       fileError(response, 401, 'unauthorized');
@@ -1063,6 +1146,7 @@ function createCommonServer(options = {}) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
+    if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
         requestPath === '/agenthub/mod/limit') {
       return handleModRequest(request, response, requestPath);
@@ -1210,8 +1294,13 @@ function createCommonServer(options = {}) {
   // first client and stays part of what we persist from here on.
   restoreScrollback(() => startAgent(true));
 
+  let ticksSinceUrlRefresh = 0;
   setIntervalImpl(() => {
     if (!exited) persistAll();
+    if (++ticksSinceUrlRefresh >= URL_REFRESH_EVERY_TICKS) {
+      ticksSinceUrlRefresh = 0;
+      refreshArtifactUrls();
+    }
   }, 30_000);
 
   const httpServer = http.createServer((request, response) => {
@@ -1229,7 +1318,7 @@ function createCommonServer(options = {}) {
 
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
-    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/messages' +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/messages, /agenthub/transcript' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 

@@ -198,7 +198,7 @@ describe('NewSessionDialog interface choice', () => {
     localStorage.removeItem('agenthub.preferredUi')
   })
 
-  it('keeps Workspace available across agents while selecting a compatible runtime transport', async () => {
+  it('keeps Workspace available across agents and creates every session on the PTY transport', async () => {
     mocks.api.createSession = vi.fn().mockResolvedValue({ id: 'new' })
     const wrapper = mountDialog()
     for (const agent of ['Claude', 'Codex', 'Cursor', 'OpenClaw']) {
@@ -206,7 +206,7 @@ describe('NewSessionDialog interface choice', () => {
       await flushPromises()
       await wrapper.find('[data-submit]').trigger('click')
       await flushPromises()
-      expect(mocks.api.createSession.mock.lastCall[0].uiMode).toBe(agent === 'Claude' ? 'chat' : 'terminal')
+      expect(mocks.api.createSession.mock.lastCall[0].uiMode).toBe('terminal')
       expect(wrapper.get('[data-ui-mode-option][aria-pressed=true]').text()).toBe('Workspace')
     }
     wrapper.unmount()
@@ -221,14 +221,14 @@ describe('NewSessionDialog interface choice', () => {
     expect(wrapper.findAll('[data-ui-mode-option]')).toHaveLength(2)
   })
 
-  it('selects streaming only for interactive Claude Workspace without changing the chosen surface', async () => {
+  it('never creates a headless chat session, whichever surface is preferred (#114)', async () => {
     mocks.api.createSession = vi.fn().mockResolvedValue({ id: 'new' })
     const wrapper = mountDialog()
     const chatChip = wrapper.findAll('[data-ui-mode-option]').find(b => b.text() === 'Workspace')
     await chatChip.trigger('click')
     await wrapper.find('[data-submit]').trigger('click')
     await flushPromises()
-    expect(mocks.api.createSession.mock.calls[0][0].uiMode).toBe('chat')
+    expect(mocks.api.createSession.mock.calls[0][0].uiMode).toBe('terminal')
 
     await chatChip.trigger('click')
     const autonomous = wrapper.findAll('[data-mode-option]').find(b => b.text() === 'Autonomous')
@@ -237,7 +237,7 @@ describe('NewSessionDialog interface choice', () => {
     await interactive.trigger('click')
     await wrapper.find('[data-submit]').trigger('click')
     await flushPromises()
-    expect(mocks.api.createSession.mock.calls[1][0].uiMode).toBe('chat')
+    expect(mocks.api.createSession.mock.calls[1][0].uiMode).toBe('terminal')
     expect(wrapper.emitted('created')[1][1]).toBe('workspace')
   })
 })

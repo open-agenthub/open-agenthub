@@ -15,13 +15,12 @@ export function conversionHint(agent) {
 }
 
 /**
- * The runtime transport a conversion asks for, given the surface the person picked. Workspace on
- * Claude is the streaming transport (`chat`, interactive Claude only — the rule the backend
- * applies); every other agent, and Terminal, keeps the CLI's TUI. The same mapping New session
- * uses, so a converted run opens exactly like a newly created one (docs/agent-workspace.md).
+ * The runtime transport a conversion asks for: the CLI's PTY whatever surface was picked, as for
+ * a new session, so the converted run keeps its terminal, /login and menus (#114). The surface
+ * only selects the first view (docs/agent-workspace.md).
  */
-export function conversionUiMode(agent, surface) {
-  return surface === 'workspace' && agent === 'Claude' ? 'chat' : 'terminal'
+export function conversionUiMode() {
+  return 'terminal'
 }
 
 /** Whether the card belongs on this session: the backend's own predicate, never re-derived here. */

@@ -142,18 +142,59 @@ renderer would turn an honest `git diff` into stray emphasis and broken tables. 
 escape-first, so this is a presentation choice, not a safety one: agent text cannot inject
 markup either way.
 
-## The Transcript tab follows a running session
+## The Workspace and the Transcript tab follow a running session
 
 The tab used to load once when opened and never again while the session ran; a person reading
-it saw the state of the first click. It now polls `…/conversation` every four seconds from the
-cursor of the last page while the tab is active and the session is live, appends what comes back
-(`mergeConversationPage`), and fetches once more when the phase settles — the session agent
-uploads a last time as it exits, and that tail would otherwise be missing until the next visit.
+it saw the state of the first click. It now polls `…/conversation` every second from the cursor
+of the last page while the view is shown, the browser tab is visible and the session is live,
+appends what comes back (`mergeConversationPage`), and fetches once more when the phase settles —
+the session agent uploads a last time as it exits, and that tail would otherwise be missing until
+the next visit.
 
-Polling rather than the session event socket: the transcript is appended by a 30-second upload,
-so there is no finer-grained event to push, and a cursor poll costs the hub one small page — a
-push would still need the same read to find out what is new. Four seconds is the interval the
-permission and inbox polls in the same view already use, so the tab adds no new timer.
+**A running session is read from its pod (#111).** Following the uploaded copy put the Workspace
+up to 30 seconds behind the terminal, which is how often the pod uploads. For a running session
+the hub now asks the session agent for the transcript itself: `GET /agenthub/transcript?from=<byte>`
+(callback token) answers the whole lines appended since that offset, with the file size and the
+next offset. `LiveTranscriptReader` keeps, per session, the offset and the entries parsed so far,
+so a poll moves only what the CLI wrote since the last one; a file shorter than the cursor or a
+new pod starts that session over from zero, and a runtime without the route (404) is not asked
+again for five minutes and gets the stored copy. Measured with Claude Code 2.1.287 against a mock
+Messages API, through this branch's `server.js`: a reply reached the hub 0.15–0.24 s after the
+model finished it, against 8–20 s on the upload path; the browser's one-second poll adds at most
+a second.
+
+Rejected: pushing appended lines over the agent WebSocket. In terminal mode that socket carries
+raw PTY bytes, so the lines would need a second framing, and the browser would need its own
+parser for every provider's format when the hub already has one. Also rejected: uploading on
+every change instead of every 30 seconds — the pod would PUT the whole file to S3 and a megabyte
+to Postgres several times per turn, for every session, whether or not anyone is looking. The live
+read costs nothing while nobody is.
+
+## Upload urls expire; the copies are read freshest first (#111)
+
+The presigned urls a pod gets in its environment are signed for twelve hours. A session that ran
+longer kept uploading to S3 and got a 403 every time, which nothing reported, while its callback
+to the hub kept updating the Postgres copies. Both readers preferred S3 whenever it was non-empty,
+so every session older than twelve hours showed a conversation frozen at that mark — the "does not
+update at all, not even after 30 seconds" in #111 — and its state archive froze with it, so a
+resume after that restored twelve-hour-old state. Reproduced against a real S3 server
+with the backend's own `S3ArtifactStore`: after the url expired, Postgres held three
+entries and the hub served one.
+
+Two changes, because pods already running cannot be changed:
+
+- **The session agent re-mints its urls** every six hours through `POST /internal/sessions/{id}/artifact-urls`,
+  half the signing period, so one failed refresh leaves time for the next. Only a url the hub
+  returned replaces one, and only one that cannot break out of the shell command it is used in.
+- **The hub reads both copies** (`TranscriptReader.ReadTranscriptAsync` / `ReadScrollbackAsync`).
+  The pod writes Postgres after S3 on every tick, so a Postgres copy that S3 does not contain is the
+  newer one. For the scrollback both are the same window and Postgres is taken; for the transcript
+  Postgres has only the capped tail, so the history before it is kept from S3, joined at the tail's
+  first line. This is what makes sessions on older runtime images follow again without a restart.
+
+Rejected: comparing timestamps. Neither copy records when it was written in a way the other can be
+compared with — the Postgres row's `updated_at` moves for every status change — and the content
+check needs no new column.
 
 A page that cannot be appended is not appended: `length` going down, the server clamping the
 offset, or the source switching from `scrollback` to `native` (the first upload landing after the
@@ -194,6 +235,11 @@ line that has *text* wins, a trailing tool call or a half-written line does not.
   component displayed.
 
 ## Compatibility
+
+For the live read (#111): a pod from an older runtime image answers `/agenthub/transcript` with
+404 and is followed through the stored copy, now read freshest first; it keeps its expiring urls
+until it is replaced. A hub older than the image answers `POST …/artifact-urls` with 404, and the
+agent keeps the urls it has.
 
 Nothing changes for sessions created before this: no `transcript.jsonl` exists,
 `GetConversationAsync` returns null, and every surface serves what it served before. A runtime

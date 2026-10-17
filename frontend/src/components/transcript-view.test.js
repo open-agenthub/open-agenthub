@@ -167,14 +167,14 @@ describe('transcript tab', () => {
       await openTranscript(wrapper)
       expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['first'])
 
-      await vi.advanceTimersByTimeAsync(4000)
+      await vi.advanceTimersByTimeAsync(1000)
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 1)
       expect(wrapper.findAll('.transcript-bubble .transcript-text').map(item => item.text())).toEqual(['first', 'second'])
 
       // Nothing new: the cursor stays and nothing is duplicated.
-      await vi.advanceTimersByTimeAsync(4000)
+      await vi.advanceTimersByTimeAsync(1000)
       await flushPromises()
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 2)
       expect(wrapper.findAll('.transcript-bubble .transcript-text')).toHaveLength(2)
@@ -187,7 +187,7 @@ describe('transcript tab', () => {
       const wrapper = mountView({ session: running })
       await openTranscript(wrapper)
 
-      await vi.advanceTimersByTimeAsync(4000)
+      await vi.advanceTimersByTimeAsync(1000)
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', 11)
@@ -203,7 +203,7 @@ describe('transcript tab', () => {
       const wrapper = mountView({ session: running })
       await openTranscript(wrapper)
 
-      await vi.advanceTimersByTimeAsync(4000)
+      await vi.advanceTimersByTimeAsync(1000)
       await flushPromises()
 
       expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', undefined)
@@ -223,6 +223,30 @@ describe('transcript tab', () => {
       await vi.advanceTimersByTimeAsync(8000)
       await flushPromises()
       expect(mocks.api.getConversation).not.toHaveBeenCalled()
+    })
+
+    it('follows a running session every second and skips polls while the browser tab is hidden', async () => {
+      mocks.api.getConversation.mockResolvedValue({ source: 'native', entries: [], text: '', offset: 1, nextOffset: 1, length: 1, running: true })
+      mocks.api.getConversation.mockResolvedValueOnce({ ...nativePage([entry('first')]), running: true })
+      const wrapper = mountView({ session: running })
+      await openTranscript(wrapper)
+      const calls = () => mocks.api.getConversation.mock.calls.length
+      const before = calls()
+
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(calls()).toBe(before + 1)
+
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('hidden')
+      await vi.advanceTimersByTimeAsync(3000)
+      await flushPromises()
+      expect(calls()).toBe(before + 1)
+
+      visibility.mockRestore()
+      await vi.advanceTimersByTimeAsync(1000)
+      await flushPromises()
+      expect(calls()).toBe(before + 2)
+      wrapper.unmount()
     })
 
     it('fetches once more when the session ends, for the final upload', async () => {

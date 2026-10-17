@@ -1150,7 +1150,7 @@ public sealed class KubernetesSessionService : ISessionService
     {
         if (await _store.GetAsync(owner, id, ct) is not { } rec) return null;
         var key = IArtifactStore.TranscriptKey(Sanitize(owner), id);
-        var jsonl = await TranscriptReader.ReadRawAsync(
+        var jsonl = await TranscriptReader.ReadTranscriptAsync(
             token => _artifacts.GetTextAsync(key, token),
             token => _store.GetTranscriptAsync(id, token),
             ct);
@@ -1167,10 +1167,10 @@ public sealed class KubernetesSessionService : ISessionService
     public async Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
     {
         if (await _store.GetAsync(owner, id, ct) is null) return null;
-        // Prefer S3 (survives DB trimming); fall back to the Postgres-stored
-        // scrollback so transcripts work on instances without S3.
+        // Both copies, so an S3 copy frozen by an expired upload url does not hide the current
+        // one; on instances without S3 the Postgres copy is all there is.
         var key = IArtifactStore.ScrollbackKey(Sanitize(owner), id);
-        return await TranscriptReader.ReadRawAsync(
+        return await TranscriptReader.ReadScrollbackAsync(
             token => _artifacts.GetTextAsync(key, token),
             token => _store.GetScrollbackAsync(id, token),
             ct);
@@ -1212,6 +1212,16 @@ public sealed class KubernetesSessionService : ISessionService
         if (rec is null || rec.Id != sessionId) return null;
         var key = IArtifactStore.ArtifactKey(Sanitize(rec.Owner), rec.Id, name);
         return _artifacts.PresignPut(key, PresignTtl);
+    }
+
+    // The urls a pod got at start expire after PresignTtl, and a pod outlives that easily. Past
+    // it every upload was refused with a 403 the pod could not act on: the state archive, the
+    // scrollback and the transcript in object storage all froze at the twelve-hour mark (#111).
+    public async Task<AgentSessionArtifactUrls?> RefreshArtifactUrlsAsync(string sessionId, string token, CancellationToken ct = default)
+    {
+        var rec = await _store.GetByCallbackTokenAsync(token, ct);
+        if (rec is null || rec.Id != sessionId) return null;
+        return AgentSessionResourceOrchestrator.PresignArtifactUrls(_artifacts, Sanitize(rec.Owner), rec, resume: false, PresignTtl);
     }
 
     public async Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default)

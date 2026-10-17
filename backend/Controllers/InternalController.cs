@@ -364,6 +364,24 @@ public sealed class InternalController : ControllerBase
         return Ok(new { skills });
     }
 
+    /// <summary>
+    /// Re-mints the pod's upload urls for its state archive, scrollback and transcript. The ones
+    /// in its environment expire after twelve hours; the session agent asks for new ones well
+    /// before that. Empty strings when no object storage is configured, as at pod start.
+    /// </summary>
+    [HttpPost("artifact-urls")]
+    public async Task<IActionResult> ArtifactUrls(string id, CancellationToken ct)
+    {
+        if (!Request.Headers.TryGetValue("X-Agent-Token", out var tok)) return Unauthorized();
+        var urls = await _svc.RefreshArtifactUrlsAsync(id, tok!, ct);
+        return urls is null ? Unauthorized() : Ok(new
+        {
+            statePutUrl = urls.StatePutUrl,
+            scrollbackPutUrl = urls.ScrollbackPutUrl,
+            transcriptPutUrl = urls.TranscriptPutUrl
+        });
+    }
+
     /// <summary>Mints a presigned PUT URL so the agent can upload an artifact to S3.</summary>
     [HttpPost("artifact-url")]
     public async Task<IActionResult> ArtifactUrl(string id, [FromQuery] string name, CancellationToken ct)

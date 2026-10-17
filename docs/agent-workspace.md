@@ -29,10 +29,27 @@ creation choice applies to that opening without replacing the saved preference. 
 state, not a setting shared with other people viewing the session.
 
 The old standalone chat surface and its alternate layout are removed. `WorkspaceStream.vue`
-renders streaming sessions only in Workspace. The existing API value `uiMode: "chat"` remains
-as a transport contract for interactive Claude sessions and for previously saved sessions;
-other agents and automated sessions use terminal transport with either viewer surface. Keeping
-that contract avoids stranding existing session history and attachment delivery receipts.
+renders streaming sessions only in Workspace.
+
+**Every new session runs on the PTY (#114).** The web app used to create an interactive Claude
+session with the Workspace preference as `uiMode: "chat"`: Claude headless with streamed JSON and
+no terminal. That was the live Workspace, but it cost the CLI itself — `/login` answered "login
+isn't available in this environment" (verified against Claude Code 2.1.287 in both modes: on the
+PTY the same `/login`, sent through the agent socket as the composer sends it, opens the CLI's
+login menu), and the Terminal tab and agent drawer did not exist. There is no provider login flow
+in the hub, so the CLI's own has to stay reachable. New sessions, conversions and copies are now
+always `terminal`; the preference only picks the first view, and Workspace and Terminal switch in
+every interactive session. The live following chat mode gave comes from the pod's transcript
+instead (#111, `transcripts.md`).
+
+The rejected alternative was keeping chat mode and building a login flow and menu rendering into
+the stream-json transport: the CLI does not offer its interactive commands there, so every one
+would have had to be re-implemented and kept in step with each CLI release.
+
+The API value `uiMode: "chat"` still exists. Saved chat sessions keep it, and keep starting
+headless on resume — switching a running conversation's transport would strand its attachment
+delivery receipts — so they gain no terminal; a copy of one does. An API or MCP caller that asks
+for `chat` explicitly still gets it.
 
 Claude Workspace sessions keep their streaming JSON connection, attachment delivery receipts,
 and native interrupt command. Compact activity rows, copy/quote actions, and a docked composer
@@ -40,9 +57,10 @@ now form their only conversation surface. Existing streaming sessions open in Wo
 when the saved preference is Terminal, because their process speaks JSON rather than a CLI TUI.
 
 Terminal-mode sessions use the native conversation API introduced by the transcript work
-(see `transcripts.md`). The workspace polls the saved conversation every four seconds while
-visible; runtime uploads still happen about every thirty seconds. This is a saved conversation,
-not token streaming. Cursor, OpenClaw and OpenCode, and older sessions without native history,
+(see `transcripts.md`). The workspace polls it every second while visible, and for a running
+session the hub reads the transcript from the pod by byte offset, so a finished message shows
+within one to two seconds of the terminal (#111). This follows the CLI's transcript file, which it
+writes per message, not token streaming. Cursor, OpenClaw and OpenCode, and older sessions without native history,
 show the cleaned terminal fallback; OpenCode keeps its conversation in its own database under
 `~/.opencode`, not in a JSONL file the reader could serve (see `transcripts.md`). Finished conversations drain all available pages too.
 
@@ -75,8 +93,8 @@ Three adjustments came with the merge:
 
 - **Continuing an autonomous run** offers *Open workspace* and *Open terminal* instead of main's
   *Open terminal* and *Open chat* (Claude only). The transport follows the New session rule
-  (`chat` for Claude in the Workspace, `terminal` otherwise) and the session opens on the
-  surface that was picked; see `session-mode-conversion.md`.
+  (always `terminal` since #114) and the session opens on the surface that was picked; see
+  `session-mode-conversion.md`.
 - **A failed history load is an error with Retry**, not main's "[no saved transcript]". In the
   Transcript tab the two looked the same; in the Workspace an empty conversation over a running
   agent reads as "nothing happened yet", and a 503 must not say that.

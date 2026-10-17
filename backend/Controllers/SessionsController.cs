@@ -19,11 +19,15 @@ public sealed class SessionsController : ControllerBase
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly ISessionMessageStore? _messages;
     private readonly ISessionMessageDelivery? _delivery;
+    private readonly ILiveTranscriptReader? _liveTranscripts;
 
     public SessionsController(ISessionService svc, PermissionStore permissions,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMessageStore? messages = null,
-        ISessionMessageDelivery? delivery = null)
-    { _svc = svc; _permissions = permissions; _promptEditors = promptEditors; _messages = messages; _delivery = delivery; }
+        ISessionMessageDelivery? delivery = null, ILiveTranscriptReader? liveTranscripts = null)
+    {
+        _svc = svc; _permissions = permissions; _promptEditors = promptEditors; _messages = messages; _delivery = delivery;
+        _liveTranscripts = liveTranscripts;
+    }
 
     private string Owner =>
         User.FindFirstValue("preferred_username")
@@ -165,7 +169,11 @@ public sealed class SessionsController : ControllerBase
         // once more and then stops — rather than stopping with output missing.
         var session = await _svc.GetSessionAsync(Owner, id, ct);
         if (session is null) return NotFound();
-        var page = await SessionTranscripts.PageAsync(_svc, Owner, id, session.Phase, offset, max, ct);
+        // A running session is read from its pod, so the Workspace follows the agent within its
+        // one-second poll rather than the pod's 30-second upload (#111).
+        var live = _liveTranscripts is null ? null
+            : (Func<CancellationToken, Task<IReadOnlyList<TranscriptEntry>?>>)(token => _liveTranscripts.ReadAsync(session, token));
+        var page = await SessionTranscripts.PageAsync(_svc, Owner, id, session.Phase, offset, max, ct, live);
         return page is null ? NotFound() : Ok(page);
     }
 
