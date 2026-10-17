@@ -39,6 +39,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     private readonly ISessionFileCleanup? _fileCleanup;
     private readonly Network.INetworkSessionCleanup? _networkCleanup;
     private readonly IAgentCredentialPusher? _credentialPusher;
+    private readonly Containers.ISessionContainerCleanup? _containerCleanup;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -47,6 +48,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     private readonly bool _browserEnabled;
     private readonly bool _spawnMcpEnabled;
     private readonly bool _networkMcpEnabled;
+    private readonly bool _containersEnabled;
     private readonly int _maxRunningSessionsPerOwner;
     private readonly string? _frontendOrigin;
 
@@ -61,9 +63,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         ILibraryAccess library, IMcpServerStore mcpServers, IEphemeralApiMcpStore ephemeralApiMcps,
         IMcpGatewayTokenService mcpGatewayTokens, ILogger<KubernetesSessionService> log,
         ISessionFileCleanup? fileCleanup = null, Network.INetworkSessionCleanup? networkCleanup = null,
-        IAgentCredentialPusher? credentialPusher = null)
+        IAgentCredentialPusher? credentialPusher = null,
+        Containers.ISessionContainerCleanup? containerCleanup = null)
     {
         _log = log;
+        _containerCleanup = containerCleanup;
         _credentialPusher = credentialPusher;
         _store = store;
         _projects = projects;
@@ -91,6 +95,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         _browserEnabled = cfg.GetValue("Browser:Enabled", true);
         _spawnMcpEnabled = cfg.GetValue("AgentHub:SpawnMcpEnabled", true);
         _networkMcpEnabled = cfg.GetValue("Network:Enabled", true);
+        _containersEnabled = cfg.GetValue("SessionContainers:Enabled", false);
         _maxRunningSessionsPerOwner = SessionSoftLimit.NormalizeMax(
             cfg.GetValue("AgentHub:MaxRunningSessionsPerOwner", SessionSoftLimit.DefaultMax));
         // Origin of the session link returned to an API or MCP caller. See SessionUrl for why this
@@ -927,6 +932,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             throw new ArgumentException("Scheduled sessions cannot be paused; they run on their schedule.");
 
         await _browsers.StopAsync(id, ct);
+        // Helpers do not survive a pause: their storage is emptyDir, and a paused session holding
+        // a database's quota would keep it from every session that runs.
+        if (_containerCleanup is not null) await _containerCleanup.CleanupSessionAsync(id, ct);
 
         // Longer grace than a plain delete so the graceful state upload can finish
         // before the container is killed (the k8s default of 30s is plenty; the
@@ -1367,6 +1375,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await _browsers.DeleteStateAsync(rec, ct);
         // Dynamic port-request NetworkPolicies (and their grant rows) die with the session.
         if (_networkCleanup is not null) await _networkCleanup.CleanupSessionAsync(id, ct);
+        if (_containerCleanup is not null) await _containerCleanup.CleanupSessionAsync(id, ct);
         await TryDeletePodAsync($"session-{id}", ct);
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
@@ -1461,6 +1470,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 BrowserEnabled = _browserEnabled,
                 SpawnMcpEnabled = _spawnMcpEnabled,
                 NetworkMcpEnabled = _networkMcpEnabled,
+                ContainersEnabled = _containersEnabled,
                 GitCloneImage = _opts.GitCloneImage,
                 ImagePullSecret = _opts.ImagePullSecret,
                 RuntimeClassName = _opts.RuntimeClassName,

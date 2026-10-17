@@ -136,6 +136,9 @@ jobs:
       - name: Verify browser values and RBAC
         shell: pwsh
         run: ./tests/helm/browser-values.ps1
+      - name: Verify session container values, RBAC and admission policies
+        shell: pwsh
+        run: ./tests/helm/session-containers-values.ps1
       - name: Verify session file and renderer values
         shell: pwsh
         run: ./tests/helm/files-values.ps1
