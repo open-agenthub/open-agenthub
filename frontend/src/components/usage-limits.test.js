@@ -196,12 +196,12 @@ describe('AdminLimitsView', () => {
   })
 
   it('shows a refused group change and restores the stored role', async () => {
-    mocks.api.eeSetGroupRole.mockRejectedValue(Object.assign(new Error('This would leave no admin.'), { status: 409 }))
+    mocks.api.eeSetGroupRole.mockRejectedValue(Object.assign(new Error('409 {"error":"This would leave no admin."}'), { status: 409 }))
     const wrapper = mount(AdminLimitsView)
     await flushPromises()
     await wrapper.get('[data-group-row="leads"] select').setValue('')
     await flushPromises()
-    expect(wrapper.text()).toContain('This would leave no admin.')
+    expect(wrapper.get('.err').text()).toBe('This would leave no admin.')
     expect(wrapper.get('[data-group-row="leads"] select').element.value).toBe('admin')
   })
 

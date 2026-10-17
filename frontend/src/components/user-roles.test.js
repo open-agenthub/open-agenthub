@@ -66,12 +66,12 @@ describe('UserRolesCard', () => {
   })
 
   it('shows the last-admin refusal and restores the stored role', async () => {
-    mocks.api.setUserRole.mockRejectedValue(Object.assign(new Error('This would leave no admin. Make someone else an admin first.'), { status: 409 }))
+    mocks.api.setUserRole.mockRejectedValue(Object.assign(new Error('409 {"error":"This would leave no admin. Make someone else an admin first."}'), { status: 409 }))
     const wrapper = mount(UserRolesCard)
     await flushPromises()
     await wrapper.get('[data-role-row="bob"] select').setValue('user')
     await flushPromises()
-    expect(wrapper.get('[data-roles-error]').text()).toContain('This would leave no admin')
+    expect(wrapper.get('[data-roles-error]').text()).toBe('This would leave no admin. Make someone else an admin first.')
     expect(wrapper.get('[data-role-row="bob"] select').element.value).toBe('admin')
   })
 

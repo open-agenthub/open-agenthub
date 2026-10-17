@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
 import { api } from '../api.js'
+import { errorText } from '../lib/errors.js'
 import { agentOptions } from '../lib/agent.js'
 import { isLicenseError } from '../lib/license.js'
 import { formatCost } from '../lib/usage.js'
@@ -35,7 +36,7 @@ onMounted(load)
 // them — on load or on a later save, once the license lapsed — swaps the pane for the gate.
 function fail(e) {
   if (isLicenseError(e)) needsLicense.value = true
-  else error.value = String(e.message || e)
+  else error.value = errorText(e)
 }
 
 const globalLimit = computed(() => limits.value.find(l => l.scope === 'global'))

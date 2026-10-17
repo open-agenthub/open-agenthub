@@ -113,6 +113,13 @@ The group endpoints stay under `/api/ee/admin`, where they were, rather than mov
 `/api/admin`: every Enterprise admin endpoint is there and answers 402 without a licence, and the
 frontend's licence gate keys on that.
 
+The group name travels in the path, and ASP.NET Core routing decodes every escape in a segment
+except `%2F`. A Keycloak subgroup path such as `eng/platform` therefore used to be stored as
+`eng%2Fplatform` and never matched a member — found while driving this UI in a real browser.
+The controller unescapes the route value before normalising it. Moving the name into the body
+would have avoided the encoding question, but it changes an existing Enterprise endpoint for
+every client, for a problem one line fixes.
+
 Roles can only be set for users who have signed in at least once (`app_users`). Pre-provisioning
 by name was left out: a typo would create a role for nobody, and the person can be promoted a
 minute after their first sign-in, or put in `Ee:Admins` if they must be an admin from the start.

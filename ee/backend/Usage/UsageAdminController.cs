@@ -109,7 +109,10 @@ public sealed class UsageAdminController : ControllerBase
         if (string.IsNullOrWhiteSpace(group)) return BadRequest(new { error = "Group name is required." });
         if (req.Role is not (null or UserGroupStore.AdminRole or UserGroupStore.UserRole))
             return BadRequest(new { error = $"Unknown role '{req.Role}'." });
-        var name = GroupClaims.Normalize(group);
+        // Routing decodes everything in a path segment except %2F, which it leaves encoded so it
+        // cannot split the segment. Keycloak subgroup paths ("team/sub") contain slashes, and
+        // left as "team%2Fsub" the mapping would never match a member.
+        var name = GroupClaims.Normalize(Uri.UnescapeDataString(group));
         if (name.Length == 0) return BadRequest(new { error = "Group name is required." });
 
         await using (await _roles.LockAsync(ct))

@@ -1,6 +1,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { api } from '../api.js'
+import { errorText } from '../lib/errors.js'
 
 const data = ref(null)
 const audit = ref([])
@@ -13,7 +14,7 @@ async function load() {
     const [roles, entries] = await Promise.all([api.adminRoles(), api.adminRoleAudit()])
     data.value = roles
     audit.value = entries
-  } catch (e) { error.value = String(e.message || e) }
+  } catch (e) { error.value = errorText(e) }
 }
 onMounted(load)
 
@@ -25,7 +26,7 @@ async function setRole(u, value) {
   } catch (e) {
     // The select already shows the refused value; reload so it snaps back to the stored one.
     await load()
-    error.value = String(e.message || e)
+    error.value = errorText(e)
   } finally { busy.value = '' }
 }
 

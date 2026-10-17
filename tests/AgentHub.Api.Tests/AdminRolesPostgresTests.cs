@@ -187,7 +187,10 @@ public class AdminRolesPostgresTests
         // Free entry: a group nobody has signed in with yet, typed the way Keycloak sends paths.
         Assert.IsType<OkObjectResult>(await controller.SetGroupRole(" /staff ", new("user"), default));
         Assert.Equal("user", await db.Groups.GetGroupRoleAsync("staff"));
-        var entry = Assert.Single(await db.Roles.ListAuditAsync(10));
+        // A subgroup path arrives with its slash still encoded in the route value.
+        Assert.IsType<OkObjectResult>(await controller.SetGroupRole("%2Fteam%2Fsub", new("user"), default));
+        Assert.Equal("user", await db.Groups.GetGroupRoleAsync("team/sub"));
+        var entry = (await db.Roles.ListAuditAsync(10)).Single(a => a.Subject == "staff");
         Assert.Equal(("alice", "group", "staff", (string?)null, "user"),
             (entry.Actor, entry.SubjectKind, entry.Subject, entry.OldRole, entry.NewRole));
     }
