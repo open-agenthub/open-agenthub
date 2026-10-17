@@ -360,7 +360,9 @@ function toggleDrawer(kind) {
   drawerKind.value = kind
 }
 function sendWorkspaceMessage(text) {
-  if (!canCompose.value || !agentTerminal.value) throw new Error('Agent is disconnected. Your draft is still here.')
+  if (!canCompose.value || !agentTerminal.value) {
+    throw Object.assign(new Error('Agent is disconnected. Your draft is still here.'), { retryable: true })
+  }
   return agentTerminal.value.submitMessage(text)
 }
 function interruptWorkspaceAgent() {
@@ -548,7 +550,7 @@ function interruptWorkspaceAgent() {
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
-          ref="composer" :session-id="session.id" :enabled="canCompose" :status="statuses.agent" :agent="session.agent"
+          ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
           :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" />
       </div>
     </SessionWorkspace>
