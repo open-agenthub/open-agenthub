@@ -237,8 +237,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 _log.LogInformation("Normalised the {Agent} login secret of {Owner} to the account layout", agent, owner);
                 return set;
             }
-            // Someone wrote in between, most likely the same normalisation from another request.
-            catch (ProviderSecretConflictException) when (attempt < MaxSecretWriteAttempts) { }
+            catch (ProviderSecretConflictException) when (attempt < MaxSecretWriteAttempts)
+            {
+                // Most likely the same normalisation from another request; the next read sees it.
+                _log.LogDebug("The {Agent} login secret of {Owner} changed while it was normalised; reading again", agent, owner);
+            }
         }
     }
 
@@ -262,7 +265,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 await WriteProviderAccountsAsync(owner, agent, set, ct);
                 return result;
             }
-            catch (ProviderSecretConflictException) when (attempt < MaxSecretWriteAttempts) { }
+            catch (ProviderSecretConflictException) when (attempt < MaxSecretWriteAttempts)
+            {
+                _log.LogDebug("The {Agent} login secret of {Owner} changed concurrently; applying the change again", agent, owner);
+            }
         }
     }
 
@@ -361,15 +367,18 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var pods = await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace,
             labelSelector: $"{OwnerLabel}={secretName[prefix.Length..]},{ComponentLabel}=agent",
             resourceVersion: "0", cancellationToken: ct);
+        var running = pods.Items
+            .Where(pod => pod.Status?.Phase == "Running" && !string.IsNullOrEmpty(pod.Status.PodIP)
+                && pod.Metadata?.Labels?.ContainsKey(SessionLabel) == true)
+            .Select(pod => (Ip: pod.Status.PodIP, SessionId: pod.Metadata.Labels[SessionLabel]));
         var sessions = new List<ProviderLoginSession>();
-        foreach (var pod in pods.Items)
+        foreach (var (ip, sessionId) in running)
         {
-            if (pod.Status?.Phase != "Running" || string.IsNullOrEmpty(pod.Status.PodIP)) continue;
-            if (pod.Metadata?.Labels is not { } labels || !labels.TryGetValue(SessionLabel, out var sessionId)) continue;
             var record = await _store.GetByIdAsync(sessionId, ct);
-            if (record is null || record.Agent != agent || record.AuthMode == AgentAuthMode.ApiKey) continue;
-            if ((record.CredentialId ?? record.ResolvedCredentialId) != accountId) continue;
-            sessions.Add(new ProviderLoginSession(record.Id, pod.Status.PodIP, record.CallbackToken));
+            // The account a session is on: the one it is pinned to, else the one resolved at start.
+            var onAccount = record is not null && record.Agent == agent && record.AuthMode != AgentAuthMode.ApiKey
+                && (record.CredentialId ?? record.ResolvedCredentialId) == accountId;
+            if (onAccount) sessions.Add(new ProviderLoginSession(record!.Id, ip, record.CallbackToken));
         }
         return sessions;
     }

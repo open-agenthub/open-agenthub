@@ -84,13 +84,13 @@ public sealed class ClaudeLoginRefresher : IClaudeLoginSync
                     .Select(a => a.Id)
                     .ToList();
                 foreach (var accountId in due)
-                    if (await RefreshAccountAsync(secret, accountId, now, ct)) renewed++;
+                    renewed += await RefreshAccountAsync(secret, accountId, now, ct) ? 1 : 0;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }
-            catch (Exception error)
+            catch (Exception error) when (error is not OperationCanceledException)
             {
                 // One broken secret must not stop the others from being renewed.
                 _log.LogWarning(error, "Renewing the Claude logins in {Secret} failed; retrying next pass", secret);
@@ -107,8 +107,9 @@ public sealed class ClaudeLoginRefresher : IClaudeLoginSync
 
         // Re-read under the lock: the other replica may have just renewed it, or a pod uploaded.
         var snapshot = await _logins.ReadAsync(secret, AgentKind.Claude, ct);
-        var account = snapshot?.Accounts.Find(accountId);
-        if (account is null || !snapshot!.Accounts.Files.TryGetValue(accountId, out var file) || !IsDue(account, file, now))
+        if (snapshot is null) return false;
+        var account = snapshot.Accounts.Find(accountId);
+        if (account is null || !snapshot.Accounts.Files.TryGetValue(accountId, out var file) || !IsDue(account, file, now))
             return false;
         var state = ClaudeCredentialFile.Read(file)!;
         var spent = state.RefreshToken!;
@@ -129,11 +130,11 @@ public sealed class ClaudeLoginRefresher : IClaudeLoginSync
                 {
                     // The account got another login while the request was out (a sign-in in a
                     // session). That one is the user's choice and stays; these tokens are dropped.
-                    _log.LogInformation("Renewed Claude login {Account} in {Secret} changed meanwhile; kept the newer one",
-                        accountId, secret);
+                    _log.LogInformation("A Claude login in {Secret} changed while it was being renewed; kept the newer one",
+                        secret);
                     return false;
                 }
-                _log.LogInformation("Renewed Claude login {Account} in {Secret}", accountId, secret);
+                _log.LogInformation("Renewed a Claude login in {Secret}", secret);
                 await DistributeAsync(secret, accountId, renewed, exceptSessionId: null, ct);
                 return true;
             }
@@ -142,13 +143,13 @@ public sealed class ClaudeLoginRefresher : IClaudeLoginSync
                 var marked = await ApplyIfUnchangedAsync(secret, accountId, spent,
                     (_, current) => current.LoginRejectedAt = now.UtcDateTime, ct);
                 if (marked)
-                    _log.LogWarning("Claude login {Account} in {Secret} was rejected by the provider ({Reason}); it needs a new sign-in",
-                        accountId, secret, result.Detail);
+                    _log.LogWarning("A Claude login in {Secret} was rejected by the provider ({Reason}); it needs a new sign-in",
+                        secret, result.Detail);
                 return false;
             }
             default:
-                _log.LogWarning("Renewing Claude login {Account} in {Secret} failed ({Reason}); retrying next pass",
-                    accountId, secret, result.Detail);
+                _log.LogWarning("Renewing a Claude login in {Secret} failed ({Reason}); retrying next pass",
+                    secret, result.Detail);
                 return false;
         }
     }
@@ -163,8 +164,9 @@ public sealed class ClaudeLoginRefresher : IClaudeLoginSync
         for (var attempt = 0; attempt < MaxWriteAttempts; attempt++)
         {
             var snapshot = await _logins.ReadAsync(secret, AgentKind.Claude, ct);
-            var account = snapshot?.Accounts.Find(accountId);
-            if (account is null || !snapshot!.Accounts.Files.TryGetValue(accountId, out var current)) return false;
+            if (snapshot is null) return false;
+            var account = snapshot.Accounts.Find(accountId);
+            if (account is null || !snapshot.Accounts.Files.TryGetValue(accountId, out var current)) return false;
             if (ClaudeCredentialFile.Read(current)?.RefreshToken != spentRefreshToken) return false;
             change(snapshot.Accounts, account);
             snapshot.Accounts.Dirty = true;
@@ -226,7 +228,7 @@ public sealed class ClaudeLoginRefresher : IClaudeLoginSync
         }
         catch (Exception error) when (!ct.IsCancellationRequested)
         {
-            _log.LogWarning(error, "Bringing the sessions of Claude account {Account} up to date failed", accountId);
+            _log.LogWarning(error, "Bringing the sessions of session {SessionId}'s Claude login up to date failed", session.Id);
         }
     }
 }
@@ -249,7 +251,7 @@ public sealed class ClaudeLoginRefreshService(ClaudeLoginRefresher refresher, Cl
             {
                 return;
             }
-            catch (Exception error)
+            catch (Exception error) when (error is not OperationCanceledException)
             {
                 logger.LogWarning(error, "Renewing stored Claude logins failed; retrying next pass");
             }
