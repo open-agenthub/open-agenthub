@@ -84,7 +84,7 @@ public class LiveTranscriptReaderTests
     public async Task RealHttp_StaleIpGetsNoTokenAndFreshPodGetsTheTranscript()
     {
         // Exercise the SDK's actual wire request and the reader's actual HTTP transport.
-        var socket = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        using var socket = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
         socket.Start();
         var port = ((IPEndPoint)socket.LocalEndpoint).Port;
         socket.Stop();
@@ -126,7 +126,11 @@ public class LiveTranscriptReaderTests
                     context.Response.Close();
                 }
             }
-            catch (OperationCanceledException) when (stop.IsCancellationRequested) { }
+            catch (OperationCanceledException e) when (stop.IsCancellationRequested)
+            {
+                // Only the fixture shutdown may terminate the HTTP accept loop.
+                Assert.Equal(stop.Token, e.CancellationToken);
+            }
         }, stop.Token);
         try
         {
@@ -180,12 +184,13 @@ public class LiveTranscriptReaderTests
     {
         public readonly TaskCompletionSource OneStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _peakLock = new();
         public int Active;
         public int Peak;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             var active = Interlocked.Increment(ref Active);
-            lock (this) Peak = Math.Max(Peak, active);
+            lock (_peakLock) Peak = Math.Max(Peak, active);
             if (active == 1) OneStarted.TrySetResult();
             try
             {
