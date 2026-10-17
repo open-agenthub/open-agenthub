@@ -1,4 +1,5 @@
 <script setup>
+import SessionIcon from './SessionIcon.vue'
 import { computed, ref } from 'vue'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
@@ -86,10 +87,10 @@ function repoLine(s) {
             <div class="row-main">
               <div class="row-title">{{ s.title }}</div>
               <div v-if="s.description" class="row-desc" data-session-description>{{ s.description }}</div>
-              <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at>{{ repoLine(s) || s.sharedBy ? ' · ' : '' }}⌛ expires in {{ formatRemaining(s.expiresAt) }}</span></div>
+              <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at>{{ repoLine(s) || s.sharedBy ? ' · ' : '' }}<SessionIcon name="expiry" /> expires in {{ formatRemaining(s.expiresAt) }}</span></div>
             </div>
             <div v-if="sessionCapabilities(s).canManage" class="row-actions">
-              <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)">⧉</button>
+              <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)" aria-label="Duplicate session"><SessionIcon name="duplicate" /></button>
               <button v-if="canPause(s)" class="act" title="Pause session" @click.stop="$emit('pause', s.id)">❚❚</button>
               <button v-if="s.canResume" class="act" title="Resume session" @click.stop="$emit('resume', s.id)">▶</button>
               <button v-if="canConvert(s)" class="act" :class="{ on: convertingId === s.id }" title="Continue interactively" data-convert-action @click.stop="toggleConvert(s.id)">↪</button>

@@ -1,4 +1,5 @@
 <script setup>
+import SessionIcon from './SessionIcon.vue'
 import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { authLabel } from '../lib/agent.js'
@@ -14,12 +15,12 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
       <div class="title">{{ s.title }}</div>
       <div v-if="s.failureReason" class="startup-failure" data-session-failure>{{ s.failureReason }}</div>
       <div v-if="s.description" class="desc" data-session-description>{{ s.description }}</div>
-      <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · ⌛ {{ formatRemaining(s.expiresAt) }}</span></div>
+      <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · <SessionIcon name="expiry" /> {{ formatRemaining(s.expiresAt) }}</span></div>
     </div>
     <span v-if="sessionCapabilities(s).canManage" class="acts">
       <button v-if="canPause(s)" class="act" title="Pause session" @click.stop="$emit('pause', s.id)">❚❚</button>
       <button v-if="s.canResume" class="act" title="Resume session" @click.stop="$emit('resume', s.id)">▶</button>
-      <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)">⧉</button>
+      <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)" aria-label="Duplicate session"><SessionIcon name="duplicate" /></button>
       <button class="act" title="Edit session" @click.stop="$emit('edit', s.id)">✎</button>
       <button class="act" title="Share session" @click.stop="$emit('share', s.id)">↗</button>
       <button class="act del" title="Delete session" @click.stop="$emit('remove', s.id)">✕</button>
