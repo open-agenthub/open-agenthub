@@ -559,7 +559,10 @@ public static class SessionDuplication
             Description = source.Description,
             ProjectId = request.ProjectId,
             Mode = source.Mode,
-            UiMode = source.UiMode,
+            // A copy is a new session, and new sessions run on the PTY (#114): copying a chat
+            // session's headless transport would hand the copy a session without a terminal,
+            // where the CLI's /login and menus cannot be reached.
+            UiMode = SessionUiMode.Terminal,
             Repos = Deserialize<List<RepoRef>>(source.ReposJson),
             RepoUrl = source.RepoUrl,
             Prompt = source.Prompt,
