@@ -38,7 +38,7 @@ class FakeChildProcess {
       this.stdinWrites.push(data);
       if (callback) queueMicrotask(() => callback(null));
       return true;
-    }, on() {} };
+    }, on() {}, end: () => { this.stdinEnded = true; } };
     this.stdout = { on: (event, handler) => { if (event === 'data') this.stdoutHandlers.push(handler); } };
     this.stderr = { on: (event, handler) => { if (event === 'data') this.stderrHandlers.push(handler); } };
   }

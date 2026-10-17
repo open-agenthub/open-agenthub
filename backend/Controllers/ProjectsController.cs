@@ -16,6 +16,7 @@ public sealed class ProjectsController : ControllerBase
     private readonly IProjectStore _store;
     private readonly ISessionService? _sessions;
 
+    /// <summary>The project store, and the session service that owns the secret store.</summary>
     /// <remarks>The session service is optional only for the tests that exercise names and colors;
     /// in the app it is always registered, and a secret selection without it is refused.</remarks>
     public ProjectsController(IProjectStore store, ISessionService? sessions = null)

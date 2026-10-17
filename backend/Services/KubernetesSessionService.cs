@@ -188,11 +188,20 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             cancellationToken: ct);
         if (copies.Items.Count == 0) return;
         var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;
-        foreach (var copy in copies.Items)
+        var sessionIds = copies.Items
+            .Select(copy => copy.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var id) ? id : null)
+            .OfType<string>();
+        foreach (var sessionId in sessionIds)
         {
-            if (copy.Metadata.Labels?.TryGetValue(SessionLabel, out var sessionId) != true) continue;
-            if (await _store.GetAsync(owner, sessionId!, ct) is not { } rec) continue;
-            await WriteSessionSecretsAsync(owner, rec, store, ct);
+            if (await _store.GetAsync(owner, sessionId, ct) is { } rec)
+            {
+                await WriteSessionSecretsAsync(owner, rec, store, ct);
+                continue;
+            }
+            // The session is gone but its copies are not (a delete that failed half-way): they hold
+            // values nobody can receive any more, and no later session delete would reach them.
+            await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(sessionId), ct);
+            await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(sessionId), ct);
         }
     }
 
@@ -1560,8 +1569,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
-        try { await _k8s.CoreV1.DeleteNamespacedSecretAsync(SessionSecretDeliveryFactory.FilesSecretName(id), _opts.Namespace, cancellationToken: ct); } catch { }
-        try { await _k8s.CoreV1.DeleteNamespacedSecretAsync(SessionSecretDeliveryFactory.EnvSecretName(id), _opts.Namespace, cancellationToken: ct); } catch { }
+        await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(id), ct);
+        await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct);
         await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
         await _store.DeleteAsync(id, ct);
         _log.LogInformation("Deleted session {Id}", id);
@@ -1581,11 +1590,23 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var owned = await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
             labelSelector: $"{OwnerLabel}={Sanitize(owner)}", cancellationToken: ct);
         foreach (var secret in owned.Items)
-        {
-            try { await _k8s.CoreV1.DeleteNamespacedSecretAsync(secret.Metadata.Name, _opts.Namespace, cancellationToken: ct); }
-            catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { }
-        }
+            await DeleteSecretIfPresentAsync(secret.Metadata.Name, ct);
         _log.LogInformation("Deleted per-user secrets for an account purge");
+    }
+
+    /// <summary>Deletes a secret; one that is already gone is what was asked for. Any other failure
+    /// is the caller's to see: a purge or delete that silently left a secret behind would claim
+    /// to have removed something it did not.</summary>
+    private async Task DeleteSecretIfPresentAsync(string name, CancellationToken ct)
+    {
+        try
+        {
+            await _k8s.CoreV1.DeleteNamespacedSecretAsync(name, _opts.Namespace, cancellationToken: ct);
+        }
+        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            _log.LogDebug("Secret {Name} was already gone", name);
+        }
     }
 
     /// <summary>Stable, non-reversible owner key used in labels and S3 key prefixes.</summary>

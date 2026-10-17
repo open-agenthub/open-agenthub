@@ -188,7 +188,7 @@ function createCommonServer(options = {}) {
 
   function persistScrollback(done) {
     if (!scrollPut) return done && done();
-    try { fs.writeFileSync('/tmp/scrollback.log', secretMask.mask(scrollback)); } catch {}
+    try { fs.writeFileSync('/tmp/scrollback.log', scrollback); } catch {}
     execFile('/bin/sh', ['-c',
       'curl -fsS --max-time ' + PERSIST_STEP_SECONDS + ' ' + curlOption +
       '-T /tmp/scrollback.log "' + scrollPut + '"'
@@ -237,33 +237,46 @@ function createCommonServer(options = {}) {
     const toHub = () => {
       if (!callback) return done && done();
       let text;
-      try { text = fs.readFileSync(file, 'utf8'); } catch { return done && done(); }
+      try { text = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return done && done(); }
       fetchImpl(callback + '/transcript', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': token },
-        body: tailLines(secretMask.mask(text), MAX_BUFFER)
+        body: tailLines(text, MAX_BUFFER)
       }).catch(() => {}).finally(() => done && done());
     };
     if (!transcriptPut) return toHub();
-    // With secrets to mask, the upload is a masked copy; the CLI's own file stays as it is,
-    // because the agent resumes from it and a replaced value there would be gone from its
-    // memory of the conversation.
-    let upload = file;
-    if (secretMask.active()) {
-      upload = '/tmp/transcript-upload.jsonl';
-      try {
-        fs.writeFileSync(upload, secretMask.mask(fs.readFileSync(file, 'utf8')), { mode: 0o600 });
-      } catch {
-        return toHub();
-      }
-    }
+    if (secretMask.active()) return uploadMaskedTranscript(file, toHub);
     // No shell here: the file name is whatever the CLI chose for its session file, and a quote
     // or `$(` in it would otherwise become part of the command. The state upload above keeps
     // its shell pipeline because every path in it is one this process picked itself.
     execFile('curl', [
       '-fsS', ...(curlOption ? ['-k'] : []), '--max-time', String(PERSIST_STEP_SECONDS),
-      '-T', upload, transcriptPut
+      '-T', file, transcriptPut
     ], toHub);
+  }
+
+  // With secrets to mask, the object storage copy is the masked text, handed to curl on stdin.
+  // The CLI's own file stays as it is: the agent resumes from it, and a value replaced there
+  // would be gone from its memory of the conversation. Not through a copy in /tmp, which is a
+  // shared, predictable path that would hold the text a second time.
+  function uploadMaskedTranscript(file, done) {
+    let finished = false;
+    const finish = () => { if (!finished) { finished = true; done(); } };
+    let masked;
+    try { masked = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return finish(); }
+    try {
+      const child = spawnProcess('curl', [
+        '-fsS', ...(curlOption ? ['-k'] : []), '--max-time', String(PERSIST_STEP_SECONDS),
+        '-T', '-', transcriptPut
+      ], { stdio: ['pipe', 'ignore', 'ignore'] });
+      child.on('exit', finish);
+      child.on('error', finish);
+      child.stdin.on('error', () => {});
+      child.stdin.write(masked);
+      child.stdin.end();
+    } catch {
+      finish();
+    }
   }
 
   function restoreScrollback(done) {
@@ -318,7 +331,7 @@ function createCommonServer(options = {}) {
     fetchImpl(callback + '/scrollback', {
       method: 'PUT',
       headers: { 'Content-Type': 'text/plain', 'X-Agent-Token': token },
-      body: secretMask.mask(scrollback)
+      body: scrollback
     }).catch(() => {}).finally(() => done && done());
   }
 
@@ -352,7 +365,10 @@ function createCommonServer(options = {}) {
     }
     persisting = true;
     postResources();
-    secretMask.refresh();
+    // The buffer itself is masked, once per tick and as a whole: every upload below then carries
+    // the masked text, a reconnecting client is replayed it, and a value the PTY delivered in two
+    // chunks is caught as well, which masking chunk by chunk would miss.
+    if (secretMask.refresh()) scrollback = secretMask.mask(scrollback);
     syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
       persistState(final, () => {
         persisting = false;

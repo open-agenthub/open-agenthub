@@ -24,32 +24,22 @@ public static class SessionSecretSelection
     public static IReadOnlyList<string>? Normalize(IEnumerable<string>? requested, IReadOnlyList<SessionSecretStore.Entry> stored)
     {
         if (requested is null) return null;
-        var ids = new List<string>();
-        foreach (var raw in requested)
-        {
-            var id = raw?.Trim();
-            if (string.IsNullOrEmpty(id)) continue;
-            if (id == FollowProject) return null;
-            if (!stored.Any(e => e.Id == id))
-                throw new ArgumentException($"No stored secret with id '{id}'.");
-            if (!ids.Contains(id)) ids.Add(id);
-        }
-        return ids;
+        var ids = Cleaned(requested);
+        if (ids.Contains(FollowProject)) return null;
+        return Known(ids, stored.Select(e => e.Id).ToHashSet());
     }
 
     /// <summary>A project's selection: every id must be stored, the wildcard has no meaning here.</summary>
     public static IReadOnlyList<string> NormalizeProject(IEnumerable<string> requested, IReadOnlyCollection<string> storedIds)
+        => Known(Cleaned(requested), storedIds);
+
+    private static List<string> Cleaned(IEnumerable<string> requested) =>
+        requested.Select(raw => raw?.Trim() ?? "").Where(id => id.Length > 0).Distinct().ToList();
+
+    private static List<string> Known(List<string> ids, IReadOnlyCollection<string> storedIds)
     {
-        var ids = new List<string>();
-        foreach (var raw in requested)
-        {
-            var id = raw?.Trim();
-            if (string.IsNullOrEmpty(id)) continue;
-            if (!storedIds.Contains(id))
-                throw new ArgumentException($"No stored secret with id '{id}'.");
-            if (!ids.Contains(id)) ids.Add(id);
-        }
-        return ids;
+        var unknown = ids.FirstOrDefault(id => !storedIds.Contains(id));
+        return unknown is null ? ids : throw new ArgumentException($"No stored secret with id '{unknown}'.");
     }
 
     /// <summary>
