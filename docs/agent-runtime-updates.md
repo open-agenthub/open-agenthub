@@ -8,10 +8,81 @@ session `ReadOnlyRootFilesystem = true` and runs it as uid 1000, while the CLIs 
 construction — not for want of a permission that could be granted, but because the
 read-only root filesystem is the point.
 
-An in-session "update available, restart?" prompt is therefore only ever a *notification*;
-the install still happens by rolling out a new image. That keeps the deployment
-reproducible: `image.tag` pins every runtime, and a given tag always contains a known set
-of CLI versions.
+Self-update prompts are unsafe in a managed PTY: the Workspace can hide the terminal picker,
+then the Enter that submits a message confirms an update and ends the agent process. Disable
+the CLI's updater rather than relying on the read-only filesystem to make installation fail.
+The nightly image rollout remains the update mechanism; explicit user-run update commands
+are outside this automatic-startup policy.
+
+## Disabling in-session updates
+
+Verified against the shipped packages on 2026-10-17:
+
+| Agent | Inspected version | Runtime control |
+|---|---|---|
+| Codex | 0.160.0 | `check_for_update_on_startup = false` in read-only `/etc/codex/requirements.toml` |
+| Claude Code | 2.1.287 | Entry point exports `DISABLE_AUTOUPDATER=1` |
+| Cursor | 2026.10.16-e3cb207 (installer's current unpinned build) | Driver passes `--disable-auto-update` before the prompt in interactive, resumed and unattended commands |
+| OpenClaw | 2026.7.1-2 | Entry point exports `OPENCLAW_NO_AUTO_UPDATE=1`; after restore, `update-policy.js` writes `update.checkOnStart=false` and `update.auto.enabled=false` |
+| OpenCode | 1.18.35 | Existing `OPENCODE_DISABLE_AUTOUPDATE=1` and managed `autoupdate:false` retained |
+
+**Codex:** the tagged [update checker](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/tui/src/updates.rs)
+returns before both discovery and popup presentation when the setting is false. Discovery
+fetches the GitHub release, then checks that npm has matching ready metadata; the result goes
+into `$CODEX_HOME/version.json`. A later launch reads that cache to show the picker. Removing
+only the cache is therefore insufficient. Setting the key only in writable user config was
+also rejected: the pinned [requirements schema](https://github.com/openai/codex/blob/rust-v0.160.0/codex-rs/config/src/config_requirements.rs)
+supports this exact key, and requirements override user, project and command-line opt-ins.
+No new CLI flag or popup-detection heuristic is needed.
+
+The real-CLI proof is [codex-update-smoke.js](../agent-runtime/session-agent/fixtures/codex-update-smoke.js).
+It uses an ephemeral CA and a loopback CONNECT proxy serving only fake release/npm metadata
+for version `99.0.0`, a disposable home, and the real npm-installed binary. All other proxy
+destinations fail. `proot` maps a scratch policy onto `/etc/codex/requirements.toml` without
+altering the host's policy. Run with Node, openssl, proot, and a built node-pty module:
+
+```bash
+npm install --prefix /tmp/codex-update-cli @openai/codex@0.160.0
+CODEX_BIN=/tmp/codex-update-cli/node_modules/.bin/codex \
+PROOT_BIN=/absolute/path/to/proot \
+node agent-runtime/session-agent/fixtures/codex-update-smoke.js
+```
+
+The first launch must fetch both fake endpoints and cache `99.0.0`; the second must show
+`Update now (runs npm install -g @openai/codex)`. With the managed setting, the same cache
+must produce no picker even with user config and `-c check_for_update_on_startup=true`.
+With an empty cache, it must also make zero updater requests and reach the composer.
+The fixture kills its owned process groups and removes its home and certificates.
+
+**Claude Code:** the pinned native package's updater-disable resolver checks
+`DISABLE_AUTOUPDATER` before the legacy `autoUpdates` preference. The entrypoint sets it
+after common startup so restored preferences cannot enable background installation.
+This does not prohibit an explicitly requested `claude update`.
+
+**Cursor:** the downloaded bundle declares the hidden `--disable-auto-update` option and
+passes it to the startup code that otherwise schedules a background update after two
+seconds. A config key was rejected because the inspected code gates this on the parsed
+option. The real CLI accepts the option and prints its version; driver tests cover option
+ordering and the login wrapper. Since the installer is unpinned, each image smoke must
+continue checking flag compatibility. This covers AgentHub's launched CLI, not a separate
+`agent` command somebody starts manually from the shell.
+
+**OpenClaw:** the shipped `dist/update-startup-*.js` has independent hint and auto-install
+gates: `update.checkOnStart` and `update.auto.enabled` plus `OPENCLAW_NO_AUTO_UPDATE`.
+Disabling just auto-install leaves startup hints enabled. AgentHub currently uses local
+agent/TUI commands rather than a managed gateway, but it disables both gates for a gateway
+started in the session too. The pinned CLI validates the generated config; the rewrite
+preserves unrelated fields and replaces restored opt-ins on every pod start.
+
+**OpenCode:** the pinned binary returns before fetching the latest version when either
+`autoupdate === false` or `OPENCODE_DISABLE_AUTOUPDATE` is true, including its notify-only
+path. The existing managed config is merged last, so a user config cannot opt in again.
+
+The Codex fake-service proof exercises the actual updater. The other agents were checked
+through their shipped code, real CLI option/version or config validation, and affected
+runtime tests; their update services and authenticated background installs were not run.
+The Workspace composer readiness guard belongs to #112's Workspace owner and is separate
+from these runtime changes.
 
 ## How the pins work
 

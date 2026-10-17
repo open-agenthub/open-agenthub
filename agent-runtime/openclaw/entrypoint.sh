@@ -30,6 +30,8 @@ node "$RUNTIME/openclaw/session-prompt.mjs" "$OPENCLAW_AGENT_DIR"
 # sync-auth-profiles.js bridges that store and this JSON file.
 export OPENCLAW_AUTH_FILE="$OPENCLAW_STATE_DIR/auth-profiles.json"
 export NO_OPEN_BROWSER=1
+# Also covers a gateway started later by the agent, regardless of restored config.
+export OPENCLAW_NO_AUTO_UPDATE=1
 
 # Shared by both auth modes; login.sh needs it too, so its location travels in the environment
 # rather than being re-derived from a path relative to whichever script sourced it.
@@ -42,6 +44,8 @@ source "$RUNTIME/openclaw/apply-default-model.sh"
 export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_STATE_DIR/openclaw.json}"
 node "$RUNTIME/openclaw/mcp-config.js" "$OPENCLAW_CONFIG_PATH" "${AGENTHUB_MCP_CONFIG:-}" \
   agenthub_browser agenthub_sessions agenthub_files agenthub_network
+
+node "$RUNTIME/openclaw/update-policy.js" "$OPENCLAW_CONFIG_PATH"
 
 # The session's auto-approve flag and command policy, as OpenClaw's exec policy. Runs after
 # mcp-config.js because both write openclaw.json, and before the state restore below is trusted:
