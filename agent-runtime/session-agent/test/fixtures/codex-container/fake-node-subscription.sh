@@ -37,7 +37,7 @@ if [ "$1" = "/opt/session-agent/common/server.js" ]; then
   grep -Fx 'env_vars = ["PATH", "RUNTIME", "AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN"]' \
     "$CODEX_HOME/config.toml" >/dev/null
   grep -Fx '[mcp_servers.agenthub_sessions]' "$CODEX_HOME/config.toml" >/dev/null
-  grep -Fx 'env_vars = ["PATH", "RUNTIME", "AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_SESSION_ID"]' \
+  grep -Fx 'env_vars = ["PATH", "RUNTIME", "AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_SESSION_ID", "AGENTHUB_CONTAINERS_ENABLED"]' \
     "$CODEX_HOME/config.toml" >/dev/null
   grep -Fx '[mcp_servers.agenthub_files]' "$CODEX_HOME/config.toml" >/dev/null
   grep -Fx 'env_vars = ["PATH", "RUNTIME", "AGENTHUB_CALLBACK_URL", "AGENTHUB_CALLBACK_TOKEN", "AGENTHUB_WORKDIR", "AGENTHUB_FILE_ROOT"]' \
