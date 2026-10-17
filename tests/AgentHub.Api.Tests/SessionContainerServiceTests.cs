@@ -228,10 +228,12 @@ public sealed class SessionContainerServiceTests
         }
     };
 
-    private static HttpOperationException Forbidden(string content) => new("forbidden")
+    private static HttpOperationException Forbidden(string content)
     {
-        Response = new HttpResponseMessageWrapper(new HttpResponseMessage(HttpStatusCode.Forbidden), content)
-    };
+        // The wrapper copies status and headers, so the message itself is not needed afterwards.
+        using var response = new HttpResponseMessage(HttpStatusCode.Forbidden);
+        return new HttpOperationException("forbidden") { Response = new HttpResponseMessageWrapper(response, content) };
+    }
 
     private sealed class FakeCluster : ISessionContainerCluster
     {

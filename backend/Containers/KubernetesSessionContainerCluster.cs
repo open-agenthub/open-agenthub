@@ -133,15 +133,31 @@ public sealed class KubernetesSessionContainerCluster : ISessionContainerCluster
         await _k8s.NetworkingV1.DeleteCollectionNamespacedNetworkPolicyAsync(namespaceName,
             labelSelector: labelSelector, cancellationToken: ct);
 
-    private static async Task IgnoreConflict<T>(Func<Task<T>> create)
+    /// <returns>Whether this call created the object; false = it existed already.</returns>
+    private static async Task<bool> IgnoreConflict<T>(Func<Task<T>> create)
     {
-        try { await create(); }
-        catch (HttpOperationException error) when (error.Response.StatusCode == HttpStatusCode.Conflict) { }
+        try
+        {
+            await create();
+            return true;
+        }
+        catch (HttpOperationException error) when (error.Response.StatusCode == HttpStatusCode.Conflict)
+        {
+            return false;
+        }
     }
 
-    private static async Task IgnoreNotFound<T>(Func<Task<T>> delete)
+    /// <returns>Whether this call deleted the object; false = it was gone already.</returns>
+    private static async Task<bool> IgnoreNotFound<T>(Func<Task<T>> delete)
     {
-        try { await delete(); }
-        catch (HttpOperationException error) when (error.Response.StatusCode == HttpStatusCode.NotFound) { }
+        try
+        {
+            await delete();
+            return true;
+        }
+        catch (HttpOperationException error) when (error.Response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return false;
+        }
     }
 }

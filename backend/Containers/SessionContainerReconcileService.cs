@@ -20,7 +20,12 @@ public sealed class SessionContainerReconcileService(
         {
             try { await ReconcileAsync(stoppingToken); }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
-            catch (Exception error) { log.LogError(error, "Session container reconciliation failed"); }
+            // Any failure of one pass (API server unreachable, a timed-out call, a store error) must
+            // not end the loop: the next pass retries, and only shutdown stops it.
+            catch (Exception error) when (!stoppingToken.IsCancellationRequested)
+            {
+                log.LogError(error, "Session container reconciliation failed");
+            }
             await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
         }
     }
