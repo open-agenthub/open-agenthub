@@ -10,6 +10,8 @@ const props = defineProps({ session: Object, kind: { type: String, default: 'age
 const emit = defineEmits(['status'])
 const host = ref(null)
 const mobileInput = ref('')
+const pasteNotice = ref('')
+let pasteNoticeTimer
 let term, fit, clipboard, ws, ro, reconnectTimer
 let disposed = false
 let inputRegistered = false
@@ -64,6 +66,12 @@ function interruptAgent() {
   ws.send(JSON.stringify({ type: 'input', data: '\x03' }))
 }
 defineExpose({ submitMessage, interruptAgent })
+
+function showPasteNotice(text) {
+  pasteNotice.value = text
+  clearTimeout(pasteNoticeTimer)
+  pasteNoticeTimer = setTimeout(() => { pasteNotice.value = '' }, 5000)
+}
 
 function sendComposerMessage() {
   if (submitToAgent(send, mobileInput.value)) mobileInput.value = ''
@@ -188,7 +196,7 @@ onMounted(() => {
   fit = new FitAddon()
   term.loadAddon(fit)
   // A shared link's viewer did not start the session, so its output may not write their clipboard.
-  clipboard = attachTerminalClipboard(term, { allowOsc52: !props.sharedToken })
+  clipboard = attachTerminalClipboard(term, { allowOsc52: !props.sharedToken, host: host.value, notify: showPasteNotice })
   term.open(host.value)
   fitNow()
   ro = new ResizeObserver(scheduleFit)
@@ -233,10 +241,11 @@ onBeforeUnmount(() => {
   ro = undefined
   clipboard?.dispose()
   clipboard = undefined
+  clearTimeout(pasteNoticeTimer)
   term?.dispose()
   term = undefined
   fit = undefined
 })
 </script>
-<template><div class="pane"><div ref="host" class="term"></div><div v-if="showComposer && canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="sendComposerMessage" /><button class="primary" @click="sendComposerMessage">Send</button></div></div></template>
-<style scoped>.pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; } .term { flex: 1; min-height: 0; padding: 10px 12px; overflow: hidden; } .composer { display: flex; gap: 10px; padding: 12px 16px; background: var(--bg); border-top: 1px solid var(--border); } .composer input { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); } .composer button { align-self: center; padding: 9px 18px; }</style>
+<template><div class="pane"><div ref="host" class="term"></div><div v-if="pasteNotice" class="paste-notice" role="status" data-paste-notice>{{ pasteNotice }}</div><div v-if="showComposer && canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="sendComposerMessage" /><button class="primary" @click="sendComposerMessage">Send</button></div></div></template>
+<style scoped>.pane { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; } .term { flex: 1; min-height: 0; padding: 10px 12px; overflow: hidden; } .composer { display: flex; gap: 10px; padding: 12px 16px; background: var(--bg); border-top: 1px solid var(--border); } .composer input { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); } .composer button { align-self: center; padding: 9px 18px; } .paste-notice { position: absolute; top: 10px; right: 16px; max-width: min(420px, calc(100% - 32px)); padding: 8px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border-2); border-radius: var(--radius); font-size: 13px; }</style>
