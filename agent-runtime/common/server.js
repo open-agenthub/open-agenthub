@@ -40,6 +40,17 @@ const MAX_LIMIT_REPORT_BYTES = 4 * 1024;
 const RESTART_INPUT_DELAY_MS = 3_000;
 // The longest reason a credential swap may carry into the scrollback.
 const MAX_SWITCH_REASON_CHARS = 300;
+// How often the skill library is pulled while the session runs. A minute is "shortly" for a
+// skill another session just saved, and with the ETag an unchanged library is one 304.
+const DEFAULT_SKILLS_SYNC_SECONDS = 60;
+
+/** AGENTHUB_SKILLS_SYNC_SECONDS; 0 turns the live pull off and leaves only the one at start. */
+function skillsSyncIntervalMs(env) {
+  const raw = env.AGENTHUB_SKILLS_SYNC_SECONDS;
+  const seconds = raw === undefined || raw === '' ? DEFAULT_SKILLS_SYNC_SECONDS : Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.max(10, seconds) * 1000;
+}
 
 function createCommonServer(options = {}) {
   const env = options.env || process.env;
@@ -1231,6 +1242,43 @@ function createCommonServer(options = {}) {
   setIntervalImpl(() => {
     if (!exited) persistAll();
   }, 30_000);
+
+  // Keeps the local skill directory in line with the library while the session runs, so a skill
+  // another session saved is listed by the agent without a restart — the agent uses what its
+  // skill directory lists and rarely thinks of searching. A poll rather than a push from the hub: the
+  // pod already talks to the hub on its own schedule and nothing has to reach into it, and with
+  // the ETag an unchanged library costs one small request per interval.
+  const skillsSyncMs = skillsSyncIntervalMs(env);
+  if (skillsSyncMs > 0 && callback && token) {
+    const skills = require('./skills');
+    const pullSkillsImpl = supplied.pullSkills || skills.pullSkills;
+    let pullingSkills = false;
+    let lastSkillsError = '';
+    let lastSkillsKept = '';
+    setIntervalImpl(() => {
+      if (exited || pullingSkills) return;
+      pullingSkills = true;
+      Promise.resolve()
+        .then(() => pullSkillsImpl(env, { fetch: fetchImpl }))
+        .then(result => {
+          lastSkillsError = '';
+          if (!result || result.notModified || result.skippedReason) return;
+          // A skill kept for its local edits is reported on every pull that changes something;
+          // repeating it each minute on its own would drown the log.
+          const kept = (result.kept || []).join(',');
+          if (result.written.length || result.removed.length || kept !== lastSkillsKept) {
+            console.log('[agent] Skills: ' + skills.summary(result) + '.');
+          }
+          lastSkillsKept = kept;
+        })
+        .catch(error => {
+          // Once per distinct failure: a hub that is down for an hour is one line, not sixty.
+          if (error.message !== lastSkillsError) console.log('[agent] Skills: pull failed (' + error.message + ')');
+          lastSkillsError = error.message;
+        })
+        .finally(() => { pullingSkills = false; });
+    }, skillsSyncMs);
+  }
 
   const httpServer = http.createServer((request, response) => {
     Promise.resolve(handleHttpRequest(request, response)).catch(() => {

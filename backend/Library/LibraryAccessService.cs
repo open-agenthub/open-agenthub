@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using AgentHub.Api.Licensing;
 
 namespace AgentHub.Api.Library;
@@ -35,6 +37,14 @@ public interface ILibraryAccess
     /// <summary>Skills materialized into an agent pod, name conflicts resolved
     /// (project beats personal beats shared).</summary>
     Task<IReadOnlyList<SkillPayload>> ListSkillPayloadsAsync(
+        string owner, string? projectId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Changes whenever <see cref="ListSkillPayloadsAsync"/> would return something different,
+    /// computed from the records alone so a pod polling an unchanged library never makes the
+    /// store read a single SKILL.md.
+    /// </summary>
+    Task<string> SkillPayloadsVersionAsync(
         string owner, string? projectId, CancellationToken ct = default);
 }
 
@@ -147,15 +157,9 @@ public sealed class LibraryAccessService : ILibraryAccess
     public async Task<IReadOnlyList<SkillPayload>> ListSkillPayloadsAsync(
         string owner, string? projectId, CancellationToken ct = default)
     {
-        var records = await ListAccessibleSkillsAsync(owner, projectId, ct);
         var payloads = new List<SkillPayload>();
-        var seen = new HashSet<string>(StringComparer.Ordinal);
-        // Name conflicts: the session project's skill wins over a personal one,
-        // and own skills win against shared ones.
-        foreach (var record in records.OrderBy(r =>
-                     r.Owner != owner ? 2 : r.ProjectId is null ? 1 : 0))
+        foreach (var record in await ResolveSkillWinnersAsync(owner, projectId, ct))
         {
-            if (!seen.Add(record.Name)) continue;
             var content = await _skills.GetContentAsync(record, ct);
             if (!string.IsNullOrEmpty(content))
             {
@@ -164,6 +168,34 @@ public sealed class LibraryAccessService : ILibraryAccess
             }
         }
         return payloads.OrderBy(p => p.Name, StringComparer.Ordinal).ToList();
+    }
+
+    public async Task<string> SkillPayloadsVersionAsync(
+        string owner, string? projectId, CancellationToken ct = default)
+    {
+        // Version moves with every content or file change; UpdatedAt also catches a rename or a
+        // description edit. Which record wins a name is part of the input, so sharing or
+        // unsharing a skill, or a licence change that hides shared ones, changes it too.
+        var text = new StringBuilder();
+        foreach (var record in (await ResolveSkillWinnersAsync(owner, projectId, ct))
+                     .OrderBy(r => r.Name, StringComparer.Ordinal))
+            text.Append(record.Name).Append('\n').Append(record.Id).Append('\n')
+                .Append(record.Version).Append('\n').Append(record.UpdatedAt.Ticks).Append('\n');
+        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text.ToString())))[..32]
+            .ToLowerInvariant();
+    }
+
+    // Name conflicts: the session project's skill wins over a personal one, and own skills win
+    // against shared ones.
+    private async Task<IReadOnlyList<SkillRecord>> ResolveSkillWinnersAsync(
+        string owner, string? projectId, CancellationToken ct)
+    {
+        var records = await ListAccessibleSkillsAsync(owner, projectId, ct);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        return records
+            .OrderBy(r => r.Owner != owner ? 2 : r.ProjectId is null ? 1 : 0)
+            .Where(r => seen.Add(r.Name))
+            .ToList();
     }
 
     private bool IsMcpAccessible(

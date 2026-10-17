@@ -138,6 +138,9 @@ process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.
   ;;
 esac
 
+# OpenClaw reads ~/.agents/skills, not ~/.claude/skills.
+sync_skill_library --link-agents
+
 export AGENTHUB_DRIVER="$RUNTIME/openclaw/driver.js"
 echo "[entrypoint] Starting session-agent (mode=${AGENTHUB_MODE:-interactive}, resume=${AGENTHUB_RESUME:-0}, runtime=$RUNTIME)"
 exec node "$RUNTIME/common/server.js"
