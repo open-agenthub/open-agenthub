@@ -19,7 +19,7 @@ alternatives were turned down.
 - **The agent never talks to the Kubernetes API.** Four tools on the in-pod `agenthub_sessions`
   MCP server — `container_run`, `container_list`, `container_logs`, `container_stop` — call
   `/internal/sessions/{id}/containers` with the session's callback token, like every other
-  internal route (the routes come first; the in-pod tools follow in a separate change). The backend builds the pod itself from a small request: image, command, args,
+  internal route. The backend builds the pod itself from a small request: image, command, args,
   env, ports, cpu, memory, emptyDir volumes, and whether the root filesystem is writable. Nothing
   else about the pod can be expressed.
 - **One ClusterIP Service per helper that declares ports**, named like the helper. The session
@@ -195,6 +195,9 @@ account — the RBAC and admission policies applied from `helm template` output:
 - the quota refuses a pod over its cpu sum, and the refusal reaches the agent as a sentence;
 - cleanup deletes the namespace — the namespace controller removes pods, Service, quota and
   policies — and the session's egress policy in the sessions namespace.
+- the four tools, through the real `sessions/server.mjs` over stdio, the real controller and
+  callback-token check, and the rig: a run comes back with its `host`, and a refused registry, an
+  oversized request, a duplicate name or an unknown container comes back as the hub's sentence.
 
 That rig has no kubelet and no network plugin, so these still need a real cluster:
 
@@ -203,5 +206,7 @@ That rig has no kubelet and no network plugin, so these still need a real cluste
 - that the default images (e.g. `postgres`, `redis`) actually start as uid 1000 with a
   read-only root, or need `writableRootFilesystem`;
 - `container_logs` of a running container (no kubelet, so no logs in the rig);
+- the tools inside each agent CLI: they were driven through the real `server.mjs` over stdio
+  against the real controller and the rig above, not from Claude, Codex, Cursor or OpenCode;
 - the chart on a cluster older than 1.30, where the ValidatingAdmissionPolicy kinds do not
   exist and the install fails, which is why the switch exists.
