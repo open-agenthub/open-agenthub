@@ -5,9 +5,10 @@ import { FitAddon } from '@xterm/addon-fit'
 import { api, getSharedTranscript, sharedTerminalUrl, shellUrl, terminalUrl } from '../api.js'
 import { SUBMIT_ENTER_DELAY_MS, submitToAgent } from '../lib/terminal-input.js'
 import { attachTerminalClipboard } from '../lib/terminal-clipboard.js'
+import { detectMenu, sameMenu } from '../lib/cli-menu.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, showComposer: { type: Boolean, default: true } })
-const emit = defineEmits(['status'])
+const emit = defineEmits(['status', 'menu'])
 const host = ref(null)
 const mobileInput = ref('')
 const pasteNotice = ref('')
@@ -66,7 +67,7 @@ function interruptAgent() {
   cancelSubmission?.()
   ws.send(JSON.stringify({ type: 'input', data: '\x03' }))
 }
-defineExpose({ submitMessage, interruptAgent })
+defineExpose({ submitMessage, interruptAgent, sendKeys })
 
 function showPasteNotice(text) {
   pasteNotice.value = text
@@ -113,8 +114,51 @@ function clearReconnect() {
   reconnectTimer = undefined
 }
 
+// The agent CLI's own interactive screens (#112), read off the screen this pane holds. Checked a
+// moment after output stops rather than per write: a TUI draws a menu in several writes, and a
+// half-drawn one would be announced and withdrawn within a frame.
+const MENU_SETTLE_MS = 150
+let menuTimer
+let lastMenu = null
+function scheduleMenuCheck() {
+  if (props.kind !== 'agent') return
+  clearTimeout(menuTimer)
+  menuTimer = setTimeout(checkMenu, MENU_SETTLE_MS)
+}
+function checkMenu() {
+  if (disposed || !term) return
+  const buffer = term.buffer.active
+  const lines = []
+  // baseY is the top of the live screen; viewportY would follow a person scrolling back.
+  for (let y = 0; y < term.rows; y++) lines.push(buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '')
+  reportMenu(isLive.value && ws ? detectMenu(lines) : null)
+}
+function reportMenu(menu) {
+  if (sameMenu(menu, lastMenu)) return
+  lastMenu = menu
+  emit('menu', menu)
+}
+
+// Keys for the CLI as a person would press them, one message each with a short gap: a TUI that
+// handles one key per read would otherwise see only the first of several sent together.
+const KEY_GAP_MS = 40
+function sendKeys(keys) {
+  const socket = ws
+  if (!canSend.value || socket?.readyState !== WebSocket.OPEN) return Promise.reject(new Error('Agent is disconnected'))
+  return keys.reduce((previous, key, index) => previous.then(() => new Promise((resolve, reject) => {
+    const write = () => {
+      if (socket !== ws || socket.readyState !== WebSocket.OPEN) return reject(new Error('Agent is disconnected'))
+      socket.send(JSON.stringify({ type: 'input', data: key }))
+      resolve()
+    }
+    if (index === 0) write()
+    else setTimeout(write, KEY_GAP_MS)
+  })), Promise.resolve())
+}
+
 function closeSocket() {
   cancelSubmission?.()
+  reportMenu(null)
   connectionGeneration += 1
   clearReconnect()
   const socket = ws
@@ -154,12 +198,13 @@ async function connect() {
     resize(true)
   }
   socket.onmessage = event => {
-    if (!disposed && ws === socket && term) term.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data))
+    if (!disposed && ws === socket && term) term.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data), scheduleMenuCheck)
   }
   socket.onclose = () => {
     if (disposed || ws !== socket) return
     cancelSubmission?.()
     ws = undefined
+    reportMenu(null)
     emit('status', 'disconnected')
     if (isLive.value) reconnectTimer = setTimeout(connect, 2000)
   }
@@ -233,6 +278,7 @@ watch(() => props.active, visible => {
 
 onBeforeUnmount(() => {
   disposed = true
+  clearTimeout(menuTimer)
   closeSocket()
   if (fitFrame) {
     cancelAnimationFrame(fitFrame)

@@ -119,7 +119,8 @@ function quote(value) {
   text.value += `${text.value ? '\n\n' : ''}${String(value).split('\n').map(line => '> ' + line).join('\n')}\n\n`
   input.value?.focus()
 }
-defineExpose({ quote })
+function clearError() { error.value = '' }
+defineExpose({ quote, clearError })
 onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); generation += 1 })
 </script>
 <template>
@@ -143,7 +144,7 @@ onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); ge
       </div>
     </div>
     <p v-if="error" class="composer-error" role="alert">{{ error }}</p>
-    <p v-else class="composer-hint">{{ enabled ? 'Messages go to the running agent. Use the terminal for login and interactive CLI menus.'
+    <p v-else class="composer-hint">{{ enabled ? 'Messages and slash commands go to the running agent; its menus appear above.'
       : queueable ? 'The agent is starting. Messages are queued and sent once it is ready.'
         : 'Connect to a running interactive session to send a message.' }}</p>
   </form>

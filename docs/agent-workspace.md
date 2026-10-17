@@ -70,9 +70,53 @@ multiline prompt, and Enter is sent after the existing CLI paste delay. The pend
 cancelled on a disconnect or session change. A send completing means bytes were sent to the
 socket; terminal protocols provide no provider receipt. If the connection changes after paste,
 the draft remains and the error asks the person to check the terminal before retrying. Stop
-sends Ctrl+C to that same agent connection. Login and interactive CLI menus remain available
-in the drawer. Terminal-mode attachments are not offered because they do not have chat-mode
-delivery receipts.
+sends Ctrl+C to that same agent connection. Terminal-mode attachments are not offered because
+they do not have chat-mode delivery receipts.
+
+### The agent CLI's own menus (#112)
+
+Slash commands typed in the composer reach the CLI exactly as typed in the terminal: verified
+with Claude Code 2.1.287, where the composer's paste-and-Enter of `/login` and `/model` opened
+the same menus as typing them. What was missing is that the Workspace did not show those menus,
+so a person working there did not see that the agent waited for a choice.
+
+The view now reads the agent terminal's rendered screen — the xterm buffer the drawer would show,
+kept current while the drawer is closed — a moment after output pauses (`lib/cli-menu.js`). A
+numbered list with the CLI's cursor in it, or above a dialog footer such as *Esc to cancel* or
+*Press enter to confirm*, is a menu; a numbered list in the agent's reply has neither and is left
+alone. A prompt for typed input inside such a dialog (*Paste code here if prompted >*) counts too.
+When one appears, the agent drawer opens with a notice, *The agent is showing a menu* and the
+dialog's question; a menu's options are buttons. A button sends the keys a person would press:
+arrows from the highlighted option, then Enter, one key per message, and *Cancel* sends Esc. When
+the menu goes, a drawer the view opened for it closes again; one the person opened or took over
+stays. While a menu is open the drawer is taller: a CLI fits its dialog into the rows it has, and
+Claude Code in the 14 rows of the normal drawer scrolled its login menu down to the one
+highlighted entry. Such a cut list is marked as partial and its notice points at the terminal.
+
+While the CLI shows one of these screens, the composer refuses to send and keeps the draft:
+its Enter would pick whatever option is highlighted, or submit the text as a login code. That
+happened in testing: a `/login` sent into an open login menu chose the first option.
+
+Verified end to end in Chromium against the real CLI, through this repository's session agent:
+`/login` from the composer, the notice with the three login methods, the second option chosen by
+button (the CLI opened its next step, which the notice followed), a composer message refused
+while the menu was open, and Cancel closing menu and drawer.
+
+What is rendered natively and what falls back to the drawer, per agent:
+
+| Agent | Permission requests | Other menus and prompts |
+|---|---|---|
+| Claude | Native approvals in the Workspace (hook) | Detected and offered as buttons: verified for `/login`, its sub-steps and `/model`; a step that wants typed input (the login code) opens the drawer |
+| Codex | Native approvals (managed hook) | Same screen detection; its selection lists are numbered with a cursor, but this was not run against the Codex CLI here |
+| OpenCode | Native approvals (policy plugin) | Its TUI dialogs are not numbered lists and are not detected: the *Agent terminal* button, as before |
+| Cursor | Configured at start (`--force`), no per-call question | Same screen detection, not verified against the CLI |
+| OpenClaw | Asked in its own terminal only (no hook) | Same screen detection, not verified against the CLI |
+
+Rejected: a structured signal from each CLI. None of them reports its own menus — Claude Code's
+hooks cover permission and notification events, not `/login` or `/model` — so the only signal
+common to all five is the screen. Also rejected: pattern-matching the raw byte stream in the
+session agent. A TUI redraws in place, so the stream says that a menu was drawn but not whether it
+is still there; the rendered screen says both, and the browser already has it.
 
 **A message written while the session starts is queued (#115).** Send used to stay disabled until
 the agent socket connected, while the person could already type. The composer now accepts a
