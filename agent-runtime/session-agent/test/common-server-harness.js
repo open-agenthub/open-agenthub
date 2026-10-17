@@ -205,6 +205,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       process: processLike,
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
       attachmentMaterializer: materializer,
+      pullSkills: harnessOptions.pullSkills,
       setTimeout(callback, ms) {
         if (harnessOptions.setTimeout) return harnessOptions.setTimeout(callback, ms);
         callback();
