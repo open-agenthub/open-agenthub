@@ -12,6 +12,7 @@ const claude = require('../../claude/driver');
 const codex = require('../../codex/driver');
 const cursor = require('../../cursor/driver');
 const openclaw = require('../../openclaw/driver');
+const opencode = require('../../opencode/driver');
 
 const NOW = Date.UTC(2026, 9, 11, 12, 0, 0);
 const now = () => NOW;
@@ -27,7 +28,7 @@ test('strips the control sequences a TUI wraps its text in', () => {
 });
 
 test('every driver passes the contract with its patterns, and the contract rejects malformed ones', () => {
-  for (const driver of [claude, codex, cursor, openclaw]) {
+  for (const driver of [claude, codex, cursor, openclaw, opencode]) {
     assert.doesNotThrow(() => validateDriver(driver), driver.name);
     assert.ok(driver.limitPatterns.length > 0, driver.name);
   }
@@ -104,6 +105,43 @@ test('Claude fallback: the CLI sentences, an ISO reset only when one is in the l
   const iso = detector(claude.limitPatterns);
   iso.instance.feedTerminal('Usage limit reached · resets at 2026-10-11T15:00:00Z\n');
   assert.equal(iso.hits[0].resetsAt, '2026-10-11T15:00:00.000Z');
+});
+
+test('OpenCode: its own notices, the Go reset duration read relative to now', () => {
+  // The Go retry status as 1.18.35 composed it from a 429 GoUsageLimitError with retry-after 8100.
+  const go = '5 hour usage limit reached. It will reset in 2 hours 15 minutes. To continue using this model now, ' +
+    'enable usage from your available balance - https://opencode.ai/workspace/wrk_test/go';
+  const reset = new Date(NOW + 8100 * 1000).toISOString();
+  const printed = detector(opencode.limitPatterns);
+  printed.instance.feedTerminal('\n[agenthub] ' + go + '\n');
+  assert.equal(printed.hits.length, 1);
+  assert.equal(printed.hits[0].resetsAt, reset);
+
+  // The TUI's status line: the first 80 characters, then its retry counter.
+  const tui = detector(opencode.limitPatterns);
+  tui.instance.feedTerminal('\x1b[38;2;224;108;117m' + go.slice(0, 80) + '… (click to expand) [retrying in 2h 14m attempt #1]\x1b[0m');
+  assert.equal(tui.hits[0].resetsAt, reset);
+
+  for (const [duration, seconds] of [['1 day 3 hours', 97200], ['1 day', 86400], ['45 minutes', 2700], ['less than a minute', 60]]) {
+    const { instance, hits } = detector(opencode.limitPatterns);
+    instance.feedTerminal('Usage limit reached. It will reset in ' + duration + '. To continue using this model now\n');
+    assert.equal(hits[0].resetsAt, new Date(NOW + seconds * 1000).toISOString(), duration);
+  }
+  // Without retry-after OpenCode leaves the duration empty; the hub's default applies.
+  const empty = detector(opencode.limitPatterns);
+  empty.instance.feedTerminal('Usage limit reached. It will reset in . To continue using this model now\n');
+  assert.equal(empty.hits[0].resetsAt, null);
+
+  for (const line of ['Free usage exceeded, subscribe to Go', 'Error: Quota exceeded. Check your plan and billing details.']) {
+    const { instance, hits } = detector(opencode.limitPatterns);
+    instance.feedTerminal(line + '\n');
+    assert.equal(hits.length, 1, line);
+    assert.equal(hits[0].resetsAt, null, line);
+  }
+  // A provider's own wording passed through is not an OpenCode sentence.
+  const other = detector(opencode.limitPatterns);
+  other.instance.feedTerminal('Error: Rate limit exceeded\nToo Many Requests\n');
+  assert.deepEqual(other.hits, []);
 });
 
 test('Cursor: conservative sentences only, never a bare "rate limit"', () => {

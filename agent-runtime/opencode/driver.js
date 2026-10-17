@@ -88,7 +88,35 @@ function isMissingResume(output, exitCode) {
   return /session not found/i.test(output);
 }
 
+// OpenCode's own limit notices, read from the binary of opencode-ai 1.18.35 (the pinned version).
+// It composes two of them from an OpenCode Go/Zen error body and shows them as the session's
+// retry status, then waits and retries instead of failing:
+// "<limit name> usage limit reached. It will reset in 2 hours 15 minutes. To continue using this
+// model now, enable usage from your available balance" (a Go window, retried after the
+// response's retry-after) and "Free usage exceeded, subscribe to Go" (the free tier). The third
+// is its text for an OpenAI `insufficient_quota` error. Every other limit message it shows is the
+// provider's own text passed through, which is no OpenCode sentence to pin to.
+// The TUI shows a retry status cut to 80 characters, which keeps the reset duration for any
+// limit name of ordinary length; `opencode run` shows none, so limit-notice.mjs prints it there.
+const limitPatterns = [
+  { pattern: /usage limit reached\. It will reset in/i, resetsAt: resetFromDuration },
+  { pattern: /Free usage exceeded, subscribe to Go/ },
+  { pattern: /Quota exceeded\. Check your plan and billing details\./ }
+];
+
+// "It will reset in 1 day 3 hours" / "2 hours 15 minutes" / "less than a minute", the shapes
+// OpenCode formats retry-after into. Relative, so unlike a wall-clock time it does not depend on a
+// time zone the pod does not share with the person. An empty duration (no retry-after) is null.
+function resetFromDuration(match, text, { secondsFromNow }) {
+  const rest = text.slice(match.index + match[0].length, match.index + match[0].length + 60);
+  if (/^\s*less than a minute/.test(rest)) return secondsFromNow(60);
+  const parts = /^\s*(?:(\d+) days?)?\s*(?:(\d+) hours?)?\s*(?:(\d+) minutes?)?/.exec(rest);
+  const seconds = (Number(parts[1] || 0) * 86400) + (Number(parts[2] || 0) * 3600) + (Number(parts[3] || 0) * 60);
+  return seconds > 0 ? secondsFromNow(seconds) : null;
+}
+
 module.exports = {
+  limitPatterns,
   // ~/.local/share/opencode is linked to ~/.opencode by the entrypoint, so the session database,
   // undo snapshots and auth.json all live here. auth.json is excluded via authFilename; the MCP
   // OAuth store and logs are not state worth carrying either.
