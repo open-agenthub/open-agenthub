@@ -581,7 +581,10 @@ function interruptWorkspaceAgent() {
 .term-bar { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--border); background: var(--bg); position: relative; flex-wrap: wrap; }
 .back { width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; border-radius: 9px; border: none; background: none; color: var(--muted); font-size: 16px; padding: 0; flex-shrink: 0; }
 .back:hover { background: var(--panel-2); color: var(--text); }
-.head-main { min-width: 0; flex: 1; }
+/* A floor for the title: with account, Files, four tabs and the actions in one bar, a zero
+   min-width let the flex row squeeze the session name to its first letter; the controls wrap
+   onto the next line instead. */
+.head-main { min-width: min(240px, 100%); flex: 1 1 240px; }
 .title { font-family: var(--display); font-size: 17px; font-weight: 700; color: var(--strong); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .meta { display: flex; align-items: center; gap: 7px; margin-top: 2px; font-size: 11px; color: var(--muted-3); white-space: nowrap; overflow: hidden; }
 .st { font-weight: 700; }
