@@ -138,6 +138,10 @@ public interface ISessionService
     Task<bool> ReplaceStateArchiveAsync(string owner, string id, Stream content,
         long? contentLength, CancellationToken ct = default) => Task.FromResult(false);
     Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default);
+    /// <summary>Fresh upload urls for the state archive, scrollback and transcript, for a pod whose
+    /// start-time urls are about to expire. Null when the token does not belong to the session.</summary>
+    Task<AgentSessionArtifactUrls?> RefreshArtifactUrlsAsync(string sessionId, string token, CancellationToken ct = default)
+        => Task.FromResult<AgentSessionArtifactUrls?>(null);
     Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Deletes every per-user Kubernetes secret (credentials, provider logins,
     /// git OAuth tokens) — part of the account purge. Default no-op for test doubles.</summary>

@@ -66,6 +66,8 @@ const statuses = reactive({ agent: 'connecting…', shell: '' })
 // In-app approval of tool-permission requests (in addition to the messengers).
 const pendingPermissions = ref([])
 let permissionTimer
+let conversationTimer
+const CONVERSATION_POLL_MS = 1000
 
 async function refreshPermissions() {
   if (props.sharedToken || !capabilities.value.canManage || !isLive.value) {
@@ -266,9 +268,10 @@ onMounted(() => {
   refreshPermissions()
   refreshMessages()
   loadAccounts()
-  permissionTimer = setInterval(() => { refreshPermissions(); refreshMessages(); refreshTranscript() }, 4000)
+  permissionTimer = setInterval(() => { refreshPermissions(); refreshMessages() }, 4000)
+  conversationTimer = setInterval(() => refreshTranscript(), CONVERSATION_POLL_MS)
 })
-onBeforeUnmount(() => clearInterval(permissionTimer))
+onBeforeUnmount(() => { clearInterval(permissionTimer); clearInterval(conversationTimer) })
 watch(() => props.session?.id, () => {
   pendingPermissions.value = []
   agentMessages.value = []
@@ -330,13 +333,15 @@ async function loadTranscript() {
   }
 }
 
-// Follows a running session from the cursor the last page left, so the Workspace shows what
-// the agent is doing now rather than what it had done when it was opened. Polling, not the
-// event socket: the transcript is appended by a 30-second upload, and a cursor poll costs the
-// hub one small page while a push would still need the same read to find out what is new.
+// Follows a running session from the cursor the last page left, so the Workspace shows what the
+// agent is doing now rather than what it had done when it was opened. The hub reads a running
+// session's transcript from its pod by byte offset (#111), so a poll costs one small page, and
+// once a second keeps the view within the one to two seconds of the terminal the issue asks for.
+// A hidden browser tab skips its polls; the next visible one catches up from the same cursor.
 async function refreshTranscript(force = false) {
   const current = conversation.value
   if (transcriptBusy.value || !conversationVisible.value || (!isLive.value && !force)) return
+  if (!force && typeof document !== 'undefined' && document.visibilityState === 'hidden') return
   if (!current) return loadTranscript()
   const sessionId = props.session?.id
   try {
@@ -389,7 +394,9 @@ function toggleDrawer(kind) {
   drawerKind.value = kind
 }
 function sendWorkspaceMessage(text) {
-  if (!canCompose.value || !agentTerminal.value) throw new Error('Agent is disconnected. Your draft is still here.')
+  if (!canCompose.value || !agentTerminal.value) {
+    throw Object.assign(new Error('Agent is disconnected. Your draft is still here.'), { retryable: true })
+  }
   // A message pasted into one of the CLI's own screens is not a message: its Enter picks the
   // highlighted option, or submits the text as a login code. Refused, so the draft stays.
   if (cliMenu.value) {
@@ -573,7 +580,7 @@ function interruptWorkspaceAgent() {
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @cancel="cancelCliMenu" />
         <div v-if="modern" class="drawer-toolbar">
-          <span v-if="!isChat" class="sync-note">Saved conversation · updates about every 30 seconds</span>
+          <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
           <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>
           <button v-if="isLive && capabilities.canShell" type="button" :aria-expanded="terminalOpened && drawerKind === 'shell'" data-drawer-shell @click="toggleDrawer('shell')">›_ Shell</button>
         </div>
@@ -587,7 +594,7 @@ function interruptWorkspaceAgent() {
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
-          ref="composer" :session-id="session.id" :enabled="canCompose" :status="statuses.agent" :agent="session.agent"
+          ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
           :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" />
       </div>
     </SessionWorkspace>

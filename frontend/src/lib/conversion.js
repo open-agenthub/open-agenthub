@@ -14,16 +14,6 @@ export function conversionHint(agent) {
     : `${agent || 'This runtime'} starts a new conversation in the same workspace; the files stay, the chat history does not.`
 }
 
-/**
- * The runtime transport a conversion asks for, given the surface the person picked. Workspace on
- * Claude is the streaming transport (`chat`, interactive Claude only — the rule the backend
- * applies); every other agent, and Terminal, keeps the CLI's TUI. The same mapping New session
- * uses, so a converted run opens exactly like a newly created one (docs/agent-workspace.md).
- */
-export function conversionUiMode(agent, surface) {
-  return surface === 'workspace' && agent === 'Claude' ? 'chat' : 'terminal'
-}
-
 /** Whether the card belongs on this session: the backend's own predicate, never re-derived here. */
 export function canConvert(session) {
   return session?.canConvertToInteractive === true

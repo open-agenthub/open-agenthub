@@ -83,16 +83,10 @@ describe('continuing an autonomous session interactively', () => {
     expect(mocks.api.convertSession).toHaveBeenCalledWith('s1', expect.objectContaining({ autoApprove: true }))
   })
 
-  it('opens the workspace on every agent, streaming only for Claude', async () => {
-    const claude = mountTerminal(finished({ agent: 'Claude' }))
-    await claude.find('[data-convert-workspace]').trigger('click')
-    await flushPromises()
-    expect(mocks.api.convertSession).toHaveBeenLastCalledWith('s1', expect.objectContaining({ uiMode: 'chat' }))
-    expect(claude.emitted('converted')).toEqual([['s1', 'workspace']])
-
-    // The backend refuses uiMode chat for anything but Claude, so the others keep the TUI
-    // transport and read their saved conversation in the workspace.
-    for (const agent of ['Codex', 'Cursor', 'OpenClaw', 'OpenCode']) {
+  it('opens the workspace on every agent over the PTY transport', async () => {
+    // Claude included (#114): the headless chat transport has no terminal, so /login and the
+    // CLI's menus would be unreachable in the converted session.
+    for (const agent of ['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode']) {
       const other = mountTerminal(finished({ agent }))
       await other.find('[data-convert-workspace]').trigger('click')
       await flushPromises()

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { conversionErrorText, conversionHint, conversionUiMode } from '../lib/conversion.js'
+import { conversionErrorText, conversionHint } from '../lib/conversion.js'
 import { preferredUi } from '../lib/ui-preference.js'
 
 // Inline card offering to continue a finished autonomous run interactively. One component for
@@ -29,8 +29,11 @@ async function convert(surface) {
   busy.value = surface
   error.value = ''
   try {
+    // Always the PTY, whichever surface was picked: a headless chat transport would leave the
+    // converted run without a terminal, /login or the CLI's menus (#114). The surface only
+    // selects the first view (docs/session-mode-conversion.md).
     await api.convertSession(props.session.id, {
-      mode: 'interactive', uiMode: conversionUiMode(props.session?.agent, surface), autoApprove: keepAutoApprove.value
+      mode: 'interactive', uiMode: 'terminal', autoApprove: keepAutoApprove.value
     })
     emit('converted', props.session.id, surface)
   } catch (e) {
