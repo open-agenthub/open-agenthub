@@ -178,7 +178,8 @@ describe('TerminalView session identity', () => {
     const terminal = mount(TerminalView, { props: { session: sessions[0] }, global: { stubs } })
     expect(terminal.findComponent({ name: 'TerminalPane' }).exists()).toBe(true)
     expect(terminal.findComponent({ name: 'WorkspaceStream' }).exists()).toBe(false)
-    expect(terminal.findAll('.tabs button').map(b => b.text())).toContain('Transcript')
+    // #113: the Workspace shows the saved conversation; there is no separate Transcript tab.
+    expect(terminal.findAll('.tabs button').map(b => b.text())).not.toContain('Transcript')
   })
 })
 

@@ -48,7 +48,7 @@ public sealed class SharedSessionsController(ISessionAccessService access, IBrow
             : Content(transcript, "text/plain");
     }
 
-    /// <summary>Same page the owner's Transcript tab reads, for a shared link's viewer.</summary>
+    /// <summary>Same page the owner's Workspace reads, for a shared link's viewer.</summary>
     [HttpGet("conversation")]
     public async Task<ActionResult<ConversationPage>> GetConversation(
         string token,

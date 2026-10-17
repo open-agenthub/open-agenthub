@@ -260,7 +260,7 @@ export const api = {
     if (res.status === 401) handle401()
     return res.ok ? res.text() : ''
   },
-  // The Transcript tab's page: role-tagged entries from the provider's own transcript, or the
+  // The Workspace conversation's page: role-tagged entries from the provider's own transcript, or the
   // cleaned scrollback as text when there is none. `offset` is the previous page's nextOffset.
   getConversation: (id, offset) =>
     req('GET', `/sessions/${encodeURIComponent(id)}/conversation${conversationQuery(offset)}`)
