@@ -511,7 +511,19 @@ public static class AgentPodSpecFactory
                       if (url !~ /:\/\// || url !~ /@/) return
                       sub(/^[^:]*:\/\//, "", url); sub(/@.*/, "", url)
                       n = split(url, parts, ":"); value = parts[n]
-                      if (length(value)) secrets[value] = 1
+                      if (length(value)) {
+                        secrets[value] = 1
+                        decoded = ""
+                        for (j = 1; j <= length(value); j++) {
+                          pair = tolower(substr(value, j + 1, 2))
+                          first = index("0123456789abcdef", substr(pair, 1, 1))
+                          second = index("0123456789abcdef", substr(pair, 2, 1))
+                          if (substr(value, j, 1) == "%" && length(pair) == 2 && first && second) {
+                            decoded = decoded sprintf("%c", (first - 1) * 16 + second - 1); j += 2
+                          } else decoded = decoded substr(value, j, 1)
+                        }
+                        if (length(decoded)) secrets[decoded] = 1
+                      }
                     }
                     function remove(line, secret, pos, result) {
                       result = ""
@@ -528,7 +540,18 @@ public static class AgentPodSpecFactory
                       while ((getline credential < file) > 0) collect(credential)
                       close(file)
                     }
-                    { line = $0; for (secret in secrets) line = remove(line, secret); print line }
+                    {
+                      line = $0
+                      for (secret in secrets) line = remove(line, secret)
+                      lower = tolower(line)
+                      if (match(lower, /(authorization|proxy-authorization|cookie|set-cookie|x-[a-z-]*(token|key))[ \t]*[:=]/))
+                        line = substr(line, 1, RSTART - 1) "[redacted header]"
+                      while (match(tolower(line), /(bearer|basic)[ \t]+[^ \t,;]+/))
+                        line = substr(line, 1, RSTART - 1) "[redacted]" substr(line, RSTART + RLENGTH)
+                      while (match(tolower(line), /([a-z_]*(token|password|passwd|secret|api[_-]?key|credential)[a-z_]*|signature)[=:][ \t]*[^ &;,]+/))
+                        line = substr(line, 1, RSTART - 1) "[redacted]" substr(line, RSTART + RLENGTH)
+                      print line
+                    }
                   ' | sed -E \
                     -e 's#([a-zA-Z][a-zA-Z0-9+.-]*://)[^ /]*@#\1[redacted]@#g' \
                     -e 's/([Aa]uthorization|[Pp]roxy-[Aa]uthorization|[Cc]ookie|[Ss]et-[Cc]ookie|[Xx]-[^ :]*(Token|token|Key|key))[ :=].*/\1: [redacted]/g' \

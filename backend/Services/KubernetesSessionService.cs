@@ -1151,7 +1151,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 rec.Status = "Failed";
                 rec.FailureReason = SessionStartupFailure.Redact(diagnostic);
                 await _store.UpsertAsync(rec, resourceCt);
-                await _store.SetScrollbackAsync(rec.Id, diagnostic, resourceCt);
+                await _store.SetScrollbackAsync(rec.Id, rec.FailureReason, resourceCt);
                 _log.LogWarning("Session {Id} failed credential preflight for {Agent}/{AuthMode}",
                     rec.Id, rec.Agent, rec.AuthMode);
             },

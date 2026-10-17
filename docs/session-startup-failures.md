@@ -23,3 +23,21 @@ Redaction precedes truncation at both the script output and backend persistence/
 URL userinfo, authentication headers, cookies, named secrets and common token formats are removed.
 Unknown failures remain bounded plain text. Tests cover secret-bearing inputs separately from
 mapping, and execute the factory's real shell script against a local bare repository.
+
+## Reproduce the API object proof
+
+Run `dotnet run --project tests/SessionStartupProof -- /path/to/kubeconfig` against a scratch
+API server. It creates an isolated namespace, writes four pod statuses through the status
+subresource, reads them back and asserts the mapper step/terminal flag and credential removal.
+It needs no kubelet. The verified output ends with:
+
+```text
+REAL API clone-failure: phase=Pending, step=clone, terminal=True, reason=clone: Branch main does not exist in https://example.com/repo5. The default branch is instagram. Edit the session's repositories.
+PASS: four statuses written/read through a real kube-apiserver; no kubelet used.
+```
+
+The real clone-script regression executes the factory's emitted shell, rather than a copy, against
+a local bare repository. It asserts exit 128 and Git's exact missing-branch error. A separate
+script regression injects credential-bearing output and asserts that neither stdout nor the
+termination file contains those values. PostgreSQL tests exercise the actual migration, column
+projection and targeted update, including resume clearing the old failure.

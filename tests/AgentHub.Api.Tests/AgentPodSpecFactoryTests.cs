@@ -662,7 +662,7 @@ public class AgentPodSpecFactoryTests
         try
         {
             var git = Path.Combine(scratch, "git");
-            await File.WriteAllTextAsync(git, "#!/bin/sh\ncase \"$1\" in clone) printf '%s\\n' 'https://user:private-value@example.com/repo private-value' 'Authorization: Bearer header-value' 'token=query-value ghp_knownvalue glpat_knownvalue' >&2; exit 128;; *) exit 0;; esac\n");
+            await File.WriteAllTextAsync(git, "#!/bin/sh\ncase \"$1\" in clone) printf '%s\\n' 'https://user:private-value@example.com/repo private-value' 'aUtHoRiZaTiOn: Bearer header-value' 'ToKeN=query-value ghp_knownvalue glpat-knownvalue' >&2; exit 128;; *) exit 0;; esac\n");
             File.SetUnixFileMode(git, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription, request => request with {
                 Repos = [new RepoRef { Url = "https://user:private-value@example.com/repo", Branch = "main" }]
@@ -684,6 +684,7 @@ public class AgentPodSpecFactoryTests
             Assert.DoesNotContain("header-value", visible);
             Assert.DoesNotContain("query-value", visible);
             Assert.DoesNotContain("ghp_knownvalue", visible);
+            Assert.DoesNotContain("glpat-knownvalue", visible);
             Assert.Contains("[redacted]", visible);
         }
         finally { Directory.Delete(scratch, recursive: true); }
