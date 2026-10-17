@@ -100,6 +100,7 @@ At every spawn the backend writes two secrets for the session from the store and
 - Whenever a secret, a project's selection or a session's selection changes, the copies of every
   affected session that has ever been spawned are rewritten (`SyncSessionSecretsAsync`). A session
   that never ran gets them at its first start.
+  A copy whose session row is gone (a delete that failed half-way) is removed by the same pass.
 
 *Rejected: mounting the user's store into the pod.* A session that should see one secret could
 then list the others in the mounted directory. *Rejected: one per-session secret for both kinds,*
@@ -115,7 +116,7 @@ values would then sit in PID 1 just the same, with an extra copy step and no liv
 | Logs | the backend logs the secret id; never a name or a value |
 | State archive | only each driver's state directory is archived (docs/state-archive.md); `~/.secrets` is outside every one |
 | Files pane | `upload_file` only accepts files under the workspace or the managed output root after `realpath`, so `~/.secrets` and any symlink into it are refused (`files-paths.test.js`) |
-| Scrollback and transcript uploads | the session agent masks every value in what it uploads: the scrollback to S3 and to the hub, the transcript to S3 and to the hub (`common/secret-mask.js`) |
+| Scrollback and transcript uploads | the session agent masks every value in what it uploads (`common/secret-mask.js`): the scrollback buffer itself once per persistence tick — so a value the PTY delivered in two chunks is caught and a reconnecting client is replayed the masked text — and the transcript on its way to the hub and to object storage, the latter through curl's stdin rather than a second copy in the shared `/tmp` |
 | Chat relays | the backend masks the `notify` message with the values in the session's own copies (`SecretMask`), because Codex's and Cursor's turn hooks send the agent's last message |
 
 Masking replaces a value, its JSON-escaped form and each line of a multi-line value with
@@ -128,6 +129,8 @@ the file value, a PEM and an environment value; with the masking none of them di
   from that file, and a replaced value there would be gone from its memory of the conversation.
   The state archive therefore still holds whatever the agent itself printed; it is uploaded to the
   owner's own object storage prefix and read only by a resume.
+- **Between two ticks the replay is not masked yet.** A client that connects within the 30 seconds after
+  a value was printed gets it in the replay; the uploads and every later replay do not.
 - **The live terminal is not masked.** The person watching it is the owner or someone the owner
   gave terminal input, and either can read `~/.secrets` from that terminal anyway. A collaborator
   with terminal input can read everything the pod holds; the sharing dialog has to say so.
