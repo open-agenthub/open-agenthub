@@ -303,6 +303,8 @@ public class SkillLibraryMcpServiceTests
         Assert.Contains("search_skills", instructions);
         // A large script was the reason uploads were skipped; the instructions say it is not one.
         Assert.Contains("never have to travel through your context", instructions);
+        // The skills are materialised locally; searching is for what the listing does not show.
+        Assert.Contains("already on disk", instructions);
     }
 
     [Fact]

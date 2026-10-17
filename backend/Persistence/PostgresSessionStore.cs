@@ -53,6 +53,7 @@ public sealed class SessionRecord
     public string? ClaudeSessionId { get; init; }
     /// <summary>Pending | Running | Succeeded | Failed | Scheduled.</summary>
     public string Status { get; set; } = "Pending";
+    public string? FailureReason { get; set; }
     public bool QuestionPending { get; set; }
     /// <summary>Custom container image (null = default agent image).</summary>
     public string? Image { get; set; }
@@ -99,6 +100,7 @@ public interface ISessionStore
     Task<SessionRecord?> GetByCallbackTokenAsync(string token, CancellationToken ct = default);
     Task<IReadOnlyList<SessionRecord>> ListAsync(string owner, CancellationToken ct = default);
     Task UpdateStatusAsync(string id, string status, CancellationToken ct = default);
+    Task SetFailureReasonAsync(string id, string? reason, bool terminal, CancellationToken ct = default) => Task.CompletedTask;
     Task SetQuestionPendingAsync(string id, bool pending, CancellationToken ct = default);
     /// <summary>
     /// Attaches the session to a provider account. A column update rather than an Upsert of the
@@ -204,6 +206,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS git_pat_ids TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS resolved_credential_id TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_failover TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS failure_reason TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_ids TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
@@ -218,16 +221,17 @@ public sealed class PostgresSessionStore : ISessionStore
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
                                   mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at,
                                   auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids,
-                                  resolved_credential_id, account_failover, secret_ids)
+                                  resolved_credential_id, account_failover, failure_reason, secret_ids)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now(),
                     @autoDeleteAfter, @autoDeleteFrom, @lastActivity, @convertedFrom, @gitPatIds,
-                    @resolvedCredentialId, @accountFailover, @secretIds)
+                    @resolvedCredentialId, @accountFailover, @failureReason, @secretIds)
             ON CONFLICT (id) DO UPDATE SET
                 resolved_credential_id = EXCLUDED.resolved_credential_id,
                 account_failover = EXCLUDED.account_failover,
+                failure_reason = EXCLUDED.failure_reason,
                 auto_delete_after_seconds = EXCLUDED.auto_delete_after_seconds,
                 auto_delete_from = EXCLUDED.auto_delete_from,
                 -- The stored touch wins: an edit reads the record, changes a field and writes it
@@ -275,6 +279,15 @@ public sealed class PostgresSessionStore : ISessionStore
         await using var r = await cmd.ExecuteReaderAsync(ct);
         while (await r.ReadAsync(ct)) list.Add(Map(r));
         return list;
+    }
+
+    public async Task SetFailureReasonAsync(string id, string? reason, bool terminal, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET failure_reason=@reason, status=CASE WHEN @terminal THEN 'Failed' ELSE status END WHERE id=@id");
+        cmd.Parameters.AddWithValue("id", id);
+        cmd.Parameters.AddWithValue("reason", (object?) (reason is null ? null : AgentHub.Api.Services.SessionStartupFailure.Redact(reason)) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("terminal", terminal);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task UpdateStatusAsync(string id, string status, CancellationToken ct = default)
@@ -379,7 +392,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, secret_ids FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -405,6 +418,7 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("openClawApiKeySource", (object?)r.OpenClawApiKeySource?.ToString() ?? DBNull.Value);
         cmd.Parameters.AddWithValue("policy", NpgsqlTypes.NpgsqlDbType.Jsonb, (object?)r.AgentPolicyJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("status", r.Status);
+        cmd.Parameters.AddWithValue("failureReason", (object?)(r.FailureReason is null ? null : AgentHub.Api.Services.SessionStartupFailure.Redact(r.FailureReason)) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("qp", r.QuestionPending);
         cmd.Parameters.AddWithValue("tok", r.CallbackToken);
         cmd.Parameters.AddWithValue("image", (object?)r.Image ?? DBNull.Value);
@@ -473,6 +487,7 @@ public sealed class PostgresSessionStore : ISessionStore
         GitPatIdsJson = r.IsDBNull(36) ? null : r.GetString(36),
         ResolvedCredentialId = r.IsDBNull(37) ? null : r.GetString(37),
         AccountFailover = r.IsDBNull(38) ? null : r.GetString(38),
-        SecretIdsJson = r.IsDBNull(39) ? null : r.GetString(39)
+        FailureReason = r.IsDBNull(39) ? null : r.GetString(39),
+        SecretIdsJson = r.IsDBNull(40) ? null : r.GetString(40)
     };
 }

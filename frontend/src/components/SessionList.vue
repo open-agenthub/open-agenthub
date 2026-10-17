@@ -12,6 +12,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
     <span class="dot" :class="{ ask: s.questionPending }" :style="{ background: statusStyle(s).color }"></span>
     <div class="info">
       <div class="title">{{ s.title }}</div>
+      <div v-if="s.failureReason" class="startup-failure" data-session-failure>{{ s.failureReason }}</div>
       <div v-if="s.description" class="desc" data-session-description>{{ s.description }}</div>
       <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · ⌛ {{ formatRemaining(s.expiresAt) }}</span></div>
     </div>
@@ -26,6 +27,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
   </li><li v-if="!sessions.length" class="none">No sessions yet.</li></ul>
 </template>
 <style scoped>
+.startup-failure { color: var(--danger, #e87979); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 .list { list-style: none; margin: 0; padding: 0 0 4px; }
 .list li { display: flex; align-items: flex-start; gap: 9px; padding: 8px 6px 8px 8px; border-radius: 9px; margin-bottom: 1px; cursor: pointer; }
 .list li:hover { background: var(--hover); }

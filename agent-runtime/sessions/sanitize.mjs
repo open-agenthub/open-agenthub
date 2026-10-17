@@ -1,6 +1,6 @@
 /** Orchestration-safe SessionInfo fields for MCP tool responses. Never includes secrets. */
 const SAFE_KEYS = [
-  'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
+  'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status', 'failureReason',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
   'createdAt', 'hasMcp', 'autoApprove',
   // The self-deletion setting and the deadline it yields (docs/session-expiry.md).

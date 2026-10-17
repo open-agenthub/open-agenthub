@@ -37,6 +37,10 @@ public interface ISessionMessageStore
     Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default);
     /// <summary>Recent messages of the session (newest first), delivered or not — read-only view for the UI.</summary>
     Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default);
+    /// <summary>Owner-bound history uses a timestamp/id keyset so new arrivals do not shift later pages.</summary>
+    Task<IReadOnlyList<SessionMessageRecord>> ListPageAsync(string owner, string toSessionId,
+        MessagePageCursor? before, int limit, CancellationToken ct = default)
+        => throw new NotSupportedException();
     /// <summary>Marks one message delivered by a push (<see cref="MessageDeliveryVia.Injected"/> or
     /// <see cref="MessageDeliveryVia.Mod"/>), so the inbox never hands it out a second time.
     /// A message the inbox already took keeps its first delivery.</summary>
@@ -69,6 +73,8 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
             );
             CREATE INDEX IF NOT EXISTS idx_session_messages_inbox
                 ON session_messages(to_session_id, delivered_at);
+            CREATE INDEX IF NOT EXISTS idx_session_messages_history
+                ON session_messages(owner, to_session_id, created_at DESC, id COLLATE "C" DESC);
             ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS priority BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS interrupt BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS delivered_via TEXT;
@@ -125,6 +131,28 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
             $"SELECT {Columns} FROM session_messages WHERE to_session_id = @to ORDER BY created_at DESC LIMIT @limit");
         cmd.Parameters.AddWithValue("to", toSessionId);
         cmd.Parameters.AddWithValue("limit", limit);
+        return await ReadAllAsync(cmd, ct);
+    }
+
+    public async Task<IReadOnlyList<SessionMessageRecord>> ListPageAsync(
+        string owner, string toSessionId, MessagePageCursor? before, int limit, CancellationToken ct = default)
+    {
+        // A timestamp alone loses messages created together; the id breaks ties, and keyset
+        // paging keeps newly arriving messages from shifting the next page underneath a reader.
+        await using var cmd = _db.CreateCommand($"""
+            SELECT {Columns} FROM session_messages
+            WHERE owner = @owner AND to_session_id = @to
+              {(before is null ? "" : "AND (created_at, id COLLATE \"C\") < (@created, @id COLLATE \"C\")")}
+            ORDER BY created_at DESC, id COLLATE "C" DESC LIMIT @limit
+            """);
+        cmd.Parameters.AddWithValue("owner", owner);
+        cmd.Parameters.AddWithValue("to", toSessionId);
+        cmd.Parameters.AddWithValue("limit", limit);
+        if (before is not null)
+        {
+            cmd.Parameters.AddWithValue("created", before.CreatedAt);
+            cmd.Parameters.AddWithValue("id", before.Id);
+        }
         return await ReadAllAsync(cmd, ct);
     }
 

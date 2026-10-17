@@ -101,6 +101,31 @@ public class SessionMessageStorePostgresTests
         Assert.Null((await database.Sessions.GetAsync("alice", "s-1"))!.Description);
     }
 
+    [PostgreSqlFact]
+    public async Task Page_IsOwnerBound_StableAcrossTiesAndArrivals_AndNeverAcknowledges()
+    {
+        await using var database = await PostgresMessageDatabase.CreateAsync();
+        var at = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        foreach (var id in new[] { "a", "b", "c", "foreign" })
+            await database.Messages.AddAsync(new SessionMessageRecord
+            {
+                Id = id, Owner = id == "foreign" ? "bob" : "alice",
+                ToSessionId = "target", Body = id, CreatedAt = at
+            });
+        var first = await database.Messages.ListPageAsync("alice", "target", null, 2);
+        Assert.Equal(["c", "b"], first.Select(m => m.Id));
+        Assert.True(MessagePageCursor.TryParse(MessagePageCursor.Encode(first[^1]), out var cursor));
+        await database.Messages.AddAsync(new SessionMessageRecord
+        {
+            Id = "new", Owner = "alice", ToSessionId = "target", Body = "new", CreatedAt = at.AddSeconds(1)
+        });
+        var second = await database.Messages.ListPageAsync("alice", "target", cursor, 2);
+        Assert.Equal("a", Assert.Single(second).Id);
+        Assert.All(first.Concat(second), m => Assert.Null(m.DeliveredAt));
+        Assert.Equal(5, (await database.Messages.TakeUndeliveredAsync("target", 10)).Count);
+        Assert.Empty(await database.Messages.ListPageAsync("alice", "other", null, 2));
+    }
+
     private static SessionMessageRecord Message(string id, string? from = "reviewer",
         string to = "target", string body = "please review MR 42") => new()
     {

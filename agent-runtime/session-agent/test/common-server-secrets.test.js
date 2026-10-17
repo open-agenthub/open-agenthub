@@ -62,7 +62,7 @@ test('common transport uploads the transcript file as before when there is nothi
   harness.intervals[0].callback();
   await tick();
 
-  const curl = harness.commands.find(c => c.file === 'curl');
+  const curl = harness.commands.find(c => c.file === 'curl' && c.args.includes('https://storage.invalid/transcript'));
   assert.deepEqual(curl.args.slice(-3), ['-T', transcript, 'https://storage.invalid/transcript']);
   assert.equal(harness.pipeSpawns.some(s => s.cmd === 'curl'), false);
 });

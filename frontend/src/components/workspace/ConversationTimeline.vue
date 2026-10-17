@@ -71,7 +71,7 @@ watch([() => props.items, query], async () => {
 </template>
 
 <style scoped>
-.conversation { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; }
+.conversation { position: relative; display: flex; flex: 1; flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; }
 .conversation-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; color: var(--muted-3); font-size: 11px; }
 .conversation-toolbar input { width: min(240px, 55%); border: 1px solid transparent; background: transparent; padding: 5px 8px; font-size: 12px; }
 .conversation-toolbar input:focus { border-color: var(--border-2); background: var(--panel); }

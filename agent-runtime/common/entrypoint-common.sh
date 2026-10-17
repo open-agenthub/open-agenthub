@@ -121,3 +121,25 @@ fi
 # which its entrypoint writes under $HOME (verified with `codex mcp list` and
 # `cursor-agent mcp list`, the latter naming its locations in the error itself).
 # Claude's central equivalent is written by claude/mcp-config.mjs.
+
+# Materializes the user's skill library (own + shared + project) into ~/.claude/skills; the
+# session agent keeps pulling it while the session runs (common/skills.js, server.js). Called by
+# each runtime's entrypoint after the state restore above, so skills removed from the library
+# since the last run are cleaned up via the manifest. --link-agents adds ~/.agents/skills, the
+# directory Codex, Cursor and OpenClaw read instead (docs/skill-library-sync.md).
+sync_skill_library() {
+  if [ "${1:-}" = "--link-agents" ]; then
+    node "$RUNTIME/common/skills.js" --link-agents \
+      || echo "[entrypoint] WARN: could not link ~/.agents/skills - continuing."
+  fi
+  [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ] || return 0
+  if node "$RUNTIME/common/skills.js" --pull; then
+    echo "[entrypoint] Skills synced."
+  else
+    echo "[entrypoint] WARN: skills sync failed - continuing without library skills."
+  fi
+  # Upward sync: skills created inside earlier runs of this session (restored from the state
+  # archive, unmanaged by the hub) are imported into the library.
+  node "$RUNTIME/common/skills-sync-up.js" \
+    || echo "[entrypoint] WARN: local skill import failed - continuing."
+}

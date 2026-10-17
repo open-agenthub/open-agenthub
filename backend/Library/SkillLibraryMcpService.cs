@@ -116,8 +116,14 @@ public sealed class SkillLibraryMcpService
                 "This AgentHub instance keeps a persistent, versioned library of agent skills " +
                 "(SKILL.md documents, optionally with helper scripts and other files). Use it " +
                 "proactively, without waiting to be asked:\n" +
-                "- BEFORE starting a non-trivial task, call search_skills — a proven runbook, " +
-                "checklist or script for it may already exist.\n" +
+                "- The library is already on disk: its skills are materialised into your skill " +
+                "directory (~/.claude/skills, which Codex, Cursor and OpenClaw read as " +
+                "~/.agents/skills) and kept in sync while the session runs, so they are listed " +
+                "to you like any local skill — use them when one matches. Read a listed skill's " +
+                "SKILL.md directly; no tool call needed.\n" +
+                "- BEFORE starting a non-trivial task, call search_skills when nothing listed " +
+                "fits — it searches by meaning, and finds a runbook, checklist or script under " +
+                "words you would not have guessed.\n" +
                 "- AFTER you worked out a reusable procedure, fixed something in a non-obvious " +
                 "way, or wrote a helper script worth keeping, save it with upload_skill (or " +
                 "update the existing skill) so future sessions benefit. Offer this to the user " +
@@ -126,8 +132,9 @@ public sealed class SkillLibraryMcpService
                 "path on disk and download them straight back to disk. A large script is no " +
                 "reason to skip the upload.\n" +
                 "- Skills you create as directories under ~/.claude/skills are also picked up " +
-                "automatically when the session ends, but upload_skill makes them available " +
-                "immediately and lets you add a change comment.\n" +
+                "automatically within a minute and when the session ends, but upload_skill " +
+                "lets you add a change comment. A library skill you edit in place is kept as " +
+                "you left it rather than overwritten by the sync; upload_skill the edit to share it.\n" +
                 "Every save creates a new version; nothing is lost — old versions can be listed " +
                 "and restored. Uploads are scoped to this session's project when it has one, " +
                 "otherwise to the owner's personal library."

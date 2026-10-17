@@ -577,7 +577,10 @@ public static class SessionDuplication
             Description = source.Description,
             ProjectId = request.ProjectId,
             Mode = source.Mode,
-            UiMode = source.UiMode,
+            // A copy is a new session, and new sessions run on the PTY (#114): copying a chat
+            // session's headless transport would hand the copy a session without a terminal,
+            // where the CLI's /login and menus cannot be reached.
+            UiMode = SessionUiMode.Terminal,
             Repos = Deserialize<List<RepoRef>>(source.ReposJson),
             RepoUrl = source.RepoUrl,
             Prompt = source.Prompt,
@@ -653,6 +656,7 @@ public record SessionInfo
     public string? McpConfigJson { get; init; }
     /// <summary>Catalog MCP servers included in this session.</summary>
     public IReadOnlyList<string> McpServerIds { get; init; } = Array.Empty<string>();
+    public string? FailureReason { get; init; }
     public required string Phase { get; init; }       // Pending | Running | Paused | Succeeded | Failed | Scheduled
     public string? PodIp { get; init; }
     public DateTime CreatedAt { get; init; }

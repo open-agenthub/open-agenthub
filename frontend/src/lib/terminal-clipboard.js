@@ -35,7 +35,39 @@ function isCopyShortcut(event, hasSelection) {
   return event.shiftKey || hasSelection
 }
 
-export function attachTerminalClipboard(term, { allowOsc52 = true, write = defaultWrite } = {}) {
+// Ctrl+V used to reach the PTY as ^V (0x16). Claude Code and Codex bind that to "paste an
+// image from the system clipboard" and look for one inside the pod, where there is none
+// (Codex reports a display-server failure, Claude Code "No image found"); the person's own
+// clipboard was never read. Returning false without preventDefault stops xterm from encoding
+// the key, so the browser runs its native paste on xterm's textarea and xterm sends the text as
+// bracketed paste — the path the context menu and Shift+Insert already took. A keypress some
+// browsers fire for Ctrl+V is let through the same way: xterm cancels keypress events it
+// handles, and cancelling that one would cancel the paste. navigator.clipboard.readText is
+// deliberately not used: depending on the browser it asks for a permission or an extra
+// "Paste" confirmation, and it does not exist outside a secure context; the native paste
+// needs none of that, so there is no refused permission to handle.
+function isPasteShortcut(event) {
+  if (event.key?.toLowerCase() !== 'v' || event.altKey) return false
+  return !!(event.ctrlKey || event.metaKey)
+}
+
+// A paste without text (an image, a copied file) has nothing the PTY could carry, and xterm
+// would send an empty bracketed paste that both CLIs silently ignore. The paste is dropped,
+// and when it held a file the person is pointed at Files: its upload works for every agent,
+// which reads the file through the provider-neutral files MCP, whereas Workspace attachments
+// exist only on the streaming transport. docs/terminal-clipboard.md has why the terminal
+// does not upload the image itself.
+function pasteText(clipboardData) {
+  return clipboardData?.getData('text/plain') || ''
+}
+
+export function pasteHasFile(clipboardData) {
+  return Array.from(clipboardData?.items || []).some(item => item.kind === 'file')
+}
+
+export const FILE_PASTE_NOTICE = 'Images and files cannot be pasted into the terminal. Upload them in Files, where the agent can read them.'
+
+export function attachTerminalClipboard(term, { allowOsc52 = true, write = defaultWrite, host, notify = () => {} } = {}) {
   const copy = text => {
     if (!text) return
     Promise.resolve()
@@ -50,12 +82,27 @@ export function attachTerminalClipboard(term, { allowOsc52 = true, write = defau
     })
     : undefined
 
+  // Capture on the host runs before xterm's own listener on its textarea inside it.
+  const onPaste = event => {
+    if (term.options?.disableStdin || pasteText(event.clipboardData)) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (pasteHasFile(event.clipboardData)) notify(FILE_PASTE_NOTICE)
+  }
+  host?.addEventListener('paste', onPaste, true)
+
   term.attachCustomKeyEventHandler?.(event => {
+    if (isPasteShortcut(event)) return false
     if (!isCopyShortcut(event, term.hasSelection?.())) return true
     event.preventDefault?.()
     copy(term.getSelection?.())
     return false
   })
 
-  return { dispose: () => osc?.dispose?.() }
+  return {
+    dispose: () => {
+      osc?.dispose?.()
+      host?.removeEventListener('paste', onPaste, true)
+    }
+  }
 }

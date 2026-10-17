@@ -154,8 +154,9 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
         return child;
       },
       WebSocketServer: FakeWebSocketServer,
-      execFile(file, args, callback) {
-        commands.push({ file, args });
+      execFile(file, args, options, callback) {
+        if (typeof options === 'function') { callback = options; options = undefined; }
+        commands.push(options ? { file, args, options } : { file, args });
         if (harnessOptions.deferExec) return void pendingExec.push(callback);
         const result = harnessOptions.execResult?.(args[1], file) ?? {};
         callback(result.error, result.stdout);
@@ -177,10 +178,18 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
         },
         statSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) {
-            return { size: harnessOptions.files[file].length, mtimeMs: harnessOptions.mtimeMs || 1 };
+            return { size: Buffer.byteLength(harnessOptions.files[file]), mtimeMs: harnessOptions.mtimeMs || 1 };
           }
           throw new Error('ENOENT: ' + file);
-        }
+        },
+        openSync(file) {
+          if (harnessOptions.files && file in harnessOptions.files) return file;
+          throw new Error('ENOENT: ' + file);
+        },
+        readSync(fd, buffer, offset, length, position) {
+          return Buffer.from(harnessOptions.files[fd]).copy(buffer, offset, position, position + length);
+        },
+        closeSync() {}
       },
       fetch(url, options = {}) {
         requests.push({ url, options });
@@ -202,6 +211,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       process: processLike,
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
       attachmentMaterializer: materializer,
+      pullSkills: harnessOptions.pullSkills,
       setTimeout(callback, ms) {
         if (harnessOptions.setTimeout) return harnessOptions.setTimeout(callback, ms);
         callback();

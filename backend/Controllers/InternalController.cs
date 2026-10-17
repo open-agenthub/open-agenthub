@@ -364,15 +364,40 @@ public sealed class InternalController : ControllerBase
 
     /// <summary>
     /// Skills accessible to the session owner (own + shared while licensed),
-    /// fetched by the entrypoint and materialized under ~/.claude/skills.
+    /// fetched by the entrypoint and materialized under ~/.claude/skills, then polled by the
+    /// session agent while the session runs.
     /// </summary>
     [HttpGet("skills")]
     public async Task<IActionResult> Skills(string id, CancellationToken ct)
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
+        // Every running session polls this. Without the validator each poll would read every
+        // SKILL.md and every helper file from the store and ship them all, to find nothing new.
+        var etag = $"\"{await _library.SkillPayloadsVersionAsync(rec.Owner, rec.ProjectId, ct)}\"";
+        Response.Headers.ETag = etag;
+        if (Request.Headers.IfNoneMatch.Any(v => v == etag))
+            return StatusCode(StatusCodes.Status304NotModified);
         var skills = await _library.ListSkillPayloadsAsync(rec.Owner, rec.ProjectId, ct);
         return Ok(new { skills });
+    }
+
+    /// <summary>
+    /// Re-mints the pod's upload urls for its state archive, scrollback and transcript. The ones
+    /// in its environment expire after twelve hours; the session agent asks for new ones well
+    /// before that. Empty strings when no object storage is configured, as at pod start.
+    /// </summary>
+    [HttpPost("artifact-urls")]
+    public async Task<IActionResult> ArtifactUrls(string id, CancellationToken ct)
+    {
+        if (!Request.Headers.TryGetValue("X-Agent-Token", out var tok)) return Unauthorized();
+        var urls = await _svc.RefreshArtifactUrlsAsync(id, tok!, ct);
+        return urls is null ? Unauthorized() : Ok(new
+        {
+            statePutUrl = urls.StatePutUrl,
+            scrollbackPutUrl = urls.ScrollbackPutUrl,
+            transcriptPutUrl = urls.TranscriptPutUrl
+        });
     }
 
     /// <summary>Mints a presigned PUT URL so the agent can upload an artifact to S3.</summary>

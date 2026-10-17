@@ -352,3 +352,6 @@ Against the pinned CLI versions, not from memory: Claude Code 2.1.283, Codex 0.1
   `base + "\n\n" + append` assembly. Neither CLI offers an offline way to dump its assembled prompt,
   so these two are verified at source level rather than by observing a live session. Worth
   confirming against a running instance before relying on them.
+
+Read-only project selection, MCP catalog, inbox history and Workspace conversation routes are
+specified in [token-read-api.md](token-read-api.md), including paging and access decisions.

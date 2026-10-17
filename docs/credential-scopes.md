@@ -173,3 +173,23 @@ Restricted tokens receive 403 `git_oauth_not_allowed` on both routes, including 
 format has no OAuth-provider permission, so exposing connected project names to restricted
 tokens would silently broaden their access. Use the interactive JWT picker for those tokens;
 these endpoints neither connect nor disconnect an OAuth provider.
+
+## Read-only discovery and conversation
+
+Credential scopes do not narrow `GET /api/remote/projects`, `projects/{id}`, or
+`sessions/{id}/messages`: they return the same owned metadata/history as an unrestricted token,
+never another owner's projects or inbox. They do not select or release credentials. Binding these
+reads to the account a session happens to use was rejected for the same reason as resume checks:
+the owner can change that account independently of the token.
+
+`GET /api/remote/sessions/{id}/conversation` follows the same policy for owned sessions and uses
+the existing licensed user-share resolver for another owner's session. Only a current grant can
+cross ownership; a personal token cannot substitute for a secret share link. Denying all shared
+reads would disagree with the existing sharing API; accepting arbitrary session ids would bypass
+revocation and licence expiry.
+
+`GET /api/remote/mcp-servers` uses the same library-access service as the interactive picker and
+returns only ids and names. Credential scopes have no MCP-entry grant and do not narrow this
+metadata: creating a session with the same token already accepts accessible MCP library ids.
+Unlike OAuth discovery, this does not exercise an ungranted upstream credential. A separate catalog
+policy was rejected because it could drift from attach validation and expose revoked shares.

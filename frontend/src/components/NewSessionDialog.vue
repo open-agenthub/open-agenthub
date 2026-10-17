@@ -119,8 +119,10 @@ async function submit() {
       title: form.value.title || 'Session',
       description: form.value.description.trim() || null,
       mode: form.value.mode,
-      // This existing API field selects the runtime transport, not the viewer's surface.
-      uiMode: isInteractiveWorkspace.value && form.value.agent === 'Claude' ? 'chat' : 'terminal',
+      // The runtime transport, not the surface: always the PTY. Chat mode ran Claude headless,
+      // which took the CLI's own /login and menus and the Terminal tab with it (#114); the
+      // preference only picks the view that opens first.
+      uiMode: 'terminal',
       ...agentPayload(form.value),
       // Null = the default account, resolved at each start; an id pins the session to that login.
       credentialId: form.value.credentialId || null,

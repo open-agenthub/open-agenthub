@@ -30,10 +30,27 @@ creation choice applies to that opening without replacing the saved preference. 
 state, not a setting shared with other people viewing the session.
 
 The old standalone chat surface and its alternate layout are removed. `WorkspaceStream.vue`
-renders streaming sessions only in Workspace. The existing API value `uiMode: "chat"` remains
-as a transport contract for interactive Claude sessions and for previously saved sessions;
-other agents and automated sessions use terminal transport with either viewer surface. Keeping
-that contract avoids stranding existing session history and attachment delivery receipts.
+renders streaming sessions only in Workspace.
+
+**Every new session runs on the PTY (#114).** The web app used to create an interactive Claude
+session with the Workspace preference as `uiMode: "chat"`: Claude headless with streamed JSON and
+no terminal. That was the live Workspace, but it cost the CLI itself — `/login` answered "login
+isn't available in this environment" (verified against Claude Code 2.1.287 in both modes: on the
+PTY the same `/login`, sent through the agent socket as the composer sends it, opens the CLI's
+login menu), and the Terminal tab and agent drawer did not exist. There is no provider login flow
+in the hub, so the CLI's own has to stay reachable. New sessions, conversions and copies are now
+always `terminal`; the preference only picks the first view, and Workspace and Terminal switch in
+every interactive session. The live following chat mode gave comes from the pod's transcript
+instead (#111, `transcripts.md`).
+
+The rejected alternative was keeping chat mode and building a login flow and menu rendering into
+the stream-json transport: the CLI does not offer its interactive commands there, so every one
+would have had to be re-implemented and kept in step with each CLI release.
+
+The API value `uiMode: "chat"` still exists. Saved chat sessions keep it, and keep starting
+headless on resume — switching a running conversation's transport would strand its attachment
+delivery receipts — so they gain no terminal; a copy of one does. An API or MCP caller that asks
+for `chat` explicitly still gets it.
 
 Claude Workspace sessions keep their streaming JSON connection, attachment delivery receipts,
 and native interrupt command. Compact activity rows, copy/quote actions, and a docked composer
@@ -41,9 +58,10 @@ now form their only conversation surface. Existing streaming sessions open in Wo
 when the saved preference is Terminal, because their process speaks JSON rather than a CLI TUI.
 
 Terminal-mode sessions use the native conversation API introduced by the transcript work
-(see `transcripts.md`). The workspace polls the saved conversation every four seconds while
-visible; runtime uploads still happen about every thirty seconds. This is a saved conversation,
-not token streaming. Cursor, OpenClaw and OpenCode, and older sessions without native history,
+(see `transcripts.md`). The workspace polls it every second while visible, and for a running
+session the hub reads the transcript from the pod by byte offset, so a finished message shows
+within one to two seconds of the terminal (#111). This follows the CLI's transcript file, which it
+writes per message, not token streaming. Cursor, OpenClaw and OpenCode, and older sessions without native history,
 show the cleaned terminal fallback; OpenCode keeps its conversation in its own database under
 `~/.opencode`, not in a JSONL file the reader could serve (see `transcripts.md`). Finished conversations drain all available pages too.
 
@@ -52,9 +70,72 @@ multiline prompt, and Enter is sent after the existing CLI paste delay. The pend
 cancelled on a disconnect or session change. A send completing means bytes were sent to the
 socket; terminal protocols provide no provider receipt. If the connection changes after paste,
 the draft remains and the error asks the person to check the terminal before retrying. Stop
-sends Ctrl+C to that same agent connection. Login and interactive CLI menus remain available
-in the drawer. Terminal-mode attachments are not offered because they do not have chat-mode
-delivery receipts.
+sends Ctrl+C to that same agent connection. Terminal-mode attachments are not offered because
+they do not have chat-mode delivery receipts.
+
+### The agent CLI's own menus (#112)
+
+Slash commands typed in the composer reach the CLI exactly as typed in the terminal: verified
+with Claude Code 2.1.287, where the composer's paste-and-Enter of `/login` and `/model` opened
+the same menus as typing them. What was missing is that the Workspace did not show those menus,
+so a person working there did not see that the agent waited for a choice.
+
+The view now reads the agent terminal's rendered screen — the xterm buffer the drawer would show,
+kept current while the drawer is closed — a moment after output pauses (`lib/cli-menu.js`). A
+numbered list with the CLI's cursor in it, or above a dialog footer such as *Esc to cancel* or
+*Press enter to confirm*, is a menu; a numbered list in the agent's reply has neither and is left
+alone. A prompt for typed input inside such a dialog (*Paste code here if prompted >*) counts too.
+When one appears, the agent drawer opens with a notice, *The agent is showing a menu* and the
+dialog's question; a menu's options are buttons. A button sends the keys a person would press:
+arrows from the highlighted option, then Enter, one key per message, and *Cancel* sends Esc. When
+the menu goes, a drawer the view opened for it closes again; one the person opened or took over
+stays. While a menu is open the drawer is taller: a CLI fits its dialog into the rows it has, and
+Claude Code in the 14 rows of the normal drawer scrolled its login menu down to the one
+highlighted entry. Such a cut list is marked as partial and its notice points at the terminal.
+
+While the CLI shows one of these screens, the composer refuses to send and keeps the draft:
+its Enter would pick whatever option is highlighted, or submit the text as a login code. That
+happened in testing: a `/login` sent into an open login menu chose the first option.
+
+Verified end to end in Chromium against the real CLI, through this repository's session agent:
+`/login` from the composer, the notice with the three login methods, the second option chosen by
+button (the CLI opened its next step, which the notice followed), a composer message refused
+while the menu was open, and Cancel closing menu and drawer.
+
+What is rendered natively and what falls back to the drawer, per agent:
+
+| Agent | Permission requests | Other menus and prompts |
+|---|---|---|
+| Claude | Native approvals in the Workspace (hook) | Detected and offered as buttons: verified for `/login`, its sub-steps and `/model`; a step that wants typed input (the login code) opens the drawer |
+| Codex | Native approvals (managed hook) | Same screen detection; its selection lists are numbered with a cursor, but this was not run against the Codex CLI here |
+| OpenCode | Native approvals (policy plugin) | Its TUI dialogs are not numbered lists and are not detected: the *Agent terminal* button, as before |
+| Cursor | Configured at start (`--force`), no per-call question | Same screen detection, not verified against the CLI |
+| OpenClaw | Asked in its own terminal only (no hook) | Same screen detection, not verified against the CLI |
+
+Rejected: a structured signal from each CLI. None of them reports its own menus — Claude Code's
+hooks cover permission and notification events, not `/login` or `/model` — so the only signal
+common to all five is the screen. Also rejected: pattern-matching the raw byte stream in the
+session agent. A TUI redraws in place, so the stream says that a menu was drawn but not whether it
+is still there; the rendered screen says both, and the browser already has it.
+
+**A message written while the session starts is queued (#115).** Send used to stay disabled until
+the agent socket connected, while the person could already type. The composer now accepts a
+message while the session is Pending (starting or resuming) or the socket is not connected yet,
+shows it as *Queued · will be sent when the agent is ready* with Edit and Withdraw, and sends the
+queue in order once the socket is connected — one message at a time, the next only after the
+previous was submitted, because two pastes interleaved in the CLI's input box would arrive as one
+turn. "Ready" is the connected socket and nothing later: verified against Claude Code 2.1.287,
+where the composer's paste-and-Enter sent the instant the socket opened, before the CLI had drawn
+anything, still became the first user turn — the PTY holds the bytes until the CLI reads them.
+Waiting for a provider-specific "prompt drawn" signal would have meant parsing every CLI's screen
+for a guarantee the PTY already gives.
+
+Exactly once: a queued message leaves the queue only when its send resolved. A send that failed
+before writing anything (the socket dropped) is kept and retried on the next connect; one that
+failed after the paste may have reached the terminal goes back into the draft with the reason,
+since a retry could not tell whether it would be the second copy. When the session stops taking
+input without having started — it failed, or was stopped — the queue goes back into the draft.
+The queue is kept per session in memory, like drafts, so switching sessions does not lose it.
 
 Only connected, writable interactive sessions can use the terminal composer. Viewers get the
 conversation and read-only agent terminal; the shell stays owner-only. Read-only markup is
@@ -76,8 +157,8 @@ Three adjustments came with the merge:
 
 - **Continuing an autonomous run** offers *Open workspace* and *Open terminal* instead of main's
   *Open terminal* and *Open chat* (Claude only). The transport follows the New session rule
-  (`chat` for Claude in the Workspace, `terminal` otherwise) and the session opens on the
-  surface that was picked; see `session-mode-conversion.md`.
+  (always `terminal` since #114) and the session opens on the surface that was picked; see
+  `session-mode-conversion.md`.
 - **A failed history load is an error with Retry**, not main's "[no saved transcript]". In the
   former Transcript tab the two looked the same; in the Workspace an empty conversation over a running
   agent reads as "nothing happened yet", and a 503 must not say that.
