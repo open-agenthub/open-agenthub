@@ -229,7 +229,7 @@ describe('saved conversation in the Workspace', () => {
       mocks.api.getConversation.mockResolvedValue({ source: 'native', entries: [], text: '', offset: 1, nextOffset: 1, length: 1, running: true })
       mocks.api.getConversation.mockResolvedValueOnce({ ...nativePage([entry('first')]), running: true })
       const wrapper = mountView({ session: running })
-      await openTranscript(wrapper)
+      await openTranscript()
       const calls = () => mocks.api.getConversation.mock.calls.length
       const before = calls()
 

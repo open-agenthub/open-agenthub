@@ -33,10 +33,13 @@ public class LiveTranscriptReaderTests
         public readonly List<Uri> Requests = [];
         public void Append(string text) => File = [.. File, .. Encoding.UTF8.GetBytes(text)];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        // Async so each response is returned to the caller, which owns and disposes it, rather than
+        // wrapped in a Task the analyzer cannot follow.
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
+            await Task.Yield();
             Requests.Add(request.RequestUri!);
-            if (Status != HttpStatusCode.OK) return Task.FromResult(new HttpResponseMessage(Status));
+            if (Status != HttpStatusCode.OK) return new HttpResponseMessage(Status);
             Assert.Equal(Token, request.Headers.GetValues("X-Agent-Token").Single());
             var from = long.Parse(request.RequestUri!.Query.Split('=')[1]);
             var body = from >= File.Length ? [] : File[(int)from..];
@@ -44,7 +47,7 @@ public class LiveTranscriptReaderTests
             var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body[..whole]) };
             response.Headers.Add("X-Transcript-Size", File.Length.ToString());
             response.Headers.Add("X-Transcript-Next", (Math.Min(from, File.Length) + whole).ToString());
-            return Task.FromResult(response);
+            return response;
         }
     }
 
