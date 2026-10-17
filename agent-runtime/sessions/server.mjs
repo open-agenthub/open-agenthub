@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { SessionsBackendClient } from './client.mjs';
+import { registerContainerTools } from './containers.mjs';
 import { withCredentialSelection } from './credentials.mjs';
 import { withExpiry } from './expiry.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
@@ -180,6 +181,8 @@ register('agent_inbox', {
     + 'Reply with agent_send.',
   inputSchema: z.object({ waitSeconds: z.number().int().min(0).max(60).optional() })
 }, async ({ waitSeconds }) => text(await client.inbox(waitSeconds ?? 0)));
+
+if (process.env.AGENTHUB_CONTAINERS_ENABLED === '1') registerContainerTools(register, client);
 
 function safeError(error) {
   const message = error instanceof Error ? error.message : '';

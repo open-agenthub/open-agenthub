@@ -179,7 +179,9 @@ function skillProxyToml(env = process.env, nodeBin = process.execPath) {
 // PATH/RUNTIME must be forwarded explicitly or the server dies before initialize.
 const BUILTIN_SERVERS = [
   { name: 'agenthub_browser', dir: 'browser', flag: 'AGENTHUB_BROWSER_ENABLED', extraEnv: [] },
-  { name: 'agenthub_sessions', dir: 'sessions', flag: 'AGENTHUB_SPAWN_MCP_ENABLED', extraEnv: ['AGENTHUB_SESSION_ID'] },
+  // AGENTHUB_CONTAINERS_ENABLED decides whether the server registers the container tools
+  // (docs/session-containers.md); with the cleared environment they would never appear in Codex.
+  { name: 'agenthub_sessions', dir: 'sessions', flag: 'AGENTHUB_SPAWN_MCP_ENABLED', extraEnv: ['AGENTHUB_SESSION_ID', 'AGENTHUB_CONTAINERS_ENABLED'] },
   { name: 'agenthub_files', dir: 'files', flag: 'AGENTHUB_FILES_MCP_ENABLED', extraEnv: ['AGENTHUB_WORKDIR', 'AGENTHUB_FILE_ROOT'] },
   { name: 'agenthub_network', dir: 'network', flag: 'AGENTHUB_NETWORK_MCP_ENABLED', extraEnv: [] }
 ];
