@@ -42,8 +42,9 @@ when the saved preference is Terminal, because their process speaks JSON rather 
 Terminal-mode sessions use the native conversation API introduced by the transcript work
 (see `transcripts.md`). The workspace polls the saved conversation every four seconds while
 visible; runtime uploads still happen about every thirty seconds. This is a saved conversation,
-not token streaming. Cursor and OpenClaw, and older sessions without native history, show the
-cleaned terminal fallback. Finished conversations drain all available pages too.
+not token streaming. Cursor, OpenClaw and OpenCode, and older sessions without native history,
+show the cleaned terminal fallback; OpenCode keeps its conversation in its own database under
+`~/.opencode`, not in a JSONL file the reader could serve (see `transcripts.md`). Finished conversations drain all available pages too.
 
 The composer reuses the mounted agent terminal's WebSocket. Bracketed paste preserves a
 multiline prompt, and Enter is sent after the existing CLI paste delay. The pending Enter is
@@ -57,6 +58,32 @@ delivery receipts.
 Only connected, writable interactive sessions can use the terminal composer. Viewers get the
 conversation and read-only agent terminal; the shell stays owner-only. Read-only markup is
 still escaped before Markdown rendering. Tool content is text, never executable HTML.
+
+## Session features around both surfaces
+
+Everything main added to the session page while this branch was open — the provider-account
+picker with its usage-limit and automatic-failover notices, the ✉ message panel with its badge
+and priority/interrupt tiles and the "message this agent" form, the auto-delete expiry badge,
+the conversion card for a finished autonomous run, Files with download, and the browser
+companion with its clipboard — lives in the session bar, in the notices under it, or in
+`SessionWorkspace`, all of which wrap both surfaces. Nothing of it is part of the Terminal
+surface, so none of it had to be ported into the Workspace and it cannot fall out of step
+between the two. The alternative, a second copy of those controls inside the Workspace layout,
+would have given every later session feature two places to be wired up and two to forget.
+
+Three adjustments came with the merge:
+
+- **Continuing an autonomous run** offers *Open workspace* and *Open terminal* instead of main's
+  *Open terminal* and *Open chat* (Claude only). The transport follows the New session rule
+  (`chat` for Claude in the Workspace, `terminal` otherwise) and the session opens on the
+  surface that was picked; see `session-mode-conversion.md`.
+- **A failed history load is an error with Retry**, not main's "[no saved transcript]". In the
+  Transcript tab the two looked the same; in the Workspace an empty conversation over a running
+  agent reads as "nothing happened yet", and a 503 must not say that.
+- **The session title keeps at least 240 px.** The bar now holds the account picker, Files,
+  four tabs and the actions; with the title allowed to shrink to nothing, it was cut to its
+  first letter on a phone and to "Works…" at 1440 px. The controls wrap onto a second line
+  instead.
 
 ## Limits of this integration
 
@@ -80,6 +107,16 @@ interrupt, terminal/shell drawers, view and session draft retention, and mobile 
 Desktop, tablet, and phone layouts were checked, including a 390 × 667 viewport. This caught
 and corrected unbounded mobile transcript height and drafts lost on keyed view remounts.
 Draft text remains in memory across session navigation; reload/sign-out clears it.
+
+After the merge with main the same pass ran in the integrated browser with the fixture extended
+by main's features, all driven from the Workspace view: switching the provider account
+(confirmation, `PATCH …/credential`, notice) with the composer still in place; the ✉ badge
+counting priority, interrupt and plain messages, and a priority+interrupt message sent from the
+panel; a Files download (the name the app hands the browser is checked there, the bytes and the
+non-ASCII filename in a local Chromium under a UTF-8 locale, because over CDP the remote browser
+cannot save into this pod); the expiry badge and version label; an OpenCode session's Workspace;
+converting a finished autonomous Codex run into the Workspace; New session with five agents at
+1440 and 390 px without horizontal overflow; and the session bar at 390 px.
 
 This browser pass uses test responses, not a real model. A live provider/pod deployment remains
 a release check: the session container denies namespace creation and mounts, has read-only

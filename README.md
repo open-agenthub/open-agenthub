@@ -700,7 +700,7 @@ tool. Whether the conversation survives depends on the runtime:
 
 | Runtime | Converted to interactive | Keeps the conversation |
 |---|---|---|
-| Claude | terminal or chat pane | **yes** — same fixed session id, `--resume` |
+| Claude | Workspace or terminal | **yes** — same fixed session id, `--resume` |
 | Codex | TUI | **yes** — the thread id recorded in the state archive |
 | Cursor | TUI | no — new conversation in the restored workspace |
 | OpenClaw | TUI | no — new conversation in the restored workspace |

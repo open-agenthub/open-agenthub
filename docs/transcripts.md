@@ -107,7 +107,7 @@ surface falls back to the cleaned scrollback when there are none.
 - A chat session's scrollback *is* stream-json in the same line shape as the native file, so a chat
   session from before this change is parsed through the same reader instead of handing the remote
   API raw JSON. The terminal replay (`GET …/transcript`) is unchanged: the ended terminal pane and
-  the chat pane need the scrollback as it was.
+  Claude's streaming Workspace need the scrollback as it was.
 
 **What the reader skips, and why.** Claude's `isMeta` lines (command caveats, injected tool
 guidance) and `isSidechain` turns (sub-agents the main conversation already summarises); Codex's
@@ -129,11 +129,12 @@ implementations override them.
 
 A native page's `user` and `assistant` entries are what the person and the model wrote, and
 both write markdown: headings, lists, fenced code, tables, the occasional mermaid diagram. The
-tab renders those two roles through the same escape-first renderer the chat pane uses
+tab renders those two roles through the same escape-first renderer the Workspace uses
 (`lib/markdown.js`, diagrams via `lib/mermaid.js`), so a turn looks the same whether it is read
-live in the chat or later in the transcript. The styles for rendered markdown live in
-`style.css` for that reason — they used to be scoped to the chat pane, and a second copy would
-have drifted.
+live in the Workspace or later in the transcript. The styles for rendered markdown live in
+`style.css` under `.md` for that reason — they used to be scoped to the chat pane, and the
+workspace branch had grown a second global copy (`.workspace-markdown`) that was dropped when it
+was merged, before the two could drift.
 
 Tool calls, tool results and the scrollback fallback stay in a `<pre>`. A diff, a shell listing
 or a stack trace contains `*`, `_`, `#` and `|` in positions that are not markup, and the
