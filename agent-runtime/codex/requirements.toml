@@ -1,3 +1,8 @@
+# Session pods cannot replace the image-owned CLI; the hidden update popup would consume
+# the next Workspace message as confirmation and terminate the session. Requirements override
+# user, project and command-line configuration, including an explicit request to re-enable it.
+check_for_update_on_startup = false
+
 allow_managed_hooks_only = true
 
 [features]
