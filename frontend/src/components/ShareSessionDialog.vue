@@ -89,6 +89,9 @@ watch(() => props.session.id, reset)
     <LicenseGate v-if="licenseLock" class="gate" feature="Sharing sessions with other users" />
     <template v-if="licenseLock !== 'load'">
     <p class="note">Roles control terminal input. Session settings, shell access, projects, and sharing remain owner-only.</p>
+    <p class="note" data-share-secrets-note>Anyone with terminal input can read whatever this session holds, including the files in
+      <code>~/.secrets</code> and the secret environment variables it was given. Values are masked in stored
+      transcripts and chat messages, not in a live terminal.</p>
 
     <section>
       <div class="add-row"><input v-model="recipient" placeholder="Add people by username…" @keyup.enter="addPerson" /><select v-model="role" class="fit"><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button></div>
@@ -135,6 +138,7 @@ watch(() => props.session.id, reset)
 .gate { margin-bottom: 12px; }
 .note, .sub { color: var(--muted-2); font-size: 12px; line-height: 1.5; margin: 0 0 10px; }
 .sub { margin: 2px 0 0; }
+.note code { font-family: var(--mono); font-size: 11px; }
 .sect-title { font-weight: 600; font-size: 13px; color: var(--text); }
 section { margin-top: 6px; }
 section.bordered { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }

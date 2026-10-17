@@ -38,6 +38,7 @@ public sealed class PostgresProjectStore : IProjectStore
             );
             CREATE INDEX IF NOT EXISTS idx_projects_owner ON projects(owner);
             CREATE UNIQUE INDEX IF NOT EXISTS uq_projects_owner_name ON projects(owner, lower(name));
+            ALTER TABLE projects ADD COLUMN IF NOT EXISTS secret_ids TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -47,7 +48,7 @@ public sealed class PostgresProjectStore : IProjectStore
     {
         var projects = new List<ProjectInfo>();
         await using var cmd = _db.CreateCommand("""
-            SELECT id, name, color, sort_order FROM projects
+            SELECT id, name, color, sort_order, secret_ids FROM projects
             WHERE owner = @owner ORDER BY sort_order, name, id
             """);
         cmd.Parameters.AddWithValue("owner", owner);
@@ -59,7 +60,7 @@ public sealed class PostgresProjectStore : IProjectStore
     public async Task<ProjectInfo?> GetAsync(string owner, string id, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("""
-            SELECT id, name, color, sort_order FROM projects WHERE owner = @owner AND id = @id
+            SELECT id, name, color, sort_order, secret_ids FROM projects WHERE owner = @owner AND id = @id
             """);
         cmd.Parameters.AddWithValue("owner", owner);
         cmd.Parameters.AddWithValue("id", id);
@@ -72,14 +73,15 @@ public sealed class PostgresProjectStore : IProjectStore
         var id = Guid.NewGuid().ToString("n")[..12];
         var name = request.Name.Trim();
         await using var cmd = _db.CreateCommand("""
-            INSERT INTO projects (id, owner, name, color, sort_order)
+            INSERT INTO projects (id, owner, name, color, sort_order, secret_ids)
             VALUES (@id, @owner, @name, @color,
-                (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM projects WHERE owner = @owner))
-            RETURNING id, name, color, sort_order
+                (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM projects WHERE owner = @owner), @secretIds)
+            RETURNING id, name, color, sort_order, secret_ids
             """);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("owner", owner);
         cmd.Parameters.AddWithValue("name", name);
+        cmd.Parameters.AddWithValue("secretIds", (object?)Services.SessionSecretSelection.Serialize(request.SecretIds) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("color", (object?)request.Color ?? DBNull.Value);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         await reader.ReadAsync(ct);
@@ -93,15 +95,17 @@ public sealed class PostgresProjectStore : IProjectStore
                 name = COALESCE(@name, name),
                 color = COALESCE(@color, color),
                 sort_order = COALESCE(@sortOrder, sort_order),
+                secret_ids = COALESCE(@secretIds, secret_ids),
                 updated_at = now()
             WHERE owner = @owner AND id = @id
-            RETURNING id, name, color, sort_order
+            RETURNING id, name, color, sort_order, secret_ids
             """);
         cmd.Parameters.AddWithValue("owner", owner);
         cmd.Parameters.AddWithValue("id", id);
         cmd.Parameters.AddWithValue("name", (object?)(request.Name?.Trim()) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("color", (object?)request.Color ?? DBNull.Value);
         cmd.Parameters.AddWithValue("sortOrder", (object?)request.SortOrder ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("secretIds", (object?)Services.SessionSecretSelection.Serialize(request.SecretIds) ?? DBNull.Value);
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         return await reader.ReadAsync(ct) ? Map(reader) : null;
     }
@@ -132,5 +136,6 @@ public sealed class PostgresProjectStore : IProjectStore
         reader.GetString(0),
         reader.GetString(1),
         reader.IsDBNull(2) ? null : reader.GetString(2),
-        reader.GetInt32(3));
+        reader.GetInt32(3),
+        Services.SessionSecretSelection.ParseProject(reader.IsDBNull(4) ? null : reader.GetString(4)));
 }

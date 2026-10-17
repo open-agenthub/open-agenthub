@@ -26,6 +26,9 @@ public sealed record ApiTokenScope
     public List<string>? GitPats { get; init; }
     /// <summary>Whether an API-key session may be created; null = no.</summary>
     public bool? ApiKeys { get; init; }
+    /// <summary>Allowed session secret ids (docs/session-secrets.md), or <c>["*"]</c>; null = none,
+    /// like every other part of a scope.</summary>
+    public List<string>? Secrets { get; init; }
 
     public bool AllowsApiKeys => ApiKeys == true;
 
@@ -46,6 +49,10 @@ public sealed record ApiTokenScope
 
     public bool AllowsGitPat(string id) => AllowsAllGitPats || GitPats?.Contains(id) == true;
 
+    public bool AllowsAllSecrets => Secrets?.Contains(Any) == true;
+
+    public bool AllowsSecret(string id) => AllowsAllSecrets || Secrets?.Contains(id) == true;
+
     /// <summary>
     /// Checks a scope a user is storing against what they have right now: every id must name a
     /// stored account or PAT, agent names are matched case-insensitively and stored canonically.
@@ -53,7 +60,8 @@ public sealed record ApiTokenScope
     /// as a restriction that silently allows nothing because it points at a removed login.
     /// </summary>
     public static ApiTokenScope Normalize(ApiTokenScope scope,
-        IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>> accounts, IReadOnlyList<GitPatInfo> gitPats)
+        IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>> accounts, IReadOnlyList<GitPatInfo> gitPats,
+        IReadOnlyCollection<string>? secretIds = null)
     {
         Dictionary<string, List<string>>? providers = null;
         if (scope.ProviderAccounts is not null)
@@ -75,8 +83,14 @@ public sealed record ApiTokenScope
         var pats = scope.GitPats is null
             ? null
             : CleanIds(scope.GitPats, id => gitPats.Any(p => p.Id == id), id => $"No stored git token with id '{id}'.");
+        var secrets = scope.Secrets is null
+            ? null
+            : CleanIds(scope.Secrets, id => secretIds?.Contains(id) == true, id => $"No stored secret with id '{id}'.");
 
-        return new ApiTokenScope { ProviderAccounts = providers, GitPats = pats, ApiKeys = scope.ApiKeys == true ? true : null };
+        return new ApiTokenScope
+        {
+            ProviderAccounts = providers, GitPats = pats, ApiKeys = scope.ApiKeys == true ? true : null, Secrets = secrets
+        };
     }
 
     private static List<string> CleanIds(IEnumerable<string> ids, Func<string, bool> exists, Func<string, string> missing)
