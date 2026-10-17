@@ -8,6 +8,7 @@ const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs } = require('./state-archive');
+const { createSecretMask } = require('./secret-mask');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -78,6 +79,7 @@ function createCommonServer(options = {}) {
     root: env.AGENTHUB_FILE_ROOT || '/workspace/.agenthub/files' });
   const attachmentMaterializer = supplied.attachmentMaterializer ||
     new AttachmentMaterializer({ env, fetch: fetchImpl, store: fileStore });
+  const secretMask = supplied.secretMask || createSecretMask({ env, fs });
 
   const preparation = driver.prepare(env);
   const childEnv = preparation && preparation.childEnv;
@@ -254,7 +256,7 @@ function createCommonServer(options = {}) {
     const toHub = () => {
       if (!callback) return done && done();
       let text;
-      try { text = fs.readFileSync(file, 'utf8'); } catch { return done && done(); }
+      try { text = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return done && done(); }
       fetchImpl(callback + '/transcript', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': token },
@@ -262,6 +264,7 @@ function createCommonServer(options = {}) {
       }).catch(() => {}).finally(() => done && done());
     };
     if (!transcriptPut) return toHub();
+    if (secretMask.active()) return uploadMaskedTranscript(file, toHub);
     // No shell here: the file name is whatever the CLI chose for its session file, and a quote
     // or `$(` in it would otherwise become part of the command.
     execFile('curl', uploadArgs(file, transcriptPut, insecureStorage), toHub);
@@ -288,6 +291,28 @@ function createCommonServer(options = {}) {
         console.log('[agent] Upload urls refreshed: ' + replaced);
       })
       .catch(error => console.log('[agent] Upload urls not refreshed (' + error.message + ')'));
+  }
+
+  // With secrets to mask, the object storage copy is the masked text, handed to curl on stdin.
+  // The CLI's own file stays as it is: the agent resumes from it, and a value replaced there
+  // would be gone from its memory of the conversation. Not through a copy in /tmp, which is a
+  // shared, predictable path that would hold the text a second time.
+  function uploadMaskedTranscript(file, done) {
+    let finished = false;
+    const finish = () => { if (!finished) { finished = true; done(); } };
+    let masked;
+    try { masked = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return finish(); }
+    try {
+      const child = spawnProcess('curl', uploadArgs('-', transcriptPut, insecureStorage),
+        { stdio: ['pipe', 'ignore', 'ignore'] });
+      child.on('exit', finish);
+      child.on('error', finish);
+      child.stdin.on('error', () => {});
+      child.stdin.write(masked);
+      child.stdin.end();
+    } catch {
+      finish();
+    }
   }
 
   function restoreScrollback(done) {
@@ -376,6 +401,10 @@ function createCommonServer(options = {}) {
     }
     persisting = true;
     postResources();
+    // The buffer itself is masked, once per tick and as a whole: every upload below then carries
+    // the masked text, a reconnecting client is replayed it, and a value the PTY delivered in two
+    // chunks is caught as well, which masking chunk by chunk would miss.
+    if (secretMask.refresh()) scrollback = secretMask.mask(scrollback);
     syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
       persistState(final, () => {
         persisting = false;

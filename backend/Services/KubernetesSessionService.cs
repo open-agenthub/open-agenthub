@@ -145,6 +145,180 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         _log.LogInformation("Removed a git token for {Owner}", owner);
     }
 
+    // ---------------------------------------------------------------- Session secrets
+
+    public async Task<IReadOnlyList<SessionSecretInfo>> ListSessionSecretsAsync(string owner, CancellationToken ct = default)
+        => SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data)
+            .Select(SessionSecretStore.Info).ToList();
+
+    public async Task<SessionSecretInfo> UpsertSessionSecretAsync(string owner, UpsertSessionSecretRequest request,
+        CancellationToken ct = default)
+    {
+        var entry = await ChangeUserSecretsAsync(owner,
+            data => SessionSecretStore.Upsert(data, request, DateTime.UtcNow), ct);
+        // The id and nothing else: the name is the owner's text and the value never goes near a log.
+        _log.LogInformation("Stored secret {Id} for {Owner}", entry.Id, owner);
+        await TrySyncSessionSecretsAsync(owner, ct);
+        return SessionSecretStore.Info(entry);
+    }
+
+    public async Task DeleteSessionSecretAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (await ReadSecretOrNullAsync(UserSecretsName(owner), ct) is null) return;
+        var removed = await ChangeUserSecretsAsync(owner, data => SessionSecretStore.Remove(data, id), ct);
+        if (!removed) return;
+        _log.LogInformation("Removed a secret for {Owner}", owner);
+        await TrySyncSessionSecretsAsync(owner, ct);
+    }
+
+    public async Task<IReadOnlyList<string>> ResolveSessionSecretIdsAsync(string owner, string? projectId,
+        IReadOnlyList<string>? requested, CancellationToken ct = default)
+    {
+        var stored = SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data);
+        var selected = requested is null || requested.Contains(SessionSecretSelection.FollowProject) ? null : requested;
+        return SessionSecretSelection.Effective(selected, projectId, await ProjectSecretIdsAsync(owner, projectId, ct), stored);
+    }
+
+    public async Task SyncSessionSecretsAsync(string owner, CancellationToken ct = default)
+    {
+        // Every session that was ever spawned has a file copy, so the copies are the list of
+        // sessions to bring up to date; a session that never ran has nothing to update.
+        var copies = await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
+            labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}={SessionSecretDeliveryFactory.FilesComponent}",
+            cancellationToken: ct);
+        if (copies.Items.Count == 0) return;
+        var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;
+        var sessionIds = copies.Items
+            .Select(copy => copy.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var id) ? id : null)
+            .OfType<string>();
+        foreach (var sessionId in sessionIds)
+        {
+            if (await _store.GetAsync(owner, sessionId, ct) is { } rec)
+            {
+                await WriteSessionSecretsAsync(owner, rec, store, ct);
+                continue;
+            }
+            // The session is gone but its copies are not (a delete that failed half-way): they hold
+            // values nobody can receive any more, and no later session delete would reach them.
+            await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(sessionId), ct);
+            await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(sessionId), ct);
+        }
+    }
+
+    /// <summary>Masks with what the session's own copies hold — exactly the values the pod can
+    /// see, rather than the whole store, whose other values the session never had.</summary>
+    public async Task<string> MaskSessionSecretsAsync(string sessionId, string text, CancellationToken ct = default)
+    {
+        if (string.IsNullOrEmpty(text)) return text;
+        var files = (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.FilesSecretName(sessionId), ct))?.Data;
+        var env = (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.EnvSecretName(sessionId), ct))?.Data;
+        if (files is not { Count: > 0 } && env is not { Count: > 0 }) return text;
+        return SecretMask.Apply(text, (files ?? new Dictionary<string, byte[]>()).Concat(env ?? new Dictionary<string, byte[]>()));
+    }
+
+    /// <summary>
+    /// The store write is what the owner asked for and has happened; a session whose copy could
+    /// not be rewritten gets it at its next start at the latest. Failing the request over it would
+    /// tell the owner their secret was not saved when it was.
+    /// </summary>
+    private async Task TrySyncSessionSecretsAsync(string owner, CancellationToken ct)
+    {
+        try { await SyncSessionSecretsAsync(owner, ct); }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogWarning(e, "Could not bring the running sessions of {Owner} up to date with their secrets", owner);
+        }
+    }
+
+    /// <summary>
+    /// Writes the session's two secret copies from the current store and selections and returns
+    /// the names of the variables, which the pod spec references. Called at every spawn and on
+    /// every change: the kubelet then carries a file change into the running pod by itself.
+    /// </summary>
+    private async Task<IReadOnlyList<string>> WriteSessionSecretsAsync(string owner, SessionRecord rec,
+        IDictionary<string, byte[]>? store, CancellationToken ct)
+    {
+        var projectIds = await ProjectSecretIdsAsync(owner, rec.ProjectId, ct);
+        var ids = SessionSecretSelection.Effective(SessionSecretSelection.Parse(rec.SecretIdsJson), rec.ProjectId,
+            projectIds, SessionSecretStore.Read(store));
+        var delivery = SessionSecretDeliveryFactory.Build(rec.Id, _opts.Namespace,
+            new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id }, store, ids);
+        await UpsertSecretAsync(delivery.Files, ct);
+        await UpsertSecretAsync(delivery.Env, ct);
+        return delivery.EnvNames;
+    }
+
+    /// <summary>Rewrites the copies of one session that has been spawned before; a session that
+    /// never ran gets them at its first start.</summary>
+    private async Task RefreshSessionSecretsAsync(string owner, SessionRecord rec, CancellationToken ct)
+    {
+        if (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.FilesSecretName(rec.Id), ct) is null) return;
+        await WriteSessionSecretsAsync(owner, rec,
+            (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data, ct);
+    }
+
+    private async Task<IReadOnlyList<string>> ProjectSecretIdsAsync(string owner, string? projectId, CancellationToken ct)
+        => projectId is null
+            ? Array.Empty<string>()
+            : (await _projects.GetAsync(owner, projectId, ct))?.SecretIds ?? Array.Empty<string>();
+
+    /// <summary>A requested selection checked against the store and the project; null passes as
+    /// "follow the project" without reading anything.</summary>
+    private async Task<IReadOnlyList<string>?> ValidateSecretIdsAsync(string owner, string? projectId,
+        IReadOnlyList<string>? requested, CancellationToken ct)
+    {
+        if (requested is null) return null;
+        var stored = requested.Count == 0
+            ? Array.Empty<SessionSecretStore.Entry>()
+            : SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data);
+        var selected = SessionSecretSelection.Normalize(requested, stored);
+        SessionSecretSelection.EnsureWithinProject(selected, projectId, await ProjectSecretIdsAsync(owner, projectId, ct));
+        return selected;
+    }
+
+    /// <summary>
+    /// Read, change, write with the version that was read, retried on a conflict. The secret
+    /// request flow writes here while the owner may be editing the same store in another tab; a
+    /// plain replace would let the later of two writes silently drop the other's secret.
+    /// </summary>
+    /// <summary>Five attempts without a pause were exhausted by eight writers at once against a real
+    /// API server. Beyond this the request fails rather than retrying without bound.</summary>
+    private const int MaxStoreWriteAttempts = 16;
+
+    private async Task<T> ChangeUserSecretsAsync<T>(string owner, Func<Dictionary<string, byte[]>, T> change, CancellationToken ct)
+    {
+        var name = UserSecretsName(owner);
+        for (var attempt = 1; ; attempt++)
+        {
+            var existing = await ReadSecretOrNullAsync(name, ct);
+            var data = existing?.Data is null ? new Dictionary<string, byte[]>() : new Dictionary<string, byte[]>(existing.Data);
+            var result = change(data);
+            var secret = new V1Secret
+            {
+                Metadata = new V1ObjectMeta
+                {
+                    Name = name, NamespaceProperty = _opts.Namespace,
+                    Labels = new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner) },
+                    ResourceVersion = existing?.Metadata.ResourceVersion
+                },
+                Type = "Opaque",
+                Data = data
+            };
+            try
+            {
+                if (existing is null) await _k8s.CoreV1.CreateNamespacedSecretAsync(secret, _opts.Namespace, cancellationToken: ct);
+                else await _k8s.CoreV1.ReplaceNamespacedSecretAsync(secret, name, _opts.Namespace, cancellationToken: ct);
+                return result;
+            }
+            catch (k8s.Autorest.HttpOperationException e)
+                when (e.Response.StatusCode == System.Net.HttpStatusCode.Conflict && attempt < MaxStoreWriteAttempts)
+            {
+                // Jittered, so writers that collided do not collide again on the next round.
+                await Task.Delay(Random.Shared.Next(5, 20 * attempt), ct);
+            }
+        }
+    }
+
     /// <summary>Which credential fields have a stored value. Values are never returned.</summary>
     public async Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default)
     {
@@ -507,6 +681,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await SessionSoftLimit.EnsureCanCreateAsync(_store, owner, _maxRunningSessionsPerOwner, ct);
         var credentialId = await ValidateCredentialIdAsync(owner, req.Agent, req.AuthMode, req.CredentialId, ct);
         var gitPatIds = await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct);
+        var secretIds = await ValidateSecretIdsAsync(owner, req.ProjectId, req.SecretIds, ct);
 
         var repos = NormalizeRepos(req);
         SessionRepos.Validate(repos);
@@ -538,6 +713,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 : null,
             CredentialId = credentialId,
             GitPatIdsJson = GitPatSelection.Serialize(gitPatIds),
+            SecretIdsJson = SessionSecretSelection.Serialize(secretIds),
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
             Image = image, RunAsRoot = req.RunAsRoot,
@@ -880,6 +1056,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             Agent = rec.Agent, AuthMode = rec.AuthMode, OpenClawApiKeySource = rec.OpenClawApiKeySource,
             CredentialId = rec.CredentialId,
             GitPatIds = GitPatSelection.Parse(rec.GitPatIdsJson)?.ToList(),
+            SecretIds = SessionSecretSelection.Parse(rec.SecretIdsJson)?.ToList(),
             Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot, AutoApprove = rec.AutoApprove,
@@ -1097,6 +1274,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             rec.CredentialId = null;
         if (req.GitPatIds is not null)
             rec.GitPatIdsJson = GitPatSelection.Serialize(await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct));
+        // Checked against the project the session is in after this update, so moving a session and
+        // narrowing its secrets in one request is judged by the project it ends up in.
+        if (req.SecretIds is not null)
+            rec.SecretIdsJson = SessionSecretSelection.Serialize(
+                await ValidateSecretIdsAsync(owner, rec.ProjectId, req.SecretIds, ct));
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
@@ -1120,6 +1302,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             throw;
         }
         _log.LogInformation("Updated session {Id} settings", id);
+        // Files follow at once in a running session; variables are fixed when its container starts.
+        if (req.SecretIds is not null || req.ProjectIdSpecified)
+            await RefreshSessionSecretsAsync(owner, rec, ct);
 
         var pod = await TryReadPodAsync($"session-{id}", ct);
         await ObserveFailureAsync(rec, pod, ct);
@@ -1204,7 +1389,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             ct);
         if (!preparation.ShouldSpawn) return;
 
-        context = context with { HasGitCredentials = preparation.HasGitCredentials };
+        context = context with { HasGitCredentials = preparation.HasGitCredentials,
+            HasSessionSecrets = true,
+            SecretEnvNames = await WriteSessionSecretsAsync(owner, rec,
+                (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data, ct)
+        };
         var podSpec = AgentPodSpecFactory.Build(rec, req, context);
 
         if (rec.Mode == SessionMode.Scheduled)
@@ -1406,20 +1595,46 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
+        await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(id), ct);
+        await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct);
         await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
         await _store.DeleteAsync(id, ct);
         _log.LogInformation("Deleted session {Id}", id);
     }
 
     /// <summary>
-    /// Deletes every secret labeled with the owner (creds-*, provider logins, gitauth-*,
-    /// plus any leftover per-session secrets) — the Kubernetes part of an account purge.
+    /// Deletes every secret labeled with the owner (creds-*, provider logins, gitauth-*, the
+    /// session secret store, plus any leftover per-session secrets) — the Kubernetes part of an
+    /// account purge.
+    ///
+    /// One delete per secret rather than a deletecollection: the chart's role grants get, list and
+    /// delete on secrets but not deletecollection, and against a real API server the collection
+    /// call was refused with 403, which stopped the purge before it reached object storage.
     /// </summary>
     public async Task DeleteUserSecretsAsync(string owner, CancellationToken ct = default)
     {
-        await _k8s.CoreV1.DeleteCollectionNamespacedSecretAsync(_opts.Namespace,
+        var owned = await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
             labelSelector: $"{OwnerLabel}={Sanitize(owner)}", cancellationToken: ct);
+        foreach (var secret in owned.Items)
+            await DeleteSecretIfPresentAsync(secret.Metadata.Name, ct);
         _log.LogInformation("Deleted per-user secrets for an account purge");
+    }
+
+    /// <summary>Deletes a secret; one that is already gone is what was asked for. Any other failure
+    /// is the caller's to see: a purge or delete that silently left a secret behind would claim
+    /// to have removed something it did not.</summary>
+    private async Task DeleteSecretIfPresentAsync(string name, CancellationToken ct)
+    {
+        try
+        {
+            await _k8s.CoreV1.DeleteNamespacedSecretAsync(name, _opts.Namespace, cancellationToken: ct);
+        }
+        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // The name is built from a route id and stays out of the log line, where a crafted
+            // value could forge entries.
+            _log.LogDebug("A secret to delete was already gone");
+        }
     }
 
     /// <summary>Stable, non-reversible owner key used in labels and S3 key prefixes.</summary>
@@ -1563,6 +1778,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
         CredentialId = r.CredentialId, ResolvedCredentialId = r.ResolvedCredentialId,
         GitPatIds = GitPatSelection.Parse(r.GitPatIdsJson),
+        SecretIds = SessionSecretSelection.Parse(r.SecretIdsJson),
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
@@ -1619,6 +1835,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     }
 
     private static string CredsSecretName(string owner) => $"creds-{Sanitize(owner)}";
+    /// <summary>The owner's secret store; never mounted, see <see cref="SessionSecretStore"/>.</summary>
+    private static string UserSecretsName(string owner) => $"usersecrets-{Sanitize(owner)}";
     public static string ProviderSecretName(string owner, AgentKind agent) => agent switch
     {
         AgentKind.Claude => $"claude-{Sanitize(owner)}",

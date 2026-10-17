@@ -13,6 +13,7 @@ public sealed class CredentialScopeException(string code) : Exception(code)
     public const string AgentNotAllowed = "agent_not_allowed";
     public const string ApiKeysNotAllowed = "api_keys_not_allowed";
     public const string GitPatNotAllowed = "git_pat_not_allowed";
+    public const string SecretNotAllowed = "secret_not_allowed";
 }
 
 /// <summary>
@@ -79,6 +80,24 @@ public static class CredentialScope
         return req with { GitPatIds = ids };
     }
 
+    /// <summary>
+    /// Narrows the session's secrets to the token's (docs/session-secrets.md). <paramref name="resolved"/>
+    /// is what the request would receive without a scope — the project's selection when it names
+    /// none. A request that names secrets may only name allowed ones; one that names none gets the
+    /// allowed part of what it would have received, written out as an explicit list so the session
+    /// does not start following a project selection the token never saw.
+    /// </summary>
+    public static CreateSessionRequest ApplySecrets(CreateSessionRequest req, ApiTokenScope? scope, IReadOnlyList<string> resolved)
+    {
+        if (scope is null || scope.AllowsAllSecrets) return req;
+        var ids = req.SecretIds?.Select(id => id?.Trim() ?? "").Where(id => id.Length > 0).ToList();
+        if (ids is null || ids.Contains(SessionSecretSelection.FollowProject))
+            return req with { SecretIds = resolved.Where(scope.AllowsSecret).ToList() };
+        if (ids.Any(id => !scope.AllowsSecret(id)))
+            throw new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
+        return req with { SecretIds = ids };
+    }
+
     /// <summary>The listing narrowed to what the token may use: a leaked restricted token tells its
     /// holder nothing about logins it cannot use anyway.</summary>
     public static RemoteCredentialListing FilterListing(RemoteCredentialListing listing, ApiTokenScope? scope)
@@ -93,6 +112,7 @@ public static class CredentialScope
         }
         var pats = listing.GitPats.Where(p => scope.AllowsGitPat(p.Id)).ToList();
         var keys = scope.AllowsApiKeys ? listing.ApiKeys : new RemoteCredentialApiKeys(false, false, false);
-        return new RemoteCredentialListing(accounts, pats, keys);
+        return new RemoteCredentialListing(accounts, pats, keys,
+            listing.Secrets?.Where(s => scope.AllowsSecret(s.Id)).ToList());
     }
 }

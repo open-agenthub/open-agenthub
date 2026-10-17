@@ -55,6 +55,21 @@ public class InternalNotifyTests
     }
 
     [Fact]
+    public async Task Notify_MasksTheSessionsSecretsInWhatTheRelaysPost()
+    {
+        // Codex's and Cursor's turn hooks send the agent's last message, which can quote a
+        // value it has just read from ~/.secrets (docs/session-secrets.md).
+        var world = new NotifyWorld(AgentKind.Codex);
+
+        await world.Controller().Notify("s1",
+            new InternalController.NotifyBody("Deployed with token tok-0123456789abcdef.", "question"), CancellationToken.None);
+
+        var (_, _, message) = Assert.Single(world.Notifier.Events);
+        Assert.Equal("Deployed with token [secret:DEPLOY_TOKEN].", message);
+        Assert.Equal(["s1"], world.Sessions.Masked);
+    }
+
+    [Fact]
     public async Task Notify_WrongToken_IsUnauthorizedAndSilent()
     {
         var world = new NotifyWorld(AgentKind.Codex);
@@ -111,16 +126,46 @@ public class InternalNotifyTests
 
         public RecordingStore Store { get; }
         public RecordingNotifier Notifier { get; } = new();
+        public MaskingSessions Sessions { get; } = new();
 
         public InternalController Controller(string? token = null)
         {
-            var controller = new InternalController(Store, [Notifier], null!, null!, [], [], null!, null!)
+            var controller = new InternalController(Store, [Notifier], Sessions, null!, [], [], null!, null!)
             {
                 ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
             };
             controller.Request.Headers["X-Agent-Token"] = token ?? "token-s1";
             return controller;
         }
+    }
+
+    /// <summary>Masks with one secret the session holds; the real lookup reads the session's copies.</summary>
+    private sealed class MaskingSessions : AgentHub.Api.Services.ISessionService
+    {
+        public List<string> Masked { get; } = [];
+
+        public Task<string> MaskSessionSecretsAsync(string sessionId, string text, CancellationToken ct = default)
+        {
+            Masked.Add(sessionId);
+            return Task.FromResult(AgentHub.Api.Services.SecretMask.Apply(text,
+                [new("DEPLOY_TOKEN", System.Text.Encoding.UTF8.GetBytes("tok-0123456789abcdef"))]));
+        }
+
+        public Task StoreCredentialsAsync(string owner, UserCredentials creds, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<CredentialStatus> GetCredentialStatusAsync(string owner, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task StoreProviderCredentialsAsync(string owner, AgentKind agent, string json, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task DeleteProviderCredentialsAsync(string owner, AgentKind agent, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionInfo> PauseSessionAsync(string owner, string id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class RecordingNotifier : INotifier
