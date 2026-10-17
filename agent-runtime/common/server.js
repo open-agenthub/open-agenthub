@@ -1255,13 +1255,15 @@ function createCommonServer(options = {}) {
     let pullingSkills = false;
     let lastSkillsError = '';
     let lastSkillsKept = '';
+    let skillsEtag = null;
     setIntervalImpl(() => {
       if (exited || pullingSkills) return;
       pullingSkills = true;
       Promise.resolve()
-        .then(() => pullSkillsImpl(env, { fetch: fetchImpl }))
+        .then(() => pullSkillsImpl(env, { fetch: fetchImpl, etag: skillsEtag }))
         .then(result => {
           lastSkillsError = '';
+          if (result && result.etag !== undefined) skillsEtag = result.etag;
           if (!result || result.notModified || result.skippedReason) return;
           // A skill kept for its local edits is reported on every pull that changes something;
           // repeating it each minute on its own would drown the log.

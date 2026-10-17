@@ -29,6 +29,19 @@ test('the session agent pulls the skill library every minute by default', async 
   assert.equal(typeof pulls[0].deps.fetch, 'function');
 });
 
+test('the etag of one pull is sent with the next', async () => {
+  const sent = [];
+  const harness = createHarness(CALLBACK, {}, {
+    pullSkills: async (env, deps) => { sent.push(deps.etag); return { written: [], removed: [], kept: [], etag: '"v1"' }; }
+  });
+  const interval = skillsInterval(harness);
+  interval.callback();
+  await tick(); await tick();
+  interval.callback();
+  await tick();
+  assert.deepEqual(sent, [null, '"v1"']);
+});
+
 test('a pull still running when the next tick comes is not doubled', async () => {
   let release;
   let calls = 0;

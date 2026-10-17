@@ -65,7 +65,7 @@ their entrypoints).
   someone's skills; the cost is that this agent then sees those instead of the library.
 
 **2. The session agent polls; the hub does not push.** Every 60 s (`AGENTHUB_SKILLS_SYNC_SECONDS`,
-`0` turns it off) `server.js` calls `pullSkills`, which sends the stored ETag.
+`0` turns it off) `server.js` calls `pullSkills` with the ETag of its previous pull.
 
 - *Rejected: a push from the hub on change.* Nothing reaches into a pod today. A push needs a
   channel per pod, and it still needs a poll as the fallback for a pod that missed the event. The
@@ -74,6 +74,10 @@ their entrypoints).
   each skill that wins its name. No `SKILL.md` and no file is read for it. Sharing and
   unsharing, a licence change and a name-conflict winner changing all change the set, so they
   change the tag too. An unchanged library is one `304` per session per minute.
+- The tag is kept in the session agent's memory, not in the manifest. It only describes the
+  directories the process that received it wrote, so a restarted process starts with one full
+  download. That download also repairs a directory changed while no pull ran, and no value read
+  from the agent-writable skills directory goes into a request to the hub.
 - A pull that finds a change rewrites only the skills whose content hash differs. An unchanged
   directory gets no file event, so the CLIs that watch it (Claude Code, Codex) do not rescan for
   nothing.

@@ -47,7 +47,7 @@ function readManifest(skillsDir, fsImpl = fs) {
   try {
     parsed = JSON.parse(fsImpl.readFileSync(path.join(skillsDir, MANIFEST), 'utf8'));
   } catch {
-    return { skills: [], hashes: {}, generation: 0, etag: null, exists: false };
+    return { skills: [], hashes: {}, generation: 0, exists: false };
   }
   const skills = Array.isArray(parsed.skills) ? parsed.skills.filter((n) => typeof n === 'string') : [];
   const hashes = parsed.hashes && typeof parsed.hashes === 'object' ? parsed.hashes : {};
@@ -55,7 +55,6 @@ function readManifest(skillsDir, fsImpl = fs) {
     skills,
     hashes,
     generation: Number.isSafeInteger(parsed.generation) ? parsed.generation : 0,
-    etag: typeof parsed.etag === 'string' ? parsed.etag : null,
     exists: true
   };
 }
@@ -213,10 +212,9 @@ function materializeSkills(payload, skillsDir, deps = {}) {
     hashes,
     // Bumped only when a directory changed, so a reader (OpenCode's refresher) can tell a pull
     // that found something from one that did not.
-    generation: before.generation + (changed ? 1 : 0),
-    etag: deps.etag !== undefined ? deps.etag : before.etag
+    generation: before.generation + (changed ? 1 : 0)
   };
-  const previous = { skills: before.skills, hashes: before.hashes, generation: before.generation, etag: before.etag };
+  const previous = { skills: before.skills, hashes: before.hashes, generation: before.generation };
   if (changed || !before.exists || JSON.stringify(manifest) !== JSON.stringify(previous)) {
     writeManifest(skillsDir, manifest, fsImpl);
   }
@@ -255,19 +253,23 @@ async function pullSkills(env = process.env, deps = {}) {
     // Whatever is in staging was left by a pull that died mid-write (pod killed, archived and
     // restored with the state); under the lock nothing else can be using it.
     fsImpl.rmSync(path.join(path.dirname(skillsDir), STAGING), { recursive: true, force: true });
-    const { etag } = readManifest(skillsDir, fsImpl);
     const headers = { 'X-Agent-Token': token };
-    // Only when the directory exists: a deleted skills dir with a stored etag would otherwise be
-    // answered 304 forever and never come back.
-    if (etag && fsImpl.existsSync(skillsDir)) headers['If-None-Match'] = etag;
+    // The tag comes from the caller's memory, not from a file next to the skills: it is only
+    // valid for the process that wrote the directories it describes. A restarted process (or the
+    // entrypoint's one-off pull) therefore starts with a full download, which also repairs a
+    // directory that changed while no pull was running. Only when the directory still exists: a
+    // deleted skills dir would otherwise be answered 304 forever and never come back.
+    if (deps.etag && fsImpl.existsSync(skillsDir)) headers['If-None-Match'] = deps.etag;
     const response = await fetchImpl(`${callback}/skills`, {
       headers,
       signal: AbortSignal.timeout(deps.timeoutMs || 15_000)
     });
-    if (response.status === 304) return { notModified: true };
+    if (response.status === 304) return { notModified: true, etag: deps.etag };
     if (!response.ok) throw new Error(`skills request failed with ${response.status}`);
     const payload = await response.json();
-    return materializeSkills(payload, skillsDir, { fs: fsImpl, etag: response.headers.get('etag') });
+    const result = materializeSkills(payload, skillsDir, { fs: fsImpl });
+    result.etag = response.headers.get('etag') || null;
+    return result;
   } finally {
     fsImpl.rmSync(lock, { recursive: true, force: true });
   }

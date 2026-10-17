@@ -186,7 +186,7 @@ function fakeHub(responses) {
 
 const pullEnv = (home) => ({ HOME: home, AGENTHUB_CALLBACK_URL: 'http://hub/internal/sessions/s1', AGENTHUB_CALLBACK_TOKEN: 'tok' });
 
-test('pull sends the stored etag and does nothing on 304', async () => {
+test('pull sends the etag it is given and does nothing on 304', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agenthub-pull-'));
   const hub = fakeHub([
     { status: 200, etag: '"e1"', body: { skills: [{ name: 'deploy', content: '# v1' }] } },
@@ -195,8 +195,12 @@ test('pull sends the stored etag and does nothing on 304', async () => {
 
   const first = await pullSkills(pullEnv(home), { fetch: hub.fetchImpl });
   assert.deepEqual(first.written, ['deploy']);
-  const second = await pullSkills(pullEnv(home), { fetch: hub.fetchImpl });
+  assert.equal(first.etag, '"e1"');
+  const second = await pullSkills(pullEnv(home), { fetch: hub.fetchImpl, etag: first.etag });
   assert.equal(second.notModified, true);
+  assert.equal(second.etag, '"e1"');
+  // The tag lives in the caller's memory only: nothing next to the skills carries it.
+  assert.doesNotMatch(fs.readFileSync(path.join(home, '.claude', 'skills', MANIFEST), 'utf8'), /e1/);
 
   assert.equal(hub.calls[0].url, 'http://hub/internal/sessions/s1/skills');
   assert.equal(hub.calls[0].headers['If-None-Match'], undefined);
