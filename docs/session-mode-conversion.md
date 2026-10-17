@@ -60,6 +60,7 @@ to `canResume`, from the same `SessionStatus` predicate so the two cannot disagr
 | Codex | **same conversation** | The driver records the thread id in `$CODEX_HOME/agenthub-thread-id`, inside the state archive. `codex exec … resume <id>` and the TUI's `codex resume <id>` name the same thread. |
 | Cursor | new conversation, same workspace | Cursor names its chats itself and the hub never learns the name. The id the hub passes to `--resume` is its own, so the CLI reports the chat as missing and the driver falls back to a fresh start — the existing resume behaviour, not something conversion adds. |
 | OpenClaw | new conversation, same workspace | Same: `--session`/`--session-id` are only honoured for an id the CLI itself issued. |
+| OpenCode | **same conversation** | OpenCode issues its own ids (`ses_…`) and takes none up front, so the driver does not name one: the run is `opencode run <task>`, the interactive resume `opencode --continue`, and `--continue` opens the most recently updated session without a `parentID` (a `task` subagent has one) from the database restored with `~/.opencode`. Verified on 1.18.35: after `run "AUTONOMOUS-TASK-ONE"`, `run --continue` sent the model that user turn and its answer before the new prompt; the TUI applies the same rule (read from the binary — the TUI cannot be driven without a terminal). It is the newest session, not a recorded one: an `opencode` the person starts in a shell tab of the same pod becomes newer and is what a later resume opens. |
 
 Reading the last-used chat id out of Cursor's or OpenClaw's state directory was considered and
 deliberately not done. Neither CLI documents its on-disk session store, and this repository has
@@ -70,7 +71,7 @@ is per agent ("keeps the conversation" / "starts a new conversation in the same 
 the README table says the same. If a verified reader for either store is added later, it belongs
 in the driver's `buildCommand`, where Codex's `rememberedThreadId` already lives.
 
-**The one case Claude and Codex lose, too:** a session that failed before its first state upload
+**The one case Claude, Codex and OpenCode lose, too:** a session that failed before its first state upload
 has no archive. The resume then takes the fresh-start branch, in which the drivers *do* pass the
 prompt again, so the task starts over interactively rather than nothing happening at all. The
 card cannot know in advance whether an archive exists; the terminal shows which branch ran.

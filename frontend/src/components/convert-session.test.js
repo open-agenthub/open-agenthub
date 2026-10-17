@@ -100,6 +100,7 @@ describe('continuing an autonomous session interactively', () => {
   it('says per agent whether the conversation survives', () => {
     expect(mountTerminal(finished({ agent: 'Claude' })).find('[data-convert-hint]').text()).toContain('keeps the conversation')
     expect(mountTerminal(finished({ agent: 'Codex' })).find('[data-convert-hint]').text()).toContain('keeps the conversation')
+    expect(mountTerminal(finished({ agent: 'OpenCode' })).find('[data-convert-hint]').text()).toContain('keeps the conversation')
     expect(mountTerminal(finished({ agent: 'Cursor' })).find('[data-convert-hint]').text()).toContain('new conversation in the same workspace')
     expect(mountTerminal(finished({ agent: 'OpenClaw' })).find('[data-convert-hint]').text()).toContain('new conversation in the same workspace')
   })
