@@ -865,6 +865,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await TryDeletePodAsync($"session-{id}", ct);
 
         rec.Status = "Pending";
+        rec.FailureReason = null;
         rec.QuestionPending = false;
         await _store.UpsertAsync(rec, ct);
         // Somebody wanted this session back: a resume restarts the idle countdown.
@@ -1121,7 +1122,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         _log.LogInformation("Updated session {Id} settings", id);
 
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        return await ToInfoAsync(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
+        await ObserveFailureAsync(rec, pod, ct);
+        return await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
             await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
@@ -1147,8 +1149,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             async (diagnostic, resourceCt) =>
             {
                 rec.Status = "Failed";
+                rec.FailureReason = SessionStartupFailure.Redact(diagnostic);
                 await _store.UpsertAsync(rec, resourceCt);
-                await _store.SetScrollbackAsync(rec.Id, diagnostic, resourceCt);
+                await _store.SetScrollbackAsync(rec.Id, rec.FailureReason, resourceCt);
                 _log.LogWarning("Session {Id} failed credential preflight for {Agent}/{AuthMode}",
                     rec.Id, rec.Agent, rec.AuthMode);
             },
@@ -1231,11 +1234,20 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         }
         else
         {
-            await _k8s.CoreV1.CreateNamespacedPodAsync(new V1Pod
+            try
             {
-                Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title),
-                Spec = podSpec
-            }, _opts.Namespace, cancellationToken: ct);
+                await _k8s.CoreV1.CreateNamespacedPodAsync(new V1Pod
+                {
+                    Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title),
+                    Spec = podSpec
+                }, _opts.Namespace, cancellationToken: ct);
+            }
+            catch (k8s.Autorest.HttpOperationException ex) when ((int)ex.Response.StatusCode is 400 or 403 or 422)
+            {
+                rec.FailureReason = SessionStartupFailure.Admission(ex.Response.Content ?? ex.Message).Message;
+                rec.Status = SessionStatus.Failed;
+                await _store.SetFailureReasonAsync(rec.Id, rec.FailureReason, true, ct);
+            }
         }
     }
 
@@ -1262,12 +1274,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             records.Select(record => record.Id).ToArray(), ct);
         var withEphemeralMcp = await _ephemeralApiMcps.ListSessionsWithEntriesAsync(
             records.Select(record => record.Id).ToArray(), ct);
-        return records.Select(r =>
+        var result = new List<SessionInfo>();
+        foreach (var r in records)
         {
             byId.TryGetValue(r.Id, out var pod);
-            return ToInfo(r, pod?.Status?.Phase ?? r.Status, pod?.Status?.PodIP, browserSummaries[r.Id],
-                withEphemeralMcp.Contains(r.Id));
-        }).ToList();
+            await ObserveFailureAsync(r, pod, ct);
+            result.Add(ToInfo(r, EffectivePhase(r, pod), pod?.Status?.PodIP, browserSummaries[r.Id],
+                withEphemeralMcp.Contains(r.Id)));
+        }
+        return result;
     }
 
     public async Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default)
@@ -1275,7 +1290,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var rec = await _store.GetAsync(owner, id, ct);
         if (rec is null) return null;
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        return await ToInfoAsync(rec, pod?.Status?.Phase ?? rec.Status, pod?.Status?.PodIP,
+        await ObserveFailureAsync(rec, pod, ct);
+        return await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
             await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
@@ -1508,6 +1524,23 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             Type = "Opaque", Data = new Dictionary<string, byte[]> { ["mcp.json"] = Encoding.UTF8.GetBytes(json) }
         }, ct);
 
+    private static string EffectivePhase(SessionRecord record, V1Pod? pod)
+        => SessionStartupFailure.FromPod(pod, ParseRepos(record))?.Terminal == true
+            ? SessionStatus.Failed : pod?.Status?.Phase ?? record.Status;
+
+    private async Task ObserveFailureAsync(SessionRecord record, V1Pod? pod, CancellationToken ct)
+    {
+        var failure = SessionStartupFailure.FromPod(pod, ParseRepos(record));
+        // Keep the last diagnostic when a finished pod is collected, but discard a transient
+        // image/scheduling warning once the same pod becomes healthy.
+        if (pod is null) return;
+        var reason = failure?.Message;
+        if (reason == record.FailureReason) return;
+        await _store.SetFailureReasonAsync(record.Id, reason, failure?.Terminal == true, ct);
+        record.FailureReason = reason;
+        if (failure?.Terminal == true) record.Status = SessionStatus.Failed;
+    }
+
     private async Task<bool> SessionHasEphemeralMcpAsync(string sessionId, CancellationToken ct) =>
         (await _ephemeralApiMcps.ListBySessionAsync(sessionId, ct)).Count > 0;
 
@@ -1524,6 +1557,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         Repos = ParseRepos(r),
         HasMcp = SessionMcpConfig.HasMcp(r.McpConfigJson, ParseMcpServerIds(r), hasEphemeralMcp),
         McpConfigJson = r.McpConfigJson, McpServerIds = ParseMcpServerIds(r),
+        FailureReason = string.IsNullOrEmpty(r.FailureReason) ? null : SessionStartupFailure.Redact(r.FailureReason),
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
