@@ -23,6 +23,12 @@ const error = ref('')
 // Inline two-step remove (no confirm() popup): the first click arms, the second removes.
 const confirming = ref('')
 const valueField = ref(null)
+// Open requests of the owner's sessions, the one being answered, and what answering gave.
+const requests = ref([])
+const answering = ref(null)
+const granted = ref(null)
+const restartArmed = ref(false)
+const restartBusy = ref(false)
 
 const editing = computed(() => !!draft.value?.existing)
 const canSave = computed(() => !!draft.value && !busy.value && draft.value.name.trim().length > 0
@@ -50,6 +56,48 @@ function open(base = {}) {
 function close() {
   draft.value = null
   error.value = ''
+  answering.value = null
+}
+
+async function loadRequests() {
+  try { requests.value = (await api.listSecretRequests()) || [] } catch { /* older backend */ }
+}
+
+// A request for a name that is already stored opens that entry, so the value is replaced (or
+// kept) rather than a second secret attempted under the same name.
+function openFor(base) {
+  const known = secrets.value.find(s => s.name.toLowerCase() === String(base.name || '').toLowerCase())
+  open(known ? { ...known, description: base.description || known.description } : base)
+}
+
+function answer(request) {
+  granted.value = null
+  answering.value = request
+  openFor({ name: request.name, delivery: request.delivery, description: request.purpose })
+}
+
+async function refuse(request) {
+  try { await api.refuseSecretRequest(request.id) } catch (e) { loadError.value = String(e.message || e) }
+  if (answering.value?.id === request.id) close()
+  await loadRequests()
+}
+
+// A variable only reaches a container started after the grant. Pausing uploads the session's
+// state first, and resuming continues the same conversation, so this is the restart the
+// owner confirms — never one the page does on its own.
+async function restartSession() {
+  if (!restartArmed.value) { restartArmed.value = true; return }
+  restartBusy.value = true
+  try {
+    await api.pauseSession(granted.value.sessionId)
+    await api.resumeSession(granted.value.sessionId)
+    granted.value = { ...granted.value, restartRequired: false, restarted: true }
+  } catch (e) {
+    error.value = String(e.message || e)
+  } finally {
+    restartBusy.value = false
+    restartArmed.value = false
+  }
 }
 
 async function save() {
@@ -66,7 +114,15 @@ async function save() {
     })
     // The typed value is not kept around in the page once it is stored.
     draft.value = null
-    await load()
+    if (answering.value) {
+      const request = answering.value
+      answering.value = null
+      const grant = await api.provideSecretRequest(request.id, saved.id)
+      granted.value = { ...grant, sessionId: request.sessionId, sessionTitle: request.sessionTitle }
+      restartArmed.value = false
+      dropRequestFromUrl()
+    }
+    await Promise.all([load(), loadRequests()])
     emit('saved', saved)
   } catch (e) {
     error.value = String(e.message || e)
@@ -82,13 +138,30 @@ async function remove(secret) {
   catch (e) { loadError.value = String(e.message || e) }
 }
 
+// The link in the notification carries the request; once answered it is taken off the address,
+// so a reload does not offer to answer it again.
+function requestFromUrl() {
+  try { return new URLSearchParams(window.location.search).get('request') } catch { return null }
+}
+function dropRequestFromUrl() {
+  try {
+    if (!requestFromUrl()) return
+    const url = new URL(window.location.href)
+    url.searchParams.delete('request')
+    window.history.replaceState(window.history.state, '', url.pathname + url.search + url.hash)
+  } catch { /* not in a browser */ }
+}
+
 onMounted(async () => {
-  await load()
-  if (props.prefill) {
-    // A request for a name that is already stored opens that entry, so the value is replaced
-    // rather than a second secret attempted under the same name.
-    const known = secrets.value.find(s => s.name.toLowerCase() === String(props.prefill.name || '').toLowerCase())
-    open(known ? { ...known, description: props.prefill.description || known.description } : props.prefill)
+  await Promise.all([load(), loadRequests()])
+  const requested = requestFromUrl()
+  if (requested) {
+    let request = requests.value.find(r => r.id === requested)
+    if (!request) { try { request = await api.getSecretRequest(requested) } catch { request = null } }
+    if (request && request.status === 'pending') answer(request)
+    else if (request) loadError.value = 'This request has already been answered.'
+  } else if (props.prefill) {
+    openFor(props.prefill)
   }
 })
 watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
@@ -101,6 +174,32 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
       environment variable, or as a file in <code>~/.secrets</code>. A project selects which of them its
       sessions get, and a session can narrow that. Values are write-only, and masked in uploaded
       scrollback, transcripts and chat messages.</p>
+
+    <section v-if="requests.length" class="card requests" data-secret-requests>
+      <h4>Asked for by your sessions</h4>
+      <ul class="list">
+        <li v-for="request in requests" :key="request.id" class="row" :data-secret-request-row="request.id">
+          <code class="name">{{ request.name }}</code>
+          <span class="pill">{{ deliveryLabel(request.delivery) }}</span>
+          <span class="desc">{{ request.sessionTitle || request.sessionId }}<template v-if="request.purpose"> — {{ request.purpose }}</template></span>
+          <span class="actions">
+            <button type="button" class="primary" data-secret-request-answer @click="answer(request)">Add it</button>
+            <button type="button" data-secret-request-refuse @click="refuse(request)">Refuse</button>
+          </span>
+        </li>
+      </ul>
+    </section>
+
+    <div v-if="granted" class="granted" data-secret-granted>
+      <b>{{ granted.name }}</b> is now available to “{{ granted.sessionTitle || granted.sessionId }}”
+      <template v-if="granted.delivery === 'file'">as <code>~/.secrets/{{ granted.name }}</code> (within about a minute).</template>
+      <template v-else-if="granted.restarted">as <code>${{ granted.name }}</code> — the session is restarting.</template>
+      <template v-else-if="granted.restartRequired">as <code>${{ granted.name }}</code> from its next start.
+        <button type="button" class="restart" :class="{ armed: restartArmed }" :disabled="restartBusy" data-secret-restart
+          @click="restartSession">{{ restartBusy ? 'Restarting…' : restartArmed ? 'Really restart the session?' : 'Restart it now' }}</button>
+      </template>
+      <template v-else>as <code>${{ granted.name }}</code>.</template>
+    </div>
 
     <section class="card">
       <ul class="list" data-secret-list>
@@ -120,6 +219,8 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
       <p v-if="loadError" class="err" data-secret-load-error>{{ loadError }}</p>
 
       <div v-if="draft" class="form" data-secret-form>
+        <p v-if="answering" class="answering" data-secret-answering>For “{{ answering.sessionTitle || answering.sessionId }}”,
+          which asked for it<template v-if="answering.purpose">: {{ answering.purpose }}</template>. Saving gives it to that session only.</p>
         <div class="grid">
           <div class="field">
             <label for="secret-name">Name</label>
@@ -180,6 +281,13 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
 small { display: block; margin: 0 0 10px; color: var(--muted-3); font-size: 11px; line-height: 1.4; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; margin: 6px 0; }
 .buttons { display: flex; gap: 10px; }
+.requests { margin-bottom: 14px; border-color: var(--warn); }
+.requests h4 { margin: 0 0 10px; font-size: 13px; }
+.answering { margin: 0 0 10px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.granted { margin: 0 0 14px; padding: 10px 12px; border: 1px solid var(--ok); border-radius: 10px; font-size: 13px; color: var(--text); }
+.granted code { font-family: var(--mono); font-size: 12px; }
+.restart { margin-left: 8px; padding: 3px 10px; font-size: 12px; }
+.restart.armed { border-color: var(--warn); color: var(--warn); }
 .add { border: 0; background: none; color: var(--muted); font-size: 12px; font-weight: 600; padding: 4px 0; }
 .add:hover { color: var(--accent); background: none; }
 @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } }

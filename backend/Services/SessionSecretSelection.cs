@@ -61,13 +61,17 @@ public static class SessionSecretSelection
     /// too. An id whose secret has been removed is skipped.
     /// </summary>
     public static IReadOnlyList<string> Effective(IReadOnlyList<string>? selected, string? projectId,
-        IReadOnlyList<string> projectIds, IReadOnlyList<SessionSecretStore.Entry> stored)
+        IReadOnlyList<string> projectIds, IReadOnlyList<SessionSecretStore.Entry> stored,
+        IReadOnlyList<string>? granted = null)
     {
         IEnumerable<string> ids = selected
             ?? (projectId is null ? Array.Empty<string>() : projectIds);
         // A project narrowed after the session was created takes the secret away from it; a
         // selection can only lose entries this way, never gain them.
         if (selected is not null && projectId is not null) ids = ids.Where(projectIds.Contains);
+        // A grant is the owner answering this session's own request: it holds whatever the project
+        // selects, because the owner gave it to this session and no other.
+        ids = ids.Concat(granted ?? Array.Empty<string>());
         return ids.Where(id => stored.Any(e => e.Id == id)).Distinct().ToList();
     }
 

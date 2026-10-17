@@ -64,6 +64,9 @@ const createSchema = z.object({
   // connected client's call does not fail schema validation (see credentials.mjs). Omitted or
   // "*" = every stored token, "none" = no token.
   gitPatIds: z.string().max(4096).optional(),
+  // Comma-separated ids from credentials_list → secrets (docs/session-secrets.md). Omitted or "*" =
+  // the project's selection, nothing outside a project; "none" = none.
+  secretIds: z.string().max(4096).optional(),
   // Whether the hub moves the session to another account when its own hits a usage limit
   // (docs/account-limits.md); omitted = auto.
   accountFailover: z.enum(['auto', 'off']).optional()
@@ -79,6 +82,7 @@ register('session_create', {
     + 'response\'s expiresAt says when. '
     + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
     + 'token) the git tokens the session gets; credentials_list shows what is available to this token. '
+    + 'secretIds (comma-separated, "none" for none) the stored secrets it gets as variables or files. '
     + 'accountFailover "off" keeps the session on its account when that hits a usage limit; the '
     + 'default "auto" moves it to another available one.',
   inputSchema: createSchema

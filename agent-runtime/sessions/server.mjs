@@ -8,6 +8,7 @@ import { withExpiry } from './expiry.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
 import { waitForSession } from './wait.mjs';
+import { listSecrets, requestSecret } from './secret-request.mjs';
 
 const text = value => ({
   content: [{ type: 'text', text: JSON.stringify(value) }]
@@ -57,6 +58,9 @@ const createSchema = z.object({
   // Omitted or "*" = every stored token, "none" = no token.
   credentialId: z.string().max(64).optional(),
   gitPatIds: z.string().max(4096).optional(),
+  // Which of this session's secrets (secrets_list → id) the child gets, comma-separated; omitted =
+  // all of them, "none" = none. At most what this session has (docs/session-secrets.md).
+  secretIds: z.string().max(4096).optional(),
   // Whether the hub moves the child to another account when its own hits a usage limit
   // (docs/account-limits.md); omitted = auto.
   accountFailover: z.enum(['auto', 'off']).optional()
@@ -76,10 +80,35 @@ register('session_create', {
     + 'autoDeleteAfter ("90m", "12h", "3d") makes the child delete itself after that long since '
     + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start. '
     + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
-    + 'token) the git tokens the child gets. accountFailover "off" keeps the child on its account '
+    + 'token) the git tokens the child gets. secretIds (comma-separated ids from secrets_list, "none" for none) '
+    + 'narrows the secrets it gets; omitted, it gets exactly the ones this session has. accountFailover "off" keeps the child on its account '
     + 'when that hits a usage limit; the default "auto" moves it to another available one.',
   inputSchema: createSchema
 }, async (body) => text(sanitizeSession(await client.create(withCredentialSelection(withExpiry(body))))));
+
+register('secrets_list', {
+  description: 'The secrets this session has, by id, name and delivery, and where to find each: an '
+    + 'environment variable ($NAME) or a file in ~/.secrets. Never the values — read those from the '
+    + 'environment or the file yourself, and do not print them.',
+  inputSchema: z.object({})
+}, async () => text(await listSecrets(client)));
+
+register('secret_request', {
+  description: 'Ask the session owner for a secret you need (an API key, a token, a key file) instead '
+    + 'of asking for it in the conversation. Give the name it should have (an environment variable '
+    + 'name, or a file name for ~/.secrets), delivery "env" or "file", and what it is for. The owner '
+    + 'gets a notification, enters the value in the web app and grants it to this session; you never '
+    + 'see it here. Waits up to waitMinutes (default 10, at most 30) and returns status "provided" '
+    + 'with where to find it, or "not provided" when the owner refused or did not answer. A secret '
+    + 'this session already has is answered at once. A variable is only set from the next start of '
+    + 'the session; a file appears in the running session.',
+  inputSchema: z.object({
+    name: z.string().min(1).max(64),
+    delivery: z.enum(['env', 'file']).optional().default('env'),
+    purpose: z.string().max(500).optional(),
+    waitMinutes: z.number().min(0).max(30).optional()
+  })
+}, async (input) => text(await requestSecret(client, input)));
 
 register('account_status', {
   description: 'Which provider account this session (no sessionId) or a descendant runs on, whether that '
