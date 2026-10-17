@@ -76,6 +76,16 @@ public class SessionStartupFailureTests
         Assert.Null(SessionStartupFailure.FromPod(null, []));
     }
 
+    [Fact]
+    public void AdmissionUsesThePlainKubernetesStatusMessage()
+    {
+        var failure = SessionStartupFailure.Admission("{\"kind\":\"Status\",\"message\":\"exceeded quota: pods, token=private-value\",\"code\":403}");
+        Assert.Equal("quota", failure.Step);
+        Assert.DoesNotContain("Status", failure.Message);
+        Assert.DoesNotContain("private-value", failure.Message);
+        Assert.Contains("Free resources", failure.Message);
+    }
+
     [PostgreSqlFact]
     public async Task FailureReasonSurvivesPersistenceAndTargetedUpdates()
     {

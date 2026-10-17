@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using System.Text.Json;
 using AgentHub.Api.Models;
 using k8s.Models;
 
@@ -39,6 +40,15 @@ public sealed record SessionStartupFailure(string Step, string Message, bool Ter
 
     public static SessionStartupFailure Admission(string message)
     {
+        // API admission refusals arrive as a Status JSON document, not a human message.
+        // Exposing the whole response obscures the remedy and copies irrelevant fields.
+        try
+        {
+            using var status = JsonDocument.Parse(message);
+            if (status.RootElement.TryGetProperty("message", out var detail) && detail.ValueKind == JsonValueKind.String)
+                message = detail.GetString()!;
+        }
+        catch (JsonException) { }
         var quota = message.Contains("quota", StringComparison.OrdinalIgnoreCase);
         return Failure(quota ? "quota" : "scheduling", quota
             ? $"Quota: {message}. Free resources or ask an administrator to increase the quota."
