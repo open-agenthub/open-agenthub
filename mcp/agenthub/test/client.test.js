@@ -309,3 +309,28 @@ test('session collections accept responses above 64 KiB but remain bounded', asy
     await assert.rejects(() => oversized[method](), /agenthub_response_too_large/);
   }
 });
+
+test('token read routes preserve page cursors and encode identifiers', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const seen = [];
+  await withFakeServer((req, body, res) => {
+    assert.equal(req.headers.authorization, `Bearer ${TOKEN}`);
+    assert.equal(req.method, 'GET');
+    assert.equal(body, '');
+    seen.push(req.url);
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ nextCursor: 'opaque+/=', nextOffset: 9 }));
+  }, async baseUrl => {
+    const client = new AgentHubClient({ AGENTHUB_URL: baseUrl, AGENTHUB_TOKEN: TOKEN });
+    assert.equal((await client.messages('s/id', { cursor: 'opaque+/=', limit: 2 })).nextCursor, 'opaque+/=');
+    assert.equal((await client.conversation('s/id', { offset: 8, max: 1 })).nextOffset, 9);
+    await client.projects();
+    await client.project('p/id');
+    await client.mcpServers();
+  });
+  assert.deepEqual(seen, [
+    '/api/remote/sessions/s%2Fid/messages?cursor=opaque%2B%2F%3D&limit=2',
+    '/api/remote/sessions/s%2Fid/conversation?offset=8&max=1',
+    '/api/remote/projects', '/api/remote/projects/p%2Fid', '/api/remote/mcp-servers'
+  ]);
+});

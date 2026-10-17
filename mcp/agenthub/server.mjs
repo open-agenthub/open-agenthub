@@ -131,6 +131,39 @@ register('session_transcript', {
   // allowlist there would strip every field of it.
 }, async ({ id, offset, maxChars }) => text(await client.transcript(id, { offset, maxChars })));
 
+register('session_conversation', {
+  description: 'Read the Workspace conversation page. Pass nextOffset back as offset; source selects native entries or scrollback text.',
+  inputSchema: z.object({
+    id: z.string().min(1).max(128),
+    offset: z.number().int().min(0).optional(),
+    max: z.number().int().min(1).max(1_000_000).optional()
+  })
+}, async ({ id, ...page }) => text(await client.conversation(id, page)));
+
+register('session_messages', {
+  description: 'Read owned session inbox history, newest first, without marking messages delivered. Pass nextCursor back as cursor.',
+  inputSchema: z.object({
+    id: z.string().min(1).max(128),
+    cursor: z.string().max(256).optional(),
+    limit: z.number().int().min(1).max(100).optional()
+  })
+}, async ({ id, ...page }) => text(await client.messages(id, page)));
+
+register('projects_list', {
+  description: 'List the token owner projects for session creation.',
+  inputSchema: z.object({})
+}, async () => text(await client.projects()));
+
+register('project_get', {
+  description: 'Read one project owned by the token owner.',
+  inputSchema: z.object({ id: z.string().min(1).max(128) })
+}, async ({ id }) => text(await client.project(id)));
+
+register('mcp_servers_list', {
+  description: 'List attachable MCP library entries by id and name only; shared entries follow the library licence policy.',
+  inputSchema: z.object({})
+}, async () => text(await client.mcpServers()));
+
 register('session_list', {
   description: 'List sessions for the token owner. Optional filters: parentSessionId, phase.',
   inputSchema: z.object({
