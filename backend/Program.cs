@@ -237,6 +237,14 @@ builder.Services.AddSingleton<AgentHub.Api.Network.NetworkPortService>();
 builder.Services.AddSingleton<AgentHub.Api.Network.INetworkSessionCleanup>(sp =>
     sp.GetRequiredService<AgentHub.Api.Network.NetworkPortService>());
 
+// Helper containers a session starts over MCP, each session in its own namespace
+// (docs/session-containers.md).
+builder.Services.AddSingleton<AgentHub.Api.Containers.ISessionContainerCluster, AgentHub.Api.Containers.KubernetesSessionContainerCluster>();
+builder.Services.AddSingleton<AgentHub.Api.Containers.SessionContainerService>();
+builder.Services.AddSingleton<AgentHub.Api.Containers.ISessionContainerCleanup>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Containers.SessionContainerService>());
+builder.Services.AddHostedService<AgentHub.Api.Containers.SessionContainerReconcileService>();
+
 builder.Services.AddHealthChecks();
 
 // --- Auth: generic OIDC/JWT provider (e.g. Keycloak). Multi-user separation via preferred_username. ---

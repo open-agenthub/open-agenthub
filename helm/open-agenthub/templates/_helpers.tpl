@@ -1,3 +1,26 @@
+{{/*
+Session-container settings shared by the configmap and the RBAC/admission templates, which have
+to agree on them: the backend names namespaces with this prefix and the admission policy admits
+only that prefix.
+*/}}
+{{- define "agenthub.sessionContainerPrefix" -}}
+{{- .Values.sessionContainers.namespacePrefix | default (printf "%s-" .Values.sessionsNamespace) -}}
+{{- end -}}
+{{- define "agenthub.sessionContainerRole" -}}
+{{- printf "%s-session-containers" .Release.Namespace -}}
+{{- end -}}
+{{/*
+TCP egress ports of a session pod, as allow-agent-egress in networkpolicy.yaml renders them
+(DNS aside). Helper containers get the same list; keep the two in step — the browser-values
+test asserts they match.
+*/}}
+{{- define "agenthub.agentEgressTcpPorts" -}}
+{{- $ports := list 443 22 80 -}}
+{{- range .Values.agent.extraEgressPorts }}{{ $ports = append $ports . }}{{ end -}}
+{{- if and .Values.objectStorage.enabled (not (has 3900 .Values.agent.extraEgressPorts)) }}{{ $ports = append $ports 3900 }}{{ end -}}
+{{- join "," $ports -}}
+{{- end -}}
+
 {{- define "agenthub.labels" -}}
 app.kubernetes.io/name: agenthub
 app.kubernetes.io/instance: {{ .Release.Name }}
