@@ -140,6 +140,10 @@ builder.Services.AddSingleton<AgentHub.Api.Licensing.LicenseStore>();
 builder.Services.AddSingleton<AgentHub.Api.Licensing.ILicenseStore>(sp =>
     sp.GetRequiredService<AgentHub.Api.Licensing.LicenseStore>());
 builder.Services.AddSingleton<AgentHub.Api.Licensing.IEnterpriseLicense, AgentHub.Api.Licensing.EnterpriseLicense>();
+// Per-user roles set in the admin area (community) and the audit of every role change.
+builder.Services.AddSingleton<AgentHub.Api.Admin.UserRoleStore>();
+builder.Services.AddSingleton<AgentHub.Api.Admin.IUserRoleStore>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>());
 builder.Services.AddSingleton<AgentHub.Api.Admin.AdminAccess>();
 // Enterprise: user groups from OAuth token claims, group→role mapping and admin usage limits.
 // Registered unconditionally — every provider self-gates on the license at call time.
@@ -442,6 +446,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Network.IPortGrantStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Usage.UsageLimitStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Agents.AllowedAgentsStore>().InitializeAsync();

@@ -45,8 +45,10 @@ public sealed class EeUsageLimitProvider : IAdminUsageLimitProvider
 }
 
 /// <summary>
-/// Grants admin rights to members of groups mapped to the admin role (groups come from the
-/// OAuth token). License-gated like every enterprise feature.
+/// Maps the owner's OAuth-token groups to a role: any admin group makes them an admin, else any
+/// user group labels them a user. Admin wins over user so that one more group membership never
+/// takes rights away — a "user" mapping is a label, not a deny (docs/admin-roles.md).
+/// License-gated like every enterprise feature.
 /// </summary>
 public sealed class GroupRoleAdminProvider : IAdminRoleProvider
 {
@@ -59,8 +61,17 @@ public sealed class GroupRoleAdminProvider : IAdminRoleProvider
         _groups = groups;
     }
 
-    public async Task<bool> IsAdminAsync(string owner, CancellationToken ct = default)
-        => _license.Enabled && await _groups.IsInAdminGroupAsync(owner, ct);
+    public async Task<GroupRole?> GetGroupRoleAsync(string owner, CancellationToken ct = default)
+    {
+        if (!_license.Enabled) return null;
+        var mapped = await _groups.GetMappedGroupsAsync(owner, ct);
+        foreach (var role in new[] { UserGroupStore.AdminRole, UserGroupStore.UserRole })
+        {
+            var groups = mapped.Where(m => m.Role == role).Select(m => m.Group).ToList();
+            if (groups.Count > 0) return new GroupRole(role, groups);
+        }
+        return null;
+    }
 
     public async Task<bool> HasAdminMappingsAsync(CancellationToken ct = default)
         => _license.Enabled && await _groups.AnyAdminGroupAsync(ct);
