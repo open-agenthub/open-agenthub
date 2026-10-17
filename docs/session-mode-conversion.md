@@ -103,9 +103,9 @@ edit to the interactive branch.
 
 - Web app: an inline card on a finished or paused autonomous session ("This autonomous run has
   finished. Continue it interactively?") with *Open workspace*, *Open terminal* and a
-  *keep auto-approve* checkbox. The surface decides the transport the way New session does:
-  Workspace on Claude asks for `uiMode: chat`, everything else for `terminal`, and the session
-  opens on the surface that was picked. The card used to offer *Open chat* (Claude only); the
+  *keep auto-approve* checkbox. Like New session, the card always asks for `uiMode: terminal`
+  (#114: a headless chat transport has no terminal, so the converted run would lose `/login` and
+  the CLI's menus), and the session opens on the surface that was picked. The card used to offer *Open chat* (Claude only); the
   separate chat surface is gone, and a Workspace button for Claude alone would have left every
   other agent's converted run opening in the terminal regardless of the person's preference; the same card unfolds under a row of the sessions list. No
   dialog, per the frontend rules.

@@ -49,6 +49,34 @@ export class AgentHubClient {
       undefined, MAX_TRANSCRIPT_BYTES);
   }
 
+  conversation(id, { offset, max } = {}) {
+    const query = new URLSearchParams();
+    if (offset !== undefined) query.set('offset', String(offset));
+    if (max !== undefined) query.set('max', String(max));
+    return this.#request('GET', `/api/remote/sessions/${encodeURIComponent(id)}/conversation?${query}`,
+      undefined, MAX_TRANSCRIPT_BYTES);
+  }
+
+  messages(id, { cursor, limit } = {}) {
+    const query = new URLSearchParams();
+    if (cursor !== undefined) query.set('cursor', cursor);
+    if (limit !== undefined) query.set('limit', String(limit));
+    return this.#request('GET', `/api/remote/sessions/${encodeURIComponent(id)}/messages?${query}`,
+      undefined, MAX_TRANSCRIPT_BYTES);
+  }
+
+  projects() {
+    return this.#request('GET', '/api/remote/projects', undefined, MAX_SESSION_LIST_BYTES);
+  }
+
+  project(id) {
+    return this.#request('GET', `/api/remote/projects/${encodeURIComponent(id)}`);
+  }
+
+  mcpServers() {
+    return this.#request('GET', '/api/remote/mcp-servers', undefined, MAX_SESSION_LIST_BYTES);
+  }
+
   async list(filters = {}) {
     const sessions = await this.#request('GET', '/api/remote/sessions', undefined, MAX_SESSION_LIST_BYTES);
     const list = Array.isArray(sessions) ? sessions : [];

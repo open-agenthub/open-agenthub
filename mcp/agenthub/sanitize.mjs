@@ -1,6 +1,6 @@
 /** Orchestration-safe SessionInfo fields for MCP tool responses. Never includes secrets. */
 const SAFE_KEYS = [
-  'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status',
+  'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status', 'failureReason',
   'parentSessionId', 'projectId', 'prompt', 'systemPrompt', 'schedule', 'questionPending',
   'createdAt', 'hasMcp',
   // What session_convert changes and whether it can be called: a caller that cannot read uiMode

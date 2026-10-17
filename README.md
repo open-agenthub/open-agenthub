@@ -74,7 +74,10 @@ shift.
 - **Versioned skill library with a built-in MCP server** — save reusable skills
   (SKILL.md plus helper scripts and other files) personally or per project; every
   save keeps the previous versions restorable. Sessions materialize the matching
-  skills automatically, and the agent itself can search (full-text, optionally
+  skills into the agent's own skill directory and keep it in sync while they run, so a skill
+  another session just saved is listed to the agent within a minute — live for Claude Code,
+  Codex and OpenCode, at the next start for OpenClaw ([docs/skill-library-sync.md](docs/skill-library-sync.md)).
+  The agent itself can also search (full-text, optionally
   semantic via a configurable embeddings endpoint), read, upload, and roll back
   skills through the injected `skill-library` MCP server. Helper scripts move by path,
   not by value: `upload_skill` reads a directory, a file or a `.tar.gz` off the session's
@@ -657,6 +660,8 @@ Results flow back via `git push` or as artifacts to S3. What is persisted:
 ### Session files and visual previews
 
 Claude's streaming Workspace accepts images and documents by file picker, paste, and drag-and-drop.
+In the agent terminal and the shell, Ctrl+V pastes the local clipboard's text; an image pasted
+there is not sent and points to Files instead ([`docs/terminal-clipboard.md`](docs/terminal-clipboard.md)).
 Images, PDF, Markdown, and plain text can be opened in Files beside Workspace or Terminal.
 HTML and SVG are download-only. A managed `files` MCP gives every supported agent the same
 provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,

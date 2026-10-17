@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => ({
     getConversation: vi.fn(), listPermissions: vi.fn().mockResolvedValue([]),
     listSessionMessages: vi.fn().mockResolvedValue([]), decidePermission: vi.fn()
   },
-  shared: vi.fn(), send: vi.fn(), stop: vi.fn(), mounted: vi.fn()
+  shared: vi.fn(), send: vi.fn(), stop: vi.fn(), mounted: vi.fn(), holdConnection: false, status: null
 }))
 vi.mock('../../api.js', () => ({ api: mocks.api, getSharedConversation: mocks.shared }))
 vi.mock('../../lib/mermaid.js', () => ({ renderMermaidBlocks: vi.fn() }))
@@ -30,7 +30,11 @@ function view(props = {}) {
         props: ['kind'], emits: ['status'],
         setup(props, { emit, expose }) {
           expose({ submitMessage: mocks.send, interruptAgent: mocks.stop })
-          onMounted(() => { mocks.mounted(props.kind); emit('status', 'connected') })
+          onMounted(() => {
+            mocks.mounted(props.kind)
+            if (props.kind === 'agent') mocks.status = value => emit('status', value)
+            if (!mocks.holdConnection) emit('status', 'connected')
+          })
           return () => null
         }
       })
@@ -47,6 +51,7 @@ beforeEach(() => {
   localStorage.clear()
   workspaceDrafts.clear()
   vi.clearAllMocks()
+  mocks.holdConnection = false
   mocks.send.mockResolvedValue(undefined)
   mocks.api.getConversation.mockResolvedValue(page([
     entry('user', 'Build a feature'), entry('assistant', 'Done **successfully**.'),
@@ -56,6 +61,27 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
 describe('integrated workspace', () => {
+  it('queues a message while the session starts and sends it through the agent terminal once connected (#115)', async () => {
+    mocks.holdConnection = true
+    const wrapper = view({ session: { ...session, phase: 'Pending' }, initialUi: 'workspace' })
+    await flushPromises()
+    const textarea = wrapper.get('[data-workspace-composer] textarea')
+    expect(textarea.element.disabled).toBe(false)
+    await textarea.setValue('Start with the tests')
+    await wrapper.get('[data-workspace-composer]').trigger('submit')
+    await flushPromises()
+    expect(mocks.send).not.toHaveBeenCalled()
+    expect(wrapper.get('[data-queued-message]').text()).toContain('Start with the tests')
+
+    await wrapper.setProps({ session: { ...session, phase: 'Running' } })
+    mocks.status('connected')
+    await flushPromises()
+    expect(mocks.send).toHaveBeenCalledTimes(1)
+    expect(mocks.send).toHaveBeenCalledWith('Start with the tests')
+    expect(wrapper.find('[data-queued-message]').exists()).toBe(false)
+  })
+
+
   it('opens the saved surface and permits an explicit creation choice without changing the preference', async () => {
     localStorage.setItem('agenthub.preferredUi', 'terminal')
     const terminal = view({ initialUi: null })

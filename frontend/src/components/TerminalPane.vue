@@ -5,11 +5,14 @@ import { FitAddon } from '@xterm/addon-fit'
 import { api, getSharedTranscript, sharedTerminalUrl, shellUrl, terminalUrl } from '../api.js'
 import { SUBMIT_ENTER_DELAY_MS, submitToAgent } from '../lib/terminal-input.js'
 import { attachTerminalClipboard } from '../lib/terminal-clipboard.js'
+import { detectMenu, sameMenu } from '../lib/cli-menu.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, showComposer: { type: Boolean, default: true } })
-const emit = defineEmits(['status'])
+const emit = defineEmits(['status', 'menu'])
 const host = ref(null)
 const mobileInput = ref('')
+const pasteNotice = ref('')
+let pasteNoticeTimer
 let term, fit, clipboard, ws, ro, reconnectTimer
 let disposed = false
 let inputRegistered = false
@@ -31,8 +34,9 @@ function send(value) {
 function submitMessage(text) {
   const socket = ws
   const generation = connectionGeneration
+  // retryable: nothing was written, so the composer may send the same text again later.
   if (!canSend.value || socket?.readyState !== WebSocket.OPEN || cancelSubmission)
-    return Promise.reject(new Error('Agent is disconnected. Your draft is still here.'))
+    return Promise.reject(Object.assign(new Error('Agent is disconnected. Your draft is still here.'), { retryable: true }))
   // Bracketed paste preserves multiline prompts as one edit instead of executing each line.
   // Strip terminal controls from pasted text so it cannot close its own paste envelope.
   const value = String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
@@ -63,7 +67,13 @@ function interruptAgent() {
   cancelSubmission?.()
   ws.send(JSON.stringify({ type: 'input', data: '\x03' }))
 }
-defineExpose({ submitMessage, interruptAgent })
+defineExpose({ submitMessage, interruptAgent, sendKeys })
+
+function showPasteNotice(text) {
+  pasteNotice.value = text
+  clearTimeout(pasteNoticeTimer)
+  pasteNoticeTimer = setTimeout(() => { pasteNotice.value = '' }, 5000)
+}
 
 function sendComposerMessage() {
   if (submitToAgent(send, mobileInput.value)) mobileInput.value = ''
@@ -104,8 +114,51 @@ function clearReconnect() {
   reconnectTimer = undefined
 }
 
+// The agent CLI's own interactive screens (#112), read off the screen this pane holds. Checked a
+// moment after output stops rather than per write: a TUI draws a menu in several writes, and a
+// half-drawn one would be announced and withdrawn within a frame.
+const MENU_SETTLE_MS = 150
+let menuTimer
+let lastMenu = null
+function scheduleMenuCheck() {
+  if (props.kind !== 'agent') return
+  clearTimeout(menuTimer)
+  menuTimer = setTimeout(checkMenu, MENU_SETTLE_MS)
+}
+function checkMenu() {
+  if (disposed || !term) return
+  const buffer = term.buffer.active
+  const lines = []
+  // baseY is the top of the live screen; viewportY would follow a person scrolling back.
+  for (let y = 0; y < term.rows; y++) lines.push(buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '')
+  reportMenu(isLive.value && ws ? detectMenu(lines) : null)
+}
+function reportMenu(menu) {
+  if (sameMenu(menu, lastMenu)) return
+  lastMenu = menu
+  emit('menu', menu)
+}
+
+// Keys for the CLI as a person would press them, one message each with a short gap: a TUI that
+// handles one key per read would otherwise see only the first of several sent together.
+const KEY_GAP_MS = 40
+function sendKeys(keys) {
+  const socket = ws
+  if (!canSend.value || socket?.readyState !== WebSocket.OPEN) return Promise.reject(new Error('Agent is disconnected'))
+  return keys.reduce((previous, key, index) => previous.then(() => new Promise((resolve, reject) => {
+    const write = () => {
+      if (socket !== ws || socket.readyState !== WebSocket.OPEN) return reject(new Error('Agent is disconnected'))
+      socket.send(JSON.stringify({ type: 'input', data: key }))
+      resolve()
+    }
+    if (index === 0) write()
+    else setTimeout(write, KEY_GAP_MS)
+  })), Promise.resolve())
+}
+
 function closeSocket() {
   cancelSubmission?.()
+  reportMenu(null)
   connectionGeneration += 1
   clearReconnect()
   const socket = ws
@@ -145,12 +198,13 @@ async function connect() {
     resize(true)
   }
   socket.onmessage = event => {
-    if (!disposed && ws === socket && term) term.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data))
+    if (!disposed && ws === socket && term) term.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data), scheduleMenuCheck)
   }
   socket.onclose = () => {
     if (disposed || ws !== socket) return
     cancelSubmission?.()
     ws = undefined
+    reportMenu(null)
     emit('status', 'disconnected')
     if (isLive.value) reconnectTimer = setTimeout(connect, 2000)
   }
@@ -188,7 +242,7 @@ onMounted(() => {
   fit = new FitAddon()
   term.loadAddon(fit)
   // A shared link's viewer did not start the session, so its output may not write their clipboard.
-  clipboard = attachTerminalClipboard(term, { allowOsc52: !props.sharedToken })
+  clipboard = attachTerminalClipboard(term, { allowOsc52: !props.sharedToken, host: host.value, notify: showPasteNotice })
   term.open(host.value)
   fitNow()
   ro = new ResizeObserver(scheduleFit)
@@ -224,6 +278,7 @@ watch(() => props.active, visible => {
 
 onBeforeUnmount(() => {
   disposed = true
+  clearTimeout(menuTimer)
   closeSocket()
   if (fitFrame) {
     cancelAnimationFrame(fitFrame)
@@ -233,10 +288,11 @@ onBeforeUnmount(() => {
   ro = undefined
   clipboard?.dispose()
   clipboard = undefined
+  clearTimeout(pasteNoticeTimer)
   term?.dispose()
   term = undefined
   fit = undefined
 })
 </script>
-<template><div class="pane"><div ref="host" class="term"></div><div v-if="showComposer && canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="sendComposerMessage" /><button class="primary" @click="sendComposerMessage">Send</button></div></div></template>
-<style scoped>.pane { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; } .term { flex: 1; min-height: 0; padding: 10px 12px; overflow: hidden; } .composer { display: flex; gap: 10px; padding: 12px 16px; background: var(--bg); border-top: 1px solid var(--border); } .composer input { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); } .composer button { align-self: center; padding: 9px 18px; }</style>
+<template><div class="pane"><div ref="host" class="term"></div><div v-if="pasteNotice" class="paste-notice" role="status" data-paste-notice>{{ pasteNotice }}</div><div v-if="showComposer && canSend && kind === 'agent'" class="composer"><input v-model="mobileInput" placeholder="Message the agent…" @keyup.enter="sendComposerMessage" /><button class="primary" @click="sendComposerMessage">Send</button></div></div></template>
+<style scoped>.pane { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; background: #0e0d0b; } .term { flex: 1; min-height: 0; padding: 10px 12px; overflow: hidden; } .composer { display: flex; gap: 10px; padding: 12px 16px; background: var(--bg); border-top: 1px solid var(--border); } .composer input { flex: 1; background: var(--hover); border: 1px solid var(--border-2); border-radius: var(--radius); } .composer button { align-self: center; padding: 9px 18px; } .paste-notice { position: absolute; top: 10px; right: 16px; max-width: min(420px, calc(100% - 32px)); padding: 8px 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border-2); border-radius: var(--radius); font-size: 13px; }</style>

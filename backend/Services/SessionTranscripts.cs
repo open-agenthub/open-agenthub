@@ -20,10 +20,15 @@ public static class SessionTranscripts
 
     /// <summary>
     /// One page for the web app's Workspace. Null when the session is unknown.
+    /// <paramref name="live"/> reads a running session's transcript from its pod; when it has
+    /// nothing, the page comes from the stored copy.
     /// </summary>
     public static async Task<ConversationPage?> PageAsync(
-        ISessionService sessions, string owner, string id, string phase, int? offset, int? max, CancellationToken ct)
+        ISessionService sessions, string owner, string id, string phase, int? offset, int? max, CancellationToken ct,
+        Func<CancellationToken, Task<IReadOnlyList<TranscriptEntry>?>>? live = null)
     {
+        if (live is not null && await live(ct) is { Count: > 0 } current)
+            return ConversationPage.FromEntries(id, phase, current, offset, max);
         var entries = await sessions.GetConversationAsync(owner, id, ct);
         if (entries is { Count: > 0 }) return ConversationPage.FromEntries(id, phase, entries, offset, max);
         var text = await sessions.GetTranscriptAsync(owner, id, ct);

@@ -90,7 +90,7 @@ describe('copy shortcuts', () => {
     attachTerminalClipboard(term, { write })
     expect(term.onKey(key({ ctrlKey: true, shiftKey: true, key: 'C' }))).toBe(false)
     expect(term.onKey(key({ metaKey: true }))).toBe(false)
-    expect(term.onKey(key({ ctrlKey: true, key: 'v' }))).toBe(true)
+    expect(term.onKey(key({ ctrlKey: true, key: 'x' }))).toBe(true)
     expect(term.onKey(key({ key: 'c' }))).toBe(true)
     await flush()
     expect(write.mock.calls).toEqual([['sel'], ['sel']])

@@ -204,7 +204,7 @@ public sealed class SessionDuplicationTests
     }
 
     [Fact]
-    public void DuplicateRequest_CopiesUiMode()
+    public void DuplicateRequest_OfAChatSessionRunsOnThePty()
     {
         var source = new SessionRecord
         {
@@ -215,7 +215,7 @@ public sealed class SessionDuplicationTests
 
         var copy = SessionDuplication.CopyableRequest(source, new("Copy", null, false));
 
-        Assert.Equal(SessionUiMode.Chat, copy.UiMode);
+        Assert.Equal(SessionUiMode.Terminal, copy.UiMode);
     }
 
     [Fact]

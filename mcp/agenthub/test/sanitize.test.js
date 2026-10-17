@@ -88,3 +88,9 @@ test('sanitizeSession keeps the self-deletion setting and the deadline it yields
   assert.equal(safe.lastActivityAt, '2026-10-10T12:00:00Z');
   assert.equal(safe.callbackToken, undefined);
 });
+
+test('session_get and child responses keep the backend failure reason', async () => {
+  const { sanitizeSession } = await import('../sanitize.mjs');
+  const failureReason = 'clone: Branch main does not exist. Edit the session repositories.';
+  assert.equal(sanitizeSession({ id: 'child', phase: 'Failed', failureReason }).failureReason, failureReason);
+});
