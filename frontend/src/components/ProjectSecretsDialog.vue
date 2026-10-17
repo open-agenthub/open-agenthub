@@ -50,7 +50,7 @@ async function save() {
         add them under Settings → Secrets.</p>
       <label v-for="secret in secrets" :key="secret.id" class="check">
         <input type="checkbox" :checked="selected.includes(secret.id)" :data-project-secret="secret.id" @change="toggle(secret.id)" />
-        <span><code>{{ secret.name }}</code> <span class="kind">{{ deliveryLabel(secret.delivery) }}</span><span v-if="secret.description" class="dim"> {{ secret.description }}</span></span>
+        <span><code>{{ secret.name }}</code> <span class="kind">{{ deliveryLabel(secret.delivery) }}</span><span v-if="secret.description" class="dim desc">{{ secret.description }}</span></span>
       </label>
       <p v-if="error" class="err" data-project-secrets-error>{{ error }}</p>
       <div class="row">
@@ -71,6 +71,7 @@ h3 { margin: 0 0 6px; font-size: 18px; }
 code { font-family: var(--mono); font-size: 12px; }
 .kind { display: inline-block; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--border-2); border-radius: 4px; color: var(--muted-3); font-size: 11px; font-weight: 700; }
 .dim { color: var(--faint); font-weight: 400; }
+.desc { margin-left: 6px; }
 .err { color: var(--danger); font: 12px var(--mono); }
 .row { display: flex; gap: 10px; margin-top: 16px; }
 </style>
