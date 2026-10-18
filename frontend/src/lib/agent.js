@@ -204,40 +204,69 @@ export function availableAlternatives(list, currentId) {
   return (Array.isArray(list) ? list : []).filter(account => account?.id !== currentId && !isAccountExhausted(account))
 }
 
-/** The stored git PATs ({id, kind, host}) out of the credential status; never a token. */
+/** The stored git PATs ({id, kind, host, label, isDefault, …}) out of the credential status; never a token. */
 export function gitPatOptions(status) {
   return Array.isArray(status?.gitPats) ? status.gitPats : []
 }
 
-/** The ids a session's stored selection ticks: null ("all") ticks every option, a list ticks what still exists. */
-export function gitPatSelectionFor(current, options) {
-  const ids = options.map(pat => pat.id)
-  return Array.isArray(current) ? ids.filter(id => current.includes(id)) : ids
+/**
+ * The tokens grouped by host, in stored order: [{host, kind, tokens}]. A session uses at most one
+ * per host (git's store answers with the first line for a host), so the picker offers one choice
+ * per group rather than a checkbox per token.
+ */
+export function gitPatHosts(options) {
+  const hosts = new Map()
+  for (const pat of options) {
+    if (!hosts.has(pat.host)) hosts.set(pat.host, { host: pat.host, kind: pat.kind, tokens: [] })
+    hosts.get(pat.host).tokens.push(pat)
+  }
+  return [...hosts.values()]
 }
 
-function everyPatTicked(selected, options) {
-  return options.length > 0 && options.every(pat => selected.includes(pat.id))
+/** Each host's default token: the one marked, or the first for a backend that marks none. */
+export function gitPatDefaults(options) {
+  return gitPatHosts(options).map(group => (group.tokens.find(pat => pat.isDefault) || group.tokens[0]).id)
+}
+
+/** How a token is named in a picker: its label, else its host. */
+export function gitPatName(pat) {
+  return pat?.label || pat?.host || ''
 }
 
 /**
- * What a create sends: null when every stored token is ticked — "all, including ones added
- * later", which is what every session got before a selection existed — else the ticked ids.
+ * The tokens a session actually gets from its stored selection: null is every host's default, a
+ * list keeps what still exists, one per host.
+ */
+export function gitPatSelectionFor(current, options) {
+  if (!Array.isArray(current)) return gitPatDefaults(options)
+  const seen = new Set()
+  return options.filter(pat => current.includes(pat.id) && !seen.has(pat.host) && seen.add(pat.host)).map(pat => pat.id)
+}
+
+function defaultsChosen(selected, options) {
+  const defaults = gitPatDefaults(options)
+  return options.length > 0 && defaults.length === selected.length && defaults.every(id => selected.includes(id))
+}
+
+/**
+ * What a create sends: null when every host has its default chosen — "the defaults, including
+ * hosts added later", which is what a session got before a choice existed — else the chosen ids.
  */
 export function gitPatIdsPayload(selected, options) {
-  if (!options.length || everyPatTicked(selected, options)) return null
+  if (!options.length || defaultsChosen(selected, options)) return null
   return options.map(pat => pat.id).filter(id => selected.includes(id))
 }
 
 /**
  * What an edit or duplicate sends: nothing when the selection matches the session's, `['*']`
- * when a restricted session goes back to every token (null would mean "unchanged" there), else
- * the ticked ids.
+ * when a restricted session goes back to the defaults (null would mean "unchanged" there), else
+ * the chosen ids.
  */
 export function gitPatIdsChange(selected, options, current) {
   if (!options.length) return {}
-  const all = everyPatTicked(selected, options)
-  if (!Array.isArray(current)) return all ? {} : { gitPatIds: gitPatIdsPayload(selected, options) }
-  if (all) return { gitPatIds: ['*'] }
+  const defaults = defaultsChosen(selected, options)
+  if (!Array.isArray(current)) return defaults ? {} : { gitPatIds: gitPatIdsPayload(selected, options) }
+  if (defaults) return { gitPatIds: ['*'] }
   const chosen = options.map(pat => pat.id).filter(id => selected.includes(id))
   const kept = gitPatSelectionFor(current, options)
   const same = chosen.length === kept.length && chosen.every(id => kept.includes(id))

@@ -3,10 +3,16 @@ import { computed, ref } from 'vue'
 import { api } from '../api.js'
 import { groupSessions } from '../lib/projects.js'
 import SessionList from './SessionList.vue'
+import ProjectSecretsDialog from './ProjectSecretsDialog.vue'
 
 const props = defineProps({ projects: Array, sessions: Array, active: String, query: { type: String, default: '' } })
 const emit = defineEmits(['new', 'select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share', 'projects-changed'])
 const collapsed = ref(new Set())
+// The project whose secret selection is being edited, or null.
+const secretsFor = ref(null)
+async function secretsSaved() { secretsFor.value = null; await changed() }
+// The sidebar group is a projection without the selection; the dialog needs the project itself.
+function openSecrets(group) { secretsFor.value = (props.projects || []).find(project => project.id === group.id) || null }
 const groups = computed(() => groupSessions(props.projects, props.sessions, props.query))
 
 function isCollapsed(id) { return collapsed.value.has(id) }
@@ -53,12 +59,13 @@ async function removeProject(project) {
     <section v-for="group in groups" :key="group.id" class="project-group">
       <header class="group-head">
         <button class="group-title" :data-toggle-group="group.id" :aria-expanded="!isCollapsed(group.id)" @click="toggleGroup(group.id)"><span class="chevron">{{ isCollapsed(group.id) ? '▸' : '▾' }}</span><i v-if="group.color" :style="{ background: group.color }"></i>{{ group.name }} <small>{{ group.sessions.length }}</small></button>
-        <span v-if="group.id !== 'shared' && group.id !== 'ungrouped'" class="group-controls"><button title="Move up" @click="reorder(group, -1)">↑</button><button title="Move down" @click="reorder(group, 1)">↓</button><button title="Rename" @click="rename(group)">✎</button><button title="Color" @click="recolor(group)">●</button><button title="Delete project" @click="removeProject(group)">×</button></span>
+        <span v-if="group.id !== 'shared' && group.id !== 'ungrouped'" class="group-controls"><button title="Move up" @click="reorder(group, -1)">↑</button><button title="Move down" @click="reorder(group, 1)">↓</button><button title="Rename" @click="rename(group)">✎</button><button title="Color" @click="recolor(group)">●</button><button title="Secrets" :data-project-secrets-open="group.id" @click="openSecrets(group)">⚿</button><button title="Delete project" @click="removeProject(group)">×</button></span>
       </header>
       <SessionList v-if="!isCollapsed(group.id)" :sessions="group.sessions" :active="active" @select="$emit('select', $event)" @remove="$emit('remove', $event)" @resume="$emit('resume', $event)" @pause="$emit('pause', $event)" @edit="$emit('edit', $event)" @duplicate="$emit('duplicate', $event)" @share="$emit('share', $event)" />
     </section>
     <p v-if="!groups.length" class="none">No matching sessions.</p>
     <button class="new-project" @click="createProject">+ New project</button>
+    <ProjectSecretsDialog v-if="secretsFor" :project="secretsFor" @close="secretsFor = null" @saved="secretsSaved" />
   </div>
 </template>
 

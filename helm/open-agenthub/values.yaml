@@ -84,6 +84,8 @@ agent:
   maxMemory: 4Gi
   # Users may specify a custom container image per session.
   allowCustomImage: true
+  # Replace outdated runtime images only after positive idle admission.
+  autoUpdateRuntimeImages: false
   # Users may run sessions as root (tools can be installed).
   # Requires PSA "baseline" (instead of "restricted") on the sessionsNamespace.
   allowRootSessions: true

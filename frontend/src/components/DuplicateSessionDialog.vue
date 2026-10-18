@@ -9,6 +9,8 @@ import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import GitPatPicker from './GitPatPicker.vue'
+import SecretPicker from './SecretPicker.vue'
+import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import SystemPromptField from './SystemPromptField.vue'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
@@ -50,6 +52,17 @@ function reset(session) {
 }
 reset(props.session)
 watch(() => props.session.id, () => reset(props.session))
+// The source's secret selection, as far as the copy's project allows it. Without a change the backend
+// copies the source's list within the same project and follows the new project otherwise, so that is
+// the baseline a change is measured against (docs/session-secrets.md).
+const storedSecrets = ref([])
+const selectedProject = computed(() => (props.projects || []).find(project => project.id === projectId.value) || null)
+const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
+const copiedSecretIds = computed(() => (projectId.value || '') === (props.session.projectId || '') ? props.session.secretIds : null)
+const selectedSecrets = ref([])
+watch([secrets, copiedSecretIds], ([options, copied]) => {
+  selectedSecrets.value = secretSelectionFor(copied, options, !!selectedProject.value)
+}, { immediate: true })
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
   try { providerAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* one login needs no choice */ }
@@ -58,6 +71,7 @@ onMounted(async () => {
     allowedAgents.value = allowed?.agents || []
   } catch { /* keep unrestricted catalog */ }
   try { savedMcpServers.value = await api.mcpServers() } catch { /* library is optional */ }
+  try { storedSecrets.value = (await api.listSecrets()) || [] } catch { /* older backend: no secrets */ }
 })
 async function submit() {
   busy.value = true; error.value = ''
@@ -77,7 +91,8 @@ async function submit() {
       // cleared in the dialog is dropped rather than copied back in (null would copy it).
       ...autoDeletePayload(autoDelete.value, { off: 0 }),
       // Omitted when unchanged, so the backend copies the source's selection.
-      ...gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds)
+      ...gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds),
+      ...secretIdsChange(selectedSecrets.value, secrets.value, !!selectedProject.value, copiedSecretIds.value)
     }))
   }
   catch (e) { error.value = String(e.message || e) } finally { busy.value = false }
@@ -90,6 +105,8 @@ async function submit() {
     <div class="card sect">
       <div class="field"><label>Title</label><input v-model="title" /></div>
       <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
+      <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
+        :project-has-none="!!selectedProject && storedSecrets.length > 0" />
       <SystemPromptField v-model="systemPrompt" />
       <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration <span class="dim">— inline JSON config</span></span></label>
       <div v-if="savedMcpServers.length" class="field mcp-field" data-mcp-picker>

@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentOptions, agentPayload, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy,
-  filterAgentOptions, gitPatIdsChange, gitPatIdsPayload, gitPatOptions, gitPatSelectionFor,
+  filterAgentOptions, gitPatDefaults, gitPatHosts, gitPatIdsChange, gitPatIdsPayload, gitPatName, gitPatOptions,
+  gitPatSelectionFor,
   needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload,
   customEndpointProtocol, supportsCustomEndpoint
 } from './agent.js'
@@ -254,5 +255,33 @@ describe('agent session helpers', () => {
     expect(credentialReadiness('OpenCode', 'Subscription', 'Autonomous', { opencodeSubscription: true }).ready).toBe(true)
     expect(credentialReadiness('OpenCode', 'Subscription', 'Interactive', {}).text).toContain('sign in inside the session')
     expect(agentPayload({ agent: 'OpenCode', authMode: 'ApiKey' })).toEqual({ agent: 'OpenCode', authMode: 'ApiKey' })
+  })
+})
+
+/// Several tokens for one host (issue #132): one choice per host, the host's default unless the
+/// session picks another.
+describe('git PAT selection with several tokens per host', () => {
+  const tokens = [
+    { id: 'p', kind: 'gitlab', host: 'gitlab.example.com', label: 'personal', isDefault: true },
+    { id: 'g', kind: 'gitlab', host: 'gitlab.example.com', label: 'group: platform', isDefault: false },
+    { id: 'h', kind: 'github', host: 'github.com', isDefault: true }
+  ]
+
+  it('groups by host and starts a session without a choice on each default', () => {
+    expect(gitPatHosts(tokens).map(group => [group.host, group.tokens.map(pat => pat.id)]))
+      .toEqual([['gitlab.example.com', ['p', 'g']], ['github.com', ['h']]])
+    expect(gitPatDefaults(tokens)).toEqual(['p', 'h'])
+    expect(gitPatSelectionFor(null, tokens)).toEqual(['p', 'h'])
+    // A stored list with two for one host (an older backend) still shows one per host.
+    expect(gitPatSelectionFor(['g', 'p'], tokens)).toEqual(['p'])
+    expect(gitPatName(tokens[1])).toBe('group: platform')
+    expect(gitPatName(tokens[2])).toBe('github.com')
+  })
+
+  it('sends null while every host is on its default and the ids once one is not', () => {
+    expect(gitPatIdsPayload(['p', 'h'], tokens)).toBeNull()
+    expect(gitPatIdsPayload(['g', 'h'], tokens)).toEqual(['g', 'h'])
+    expect(gitPatIdsChange(['g', 'h'], tokens, null)).toEqual({ gitPatIds: ['g', 'h'] })
+    expect(gitPatIdsChange(['p', 'h'], tokens, ['g'])).toEqual({ gitPatIds: ['*'] })
   })
 })

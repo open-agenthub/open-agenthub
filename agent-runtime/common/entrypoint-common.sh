@@ -51,6 +51,10 @@ fi
 # where `env` and every subprocess could read it.
 "$RUNTIME/common/setup-cli-auth.sh" || echo "[entrypoint] WARN: gh/glab auth setup failed"
 
+# The commit author of each selected token, per host (docs/git-credentials.md). After the owner's
+# own user.name/user.email above, so for a remote on that host the token's identity wins.
+node "$RUNTIME/common/git-identity.js" /secrets/gitcreds/authors || echo "[entrypoint] WARN: git author setup failed"
+
 export AGENTHUB_STATE_RESTORED=0
 if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; then
   echo "[entrypoint] Downloading session state from S3 …"

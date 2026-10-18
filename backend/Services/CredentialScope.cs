@@ -69,7 +69,7 @@ public static class CredentialScope
     private static CreateSessionRequest ApplyGit(CreateSessionRequest req, ApiTokenScope scope, IReadOnlyList<GitPatInfo> gitPats)
     {
         if (scope.AllowsAllGitPats) return req;
-        var allowedStored = gitPats.Where(p => scope.AllowsGitPat(p.Id)).Select(p => p.Id).ToList();
+        var allowedStored = OnePerHost(gitPats.Where(p => scope.AllowsGitPat(p.Id)).ToList());
         if (req.GitPatIds is null) return req with { GitPatIds = allowedStored };
 
         var ids = req.GitPatIds.Select(id => id?.Trim() ?? "").Where(id => id.Length > 0).ToList();
@@ -79,6 +79,17 @@ public static class CredentialScope
             throw new CredentialScopeException(CredentialScopeException.GitPatNotAllowed);
         return req with { GitPatIds = ids };
     }
+
+    /// <summary>
+    /// What "the defaults" means for a token allowed only some PATs: per host, the owner's default
+    /// when the token may use it, else the first allowed one. Passing every allowed id on would be
+    /// refused by the one-token-per-host rule (GitPatSelection) as soon as a token is allowed a
+    /// personal and a group token for the same host — which is the case the scope exists for.
+    /// </summary>
+    private static List<string> OnePerHost(IReadOnlyList<GitPatInfo> allowed) =>
+        allowed.GroupBy(p => p.Host, StringComparer.OrdinalIgnoreCase)
+            .Select(host => (host.FirstOrDefault(p => p.IsDefault) ?? host.First()).Id)
+            .ToList();
 
     /// <summary>
     /// Narrows the session's secrets to the token's (docs/session-secrets.md). <paramref name="resolved"/>

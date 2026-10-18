@@ -20,6 +20,7 @@ function Assert-NotContains([string]$Text, [string]$Expected) {
 
 $enabled = Render
 foreach ($expected in @(
+    'AgentHub__AutoUpdateRuntimeImages: "false"',
     'AgentHub__ControlNamespace: "agenthub-test"',
     'Browser__Enabled: "true"',
     'Browser__Image: "ghcr.io/open-agenthub/open-agenthub/browser:latest"',
@@ -87,5 +88,9 @@ Assert-Contains $disabled 'resources: ["networkpolicies"]'
 $noPolicies = Render @('--set', 'browser.enabled=false', '--set', 'agent.portRequests.enabled=false',
     '--set', 'sessionContainers.enabled=false')
 Assert-NotContains $noPolicies 'resources: ["networkpolicies"]'
+
+
+$runtimeUpdates = Render @('--set', 'agent.autoUpdateRuntimeImages=true')
+Assert-Contains $runtimeUpdates 'AgentHub__AutoUpdateRuntimeImages: "true"'
 
 Write-Output 'Browser Helm values and least-privilege RBAC assertions passed.'

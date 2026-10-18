@@ -70,6 +70,7 @@ public sealed class SessionsController : ControllerBase
         catch (KeyNotFoundException) { return NotFound(); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
     /// <summary>Resolves every still-pending request of the session as "allow" and defuses
@@ -101,6 +102,20 @@ public sealed class SessionsController : ControllerBase
         catch (HttpRequestException e) { return StatusCode(StatusCodes.Status502BadGateway, e.Message); }
     }
 
+    /// <summary>
+    /// Chooses which stored git tokens a session uses (at most one per host) and installs them in
+    /// its pod at once when it is running; <c>appliedNow</c> false means at the next start. What the
+    /// share dialog offers before a session is handed to someone else (docs/git-credentials.md).
+    /// </summary>
+    [HttpPatch("{id}/git-pats")]
+    public async Task<ActionResult<GitPatSwitchResult>> SwitchGitPats(string id,
+        [FromBody] SwitchSessionGitPatsRequest body, CancellationToken ct)
+    {
+        try { return Ok(await _svc.SwitchSessionGitPatsAsync(Owner, id, body.GitPatIds, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
     [HttpPost("{id}/duplicate")]
     public async Task<ActionResult<SessionInfo>> Duplicate(string id, [FromBody] DuplicateSessionRequest request, CancellationToken ct)
     {
@@ -110,6 +125,17 @@ public sealed class SessionsController : ControllerBase
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
+    }
+
+    [HttpPost("{id}/update-runtime")]
+    public async Task<ActionResult<SessionInfo>> UpdateRuntime(string id, CancellationToken ct)
+    {
+        try { return Ok(await _svc.UpdateRuntimeImageAsync(Owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (HttpRequestException) { return Conflict("Runtime is unavailable; update deferred."); }
     }
 
     [HttpPost("{id}/resume")]
@@ -143,6 +169,7 @@ public sealed class SessionsController : ControllerBase
         try { return Ok(await _svc.PauseSessionAsync(Owner, id, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
     /// <summary>
@@ -209,6 +236,7 @@ public sealed class SessionsController : ControllerBase
     {
         try { await _svc.DeleteSessionAsync(Owner, id, ct); return NoContent(); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
     /// <summary>Recent agent messages sent to this session — a read-only view for the web
