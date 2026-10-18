@@ -13,7 +13,6 @@
 // Interactive sessions only. An autonomous run ends with its turn, and its plain messages stay
 // in the inbox for agent_inbox, as they do for an autonomous Claude.
 
-import fs from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 const CALL_TIMEOUT_MS = 8000;
@@ -90,7 +89,7 @@ export async function cli() {
   try { payload = raw.trim() ? JSON.parse(raw) : {}; } catch { payload = {}; }
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) payload = {};
   const output = await run(payload);
-  if (output) fs.writeSync(1, JSON.stringify(output));
+  if (output) process.stdout.write(JSON.stringify(output));
 }
 
 // A hook that throws blocks the agent for no reason, so every failure path here is silent.
