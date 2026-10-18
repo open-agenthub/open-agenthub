@@ -37,5 +37,5 @@ strong { color: var(--danger); font-size: 13px; }
 header button { margin-left: auto; font-size: 12px; }
 .copy-error { flex-basis: 100%; color: var(--danger); font-size: 11px; }
 /* The mono face draws != as a single ≠ glyph; someone retyping a flag from the diagnostic must see the characters that are there. */
-pre { font-variant-ligatures: none; margin: 0; padding: 10px 12px; max-height: 40vh; overflow: auto; font: 12px/1.5 var(--mono); color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
+pre { margin: 0; padding: 10px 12px; max-height: 40vh; overflow: auto; font: 12px/1.5 var(--mono); font-variant-ligatures: none; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 </style>
