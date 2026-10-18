@@ -96,7 +96,7 @@ describe('pending queue below the conversation', () => {
     const pending = wrapper.get('[data-pending-message]')
     expect(pending.attributes('data-pending-kind')).toBe('fleet')
     expect(pending.text()).toContain('Message from agent “Code Reviewer”')
-    expect(pending.text()).toContain('waiting in the agent’s inbox')
+    expect(pending.text()).toContain('not yet received by the agent')
 
     mocks.api.listSessionMessages.mockResolvedValue([
       { id: 'm1', from: 'abc123', fromTitle: 'Code Reviewer', body: 'Look at MR 42', createdAt: '2026-10-18T10:00:00Z', deliveredAt: '2026-10-18T10:00:05Z', priority: false, interrupt: false, deliveredVia: 'mod' }

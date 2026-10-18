@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fleetLabel, fleetWaitingLabel, normalizeMessage, parseFleetMessage, pendingFleetMessages, sentEntry, stillPending, trackable } from './pending-messages.js'
+import { FLEET_WAITING, fleetLabel, normalizeMessage, parseFleetMessage, pendingFleetMessages, sentEntry, stillPending, trackable } from './pending-messages.js'
 import { toTranscriptItems } from './transcript.js'
 
 const user = text => ({ role: 'user', text })
@@ -65,7 +65,7 @@ describe('fleet messages', () => {
       { id: '4', deliveredAt: '2026-10-18T10:00:00Z', deliveredVia: 'next_turn' }
     ]
     expect(pendingFleetMessages(messages).map(m => m.id)).toEqual(['1', '3'])
-    expect(fleetWaitingLabel(messages[0])).toBe('waiting in the agent’s inbox')
+    expect(FLEET_WAITING).toBe('not yet received by the agent')
     expect(fleetLabel({ from: 'abc', fromTitle: null })).toBe('Message from agent “abc”')
     expect(fleetLabel({ from: null })).toBe('Message from outside the fleet')
   })

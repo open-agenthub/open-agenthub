@@ -178,8 +178,9 @@ it as pending, in case a CLI ever records a message differently from how it was 
 changes this view.
 
 Fleet messages to the session join the same list while the hub has not recorded them delivered
-(`priority-messages.md`): *waiting in the agent's inbox* — also one the pod accepted for the end of
-the running turn (#173), which the hub leaves unmarked until it is handed over. Once delivered they leave the list and the ✉ badge. A fleet message
+(`priority-messages.md`), labelled *not yet received by the agent*: the row cannot tell the inbox
+from a message the pod accepted for the end of the running turn (#173), which the hub leaves unmarked
+until it is handed over. Once delivered they leave the list and the ✉ badge. A fleet message
 reaches the CLI as a user turn headed `[AgentHub message from agent "<title>" (<id>)]` — typed into the
 terminal or submitted by the Claude fleet mod, which Claude Code 2.1.287 records wrapped in *The
 agenthub-fleet plugin sent a message:* and a note to the model — and the conversation shows that turn

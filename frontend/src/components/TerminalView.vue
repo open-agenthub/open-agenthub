@@ -18,7 +18,7 @@ import { repoShortName } from '../lib/text.js'
 import { terminalAttachmentPaths } from '../lib/attachments.js'
 import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
-import { fleetLabel, fleetWaitingLabel, pendingFleetMessages, sentEntry, stillPending, trackable } from '../lib/pending-messages.js'
+import { FLEET_WAITING, fleetLabel, pendingFleetMessages, sentEntry, stillPending, trackable } from '../lib/pending-messages.js'
 import { workspaceSent } from '../lib/session-drafts.js'
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
@@ -98,7 +98,7 @@ function dismissPending(key) {
 }
 const pendingItems = computed(() => [
   ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, dismissible: true })),
-  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: fleetWaitingLabel(m), text: m.body, dismissible: true }))
+  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, dismissible: true }))
 ])
 const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '' })
@@ -152,10 +152,6 @@ function messageTime(m) {
   const sameDay = at.toDateString() === new Date().toDateString()
   return sameDay ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : at.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
-
-function deliveryLabel(m) {
-  return fleetWaitingLabel(m)
 }
 
 async function refreshMessages() {
@@ -589,7 +585,7 @@ function interruptWorkspaceAgent() {
           </header>
           <p class="msg-body" :class="{ clamped: !isExpanded(m.id) }" data-message-body>{{ m.body }}</p>
           <footer class="msg-tile-foot">
-            <span class="msg-delivery" data-message-delivery>{{ deliveryLabel(m) }}</span>
+            <span class="msg-delivery" data-message-delivery>{{ FLEET_WAITING }}</span>
             <button v-if="needsClamp(m)" class="ghost msg-expand" data-message-expand :aria-expanded="isExpanded(m.id) ? 'true' : 'false'"
                     @click="toggleExpanded(m.id)">{{ isExpanded(m.id) ? 'Show less' : 'Show more' }}</button>
           </footer>

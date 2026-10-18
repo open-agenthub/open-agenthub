@@ -190,7 +190,7 @@ describe('priority messages in the session view', () => {
     const banner = wrapper.get('[data-agent-message]')
     expect(banner.attributes('data-priority')).toBe('true')
     expect(banner.text()).toContain('Priority message from agent “Code Reviewer”')
-    expect(banner.get('[data-message-delivery]').text()).toBe('waiting in the agent’s inbox')
+    expect(banner.get('[data-message-delivery]').text()).toBe('not yet received by the agent')
   })
 
   // #186: a message the agent received — through the mod, typed in, or read from its inbox — is
