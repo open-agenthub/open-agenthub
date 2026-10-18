@@ -1,8 +1,8 @@
 <script setup>
 import { computed, watch } from 'vue'
 import {
-  accountLimitLabel, accountOptionLabel, accountsFor, agentOptions, authOptions, credentialReadiness, defaultAccountId,
-  isAccountExhausted, needsOpenClawApiKeySource, openClawApiKeySourceOptions
+  accountLimitLabel, accountOptionLabel, accountsFor, agentOptions, authOptions, credentialReadiness, customEndpointProtocol,
+  defaultAccountId, isAccountExhausted, needsOpenClawApiKeySource, openClawApiKeySourceOptions, supportsCustomEndpoint
 } from '../lib/agent.js'
 
 const props = defineProps({
@@ -15,9 +15,13 @@ const props = defineProps({
   // Stored provider logins keyed by agent name, as the accounts endpoint returns them.
   accounts: { type: Object, default: () => ({}) },
   credentialId: { type: String, default: '' },
+  modelEndpointUrl: { type: String, default: '' },
+  modelName: { type: String, default: '' },
   options: { type: Array, default: null }
 })
-const emit = defineEmits(['update:agent', 'update:authMode', 'update:openClawApiKeySource', 'update:credentialId'])
+const emit = defineEmits(['update:agent', 'update:authMode', 'update:openClawApiKeySource', 'update:credentialId',
+  'update:modelEndpointUrl', 'update:modelName'])
+const showEndpoint = computed(() => props.authMode === 'CustomEndpoint')
 const visibleAgents = computed(() => props.options || agentOptions)
 const billingOptions = computed(() => authOptions(props.agent, props.legacyAuthMode))
 const showOpenClawSource = computed(() => needsOpenClawApiKeySource(props.agent, props.authMode))
@@ -28,7 +32,7 @@ const providerAccounts = computed(() => accountsFor(props.accounts, props.agent)
 // which left the dialog silent about *which* login the session would run on — and once an API
 // token can be restricted to some accounts (docs/credential-scopes.md), "the default" is no
 // longer something a person can take for granted.
-const showAccounts = computed(() => props.authMode !== 'ApiKey' && providerAccounts.value.length >= 1)
+const showAccounts = computed(() => !['ApiKey', 'CustomEndpoint'].includes(props.authMode) && providerAccounts.value.length >= 1)
 // The listing always carries every agent's key, so an empty object is "not loaded yet" (or an
 // older backend) rather than "no accounts". Until it arrives a pinned id must be left alone:
 // resetting it against an empty list would wipe the pin of a session being edited or copied.
@@ -47,6 +51,8 @@ watch([() => props.agent, providerAccounts, showAccounts, () => props.credential
 function chooseAgent(agent) {
   emit('update:agent', agent)
   if (props.authMode === 'Auto' && agent !== 'Claude') emit('update:authMode', 'Subscription')
+  // Cursor and OpenClaw cannot use an endpoint; the backend would refuse the session.
+  if (props.authMode === 'CustomEndpoint' && !supportsCustomEndpoint(agent)) emit('update:authMode', 'Subscription')
 }
 </script>
 
@@ -80,6 +86,15 @@ function chooseAgent(agent) {
           @click="$emit('update:openClawApiKeySource', option.value)">{{ option.label }}</button>
       </div>
       <small>{{ openClawApiKeySourceOptions.find(option => option.value === openClawApiKeySource)?.hint }}</small>
+    </div>
+    <div v-if="showEndpoint" class="decision-group source-group endpoint-group" data-endpoint-choice>
+      <div class="decision-label">Model endpoint</div>
+      <input data-endpoint-url class="mono" :value="modelEndpointUrl" aria-label="Model endpoint URL"
+        placeholder="https://llm.example.com/v1" @input="$emit('update:modelEndpointUrl', $event.target.value)" />
+      <input data-endpoint-model class="mono" :value="modelName" aria-label="Model name"
+        placeholder="model id, e.g. qwen3-coder-30b" @input="$emit('update:modelName', $event.target.value)" />
+      <small data-endpoint-protocol>{{ customEndpointProtocol(agent) }} The key is the custom endpoint API key in
+        Credentials. A server inside the cluster must be allowed by the operator.</small>
     </div>
     <div v-if="showAccounts" class="decision-group source-group" data-account-choice>
       <div class="decision-label">Account</div>
@@ -115,6 +130,7 @@ function chooseAgent(agent) {
 small { display: block; margin-top: 5px; color: var(--muted-3); font-size: 11px; }
 .source-group { grid-column: 1 / -1; }
 .source-group select { max-width: 100%; }
+.endpoint-group input { display: block; width: 100%; margin-bottom: 6px; }
 .readiness { grid-column: 1 / -1; margin: 0; padding-top: 10px; border-top: 1px solid var(--border); color: var(--warn); font-size: 12px; line-height: 1.45; }
 .readiness.ready { color: var(--ok); }
 @media (max-width: 600px) {

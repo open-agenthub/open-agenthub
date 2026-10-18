@@ -85,3 +85,35 @@ spec:
       ports:
         - { protocol: TCP, port: 8080 }
         - { protocol: TCP, port: 80 }
+{{- with .Values.agent.modelEndpoints }}
+---
+# Agent -> the in-cluster model servers the operator named (docs/custom-model-endpoints.md).
+# Exactly those pods on exactly those ports: allow-agent-egress cannot cover them, because a
+# Service on 80 usually fronts a container on another port, and the policy sees the container's.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-model-endpoints
+  namespace: {{ $.Values.sessionsNamespace }}
+  labels: {{ include "agenthub.labels" $ | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { agenthub.dev/component: agent }
+  policyTypes: [Egress]
+  egress:
+    {{- range . }}
+    {{- if not .namespace }}{{ fail "agent.modelEndpoints[].namespace is required" }}{{ end }}
+    {{- if not .ports }}{{ fail "agent.modelEndpoints[].ports is required" }}{{ end }}
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .namespace | quote }} }
+          {{- with .podLabels }}
+          podSelector:
+            matchLabels: {{ toJson . }}
+          {{- end }}
+      ports:
+        {{- range .ports }}
+        - { protocol: TCP, port: {{ . }} }
+        {{- end }}
+    {{- end }}
+{{- end }}

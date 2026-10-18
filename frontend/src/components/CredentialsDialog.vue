@@ -10,7 +10,7 @@ const props = defineProps({ embedded: { type: Boolean, default: false } })
 // Fields that are staged here and written together on Save. Git tokens are not among them:
 // they are a list with their own endpoints (see addPat/removePat below).
 const c = ref({
-  sshPrivateKey: '', anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '', openCodeApiKey: '',
+  sshPrivateKey: '', anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '', openCodeApiKey: '', customEndpointApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
 })
 // Which fields already have a stored value (values are never sent back).
@@ -38,6 +38,10 @@ const apiKeys = [
   {
     field: 'openCodeApiKey', label: 'OpenCode API key', placeholder: 'sk-…',
     hint: 'OpenCode Go subscription or Zen billing — the key from the opencode.ai console.'
+  },
+  {
+    field: 'customEndpointApiKey', label: 'Custom endpoint API key', placeholder: 'bearer token of your model server',
+    hint: 'Sessions on your own model endpoint (Own endpoint billing). Leave empty for a server without auth.'
   }
 ]
 

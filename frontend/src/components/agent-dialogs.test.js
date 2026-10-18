@@ -77,6 +77,50 @@ describe('agent-aware session dialogs', () => {
     expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('allowedTools')
   })
 
+  it('creates a Codex session on a custom endpoint and names the Responses API it needs', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="Codex"]').trigger('click')
+    await wrapper.get('[data-auth-option="CustomEndpoint"]').trigger('click')
+    expect(wrapper.get('[data-endpoint-protocol]').text()).toContain('/v1/responses')
+    expect(wrapper.find('[data-account-choice]').exists()).toBe(false)
+    await wrapper.get('[data-endpoint-url]').setValue('https://llm.example.com/v1')
+    await wrapper.get('[data-endpoint-model]').setValue('qwen3-coder-30b')
+    await wrapper.get('[data-submit]').trigger('click')
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'Codex', authMode: 'CustomEndpoint',
+      modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'qwen3-coder-30b'
+    }))
+  })
+
+  it('drops the custom endpoint when switching to an agent that cannot use one', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-auth-option="CustomEndpoint"]').trigger('click')
+    await wrapper.get('[data-agent-option="Cursor"]').trigger('click')
+
+    expect(wrapper.find('[data-auth-option="CustomEndpoint"]').exists()).toBe(false)
+    expect(wrapper.find('[data-endpoint-choice]').exists()).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0]).toMatchObject({ agent: 'Cursor', authMode: 'Subscription' })
+    expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('modelEndpointUrl')
+  })
+
+  it('edits the model of a custom-endpoint session and hides account failover', async () => {
+    const session = { ...baseSession, mode: 'Interactive', authMode: 'CustomEndpoint',
+      modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'old-model' }
+    const wrapper = mount(EditSessionDialog, { props: { session, projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.get('[data-endpoint-url]').element.value).toBe('https://llm.example.com/v1')
+    expect(wrapper.find('.failover-field').exists()).toBe(false)
+    await wrapper.get('[data-endpoint-model]').setValue('new-model')
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      authMode: 'CustomEndpoint', modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'new-model'
+    }))
+  })
+
   it('creates a Cursor API-key autonomous session', async () => {
     const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await wrapper.get('[data-agent-option="Cursor"]').trigger('click')

@@ -3,8 +3,44 @@ import {
   agentOptions, agentPayload, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy,
   filterAgentOptions, gitPatDefaults, gitPatHosts, gitPatIdsChange, gitPatIdsPayload, gitPatName, gitPatOptions,
   gitPatSelectionFor,
-  needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload
+  needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload,
+  customEndpointProtocol, supportsCustomEndpoint
 } from './agent.js'
+
+/// Sessions on a self-hosted model server (docs/custom-model-endpoints.md).
+describe('custom model endpoint', () => {
+  it('is offered only for the agents the backend accepts it for', () => {
+    for (const agent of ['Claude', 'Codex', 'OpenCode']) {
+      expect(supportsCustomEndpoint(agent)).toBe(true)
+      expect(authOptions(agent).map(option => option.value)).toContain('CustomEndpoint')
+    }
+    for (const agent of ['Cursor', 'OpenClaw']) {
+      expect(supportsCustomEndpoint(agent)).toBe(false)
+      expect(authOptions(agent).map(option => option.value)).not.toContain('CustomEndpoint')
+    }
+  })
+
+  it('names the wire protocol each agent needs, since "OpenAI-compatible" is not enough', () => {
+    expect(customEndpointProtocol('Claude')).toContain('/v1/messages')
+    expect(customEndpointProtocol('Codex')).toContain('/v1/responses')
+    expect(customEndpointProtocol('Codex')).toContain('/v1/chat/completions alone will not work')
+    expect(customEndpointProtocol('OpenCode')).toContain('/v1/chat/completions')
+  })
+
+  it('sends the endpoint only with its mode, trimmed', () => {
+    const form = { agent: 'Codex', authMode: 'CustomEndpoint', modelEndpointUrl: ' https://llm.example.com/v1 ', modelName: ' m1 ' }
+    expect(agentPayload(form)).toEqual({ agent: 'Codex', authMode: 'CustomEndpoint', modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' })
+    expect(agentPayload({ ...form, authMode: 'ApiKey' })).toEqual({ agent: 'Codex', authMode: 'ApiKey' })
+    expect(defaultAgentForm({ agent: 'Claude', authMode: 'CustomEndpoint', modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' }))
+      .toMatchObject({ modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' })
+  })
+
+  it('is ready without a stored key, and says the first turn is slow', () => {
+    expect(credentialReadiness('Claude', 'CustomEndpoint', 'Autonomous', {})).toMatchObject({ ready: true })
+    expect(credentialReadiness('Claude', 'CustomEndpoint', 'Autonomous', {}).text).toContain('without auth')
+    expect(credentialReadiness('Codex', 'CustomEndpoint', 'Interactive', { customEndpointApiKey: true }).text).toContain('minutes')
+  })
+})
 
 /// A session's git token selection (docs/credential-scopes.md): null = every stored token,
 /// including later ones; a list = exactly these; '*' = back to all on an update.
@@ -65,13 +101,13 @@ describe('agent session helpers', () => {
 
   it('offers both public agents and auth modes without Auto', () => {
     expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode'])
-    expect(authOptions('Codex').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
+    expect(authOptions('Codex').map(option => option.value)).toEqual(['Subscription', 'ApiKey', 'CustomEndpoint'])
     expect(authOptions('Cursor').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
     expect(authOptions('OpenClaw').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
   })
 
   it('offers Auto only for an existing migrated Claude Auto session', () => {
-    expect(authOptions('Claude', 'Auto').map(option => option.value)).toEqual(['Auto', 'Subscription', 'ApiKey'])
+    expect(authOptions('Claude', 'Auto').map(option => option.value)).toEqual(['Auto', 'Subscription', 'ApiKey', 'CustomEndpoint'])
     expect(authOptions('Codex', 'Auto').map(option => option.value)).not.toContain('Auto')
     expect(authOptions('Cursor', 'Auto').map(option => option.value)).not.toContain('Auto')
     expect(authOptions('OpenClaw', 'Auto').map(option => option.value)).not.toContain('Auto')
