@@ -163,6 +163,28 @@ project, which may select more than the parent was narrowed to); a child placed 
 keeps only what both select. Asking for a secret the parent does not have is `403
 secret_not_allowed` — refused rather than dropped, so the agent learns why the child lacks it.
 
+## The web app
+
+- **Settings → Secrets** is a tab of its own rather than a card in Credentials. Credentials are
+  logins the runtime knows how to use; a secret is something the owner hands the agent, with a name
+  and a purpose the agent sees. A value field is never filled from the store, an edit without a value
+  keeps the stored one, and the typed value is dropped from the page once saved. The name of a stored
+  secret cannot be edited: it is the variable or file the sessions see, and renaming would be a new
+  secret under a new id that no project or session selects yet.
+- **The project selection is a dialog on the project in the sidebar** (the key button next to
+  rename and color), the same place every other project setting is changed. The session dialogs
+  show the picker under the project field, because what they offer depends on it: the project's
+  selection inside a project, every stored secret outside one, and the hint says which applies.
+- **The token scope editor** lists secrets like git tokens. A token that ticks none is stored
+  without a `secrets` part, exactly like a token restricted before secrets existed.
+- **The share dialog says** that anyone with terminal input can read the session's secrets: the
+  masking covers what is stored and relayed, not a live terminal.
+
+Verified in real Chromium against the real backend (auth-off development mode, real Postgres, the
+API server rig): a file secret typed in Settings reached the `sessionsecrets` copy of a session
+created in the browser, the unticked variable did not, the project and token scope stored the
+ticked ids, and no page and no API response carried a value.
+
 ## What needs a real pod
 
 Verified against a real kube-apiserver with the chart's RBAC, as the backend's service account, and
