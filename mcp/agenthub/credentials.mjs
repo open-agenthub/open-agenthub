@@ -4,7 +4,7 @@
  * strings: a client caches the tool schema when it connects, and a parameter added later arrives
  * as a string from every already-connected client.
  *
- * Empty or "*" means "not specified" — the backend then uses every stored token, as before —
+ * Empty or "*" means "not specified" — the backend then uses the default token of each host, as before —
  * and "none" is the one way to say "no token at all", since an empty string cannot carry it.
  */
 export function parseIdList(value) {

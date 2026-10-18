@@ -598,6 +598,49 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         CancellationToken ct = default)
         => SwitchSessionCredentialAsync(owner, id, credentialId, reason: null, ct);
 
+    /// <summary>
+    /// Stores a new git token selection and, for a running pod, installs it there at once
+    /// (docs/git-credentials.md, "Switching the token of a running session"). Unlike a provider
+    /// account this needs no restart — git reads its store on every command — so the only reason to
+    /// fall back to "next start" is a pod that cannot take it: not running, or an image from before
+    /// the route. The selection is saved first either way, so the next start uses it regardless.
+    /// </summary>
+    public async Task<GitPatSwitchResult> SwitchSessionGitPatsAsync(string owner, string id,
+        IReadOnlyList<string>? gitPatIds, CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        rec.GitPatIdsJson = GitPatSelection.Serialize(await ValidateGitPatIdsAsync(owner, gitPatIds, ct));
+        await _store.UpsertAsync(rec, ct);
+
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        var appliedNow = false;
+        if (pod?.Status?.Phase == "Running" && pod.Status.PodIP is { Length: > 0 } podIp && _credentialPusher is not null)
+        {
+            var git = await BuildGitCredentialsAsync(owner, rec, ParseRepos(rec), ct)
+                ?? new SessionGitCredentials("", Array.Empty<GitAuthor>());
+            // The mounted copy follows too: a container restart in the same pod copies the store
+            // from the secret again and must not bring the previous token back.
+            await UpsertSecretAsync(GitCredentialsSecret(owner, rec.Id, git), ct);
+            try
+            {
+                appliedNow = await _credentialPusher.PushGitCredentialsAsync(podIp, rec.CallbackToken, git.PodPayload(), ct);
+            }
+            catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+            {
+                // The selection is stored and the next start uses it; failing the request would
+                // tell the owner nothing changed when it did.
+                _log.LogWarning(error, "Session {Id} did not take the new git credentials", rec.Id);
+            }
+        }
+        // A count rather than the ids: they arrive in the request body, and the record holds them anyway.
+        _log.LogInformation("Session {Id} git tokens set ({Count}; applied now: {Now})",
+            rec.Id, GitPatSelection.Parse(rec.GitPatIdsJson)?.Count.ToString() ?? "defaults", appliedNow);
+        var info = await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
+            await _browsers.GetSummaryAsync(id, ct), ct);
+        return new GitPatSwitchResult(info, appliedNow);
+    }
+
     public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
         string? reason, CancellationToken ct = default)
     {
@@ -1468,6 +1511,38 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         catch { throw new ArgumentException($"Invalid {what} quantity: '{value}'."); }
     }
 
+    /// <summary>
+    /// The session's credential store and per-host authors: connected-provider lines for the
+    /// repositories it names, then the stored PATs its selection keeps (one per host). Null when
+    /// there is nothing to write. Shared by the spawn and the switch of a running session, so the
+    /// pod gets the same content either way.
+    /// </summary>
+    private async Task<SessionGitCredentials?> BuildGitCredentialsAsync(string owner, SessionRecord rec,
+        IReadOnlyList<RepoRef> repos, CancellationToken ct)
+    {
+        var oauthStore = await _gitAuth.BuildCredentialStoreAsync(owner, repos, ct);
+        var manualCredentials = (await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data;
+        var selectedPats = GitPatSelection.Apply(
+            GitPatStore.Read(manualCredentials), GitPatSelection.Parse(rec.GitPatIdsJson));
+        var store = ManualGitCredentials.ComposeStore(oauthStore, ManualGitCredentials.Lines(selectedPats));
+        return store is null ? null : new SessionGitCredentials(store, ManualGitCredentials.Authors(selectedPats, oauthStore));
+    }
+
+    private V1Secret GitCredentialsSecret(string owner, string sessionId, SessionGitCredentials git) => new()
+    {
+        Metadata = new V1ObjectMeta
+        {
+            Name = $"gitcreds-{sessionId}", NamespaceProperty = _opts.Namespace,
+            Labels = new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = sessionId }
+        },
+        Type = "Opaque",
+        Data = new Dictionary<string, byte[]>
+        {
+            ["credentials"] = Encoding.UTF8.GetBytes(git.Store),
+            ["authors"] = JsonSerializer.SerializeToUtf8Bytes(git.Authors, SessionGitCredentials.Json)
+        }
+    };
+
     private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct)
     {
         // Resolved fresh on every (re)start so catalog entries stay live:
@@ -1508,32 +1583,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 // Which PATs is read from the record, not the request: a resume rebuilds the
                 // request from the record anyway, and one source means a resumed session cannot
                 // come back with a different selection than it was created with.
-                var oauthStore = await _gitAuth.BuildCredentialStoreAsync(
-                    owner, NormalizeRepos(req), resourceCt);
-                var manualCredentials = (await ReadSecretOrNullAsync(
-                    CredsSecretName(owner), resourceCt))?.Data;
-                var selectedPats = GitPatSelection.Apply(
-                    GitPatStore.Read(manualCredentials), GitPatSelection.Parse(rec.GitPatIdsJson));
-                var credentialStore = ManualGitCredentials.ComposeStore(
-                    oauthStore, ManualGitCredentials.Lines(selectedPats));
-                if (credentialStore is null) return false;
-
-                await UpsertSecretAsync(new V1Secret
-                {
-                    Metadata = new V1ObjectMeta
-                    {
-                        Name = $"gitcreds-{rec.Id}", NamespaceProperty = _opts.Namespace,
-                        Labels = new Dictionary<string, string>
-                        {
-                            [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id
-                        }
-                    },
-                    Type = "Opaque",
-                    Data = new Dictionary<string, byte[]>
-                    {
-                        ["credentials"] = Encoding.UTF8.GetBytes(credentialStore)
-                    }
-                }, resourceCt);
+                var git = await BuildGitCredentialsAsync(owner, rec, NormalizeRepos(req), resourceCt);
+                if (git is null) return false;
+                await UpsertSecretAsync(GitCredentialsSecret(owner, rec.Id, git), resourceCt);
                 return true;
             },
             ct);

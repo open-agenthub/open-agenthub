@@ -111,6 +111,14 @@ public interface ISessionService
     Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId, string? reason,
         CancellationToken ct = default) => SwitchSessionCredentialAsync(owner, id, credentialId, ct);
 
+    /// <summary>
+    /// Stores which git tokens a session uses and installs them in its pod when it is running
+    /// (docs/git-credentials.md). Throws <see cref="KeyNotFoundException"/> (no such session) or
+    /// <see cref="ArgumentException"/> (unknown id, two tokens for one host).
+    /// </summary>
+    Task<GitPatSwitchResult> SwitchSessionGitPatsAsync(string owner, string id, IReadOnlyList<string>? gitPatIds,
+        CancellationToken ct = default) => throw new NotSupportedException();
+
     Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default);
     Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);
     Task<SessionInfo> UpdateRuntimeImageAsync(string owner, string id, CancellationToken ct = default)

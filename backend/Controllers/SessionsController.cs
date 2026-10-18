@@ -102,6 +102,20 @@ public sealed class SessionsController : ControllerBase
         catch (HttpRequestException e) { return StatusCode(StatusCodes.Status502BadGateway, e.Message); }
     }
 
+    /// <summary>
+    /// Chooses which stored git tokens a session uses (at most one per host) and installs them in
+    /// its pod at once when it is running; <c>appliedNow</c> false means at the next start. What the
+    /// share dialog offers before a session is handed to someone else (docs/git-credentials.md).
+    /// </summary>
+    [HttpPatch("{id}/git-pats")]
+    public async Task<ActionResult<GitPatSwitchResult>> SwitchGitPats(string id,
+        [FromBody] SwitchSessionGitPatsRequest body, CancellationToken ct)
+    {
+        try { return Ok(await _svc.SwitchSessionGitPatsAsync(Owner, id, body.GitPatIds, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException e) { return BadRequest(e.Message); }
+    }
+
     [HttpPost("{id}/duplicate")]
     public async Task<ActionResult<SessionInfo>> Duplicate(string id, [FromBody] DuplicateSessionRequest request, CancellationToken ct)
     {

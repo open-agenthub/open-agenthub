@@ -777,9 +777,12 @@ public record CredentialStatus
 /// <summary>
 /// One stored git personal access token as the API reports it. <c>Kind</c> is
 /// <c>gitlab</c> or <c>github</c> (see <see cref="GitPatKind"/>); the token itself is never
-/// included.
+/// included. A host can carry several tokens; <c>IsDefault</c> marks the one a session gets for
+/// that host unless it chose another (docs/git-credentials.md). The author, when set, is the git
+/// identity commits to that host are made with in a session using this token.
 /// </summary>
-public record GitPatInfo(string Id, string Kind, string Host);
+public record GitPatInfo(string Id, string Kind, string Host, string? Label = null, bool IsDefault = false,
+    string? AuthorName = null, string? AuthorEmail = null);
 
 /// <summary>The two kinds of PAT a session knows how to use; the kind decides the user part of
 /// the store line and therefore which CLI (<c>glab</c> or <c>gh</c>) is configured.</summary>
@@ -792,17 +795,35 @@ public static class GitPatKind
 }
 
 /// <summary>
-/// Stores or rotates a PAT. The host is the identity: a second request for a host that is
-/// already stored replaces that entry's token rather than adding a line, because git's store
-/// helper answers with the first entry matching the host and a stale one in front would keep
-/// winning after a rotation.
+/// Stores, rotates or edits a PAT; see <see cref="Services.GitPatStore.Upsert"/> for which entry a
+/// request means. Rotation keeps the id rather than appending a line, because git's store helper
+/// answers with the first entry matching the host and a stale one in front would keep winning.
 /// </summary>
 public record UpsertGitPatRequest
 {
+    /// <summary>Edits this stored entry; kind and host may then be omitted, and so may the token
+    /// when only the label, author or default changes.</summary>
+    public string? Id { get; init; }
     public string? Kind { get; init; }
-    /// <summary>Hostname with an optional port, e.g. <c>gitlab.example.com</c>. Required: the
-    /// token is only ever sent to this host, and defaulting to the public instance would be
+    /// <summary>Hostname with an optional port, e.g. <c>gitlab.example.com</c>. Required for a new
+    /// token: it is only ever sent to this host, and defaulting to the public instance would be
     /// silently wrong for a self-hosted one.</summary>
     public string? Host { get; init; }
     public string? Token { get; init; }
+    /// <summary>What the owner calls it ("personal", "group: platform"). Without an id, the host and
+    /// label together pick the entry a request rotates.</summary>
+    public string? Label { get; init; }
+    /// <summary>True makes this the host's default; false is ignored (mark another token instead).</summary>
+    public bool? Default { get; init; }
+    public string? AuthorName { get; init; }
+    public string? AuthorEmail { get; init; }
 }
+
+/// <summary>Body of <c>PATCH /api/sessions/{id}/git-pats</c>: the same values as
+/// <see cref="UpdateSessionRequest.GitPatIds"/>, except that null here means "the defaults"
+/// (there is nothing to leave unchanged).</summary>
+public record SwitchSessionGitPatsRequest(List<string>? GitPatIds);
+
+/// <summary>The session after a git token switch, and whether its running pod already uses the new
+/// tokens (<c>AppliedNow</c>) or gets them at the next start.</summary>
+public record GitPatSwitchResult(SessionInfo Session, bool AppliedNow);
