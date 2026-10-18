@@ -33,8 +33,11 @@ public interface ISessionMessageStore
     Task InitializeAsync(CancellationToken ct = default);
     Task AddAsync(SessionMessageRecord message, CancellationToken ct = default);
     /// <summary>Atomically marks up to <paramref name="limit"/> undelivered messages of the
-    /// session as delivered (via the inbox) and returns them (oldest first).</summary>
-    Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default);
+    /// session as delivered and returns them (oldest first). <paramref name="via"/> is
+    /// <see cref="MessageDeliveryVia.Inbox"/> for <c>agent_inbox</c> and
+    /// <see cref="MessageDeliveryVia.NextTurn"/> when the pod takes them to hand over as a turn.</summary>
+    Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, string via,
+        CancellationToken ct = default);
     /// <summary>Recent messages of the session (newest first), delivered or not — read-only view for the UI.</summary>
     Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default);
     /// <summary>Owner-bound history uses a timestamp/id keyset so new arrivals do not shift later pages.</summary>
@@ -104,7 +107,8 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    public async Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default)
+    public async Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, string via,
+        CancellationToken ct = default)
     {
         const string sql = $"""
             UPDATE session_messages SET delivered_at = now(), delivered_via = @via
@@ -120,7 +124,7 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("to", toSessionId);
         cmd.Parameters.AddWithValue("limit", limit);
-        cmd.Parameters.AddWithValue("via", MessageDeliveryVia.Inbox);
+        cmd.Parameters.AddWithValue("via", via);
         var taken = await ReadAllAsync(cmd, ct);
         return taken.OrderBy(m => m.CreatedAt).ToList();
     }

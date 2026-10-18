@@ -8,6 +8,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
+const { createNextTurnDelivery, IDLE_QUIET_MS } = require('./next-turn');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs } = require('./state-archive');
 const { createSecretMask } = require('./secret-mask');
@@ -49,6 +50,12 @@ const URL_REFRESH_EVERY_TICKS = 720;
 // The most transcript one GET /agenthub/transcript returns. A first read of a long session
 // takes a few of these; the hub asks again from where the last one stopped.
 const MAX_TRANSCRIPT_CHUNK = 8 * 1024 * 1024;
+// A POST /agenthub/attachments body: at most five 32-character file ids.
+const MAX_ATTACHMENT_REQUEST_BYTES = 4 * 1024;
+// What a path typed into a CLI's input box may contain. The CLIs recognise a pasted image path
+// only as the whole paste, and a space or quote would need each CLI's own escaping; the composer
+// names its uploads within this set, so anything else is refused rather than half-recognised.
+const TERMINAL_PATH = /^\/[A-Za-z0-9._/-]+$/;
 // The longest reason a credential swap may carry into the scrollback.
 const MAX_SWITCH_REASON_CHARS = 300;
 // How often the skill library is pulled while the session runs. A minute is "shortly" for a
@@ -184,6 +191,19 @@ function createCommonServer(options = {}) {
   });
   // Mod reports already forwarded this start, keyed by window and reset time.
   const forwardedLimits = new Set();
+  // Plain fleet messages as the agent's next turn, for a runtime whose hooks report its turns
+  // (driver.turnHooks) and that has no mod to hand them to (docs/priority-messages.md, #173).
+  const nextTurn = driver.turnHooks === true && mode === 'interactive'
+    ? createNextTurnDelivery({
+      now, fetchImpl, callback, token,
+      wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms)),
+      Terminal: supplied.HeadlessTerminal && (() => supplied.HeadlessTerminal),
+      log: line => console.log('[agent] ' + line)
+    })
+    : null;
+  // Keys a person sends while a message is being typed in: they go in after its Enter instead of
+  // landing in the middle of it.
+  let inputHeldForTyping = [];
 
   function remember(chunk) {
     scrollback += chunk;
@@ -859,7 +879,9 @@ function createCommonServer(options = {}) {
       cwd, env: agentEnv
     });
 
+    if (nextTurn) nextTurn.agentStarted();
     term.onData(data => {
+      if (nextTurn) nextTurn.agentOutput();
       attemptOutput += data;
       remember(data);
       broadcast(data);
@@ -965,6 +987,13 @@ function createCommonServer(options = {}) {
         return;
       }
       if (message.type === 'input' && typeof message.data === 'string') {
+        if (nextTurn) {
+          nextTurn.personInput(message.data);
+          if (nextTurn.isTyping()) {
+            inputHeldForTyping.push(message.data);
+            return;
+          }
+        }
         term.write(message.data);
       } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
         lastSize = { cols: message.cols, rows: message.rows };
@@ -1234,7 +1263,15 @@ function createCommonServer(options = {}) {
       sendJson(response, 200, { delivered: 'queued-for-mod' });
       return;
     }
-    if (!message.priority) return unavailable('not_priority');
+    if (!message.priority) {
+      if (!nextTurn || chatMode) return unavailable('not_priority');
+      // Not typed now: the agent may be mid-turn or in a menu. The hub leaves the row in the
+      // inbox, and the turn's end (or an idle prompt) takes it from there.
+      nextTurn.accept();
+      sendJson(response, 200, { delivered: 'next-turn' });
+      deliverNextTurnIfIdle();
+      return;
+    }
     // The agent is being swapped out (an account switch): the pipe or PTY it is about to leave
     // would swallow the text, so the message waits for the one that comes up. The answer names
     // the channel it will take, since that is what the hub records.
@@ -1264,6 +1301,47 @@ function createCommonServer(options = {}) {
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
     });
     sendJson(response, 200, { delivered: 'pty' });
+  }
+
+  function deliverNextTurnIfIdle() {
+    if (!nextTurn || chatMode || exited || restartReason !== null || runtimeDraining) return;
+    const target = term;
+    nextTurn.deliverIfIdle(target, () => scrollback, lastSize || { cols: 120, rows: 32 })
+      .catch(error => console.log('[agent] next-turn: delivery failed: ' + (error && error.message || error)))
+      .finally(() => {
+        // A check that found another one typing must leave the keys to that one's end.
+        if (nextTurn.isTyping()) return;
+        const keys = inputHeldForTyping;
+        inputHeldForTyping = [];
+        if (term === target && !exited) for (const data of keys) target.write(data);
+      });
+  }
+
+  /**
+   * POST /agenthub/turn: the agent's own turn hooks (common/fleet-turn-hook.mjs) say a prompt was
+   * submitted, an approval is being asked, or the turn ended. The answer to a Stop is the text of
+   * the next turn when fleet messages wait. Loopback only, with the callback token the hooks
+   * already carry for their calls to the hub.
+   */
+  async function handleTurnRequest(request, response) {
+    const address = request.socket && request.socket.remoteAddress;
+    if (!nextTurn || !isLoopback(address) || !tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, nextTurn ? 401 : 404, nextTurn ? 'unauthorized' : 'not_found');
+      return;
+    }
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const raw = await readBoundedBody(request, MAX_LIMIT_REPORT_BYTES);
+    let event = null;
+    try { event = raw && JSON.parse(raw.toString('utf8')).event; } catch {}
+    if (!['prompt', 'permission', 'stop'].includes(event)) return fileError(response, 400, 'invalid_event');
+    // A Stop during an update or restart is answered with nothing: the agent is about to go.
+    const text = runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
+    sendJson(response, 200, text ? { text } : {});
+    if (event === 'stop' && !text) setTimeoutImpl(deliverNextTurnIfIdle, IDLE_QUIET_MS + 100);
   }
 
   function parseFleetMessage(raw) {
@@ -1367,6 +1445,7 @@ function createCommonServer(options = {}) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
     if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
+    if (requestPath === '/agenthub/attachments') return handleAttachmentRequest(request, response);
     if (requestPath === '/agenthub/runtime-drain') {
       if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
       if (request.method === 'DELETE') {
@@ -1396,6 +1475,7 @@ function createCommonServer(options = {}) {
     if (requestPath === '/agenthub/git-credentials') return handleGitCredentialRequest(request, response);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
     if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
+    if (requestPath === '/agenthub/turn') return handleTurnRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
         requestPath === '/agenthub/mod/limit') {
       return handleModRequest(request, response, requestPath);
@@ -1431,6 +1511,50 @@ function createCommonServer(options = {}) {
     } catch {
       fileError(response, 503, 'commands_unavailable');
     }
+  }
+
+  /**
+   * POST /agenthub/attachments: files the person attached in the Workspace composer or pasted into
+   * the agent terminal of a terminal-transport session (#148). They are materialized exactly as a
+   * chat-mode attachment is, and the answer is the path each one has to be pasted as: every pinned
+   * CLI turns a pasted path to an image into an image of its own ("[Image #1]") and sends it to the
+   * model as image content (docs/terminal-clipboard.md). The browser pastes the paths itself, ahead
+   * of the message text, so the bytes keep the single order of the one terminal connection.
+   */
+  async function handleAttachmentRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    // A chat-mode turn carries its attachments in the message, with a delivery receipt.
+    if (chatMode) return fileError(response, 409, 'chat_transport');
+    if (exited) return fileError(response, 409, 'agent_exited');
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
+    const raw = await readBoundedBody(request, MAX_ATTACHMENT_REQUEST_BYTES);
+    if (!raw) return fileError(response, 413, 'request_too_large');
+    let fileIds;
+    try { fileIds = JSON.parse(raw.toString('utf8')).fileIds; } catch { return fileError(response, 400, 'invalid_request'); }
+    let records;
+    try {
+      records = await attachmentMaterializer.materialize(fileIds);
+    } catch (error) {
+      return fileError(response, error && error.message === 'attachment_batch_invalid' ? 400 : 502, 'attachment_delivery_failed');
+    }
+    const attachments = [];
+    try {
+      for (const file of records) {
+        const pastePath = typeof driver.terminalAttachmentPath === 'function'
+          ? driver.terminalAttachmentPath(file, { env, home, fs })
+          : file.localPath;
+        if (!TERMINAL_PATH.test(pastePath)) return fileError(response, 422, 'attachment_path_unsafe');
+        attachments.push({ id: file.id, name: file.name, mimeType: file.mimeType, size: file.size, path: pastePath });
+      }
+    } catch {
+      return fileError(response, 502, 'attachment_delivery_failed');
+    }
+    sendJson(response, 200, { attachments });
   }
 
   function handleShell(socket) {
@@ -1573,6 +1697,9 @@ function createCommonServer(options = {}) {
   // first client and stays part of what we persist from here on.
   restoreScrollback(() => catchUpTranscript(() => startAgent(true)));
 
+  // An idle agent's waiting messages, once the screen has been still long enough to tell.
+  if (nextTurn) setIntervalImpl(deliverNextTurnIfIdle, 1_000);
+
   let ticksSinceUrlRefresh = 0;
   setIntervalImpl(() => {
     if (!exited) persistAll();
@@ -1641,7 +1768,7 @@ function createCommonServer(options = {}) {
 
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
-    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands' +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands, /agenthub/attachments' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 

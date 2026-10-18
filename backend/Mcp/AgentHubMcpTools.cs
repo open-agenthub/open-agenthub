@@ -347,7 +347,7 @@ public sealed class AgentHubMcpTools(
     [Description("Send a message or task to one of your agents. \"to\" is a session id or a unique title; "
                  + "scope the lookup with projectId. By default the agent reads it via its in-session "
                  + "agent_inbox tool; with priority the message is pushed straight into the running agent's "
-                 + "prompt. deliveredVia in the result says where it went: inbox, injected or mod.")]
+                 + "prompt. deliveredVia in the result says where it went: inbox, injected, mod or next_turn (handed over when its current turn ends).")]
     public async Task<AgentMessageResult> SendToAgent(
         [Description("Session id or unique agent title.")] string to,
         [Description("Message body, 1..4000 characters.")] string message,

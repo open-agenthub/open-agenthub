@@ -218,6 +218,13 @@ export function createAttachmentQueue({ sessionId, api, onChange = () => {} }) {
     return remove(key)
   }
 
+  // Rows that were already uploaded, handed back — a queued message's attachments returning to
+  // the composer when the message could not be sent.
+  function adopt(ready) {
+    for (const item of ready) items.push({ ...item, key: `attachment-${++nextKey}`, state: 'ready', progress: 100, error: '' })
+    changed()
+  }
+
   function clearReady() {
     for (let index = items.length - 1; index >= 0; index -= 1) {
       if (items[index].state === 'ready') items.splice(index, 1)
@@ -234,5 +241,60 @@ export function createAttachmentQueue({ sessionId, api, onChange = () => {} }) {
     await Promise.all(items.slice().map(item => dismiss(item.key)))
   }
 
-  return { items, add, retry, remove, dismiss, release, clearReady, cancelAll }
+  return { items, add, retry, remove, dismiss, release, adopt, clearReady, cancelAll }
+}
+
+// A file reaches a terminal-transport agent as its path pasted into the CLI (#148), and a CLI
+// recognises a pasted path only when the paste is that path alone: a space or a quote in the name
+// would need each CLI's own escaping. The session agent refuses such a path, so names are made
+// safe before the upload. A clipboard image arrives as "image.png" every time; it gets a name
+// that says when it was pasted, which is what a person looking through Files later has to go by.
+const UNSAFE_NAME = /[^A-Za-z0-9._-]+/g
+
+function stamp(date) {
+  const pad = value => String(value).padStart(2, '0')
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`
+}
+
+export function terminalSafeFile(file, { pasted = false, now = new Date(), index = 0 } = {}) {
+  const ext = extension(file.name) || ({ 'image/png': '.png', 'image/jpeg': '.jpg', 'image/webp': '.webp', 'image/gif': '.gif' })[file.type] || ''
+  const base = pasted && /^image\.[a-z]+$/i.test(file.name)
+    ? `pasted-image-${stamp(now)}${index ? '-' + (index + 1) : ''}`
+    : String(file.name).slice(0, String(file.name).length - extension(file.name).length).replace(UNSAFE_NAME, '-').replace(/^[-.]+|-+$/g, '') || 'file'
+  const name = base + ext.toLowerCase()
+  if (name === file.name) return file
+  return new File([file], name, { type: file.type, lastModified: file.lastModified })
+}
+
+// Uploads files outside a composer (a paste into the terminal) and resolves to their ids once
+// every one is ready; the first failure rejects with the message the composer would show.
+export async function uploadAttachmentFiles({ sessionId, api, files }) {
+  const queue = createAttachmentQueue({ sessionId, api })
+  const added = queue.add(files)
+  const refused = queue.items.find(item => item.validationError)
+  if (refused) throw new Error(refused.error)
+  await Promise.all(added.map(item => item.promise))
+  const failed = added.find(item => item.state !== 'ready')
+  if (failed) throw new Error(failed.error || COPY.upload_failed)
+  return added.map(item => item.id)
+}
+
+const TERMINAL_COPY = Object.freeze({
+  501: 'This session runs an agent runtime from before terminal attachments. Upload the file in Files instead.',
+  503: 'The agent is not running, so it cannot take attachments now.',
+  422: 'This file name cannot be pasted into the agent. Rename the file and attach it again.'
+})
+
+// The session agent materializes the files and answers with the path each one is pasted into the
+// CLI as (docs/terminal-clipboard.md). Resolves to those paths, in the order of the ids.
+export async function terminalAttachmentPaths(api, sessionId, fileIds) {
+  try {
+    const result = await api.terminalAttachments(sessionId, fileIds)
+    const byId = new Map((result?.attachments || []).map(file => [file.id, file.path]))
+    const paths = fileIds.map(id => byId.get(id))
+    if (paths.some(path => typeof path !== 'string' || !path.startsWith('/'))) throw new Error('invalid answer')
+    return paths
+  } catch (error) {
+    throw new Error(TERMINAL_COPY[error?.status] || 'The attachments could not be handed to the agent.')
+  }
 }

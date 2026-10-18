@@ -888,19 +888,23 @@ public sealed class InternalController : ControllerBase
     /// The session's inbox: takes undelivered messages (marking them delivered), long-polling
     /// up to <paramref name="wait"/> seconds. Batches are capped so a full response stays
     /// under the in-pod MCP client's response limit — callers poll again for the rest.
+    /// <paramref name="via"/> <c>next_turn</c> is the pod's end-of-turn delivery taking them
+    /// (docs/priority-messages.md); anything else records the pull as <c>agent_inbox</c>.
     /// </summary>
     [HttpGet("messages")]
-    public async Task<IActionResult> InboxMessages(string id, CancellationToken ct, [FromQuery] int wait = 0)
+    public async Task<IActionResult> InboxMessages(string id, CancellationToken ct, [FromQuery] int wait = 0,
+        [FromQuery] string? via = null)
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
         if (_messages is null) return Ok(new { messages = Array.Empty<AgentMessageInfo>() });
+        var takenVia = via == MessageDeliveryVia.NextTurn ? MessageDeliveryVia.NextTurn : MessageDeliveryVia.Inbox;
 
         var deadline = DateTime.UtcNow.AddSeconds(Math.Clamp(wait, 0, AgentMessaging.MaxWaitSeconds));
         IReadOnlyList<SessionMessageRecord> taken;
         while (true)
         {
-            taken = await _messages.TakeUndeliveredAsync(id, AgentMessaging.InboxBatchLimit, ct);
+            taken = await _messages.TakeUndeliveredAsync(id, AgentMessaging.InboxBatchLimit, takenVia, ct);
             if (taken.Count > 0 || DateTime.UtcNow >= deadline) break;
             await Task.Delay(TimeSpan.FromSeconds(1), ct);
         }
