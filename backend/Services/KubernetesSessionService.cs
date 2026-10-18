@@ -1059,11 +1059,21 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 if (record is null || !(record.AutoUpdateRuntimeImages ?? _opts.AutoUpdateRuntimeImages)) continue;
                 await UpdateRuntimeImageAsync(record.Owner, record.Id, ct);
             }
-            catch (InvalidOperationException) { /* Busy and unsupported runtimes defer until the next sweep. */ }
+            catch (InvalidOperationException exception) { _log.LogDebug(exception, "Runtime update deferred for {SessionId}", id); }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception exception) { _log.LogWarning(exception, "Runtime update deferred for {SessionId}", id); }
+            catch (HttpRequestException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (k8s.Autorest.HttpOperationException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (Npgsql.NpgsqlException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (Amazon.Runtime.AmazonServiceException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (KeyNotFoundException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (ArgumentException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (OperationCanceledException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (AgentNotAllowedException exception) { LogRuntimeUpdateFailure(exception, id); }
         }
     }
+
+    private void LogRuntimeUpdateFailure(Exception exception, string? id) =>
+        _log.LogWarning(exception, "Runtime update deferred for {SessionId}", id);
 
     public async Task<SessionInfo> UpdateRuntimeImageAsync(string owner, string id, CancellationToken ct = default)
     {
@@ -1131,14 +1141,14 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             {
                 using var releaseDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 var surviving = await TryReadPodAsync($"session-{id}", releaseDeadline.Token);
-                if (surviving?.Metadata?.Uid == pod.Metadata.Uid && surviving.Metadata.DeletionTimestamp is null)
+                if (surviving is { Metadata: { DeletionTimestamp: null } metadata } && metadata.Uid == pod.Metadata.Uid)
                 {
                     using var released = await client.DeleteAsync(drainUrl, releaseDeadline.Token);
                 }
             }
-            catch (HttpRequestException) { }
-            catch (TaskCanceledException) { }
-            catch (k8s.Autorest.HttpOperationException) { }
+            catch (HttpRequestException exception) { _log.LogDebug(exception, "Releasing runtime drain failed for {SessionId}", id); }
+            catch (OperationCanceledException exception) { _log.LogDebug(exception, "Releasing runtime drain timed out for {SessionId}", id); }
+            catch (k8s.Autorest.HttpOperationException exception) { _log.LogDebug(exception, "Reading runtime drain pod failed for {SessionId}", id); }
         }
     }
 
@@ -1605,9 +1615,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             var schedules = await _k8s.BatchV1.ListNamespacedCronJobAsync(_opts.Namespace,
                 labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}=cronjob",
                 resourceVersion: "0", cancellationToken: ct);
-            foreach (var cron in schedules.Items)
-                if (cron.Metadata.Labels.TryGetValue(SessionLabel, out var sid))
-                    scheduledTemplates[sid] = cron.Spec.JobTemplate.Spec.Template.Spec;
+            foreach (var cron in schedules.Items.Where(cron => cron.Metadata.Labels.ContainsKey(SessionLabel)))
+                scheduledTemplates[cron.Metadata.Labels[SessionLabel]] = cron.Spec.JobTemplate.Spec.Template.Spec;
         }
         var browserSummaries = await _browsers.GetSummariesAsync(
             records.Select(record => record.Id).ToArray(), ct);
