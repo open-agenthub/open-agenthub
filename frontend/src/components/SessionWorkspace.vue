@@ -12,6 +12,7 @@ import { openSessionEvents } from '../lib/live.js'
 import BrowserPane from './BrowserPane.vue'
 import FilesPane from './FilesPane.vue'
 import WorkspaceDiffPane from './workspace/WorkspaceDiffPane.vue'
+import SessionStartupFailure from './SessionStartupFailure.vue'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -236,7 +237,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="diff-toggle"><button type="button" :aria-pressed="diffOpen" @click="diffOpen ? closeDiff() : openDiff()">Changes</button></div>
-  <div v-if="session?.failureReason" class="startup-failure" role="status" data-session-failure>{{ session.failureReason }}</div>
+  <SessionStartupFailure v-if="session?.failureReason" :reason="session.failureReason" />
   <div v-if="companionVisible" class="workspace-shell">
     <nav class="workspace-tabs" aria-label="Session view">
       <button v-if="diffOpen" :class="{ active: mobilePane === 'diff' }" @click="mobilePane = 'diff'; activeCompanion = 'diff'">Changes</button>
@@ -281,7 +282,6 @@ onBeforeUnmount(() => {
 <style scoped>
 .diff-toggle { padding: 3px 8px; }
 .diff-toggle button { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; }
-.startup-failure { padding: 12px; color: var(--danger, #e87979); white-space: pre-wrap; overflow-wrap: anywhere; }
 .workspace-shell, .terminal-only { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .session-split { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .companion-side { flex: 0 0 var(--browser-width); display: grid; grid-template-rows: 34px minmax(0, 1fr); min-width: 0; min-height: 0; background: #111721; }
