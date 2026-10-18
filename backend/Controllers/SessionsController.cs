@@ -150,11 +150,24 @@ public sealed class SessionsController : ControllerBase
     public async Task<ActionResult<SessionInfo>> UpdateRuntime(string id, CancellationToken ct)
     {
         try { return Ok(await _svc.UpdateRuntimeImageAsync(Owner, id, ct)); }
+        catch (RuntimeUpdateConfirmationRequiredException e)
+        { return Conflict(new { code = "runtime_update_confirmation_required", error = e.Message }); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
-        catch (HttpRequestException) { return Conflict("Runtime is unavailable; update deferred."); }
+        catch (HttpRequestException) { return Conflict(new { code = "runtime_update_confirmation_required",
+            error = "The hub cannot reach this runtime to confirm that it is idle." }); }
+    }
+
+    [HttpPost("{id}/pause-and-resume-runtime")]
+    public async Task<ActionResult<SessionInfo>> PauseAndResumeRuntime(string id, CancellationToken ct)
+    {
+        try { return Ok(await _svc.PauseAndResumeRuntimeImageAsync(Owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
     }
 
     [HttpPost("{id}/resume")]

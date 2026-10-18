@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     listSessionMessages: vi.fn().mockResolvedValue([]),
     listProviderAccounts: vi.fn().mockResolvedValue({}),
     updateRuntimeImage: vi.fn(),
+    pauseAndResumeRuntimeImage: vi.fn(),
     convertSession: vi.fn()
   },
   config: { gitEnabled: false }
@@ -233,6 +234,33 @@ describe('runtime image updates', () => {
     await button.trigger('click'); await flushPromises();
     expect(mocks.api.updateRuntimeImage).toHaveBeenCalledWith('s1');
     expect(wrapper.emitted('runtime-updated')).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
+
+describe('manual runtime update confirmation', () => {
+  it('requires confirmation, supports cancellation, and refreshes after pause/resume', async () => {
+    const error = Object.assign(new Error('The hub cannot confirm whether a terminal session is idle.'), { code: 'runtime_update_confirmation_required' });
+    mocks.api.updateRuntimeImage.mockRejectedValue(error);
+    const wrapper = mountTerminal(finished({ outdatedImage: true, mode: 'Interactive', phase: 'Running' }));
+    const update = wrapper.findAll('button').find(b => b.text() === 'Update now');
+    await update.trigger('click'); await flushPromises();
+    expect(wrapper.find('[role="alertdialog"]').text()).toContain('mid-turn');
+    expect(mocks.api.pauseAndResumeRuntimeImage).not.toHaveBeenCalled();
+    await wrapper.findAll('button').find(b => b.text() === 'Cancel').trigger('click');
+    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false);
+    await update.trigger('click'); await flushPromises();
+    mocks.api.pauseAndResumeRuntimeImage.mockResolvedValueOnce({ id: 's1', phase: 'Pending' });
+    await wrapper.findAll('button').find(b => b.text() === 'Pause and resume now').trigger('click'); await flushPromises();
+    expect(mocks.api.pauseAndResumeRuntimeImage).toHaveBeenCalledWith('s1');
+    expect(wrapper.emitted('runtime-updated')).toHaveLength(1);
+    wrapper.unmount();
+  });
+  it('does not offer the fallback for an ordinary maintenance conflict', async () => {
+    mocks.api.updateRuntimeImage.mockRejectedValueOnce(new Error('Session maintenance is already in progress.'));
+    const wrapper = mountTerminal(finished({ outdatedImage: true }));
+    await wrapper.findAll('button').find(b => b.text() === 'Update now').trigger('click'); await flushPromises();
+    expect(wrapper.find('[role="alertdialog"]').exists()).toBe(false);
     wrapper.unmount();
   });
 });
