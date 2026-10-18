@@ -103,3 +103,27 @@ container on 8080 is blocked although the URL says 80. Three ways to open it wer
 
 When the path is blocked, the start probe fails with a connection error and says that the egress
 policy is the likely cause, instead of the CLI retrying until a timeout.
+
+## Latency: the first turn takes minutes, and the CLIs must wait for it
+
+A self-hosted server on one GPU processes the whole prompt before it sends the first byte. The first
+turn of a session carries the CLI's system prompt and tool list. Against `llama-server` with a 30B
+model it took 4 min 32 s for Claude Code, about 4 minutes for OpenCode and about 1 minute for Codex
+`exec`. Later turns hit the server's prompt cache and answer in seconds. The test used a one-word
+prompt, so what took that long was the prompt processing, not the generation.
+
+The CLIs' own defaults are tuned for a provider's API, and two of them are shorter than that wait:
+
+- OpenCode waits 5 minutes for response headers (`headerTimeout`).
+- Claude Code has `API_TIMEOUT_MS` (600 s) and a separate first-byte window.
+- Codex documents a 5-minute stream idle timeout.
+
+A CLI that gives up disconnects, the server drops the half-processed prompt, and the retry starts
+the same wait again. The session would never get an answer. The runtime therefore raises all three
+to 30 minutes: `headerTimeout` in the OpenCode provider block, `stream_idle_timeout_ms` in the Codex
+provider table, and `API_TIMEOUT_MS` / `CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS` for Claude Code.
+
+Nothing on the hub side is shorter. The pod's readiness probe is a TCP check on the session agent,
+which listens before the CLI sends its first request. AgentHub sets no deadline on an autonomous
+run. The chat relay reacts only to hook events, which come after the turn. The limit detector
+matches the CLI's own limit messages, not silence.
