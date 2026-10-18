@@ -8,6 +8,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
+const { createNextTurnDelivery, IDLE_QUIET_MS } = require('./next-turn');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs } = require('./state-archive');
 const { createSecretMask } = require('./secret-mask');
@@ -172,6 +173,19 @@ function createCommonServer(options = {}) {
   });
   // Mod reports already forwarded this start, keyed by window and reset time.
   const forwardedLimits = new Set();
+  // Plain fleet messages as the agent's next turn, for a runtime whose hooks report its turns
+  // (driver.turnHooks) and that has no mod to hand them to (docs/priority-messages.md, #173).
+  const nextTurn = driver.turnHooks === true && mode === 'interactive'
+    ? createNextTurnDelivery({
+      now, fetchImpl, callback, token,
+      wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms)),
+      Terminal: supplied.HeadlessTerminal && (() => supplied.HeadlessTerminal),
+      log: line => console.log('[agent] ' + line)
+    })
+    : null;
+  // Keys a person sends while a message is being typed in: they go in after its Enter instead of
+  // landing in the middle of it.
+  let inputHeldForTyping = [];
 
   function remember(chunk) {
     scrollback += chunk;
@@ -819,7 +833,9 @@ function createCommonServer(options = {}) {
       cwd, env: agentEnv
     });
 
+    if (nextTurn) nextTurn.agentStarted();
     term.onData(data => {
+      if (nextTurn) nextTurn.agentOutput();
       attemptOutput += data;
       remember(data);
       broadcast(data);
@@ -925,6 +941,13 @@ function createCommonServer(options = {}) {
         return;
       }
       if (message.type === 'input' && typeof message.data === 'string') {
+        if (nextTurn) {
+          nextTurn.personInput(message.data);
+          if (nextTurn.isTyping()) {
+            inputHeldForTyping.push(message.data);
+            return;
+          }
+        }
         term.write(message.data);
       } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
         lastSize = { cols: message.cols, rows: message.rows };
@@ -1184,7 +1207,15 @@ function createCommonServer(options = {}) {
       sendJson(response, 200, { delivered: 'queued-for-mod' });
       return;
     }
-    if (!message.priority) return unavailable('not_priority');
+    if (!message.priority) {
+      if (!nextTurn || chatMode) return unavailable('not_priority');
+      // Not typed now: the agent may be mid-turn or in a menu. The hub leaves the row in the
+      // inbox, and the turn's end (or an idle prompt) takes it from there.
+      nextTurn.accept();
+      sendJson(response, 200, { delivered: 'next-turn' });
+      deliverNextTurnIfIdle();
+      return;
+    }
     // The agent is being swapped out (an account switch): the pipe or PTY it is about to leave
     // would swallow the text, so the message waits for the one that comes up. The answer names
     // the channel it will take, since that is what the hub records.
@@ -1214,6 +1245,47 @@ function createCommonServer(options = {}) {
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
     });
     sendJson(response, 200, { delivered: 'pty' });
+  }
+
+  function deliverNextTurnIfIdle() {
+    if (!nextTurn || chatMode || exited || restartReason !== null || runtimeDraining) return;
+    const target = term;
+    nextTurn.deliverIfIdle(target, () => scrollback, lastSize || { cols: 120, rows: 32 })
+      .catch(error => console.log('[agent] next-turn: delivery failed: ' + (error && error.message || error)))
+      .finally(() => {
+        // A check that found another one typing must leave the keys to that one's end.
+        if (nextTurn.isTyping()) return;
+        const keys = inputHeldForTyping;
+        inputHeldForTyping = [];
+        if (term === target && !exited) for (const data of keys) target.write(data);
+      });
+  }
+
+  /**
+   * POST /agenthub/turn: the agent's own turn hooks (common/fleet-turn-hook.mjs) say a prompt was
+   * submitted, an approval is being asked, or the turn ended. The answer to a Stop is the text of
+   * the next turn when fleet messages wait. Loopback only, with the callback token the hooks
+   * already carry for their calls to the hub.
+   */
+  async function handleTurnRequest(request, response) {
+    const address = request.socket && request.socket.remoteAddress;
+    if (!nextTurn || !isLoopback(address) || !tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, nextTurn ? 401 : 404, nextTurn ? 'unauthorized' : 'not_found');
+      return;
+    }
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const raw = await readBoundedBody(request, MAX_LIMIT_REPORT_BYTES);
+    let event = null;
+    try { event = raw && JSON.parse(raw.toString('utf8')).event; } catch {}
+    if (!['prompt', 'permission', 'stop'].includes(event)) return fileError(response, 400, 'invalid_event');
+    // A Stop during an update or restart is answered with nothing: the agent is about to go.
+    const text = runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
+    sendJson(response, 200, text ? { text } : {});
+    if (event === 'stop' && !text) setTimeoutImpl(deliverNextTurnIfIdle, IDLE_QUIET_MS + 100);
   }
 
   function parseFleetMessage(raw) {
@@ -1346,6 +1418,7 @@ function createCommonServer(options = {}) {
     if (requestPath === '/agenthub/git-credentials') return handleGitCredentialRequest(request, response);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
     if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
+    if (requestPath === '/agenthub/turn') return handleTurnRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
         requestPath === '/agenthub/mod/limit') {
       return handleModRequest(request, response, requestPath);
@@ -1522,6 +1595,9 @@ function createCommonServer(options = {}) {
   // the copy the hub kept before starting the agent, so the history is there for the
   // first client and stays part of what we persist from here on.
   restoreScrollback(() => catchUpTranscript(() => startAgent(true)));
+
+  // An idle agent's waiting messages, once the screen has been still long enough to tell.
+  if (nextTurn) setIntervalImpl(deliverNextTurnIfIdle, 1_000);
 
   let ticksSinceUrlRefresh = 0;
   setIntervalImpl(() => {

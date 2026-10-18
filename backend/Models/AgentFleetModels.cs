@@ -53,6 +53,11 @@ public static class MessageDeliveryVia
     public const string Injected = "injected";
     /// <summary>Handed to the Claude Code mod running inside the agent process.</summary>
     public const string Mod = "mod";
+    /// <summary>Handed to the agent as its next turn: by the runtime's end-of-turn hook, or typed
+    /// in by the session agent while the agent is idle (docs/priority-messages.md). As the answer
+    /// to a send it means "waiting for the running turn to end" — the row stays undelivered until
+    /// one of the two takes it, so <c>agent_inbox</c> can still get it first.</summary>
+    public const string NextTurn = "next_turn";
 }
 
 /// <summary>Shared limits and normalization for agent-to-agent messages.</summary>

@@ -1193,3 +1193,13 @@ test('common transport validates reloadsCredentialLive when a driver declares it
   assert.throws(() => validateDriver({ ...base, reloadsCredentialLive: 'yes' }), /reloadsCredentialLive must be a boolean/);
   assert.equal(validateDriver({ ...base, reloadsCredentialLive: true }).reloadsCredentialLive, true);
 });
+
+test('common transport validates turnHooks when a driver declares it', () => {
+  const base = {
+    name: 'Example', stateDir: '.example', authFilename: 'auth.json',
+    attachmentCapabilities: { nativeImages: false, localImagePaths: true, mcpImages: true },
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
+  };
+  assert.throws(() => validateDriver({ ...base, turnHooks: 'yes' }), /turnHooks must be a boolean/);
+  assert.equal(validateDriver({ ...base, turnHooks: true }).turnHooks, true);
+});

@@ -269,6 +269,19 @@ describe('messaging the agent from the session view', () => {
     expect(wrapper.get('[data-send-message-note]').text()).toContain('Waiting in the inbox')
   })
 
+  it('says a message for the next turn waits for the running one to end', async () => {
+    mocks.api.sendSessionMessage.mockResolvedValue({ id: 'm-9', to: 's1', deliveredVia: 'next_turn' })
+    const wrapper = mountTerminal()
+    await flushPromises()
+
+    await wrapper.get('[data-send-message-toggle]').trigger('click')
+    await wrapper.get('[data-send-message-text]').setValue('when you are done')
+    await wrapper.get('[data-send-message-submit]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-send-message-note]').text()).toBe('The agent gets it as soon as its current turn ends.')
+  })
+
   it('offers the panel to managers only, and the send form only while the session is live', async () => {
     const stopped = mountTerminal({ session: session({ phase: 'Succeeded' }) })
     await flushPromises()

@@ -211,6 +211,8 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       },
       process: processLike,
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
+      // The session agent's own dependency, resolved from its node_modules in the image.
+      HeadlessTerminal: require('@xterm/headless').Terminal,
       attachmentMaterializer: materializer,
       pullSkills: harnessOptions.pullSkills,
       // Recorded, never the real installer: that one runs git against the HOME it is given.

@@ -182,7 +182,7 @@ register('agent_send', {
     + 'unique agent title (see agents_list); an ambiguous title fails with the candidate list. '
     + 'By default the peer reads it via its agent_inbox tool. priority pushes it straight into the '
     + 'peer\'s running prompt; interrupt also stops the peer\'s current work first (implies priority). '
-    + 'The result\'s deliveredVia says where it went: inbox, injected or mod.',
+    + 'The result\'s deliveredVia says where it went: inbox, injected, mod or next_turn (handed over when its current turn ends).',
   inputSchema: z.object({
     to: z.string().min(1).max(256),
     message: z.string().min(1).max(4000),

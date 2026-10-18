@@ -188,3 +188,120 @@ test('a live mod takes plain messages in an interactive session only', async () 
   assert.deepEqual(JSON.parse(kept.body), { delivered: 'unavailable', reason: 'not_priority' });
   assert.deepEqual(JSON.parse(pushed.body), { delivered: 'queued-for-mod' });
 });
+
+// ---- Plain messages as the next turn, for runtimes whose hooks report turns (#173) ------------
+
+const turnHeaders = { 'X-Agent-Token': 'correct-token', 'Content-Type': 'application/json' };
+const CALLBACK = 'http://hub.example.com/internal/sessions/s1';
+
+/** A turn-hook runtime with a clock the test moves and a hub inbox the session agent takes from. */
+function turnHarness(environment = {}, options = {}) {
+  let clock = 50_000;
+  const hub = { waiting: [], takes: [] };
+  const timers = [];
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token', AGENTHUB_CALLBACK_URL: CALLBACK, ...environment },
+    { turnHooks: true }, {
+      now: () => clock,
+      setTimeout: options.holdTimers ? (callback => { timers.push(callback); return timers.length; }) : undefined,
+      fetchResponse: url => {
+        if (!url.startsWith(CALLBACK + '/messages')) return undefined;
+        hub.takes.push(url);
+        const messages = hub.waiting.splice(0, 4);
+        return { ok: true, json: async () => ({ messages }) };
+      }
+    });
+  return {
+    harness, hub, advance(ms) { clock += ms; },
+    runTimers() { const due = timers.splice(0); for (const callback of due) callback(); }
+  };
+}
+// The screen check renders with xterm, which parses on a timer of its own.
+const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+const turn = (harness, event, address = '127.0.0.1', headers = turnHeaders) =>
+  requestHttp(harness, 'POST', '/agenthub/turn', headers, JSON.stringify({ event }), address);
+const intervalTick = harness => harness.intervals.find(entry => entry.ms === 1_000).callback();
+
+test('a plain message for a turn-hook runtime waits for the turn instead of being typed or left to agent_inbox', async () => {
+  const { harness } = turnHarness();
+
+  const response = await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ priority: false }));
+
+  assert.deepEqual(JSON.parse(response.body), { delivered: 'next-turn' });
+  // Before the first Stop nothing says the CLI waits at its prompt.
+  assert.deepEqual(harness.terminals[0].writes, []);
+});
+
+test('runtimes without turn hooks, and autonomous runs, keep plain messages in the inbox', async () => {
+  const autonomous = turnHarness({ AGENTHUB_MODE: 'autonomous' }).harness;
+  const response = await requestHttp(autonomous, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ priority: false }));
+  assert.deepEqual(JSON.parse(response.body), { delivered: 'unavailable', reason: 'not_priority' });
+
+  const plain = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' });
+  assert.equal((await turn(plain, 'stop')).status, 404);
+});
+
+test('the turn route takes loopback callers with the callback token and known events only', async () => {
+  const { harness } = turnHarness();
+
+  const remote = await turn(harness, 'stop', '10.0.0.9');
+  const wrongToken = await turn(harness, 'stop', '127.0.0.1', { ...turnHeaders, 'X-Agent-Token': 'nope' });
+  const unknown = await turn(harness, 'sleep');
+  const get = await requestHttp(harness, 'GET', '/agenthub/turn', turnHeaders, '', '::1');
+
+  assert.deepEqual([remote.status, wrongToken.status, unknown.status, get.status], [401, 401, 400, 405]);
+});
+
+test('a Stop answers with the messages waiting in the hub inbox, taken as next_turn', async () => {
+  const { harness, hub } = turnHarness();
+  hub.waiting.push({ id: 'm-1', from: 'rev-1', fromTitle: 'Code Reviewer', body: 'Please fix MR 42' });
+
+  await turn(harness, 'prompt');
+  const stop = await turn(harness, 'stop');
+  const again = await turn(harness, 'stop');
+
+  assert.deepEqual(hub.takes, [CALLBACK + '/messages?via=next_turn', CALLBACK + '/messages?via=next_turn']);
+  const text = JSON.parse(stop.body).text;
+  assert.match(text, /not from your owner/);
+  assert.ok(text.endsWith(EXPECTED_TEXT));
+  assert.deepEqual(JSON.parse(again.body), {});
+  assert.deepEqual(harness.terminals[0].writes, []);
+});
+
+test('an idle agent gets the message typed in, with the person\'s keys held until after Enter', async () => {
+  const { harness, hub, advance, runTimers } = turnHarness({}, { holdTimers: true });
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  await turn(harness, 'prompt');
+  await turn(harness, 'stop');
+  advance(2_000);
+
+  hub.waiting.push({ id: 'm-1', from: 'rev-1', fromTitle: 'Code Reviewer', body: 'Please fix MR 42' });
+  await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ priority: false }));
+  await settle();
+  // The text is in, Enter waits for its pause — and the person presses a key right then.
+  assert.equal(harness.terminals[0].writes.length, 1);
+  socket.emit('message', JSON.stringify({ type: 'input', data: 'x' }));
+  runTimers();
+  await settle();
+
+  const writes = harness.terminals[0].writes;
+  assert.match(writes[0], /Please fix MR 42$/);
+  assert.equal(writes[1], '\r');
+  assert.deepEqual(writes.slice(2), ['x']);
+});
+
+test('the one-second check delivers once the screen settles, and not while the agent is drawing', async () => {
+  const { harness, hub, advance } = turnHarness();
+  await turn(harness, 'prompt');
+  await turn(harness, 'stop');
+  harness.terminals[0].emitData('• Working (1s • esc to interrupt)');
+  hub.waiting.push({ id: 'm-1', from: 'rev-1', fromTitle: 'Code Reviewer', body: 'Please fix MR 42' });
+  await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ priority: false }));
+  await settle();
+  assert.deepEqual(harness.terminals[0].writes, []);
+
+  advance(2_000);
+  intervalTick(harness);
+  await settle();
+  assert.match(harness.terminals[0].writes[0], /Please fix MR 42$/);
+});

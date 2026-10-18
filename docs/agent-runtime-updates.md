@@ -170,6 +170,11 @@ inheriting `AGENTHUB_*`, and silence in exec mode. It is what opens a Codex sess
 thread (`docs/chat-relay.md`), so a bump that renames either field turns every Codex
 session invisible in Slack/Telegram/Signal without any other symptom.
 
+`fixtures/codex-fleet-turn-smoke.js` pins the third: `UserPromptSubmit` reaching the managed
+hook, and a `Stop` hook's `{"decision":"block","reason"}` becoming the model's next input. That
+is how a plain fleet message reaches a busy Codex agent (`docs/priority-messages.md`); if a bump
+breaks it, messages silently wait for `agent_inbox` again.
+
 ### Custom model endpoints
 
 Sessions on a self-hosted server (`docs/custom-model-endpoints.md`) depend on configuration

@@ -215,5 +215,7 @@ module.exports = {
   buildCommand, isResumeCommand, isMissingResume, findTranscript, prepare,
   THREAD_ID_FILE,
   credentialPath,
-  validCredential: require('./auth-watcher').validCredential
+  validCredential: require('./auth-watcher').validCredential,
+  // requirements.toml runs fleet-turn-hook.js on UserPromptSubmit, PermissionRequest and Stop.
+  turnHooks: true
 };
