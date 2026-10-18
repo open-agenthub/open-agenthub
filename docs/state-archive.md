@@ -43,10 +43,14 @@ stay on the 30-second tick: they are small, uploaded on their own, and are what 
 The state directory is only read by a resume. Once the two minutes have passed, the digest is
 checked on every tick, so the first change after a quiet period is uploaded within 30 seconds.
 
-- The price is what a pod loses when it dies *without* its SIGTERM (node failure, OOM kill): up
-  to two minutes of conversation instead of 30 seconds. The transcript the hub shows is not
-  affected, only where the resumed agent picks up. A longer interval was not chosen because
-  with changes 1, 3 and 4 the remaining cost no longer justifies a larger window.
+- The price was what a pod loses when it dies *without* its SIGTERM (node failure, OOM kill): up
+  to two minutes of conversation instead of 30 seconds. This note used to say the transcript the
+  hub shows was not affected. It was: the resumed pod served and uploaded the older file, and the
+  Workspace dropped those turns (#146). The resuming pod now appends the turns its archive
+  missed from the hub's transcript before the agent starts (`docs/transcripts.md`), so a
+  provider with a transcript loses at most the 30 seconds since the last upload. A longer
+  interval was not chosen because with changes 1, 3 and 4 the remaining cost no longer
+  justifies a larger window.
 - The run on agent exit and on SIGTERM is not subject to the interval **or** the digest. It
   always archives: it is the last chance, and it must not depend on the change detection being
   right. It also got faster, which matters because a paused session's pod gets

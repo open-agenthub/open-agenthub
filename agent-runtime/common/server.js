@@ -132,6 +132,9 @@ function createCommonServer(options = {}) {
   let firstLaunchedAt = 0;
   let transcriptFile = null;
   let transcriptUploaded = { size: -1, mtimeMs: -1 };
+  // False while a resumed session's transcript may still be behind the hub's copy: until
+  // catchUpTranscript has settled, the file is neither served to the hub nor uploaded over it.
+  let transcriptCaughtUp = env.AGENTHUB_RESUME !== '1' || !callback;
   // Set while the agent is being stopped on purpose so that its exit starts it again instead
   // of ending the session: `{ text, subtype }`, the line the clients see and the agenthub event
   // the chat UI gets for it.
@@ -225,10 +228,18 @@ function createCommonServer(options = {}) {
   // persistence tick until found: providers create the file on the first turn or pick its
   // name themselves after starting, so it does not exist when this process comes up.
   function locateTranscript() {
+    if (!transcriptCaughtUp) return null;
+    return findTranscriptFile();
+  }
+
+  // Before the first launch the restored file is asked for as "touched from now on", so a
+  // driver that falls back to the newest file since launch (one without a recorded thread id)
+  // finds nothing rather than whichever thread happens to be newest in the archive.
+  function findTranscriptFile() {
     if (transcriptFile || typeof driver.findTranscript !== 'function') return transcriptFile;
     let found = null;
     try {
-      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt });
+      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt || now() });
     } catch {}
     // The path is interpolated into a shell command below; anything a driver could not have
     // derived from a home directory, a slug and a uuid is not a transcript.
@@ -367,6 +378,50 @@ function createCommonServer(options = {}) {
         });
     };
     attempt(1);
+  }
+
+  // The state archive a resume unpacks is written at most every two minutes and is lost with a
+  // pod that dies without its SIGTERM, while the transcript reaches the hub every 30 seconds. So
+  // the provider's file a resumed agent continues can be older than the hub's copy (#146). Left
+  // alone, the agent resumed without its last turns, the Workspace read the older file live and
+  // dropped them from view, and the next upload overwrote the hub's copy with it. The CLIs only
+  // append to the file, so a hub copy that starts with what was restored is the same file further
+  // on: what it has beyond that is appended before the agent starts. A copy that does not start
+  // with it is a different history, and the restored file is kept as it is.
+  function catchUpTranscript(done) {
+    if (transcriptCaughtUp) return done();
+    let settled = false;
+    const settle = reason => {
+      if (settled) return;
+      settled = true;
+      transcriptCaughtUp = true;
+      console.log('[agent] Transcript history: ' + reason);
+      done();
+    };
+    setTimeoutImpl(() => settle('hub did not answer in time, resuming from the archive'), 15000);
+    const file = findTranscriptFile();
+    if (!file) return settle('no transcript restored');
+    fetchImpl(callback + '/transcript', { headers: { 'X-Agent-Token': token } })
+      .then(response => {
+        if (!response || !response.ok) throw new Error('HTTP ' + (response && response.status));
+        return response.text();
+      })
+      .then(stored => {
+        if (settled) return;
+        const raw = fs.readFileSync(file);
+        const restored = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw));
+        // The hub was sent the masked file, so it is compared with the restored one masked the
+        // same way; the turns appended from it reach the agent as the hub has them.
+        secretMask.refresh();
+        const local = secretMask.mask(restored.toString('utf8'));
+        if (typeof stored !== 'string' || stored.length <= local.length) return settle('archive is current');
+        if (!stored.startsWith(local)) return settle('hub copy is a different history, kept the archive');
+        const extended = Buffer.concat([restored, Buffer.from(stored.slice(local.length), 'utf8')]);
+        fs.writeFileSync(file + '.agenthub-tmp', extended);
+        fs.renameSync(file + '.agenthub-tmp', file);
+        settle('appended ' + (extended.length - restored.length) + ' bytes the archive was missing');
+      })
+      .catch(error => settle('unavailable (' + error.message + '), resuming from the archive'));
   }
 
   function backupScrollback(done) {
@@ -1447,7 +1502,7 @@ function createCommonServer(options = {}) {
   // connect would start empty and the conversation so far would look lost. Seed it from
   // the copy the hub kept before starting the agent, so the history is there for the
   // first client and stays part of what we persist from here on.
-  restoreScrollback(() => startAgent(true));
+  restoreScrollback(() => catchUpTranscript(() => startAgent(true)));
 
   let ticksSinceUrlRefresh = 0;
   setIntervalImpl(() => {

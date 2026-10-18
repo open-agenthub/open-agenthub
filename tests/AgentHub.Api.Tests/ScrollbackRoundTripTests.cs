@@ -81,6 +81,31 @@ public class ScrollbackRoundTripTests
     }
 
     [Fact]
+    public async Task ResumeTranscript_IsTheStoredFileAsUploaded()
+    {
+        // The agent appends what this has beyond its restored file, so it must be the provider's
+        // own lines byte for byte, not the parsed conversation.
+        const string jsonl = "{\"type\":\"user\",\"message\":{\"content\":\"turn-2\"}}\n";
+        var controller = Controller(new RecordingStore(), new ScrollbackService(null, jsonl));
+
+        var content = Assert.IsType<ContentResult>(await controller.GetTranscript(SessionId, CancellationToken.None));
+
+        Assert.Equal(jsonl, content.Content);
+        Assert.Equal("application/x-ndjson", content.ContentType);
+    }
+
+    [Fact]
+    public async Task ResumeTranscript_WithNothingStored_IsEmpty_AndRefusesAWrongToken()
+    {
+        var empty = Assert.IsType<ContentResult>(
+            await Controller(new RecordingStore(), new ScrollbackService(null)).GetTranscript(SessionId, CancellationToken.None));
+        Assert.Equal("", empty.Content);
+
+        Assert.IsType<UnauthorizedResult>(await Controller(new RecordingStore(), new ScrollbackService(null, "x"), token: "wrong")
+            .GetTranscript(SessionId, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task Reader_RawKeepsControlSequences_CleanStripsThem()
     {
         var raw = Esc + "[1mbold" + Esc + "[0m\r\n";
@@ -105,10 +130,12 @@ public class ScrollbackRoundTripTests
         return controller;
     }
 
-    private sealed class ScrollbackService(string? raw) : RecordingWebhookSessionService
+    private sealed class ScrollbackService(string? raw, string? transcript = null) : RecordingWebhookSessionService
     {
         public override Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
             => Task.FromResult(owner == Owner && id == SessionId ? raw : null);
+        public override Task<string?> GetTranscriptFileAsync(string owner, string id, CancellationToken ct = default)
+            => Task.FromResult(owner == Owner && id == SessionId ? transcript : null);
     }
 
     private sealed class RecordingStore : ISessionStore

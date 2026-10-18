@@ -249,6 +249,20 @@ public sealed class InternalController : ControllerBase
         return Content(await _svc.GetScrollbackAsync(rec.Owner, id, ct) ?? "", "text/plain");
     }
 
+    /// <summary>
+    /// Hands the stored provider transcript back to a resuming agent. Its state archive is written
+    /// less often than the transcript is uploaded, so the file it restores can miss the last
+    /// turns; the agent appends them from this copy before the CLI resumes (#146). Empty when
+    /// nothing was stored.
+    /// </summary>
+    [HttpGet("transcript")]
+    public async Task<IActionResult> GetTranscript(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        return Content(await _svc.GetTranscriptFileAsync(rec.Owner, id, ct) ?? "", "application/x-ndjson");
+    }
+
     public record PermissionBody(string Tool, string? Input);
     public record AgentPolicyBody(string Tool, JsonElement Input);
 

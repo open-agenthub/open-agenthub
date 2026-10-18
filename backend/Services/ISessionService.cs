@@ -168,6 +168,13 @@ public interface ISessionService
     /// </summary>
     Task<IReadOnlyList<TranscriptEntry>?> GetConversationAsync(string owner, string id, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null);
+    /// <summary>
+    /// The provider's transcript file as the agent uploaded it (the S3 copy joined with the newer
+    /// Postgres tail), for a resuming pod whose restored file may be older (#146). Default null
+    /// for test doubles that never resume anything.
+    /// </summary>
+    Task<string?> GetTranscriptFileAsync(string owner, string id, CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
     /// <summary>Opens the stored provider state archive — the same tar.gz a resuming pod unpacks
     /// into its home directory, and therefore the conversation history an agent CLI needs to
     /// continue the session off-cluster. Null when the session is unknown or nothing is stored.</summary>
