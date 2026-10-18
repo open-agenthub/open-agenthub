@@ -35,6 +35,10 @@ function prepare(env) {
   const apiKey = env.CODEX_API_KEY;
   delete env.CODEX_API_KEY;
   if (apiKey) return { childEnv: { CODEX_API_KEY: apiKey } };
+  // A custom endpoint's key, read by Codex through the provider's env_key (codex/model-provider.js).
+  const endpointKey = env.AGENTHUB_MODEL_API_KEY;
+  delete env.AGENTHUB_MODEL_API_KEY;
+  if (endpointKey) return { childEnv: { AGENTHUB_MODEL_API_KEY: endpointKey } };
   return undefined;
 }
 

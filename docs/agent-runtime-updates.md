@@ -170,6 +170,23 @@ inheriting `AGENTHUB_*`, and silence in exec mode. It is what opens a Codex sess
 thread (`docs/chat-relay.md`), so a bump that renames either field turns every Codex
 session invisible in Slack/Telegram/Signal without any other symptom.
 
+### Custom model endpoints
+
+Sessions on a self-hosted server (`docs/custom-model-endpoints.md`) depend on configuration
+names each CLI may rename in a bump. Each one was checked against the pinned version, and none
+of them is covered by a smoke test against a real server:
+
+- **Claude Code** (2.1.287): `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, the
+  `ANTHROPIC_DEFAULT_*_MODEL` tiers, `API_TIMEOUT_MS` and `CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS`.
+- **Codex** (0.160.0): `[model_providers.<id>]` with `base_url`, `wire_api = "responses"`, `env_key`
+  and `stream_idle_timeout_ms`. 0.160.0 refuses `wire_api = "chat"` at config load.
+- **OpenCode** (1.18.35): a `provider` block with `npm: "@ai-sdk/openai-compatible"` (bundled with
+  the CLI) and `options.baseURL` / `apiKey` / `headerTimeout`.
+
+After a bump, check these names in the new version. A rename does not fail any unit test. It
+shows up as a session that silently talks to the provider's default endpoint, or that waits on
+the old 5-minute timeout.
+
 ## The nightly job
 
 [`update-agent-runtimes.yml`](../.github/workflows/update-agent-runtimes.yml) runs at

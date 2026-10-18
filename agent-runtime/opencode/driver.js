@@ -22,6 +22,10 @@ function prepare(env) {
   const apiKey = env.OPENCODE_API_KEY;
   delete env.OPENCODE_API_KEY;
   if (apiKey) return { childEnv: { OPENCODE_API_KEY: apiKey } };
+  // A custom endpoint's key, which the user config refers to as {env:AGENTHUB_MODEL_API_KEY}.
+  const endpointKey = env.AGENTHUB_MODEL_API_KEY;
+  delete env.AGENTHUB_MODEL_API_KEY;
+  if (endpointKey) return { childEnv: { AGENTHUB_MODEL_API_KEY: endpointKey } };
   return undefined;
 }
 

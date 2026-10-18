@@ -8,6 +8,10 @@ const SERVER_NAME = /^[A-Za-z0-9_-]+$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const PLACEHOLDER = /\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g;
 const GO_PROVIDER = 'opencode-go';
+// The provider id a custom endpoint (docs/custom-model-endpoints.md) is registered under. Its own
+// id rather than "openai": that one is OpenCode's built-in provider, and a block under its name
+// would be merged into the built-in model catalogue instead of replacing it.
+const ENDPOINT_PROVIDER = 'agenthub-endpoint';
 
 // Coding-capable OpenCode Go models, best first. An ordered list rather than one pinned id: the Go
 // catalogue changes every few weeks, and a renamed model should degrade to the next one here
@@ -142,12 +146,44 @@ function defaultModel(env, auth, list = listGoModels) {
   }
 }
 
+/**
+ * The provider block for a custom endpoint. @ai-sdk/openai-compatible ships inside the pinned CLI
+ * (verified on 1.18.35: nothing is downloaded), and speaks /chat/completions under baseURL. The key
+ * stays a reference, so it is resolved from the agent child's environment and never written under
+ * $HOME, where the archive and the agent could read it.
+ */
+function endpointProvider(env) {
+  const { settings, FIRST_TOKEN_TIMEOUT_MS } = require('../common/model-endpoint');
+  const { url, model, key } = settings(env);
+  // headerTimeout defaults to 5 minutes on 1.18.35, shorter than a first turn takes on a
+  // self-hosted server (FIRST_TOKEN_TIMEOUT_MS).
+  const options = { baseURL: url, headerTimeout: FIRST_TOKEN_TIMEOUT_MS };
+  if (key) options.apiKey = '{env:AGENTHUB_MODEL_API_KEY}';
+  return {
+    provider: {
+      [ENDPOINT_PROVIDER]: {
+        npm: '@ai-sdk/openai-compatible', name: 'Custom endpoint', options,
+        models: { [model]: { name: model } }
+      }
+    },
+    model: ENDPOINT_PROVIDER + '/' + model
+  };
+}
+
 function userConfig(env, deps = {}) {
   const mcpConfig = readJson(env.AGENTHUB_MCP_CONFIG);
   const auth = readJson(env.OPENCODE_AUTH_FILE);
   const config = { $schema: 'https://opencode.ai/config.json' };
-  const model = defaultModel(env, auth, deps.listModels);
-  if (model) config.model = model;
+  if (env.AGENTHUB_AUTH_MODE === 'customendpoint') {
+    // The endpoint's model wins over AGENTHUB_OPENCODE_MODEL and the Go default: no other
+    // provider is logged in, so any other model would fail the first request.
+    const endpoint = endpointProvider(env);
+    config.provider = endpoint.provider;
+    config.model = endpoint.model;
+  } else {
+    const model = defaultModel(env, auth, deps.listModels);
+    if (model) config.model = model;
+  }
   const instructions = env.AGENTHUB_OPENCODE_INSTRUCTIONS;
   if (instructions && fs.existsSync(instructions)) config.instructions = [instructions];
   const mcp = convertMcp(record(mcpConfig) ? mcpConfig.mcpServers : undefined);
@@ -169,6 +205,6 @@ if (require.main === module) {
 }
 
 module.exports = {
-  GO_MODEL_PREFERENCE, convertMcp, convertServer, defaultModel, goProviderFor, selectGoModel,
-  userConfig, writeUserConfig
+  ENDPOINT_PROVIDER, GO_MODEL_PREFERENCE, convertMcp, convertServer, defaultModel, endpointProvider, goProviderFor,
+  selectGoModel, userConfig, writeUserConfig
 };
