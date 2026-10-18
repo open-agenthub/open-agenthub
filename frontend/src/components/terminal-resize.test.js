@@ -116,6 +116,28 @@ describe('terminal fit/resize stability', () => {
     } finally { vi.useRealTimers() }
   })
 
+  // #148: each attachment path is a paste of its own, ahead of the text, and Enter comes last.
+  it('pastes attachment paths one by one before the text, then submits', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = await mountRunningPane()
+      const socket = mocks.sockets[0]
+      const delivery = wrapper.vm.submitMessage('What is this?', { paths: ['/workspace/a.png', '/workspace/b.png'] })
+      await vi.advanceTimersByTimeAsync(150)
+      await vi.advanceTimersByTimeAsync(150)
+      await vi.advanceTimersByTimeAsync(150)
+      await delivery
+      expect(socket.sent.filter(value => value.type === 'input').map(value => value.data)).toEqual([
+        '\u001b[200~/workspace/a.png\u001b[201~', '\u001b[200~/workspace/b.png\u001b[201~',
+        '\u001b[200~ What is this?\u001b[201~', '\r'])
+      const imageOnly = wrapper.vm.submitMessage('', { paths: ['/workspace/c.png'] })
+      await vi.advanceTimersByTimeAsync(150)
+      await imageOnly
+      expect(socket.sent.slice(-2).map(value => value.data)).toEqual(['\u001b[200~/workspace/c.png\u001b[201~', '\r'])
+      wrapper.unmount()
+    } finally { vi.useRealTimers() }
+  })
+
   it('cancels the pending Enter when the session switches', async () => {
     vi.useFakeTimers()
     try {

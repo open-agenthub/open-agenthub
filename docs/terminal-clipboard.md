@@ -34,23 +34,66 @@ Rejected alternatives:
 - **Sending `^V` through and making the pod's clipboard work.** A clipboard inside the pod would
   be the pod's, not the person's; there is nothing in it to paste.
 
-## Images and files go through Files
+## Images reach the CLI as a pasted path (#148)
 
-A paste without text — an image, a copied file — has nothing the PTY could carry. xterm would
-send an empty bracketed paste, which both CLIs ignore silently. The terminal drops such a paste
-and, when it held a file, says: *Images and files cannot be pasted into the terminal. Upload
-them in Files, where the agent can read them.*
+Every pinned CLI attaches an image when its path is pasted into the input box on its own, the way a
+file dragged into a desktop terminal arrives. That is the one form all five take, so it is the one
+the terminal and the Workspace composer use:
 
-Files is named rather than the Workspace message box because its upload exists for every
-agent, which reads the file through the provider-neutral `files` MCP. Workspace attachments
-exist only on the streaming transport; a terminal-transport session has none
-(`agent-workspace.md`), so pointing there would send a Codex user nowhere.
+1. The browser uploads the pasted or attached file to the session, as Files and the chat-mode
+   composer do. A clipboard image always arrives as `image.png`; it is stored as
+   `pasted-image-<date>-<time>.png`, and any other name is reduced to `[A-Za-z0-9._-]`.
+2. `POST /api/sessions/{id}/terminal-attachments` (owner or collaborator: typing into the terminal
+   and uploading) forwards the ids to the pod's `POST /agenthub/attachments`. The session agent
+   materializes them with the same `AttachmentMaterializer` as a chat-mode attachment and answers
+   with the path each one is pasted as.
+3. The browser writes each path as a bracketed paste of its own on the agent terminal's connection,
+   150 ms apart. From the terminal that is all; the person adds words and presses Enter. From the
+   composer the message text follows as one more paste, then Enter.
 
-Uploading the image from the terminal and typing a path into the CLI was the alternative. It
-does not fit how session files reach the agent: an attachment is delivered with a chat message
-that tells the session agent which files belong to the turn, and a file in Files is fetched by
-the agent through the MCP. The terminal has neither and no pod path to type, and inventing one
-would give images a third delivery path with its own guarantees to keep.
+What each CLI does with it, measured with the pinned versions in a PTY against a mock model that
+records the request, and end to end in Chromium with a real PNG on the system clipboard pasted by
+Ctrl+V into both the composer and the agent terminal, through this repository's session agent:
+
+| Agent | Shown in its input | Reaches the model as |
+|---|---|---|
+| Claude Code 2.1.287 | `[Image #1]` | an `image` content block |
+| Codex 0.160.0 | `[Image #1]` | `input_image` (data URL) inside `<image>` |
+| OpenCode 1.18.35 | `[Image 1]` | `image_url` (data URL), for a model that declares image input |
+| OpenClaw 2026.7.1-2 | the path as text | an image, loaded from the path when the turn is sent |
+| Cursor 2026.10.16 | `[Image #n]` (its TUI code) | not verified: the CLI needs a real key to start |
+
+Two of them need more than the path:
+
+- **OpenClaw** loads an image named in a prompt only from its own directories (`media`,
+  `workspace`, `canvas` under its state dir, and its tmp dir). A path under `/workspace` is
+  detected and then dropped — its debug log says *Local media path is not under an allowed
+  directory* — and the model gets the path as text. The driver's `terminalAttachmentPath` copies
+  the file to `~/.openclaw/media/agenthub/<id>/` and that path is pasted; the copy is excluded from
+  the state archive, the original stays in session storage.
+- **OpenCode** refuses an image for a model it does not know to take images: the model got
+  *Cannot read "…png" (this model does not support image input)* instead. Catalogue models declare
+  it; a custom model endpoint (`custom-model-endpoints.md`) is declared without it, because the
+  hub cannot know whether a self-hosted model reads images, so there the image does not arrive.
+
+The shell keeps the old behaviour: an image pasted there is dropped with *Images and files cannot
+be pasted into the terminal. Upload them in Files, where the agent can read them.* A shell has no
+agent to read a path, and a shared link's viewer cannot upload. A paste carrying text and a picture
+of it (a spreadsheet range, rich text) stays text, in the terminal and in the composer.
+
+Rejected alternatives:
+
+- **Pointing at Files, as before.** That was the decision this replaces. It made the person upload
+  the image elsewhere and then tell the agent about it in words, while all five CLIs already know
+  how to take an image when given its path.
+- **The pod typing the path itself** (the session agent writing to the PTY after materializing).
+  The browser's own text and Enter would then race the pod's writes on two connections into one
+  input box; with the browser pasting, every byte goes out on the one terminal socket in order.
+- **The chat-mode instruction text** (`[AgentHub attachments] … Inspect each attached image…`).
+  The agent then has to decide to read the file with a tool, which costs a turn and depends on the
+  model choosing to; a pasted path is attached by the CLI before the model sees the turn.
+- **Sending the image bytes into the PTY** (an OSC or kitty graphics sequence). None of the CLIs
+  reads an image from its input stream; each only reads a file or its own clipboard.
 
 ## Why Codex mentions X11
 
@@ -69,3 +112,12 @@ turns bracketed paste on as the CLIs do, Ctrl+V and Ctrl+Shift+V delivered the c
 bracketed paste, a real PNG on the clipboard produced the notice and sent nothing, and the
 previous code sent `\x16`. The pinned Claude Code and Codex in a PTY show the bracketed-paste
 text in their input box.
+
+For #148, the same Chromium run with a real PNG on the system clipboard, against main's frontend,
+showed the failure as reported: Ctrl+V into the Workspace composer did nothing, into the agent
+terminal it showed the Files notice, and no model request carried an image. With this change, for
+each of Claude Code, Codex, OpenCode and OpenClaw and for both the composer and the agent terminal,
+the upload went through the pod's file store, the session agent materialized it, the CLI showed its
+image marker, and the mock model behind the real CLI received the PNG as image content. The
+backend proxy class was run against that live session agent as well (the path for a valid token,
+401 for a wrong one).

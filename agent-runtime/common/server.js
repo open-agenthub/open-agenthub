@@ -50,6 +50,12 @@ const URL_REFRESH_EVERY_TICKS = 720;
 // The most transcript one GET /agenthub/transcript returns. A first read of a long session
 // takes a few of these; the hub asks again from where the last one stopped.
 const MAX_TRANSCRIPT_CHUNK = 8 * 1024 * 1024;
+// A POST /agenthub/attachments body: at most five 32-character file ids.
+const MAX_ATTACHMENT_REQUEST_BYTES = 4 * 1024;
+// What a path typed into a CLI's input box may contain. The CLIs recognise a pasted image path
+// only as the whole paste, and a space or quote would need each CLI's own escaping; the composer
+// names its uploads within this set, so anything else is refused rather than half-recognised.
+const TERMINAL_PATH = /^\/[A-Za-z0-9._/-]+$/;
 // The longest reason a credential swap may carry into the scrollback.
 const MAX_SWITCH_REASON_CHARS = 300;
 // How often the skill library is pulled while the session runs. A minute is "shortly" for a
@@ -1389,6 +1395,7 @@ function createCommonServer(options = {}) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
     if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
+    if (requestPath === '/agenthub/attachments') return handleAttachmentRequest(request, response);
     if (requestPath === '/agenthub/runtime-drain') {
       if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
       if (request.method === 'DELETE') {
@@ -1454,6 +1461,50 @@ function createCommonServer(options = {}) {
     } catch {
       fileError(response, 503, 'commands_unavailable');
     }
+  }
+
+  /**
+   * POST /agenthub/attachments: files the person attached in the Workspace composer or pasted into
+   * the agent terminal of a terminal-transport session (#148). They are materialized exactly as a
+   * chat-mode attachment is, and the answer is the path each one has to be pasted as: every pinned
+   * CLI turns a pasted path to an image into an image of its own ("[Image #1]") and sends it to the
+   * model as image content (docs/terminal-clipboard.md). The browser pastes the paths itself, ahead
+   * of the message text, so the bytes keep the single order of the one terminal connection.
+   */
+  async function handleAttachmentRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    // A chat-mode turn carries its attachments in the message, with a delivery receipt.
+    if (chatMode) return fileError(response, 409, 'chat_transport');
+    if (exited) return fileError(response, 409, 'agent_exited');
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
+    const raw = await readBoundedBody(request, MAX_ATTACHMENT_REQUEST_BYTES);
+    if (!raw) return fileError(response, 413, 'request_too_large');
+    let fileIds;
+    try { fileIds = JSON.parse(raw.toString('utf8')).fileIds; } catch { return fileError(response, 400, 'invalid_request'); }
+    let records;
+    try {
+      records = await attachmentMaterializer.materialize(fileIds);
+    } catch (error) {
+      return fileError(response, error && error.message === 'attachment_batch_invalid' ? 400 : 502, 'attachment_delivery_failed');
+    }
+    const attachments = [];
+    try {
+      for (const file of records) {
+        const pastePath = typeof driver.terminalAttachmentPath === 'function'
+          ? driver.terminalAttachmentPath(file, { env, home, fs })
+          : file.localPath;
+        if (!TERMINAL_PATH.test(pastePath)) return fileError(response, 422, 'attachment_path_unsafe');
+        attachments.push({ id: file.id, name: file.name, mimeType: file.mimeType, size: file.size, path: pastePath });
+      }
+    } catch {
+      return fileError(response, 502, 'attachment_delivery_failed');
+    }
+    sendJson(response, 200, { attachments });
   }
 
   function handleShell(socket) {
@@ -1662,7 +1713,7 @@ function createCommonServer(options = {}) {
 
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
-    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands' +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands, /agenthub/attachments' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 

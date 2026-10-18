@@ -116,6 +116,7 @@ builder.Services.AddHttpClient<ISessionMessageDelivery, SessionMessageDelivery>(
 // A singleton, unlike the typed clients above: it holds each followed session's offset and entries.
 builder.Services.AddHttpClient<IWorkspaceDiffReader, WorkspaceDiffReader>();
 builder.Services.AddHttpClient<ISessionCommandsReader, SessionCommandsReader>();
+builder.Services.AddHttpClient<ISessionTerminalAttachments, SessionTerminalAttachments>();
 // A redirect target has not passed the live-pod identity check.
 builder.Services.AddHttpClient(nameof(LiveTranscriptReader))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });

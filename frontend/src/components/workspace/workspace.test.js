@@ -77,7 +77,7 @@ describe('integrated workspace', () => {
     mocks.status('connected')
     await flushPromises()
     expect(mocks.send).toHaveBeenCalledTimes(1)
-    expect(mocks.send).toHaveBeenCalledWith('Start with the tests')
+    expect(mocks.send).toHaveBeenCalledWith('Start with the tests', undefined)
     expect(wrapper.find('[data-queued-message]').exists()).toBe(false)
   })
 
@@ -104,7 +104,7 @@ describe('integrated workspace', () => {
     await wrapper.get('[data-workspace-composer] textarea').setValue('Now improve it')
     await wrapper.get('[data-workspace-composer]').trigger('submit')
     await flushPromises()
-    expect(mocks.send).toHaveBeenCalledWith('Now improve it')
+    expect(mocks.send).toHaveBeenCalledWith('Now improve it', undefined)
     await wrapper.get('[aria-label="Interrupt agent"]').trigger('click')
     expect(mocks.stop).toHaveBeenCalledOnce()
     await wrapper.get('[data-drawer-agent]').trigger('click')

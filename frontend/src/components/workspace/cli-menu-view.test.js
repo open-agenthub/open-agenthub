@@ -116,7 +116,7 @@ describe('agent CLI menus in the Workspace', () => {
     expect(wrapper.find('[data-workspace-composer] [role=alert]').exists()).toBe(false)
     await wrapper.get('[data-workspace-composer]').trigger('submit')
     await flushPromises()
-    expect(mocks.submit).toHaveBeenCalledWith('Fix the tests')
+    expect(mocks.submit).toHaveBeenCalledWith('Fix the tests', undefined)
   })
 
   it('points at the terminal for a prompt that wants typed input, without buttons', async () => {

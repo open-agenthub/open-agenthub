@@ -4,7 +4,8 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { api, getSharedTranscript, sharedTerminalUrl, shellUrl, terminalUrl } from '../api.js'
 import { SUBMIT_ENTER_DELAY_MS, submitToAgent } from '../lib/terminal-input.js'
-import { attachTerminalClipboard } from '../lib/terminal-clipboard.js'
+import { FILE_PASTE_NOTICE, attachTerminalClipboard } from '../lib/terminal-clipboard.js'
+import { terminalAttachmentPaths, terminalSafeFile, uploadAttachmentFiles } from '../lib/attachments.js'
 import { detectMenu, sameMenu } from '../lib/cli-menu.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, showComposer: { type: Boolean, default: true } })
@@ -29,18 +30,25 @@ function send(value) {
   if (canSend.value && ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(value))
 }
 
-// Reuse this pane's connection: a second terminal client could resize the same PTY
-// and two independently reconnecting clients could submit to different generations.
-function submitMessage(text) {
+// Each attachment path is a bracketed paste of its own: the CLIs recognise a pasted image path
+// only when it is the whole paste. The gap lets the CLI turn one into "[Image #n]" before the next
+// paste arrives.
+const PATH_PASTE_GAP_MS = 150
+// Bracketed paste preserves multiline prompts as one edit instead of executing each line.
+// Strip terminal controls from pasted text so it cannot close its own paste envelope.
+function bracketed(text) {
+  return '\x1b[200~' + String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '') + '\x1b[201~'
+}
+
+// Writes the pastes one after another on this pane's connection, then Enter when `submit` is
+// set. A connection that changes in between ends the sequence: what was already written stays in
+// the CLI's input box, and the error says to look there.
+function writePastes(pieces, submit) {
   const socket = ws
   const generation = connectionGeneration
   // retryable: nothing was written, so the composer may send the same text again later.
   if (!canSend.value || socket?.readyState !== WebSocket.OPEN || cancelSubmission)
     return Promise.reject(Object.assign(new Error('Agent is disconnected. Your draft is still here.'), { retryable: true }))
-  // Bracketed paste preserves multiline prompts as one edit instead of executing each line.
-  // Strip terminal controls from pasted text so it cannot close its own paste envelope.
-  const value = String(text).replace(/\r\n?/g, '\n').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
-  if (!value.trim()) return Promise.reject(new Error('Enter a message.'))
   return new Promise((resolve, reject) => {
     let timer
     const finish = error => {
@@ -50,16 +58,53 @@ function submitMessage(text) {
       else resolve()
     }
     cancelSubmission = () => finish(new Error('Connection changed. Check the agent terminal before retrying your draft.'))
-    try {
-      socket.send(JSON.stringify({ type: 'input', data: '\x1b[200~' + value + '\x1b[201~' }))
-      timer = setTimeout(() => {
-        if (generation !== connectionGeneration || socket !== ws || !canSend.value || socket.readyState !== WebSocket.OPEN)
-          return cancelSubmission?.()
-        try { socket.send(JSON.stringify({ type: 'input', data: '\r' })); finish() }
-        catch (error) { finish(error) }
-      }, SUBMIT_ENTER_DELAY_MS)
-    } catch (error) { finish(error) }
+    const step = index => {
+      if (index > 0 && (generation !== connectionGeneration || socket !== ws || !canSend.value || socket.readyState !== WebSocket.OPEN))
+        return cancelSubmission?.()
+      try {
+        if (index === pieces.length) {
+          if (submit) socket.send(JSON.stringify({ type: 'input', data: '\r' }))
+          return finish()
+        }
+        socket.send(JSON.stringify({ type: 'input', data: bracketed(pieces[index]) }))
+        const last = index === pieces.length - 1
+        if (last && !submit) return finish()
+        timer = setTimeout(() => step(index + 1), last ? SUBMIT_ENTER_DELAY_MS : PATH_PASTE_GAP_MS)
+      } catch (error) { finish(error) }
+    }
+    step(0)
   })
+}
+
+// Reuse this pane's connection: a second terminal client could resize the same PTY
+// and two independently reconnecting clients could submit to different generations.
+// `paths` are attachments the session agent materialized (#148); they go first, so the text
+// follows the CLI's "[Image #n]" markers in its input box.
+function submitMessage(text, { paths = [] } = {}) {
+  const value = String(text)
+  if (!value.trim() && !paths.length) return Promise.reject(new Error('Enter a message.'))
+  const pieces = [...paths, ...(value.trim() ? [paths.length ? ' ' + value : value] : [])]
+  return writePastes(pieces, true)
+}
+
+// An image pasted into the agent terminal: uploaded, materialized by the session agent, and its
+// path pasted into the CLI's input box without Enter — the person adds their words and sends it,
+// as after pasting an image into the CLI on their own machine.
+const canPasteFiles = computed(() => props.kind === 'agent' && canSend.value && !props.sharedToken)
+async function pasteFilesIntoAgent(files) {
+  if (!canPasteFiles.value) return showPasteNotice(FILE_PASTE_NOTICE)
+  const sessionId = props.session.id
+  const now = new Date()
+  showPasteNotice(files.length === 1 ? 'Attaching the pasted file…' : `Attaching ${files.length} pasted files…`)
+  try {
+    const ids = await uploadAttachmentFiles({ sessionId, api, files: files.map((file, index) => terminalSafeFile(file, { pasted: true, now, index })) })
+    const paths = await terminalAttachmentPaths(api, sessionId, ids)
+    if (disposed || sessionId !== props.session.id) return
+    await writePastes(paths, false)
+    showPasteNotice('Attached to the agent\'s input. Add your message and press Enter.')
+  } catch (error) {
+    if (!disposed) showPasteNotice(error?.message || 'The pasted file could not be attached.')
+  }
 }
 
 function interruptAgent() {
@@ -245,7 +290,8 @@ onMounted(() => {
   fit = new FitAddon()
   term.loadAddon(fit)
   // A shared link's viewer did not start the session, so its output may not write their clipboard.
-  clipboard = attachTerminalClipboard(term, { allowOsc52: !props.sharedToken, host: host.value, notify: showPasteNotice })
+  clipboard = attachTerminalClipboard(term, { allowOsc52: !props.sharedToken, host: host.value, notify: showPasteNotice,
+    pasteFiles: props.kind === 'agent' ? pasteFilesIntoAgent : undefined })
   term.open(host.value)
   fitNow()
   ro = new ResizeObserver(scheduleFit)
