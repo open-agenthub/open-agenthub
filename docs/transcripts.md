@@ -327,3 +327,62 @@ Nothing changes for sessions created before this: no `transcript.jsonl` exists,
 image older than the hub ignores `AGENTHUB_TRANSCRIPT_PUT_URL`; a hub older than the image answers
 the new `PUT …/transcript` with 404, which the agent treats like any other failed best-effort
 upload.
+
+## A live read confirms the pod before sending its token (#133)
+
+The status IP is advisory: a deleted pod's address can already belong to another session.
+Before **each** transcript HTTP round, the hub checks the cluster for a running, non-deleting
+pod named `session-<id>` with the session and agent labels and the same IP. An absent, changed
+or unconfirmable identity returns the stored copy without sending the callback token. This uses
+the existing live-pod resolver, with no confirmation cache; even the second round and the next
+poll must confirm again. The real HTTP regression exercises the actual cluster SDK transport,
+a stale IP before the first read, a valid read, and IP reuse after that successful read.
+
+Rejected: trusting the earlier session status or briefly caching a positive confirmation. Both
+retain the stale-IP window. A challenge protocol would keep the token off the wire altogether,
+but needs a coordinated runtime rollout; a transcript-only credential likewise needs new
+issuance and validation on both sides. Fresh cluster confirmation works with existing pods.
+There is still a race between the confirmation and the network request; eliminating that race
+requires the challenge protocol or authenticated transport to the pod.
+
+Four 8 MiB rounds are sequential, not four simultaneous bodies per viewer. The singleton now
+admits one download/parse read at a time across sessions and streams each response into an
+enforced 8 MiB cap, with a five-second body deadline. Automatic redirects are disabled: their
+destination has not passed the identity check. Cluster confirmation also has a five-second
+deadline, and an unavailable cluster sends the caller to the stored copy.
+
+A rootless real-HTTP probe opened 24 distinct sessions, each consuming four exactly 8 MiB
+JSONL chunks (96 requests, 768 MiB transferred). The chunks contained an ignored record so the
+probe isolated transient parsing costs rather than retained conversation text. With four readers
+and an unconstrained heap it reached 1,091,224 KiB peak RSS and allocated 5,541 MiB in total.
+With a 384 MiB heap budget (the default 75% of the chart's 512 MiB backend limit), both four and
+two admitted readers exhausted the heap. One reader completed all 96 requests with 441,980 KiB
+peak RSS and 128 MiB managed memory at the end. The suite also checks that while one session holds the slot, 23 other sessions finish
+with the stored-copy fallback before that first read is released; a subsequent read can use
+the slot again. Oversized responses fall back without parsing.
+
+Rejected: lowering only the rounds per poll, which slows catch-up but leaves simultaneous viewers
+unbounded; two or four active readers, which failed the constrained probe. Serialization trades
+catch-up latency for memory headroom. These measurements include the probe host and server,
+not the full backend under production traffic. Parsed history remains proportional to followed
+session history and is evicted after ten idle minutes; the admission limit is not a total process
+memory bound. Production-scale retained-history memory still requires measurement under the
+deployment's session and history sizes.
+
+### Multiple viewers and a slow pod
+
+The single slot protects the backend heap across all users; a per-session gate alone would
+allow every distinct session to allocate an 8 MiB response and its parser state simultaneously.
+Multiple viewers of one session share its existing offset/history rather than separate caches.
+Admission to the global slot is non-blocking: when another session already holds it, the reader
+returns null immediately and the conversation path serves the stored copy. A slow pod therefore
+cannot put unrelated sessions in a global wait queue. Later Workspace polls retry live admission.
+
+Rejected: awaiting the global slot, which makes one stalled pod delay every queued viewer;
+per-session admission only, which loses the measured aggregate memory bound; and two concurrent
+live readers, which exhausted the constrained heap in the probe above. The tradeoff is freshness:
+under sustained contention a session may keep receiving its periodically uploaded transcript.
+There is no fairness or one-second live-update guarantee under load; production measurements
+may justify smaller chunks and a fair scheduler later. The recorded 24-session memory probe used
+queued admission to measure all 96 reads; non-blocking admission keeps the same single-reader
+allocation bound while avoiding that queue.

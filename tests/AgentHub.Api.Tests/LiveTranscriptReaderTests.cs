@@ -1,5 +1,6 @@
 using System.Net;
 using System.Text;
+using AgentHub.Api.Browser;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
@@ -30,6 +31,7 @@ public class LiveTranscriptReaderTests
     {
         public byte[] File = [];
         public HttpStatusCode Status = HttpStatusCode.OK;
+        public bool More;
         public readonly List<Uri> Requests = [];
         public void Append(string text) => File = [.. File, .. Encoding.UTF8.GetBytes(text)];
 
@@ -45,10 +47,184 @@ public class LiveTranscriptReaderTests
             var body = from >= File.Length ? [] : File[(int)from..];
             var whole = Array.LastIndexOf(body, (byte)'\n') + 1;
             var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body[..whole]) };
-            response.Headers.Add("X-Transcript-Size", File.Length.ToString());
+            response.Headers.Add("X-Transcript-Size", (File.Length + (More ? 1 : 0)).ToString());
             response.Headers.Add("X-Transcript-Next", (Math.Min(from, File.Length) + whole).ToString());
             return response;
         }
+    }
+
+    private sealed class Identity : IAgentPodIdentityResolver
+    {
+        public bool Live = true;
+        public int Calls;
+        public int AllowedCalls = int.MaxValue;
+        public Task<bool> IsLiveSessionPodAsync(string id, IPAddress ip, CancellationToken ct = default)
+        {
+            Calls++;
+            return Task.FromResult(Live && Calls <= AllowedCalls);
+        }
+    }
+
+    [Fact]
+    public async Task StaleIpNeverReceivesTheCallbackTokenEvenAfterASuccessfulRead()
+    {
+        var pod = new Pod();
+        pod.Append(Line("user", "hello"));
+        var identity = new Identity();
+        var reader = new LiveTranscriptReader(new HttpClient(pod), new Store(),
+            new ConfigurationBuilder().Build(), identity);
+        Assert.NotNull(await reader.ReadAsync(Running(), CancellationToken.None));
+        identity.Live = false;
+        Assert.Null(await reader.ReadAsync(Running(), CancellationToken.None));
+        Assert.Single(pod.Requests);
+        Assert.Equal(2, identity.Calls);
+    }
+
+    [Fact]
+    public async Task RealHttp_StaleIpGetsNoTokenAndFreshPodGetsTheTranscript()
+    {
+        // Exercise the SDK's actual wire request and the reader's actual HTTP transport.
+        using var socket = new System.Net.Sockets.TcpListener(IPAddress.Loopback, 0);
+        socket.Start();
+        var port = ((IPEndPoint)socket.LocalEndpoint).Port;
+        socket.Stop();
+        using var listener = new HttpListener();
+        listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+        listener.Start();
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        var live = false;
+        var tokenRequests = 0;
+        var identityRequests = 0;
+        var server = Task.Run(async () =>
+        {
+            try
+            {
+                while (!stop.IsCancellationRequested)
+                {
+                    var context = await listener.GetContextAsync().WaitAsync(stop.Token);
+                    string body;
+                    if (context.Request.Url!.AbsolutePath.EndsWith("/pods"))
+                    {
+                        identityRequests++;
+                        Assert.Null(context.Request.Headers["X-Agent-Token"]);
+                        Assert.Contains("metadata.name=session-s1", context.Request.QueryString["fieldSelector"]);
+                        var ip = live ? "127.0.0.1" : "127.0.0.2";
+                        body = $$$"""{"apiVersion":"v1","kind":"PodList","metadata":{},"items":[{"metadata":{"name":"session-s1","uid":"current-pod","labels":{"agenthub.dev/session":"s1","agenthub.dev/component":"agent"}},"status":{"phase":"Running","podIP":"{{{ip}}}"}}]}""";
+                    }
+                    else
+                    {
+                        tokenRequests++;
+                        Assert.Equal(Token, context.Request.Headers["X-Agent-Token"]);
+                        body = Line("user", "real HTTP");
+                        var length = Encoding.UTF8.GetByteCount(body).ToString();
+                        context.Response.Headers.Add("X-Transcript-Size", length);
+                        context.Response.Headers.Add("X-Transcript-Next", length);
+                    }
+                    var bytes = Encoding.UTF8.GetBytes(body);
+                    context.Response.ContentLength64 = bytes.Length;
+                    await context.Response.OutputStream.WriteAsync(bytes, stop.Token);
+                    context.Response.Close();
+                }
+            }
+            catch (OperationCanceledException e) when (stop.IsCancellationRequested)
+            {
+                // Only the fixture shutdown may terminate the HTTP accept loop.
+                Assert.Equal(stop.Token, e.CancellationToken);
+            }
+        }, stop.Token);
+        try
+        {
+            using var client = new k8s.Kubernetes(new k8s.KubernetesClientConfiguration
+                { Host = $"http://127.0.0.1:{port}" });
+            using var http = new HttpClient();
+            var config = new ConfigurationBuilder().AddInMemoryCollection(
+                new Dictionary<string, string?> { ["AgentHub:AgentPort"] = port.ToString() }).Build();
+            var reader = new LiveTranscriptReader(http, new Store(), config,
+                new KubernetesAgentPodIdentityResolver(client, "sessions"));
+            Assert.Null(await reader.ReadAsync(Running("127.0.0.1"), stop.Token));
+            Assert.Equal(0, tokenRequests);
+            live = true;
+            var entries = await reader.ReadAsync(Running("127.0.0.1"), stop.Token);
+            Assert.Equal("real HTTP", Assert.Single(entries!).Text);
+            live = false;
+            Assert.Null(await reader.ReadAsync(Running("127.0.0.1"), stop.Token));
+            Assert.Equal(1, tokenRequests);
+            Assert.Equal(3, identityRequests);
+        }
+        finally
+        {
+            await stop.CancelAsync();
+            await server;
+        }
+    }
+
+    [Fact]
+    public async Task OversizedBodyFallsBackWithoutParsingIt()
+    {
+        var (reader, pod, _, _) = Create();
+        pod.File = Encoding.UTF8.GetBytes(new string('x', 8 * 1024 * 1024) + "\n");
+        Assert.Null(await reader.ReadAsync(Running(), CancellationToken.None));
+        Assert.Single(pod.Requests);
+    }
+
+    [Fact]
+    public async Task RechecksIdentityBetweenCatchUpRounds()
+    {
+        using var pod = new Pod { More = true };
+        pod.Append(Line("user", "hello"));
+        using var http = new HttpClient(pod);
+        var identity = new Identity { AllowedCalls = 1 };
+        var reader = new LiveTranscriptReader(http, new Store(), new ConfigurationBuilder().Build(), identity);
+        Assert.Null(await reader.ReadAsync(Running(), CancellationToken.None));
+        Assert.Single(pod.Requests);
+        Assert.Equal(2, identity.Calls);
+    }
+
+    private sealed class BusyPod : HttpMessageHandler
+    {
+        public readonly TaskCompletionSource OneStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly object _peakLock = new();
+        public int Active;
+        public int Peak;
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            var active = Interlocked.Increment(ref Active);
+            lock (_peakLock) Peak = Math.Max(Peak, active);
+            if (active == 1) OneStarted.TrySetResult();
+            try
+            {
+                await Release.Task.WaitAsync(ct);
+                var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(Line("user", "hello")) };
+                var size = (await response.Content.ReadAsByteArrayAsync(ct)).Length.ToString();
+                response.Headers.Add("X-Transcript-Size", size);
+                response.Headers.Add("X-Transcript-Next", size);
+                return response;
+            }
+            finally { Interlocked.Decrement(ref Active); }
+        }
+    }
+
+    [Fact]
+    public async Task BusyLiveReadSendsOtherSessionsToStoredCopyWithoutWaiting()
+    {
+        using var pod = new BusyPod();
+        using var http = new HttpClient(pod);
+        var reader = new LiveTranscriptReader(http, new Store(), new ConfigurationBuilder().Build(), new Identity());
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var reads = Enumerable.Range(0, 24).Select(i =>
+            reader.ReadAsync(Running() with { Id = "s" + i }, stop.Token)).ToArray();
+        try
+        {
+            await pod.OneStarted.Task.WaitAsync(stop.Token);
+            Assert.Equal(1, pod.Active);
+            var otherReads = await Task.WhenAll(reads.Skip(1)).WaitAsync(stop.Token);
+            Assert.All(otherReads, entries => Assert.Null(entries));
+        }
+        finally { pod.Release.TrySetResult(); }
+        Assert.NotNull(await reads[0]);
+        Assert.NotNull(await reader.ReadAsync(Running() with { Id = "after" }, stop.Token));
+        Assert.Equal(1, pod.Peak);
     }
 
     private sealed class Store : ISessionStore
@@ -77,7 +253,7 @@ public class LiveTranscriptReaderTests
         var pod = new Pod();
         var store = new Store();
         var now = new DateTime(2026, 10, 17, 12, 0, 0, DateTimeKind.Utc);
-        var reader = new LiveTranscriptReader(new HttpClient(pod), store, new ConfigurationBuilder().Build(), () => now);
+        var reader = new LiveTranscriptReader(new HttpClient(pod), store, new ConfigurationBuilder().Build(), new Identity(), () => now);
         return (reader, pod, store, by => now += by);
     }
 
