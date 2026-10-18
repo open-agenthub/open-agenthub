@@ -3,21 +3,24 @@ import path from 'node:path';
 import { createGate } from './policy-gate.mjs';
 import { createLimitNotice } from './limit-notice.mjs';
 import { createTurnNotifier } from './turn-notify.mjs';
+import { createNextTurnRelay } from './next-turn.mjs';
 import { installSkillRefresher } from './skill-refresh.mjs';
 
 // OpenCode treats every function this module exports as a plugin and calls it at startup, so
 // this file exports the plugin and nothing else; the logic lives in policy-gate.mjs,
-// turn-notify.mjs, limit-notice.mjs and skill-refresh.mjs.
+// turn-notify.mjs, next-turn.mjs, limit-notice.mjs and skill-refresh.mjs.
 export const AgentHubPolicy = async (input) => {
   const inputClient = input && input.client;
   const gate = createGate();
   const notify = createTurnNotifier({ client: input && input.client });
+  const nextTurn = createNextTurnRelay({ client: input && input.client });
   const limitNotice = createLimitNotice();
   const skills = installSkillRefresher({ client: input && input.client });
   return {
     // The CLI creates its own session IDs; recording the submitted conversation prevents
     // --continue from selecting a shell-tab session when this pod resumes.
     'chat.message': async (input) => {
+      await nextTurn.onChatMessage().catch(() => {});
       if (typeof input?.sessionID !== 'string' || !/^ses_[A-Za-z0-9]+$/.test(input.sessionID)) return;
       try {
         const session = await inputClient.session.get({ path: { id: input.sessionID } });
@@ -35,6 +38,7 @@ export const AgentHubPolicy = async (input) => {
       try { limitNotice(event); } catch {}
       try { skills.onEvent(event); } catch {}
       await notify(event).catch(() => {});
+      await nextTurn.onEvent(event).catch(() => {});
     }
   };
 };
