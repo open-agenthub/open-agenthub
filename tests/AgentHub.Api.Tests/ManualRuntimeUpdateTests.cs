@@ -98,7 +98,7 @@ public class ManualRuntimeUpdateTests
         public bool ArchiveAvailable = true, StorageConfigured = true, ArchiveCheckedAfterDeletion;
         public int DeleteGrace;
         public V1Pod? CreatedPod;
-        public TaskCompletionSource DeleteStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource DeleteStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public static async Task<Rig> Start(AgentKind agent, string ui, bool question, int drainStatus)
         {
@@ -128,7 +128,8 @@ public class ManualRuntimeUpdateTests
                 return Results.Json(new V1Pod { ApiVersion = "v1", Kind = "Pod" });
             });
             rig._app.MapPost("/api/v1/namespaces/{ns}/pods", async (HttpRequest request) => {
-                rig.CreatedPod = KubernetesJson.Deserialize<V1Pod>(await new StreamReader(request.Body).ReadToEndAsync());
+                using var reader = new StreamReader(request.Body);
+                rig.CreatedPod = KubernetesJson.Deserialize<V1Pod>(await reader.ReadToEndAsync());
                 return Results.Json(rig.CreatedPod);
             });
             rig._app.MapGet("/api/v1/namespaces/{ns}/secrets/{name}", () => Results.Json(new V1Secret { ApiVersion = "v1", Kind = "Secret",
