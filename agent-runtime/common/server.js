@@ -1,5 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
+const { createWorkspaceDiff } = require('./workspace-diff');
 
 const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
@@ -79,6 +80,7 @@ function createCommonServer(options = {}) {
     root: env.AGENTHUB_FILE_ROOT || '/workspace/.agenthub/files' });
   const attachmentMaterializer = supplied.attachmentMaterializer ||
     new AttachmentMaterializer({ env, fetch: fetchImpl, store: fileStore });
+  const workspaceDiff = supplied.workspaceDiff || createWorkspaceDiff(env.AGENTHUB_WORKSPACE_ROOT || '/workspace');
   const secretMask = supplied.secretMask || createSecretMask({ env, fs });
 
   const preparation = driver.prepare(env);
@@ -1198,6 +1200,7 @@ function createCommonServer(options = {}) {
 
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
+    if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
     if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
     if (requestPath === '/agenthub/credentials/refresh') return handleCredentialRequest(request, response, true);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
@@ -1207,6 +1210,19 @@ function createCommonServer(options = {}) {
       return handleModRequest(request, response, requestPath);
     }
     return handleFileRequest(request, response);
+  }
+
+  async function handleDiffRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'GET') {
+      response.setHeader('Allow', 'GET');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    const comparison = new URL(request.url, 'http://example.com').searchParams.get('comparison') || 'base';
+    if (!['base', 'head'].includes(comparison)) return fileError(response, 400, 'invalid_comparison');
+    try { sendJson(response, 200, await workspaceDiff(comparison)); }
+    catch { fileError(response, 503, 'diff_unavailable'); }
   }
 
   function handleShell(socket) {

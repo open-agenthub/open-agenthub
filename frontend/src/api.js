@@ -104,6 +104,7 @@ async function sharedReq(path, method = 'GET', body) {
 export const api = {
   listSessions: () => req('GET', '/sessions'),
   getSession: (id) => req('GET', `/sessions/${id}`),
+  workspaceDiff: (id, comparison = 'base') => req('GET', `/sessions/${encodeURIComponent(id)}/diff?comparison=${encodeURIComponent(comparison)}`),
   sessionFileCapabilities: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/capabilities`),
   reserveSessionFile: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/files/reserve`, data),
   uploadSessionFile,
@@ -322,3 +323,5 @@ export async function getSharedTranscript(token) {
 
 // An interactive bash shell in the same pod.
 export const shellUrl = (id) => wsUrl(id, 'shell')
+
+export const getSharedWorkspaceDiff = (token, comparison = 'base') => sharedReq(`/shared/${encodeURIComponent(token)}/diff?comparison=${encodeURIComponent(comparison)}`)
