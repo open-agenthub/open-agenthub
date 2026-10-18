@@ -1196,10 +1196,17 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         }
         var pod = await TryReadPodAsync($"session-{id}", ct);
         if (!RuntimeImageOutdated(record, pod)) return (await GetSessionAsync(owner, id, ct))!;
-        if (record.Mode != SessionMode.Interactive || record.Agent != AgentKind.Claude ||
-            record.UiMode != SessionUiMode.Chat || record.QuestionPending || pod?.Status?.Phase != SessionStatus.Running ||
-            string.IsNullOrEmpty(pod.Status.PodIP) || !_artifacts.IsConfigured)
-            throw new InvalidOperationException("Update requires a running idle resumable chat session with saved state and no pending question.");
+        if (record.Mode != SessionMode.Interactive || pod?.Status?.Phase != SessionStatus.Running)
+            throw new InvalidOperationException("Runtime updates require a running interactive session.");
+        if (!_artifacts.IsConfigured)
+            throw new InvalidOperationException("State storage is unavailable. The conversation cannot be saved for resume.");
+        if (record.Agent != AgentKind.Claude || record.UiMode != SessionUiMode.Chat || record.QuestionPending ||
+            string.IsNullOrEmpty(pod.Status.PodIP))
+            throw new RuntimeUpdateConfirmationRequiredException(record.QuestionPending
+                ? "The agent has a question waiting for an answer, so the hub cannot confirm it is idle."
+                : record.UiMode != SessionUiMode.Chat
+                    ? "The hub cannot confirm whether a terminal session is idle."
+                    : "This session cannot confirm that it is idle and ready for an automatic update.");
         await EnsureAgentAllowedAsync(record.Agent, ct);
         await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(260) };
@@ -1209,18 +1216,12 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         {
             using var admitted = await client.PostAsync(drainUrl, null, ct);
             if (!admitted.IsSuccessStatusCode)
-                throw new InvalidOperationException("Runtime is busy or does not support safe updates. Pause and resume manually when idle.");
+                throw new RuntimeUpdateConfirmationRequiredException("The agent may still be working, or this runtime cannot confirm that it is idle.");
             record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
-            if (record.QuestionPending) throw new InvalidOperationException("A question is pending.");
-            if (await _artifacts.HeadAsync(IArtifactStore.StateKey(owner, id, record.Agent), ct) is null)
+            if (record.QuestionPending) throw new RuntimeUpdateConfirmationRequiredException("The agent has a question waiting for an answer, so the hub cannot confirm it is idle.");
+            if (await _artifacts.HeadAsync(IArtifactStore.StateKey(Sanitize(owner), id, record.Agent), ct) is null)
                 throw new InvalidOperationException("No saved conversation archive is available yet.");
-            await PauseSessionCoreAsync(owner, id, ct);
-            // Deletion is asynchronous: the old process must finish uploading before resume downloads.
-            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            deadline.CancelAfter(TimeSpan.FromSeconds(_opts.PauseGracePeriodSeconds + 30));
-            while (await TryReadPodAsync($"session-{id}", deadline.Token) is not null)
-                await Task.Delay(250, deadline.Token);
-            return await ResumeSessionCoreAsync(owner, id, ct);
+            return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
         }
         finally
         {
@@ -1238,6 +1239,39 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             catch (OperationCanceledException exception) { _log.LogDebug(exception, "Releasing runtime drain timed out"); }
             catch (k8s.Autorest.HttpOperationException exception) { _log.LogDebug(exception, "Reading runtime drain pod failed"); }
         }
+    }
+
+    public async Task<SessionInfo> PauseAndResumeRuntimeImageAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (_runtimeUpdateLock is null) throw new InvalidOperationException("Runtime update lock is unavailable.");
+        await using var held = await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
+        var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        if (!string.IsNullOrWhiteSpace(record.Image))
+            throw new InvalidOperationException("Custom runtime images are pinned.");
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        if (record.Mode != SessionMode.Interactive || pod?.Status?.Phase != SessionStatus.Running)
+            throw new InvalidOperationException("Pause and resume requires a running interactive session.");
+        if (!_artifacts.IsConfigured)
+            throw new InvalidOperationException("State storage is unavailable. The conversation cannot be saved for resume.");
+        if (!RuntimeImageOutdated(record, pod)) return (await GetSessionAsync(owner, id, ct))!;
+        await EnsureAgentAllowedAsync(record.Agent, ct);
+        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
+        return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
+    }
+
+    private async Task<SessionInfo> PauseAndResumeRuntimeCoreAsync(string owner, string id, CancellationToken ct)
+    {
+        await PauseSessionCoreAsync(owner, id, ct);
+        // The old runtime uploads on termination; starting sooner can restore stale state.
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromSeconds(_opts.PauseGracePeriodSeconds + 30));
+        while (await TryReadPodAsync($"session-{id}", deadline.Token) is not null)
+            await Task.Delay(250, deadline.Token);
+        var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        if (await _artifacts.HeadAsync(IArtifactStore.StateKey(owner, id, record.Agent), ct) is null)
+            throw new InvalidOperationException("No saved conversation archive is available. The session remains paused.");
+        return await ResumeSessionCoreAsync(owner, id, ct);
     }
 
     public async Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default)

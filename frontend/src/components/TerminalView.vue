@@ -30,11 +30,26 @@ import SecretRequestBanner from './SecretRequestBanner.vue'
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
 const runtimeUpdateError = ref('')
 const runtimeUpdating = ref(false)
+const runtimeUpdateConfirmation = ref(false)
 async function updateRuntime() {
   runtimeUpdating.value = true
   runtimeUpdateError.value = ''
+  runtimeUpdateConfirmation.value = false
   try { await api.updateRuntimeImage(props.session.id); emit('runtime-updated') }
-  catch (error) { runtimeUpdateError.value = error.message || 'Update deferred' }
+  catch (error) {
+    runtimeUpdateError.value = error.message || 'Update deferred'
+    runtimeUpdateConfirmation.value = error.code === 'runtime_update_confirmation_required'
+  }
+  finally { runtimeUpdating.value = false }
+}
+async function pauseAndResumeRuntime() {
+  runtimeUpdating.value = true
+  runtimeUpdateError.value = ''
+  try {
+    await api.pauseAndResumeRuntimeImage(props.session.id)
+    runtimeUpdateConfirmation.value = false
+    emit('runtime-updated')
+  } catch (error) { runtimeUpdateError.value = error.message || 'Pause and resume failed' }
   finally { runtimeUpdating.value = false }
 }
 const emit = defineEmits(['runtime-updated', 'back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
@@ -487,7 +502,7 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
       <span v-if="session.outdatedImage" class="status" data-outdated-image>outdated image</span>
-      <button v-if="session.outdatedImage && capabilities.canManage" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
+      <button v-if="session.outdatedImage && capabilities.canManage && !sharedToken" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
       <span class="status">{{ modern ? statuses.agent : statuses[activeTab] }}</span>
       <div v-if="shareOpen" class="share-pop">
         <div class="share-head"><span>Share session</span><button class="ghost" @click="shareOpen = false">✕</button></div>
@@ -496,6 +511,16 @@ function interruptWorkspaceAgent() {
     </div>
     <p v-if="runtimeUpdateError" role="alert">{{ runtimeUpdateError }}</p>
     <SessionStoppedNotice :session="session" :shared-token="sharedToken" @resume="$emit('resume', $event)" />
+    <div v-if="runtimeUpdateConfirmation && capabilities.canManage && !sharedToken" role="alertdialog" aria-label="Confirm runtime update" class="perm">
+      <div class="perm-text">
+        <strong>Pause and resume on the current runtime image?</strong>
+        <span>The hub cannot tell whether the agent is mid-turn. Pausing may interrupt its work or a pending question. The runtime saves its state before resuming the conversation.</span>
+      </div>
+      <div class="perm-actions">
+        <button class="bar-btn primary" :disabled="runtimeUpdating" @click="pauseAndResumeRuntime">Pause and resume now</button>
+        <button class="bar-btn" :disabled="runtimeUpdating" @click="runtimeUpdateConfirmation = false">Cancel</button>
+      </div>
+    </div>
     <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>

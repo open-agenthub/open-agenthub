@@ -136,6 +136,8 @@ public interface ISessionService
     Task<SessionInfo> DuplicateSessionAsync(string owner, string id, DuplicateSessionRequest request, CancellationToken ct = default);
     Task<SessionInfo> UpdateRuntimeImageAsync(string owner, string id, CancellationToken ct = default)
         => throw new NotSupportedException();
+    Task<SessionInfo> PauseAndResumeRuntimeImageAsync(string owner, string id, CancellationToken ct = default)
+        => throw new NotSupportedException();
     Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Pauses a running session: uploads its state, removes the pod and marks it "Paused".
     /// A paused session is resumable via the normal resume path.</summary>
