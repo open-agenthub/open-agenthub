@@ -70,8 +70,9 @@ multiline prompt, and Enter is sent after the existing CLI paste delay. The pend
 cancelled on a disconnect or session change. A send completing means bytes were sent to the
 socket; terminal protocols provide no provider receipt. If the connection changes after paste,
 the draft remains and the error asks the person to check the terminal before retrying. Stop
-sends Ctrl+C to that same agent connection. Terminal-mode attachments are not offered because
-they do not have chat-mode delivery receipts.
+sends Ctrl+C to that same agent connection. Attachments go ahead of the text as pasted file paths,
+the form every pinned CLI takes an image in; they have no delivery receipt either, so a failed
+hand-over keeps the draft and its files (#148, `terminal-clipboard.md`).
 
 ### The agent CLI's own menus (#112)
 
