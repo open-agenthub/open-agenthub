@@ -120,6 +120,7 @@ function resetFromDuration(match, text, { secondsFromNow }) {
 }
 
 module.exports = {
+  slashCommands: require('./slash-commands'),
   limitPatterns,
   // ~/.local/share/opencode is linked to ~/.opencode by the entrypoint, so the session database,
   // undo snapshots and auth.json all live here. auth.json is excluded via authFilename; the MCP
