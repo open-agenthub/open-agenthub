@@ -187,6 +187,7 @@ const origin = location.origin
 // the API-key switch.
 const scopeAccounts = ref({})
 const scopePats = ref([])
+const scopeSecrets = ref([])
 // Create form: the card is opened by a toggle, so an unrestricted token stays one click.
 const restrict = ref(false)
 const newScope = ref(emptyScopeDraft())
@@ -208,11 +209,12 @@ async function loadScopeSources() {
   if (!showTokens.value) return
   try { scopeAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* older backend */ }
   try { scopePats.value = (await api.getCredentialStatus())?.gitPats || [] } catch { /* older backend */ }
+  try { scopeSecrets.value = (await api.listSecrets()) || [] } catch { /* older backend: no secrets */ }
 }
 
 onMounted(() => { load(); loadScopeSources(); loadSlack(); loadChat() })
 
-const summaryOf = (t) => scopeSummary(t.allowedCredentials, scopeAccounts.value, scopePats.value)
+const summaryOf = (t) => scopeSummary(t.allowedCredentials, scopeAccounts.value, scopePats.value, scopeSecrets.value)
 
 async function create() {
   const name = newName.value.trim()
@@ -232,7 +234,7 @@ async function create() {
 
 function startEdit(t) {
   editingId.value = t.id
-  editScope.value = draftFromScope(t.allowedCredentials, scopeAccounts.value, scopePats.value)
+  editScope.value = draftFromScope(t.allowedCredentials, scopeAccounts.value, scopePats.value, scopeSecrets.value)
   confirmingId.value = ''
 }
 
@@ -418,7 +420,7 @@ const mcpSnippet = computed(() =>
         <input type="checkbox" v-model="restrict" data-token-restrict :disabled="creating" />
         <span>Restrict to credentials <span class="dim">— limit which logins and git tokens sessions created with this token may use</span></span>
       </label>
-      <TokenScopeEditor v-if="restrict" v-model="newScope" :accounts="scopeAccounts" :pats="scopePats" data-token-create-scope />
+      <TokenScopeEditor v-if="restrict" v-model="newScope" :accounts="scopeAccounts" :pats="scopePats" :secrets="scopeSecrets" data-token-create-scope />
 
       <div v-if="freshToken" class="fresh">
         <p class="fresh-label">New token — copy it now, it will not be shown again:</p>
@@ -448,7 +450,7 @@ const mcpSnippet = computed(() =>
           </div>
           <p v-if="confirmingId === t.id" class="muted" data-token-delete-note>Any remote client using this token stops working.</p>
           <div v-if="editingId === t.id" data-token-edit>
-            <TokenScopeEditor v-model="editScope" :accounts="scopeAccounts" :pats="scopePats" />
+            <TokenScopeEditor v-model="editScope" :accounts="scopeAccounts" :pats="scopePats" :secrets="scopeSecrets" />
             <div class="scope-actions">
               <button class="primary" :disabled="scopeBusy" data-token-scope-save @click="saveScope(t, scopeFromDraft(editScope))">Save restriction</button>
               <button v-if="t.allowedCredentials" :disabled="scopeBusy" data-token-scope-lift @click="saveScope(t, null)">Remove restriction</button>

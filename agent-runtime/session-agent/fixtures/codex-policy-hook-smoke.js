@@ -121,7 +121,7 @@ async function main() {
   });
   const port = server.address().port;
   const child = spawn('codex', [
-    'exec', '--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust',
+    'exec', '--sandbox', 'danger-full-access', '--json', '--dangerously-bypass-hook-trust',
     '--disable', 'enable_request_compression',
     // Codex now prefers a WebSocket transport for /v1/responses. This fixture's server
     // speaks plain HTTP, and the failed upgrade burned the first canned response before
