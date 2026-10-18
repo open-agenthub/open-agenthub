@@ -52,10 +52,8 @@ const workspaceOpened = ref(activeTab.value === 'workspace')
 const conversationVisible = computed(() => modern.value && !isChat.value)
 const terminalOpened = ref(false)
 const drawerKind = ref('agent')
-// What the agent CLI shows of its own interactive screens (#112), and whether the drawer is open
-// because of it: only a drawer this view opened for a menu is closed again when the menu goes.
+// Keep menu detection independent of drawer visibility so answering never requires opening it.
 const cliMenu = ref(null)
-let drawerOpenedForMenu = false
 const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
@@ -291,7 +289,6 @@ watch(() => props.session?.id, () => {
   transcriptError.value = ''
   terminalOpened.value = false
   cliMenu.value = null
-  drawerOpenedForMenu = false
   shellOpened.value = false
   drawerKind.value = 'agent'
   statuses.agent = 'connecting…'
@@ -380,14 +377,6 @@ function onConverted(id, surface) {
 
 function onCliMenu(menu) {
   cliMenu.value = menu
-  if (menu && modern.value && !(terminalOpened.value && drawerKind.value === 'agent')) {
-    terminalOpened.value = true
-    drawerKind.value = 'agent'
-    drawerOpenedForMenu = true
-  } else if (!menu && drawerOpenedForMenu) {
-    terminalOpened.value = false
-    drawerOpenedForMenu = false
-  }
   // The composer's "answer the menu first" is about this menu; it goes when the menu does.
   if (!menu) composer.value?.clearError?.()
 }
@@ -398,8 +387,6 @@ function cancelCliMenu() {
   void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
 }
 function toggleDrawer(kind) {
-  // The person took the drawer over; a menu closing must not shut it under them.
-  drawerOpenedForMenu = false
   if (kind === 'shell') shellOpened.value = true
   terminalOpened.value = !(terminalOpened.value && drawerKind.value === kind)
   drawerKind.value = kind
@@ -593,7 +580,7 @@ function interruptWorkspaceAgent() {
           @retry="loadTranscript" @quote="composer?.quote($event)" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
-          @choose="answerCliMenu" @cancel="cancelCliMenu" />
+          @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
           <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>

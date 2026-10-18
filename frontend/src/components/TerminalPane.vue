@@ -114,16 +114,19 @@ function clearReconnect() {
   reconnectTimer = undefined
 }
 
-// The agent CLI's own interactive screens (#112), read off the screen this pane holds. Checked a
-// moment after output stops rather than per write: a TUI draws a menu in several writes, and a
-// half-drawn one would be announced and withdrawn within a frame.
+// The agent CLI's own interactive screens (#112), read off the screen this pane holds. Checked
+// at most once per settling interval: a TUI draws a menu in several writes. Restarting the
+// timer on every write would keep a dismissed menu alive while the CLI animates or streams.
 const MENU_SETTLE_MS = 150
 let menuTimer
 let lastMenu = null
 function scheduleMenuCheck() {
   if (props.kind !== 'agent') return
-  clearTimeout(menuTimer)
-  menuTimer = setTimeout(checkMenu, MENU_SETTLE_MS)
+  if (menuTimer) return
+  menuTimer = setTimeout(() => {
+    menuTimer = undefined
+    checkMenu()
+  }, MENU_SETTLE_MS)
 }
 function checkMenu() {
   if (disposed || !term) return
