@@ -36,7 +36,7 @@ Invoke-Docker @(
 )
 Invoke-Docker @(
     "run", "--rm", "--entrypoint", "codex", $Image,
-    "exec", "--sandbox", "workspace-write", "--json",
+    "exec", "--sandbox", "danger-full-access", "--json",
     "--dangerously-bypass-hook-trust", "resume", "--help"
 )
 
