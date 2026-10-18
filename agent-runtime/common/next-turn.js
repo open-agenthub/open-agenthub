@@ -194,12 +194,12 @@ function createNextTurnDelivery(options) {
     accept() { pending = true; },
     turnEvent,
     scheduleAtSafePoint(action) { actions.push(action); },
-    async waitForInputReady(term, scrollback, screenSize) {
+    async waitForInputReady(term, scrollback, screenSize, isReady = () => true) {
       const deadline = now() + 15_000;
       while (now() < deadline) {
         if (now() - lastOutput >= IDLE_QUIET_MS) {
           const screen = await renderScreen(scrollback(), screenSize, Terminal());
-          if (!detectMenu(screen) && now() - lastOutput >= IDLE_QUIET_MS) return;
+          if (!detectMenu(screen) && isReady(screen) && now() - lastOutput >= IDLE_QUIET_MS) return;
         }
         await wait(100);
       }

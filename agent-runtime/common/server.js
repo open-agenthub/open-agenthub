@@ -219,14 +219,14 @@ function createCommonServer(options = {}) {
         return previous;
       },
       waitForClear: async previous => {
-        if (typeof driver.findTranscript === 'function') {
+        if (typeof driver.findTranscript === 'function' && !driver.contextClearScreen) {
           const deadline = now() + 15_000;
           while (locateTranscript() === previous && now() < deadline) {
             await new Promise(resolve => setTimeoutImpl(resolve, 100));
           }
           if (locateTranscript() === previous) throw new Error('context_clear_identity_unchanged');
         }
-        await nextTurn.waitForInputReady(clearTarget, () => scrollback, lastSize || { cols: 120, rows: 32 });
+        await nextTurn.waitForInputReady(clearTarget, () => scrollback, lastSize || { cols: 120, rows: 32 }, driver.contextClearScreen);
         if (term !== clearTarget || exited || restartReason !== null) throw new Error('context_clear_agent_restarted');
       },
       deliver: text => injectTerminalInput(clearTarget, '\x1b[200~' + text + '\x1b[201~', {
