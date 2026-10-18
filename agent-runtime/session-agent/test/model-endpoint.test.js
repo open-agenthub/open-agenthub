@@ -121,7 +121,8 @@ test('the probe fails on a missing route and says which API the agent needs', as
 
   assert.match(claude.message, /https:\/\/llm\.example\.com\/v1\/messages does not exist \(HTTP 404\)/);
   assert.match(claude.message, /Anthropic Messages API/);
-  assert.match(claude.message, /Server said: File Not Found/);
+  assert.equal(claude.detail, 'File Not Found');
+  assert.doesNotMatch(claude.message, /File Not Found/);
   assert.match(codex.message, /\/v1\/responses does not exist/);
   assert.match(codex.message, /OpenAI Responses API/);
 });

@@ -132,8 +132,10 @@ async function probe({ url, model, key }, protocol, { fetchImpl = fetch, attempt
         (key ? 'Check the stored custom endpoint API key.' : 'No custom endpoint API key is stored; add one in the credential settings.') };
     }
     if (response.status === 404 || response.status === 405) {
-      return { ok: false, message: `${target} does not exist (HTTP ${response.status}): ${spec.agent} needs ${spec.api}. ${spec.hint}` +
-        (body ? ` Server said: ${body}` : '') };
+      // The server's own words go to the log only. The termination message is shown in the session
+      // list to everyone who can read the session, and a server's error body is not ours to show there.
+      return { ok: false, message: `${target} does not exist (HTTP ${response.status}): ${spec.agent} needs ${spec.api}. ${spec.hint}`,
+        detail: body };
     }
     return { ok: true, status: response.status };
   }
@@ -157,6 +159,7 @@ async function main(argv) {
     return 0;
   }
   console.error('[model-endpoint] ' + result.message);
+  if (result.detail) console.error('[model-endpoint] Server said: ' + result.detail);
   writeTermination(result.message);
   return 1;
 }
