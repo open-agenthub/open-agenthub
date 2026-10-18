@@ -599,7 +599,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         {
             var record = await _store.GetByIdAsync(sessionId, ct);
             // The account a session is on: the one it is pinned to, else the one resolved at start.
-            var onAccount = record is not null && record.Agent == agent && record.AuthMode != AgentAuthMode.ApiKey
+            var onAccount = record is not null && record.Agent == agent && AgentConfiguration.UsesProviderAccount(record.AuthMode)
                 && (record.CredentialId ?? record.ResolvedCredentialId) == accountId;
             if (onAccount) sessions.Add(new ProviderLoginSession(record!.Id, ip, record.CallbackToken));
         }
@@ -611,7 +611,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         string? credentialId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(credentialId)) return null;
-        if (authMode == AgentAuthMode.ApiKey)
+        if (!AgentConfiguration.UsesProviderAccount(authMode))
             throw new ArgumentException("A provider account only applies to Subscription sessions.");
         if (!ProviderAccountSecret.IsValidId(credentialId))
             throw new ArgumentException("Invalid provider account id.");
@@ -748,6 +748,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             AgentConfiguration.ValidateForDuplicatedSession(req.Agent, req.AuthMode, req.OpenClawApiKeySource);
         else
             AgentConfiguration.ValidateForCreate(req.Agent, req.AuthMode, req.OpenClawApiKeySource);
+        var (modelEndpointUrl, modelName) =
+            AgentConfiguration.ValidateModelEndpoint(req.Agent, req.AuthMode, req.ModelEndpointUrl, req.ModelName);
         var uiMode = SessionUiMode.NormalizeForCreate(req.UiMode, req.Agent, req.Mode);
 
         var image = string.IsNullOrWhiteSpace(req.Image) ? null : req.Image.Trim();
@@ -798,6 +800,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             OpenClawApiKeySource = req.Agent == AgentKind.OpenClaw && req.AuthMode == AgentAuthMode.ApiKey
                 ? req.OpenClawApiKeySource
                 : null,
+            ModelEndpointUrl = modelEndpointUrl, ModelName = modelName,
             CredentialId = credentialId,
             GitPatIdsJson = GitPatSelection.Serialize(gitPatIds),
             SecretIdsJson = SessionSecretSelection.Serialize(secretIds),
@@ -1501,11 +1504,14 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         {
             rec.OpenClawApiKeySource = null;
         }
+        // SessionUpdateValidator has already checked the merged values; this applies them, and
+        // drops both when the session leaves CustomEndpoint.
+        (rec.ModelEndpointUrl, rec.ModelName) = SessionUpdateValidator.ModelEndpointAfterUpdate(rec, req);
         // An account is bound to one provider: a change of agent drops the pin unless the
         // request names an account of the new agent in the same breath.
         if (req.CredentialId is not null)
             rec.CredentialId = await ValidateCredentialIdAsync(owner, rec.Agent, rec.AuthMode, req.CredentialId, ct);
-        else if (rec.Agent != previousAgent || rec.AuthMode == AgentAuthMode.ApiKey)
+        else if (rec.Agent != previousAgent || !AgentConfiguration.UsesProviderAccount(rec.AuthMode))
             rec.CredentialId = null;
         if (req.GitPatIds is not null)
             rec.GitPatIdsJson = GitPatSelection.Serialize(await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct));
@@ -2060,6 +2066,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
+        ModelEndpointUrl = r.ModelEndpointUrl, ModelName = r.ModelName,
         CredentialId = r.CredentialId, ResolvedCredentialId = r.ResolvedCredentialId,
         GitPatIds = GitPatSelection.Parse(r.GitPatIdsJson),
         SecretIds = SessionSecretSelection.Parse(r.SecretIdsJson),

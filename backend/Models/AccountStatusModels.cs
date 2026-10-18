@@ -35,7 +35,7 @@ public sealed record AccountStatus(
     {
         var stored = accounts.TryGetValue(session.Agent.ToString(), out var list) ? list : Array.Empty<ProviderAccountInfo>();
         ProviderAccountInfo? current = null;
-        if (session.AuthMode != AgentAuthMode.ApiKey)
+        if (AgentConfiguration.UsesProviderAccount(session.AuthMode))
         {
             current = stored.FirstOrDefault(a => a.Id == session.CredentialId)
                 ?? stored.FirstOrDefault(a => a.Id == session.ResolvedCredentialId)

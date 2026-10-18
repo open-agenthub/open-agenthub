@@ -27,6 +27,11 @@ public sealed class SessionRecord
     public AgentAuthMode AuthMode { get; set; } = AgentAuthMode.Auto;
     /// <summary>Which existing API key OpenClaw should use; set only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; set; }
+    /// <summary>API base of the self-hosted model server; set only for CustomEndpoint
+    /// (docs/custom-model-endpoints.md). The key is in the owner's credential secret, not here.</summary>
+    public string? ModelEndpointUrl { get; set; }
+    /// <summary>The model id requested from <see cref="ModelEndpointUrl"/>.</summary>
+    public string? ModelName { get; set; }
     /// <summary>The provider account this session mounts (docs/provider-accounts.md); null = the
     /// default account at each start. Also where a writeback from the pod lands.</summary>
     public string? CredentialId { get; set; }
@@ -218,6 +223,8 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_update_runtime_images BOOLEAN;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_grant_ids TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_ceiling TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_endpoint_url TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_name TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -232,14 +239,16 @@ public sealed class PostgresSessionStore : ISessionStore
                                   mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at,
                                   auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids,
                                   resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images,
-                                  secret_grant_ids, secret_ceiling)
+                                  secret_grant_ids, secret_ceiling,
+                                  model_endpoint_url, model_name)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now(),
                     @autoDeleteAfter, @autoDeleteFrom, @lastActivity, @convertedFrom, @gitPatIds,
                     @resolvedCredentialId, @accountFailover, @failureReason, @secretIds, @autoUpdateRuntimeImages,
-                    @secretGrantIds, @secretCeiling)
+                    @secretGrantIds, @secretCeiling,
+                    @modelEndpointUrl, @modelName)
             ON CONFLICT (id) DO UPDATE SET
                 resolved_credential_id = EXCLUDED.resolved_credential_id,
                 account_failover = EXCLUDED.account_failover,
@@ -257,6 +266,7 @@ public sealed class PostgresSessionStore : ISessionStore
                 agent_session_id = EXCLUDED.agent_session_id,
                 agent = EXCLUDED.agent, auth_mode = EXCLUDED.auth_mode,
                 openclaw_api_key_source = EXCLUDED.openclaw_api_key_source,
+                model_endpoint_url = EXCLUDED.model_endpoint_url, model_name = EXCLUDED.model_name,
                 credential_id = EXCLUDED.credential_id,
                 git_pat_ids = EXCLUDED.git_pat_ids,
                 secret_ids = EXCLUDED.secret_ids,
@@ -407,7 +417,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling, model_endpoint_url, model_name FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -458,6 +468,8 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("secretIds", (object?)r.SecretIdsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("secretGrantIds", (object?)r.SecretGrantIdsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("secretCeiling", (object?)r.SecretCeilingJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("modelEndpointUrl", (object?)r.ModelEndpointUrl ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("modelName", (object?)r.ModelName ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
         cmd.Parameters.AddWithValue("autoDeleteAfter", (object?)r.AutoDeleteAfterSeconds ?? DBNull.Value);
         cmd.Parameters.AddWithValue("autoDeleteFrom", (object?)r.AutoDeleteFrom ?? DBNull.Value);
@@ -509,6 +521,8 @@ public sealed class PostgresSessionStore : ISessionStore
         SecretIdsJson = r.IsDBNull(40) ? null : r.GetString(40),
         AutoUpdateRuntimeImages = r.IsDBNull(41) ? null : r.GetBoolean(41),
         SecretGrantIdsJson = r.IsDBNull(42) ? null : r.GetString(42),
-        SecretCeilingJson = r.IsDBNull(43) ? null : r.GetString(43)
+        SecretCeilingJson = r.IsDBNull(43) ? null : r.GetString(43),
+        ModelEndpointUrl = r.IsDBNull(44) ? null : r.GetString(44),
+        ModelName = r.IsDBNull(45) ? null : r.GetString(45)
     };
 }

@@ -78,6 +78,9 @@ public static class AgentPodSpecFactory
 
     public readonly record struct OpenClawApiKeyEnvBinding(string EnvName, string SecretKey);
 
+    /// <summary>Key of the custom endpoint's bearer token in the owner's credential secret.</summary>
+    public const string CustomEndpointApiKeySecretKey = "custom_endpoint_api_key";
+
     /// <summary>Maps a selected OpenClaw API key source to the shared creds secret key, or null when unset.</summary>
     public static string? TryOpenClawApiKeySecretKey(OpenClawApiKeySource? source) => source switch
     {
@@ -124,6 +127,9 @@ public static class AgentPodSpecFactory
             AgentAuthMode.ApiKey => context.HasSelectedApiKey,
             AgentAuthMode.Auto when record.Agent == AgentKind.Claude =>
                 context.HasSelectedSubscriptionCredential || context.HasSelectedApiKey,
+            // The key is optional: a self-hosted server often runs without one. One that does
+            // want a key refuses the runtime's start probe, which names the missing key.
+            AgentAuthMode.CustomEndpoint => true,
             _ => false
         };
         return available
@@ -300,6 +306,15 @@ public static class AgentPodSpecFactory
             case (AgentKind.Claude, AgentAuthMode.Auto):
                 AddSubscriptionVolume("claude", context.ClaudeCredentialSecretName);
                 AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
+                break;
+            case (AgentKind.Claude or AgentKind.Codex or AgentKind.OpenCode, AgentAuthMode.CustomEndpoint):
+                // Provider-neutral names; each runtime maps them onto what its CLI reads, because
+                // the three disagree on wire protocol and configuration (docs/custom-model-endpoints.md).
+                // No provider key and no login volume: neither is used, and a provider key in the
+                // pod is one the CLI could send to a server the provider never vetted.
+                env.Add(new V1EnvVar { Name = "AGENTHUB_MODEL_ENDPOINT_URL", Value = record.ModelEndpointUrl ?? "" });
+                env.Add(new V1EnvVar { Name = "AGENTHUB_MODEL_NAME", Value = record.ModelName ?? "" });
+                AddApiKey("AGENTHUB_MODEL_API_KEY", CustomEndpointApiKeySecretKey);
                 break;
             default:
                 throw new ArgumentException("Unsupported agent/authentication combination.");
