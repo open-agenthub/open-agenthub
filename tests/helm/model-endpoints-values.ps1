@@ -74,3 +74,7 @@ agent:
 }
 
 Write-Host 'model endpoint values: ok'
+
+# The expected-failure render above leaves $LASTEXITCODE at 1, and GitHub appends
+# `exit $LASTEXITCODE` to a pwsh step, which failed the job after every check had passed.
+exit 0
