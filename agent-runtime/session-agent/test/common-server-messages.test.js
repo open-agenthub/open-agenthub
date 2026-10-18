@@ -217,6 +217,9 @@ function turnHarness(environment = {}, options = {}) {
 }
 // The screen check renders with xterm, which parses on a timer of its own.
 const settle = () => new Promise(resolve => setTimeout(resolve, 30));
+async function eventually(condition) {
+  for (let i = 0; i < 200 && !condition(); i++) await settle();
+}
 const turn = (harness, event, address = '127.0.0.1', headers = turnHeaders) =>
   requestHttp(harness, 'POST', '/agenthub/turn', headers, JSON.stringify({ event }), address);
 const intervalTick = harness => harness.intervals.find(entry => entry.ms === 1_000).callback();
@@ -277,12 +280,12 @@ test('an idle agent gets the message typed in, with the person\'s keys held unti
 
   hub.waiting.push({ id: 'm-1', from: 'rev-1', fromTitle: 'Code Reviewer', body: 'Please fix MR 42' });
   await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ priority: false }));
-  await settle();
+  await eventually(() => harness.terminals[0].writes.length > 0);
   // The text is in, Enter waits for its pause — and the person presses a key right then.
   assert.equal(harness.terminals[0].writes.length, 1);
   socket.emit('message', JSON.stringify({ type: 'input', data: 'x' }));
   runTimers();
-  await settle();
+  await eventually(() => harness.terminals[0].writes.length >= 3);
 
   const writes = harness.terminals[0].writes;
   assert.match(writes[0], /Please fix MR 42$/);
@@ -302,6 +305,6 @@ test('the one-second check delivers once the screen settles, and not while the a
 
   advance(2_000);
   intervalTick(harness);
-  await settle();
+  await eventually(() => harness.terminals[0].writes.length > 0);
   assert.match(harness.terminals[0].writes[0], /Please fix MR 42$/);
 });
