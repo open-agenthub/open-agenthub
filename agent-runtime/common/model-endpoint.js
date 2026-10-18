@@ -28,6 +28,14 @@ const KEYLESS_TOKEN = 'agenthub-no-key';
 // starts the same wait again, so the session never gets an answer.
 const FIRST_TOKEN_TIMEOUT_MS = 30 * 60 * 1000;
 
+// What a failed connection reports as its cause, as far as it helps someone fix the endpoint.
+const CONNECT_ERRORS = Object.freeze([
+  'ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH',
+  'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET', 'TimeoutError', 'AbortError',
+  'CERT_HAS_EXPIRED', 'DEPTH_ZERO_SELF_SIGNED_CERT', 'SELF_SIGNED_CERT_IN_CHAIN', 'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+  'ERR_TLS_CERT_ALTNAME_INVALID'
+]);
+
 const PROTOCOLS = {
   messages: {
     agent: 'Claude Code',
@@ -127,19 +135,25 @@ async function probe({ url, model, key }, protocol, { fetchImpl = fetch, attempt
       continue;
     }
     const body = bounded(await response.text().catch(() => ''));
+    // Only our own text reaches the termination message: the status is named by a literal per branch
+    // rather than copied from the response, and the server's body goes to the log (detail).
     if (response.status === 401 || response.status === 403) {
-      return { ok: false, message: `The model endpoint refused the key (HTTP ${response.status}) at ${target}. ` +
+      const code = response.status === 401 ? '401' : '403';
+      return { ok: false, message: `The model endpoint refused the key (HTTP ${code}) at ${target}. ` +
         (key ? 'Check the stored custom endpoint API key.' : 'No custom endpoint API key is stored; add one in the credential settings.') };
     }
     if (response.status === 404 || response.status === 405) {
-      // The server's own words go to the log only. The termination message is shown in the session
-      // list to everyone who can read the session, and a server's error body is not ours to show there.
-      return { ok: false, message: `${target} does not exist (HTTP ${response.status}): ${spec.agent} needs ${spec.api}. ${spec.hint}`,
+      // The termination message is shown in the session list to everyone who can read the session,
+      // and a server's error body is not ours to show there.
+      const code = response.status === 404 ? '404' : '405';
+      return { ok: false, message: `${target} does not exist (HTTP ${code}): ${spec.agent} needs ${spec.api}. ${spec.hint}`,
         detail: body };
     }
     return { ok: true, status: response.status };
   }
-  const cause = lastError && (lastError.cause?.code || lastError.cause?.message || lastError.name || lastError.message);
+  // Named from a fixed list, for the same reason as the status codes above.
+  const raw = lastError && (lastError.cause?.code || lastError.name);
+  const cause = CONNECT_ERRORS.find(known => known === raw);
   return { ok: false, message: `Cannot reach the model endpoint ${target} (${cause || 'no answer'}). ` +
     'If the server runs inside the cluster, the operator has to allow it in the chart (agent.modelEndpoints); ' +
     'see docs/custom-model-endpoints.md.' };
