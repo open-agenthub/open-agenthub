@@ -253,6 +253,7 @@ public record RepoRef
 /// <summary>Request to start a new session.</summary>
 public record CreateSessionRequest
 {
+    public bool? AutoUpdateRuntimeImages { get; init; }
     public string Title { get; init; } = "Untitled";
 
     /// <summary>What this agent is for — shown in the UI and to other agents of the project.</summary>
@@ -419,6 +420,14 @@ public sealed record EphemeralApiSource
 /// </summary>
 public record UpdateSessionRequest
 {
+    private bool? _autoUpdateRuntimeImages;
+    [JsonIgnore]
+    public bool AutoUpdateRuntimeImagesSpecified { get; private set; }
+    public bool? AutoUpdateRuntimeImages
+    {
+        get => _autoUpdateRuntimeImages;
+        init { _autoUpdateRuntimeImages = value; AutoUpdateRuntimeImagesSpecified = true; }
+    }
     public string? Title { get; init; }
     /// <summary>Agent description; null = unchanged, empty string clears it. Applies immediately.</summary>
     public string? Description { get; init; }
@@ -636,6 +645,7 @@ public static class SessionDuplication
 /// <summary>View of a running or scheduled session.</summary>
 public record SessionInfo
 {
+    public bool? AutoUpdateRuntimeImages { get; init; }
     public required string Id { get; init; }
     public required string Title { get; init; }
     /// <summary>What this agent is for (null = none set).</summary>
@@ -690,6 +700,7 @@ public record SessionInfo
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
+    public bool OutdatedImage { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>
     public bool CanResume { get; init; }
     /// <summary>A finished or paused autonomous session can be continued interactively.</summary>

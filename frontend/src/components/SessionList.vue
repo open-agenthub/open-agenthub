@@ -19,6 +19,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
     </div>
     <span v-if="sessionCapabilities(s).canManage" class="acts">
       <button v-if="canPause(s)" class="act" title="Pause session" @click.stop="$emit('pause', s.id)">❚❚</button>
+      <span v-if="s.outdatedImage" class="status">outdated image</span>
       <button v-if="s.canResume" class="act" title="Resume session" @click.stop="$emit('resume', s.id)">▶</button>
       <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)" aria-label="Duplicate session"><SessionIcon name="duplicate" /></button>
       <button class="act" title="Edit session" @click.stop="$emit('edit', s.id)">✎</button>

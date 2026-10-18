@@ -121,6 +121,8 @@ function createCommonServer(options = {}) {
   let controlCounter = 0;
   let chatDelivery = Promise.resolve();
   let pendingChatDeliveries = 0;
+  let outstandingRuntimeTurns = 0;
+  let runtimeDraining = false;
   let promptSent = false;
   let firstLaunchedAt = 0;
   let transcriptFile = null;
@@ -184,16 +186,16 @@ function createCommonServer(options = {}) {
   // (agent exit, SIGTERM) archives without asking: it is the last chance, and it must not
   // depend on the change detection being right.
   function persistState(final, done) {
-    if (!statePut) return done && done();
+    if (!statePut) return done && done(new Error('state storage unavailable'));
     const archive = signature => execFile('/bin/sh',
       ['-c', archiveScript(driver), 'sh', '/tmp/state.tgz'], { cwd: home }, archiveError => {
-        if (archiveError) return done && done();
+        if (archiveError) return done && done(archiveError);
         execFile('curl', uploadArgs('/tmp/state.tgz', statePut, insecureStorage), error => {
           if (!error) {
             uploadedStateSignature = signature;
             stateTicksSinceUpload = 0;
           }
-          if (done) done();
+          if (done) done(error);
         });
       });
     if (final) return archive(null);
@@ -406,12 +408,12 @@ function createCommonServer(options = {}) {
     // chunks is caught as well, which masking chunk by chunk would miss.
     if (secretMask.refresh()) scrollback = secretMask.mask(scrollback);
     syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
-      persistState(final, () => {
+      persistState(final, error => {
         persisting = false;
         const waiters = persistWaiters;
         persistWaiters = null;
-        if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); }, true);
-        if (done) done();
+        if (waiters) persistAll(nextError => { for (const waiter of waiters) waiter(nextError); }, true);
+        if (done) done(error);
       })))));
   }
 
@@ -646,6 +648,7 @@ function createCommonServer(options = {}) {
   }
 
   function deliverChatLine(line) {
+    if (chatEventType(line) === 'result' && outstandingRuntimeTurns > 0) outstandingRuntimeTurns -= 1;
     const payload = line + '\n';
     if (!TRANSIENT_CHAT_EVENTS.has(chatEventType(line))) remember(payload);
     broadcast(payload);
@@ -727,6 +730,7 @@ function createCommonServer(options = {}) {
 
     if (!attemptedResume && !promptSent && env.AGENTHUB_PROMPT) {
       promptSent = true;
+      outstandingRuntimeTurns += 1;
       void chat.sendUser(env.AGENTHUB_PROMPT).catch(() => {});
     }
   }
@@ -823,6 +827,11 @@ function createCommonServer(options = {}) {
       safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed', clientTurnId: message.clientTurnId }));
       return;
     }
+    if (runtimeDraining) {
+      safeSend(socket, agenthubEvent('error', { code: 'runtime_updating', clientTurnId: message.clientTurnId }));
+      return;
+    }
+    outstandingRuntimeTurns += 1;
     pendingChatDeliveries += 1;
     chatDelivery = chatDelivery
       .then(() => attachments.length ? deliverAttachmentTurn({ ...message, attachments }) : chat.sendUser(message.text))
@@ -837,6 +846,10 @@ function createCommonServer(options = {}) {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
       if (exited) return;
+      if (runtimeDraining) {
+        safeSend(socket, agenthubEvent('error', { code: 'runtime_updating', clientTurnId: message.clientTurnId }));
+        return;
+      }
       if (chatMode) {
         if (message.type === 'chat' && typeof message.text === 'string' && chat) {
           if (message.clientTurnId !== undefined &&
@@ -914,6 +927,7 @@ function createCommonServer(options = {}) {
       return;
     }
     const body = await readBoundedBody(request, credentials.MAX_CREDENTIAL_BYTES);
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
     if (!body) {
       fileError(response, 413, 'credential_too_large');
       return;
@@ -1052,6 +1066,7 @@ function createCommonServer(options = {}) {
       return;
     }
     const raw = await readBoundedBody(request, MAX_MESSAGE_BYTES);
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
     const message = raw && parseFleetMessage(raw);
     if (!message) {
       fileError(response, raw ? 400 : 413, raw ? 'invalid_message' : 'message_too_large');
@@ -1177,7 +1192,9 @@ function createCommonServer(options = {}) {
       fileError(response, 405, 'method_not_allowed');
       return;
     }
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
     const messages = modQueue;
+    if (chatMode) outstandingRuntimeTurns += messages.length;
     modQueue = [];
     sendJson(response, 200, { messages });
   }
@@ -1198,6 +1215,30 @@ function createCommonServer(options = {}) {
 
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
+    if (requestPath === '/agenthub/runtime-drain') {
+      if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+      if (request.method === 'DELETE') {
+        runtimeDraining = false;
+        return sendJson(response, 200, { draining: false });
+      }
+      if (request.method !== 'POST') return fileError(response, 405, 'method_not_allowed');
+      // Only structured chat results prove turn completion; silence in a terminal proves nothing.
+      if (!chatMode || !chat || exited || restartReason !== null || outstandingRuntimeTurns ||
+          pendingChatDeliveries || modQueue.length || deferredMessages.length || runtimeDraining || persisting)
+        return fileError(response, 409, 'runtime_busy_or_unsupported');
+      runtimeDraining = true;
+      // Confirm the current conversation is durable before the hub removes this process.
+      return persistAll(error => {
+        if (error) {
+          runtimeDraining = false;
+          return fileError(response, 503, 'runtime_state_upload_failed');
+        }
+        if (!runtimeDraining) return fileError(response, 409, 'runtime_drain_cancelled');
+        sendJson(response, 200, { draining: true });
+      }, true);
+    }
+    if (runtimeDraining && requestPath.startsWith('/agenthub/credentials'))
+      return fileError(response, 409, 'runtime_updating');
     if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
     if (requestPath === '/agenthub/credentials/refresh') return handleCredentialRequest(request, response, true);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
