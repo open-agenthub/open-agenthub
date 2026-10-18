@@ -238,6 +238,7 @@ builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepServic
 // from deleting the same session at once.
 builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
 builder.Services.AddHostedService<SessionExpirySweepService>();
+builder.Services.AddHostedService<SessionRuntimeImageSweepService>();
 
 // The hub renews every stored Claude login before it expires and hands the new tokens to the
 // running sessions on it (docs/provider-accounts.md, "The hub owns each login", issue #116).

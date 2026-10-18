@@ -128,6 +128,7 @@ export const api = {
   updateShareLink: (id, linkId, data) => req('PATCH', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`, data),
   deleteShareLink: (id, linkId) => req('DELETE', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`),
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
+  updateRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/update-runtime`),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
   // Continues a finished autonomous session interactively; 409 while it runs or is not autonomous.
@@ -170,6 +171,9 @@ export const api = {
     req('PATCH', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`, data),
   deleteProviderAccount: (agent, id) =>
     req('DELETE', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`),
+  // Chooses the git tokens of a session (one per host); a running pod takes them without a restart.
+  switchSessionGitPats: (id, gitPatIds) =>
+    req('PATCH', `/sessions/${encodeURIComponent(id)}/git-pats`, { gitPatIds }),
   // Moves a running Subscription session to another account; the pod restarts its agent with resume.
   switchSessionCredential: (id, credentialId) =>
     req('PATCH', `/sessions/${encodeURIComponent(id)}/credential`, { credentialId }),

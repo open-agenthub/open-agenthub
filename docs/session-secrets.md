@@ -66,7 +66,7 @@ A project holds `secretIds`; a session holds `secretIds` too.
 | `["id", …]` | these, as far as the project still selects them | exactly these |
 | `["*"]` | spelling of `null`, so a PATCH can go back to following the project | |
 
-- **The default is nothing.** For git PATs `null` means "every stored PAT", because a PAT is only
+- **The default is nothing.** For git PATs `null` means "the default PAT of every host", because a PAT is only
   ever offered to the host it belongs to. A secret is handed to the agent outright, so
   "everything, including what is stored later" is not a default anyone should get unasked.
 - **An explicit list must lie within the project.** It is refused (400), not cut down: a caller

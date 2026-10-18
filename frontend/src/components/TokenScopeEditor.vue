@@ -66,7 +66,7 @@ function toggleApiKeys(event) {
       <div class="group-label">Git tokens</div>
       <label v-for="pat in pats" :key="pat.id" class="check">
         <input type="checkbox" :checked="(modelValue.gitPats || []).includes(pat.id)" :data-scope-pat="pat.id" @change="togglePat(pat.id)" />
-        <span>{{ pat.host }} <span class="kind">{{ kindLabel(pat.kind) }}</span></span>
+        <span>{{ pat.host }} <span class="kind">{{ kindLabel(pat.kind) }}</span><span v-if="pat.label" class="dim"> {{ pat.label }}</span></span>
       </label>
     </div>
     <div v-if="secrets.length" class="group" data-scope-secrets>

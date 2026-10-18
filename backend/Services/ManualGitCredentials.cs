@@ -100,4 +100,39 @@ public static class ManualGitCredentials
             if (!all.Contains(line)) all.Add(line);
         return all.Count == 0 ? null : string.Join("\n", all) + "\n";
     }
+
+    /// <summary>
+    /// The commit author of every selected token that has one, by host. A host the connected
+    /// provider already covers is left out: its OAuth line comes first in the store, so pushes to
+    /// that host go out under the provider's token, and stamping the PAT's identity on those commits
+    /// would claim an author the push does not authenticate as.
+    /// </summary>
+    public static IReadOnlyList<GitAuthor> Authors(IReadOnlyList<GitPatStore.Entry> selected, string? oauthStore)
+    {
+        var oauthHosts = (oauthStore ?? "").Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Select(line => line[(line.LastIndexOf('@') + 1)..])
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        return selected
+            .Where(e => (e.AuthorName is not null || e.AuthorEmail is not null) && !oauthHosts.Contains(e.Host))
+            .Select(e => new GitAuthor(e.Host, e.AuthorName, e.AuthorEmail))
+            .ToList();
+    }
+}
+
+/// <summary>One host's commit author, as the pod's <c>common/git-identity.js</c> reads it.</summary>
+public sealed record GitAuthor(string Host, string? Name, string? Email);
+
+/// <summary>What a session pod gets for git: the store (the <c>credentials</c> key of its
+/// <c>gitcreds</c> secret) and the per-host authors (the <c>authors</c> key).</summary>
+public sealed record SessionGitCredentials(string Store, IReadOnlyList<GitAuthor> Authors)
+{
+    public static readonly System.Text.Json.JsonSerializerOptions Json = new()
+    {
+        PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+    };
+
+    /// <summary>The body of <c>PUT /agenthub/git-credentials</c> on a running pod.</summary>
+    public byte[] PodPayload() =>
+        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new { credentials = Store, authors = Authors }, Json);
 }
