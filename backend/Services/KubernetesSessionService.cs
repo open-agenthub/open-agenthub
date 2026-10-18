@@ -279,7 +279,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await _store.UpsertAsync(rec, ct);
         }
         await RefreshSessionSecretsAsync(owner, rec, ct);
-        _log.LogInformation("Granted secret {SecretId} to session {Id}", secretId, rec.Id);
+        // The stored id, not the one from the request body, which a caller could fill with log lines.
+        _log.LogInformation("Granted secret {SecretId} to session {Id}", entry.Id, rec.Id);
         // A file arrives in the running pod on its own; a variable only with a container that
         // starts after this, unless the running one already references it.
         var restart = false;
