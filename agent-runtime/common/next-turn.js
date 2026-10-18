@@ -16,7 +16,7 @@
 // was submitted) and approval requests too, since an approval dialog during a hook continuation
 // is exactly the open menu a typed message must not land in.
 
-const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
+const { injectTerminalInput, formatFleetMessage, SUBMIT_PAUSE_MS } = require('./terminal-inject');
 const { detectMenu } = require('./cli-menu');
 
 // The CLI's own spinner redraws several times a second while a turn runs (Codex 0.160.0: faster
@@ -80,6 +80,10 @@ function createNextTurnDelivery(options) {
   let held = [];
   let busyTaking = false;
   let typing = null;
+  // Keys the person sent while a message was being typed. The server writes them after its Enter,
+  // so they are a draft in the box of the turn that message starts — but the prompt event of that
+  // turn arrives after the keys did and would make them look older than it (#192).
+  let keysDuringTyping = false;
   const actions = [];
 
   async function takeFromHub() {
@@ -113,7 +117,13 @@ function createNextTurnDelivery(options) {
    * answered with the next one's text when there is something to deliver. */
   async function turnEvent(event) {
     if (event === 'prompt' || event === 'permission') {
-      if (event === 'prompt') lastPrompt = now();
+      if (event === 'prompt') {
+        lastPrompt = now();
+        if (keysDuringTyping) {
+          keysDuringTyping = false;
+          lastPersonInput = lastPrompt;
+        }
+      }
       state = 'busy';
       return null;
     }
@@ -179,7 +189,11 @@ function createNextTurnDelivery(options) {
         return false;
       }
       state = 'busy';
-      typing = injectTerminalInput(term, nextTurnText(messages), { wait });
+      // The person's keys stay held for one more pause after the Enter. Written in the same instant,
+      // OpenCode 1.18.35 read Enter and keys as one burst: the Enter was lost and the keys joined
+      // the peer's message instead of starting a draft of their own.
+      typing = injectTerminalInput(term, nextTurnText(messages), { wait })
+        .then(() => (wait || (ms => new Promise(resolve => setTimeout(resolve, ms))))(SUBMIT_PAUSE_MS));
       await typing;
       return true;
     } finally {
@@ -209,9 +223,14 @@ function createNextTurnDelivery(options) {
     agentStarted() {
       state = 'unknown';
       chained = 0;
+      keysDuringTyping = false;
     },
     agentOutput() { lastOutput = now(); },
-    personInput(data) { if (!isTerminalReply(data)) lastPersonInput = now(); },
+    personInput(data) {
+      if (isTerminalReply(data)) return;
+      lastPersonInput = now();
+      if (typing) keysDuringTyping = true;
+    },
     /** True while text is being typed in: person keys held back meanwhile go in after Enter. */
     isTyping() { return typing !== null; },
     get state() { return state; }

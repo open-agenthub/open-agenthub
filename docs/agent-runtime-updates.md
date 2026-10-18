@@ -175,6 +175,11 @@ hook, and a `Stop` hook's `{"decision":"block","reason"}` becoming the model's n
 is how a plain fleet message reaches a busy Codex agent (`docs/priority-messages.md`); if a bump
 breaks it, messages silently wait for `agent_inbox` again.
 
+OpenCode's half has no smoke test: `opencode/next-turn.mjs` relies on `session.idle` reaching the
+plugin, on `client.session.promptAsync`, and on an assistant message that ended on its own
+carrying `time.completed` (an interrupted one has no completion time when `session.idle` fires on
+1.18.35). After a bump, rerun the OpenCode scenarios of the `fleet-delivery-real-cli-rig` skill.
+
 ### Custom model endpoints
 
 Sessions on a self-hosted server (`docs/custom-model-endpoints.md`) depend on configuration

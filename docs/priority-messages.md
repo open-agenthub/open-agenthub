@@ -73,7 +73,7 @@ runs. The hub reads one word back:
 |---|---|---|
 | Claude with the fleet mod alive (`docs/claude-code-mods.md`) | queued for the mod, which submits it as the next prompt (aborting the running turn on interrupt) | interactive: queued for the mod, which submits it as a prompt of its own once no turn runs; during a turn it waits on the status line and goes with the person's prompt if one comes first; autonomous: inbox |
 | Chat UI (`claude -p --input-format stream-json`) | written as a `user` event, after a `control_request interrupt` when asked | inbox |
-| Interactive Codex terminal (turn hooks, below) | typed into the PTY: optional Escape, 300 ms, text, 300 ms, Enter | its next turn: the Stop hook hands it over when the running turn ends, or it is typed in while the agent waits at its prompt |
+| Interactive Codex or OpenCode terminal (turn hooks, below) | typed into the PTY: optional Escape, 300 ms, text, 300 ms, Enter | its next turn: the end-of-turn hook hands it over when the running turn ends, or it is typed in while the agent waits at its prompt |
 | Interactive terminal, other runtimes | typed into the PTY, as above | inbox |
 | Autonomous or scheduled `-p` run without a mod | `unavailable` → inbox | inbox |
 
@@ -162,7 +162,7 @@ to type "check your inbox" into every Codex session that a peer had written to. 
 help: it types the message at once, also into the middle of a turn, and a sender cannot know
 whether the receiving agent is busy.
 
-A runtime whose hooks report its turns (`driver.turnHooks`, Codex for now) now gets plain
+A runtime whose hooks report its turns (`driver.turnHooks`: Codex, and OpenCode since #192) now gets plain
 messages at the next safe point instead. The session agent answers the hub `next-turn`; the hub
 tells the sender `deliveredVia: "next_turn"` and leaves the row **undelivered**. From there two
 paths take it, both from the hub inbox (`GET …/messages?via=next_turn`), at the moment the
@@ -173,7 +173,10 @@ message is handed over:
   waits and answers with its text; the hook returns `{"decision":"block","reason":<text>}`, which
   Codex feeds to the model as the next input of the same session (shown in the TUI as *Blocked by
   hook* with the text under it). Nothing is typed, so neither a draft in the prompt box nor a
-  dialog can be hit.
+  dialog can be hit. OpenCode has no hook command that can return input, so its policy plugin
+  plays the part (`opencode/next-turn.mjs`): on a top-level `session.idle` it asks the same
+  route and submits the answer with the plugin's own client as a new prompt of the session
+  (`session.promptAsync`), which the TUI shows as an ordinary user message. Also nothing typed.
 - **While the agent is idle.** When the last turn event was a Stop and the session agent decides
   the CLI really sits at its prompt, it types the message in as the priority path does. "Really"
   means all of: no `UserPromptSubmit` or `PermissionRequest` since the Stop; no key from a person
@@ -182,12 +185,18 @@ message is handed over:
   times a second while it works); and no CLI menu on the screen, checked with the Workspace's own
   detector (#112, #166) on the scrollback replayed into a headless xterm, the bytes a browser
   attaching now would get. The person's keys that arrive during the 300 ms of typing are held and
-  written after the Enter. A batch taken from the hub when the person started typing in the
+  written one pause after the Enter. Written in the same instant, OpenCode read Enter and keys as
+  one burst, and the keys ended up in the peer's message. Those keys are a draft in the box of the
+  turn the message starts, and the prompt event of that turn arrives after them, so they are dated
+  after it. Dated by arrival, the next idle message was typed into that draft and sent with it
+  (`zz[AgentHub: …]`, reproduced on Codex; #192). A batch taken from the hub when the person started typing in the
   meantime is held and goes with the next Stop. Before the first Stop of an agent run nothing is
   typed: the session agent cannot tell a start-up dialog from a prompt.
 
-The hook reports `UserPromptSubmit` (busy) and `PermissionRequest` (an approval dialog is open)
-too. It ignores Codex's helper threads — the title generation runs as a session without a rollout
+The Codex hook reports `UserPromptSubmit` (busy) and `PermissionRequest` (an approval dialog is
+open) too; the OpenCode plugin reports `chat.message` as the prompt. OpenCode needs no approval
+report: its managed config sets OpenCode's own permission to `allow` and the plugin asks the hub,
+so its TUI never opens an approval dialog. It ignores Codex's helper threads — the title generation runs as a session without a rollout
 file, subagents carry an `agent_id` — whose prompts would otherwise mark an idle agent busy.
 
 Each message is headed as everywhere else (sender title and id), under one line saying these come
@@ -200,6 +209,22 @@ the turn ends, and whatever arrives next starts a turn of its own through the id
 boundary the person sees. This bounds the hook loop, not a conversation between peers; that is
 the same with the mod.
 
+**A turn stopped with Escape is not continued.** The person is at the keyboard and should not find
+a peer's message started in place of what they meant to do; it waits for the end of their next
+turn. Codex runs no Stop hook for an interrupted turn. OpenCode fires `session.idle` either way,
+and on 1.18.35 it does so before the abort is stored: the last answer then has neither
+`MessageAbortedError` nor `time.completed`. The plugin therefore delivers only after an answer
+that completed without an error. A failed turn waits as well, since the person has something to
+look at first. (The chat relay's own abort filter in `turn-notify.mjs` looks for the error only and
+so misses this case; that is outside this change.)
+
+**The menu check does not recognise OpenCode's dialogs.** They are lists without numbers (model
+picker, command palette) that the Workspace's detector does not treat as menus. On OpenCode a
+dialog opens only on the person's keys, and any key since the last prompt already stops the idle
+path; the end-of-turn path does not type. So the gap leaves a message waiting, never typed into a
+dialog. Widening the shared detector would change what the Workspace shows for OpenCode, which is
+a decision of its own.
+
 Proved with the pinned Codex 0.160.0 TUI in the real `common/server.js` PTY, with the branch's
 `requirements.toml` at `/etc/codex` (proot), a stand-in hub inbox and a mock model. A message
 sent mid-turn reached the model 0.2 s after the turn ended, as the Stop continuation. One sent to an
@@ -208,6 +233,17 @@ the message rode the Stop of the draft's turn. With `/model` open nothing was ty
 arriving during continuations went hook, hook, hook, idle typing, hook. Each message was taken
 once and reached the model once. `fixtures/codex-fleet-turn-smoke.js` pins the hook contract
 for CLI bumps.
+
+The same rig ran the pinned OpenCode 1.18.35 TUI, with the managed `/etc/opencode` from
+`managed-config.js` (proot). The results were the same:
+- a message sent mid-turn was taken 0.1 s after the turn ended and submitted by the plugin;
+- an idle agent had its message typed in 0.4 s after the send;
+- a draft was left alone, and the message rode the plugin's next stop;
+- with `/models` open nothing was typed;
+- the chain went plugin, plugin, plugin, idle typing, plugin.
+
+After Escape the waiting message stayed in the inbox, then went with the Stop of the person's
+next turn. It was started 0.5 s after the Escape until the completion check above was added.
 
 Rejected on the way:
 
@@ -234,11 +270,11 @@ Per runtime:
 |---|---|
 | Claude | unchanged: the mod (above), verified again with Claude Code 2.1.287 through the real `common/server.js` |
 | Codex | next turn, as described here |
-| OpenCode | inbox (`not_priority`). Its policy plugin sees `session.idle` and could submit the text with its own client; not built yet |
+| OpenCode | next turn (#192): the policy plugin submits it on `session.idle`, or it is typed in while idle |
 | Cursor | inbox. Its `stop` hook takes `followup_message` (the skill reminder uses it), but its TUI cannot be driven here without a real key, so the path is unproven and left off |
 | OpenClaw | inbox. It has no hooks, so nothing tells the session agent where a turn stands, and typing would be blind |
 
-The cost is one loopback call per hook event and one hub request per Codex turn end.
+The cost is one loopback call per hook event and one hub request per Codex or OpenCode turn end.
 
 ## The mod queue is loopback only
 

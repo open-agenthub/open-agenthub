@@ -285,6 +285,11 @@ test('an idle agent gets the message typed in, with the person\'s keys held unti
   assert.equal(harness.terminals[0].writes.length, 1);
   socket.emit('message', JSON.stringify({ type: 'input', data: 'x' }));
   runTimers();
+  await eventually(() => harness.terminals[0].writes.length >= 2);
+  await settle();
+  // Enter went out alone; the key still waits one more pause, so the TUI reads Enter by itself.
+  assert.equal(harness.terminals[0].writes.length, 2);
+  runTimers();
   await eventually(() => harness.terminals[0].writes.length >= 3);
 
   const writes = harness.terminals[0].writes;

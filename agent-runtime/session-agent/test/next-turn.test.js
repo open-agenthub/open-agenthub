@@ -201,6 +201,32 @@ test('the screen is rendered the way the drawer would show it', async () => {
   assert.equal(nextTurnText([message('m')]).split('\n\n').length, 2);
 });
 
+test('keys held while a message is typed stay a draft after that message\'s own prompt event', async () => {
+  let delivery;
+  const w = await idleWorld({ duringPause: d => { delivery = d; d.personInput('dr'); } });
+  w.hub.waiting.push(message('m-1'));
+  w.delivery.accept();
+  await w.deliver();
+  // The prompt hook of the typed message arrives after the person's held keys.
+  w.advance(100);
+  await delivery.turnEvent('prompt');
+  w.advance(100);
+  await delivery.turnEvent('stop');
+  w.advance(2_000);
+
+  w.hub.waiting.push(message('m-2', 'later'));
+  w.delivery.accept();
+  w.terminal.writes.length = 0;
+  assert.equal(await w.deliver(), false, 'the draft in the box blocks typing');
+  assert.deepEqual(w.terminal.writes, []);
+
+  // The person submits the draft: from its end on, the box is empty again.
+  await delivery.turnEvent('prompt');
+  w.advance(100);
+  const text = await delivery.turnEvent('stop');
+  assert.ok(text.includes('later'));
+});
+
 test('context actions reuse turn, quiet-output and menu guards and reserve input before peer messages', async () => {
   const w = world();
   const actions = [];

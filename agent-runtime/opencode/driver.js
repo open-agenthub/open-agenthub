@@ -143,5 +143,7 @@ module.exports = {
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand, isResumeCommand, isMissingResume, prepare,
-  credentialPath, validCredential, installCredential
+  credentialPath, validCredential, installCredential,
+  // The policy plugin reports chat.message and session.idle to /agenthub/turn (next-turn.mjs).
+  turnHooks: true
 };
