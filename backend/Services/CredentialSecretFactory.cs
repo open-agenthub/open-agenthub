@@ -17,6 +17,7 @@ public static class CredentialSecretFactory
         ["openAiApiKey"] = "openai_api_key",
         ["cursorApiKey"] = "cursor_api_key",
         ["openCodeApiKey"] = "opencode_api_key",
+        ["customEndpointApiKey"] = "custom_endpoint_api_key",
         ["gitKnownHosts"] = "known_hosts",
         ["gitUserName"] = "git_user_name",
         ["gitUserEmail"] = "git_user_email"
@@ -40,6 +41,7 @@ public static class CredentialSecretFactory
         Put(data, "openai_api_key", credentials.OpenAiApiKey);
         Put(data, "cursor_api_key", credentials.CursorApiKey);
         Put(data, "opencode_api_key", credentials.OpenCodeApiKey);
+        Put(data, "custom_endpoint_api_key", credentials.CustomEndpointApiKey);
         Put(data, "known_hosts", credentials.GitKnownHosts);
         Put(data, "git_user_name", credentials.GitUserName);
         Put(data, "git_user_email", credentials.GitUserEmail);
@@ -84,6 +86,7 @@ public static class CredentialSecretFactory
         OpenAiApiKey = data.ContainsKey("openai_api_key"),
         CursorApiKey = data.ContainsKey("cursor_api_key"),
         OpenCodeApiKey = data.ContainsKey("opencode_api_key"),
+        CustomEndpointApiKey = data.ContainsKey("custom_endpoint_api_key"),
         GitKnownHosts = data.ContainsKey("known_hosts"),
         GitUserName = data.ContainsKey("git_user_name"),
         GitUserEmail = data.ContainsKey("git_user_email"),

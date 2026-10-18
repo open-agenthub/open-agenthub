@@ -35,7 +35,9 @@ public static class CredentialScope
     private static CreateSessionRequest ApplyProvider(CreateSessionRequest req, ApiTokenScope scope,
         IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>> accounts)
     {
-        if (req.AuthMode == AgentAuthMode.ApiKey)
+        // A custom endpoint runs on the owner's stored endpoint key, so a token that may not use
+        // stored API keys may not start one either.
+        if (req.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.CustomEndpoint)
         {
             if (!scope.AllowsApiKeys) throw new CredentialScopeException(CredentialScopeException.ApiKeysNotAllowed);
             return req;
