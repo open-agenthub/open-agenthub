@@ -127,6 +127,9 @@ CURSOR_WORKDIR="${AGENTHUB_WORKDIR:-/workspace}"
 [ -d "$CURSOR_WORKDIR" ] || CURSOR_WORKDIR="/workspace"
 node "$RUNTIME/cursor/session-prompt.mjs" "$CURSOR_WORKDIR"
 
+# Cursor reads ~/.agents/skills, not ~/.claude/skills.
+sync_skill_library --link-agents
+
 export AGENTHUB_DRIVER="$RUNTIME/cursor/driver.js"
 echo "[entrypoint] Starting session-agent (mode=${AGENTHUB_MODE:-interactive}, resume=${AGENTHUB_RESUME:-0}, runtime=$RUNTIME)"
 exec node "$RUNTIME/common/server.js"

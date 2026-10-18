@@ -9,6 +9,8 @@ import {
 import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
+import SecretPicker from './SecretPicker.vue'
+import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
@@ -51,6 +53,7 @@ function reset(session) {
     image: session.image || '',
     runAsRoot: !!session.runAsRoot,
     autoApprove: !!session.autoApprove,
+    autoUpdateRuntimeImages: session.autoUpdateRuntimeImages ?? 'default',
     cpu: session.cpu || '500m',
     memory: session.memory || '1Gi',
     mcpConfigJson: session.mcpConfigJson || '',
@@ -72,6 +75,16 @@ function reset(session) {
 reset(props.session)
 watch(() => props.session.id, () => reset(props.session))
 
+// Stored secrets, ticked as the session has them. The options follow the project chosen here, so
+// moving the session shows what it would get in the other project (docs/session-secrets.md).
+const storedSecrets = ref([])
+const selectedProject = computed(() => (props.projects || []).find(project => project.id === f.value.projectId) || null)
+const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
+const selectedSecrets = ref([])
+watch([secrets, () => props.session.id], ([options]) => {
+  selectedSecrets.value = secretSelectionFor(props.session.secretIds, options, !!selectedProject.value)
+}, { immediate: true })
+
 onMounted(async () => {
   try { credentialStatus.value = await api.getCredentialStatus() } catch { /* advisory only */ }
   try { providerAccounts.value = (await api.listProviderAccounts()) || {} } catch { /* one login needs no choice */ }
@@ -80,6 +93,7 @@ onMounted(async () => {
     allowedAgents.value = allowed?.agents || []
   } catch { /* keep unrestricted catalog */ }
   try { savedMcpServers.value = await api.mcpServers() } catch { /* library is optional */ }
+  try { storedSecrets.value = (await api.listSecrets()) || [] } catch { /* older backend: no secrets */ }
 })
 
 watch(ephemeralUrl, (url) => {
@@ -142,11 +156,14 @@ async function save() {
     if (!scheduled.value) {
       Object.assign(payload, credentialChange())
       Object.assign(payload, gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds))
+      Object.assign(payload, secretIdsChange(selectedSecrets.value, secrets.value, !!selectedProject.value, props.session.secretIds))
       // Sent only when changed: null means "unchanged" on the API, and the hub reads the stored
       // value when a limit is reported, so this applies to the running session at once.
       const storedFailover = props.session.accountFailover === 'off' ? 'off' : 'auto'
       if (f.value.accountFailover !== storedFailover) payload.accountFailover = f.value.accountFailover
     }
+    if (f.value.autoUpdateRuntimeImages !== (props.session.autoUpdateRuntimeImages ?? 'default'))
+      payload.autoUpdateRuntimeImages = f.value.autoUpdateRuntimeImages === 'default' ? null : f.value.autoUpdateRuntimeImages
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
   } catch (e) { error.value = String(e.message || e) }
@@ -173,6 +190,8 @@ async function save() {
         <SystemPromptField v-model="f.systemPrompt" :readonly="scheduled"
           readonly-hint="Fixed by the CronJob spec — delete and recreate the session to change it." />
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
+        <SecretPicker v-if="!scheduled" v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
+          :project-has-none="!!selectedProject && storedSecrets.length > 0" />
         <div class="field last toggle-field">
           <label>Auto approve <span class="dim">— run tools without asking</span></label>
           <button type="button" class="toggle" role="switch" data-auto-approve
@@ -187,13 +206,21 @@ async function save() {
           </p>
         </div>
       </div>
+      <label>Automatic runtime image updates
+        <select v-model="f.autoUpdateRuntimeImages">
+          <option value="default">Deployment default</option>
+          <option :value="true">On when safe</option>
+          <option :value="false">Off</option>
+        </select>
+      </label>
       <AutoDeleteCard v-model="autoDelete" :scheduled="scheduled" :expires-at="session.expiresAt || null" />
       <template v-if="!scheduled">
         <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode"
           v-model:open-claw-api-key-source="f.openClawApiKeySource" v-model:credential-id="f.credentialId"
+          v-model:model-endpoint-url="f.modelEndpointUrl" v-model:model-name="f.modelName"
           :accounts="providerAccounts" :mode="session.mode"
           :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
-        <div v-if="f.authMode !== 'ApiKey'" class="card sect toggle-field failover-field">
+        <div v-if="!['ApiKey', 'CustomEndpoint'].includes(f.authMode)" class="card sect toggle-field failover-field">
           <label>Switch account automatically at usage limit <span class="dim">— move to another stored login when this one is used up</span></label>
           <button type="button" class="toggle" role="switch" data-account-failover
                   :aria-checked="f.accountFailover !== 'off' ? 'true' : 'false'" :class="{ on: f.accountFailover !== 'off' }"

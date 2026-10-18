@@ -7,8 +7,13 @@ const mocks = vi.hoisted(() => ({ terminals: [], sockets: [], observers: [], dim
 
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
-    constructor(options) { this.options = options; this.cols = 80; this.rows = 24; this.resizeCalls = []; mocks.terminals.push(this) }
-    loadAddon() {} open() {} write() {} dispose() {}
+    constructor(options) {
+      this.options = options; this.cols = 80; this.rows = 24; this.resizeCalls = []
+      this.lines = []
+      this.buffer = { active: { baseY: 0, getLine: y => ({ translateToString: () => this.lines[y] || '' }) } }
+      mocks.terminals.push(this)
+    }
+    loadAddon() {} open() {} write(data, callback) { callback?.() } dispose() {}
     onData(callback) { this.input = callback }
     resize(cols, rows) { this.cols = cols; this.rows = rows; this.resizeCalls.push([cols, rows]) }
   }
@@ -70,6 +75,29 @@ describe('terminal fit/resize stability', () => {
     globalThis.ResizeObserver = MockResizeObserver
     globalThis.requestAnimationFrame = cb => rafQueue.push(cb)
     globalThis.cancelAnimationFrame = () => {}
+  })
+
+  it('clears a menu from the live screen while output continues faster than the settling interval', async () => {
+    vi.useFakeTimers()
+    const wrapper = await mountRunningPane()
+    try {
+      const term = mocks.terminals[0], socket = mocks.sockets[0]
+      term.lines = ['Select a mode', '› 1. First', '  2. Second', 'Enter to select']
+      socket.onmessage({ data: 'menu redraw' })
+      await vi.advanceTimersByTimeAsync(150)
+      expect(wrapper.emitted('menu').at(-1)[0]?.kind).toBe('choice')
+      // Selecting starts a command: spinner writes must not postpone reading the new screen.
+      term.lines = ['Working…']
+      for (let i = 0; i < 4; i++) {
+        socket.onmessage({ data: 'spinner redraw' })
+        await vi.advanceTimersByTimeAsync(50)
+      }
+      expect(wrapper.emitted('menu').at(-1)).toEqual([null])
+      term.lines = ['Choose effort', '› 1. Low', '  2. High', 'Enter to select']
+      socket.onmessage({ data: 'submenu redraw' })
+      await vi.advanceTimersByTimeAsync(150)
+      expect(wrapper.emitted('menu').at(-1)[0]?.title).toBe('Choose effort')
+    } finally { wrapper.unmount(); vi.useRealTimers() }
   })
 
   it('uses bracketed paste and a delayed Enter on the existing connection for workspace messages', async () => {

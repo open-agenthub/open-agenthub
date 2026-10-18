@@ -4,7 +4,7 @@
  * caches the tool schema when it connects, and a parameter added later arrives as a string from
  * every already-connected client.
  *
- * Empty or "*" means "not specified" — the backend then uses every stored token, as before —
+ * Empty or "*" means "not specified" — the backend then uses the default token of each host, as before —
  * and "none" is the one way to say "no token at all", since an empty string cannot carry it.
  */
 export function parseIdList(value) {
@@ -15,12 +15,18 @@ export function parseIdList(value) {
   return [...new Set(text.split(',').map(item => item.trim()).filter(Boolean))];
 }
 
-/** The create body with the text-form credential parameters turned into what the backend takes. */
+/**
+ * The create body with the text-form credential parameters turned into what the backend takes.
+ * `secretIds` follows the same text form; left out, a child gets exactly the secrets this session
+ * has (docs/session-secrets.md), and "none" gives it none.
+ */
 export function withCredentialSelection(body) {
-  const { credentialId, gitPatIds, ...rest } = body ?? {};
+  const { credentialId, gitPatIds, secretIds, ...rest } = body ?? {};
   const out = { ...rest };
   if (typeof credentialId === 'string' && credentialId.trim()) out.credentialId = credentialId.trim();
   const ids = parseIdList(gitPatIds);
   if (ids !== undefined) out.gitPatIds = ids;
+  const secrets = parseIdList(secretIds);
+  if (secrets !== undefined) out.secretIds = secrets;
   return out;
 }

@@ -42,6 +42,12 @@ apikey)
   fi
   # API-key auth is env-driven (OPENCODE_API_KEY); driver.prepare scopes it to the agent child.
   ;;
+customendpoint)
+  # The provider block is written into the user config below; the key reaches the CLI child only,
+  # through driver.prepare. The probe fails the start with a reason when the server lacks
+  # /chat/completions or cannot be reached.
+  node "$RUNTIME/common/model-endpoint.js" probe chat
+  ;;
 subscription)
   AUTH_EXPECT_CREATE=1
   AUTH_BASELINE_SHA256=""
@@ -93,15 +99,8 @@ if [ ! -f /etc/opencode/opencode.json ]; then
   exit 1
 fi
 
-# Materialize the user's skill library into ~/.claude/skills, which OpenCode reads natively.
-if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
-  if curl -fsS -H "X-Agent-Token: $AGENTHUB_CALLBACK_TOKEN" "$AGENTHUB_CALLBACK_URL/skills" \
-      | node "$RUNTIME/common/skills.js"; then
-    echo "[entrypoint] Skills synced."
-  else
-    echo "[entrypoint] WARN: skills sync failed - continuing without library skills."
-  fi
-fi
+# OpenCode reads ~/.claude/skills natively; its policy plugin rescans after a live pull.
+sync_skill_library
 
 export AGENTHUB_DRIVER="$RUNTIME/opencode/driver.js"
 echo "[entrypoint] Starting session-agent (mode=${AGENTHUB_MODE:-interactive}, resume=${AGENTHUB_RESUME:-0}, runtime=$RUNTIME)"

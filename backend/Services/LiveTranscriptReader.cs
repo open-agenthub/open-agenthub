@@ -94,7 +94,8 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
         var downloadAcquired = false;
         try
         {
-            await _downloads.WaitAsync(ct);
+            // A slow pod must not queue other sessions behind it; their stored copy is ready.
+            if (!await _downloads.WaitAsync(0, ct)) return null;
             downloadAcquired = true;
             follow.LastUsed = _now();
             if (follow.PodIp != session.PodIp) follow.Reset(session.PodIp);

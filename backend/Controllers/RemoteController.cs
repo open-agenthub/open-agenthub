@@ -68,6 +68,15 @@ public sealed class RemoteController : ControllerBase
                 req = CredentialScope.ApplyToCreate(req, scope,
                     await _svc.ListProviderAccountsAsync(caller.Owner, ct),
                     (await _svc.GetCredentialStatusAsync(caller.Owner, ct)).GitPats);
+                // Only a request that leaves its secrets to the project needs to know what the
+                // project selects; one that names them is judged by the names alone, before any id
+                // is looked up, so a restricted token learns nothing about ids it may not use.
+                var followsProject = req.SecretIds is null || req.SecretIds.Contains(SessionSecretSelection.FollowProject);
+                req = CredentialScope.ApplySecrets(req, scope, followsProject && !scope.AllowsAllSecrets
+                    ? await _svc.ResolveSessionSecretIdsAsync(caller.Owner, req.ProjectId, null, ct)
+                    : Array.Empty<string>());
+                // What the session may later ask for is held to the token's secrets as well.
+                if (!scope.AllowsAllSecrets) req = req with { SecretCeiling = scope.Secrets?.ToList() ?? [] };
             }
             return Ok(await _svc.CreateSessionAsync(caller.Owner, req, ct));
         }
@@ -145,7 +154,8 @@ public sealed class RemoteController : ControllerBase
         if (caller is null) return Unauthorized();
         var listing = RemoteCredentialListing.From(
             await _svc.ListProviderAccountsAsync(caller.Owner, ct),
-            await _svc.GetCredentialStatusAsync(caller.Owner, ct));
+            await _svc.GetCredentialStatusAsync(caller.Owner, ct),
+            await _svc.ListSessionSecretsAsync(caller.Owner, ct));
         return Ok(CredentialScope.FilterListing(listing, caller.Scope));
     }
 

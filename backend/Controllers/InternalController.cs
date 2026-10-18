@@ -41,6 +41,8 @@ public sealed class InternalController : ControllerBase
     private readonly ISessionMessageDelivery? _delivery;
     private readonly IAccountFailover? _accountFailover;
     private readonly IClaudeLoginSync? _loginSync;
+    private readonly ISecretRequestStore? _secretRequests;
+    private readonly string? _frontendOrigin;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
@@ -49,9 +51,11 @@ public sealed class InternalController : ControllerBase
         IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null,
         IUsageStore? usage = null, ISessionMessageStore? messages = null,
         ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null,
-        IClaudeLoginSync? loginSync = null)
+        IClaudeLoginSync? loginSync = null, ISecretRequestStore? secretRequests = null)
     {
         _loginSync = loginSync;
+        _secretRequests = secretRequests;
+        _frontendOrigin = configuration?["FrontendOrigin"]?.TrimEnd('/');
         _store = store; _notifiers = notifiers; _svc = svc;
         _permissions = permissions; _permNotifiers = permNotifiers; _promptEditors = promptEditors; _shares = shares;
         _library = library;
@@ -123,8 +127,12 @@ public sealed class InternalController : ControllerBase
         if (rec is null) return Unauthorized();
 
         await _store.SetQuestionPendingAsync(id, true, ct);
+        // Codex's and Cursor's turn hooks send the agent's last message, which may quote a secret
+        // the agent just read; the relays post it to a chat that outlives the session.
         await NotifyAllAsync(rec, body.Event ?? "question",
-            string.IsNullOrWhiteSpace(body.Message) ? "The agent is waiting for your reply." : body.Message, ct);
+            string.IsNullOrWhiteSpace(body.Message)
+                ? "The agent is waiting for your reply."
+                : await _svc.MaskSessionSecretsAsync(id, body.Message, ct), ct);
         return NoContent();
     }
 
@@ -245,6 +253,20 @@ public sealed class InternalController : ControllerBase
         return Content(await _svc.GetScrollbackAsync(rec.Owner, id, ct) ?? "", "text/plain");
     }
 
+    /// <summary>
+    /// Hands the stored provider transcript back to a resuming agent. Its state archive is written
+    /// less often than the transcript is uploaded, so the file it restores can miss the last
+    /// turns; the agent appends them from this copy before the CLI resumes (#146). Empty when
+    /// nothing was stored.
+    /// </summary>
+    [HttpGet("transcript")]
+    public async Task<IActionResult> GetTranscript(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        return Content(await _svc.GetTranscriptFileAsync(rec.Owner, id, ct) ?? "", "application/x-ndjson");
+    }
+
     public record PermissionBody(string Tool, string? Input);
     public record AgentPolicyBody(string Tool, JsonElement Input);
 
@@ -360,13 +382,20 @@ public sealed class InternalController : ControllerBase
 
     /// <summary>
     /// Skills accessible to the session owner (own + shared while licensed),
-    /// fetched by the entrypoint and materialized under ~/.claude/skills.
+    /// fetched by the entrypoint and materialized under ~/.claude/skills, then polled by the
+    /// session agent while the session runs.
     /// </summary>
     [HttpGet("skills")]
     public async Task<IActionResult> Skills(string id, CancellationToken ct)
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
+        // Every running session polls this. Without the validator each poll would read every
+        // SKILL.md and every helper file from the store and ship them all, to find nothing new.
+        var etag = $"\"{await _library.SkillPayloadsVersionAsync(rec.Owner, rec.ProjectId, ct)}\"";
+        Response.Headers.ETag = etag;
+        if (Request.Headers.IfNoneMatch.Any(v => v == etag))
+            return StatusCode(StatusCodes.Status304NotModified);
         var skills = await _library.ListSkillPayloadsAsync(rec.Owner, rec.ProjectId, ct);
         return Ok(new { skills });
     }
@@ -424,6 +453,27 @@ public sealed class InternalController : ControllerBase
             McpConfigJson = inheritMcp ? rec.McpConfigJson : req.McpConfigJson,
             McpServerIds = inheritMcp ? await AccessibleParentServerIdsAsync(rec, ct) : req.McpServerIds
         };
+        // A child carries at most the secrets its parent has (docs/session-secrets.md). Asking for
+        // more is refused, not quietly narrowed: the agent asked for a secret by id, and a child
+        // started without it would fail later on a missing variable with nothing pointing here.
+        var parentSecrets = await _svc.SessionSecretIdsAsync(rec.Owner, rec, ct);
+        var requestedSecrets = req.SecretIds?.Select(s => s?.Trim() ?? "").Where(s => s.Length > 0).ToList();
+        if (requestedSecrets is null || requestedSecrets.Contains(SessionSecretSelection.FollowProject))
+        {
+            // Without a list the child inherits, written out explicitly: left at null it would
+            // follow its project's selection, which can be wider than the parent's. A child moved
+            // to another project keeps only what that project selects as well.
+            var inherited = forced.ProjectId is null
+                ? parentSecrets
+                : parentSecrets.Intersect(await _svc.ResolveSessionSecretIdsAsync(rec.Owner, forced.ProjectId, null, ct)).ToList();
+            forced = forced with { SecretIds = inherited.ToList() };
+        }
+        else if (requestedSecrets.Any(s => !parentSecrets.Contains(s)))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, CredentialScopeException.SecretNotAllowed);
+        }
+        // A secret request of the child is held to the same limit, so asking cannot widen it either.
+        forced = forced with { SecretCeiling = parentSecrets.ToList() };
         try
         {
             return Ok(await _svc.CreateSessionAsync(rec.Owner, forced, ct));
@@ -436,6 +486,119 @@ public sealed class InternalController : ControllerBase
         {
             return StatusCode(StatusCodes.Status429TooManyRequests, e.Message);
         }
+    }
+
+    // ---------------------------------------------------------------- Secret requests (docs/session-secrets.md)
+
+    /// <summary>
+    /// Bounds the open requests of one session. The owner sees each as a question in every chat
+    /// relay; an agent in a loop must not be able to flood them.
+    /// </summary>
+    public const int MaxOpenSecretRequests = 5;
+    private const int MaxPurposeLength = 500;
+
+    /// <summary>The secrets this session receives, by name and delivery — what `secrets_list` shows.
+    /// Never a value: the agent reads those from its environment and ~/.secrets itself.</summary>
+    [HttpGet("secrets")]
+    public async Task<IActionResult> Secrets(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        var ids = await _svc.SessionSecretIdsAsync(rec.Owner, rec, ct);
+        var secrets = (await _svc.ListSessionSecretsAsync(rec.Owner, ct)).Where(s => ids.Contains(s.Id));
+        return Ok(new { secrets = secrets.Select(s => new { id = s.Id, name = s.Name, delivery = s.Delivery, description = s.Description }) });
+    }
+
+    /// <summary>
+    /// The agent asks for a secret. Answered at once when the session already has one of that
+    /// name; otherwise a request is opened, the session shows as waiting for its owner, and the
+    /// relays post it as a question with a link to the pre-filled form. The value is never part
+    /// of any of this — the owner types it into the web app.
+    /// </summary>
+    [HttpPost("secret-requests")]
+    public async Task<IActionResult> CreateSecretRequest(string id, [FromBody] SecretRequestBody body, CancellationToken ct)
+    {
+        if (_secretRequests is null) return NotFound();
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        var delivery = string.IsNullOrWhiteSpace(body.Delivery) ? SessionSecretDelivery.Env : body.Delivery.Trim().ToLowerInvariant();
+        if (!SessionSecretDelivery.IsValid(delivery)) return BadRequest(new { error = "delivery must be 'env' or 'file'" });
+        var name = body.Name?.Trim() ?? "";
+        if (SessionSecretStore.NameError(name, delivery) is { } nameError) return BadRequest(new { error = nameError });
+        var purpose = CleanPurpose(body.Purpose);
+
+        var held = await _svc.SessionSecretIdsAsync(rec.Owner, rec, ct);
+        var existing = (await _svc.ListSessionSecretsAsync(rec.Owner, ct))
+            .FirstOrDefault(s => held.Contains(s.Id) && string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+        if (existing is not null)
+            return Ok(new { status = SecretRequest.Provided, name = existing.Name, delivery = existing.Delivery });
+
+        var open = await _secretRequests.ListPendingAsync(rec.Owner, rec.Id, ct);
+        // Asking again for the same name waits on the request already open instead of posting a
+        // second question for it.
+        if (open.FirstOrDefault(r => string.Equals(r.Name, name, StringComparison.OrdinalIgnoreCase)) is { } same)
+            return Ok(new { id = same.Id, status = same.Status });
+        if (open.Count >= MaxOpenSecretRequests)
+            return StatusCode(StatusCodes.Status429TooManyRequests, new { error = "too many open secret requests" });
+
+        var request = new SecretRequest
+        {
+            Id = Guid.NewGuid().ToString("n")[..12], SessionId = rec.Id, Owner = rec.Owner,
+            Name = name, Delivery = delivery, Purpose = purpose
+        };
+        await _secretRequests.CreateAsync(request, ct);
+        await _store.SetQuestionPendingAsync(id, true, ct);
+        var link = _frontendOrigin is null ? "Settings → Secrets" : $"{_frontendOrigin}/settings/secrets?request={request.Id}";
+        var kind = delivery == SessionSecretDelivery.File ? "file" : "environment variable";
+        await NotifyAllAsync(rec, "question",
+            $"The agent asks for a secret: {name} ({kind}){(purpose is null ? "" : $" — {purpose}")}. Add it in the web app: {link}", ct);
+        return Ok(new { id = request.Id, status = request.Status });
+    }
+
+    /// <summary>Polled by `secret_request`: the state of one of this session's requests, and once
+    /// provided the name and delivery of the secret the owner answered with.</summary>
+    [HttpGet("secret-requests/{reqId}")]
+    public async Task<IActionResult> GetSecretRequest(string id, string reqId, CancellationToken ct)
+    {
+        if (_secretRequests is null) return NotFound();
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        return await SecretRequestAnswerAsync(rec, reqId, ct);
+    }
+
+    /// <summary>The tool gave up waiting. Returns the final state, which is "provided" when the
+    /// owner's answer won the race against the expiry.</summary>
+    [HttpPost("secret-requests/{reqId}/expire")]
+    public async Task<IActionResult> ExpireSecretRequest(string id, string reqId, CancellationToken ct)
+    {
+        if (_secretRequests is null) return NotFound();
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (await _secretRequests.GetAsync(reqId, ct) is { } r && r.SessionId == rec.Id)
+            await _secretRequests.ResolveAsync(reqId, SecretRequest.Expired, null, ct);
+        return await SecretRequestAnswerAsync(rec, reqId, ct);
+    }
+
+    private async Task<IActionResult> SecretRequestAnswerAsync(SessionRecord rec, string reqId, CancellationToken ct)
+    {
+        var request = await _secretRequests!.GetAsync(reqId, ct);
+        if (request is null || request.SessionId != rec.Id) return NotFound();
+        if (request.Status != SecretRequest.Provided || request.SecretId is null)
+            return Ok(new { id = request.Id, status = request.Status });
+        var secret = (await _svc.ListSessionSecretsAsync(rec.Owner, ct)).FirstOrDefault(s => s.Id == request.SecretId);
+        return secret is null
+            ? Ok(new { id = request.Id, status = SecretRequest.Refused })
+            : Ok(new { id = request.Id, status = request.Status, name = secret.Name, delivery = secret.Delivery });
+    }
+
+    // The purpose is the agent's text and goes into every chat relay; one line, bounded, so it
+    // cannot fake further lines of the message around it.
+    private static string? CleanPurpose(string? purpose)
+    {
+        if (string.IsNullOrWhiteSpace(purpose)) return null;
+        var line = new string(purpose.Select(c => char.IsControl(c) ? ' ' : c).ToArray()).Trim();
+        return line.Length > MaxPurposeLength ? line[..MaxPurposeLength] : line;
     }
 
     /// <summary>Lists direct children of this session (same owner, ParentSessionId == id).</summary>

@@ -114,6 +114,8 @@ builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api
 builder.Services.AddHttpClient<IAgentCredentialPusher, AgentCredentialPusher>();
 builder.Services.AddHttpClient<ISessionMessageDelivery, SessionMessageDelivery>();
 // A singleton, unlike the typed clients above: it holds each followed session's offset and entries.
+builder.Services.AddHttpClient<IWorkspaceDiffReader, WorkspaceDiffReader>();
+builder.Services.AddHttpClient<ISessionCommandsReader, SessionCommandsReader>();
 // A redirect target has not passed the live-pod identity check.
 builder.Services.AddHttpClient(nameof(LiveTranscriptReader))
     .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
@@ -202,6 +204,7 @@ builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackThreadStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackClient>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.UserDirectory>();
 builder.Services.AddSingleton<AgentHub.Api.Permissions.PermissionStore>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.ISecretRequestStore, AgentHub.Api.Persistence.PostgresSecretRequestStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.ISlackTargetResolver, AgentHub.Api.Ee.Slack.SlackTargetResolver>();
 builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Ee.Slack.SlackNotifier>();
 // Slack permission prompts: one instance posts them (IPermissionNotifier) and later
@@ -238,8 +241,10 @@ builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepServic
 
 // Sessions with a self-deletion deadline (docs/session-expiry.md). The lock keeps two replicas
 // from deleting the same session at once.
+builder.Services.AddSingleton<SessionStorageCleanup>();
 builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
 builder.Services.AddHostedService<SessionExpirySweepService>();
+builder.Services.AddHostedService<SessionRuntimeImageSweepService>();
 
 // The hub renews every stored Claude login before it expires and hands the new tokens to the
 // running sessions on it (docs/provider-accounts.md, "The hub owns each login", issue #116).
@@ -473,6 +478,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatLinkCodeStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISecretRequestStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Network.IPortGrantStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();

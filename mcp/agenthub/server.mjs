@@ -62,8 +62,11 @@ const createSchema = z.object({
   credentialId: z.string().max(64).optional(),
   // Comma-separated ids from credentials_list → gitPats. Text, not an array, so an already
   // connected client's call does not fail schema validation (see credentials.mjs). Omitted or
-  // "*" = every stored token, "none" = no token.
+  // "*" = the default token of each host, "none" = no token; at most one per host.
   gitPatIds: z.string().max(4096).optional(),
+  // Comma-separated ids from credentials_list → secrets (docs/session-secrets.md). Omitted or "*" =
+  // the project's selection, nothing outside a project; "none" = none.
+  secretIds: z.string().max(4096).optional(),
   // Whether the hub moves the session to another account when its own hits a usage limit
   // (docs/account-limits.md); omitted = auto.
   accountFailover: z.enum(['auto', 'off']).optional()
@@ -77,8 +80,9 @@ register('session_create', {
     + 'autoDeleteAfter ("90m", "12h", "3d") makes the session delete itself after that long since '
     + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start; the '
     + 'response\'s expiresAt says when. '
-    + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
+    + 'credentialId picks the stored provider login and gitPatIds (comma-separated, one per host, "none" for no '
     + 'token) the git tokens the session gets; credentials_list shows what is available to this token. '
+    + 'secretIds (comma-separated, "none" for none) the stored secrets it gets as variables or files. '
     + 'accountFailover "off" keeps the session on its account when that hits a usage limit; the '
     + 'default "auto" moves it to another available one.',
   inputSchema: createSchema
@@ -107,7 +111,8 @@ register('account_switch', {
 register('credentials_list', {
   description: 'List the credentials a session created with this token may use: provider logins '
     + '(accounts, keyed by agent) with id, label and identity, stored git personal access tokens '
-    + '(id, kind, host — never the token), and which API keys are stored. A restricted token sees '
+    + '(id, kind, host, label, isDefault — never the token; a host can have several and a session '
+    + 'uses one of them), and which API keys are stored. A restricted token sees '
     + 'only what it is allowed to use.',
   inputSchema: z.object({})
   // Not a session record; sanitizeSession's allowlist would strip all of it.

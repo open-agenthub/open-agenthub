@@ -1,4 +1,5 @@
 <script setup>
+import SessionIcon from './SessionIcon.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
@@ -6,6 +7,8 @@ import WorkspaceStream from './workspace/WorkspaceStream.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import ConversationTimeline from './workspace/ConversationTimeline.vue'
 import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
+import CliMenuNotice from './workspace/CliMenuNotice.vue'
+import { CANCEL_KEYS, keysForOption } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
@@ -17,9 +20,19 @@ import { conversationState, mergeConversationPage, toTranscriptItems } from '../
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
+import SecretRequestBanner from './SecretRequestBanner.vue'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
-const emit = defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
+const runtimeUpdateError = ref('')
+const runtimeUpdating = ref(false)
+async function updateRuntime() {
+  runtimeUpdating.value = true
+  runtimeUpdateError.value = ''
+  try { await api.updateRuntimeImage(props.session.id); emit('runtime-updated') }
+  catch (error) { runtimeUpdateError.value = error.message || 'Update deferred' }
+  finally { runtimeUpdating.value = false }
+}
+const emit = defineEmits(['runtime-updated', 'back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 // Reopens a browser pane the person closed; it stays offered while the pane is open because on a
@@ -39,6 +52,8 @@ const workspaceOpened = ref(activeTab.value === 'workspace')
 const conversationVisible = computed(() => modern.value && !isChat.value)
 const terminalOpened = ref(false)
 const drawerKind = ref('agent')
+// Keep menu detection independent of drawer visibility so answering never requires opening it.
+const cliMenu = ref(null)
 const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
@@ -273,6 +288,7 @@ watch(() => props.session?.id, () => {
   conversation.value = null
   transcriptError.value = ''
   terminalOpened.value = false
+  cliMenu.value = null
   shellOpened.value = false
   drawerKind.value = 'agent'
   statuses.agent = 'connecting…'
@@ -359,6 +375,17 @@ function onConverted(id, surface) {
   emit('converted', id, surface)
 }
 
+function onCliMenu(menu) {
+  cliMenu.value = menu
+  // The composer's "answer the menu first" is about this menu; it goes when the menu does.
+  if (!menu) composer.value?.clearError?.()
+}
+function answerCliMenu(number) {
+  if (cliMenu.value) void agentTerminal.value?.sendKeys(keysForOption(cliMenu.value, number)).catch(() => {})
+}
+function cancelCliMenu() {
+  void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
+}
 function toggleDrawer(kind) {
   if (kind === 'shell') shellOpened.value = true
   terminalOpened.value = !(terminalOpened.value && drawerKind.value === kind)
@@ -368,7 +395,19 @@ function sendWorkspaceMessage(text) {
   if (!canCompose.value || !agentTerminal.value) {
     throw Object.assign(new Error('Agent is disconnected. Your draft is still here.'), { retryable: true })
   }
+  // A message pasted into one of the CLI's own screens is not a message: its Enter picks the
+  // highlighted option, or submits the text as a login code. Refused, so the draft stays.
+  if (cliMenu.value) {
+    throw new Error(cliMenu.value.kind === 'choice'
+      ? 'The agent is showing a menu. Answer it above or in the terminal first; your draft is still here.'
+      : 'The agent is waiting for input in its terminal. Answer it there first; your draft is still here.')
+  }
   return agentTerminal.value.submitMessage(text)
+}
+// Commands that open one of the CLI's menus need nothing here: the composer sends them like any
+// message, and the menu is picked up from the screen like one the person opened in the terminal.
+function loadAgentCommands() {
+  return api.sessionCommands(props.session.id)
 }
 function interruptWorkspaceAgent() {
   if (!canCompose.value || !agentTerminal.value) throw new Error('Agent is disconnected')
@@ -390,7 +429,7 @@ function interruptWorkspaceAgent() {
           <span v-if="repoLabel" class="mono">· {{ repoLabel }}</span>
           <span v-if="session.schedule" class="cron">· ▶ {{ session.schedule }}</span>
           <span v-if="session.expiresAt" class="expires" :class="{ soon: isExpiringSoon(session.expiresAt) }"
-            data-expires-at :title="`Auto-delete ${session.autoDeleteFrom === 'start' ? 'after start' : 'after last activity'}`">· ⌛ expires in {{ formatRemaining(session.expiresAt) }}</span>
+            data-expires-at :title="`Auto-delete ${session.autoDeleteFrom === 'start' ? 'after start' : 'after last activity'}`">· <SessionIcon name="expiry" /> expires in {{ formatRemaining(session.expiresAt) }}</span>
           <span v-if="session.sharedBy" class="shared">· shared by {{ session.sharedBy }}</span>
         </div>
       </div>
@@ -417,12 +456,15 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
+      <span v-if="session.outdatedImage" class="status" data-outdated-image>outdated image</span>
+      <button v-if="session.outdatedImage && capabilities.canManage" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
       <span class="status">{{ modern ? statuses.agent : statuses[activeTab] }}</span>
       <div v-if="shareOpen" class="share-pop">
         <div class="share-head"><span>Share session</span><button class="ghost" @click="shareOpen = false">✕</button></div>
         <ShareSessionDialog embedded :session="session" @close="shareOpen = false" />
       </div>
     </div>
+    <p v-if="runtimeUpdateError" role="alert">{{ runtimeUpdateError }}</p>
     <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
@@ -535,28 +577,32 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn danger" @click="decidePermission(p.id, 'deny')">Deny</button>
       </div>
     </div>
+    <SecretRequestBanner v-if="capabilities.canManage && !sharedToken" :session-id="session.id" />
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
           @retry="loadTranscript" @quote="composer?.quote($event)" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
+        <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
+          @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
           <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>
           <button v-if="isLive && capabilities.canShell" type="button" :aria-expanded="terminalOpened && drawerKind === 'shell'" data-drawer-shell @click="toggleDrawer('shell')">›_ Shell</button>
         </div>
         <div v-if="!isChat || (isLive && capabilities.canShell && shellOpened)" class="terminal-host"
-          :class="{ 'terminal-drawer': modern }" v-show="activeTab === 'agent' || activeTab === 'shell' || (modern && terminalOpened)">
+          :class="{ 'terminal-drawer': modern, 'menu-open': modern && cliMenu && drawerKind === 'agent' }" v-show="activeTab === 'agent' || activeTab === 'shell' || (modern && terminalOpened)">
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
-            :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event" />
+            :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
+            @menu="onCliMenu" />
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
           ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
-          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" />
+          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" :load-commands="sharedToken ? undefined : loadAgentCommands" />
       </div>
     </SessionWorkspace>
   </div>
@@ -639,6 +685,9 @@ function interruptWorkspaceAgent() {
 .terminal-stack { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .terminal-host { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .terminal-host.terminal-drawer { flex: 0 0 32%; min-height: 140px; border-block: 1px solid var(--border); }
+/* A CLI fits its dialog into the rows it has, scrolling its list down to the highlighted entry;
+   the drawer grows while one is open so the whole menu is drawn, for the buttons and the person. */
+.terminal-host.terminal-drawer.menu-open { flex-basis: 50%; min-height: 300px; }
 .modern-workspace { background: var(--bg); }
 .drawer-toolbar { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding: 6px 16px; border-top: 1px solid var(--border); background: var(--bg); }
 .drawer-toolbar button { border: 0; background: transparent; color: var(--muted-2); font-size: 11px; padding: 5px 8px; }

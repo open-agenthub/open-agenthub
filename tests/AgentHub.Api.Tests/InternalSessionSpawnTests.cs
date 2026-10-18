@@ -427,6 +427,89 @@ public class InternalSessionSpawnTests
 
     // ------------------------------------------------------------------ fixtures
 
+    // ------------------------------------------------------------------ secrets (docs/session-secrets.md)
+
+    // The parent follows proj-a, which selects a and b; proj-b selects b and c.
+    private static IReadOnlyList<string> ProjectSecrets(string? project, IReadOnlyList<string>? requested)
+    {
+        IReadOnlyList<string> selected = project switch { "proj-a" => ["a", "b"], "proj-b" => ["b", "c"], _ => [] };
+        return requested is null ? selected : requested.Where(id => project is null || selected.Contains(id)).ToList();
+    }
+
+    [Fact]
+    public async Task Spawn_WithoutSecrets_InheritsExactlyTheParentsSet_AsAnExplicitList()
+    {
+        var svc = new RecordingSessionService { Secrets = ProjectSecrets };
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+        parent.SecretIdsJson = """["a"]""";
+
+        await Controller(parent, svc).Spawn(ParentId, new CreateSessionRequest { Title = "child", Prompt = "p" }, CancellationToken.None);
+
+        // Not null: null would follow proj-a, which also selects b, a secret the parent never had.
+        Assert.Equal(["a"], svc.CreateRequest!.SecretIds);
+        // What the child may later ask for is held to the same set.
+        Assert.Equal(["a"], svc.CreateRequest.SecretCeiling);
+    }
+
+    [Fact]
+    public async Task Spawn_AskingForASecretTheParentDoesNotHave_IsRefused()
+    {
+        var svc = new RecordingSessionService { Secrets = ProjectSecrets };
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+        parent.SecretIdsJson = """["a"]""";
+
+        var result = await Controller(parent, svc).Spawn(ParentId,
+            new CreateSessionRequest { Title = "child", Prompt = "p", SecretIds = ["a", "b"] }, CancellationToken.None);
+
+        var status = Assert.IsType<ObjectResult>(result);
+        Assert.Equal(StatusCodes.Status403Forbidden, status.StatusCode);
+        Assert.Equal("secret_not_allowed", status.Value);
+        Assert.Equal(0, svc.CreateCalls);
+    }
+
+    [Fact]
+    public async Task Spawn_NarrowingToPartOfTheParentsSet_Passes()
+    {
+        var svc = new RecordingSessionService { Secrets = ProjectSecrets };
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+
+        await Controller(parent, svc).Spawn(ParentId,
+            new CreateSessionRequest { Title = "child", Prompt = "p", SecretIds = ["b"] }, CancellationToken.None);
+
+        Assert.Equal(["b"], svc.CreateRequest!.SecretIds);
+    }
+
+    [Fact]
+    public async Task Spawn_IntoAnotherProject_InheritsOnlyWhatBothSelect()
+    {
+        var svc = new RecordingSessionService { Secrets = ProjectSecrets };
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+
+        await Controller(parent, svc).Spawn(ParentId,
+            new CreateSessionRequest { Title = "child", Prompt = "p", ProjectId = "proj-b" }, CancellationToken.None);
+
+        Assert.Equal(["b"], svc.CreateRequest!.SecretIds);
+    }
+
+    [Fact]
+    public async Task Spawn_FromAParentWithoutSecrets_CannotAskForAny()
+    {
+        var svc = new RecordingSessionService { Secrets = ProjectSecrets };
+
+        var inherited = await Controller(Parent(), svc).Spawn(ParentId,
+            new CreateSessionRequest { Title = "child", Prompt = "p", SecretIds = ["*"] }, CancellationToken.None);
+        Assert.IsType<OkObjectResult>(inherited);
+        Assert.Empty(svc.CreateRequest!.SecretIds!);
+
+        var asked = await Controller(Parent(), svc).Spawn(ParentId,
+            new CreateSessionRequest { Title = "child", Prompt = "p", SecretIds = ["c"] }, CancellationToken.None);
+        Assert.Equal(StatusCodes.Status403Forbidden, Assert.IsType<ObjectResult>(asked).StatusCode);
+    }
+
     private static SessionRecord Parent() => new()
     {
         Id = ParentId,
@@ -496,6 +579,13 @@ public class InternalSessionSpawnTests
         public string? DeleteId { get; private set; }
 
         public List<SessionInfo> Sessions { get; init; } = [];
+
+        /// <summary>What a session in a project with a selection receives: (projectId, requested) to ids.</summary>
+        public Func<string?, IReadOnlyList<string>?, IReadOnlyList<string>>? Secrets { get; init; }
+
+        public Task<IReadOnlyList<string>> ResolveSessionSecretIdsAsync(string owner, string? projectId,
+            IReadOnlyList<string>? requested, CancellationToken ct = default) =>
+            Task.FromResult(Secrets?.Invoke(projectId, requested) ?? Array.Empty<string>());
 
         public Task StoreCredentialsAsync(string owner, UserCredentials creds, CancellationToken ct = default) =>
             throw new NotSupportedException();

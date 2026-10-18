@@ -12,6 +12,7 @@ import McpServersPane from './McpServersPane.vue'
 import SkillsPane from './SkillsPane.vue'
 import GroupsPane from './GroupsPane.vue'
 import WebhooksPane from './WebhooksPane.vue'
+import SecretsPane from './SecretsPane.vue'
 import { initials } from '../lib/text.js'
 import { REPO_URL, docsUrl, versionLabel } from '../lib/docs.js'
 
@@ -26,6 +27,7 @@ const personalTabs = computed(() => [
   { key: 'interface', label: 'Interface' },
   { key: 'account', label: 'Connected accounts', show: () => config.gitEnabled },
   { key: 'credentials', label: 'Credentials' },
+  { key: 'secrets', label: 'Secrets' },
   { key: 'mcp', label: 'MCP servers' },
   { key: 'skills', label: 'Skills' },
   { key: 'notifications', label: 'Notifications' },
@@ -135,6 +137,7 @@ async function deleteAccount() {
       <InterfaceSettings v-else-if="active === 'interface'" />
       <AccountDialog v-else-if="active === 'account'" embedded />
       <CredentialsDialog v-else-if="active === 'credentials'" embedded @accounts="select('account')" />
+      <SecretsPane v-else-if="active === 'secrets'" />
       <McpServersPane v-else-if="active === 'mcp'" :is-admin="isAdmin" mode="personal" />
       <SkillsPane v-else-if="active === 'skills'" :is-admin="isAdmin" />
       <GroupsPane v-else-if="active === 'groups'" />

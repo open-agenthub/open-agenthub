@@ -104,7 +104,7 @@ jobs:
       - name: Build Cursor runtime
         run: docker build --file agent-runtime/cursor/Dockerfile --tag open-agenthub-dev/agent-runtime-cursor:test agent-runtime
       - name: Smoke Cursor CLI
-        run: docker run --rm --entrypoint agent open-agenthub-dev/agent-runtime-cursor:test --version
+        run: docker run --rm --entrypoint agent open-agenthub-dev/agent-runtime-cursor:test --disable-auto-update --version
       - name: Build OpenClaw runtime
         run: docker build --file agent-runtime/openclaw/Dockerfile --tag open-agenthub-dev/agent-runtime-openclaw:test agent-runtime
       - name: Smoke OpenClaw CLI
@@ -145,3 +145,6 @@ jobs:
       - name: Verify deployment parity
         shell: pwsh
         run: ./tests/helm/deployment-parity.ps1
+      - name: Verify model endpoint egress values
+        shell: pwsh
+        run: ./tests/helm/model-endpoints-values.ps1

@@ -16,11 +16,17 @@ Three values mean three different things:
 
 | Value | Meaning | Stored as |
 |---|---|---|
-| omitted / `null` | every stored PAT, including ones added later — what every session did before | `NULL` |
+| omitted / `null` | the default PAT of every host, including hosts added later — what every session did before | `NULL` |
 | `[]` | no PAT at all; connected providers and the SSH key still apply | `[]` |
-| `["id1", "id2"]` | exactly these; an unknown id is a 400 at create or update time | `["id1","id2"]` |
+| `["id1", "id2"]` | exactly these; an unknown id, or two ids for one host, is a 400 at create or update time | `["id1","id2"]` |
 
-`["*"]` is accepted as a spelling of "all" wherever the field is written, because a PATCH has no
+A host can carry several tokens (docs/git-credentials.md, "Several tokens per host"), and a session
+gets at most one of them: the store answers with the first line for a host, so a second token for the
+same host in one pod would be either dead weight or, depending on list order, the one actually used.
+Before a host could carry several tokens, "every PAT" and "the default of every host" were the same
+set, which is why `null` keeps its meaning without a migration.
+
+`["*"]` is accepted as a spelling of "the defaults" wherever the field is written, because a PATCH has no
 other way to go *back* to "all" once a list has been stored: the update convention is null =
 unchanged, and an empty list already means "none". The wildcard is the same token the API-token
 scope uses below, so there is one spelling for "everything" rather than two.
@@ -118,7 +124,10 @@ the scope only narrows what reaches it.
 - **An agent the scope does not name**: `403 agent_not_allowed`.
 - **API-key session**: only with `"apiKeys": true`, otherwise `403 api_keys_not_allowed`.
 - **Git**: a request that names PATs may only name allowed ones (`403 git_pat_not_allowed`); a
-  request that says nothing gets the allowed set intersected with what is stored. With `["*"]` it
+  request that says nothing gets the allowed set intersected with what is stored, reduced to one per
+  host — the owner's default where the token may use it, else the first allowed one. Passing every
+  allowed id on would be refused by the one-per-host rule as soon as a token is allowed both a
+  personal and a group token for one host, which is the case a scope like that exists for. With `["*"]` it
   stays "all", so a PAT stored later still reaches the session, as the unrestricted behaviour would.
 
 The error codes are the body of the 403, so an MCP client gets a stable word to act on rather than a
@@ -144,6 +153,12 @@ The `"*"` entries are kept as written. The validation lives in `ApiTokenScope.No
 function, so the controller stays thin and the rules are tested without a database. Agent names in
 `providerAccounts` are matched case-insensitively and stored as the canonical `AgentKind` name, so
 `claude` and `Claude` do not become two different restrictions.
+
+## Session secrets
+
+The same scope document has a `secrets` part — an allow list of secret ids, `["*"]` for all,
+missing for none — and `session_create` over MCP passes at most the parent's secrets. Both are
+described with the store itself in docs/session-secrets.md.
 
 ## What is deliberately not done
 

@@ -206,7 +206,7 @@ public class LiveTranscriptReaderTests
     }
 
     [Fact]
-    public async Task ManyOpenSessionsShareOneDownloadSlot()
+    public async Task BusyLiveReadSendsOtherSessionsToStoredCopyWithoutWaiting()
     {
         using var pod = new BusyPod();
         using var http = new HttpClient(pod);
@@ -218,9 +218,12 @@ public class LiveTranscriptReaderTests
         {
             await pod.OneStarted.Task.WaitAsync(stop.Token);
             Assert.Equal(1, pod.Active);
+            var otherReads = await Task.WhenAll(reads.Skip(1)).WaitAsync(stop.Token);
+            Assert.All(otherReads, entries => Assert.Null(entries));
         }
         finally { pod.Release.TrySetResult(); }
-        Assert.All(await Task.WhenAll(reads), entries => Assert.NotNull(entries));
+        Assert.NotNull(await reads[0]);
+        Assert.NotNull(await reader.ReadAsync(Running() with { Id = "after" }, stop.Token));
         Assert.Equal(1, pod.Peak);
     }
 

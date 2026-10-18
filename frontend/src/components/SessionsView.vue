@@ -1,4 +1,5 @@
 <script setup>
+import SessionIcon from './SessionIcon.vue'
 import { computed, ref } from 'vue'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
@@ -80,18 +81,19 @@ function repoLine(s) {
           <div class="row" @click="$emit('select', s.id)">
             <div class="row-status">
               <span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span>
-      <div v-if="s.failureReason" class="startup-failure" data-session-failure>{{ s.failureReason }}</div>
+              <span v-if="s.failureReason" class="startup-failure" data-session-failure-marker>Cannot start</span>
               <span class="mode">{{ s.mode }}<template v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></template></span>
             </div>
             <div class="row-main">
               <div class="row-title">{{ s.title }}</div>
               <div v-if="s.description" class="row-desc" data-session-description>{{ s.description }}</div>
-              <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at>{{ repoLine(s) || s.sharedBy ? ' · ' : '' }}⌛ expires in {{ formatRemaining(s.expiresAt) }}</span></div>
+              <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at>{{ repoLine(s) || s.sharedBy ? ' · ' : '' }}<SessionIcon name="expiry" /> expires in {{ formatRemaining(s.expiresAt) }}</span></div>
             </div>
             <div v-if="sessionCapabilities(s).canManage" class="row-actions">
-              <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)">⧉</button>
+              <button class="act" title="Duplicate session" @click.stop="$emit('duplicate', s.id)" aria-label="Duplicate session"><SessionIcon name="duplicate" /></button>
               <button v-if="canPause(s)" class="act" title="Pause session" @click.stop="$emit('pause', s.id)">❚❚</button>
-              <button v-if="s.canResume" class="act" title="Resume session" @click.stop="$emit('resume', s.id)">▶</button>
+              <span v-if="s.outdatedImage" class="status">outdated image</span>
+      <button v-if="s.canResume" class="act" title="Resume session" @click.stop="$emit('resume', s.id)">▶</button>
               <button v-if="canConvert(s)" class="act" :class="{ on: convertingId === s.id }" title="Continue interactively" data-convert-action @click.stop="toggleConvert(s.id)">↪</button>
               <button class="act" title="Edit session" @click.stop="$emit('edit', s.id)">✎</button>
               <button class="act del" title="Delete session" @click.stop="$emit('remove', s.id)">✕</button>
@@ -109,7 +111,7 @@ function repoLine(s) {
   </div>
 </template>
 <style scoped>
-.startup-failure { color: var(--danger, #e87979); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.startup-failure { color: var(--danger); font-size: 11px; font-weight: 600; white-space: nowrap; }
 .sessions-page { flex: 1; min-width: 0; padding: 26px 28px; display: flex; flex-direction: column; gap: 18px; overflow-y: auto; }
 .head { display: flex; align-items: flex-end; justify-content: space-between; flex-wrap: wrap; gap: 12px; }
 h2 { font-size: 28px; font-weight: 700; margin: 0; }

@@ -81,6 +81,7 @@ internal sealed class PostgresPurgeDatabase : IAsyncDisposable
     private readonly string _baseConnectionString;
     private readonly string _schema;
     private readonly IConfiguration _config;
+    public IConfiguration Config => _config;
     private readonly NpgsqlDataSource _raw;
 
     private PostgresPurgeDatabase(string baseConnectionString, string schema, IConfiguration config,

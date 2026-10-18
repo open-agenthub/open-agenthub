@@ -117,7 +117,7 @@ public class InternalResourcesTests
             => Task.FromResult(0d);
     }
 
-    private sealed class SingleSessionStore(SessionRecord session) : ISessionStore
+    internal sealed class SingleSessionStore(SessionRecord session) : ISessionStore
     {
         public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task UpsertAsync(SessionRecord record, CancellationToken ct = default) => Task.CompletedTask;

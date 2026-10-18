@@ -1,5 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
+const { createWorkspaceDiff } = require('./workspace-diff');
+const { listSlashCommands } = require('./slash-commands');
 
 const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
@@ -8,6 +10,8 @@ const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs } = require('./state-archive');
+const { createSecretMask } = require('./secret-mask');
+const gitIdentity = require('./git-identity');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
@@ -47,6 +51,17 @@ const URL_REFRESH_EVERY_TICKS = 720;
 const MAX_TRANSCRIPT_CHUNK = 8 * 1024 * 1024;
 // The longest reason a credential swap may carry into the scrollback.
 const MAX_SWITCH_REASON_CHARS = 300;
+// How often the skill library is pulled while the session runs. A minute is "shortly" for a
+// skill another session just saved, and with the ETag an unchanged library is one 304.
+const DEFAULT_SKILLS_SYNC_SECONDS = 60;
+
+/** AGENTHUB_SKILLS_SYNC_SECONDS; 0 turns the live pull off and leaves only the one at start. */
+function skillsSyncIntervalMs(env) {
+  const raw = env.AGENTHUB_SKILLS_SYNC_SECONDS;
+  const seconds = raw === undefined || raw === '' ? DEFAULT_SKILLS_SYNC_SECONDS : Number(raw);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.max(10, seconds) * 1000;
+}
 
 function createCommonServer(options = {}) {
   const env = options.env || process.env;
@@ -67,6 +82,10 @@ function createCommonServer(options = {}) {
     root: env.AGENTHUB_FILE_ROOT || '/workspace/.agenthub/files' });
   const attachmentMaterializer = supplied.attachmentMaterializer ||
     new AttachmentMaterializer({ env, fetch: fetchImpl, store: fileStore });
+  const workspaceDiff = supplied.workspaceDiff || createWorkspaceDiff(env.AGENTHUB_WORKSPACE_ROOT || '/workspace');
+  const secretMask = supplied.secretMask || createSecretMask({ env, fs });
+  const installGitIdentity = supplied.installGitIdentity ||
+    (payload => gitIdentity.install(payload, { setupCliAuth: require('node:path').join(__dirname, 'setup-cli-auth.sh') }));
 
   const preparation = driver.prepare(env);
   const childEnv = preparation && preparation.childEnv;
@@ -108,10 +127,15 @@ function createCommonServer(options = {}) {
   let controlCounter = 0;
   let chatDelivery = Promise.resolve();
   let pendingChatDeliveries = 0;
+  let outstandingRuntimeTurns = 0;
+  let runtimeDraining = false;
   let promptSent = false;
   let firstLaunchedAt = 0;
   let transcriptFile = null;
   let transcriptUploaded = { size: -1, mtimeMs: -1 };
+  // False while a resumed session's transcript may still be behind the hub's copy: until
+  // catchUpTranscript has settled, the file is neither served to the hub nor uploaded over it.
+  let transcriptCaughtUp = env.AGENTHUB_RESUME !== '1' || !callback;
   // Set while the agent is being stopped on purpose so that its exit starts it again instead
   // of ending the session: `{ text, subtype }`, the line the clients see and the agenthub event
   // the chat UI gets for it.
@@ -171,16 +195,16 @@ function createCommonServer(options = {}) {
   // (agent exit, SIGTERM) archives without asking: it is the last chance, and it must not
   // depend on the change detection being right.
   function persistState(final, done) {
-    if (!statePut) return done && done();
+    if (!statePut) return done && done(new Error('state storage unavailable'));
     const archive = signature => execFile('/bin/sh',
       ['-c', archiveScript(driver), 'sh', '/tmp/state.tgz'], { cwd: home }, archiveError => {
-        if (archiveError) return done && done();
+        if (archiveError) return done && done(archiveError);
         execFile('curl', uploadArgs('/tmp/state.tgz', statePut, insecureStorage), error => {
           if (!error) {
             uploadedStateSignature = signature;
             stateTicksSinceUpload = 0;
           }
-          if (done) done();
+          if (done) done(error);
         });
       });
     if (final) return archive(null);
@@ -205,10 +229,18 @@ function createCommonServer(options = {}) {
   // persistence tick until found: providers create the file on the first turn or pick its
   // name themselves after starting, so it does not exist when this process comes up.
   function locateTranscript() {
+    if (!transcriptCaughtUp) return null;
+    return findTranscriptFile();
+  }
+
+  // Before the first launch the restored file is asked for as "touched from now on", so a
+  // driver that falls back to the newest file since launch (one without a recorded thread id)
+  // finds nothing rather than whichever thread happens to be newest in the archive.
+  function findTranscriptFile() {
     if (transcriptFile || typeof driver.findTranscript !== 'function') return transcriptFile;
     let found = null;
     try {
-      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt });
+      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt || now() });
     } catch {}
     // The path is interpolated into a shell command below; anything a driver could not have
     // derived from a home directory, a slug and a uuid is not a transcript.
@@ -243,7 +275,7 @@ function createCommonServer(options = {}) {
     const toHub = () => {
       if (!callback) return done && done();
       let text;
-      try { text = fs.readFileSync(file, 'utf8'); } catch { return done && done(); }
+      try { text = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return done && done(); }
       fetchImpl(callback + '/transcript', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': token },
@@ -251,6 +283,7 @@ function createCommonServer(options = {}) {
       }).catch(() => {}).finally(() => done && done());
     };
     if (!transcriptPut) return toHub();
+    if (secretMask.active()) return uploadMaskedTranscript(file, toHub);
     // No shell here: the file name is whatever the CLI chose for its session file, and a quote
     // or `$(` in it would otherwise become part of the command.
     execFile('curl', uploadArgs(file, transcriptPut, insecureStorage), toHub);
@@ -277,6 +310,28 @@ function createCommonServer(options = {}) {
         console.log('[agent] Upload urls refreshed: ' + replaced);
       })
       .catch(error => console.log('[agent] Upload urls not refreshed (' + error.message + ')'));
+  }
+
+  // With secrets to mask, the object storage copy is the masked text, handed to curl on stdin.
+  // The CLI's own file stays as it is: the agent resumes from it, and a value replaced there
+  // would be gone from its memory of the conversation. Not through a copy in /tmp, which is a
+  // shared, predictable path that would hold the text a second time.
+  function uploadMaskedTranscript(file, done) {
+    let finished = false;
+    const finish = () => { if (!finished) { finished = true; done(); } };
+    let masked;
+    try { masked = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return finish(); }
+    try {
+      const child = spawnProcess('curl', uploadArgs('-', transcriptPut, insecureStorage),
+        { stdio: ['pipe', 'ignore', 'ignore'] });
+      child.on('exit', finish);
+      child.on('error', finish);
+      child.stdin.on('error', () => {});
+      child.stdin.write(masked);
+      child.stdin.end();
+    } catch {
+      finish();
+    }
   }
 
   function restoreScrollback(done) {
@@ -326,6 +381,50 @@ function createCommonServer(options = {}) {
     attempt(1);
   }
 
+  // The state archive a resume unpacks is written at most every two minutes and is lost with a
+  // pod that dies without its SIGTERM, while the transcript reaches the hub every 30 seconds. So
+  // the provider's file a resumed agent continues can be older than the hub's copy (#146). Left
+  // alone, the agent resumed without its last turns, the Workspace read the older file live and
+  // dropped them from view, and the next upload overwrote the hub's copy with it. The CLIs only
+  // append to the file, so a hub copy that starts with what was restored is the same file further
+  // on: what it has beyond that is appended before the agent starts. A copy that does not start
+  // with it is a different history, and the restored file is kept as it is.
+  function catchUpTranscript(done) {
+    if (transcriptCaughtUp) return done();
+    let settled = false;
+    const settle = reason => {
+      if (settled) return;
+      settled = true;
+      transcriptCaughtUp = true;
+      console.log('[agent] Transcript history: ' + reason);
+      done();
+    };
+    setTimeoutImpl(() => settle('hub did not answer in time, resuming from the archive'), 15000);
+    const file = findTranscriptFile();
+    if (!file) return settle('no transcript restored');
+    fetchImpl(callback + '/transcript', { headers: { 'X-Agent-Token': token } })
+      .then(response => {
+        if (!response || !response.ok) throw new Error('HTTP ' + (response && response.status));
+        return response.text();
+      })
+      .then(stored => {
+        if (settled) return;
+        const raw = fs.readFileSync(file);
+        const restored = Buffer.isBuffer(raw) ? raw : Buffer.from(String(raw));
+        // The hub was sent the masked file, so it is compared with the restored one masked the
+        // same way; the turns appended from it reach the agent as the hub has them.
+        secretMask.refresh();
+        const local = secretMask.mask(restored.toString('utf8'));
+        if (typeof stored !== 'string' || stored.length <= local.length) return settle('archive is current');
+        if (!stored.startsWith(local)) return settle('hub copy is a different history, kept the archive');
+        const extended = Buffer.concat([restored, Buffer.from(stored.slice(local.length), 'utf8')]);
+        fs.writeFileSync(file + '.agenthub-tmp', extended);
+        fs.renameSync(file + '.agenthub-tmp', file);
+        settle('appended ' + (extended.length - restored.length) + ' bytes the archive was missing');
+      })
+      .catch(error => settle('unavailable (' + error.message + '), resuming from the archive'));
+  }
+
   function backupScrollback(done) {
     if (!callback) return done && done();
     fetchImpl(callback + '/scrollback', {
@@ -365,13 +464,17 @@ function createCommonServer(options = {}) {
     }
     persisting = true;
     postResources();
+    // The buffer itself is masked, once per tick and as a whole: every upload below then carries
+    // the masked text, a reconnecting client is replayed it, and a value the PTY delivered in two
+    // chunks is caught as well, which masking chunk by chunk would miss.
+    if (secretMask.refresh()) scrollback = secretMask.mask(scrollback);
     syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
-      persistState(final, () => {
+      persistState(final, error => {
         persisting = false;
         const waiters = persistWaiters;
         persistWaiters = null;
-        if (waiters) persistAll(() => { for (const waiter of waiters) waiter(); }, true);
-        if (done) done();
+        if (waiters) persistAll(nextError => { for (const waiter of waiters) waiter(nextError); }, true);
+        if (done) done(error);
       })))));
   }
 
@@ -606,6 +709,7 @@ function createCommonServer(options = {}) {
   }
 
   function deliverChatLine(line) {
+    if (chatEventType(line) === 'result' && outstandingRuntimeTurns > 0) outstandingRuntimeTurns -= 1;
     const payload = line + '\n';
     if (!TRANSIENT_CHAT_EVENTS.has(chatEventType(line))) remember(payload);
     broadcast(payload);
@@ -687,6 +791,7 @@ function createCommonServer(options = {}) {
 
     if (!attemptedResume && !promptSent && env.AGENTHUB_PROMPT) {
       promptSent = true;
+      outstandingRuntimeTurns += 1;
       void chat.sendUser(env.AGENTHUB_PROMPT).catch(() => {});
     }
   }
@@ -783,6 +888,11 @@ function createCommonServer(options = {}) {
       safeSend(socket, agenthubEvent('error', { code: 'attachment_delivery_failed', clientTurnId: message.clientTurnId }));
       return;
     }
+    if (runtimeDraining) {
+      safeSend(socket, agenthubEvent('error', { code: 'runtime_updating', clientTurnId: message.clientTurnId }));
+      return;
+    }
+    outstandingRuntimeTurns += 1;
     pendingChatDeliveries += 1;
     chatDelivery = chatDelivery
       .then(() => attachments.length ? deliverAttachmentTurn({ ...message, attachments }) : chat.sendUser(message.text))
@@ -797,6 +907,10 @@ function createCommonServer(options = {}) {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
       if (exited) return;
+      if (runtimeDraining) {
+        safeSend(socket, agenthubEvent('error', { code: 'runtime_updating', clientTurnId: message.clientTurnId }));
+        return;
+      }
       if (chatMode) {
         if (message.type === 'chat' && typeof message.text === 'string' && chat) {
           if (message.clientTurnId !== undefined &&
@@ -874,6 +988,7 @@ function createCommonServer(options = {}) {
       return;
     }
     const body = await readBoundedBody(request, credentials.MAX_CREDENTIAL_BYTES);
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
     if (!body) {
       fileError(response, 413, 'credential_too_large');
       return;
@@ -905,6 +1020,45 @@ function createCommonServer(options = {}) {
       : restartAgent('Provider account switched');
     console.log('[agent] Provider credential replaced' + (restarting ? '; restarting with resume.' : '.'));
     sendJson(response, 202, { installed: true, restarting });
+  }
+
+  /**
+   * PUT /agenthub/git-credentials: the owner chose another stored git token for this session
+   * (docs/git-credentials.md, "Switching the token of a running session"). Body
+   * `{credentials, authors}` — the whole store and the per-host authors, rebuilt by the hub the
+   * same way as at spawn. Nothing restarts: git reads the store and its config on every command,
+   * and gh/glab read theirs on every call, so the next push already uses the new token.
+   */
+  async function handleGitCredentialRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, 401, 'unauthorized');
+      return;
+    }
+    if (request.method !== 'PUT') {
+      response.setHeader('Allow', 'PUT');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    // Room for the store plus the authors list around it.
+    const body = await readBoundedBody(request, gitIdentity.MAX_CREDENTIALS_BYTES * 2);
+    if (!body) {
+      fileError(response, 413, 'git_credentials_too_large');
+      return;
+    }
+    let payload;
+    try { payload = gitIdentity.parsePayload(body); } catch (error) {
+      fileError(response, 400, error.message);
+      return;
+    }
+    try {
+      installGitIdentity({ home: env.HOME || '/home/agent', ...payload });
+    } catch (error) {
+      console.error('[agent] Installing git credentials failed:', error.message);
+      fileError(response, 500, 'git_credentials_install_failed');
+      return;
+    }
+    console.log('[agent] Git credentials replaced by the hub.');
+    sendJson(response, 200, { installed: true });
   }
 
   // Percent-encoded by the hub so a label with any character survives the header; control
@@ -1012,6 +1166,7 @@ function createCommonServer(options = {}) {
       return;
     }
     const raw = await readBoundedBody(request, MAX_MESSAGE_BYTES);
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
     const message = raw && parseFleetMessage(raw);
     if (!message) {
       fileError(response, raw ? 400 : 413, raw ? 'invalid_message' : 'message_too_large');
@@ -1137,7 +1292,9 @@ function createCommonServer(options = {}) {
       fileError(response, 405, 'method_not_allowed');
       return;
     }
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
     const messages = modQueue;
+    if (chatMode) outstandingRuntimeTurns += messages.length;
     modQueue = [];
     sendJson(response, 200, { messages });
   }
@@ -1158,8 +1315,35 @@ function createCommonServer(options = {}) {
 
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
+    if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
+    if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
+    if (requestPath === '/agenthub/runtime-drain') {
+      if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+      if (request.method === 'DELETE') {
+        runtimeDraining = false;
+        return sendJson(response, 200, { draining: false });
+      }
+      if (request.method !== 'POST') return fileError(response, 405, 'method_not_allowed');
+      // Only structured chat results prove turn completion; silence in a terminal proves nothing.
+      if (!chatMode || !chat || exited || restartReason !== null || outstandingRuntimeTurns ||
+          pendingChatDeliveries || modQueue.length || deferredMessages.length || runtimeDraining || persisting)
+        return fileError(response, 409, 'runtime_busy_or_unsupported');
+      runtimeDraining = true;
+      // Confirm the current conversation is durable before the hub removes this process.
+      return persistAll(error => {
+        if (error) {
+          runtimeDraining = false;
+          return fileError(response, 503, 'runtime_state_upload_failed');
+        }
+        if (!runtimeDraining) return fileError(response, 409, 'runtime_drain_cancelled');
+        sendJson(response, 200, { draining: true });
+      }, true);
+    }
+    if (runtimeDraining && requestPath.startsWith('/agenthub/credentials'))
+      return fileError(response, 409, 'runtime_updating');
     if (requestPath === '/agenthub/credentials') return handleCredentialRequest(request, response);
     if (requestPath === '/agenthub/credentials/refresh') return handleCredentialRequest(request, response, true);
+    if (requestPath === '/agenthub/git-credentials') return handleGitCredentialRequest(request, response);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
     if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
@@ -1167,6 +1351,36 @@ function createCommonServer(options = {}) {
       return handleModRequest(request, response, requestPath);
     }
     return handleFileRequest(request, response);
+  }
+
+  async function handleDiffRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'GET') {
+      response.setHeader('Allow', 'GET');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    const comparison = new URL(request.url, 'http://example.com').searchParams.get('comparison') || 'base';
+    if (!['base', 'head'].includes(comparison)) return fileError(response, 400, 'invalid_comparison');
+    try { sendJson(response, 200, await workspaceDiff(comparison)); }
+    catch { fileError(response, 503, 'diff_unavailable'); }
+  }
+
+  // Read from disk on every request rather than cached: a skill the library sync or the agent
+  // itself adds mid-session is one the CLI may already offer, and the scan is bounded.
+  function handleCommandsRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'GET') {
+      response.setHeader('Allow', 'GET');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    if (!driver.slashCommands) return sendJson(response, 200, { agent: driver.name, commands: [], truncated: false });
+    try {
+      sendJson(response, 200, { agent: driver.name, ...listSlashCommands(driver.slashCommands, { env, home, cwd, fs }) });
+    } catch {
+      fileError(response, 503, 'commands_unavailable');
+    }
   }
 
   function handleShell(socket) {
@@ -1307,7 +1521,7 @@ function createCommonServer(options = {}) {
   // connect would start empty and the conversation so far would look lost. Seed it from
   // the copy the hub kept before starting the agent, so the history is there for the
   // first client and stays part of what we persist from here on.
-  restoreScrollback(() => startAgent(true));
+  restoreScrollback(() => catchUpTranscript(() => startAgent(true)));
 
   let ticksSinceUrlRefresh = 0;
   setIntervalImpl(() => {
@@ -1317,6 +1531,45 @@ function createCommonServer(options = {}) {
       refreshArtifactUrls();
     }
   }, 30_000);
+
+  // Keeps the local skill directory in line with the library while the session runs, so a skill
+  // another session saved is listed by the agent without a restart — the agent uses what its
+  // skill directory lists and rarely thinks of searching. A poll rather than a push from the hub: the
+  // pod already talks to the hub on its own schedule and nothing has to reach into it, and with
+  // the ETag an unchanged library costs one small request per interval.
+  const skillsSyncMs = skillsSyncIntervalMs(env);
+  if (skillsSyncMs > 0 && callback && token) {
+    const skills = require('./skills');
+    const pullSkillsImpl = supplied.pullSkills || skills.pullSkills;
+    let pullingSkills = false;
+    let lastSkillsError = '';
+    let lastSkillsKept = '';
+    let skillsEtag = null;
+    setIntervalImpl(() => {
+      if (exited || pullingSkills) return;
+      pullingSkills = true;
+      Promise.resolve()
+        .then(() => pullSkillsImpl(env, { fetch: fetchImpl, etag: skillsEtag }))
+        .then(result => {
+          lastSkillsError = '';
+          if (result && result.etag !== undefined) skillsEtag = result.etag;
+          if (!result || result.notModified || result.skippedReason) return;
+          // A skill kept for its local edits is reported on every pull that changes something;
+          // repeating it each minute on its own would drown the log.
+          const kept = (result.kept || []).join(',');
+          if (result.written.length || result.removed.length || kept !== lastSkillsKept) {
+            console.log('[agent] Skills: ' + skills.summary(result) + '.');
+          }
+          lastSkillsKept = kept;
+        })
+        .catch(error => {
+          // Once per distinct failure: a hub that is down for an hour is one line, not sixty.
+          if (error.message !== lastSkillsError) console.log('[agent] Skills: pull failed (' + error.message + ')');
+          lastSkillsError = error.message;
+        })
+        .finally(() => { pullingSkills = false; });
+    }, skillsSyncMs);
+  }
 
   const httpServer = http.createServer((request, response) => {
     Promise.resolve(handleHttpRequest(request, response)).catch(() => {
@@ -1333,7 +1586,7 @@ function createCommonServer(options = {}) {
 
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
-    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/messages, /agenthub/transcript' +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 

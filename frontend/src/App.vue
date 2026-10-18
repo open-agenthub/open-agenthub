@@ -18,6 +18,7 @@ import { REPO_URL, versionLabel } from './lib/docs.js'
 import { SETTINGS_DEFAULT_TAB, settingsPath, settingsTabFromPath, sharedTokenFromPath } from './lib/routes.js'
 import { initials } from './lib/text.js'
 import { detectAlerts, showAlert } from './lib/desktop-notify.js'
+import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, clampSidebarWidth, loadSidebarLayout, saveSidebarLayout } from './lib/sidebar-layout.js'
 
 const sessions = ref([])
 const projects = ref([])
@@ -38,6 +39,42 @@ const editSession = computed(() => sessions.value.find(session => session.id ===
 const needsLogin = !sharedToken && auth.enabled && !auth.isAuthenticated
 const waitingCount = computed(() => sessions.value.filter(s => s.questionPending).length)
 let refreshTimer
+
+const savedSidebar = loadSidebarLayout()
+const sidebarWidth = ref(savedSidebar.width)
+const sidebarCollapsed = ref(savedSidebar.collapsed)
+const sidebarResizing = ref(false)
+function rememberSidebar() { saveSidebarLayout({ width: sidebarWidth.value, collapsed: sidebarCollapsed.value }) }
+function toggleSidebar() { sidebarCollapsed.value = !sidebarCollapsed.value; rememberSidebar() }
+// Pointer capture keeps the drag alive over the terminal and the browser's VNC canvas, which
+// would otherwise take the pointermove events as soon as the cursor crosses into them.
+function startSidebarResize(event) {
+  if (event.button !== 0) return
+  event.preventDefault()
+  event.currentTarget.setPointerCapture?.(event.pointerId)
+  sidebarResizing.value = true
+}
+function onSidebarResize(event) {
+  if (!sidebarResizing.value) return
+  const left = event.currentTarget.parentElement?.getBoundingClientRect().left || 0
+  sidebarWidth.value = clampSidebarWidth(event.clientX - left)
+}
+// Stored once the drag ends, not on every move: a drag fires dozens of events per second.
+function stopSidebarResize(event) {
+  if (!sidebarResizing.value) return
+  sidebarResizing.value = false
+  event.currentTarget.releasePointerCapture?.(event.pointerId)
+  rememberSidebar()
+}
+function onSidebarResizeKey(event) {
+  const step = event.shiftKey ? 64 : 16
+  const next = { ArrowLeft: sidebarWidth.value - step, ArrowRight: sidebarWidth.value + step, Home: SIDEBAR_MIN, End: SIDEBAR_MAX }[event.key]
+  if (next === undefined) return
+  event.preventDefault()
+  sidebarWidth.value = clampSidebarWidth(next)
+  rememberSidebar()
+}
+function resetSidebarWidth() { sidebarWidth.value = SIDEBAR_DEFAULT; rememberSidebar() }
 
 function sessionIdFromLocation() {
   const match = location.pathname.match(/^\/s\/([^/]+)\/?$/)
@@ -152,9 +189,11 @@ onBeforeUnmount(() => {
 <template>
   <SharedSessionView v-if="sharedToken" :token="sharedToken" />
   <div v-else-if="needsLogin" class="login"><div class="login-card"><h1>Open AgentHub</h1><p>Please sign in to manage your agent sessions.</p><button class="primary" @click="auth.login()">Sign in</button></div></div>
-  <div v-else class="shell" :class="{ 'session-open': activeSession && !page, 'mobile-navigation-open': mobileNavigationOpen }">
-    <aside class="side">
-      <div class="brand" @click="goHome"><img src="/favicon.svg" alt="" class="logo" /><span>Open AgentHub</span></div>
+  <div v-else class="shell" :class="{ 'session-open': activeSession && !page, 'mobile-navigation-open': mobileNavigationOpen, 'side-collapsed': sidebarCollapsed, 'side-resizing': sidebarResizing }"
+    :style="{ '--side-width': `${sidebarWidth}px` }">
+    <aside class="side" id="app-sidebar" data-sidebar>
+      <div class="brand"><span class="brand-home" @click="goHome"><img src="/favicon.svg" alt="" class="logo" /><span>Open AgentHub</span></span>
+        <button type="button" class="side-toggle" data-sidebar-collapse aria-controls="app-sidebar" aria-expanded="true" title="Hide sidebar" aria-label="Hide sidebar" @click="toggleSidebar">«</button></div>
       <button class="primary task-btn" @click="openPage('new')">+ Give an agent a task</button>
       <nav class="nav">
         <button class="nav-item" :class="{ on: !page && !activeId }" @click="goHome">◈ Home</button>
@@ -167,9 +206,14 @@ onBeforeUnmount(() => {
       <ProjectSidebar class="side-sessions" :projects="projects" :sessions="sessions" :active="activeId" :query="query" @new="openPage('new')" @select="selectSession" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @share="openShare" @projects-changed="refresh" />
       <p v-if="error" class="err">{{ error }}</p>
       <div class="side-foot" data-app-version>Open AgentHub {{ versionLabel(config.version) }} · <a :href="config.repoUrl || REPO_URL" target="_blank" rel="noopener" data-repo-link>GitHub ↗</a></div>
+      <div class="side-resize" role="separator" tabindex="0" data-sidebar-resize aria-label="Sidebar width" aria-orientation="vertical" aria-controls="app-sidebar"
+        :aria-valuemin="SIDEBAR_MIN" :aria-valuemax="SIDEBAR_MAX" :aria-valuenow="sidebarWidth" title="Drag to resize · double-click to reset"
+        @pointerdown="startSidebarResize" @pointermove="onSidebarResize" @pointerup="stopSidebarResize" @pointercancel="stopSidebarResize"
+        @keydown="onSidebarResizeKey" @dblclick="resetSidebarWidth"></div>
     </aside>
     <div class="main">
       <header class="topbar">
+        <button v-if="sidebarCollapsed" type="button" class="icon-btn side-expand" data-sidebar-expand aria-controls="app-sidebar" aria-expanded="false" title="Show sidebar" aria-label="Show sidebar" @click="toggleSidebar">»</button>
         <button v-if="activeSession && !page" class="mobile-sessions" :aria-expanded="mobileNavigationOpen" @click="mobileNavigationOpen = !mobileNavigationOpen">Sessions</button>
         <SessionSearch ref="searchBox" v-model="query" :sessions="sessions" @select="selectSession" />
         <span class="spacer"></span>
@@ -188,7 +232,7 @@ onBeforeUnmount(() => {
         <div v-else-if="page === 'edit' && editSession" class="page"><EditSessionDialog :key="editSession.id" embedded :session="editSession" :projects="projects" @close="closePage" @updated="created" /></div>
         <div v-else-if="page === 'duplicate' && editSession" class="page"><DuplicateSessionDialog :key="editSession.id" embedded :session="editSession" :projects="projects" @close="closePage" @duplicated="created" /></div>
         <div v-else-if="page === 'share' && editSession" class="page"><ShareSessionDialog :key="editSession.id" embedded :session="editSession" @close="closePage" /></div>
-        <TerminalView v-else-if="activeSession" :key="activeSession.id" :session="activeSession" :initial-ui="initialUi" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
+        <TerminalView @runtime-updated="refresh" v-else-if="activeSession" :key="activeSession.id" :session="activeSession" :initial-ui="initialUi" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
         <SessionsView v-else-if="page === 'sessions'" :sessions="sessions" :projects="projects" :query="query" @select="selectSession" @new="openPage('new')" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
         <UsageView v-else-if="page === 'usage'" />
         <HomeView v-else :sessions="sessions" @select="selectSession" @sessions="openPage('sessions')" @usage="openPage('usage')" @new="openPage('new')" @resume="resume" />
@@ -203,9 +247,18 @@ onBeforeUnmount(() => {
 .login-card p { color: var(--muted-2); margin: 0 0 18px; }
 .shell { height: 100%; display: flex; }
 
-.side { width: 248px; flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 18px 12px 14px; min-height: 0; }
-.brand { display: flex; align-items: center; gap: 10px; padding: 6px 4px 14px; cursor: pointer; }
+.side { position: relative; width: var(--side-width, 248px); flex-shrink: 0; background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; padding: 18px 12px 14px; min-height: 0; }
+.shell.side-collapsed .side { display: none; }
+.side-resize { position: absolute; top: 0; right: -4px; bottom: 0; width: 8px; cursor: col-resize; touch-action: none; z-index: 5; }
+.side-resize:hover, .side-resize:focus-visible, .shell.side-resizing .side-resize { background: linear-gradient(to right, transparent 3px, var(--accent) 3px, var(--accent) 5px, transparent 5px); outline: none; }
+/* The text under a fast drag would otherwise be selected line by line across the whole page. */
+.shell.side-resizing { cursor: col-resize; user-select: none; }
+.brand { display: flex; align-items: center; gap: 10px; padding: 6px 4px 14px; }
+.brand-home { display: flex; align-items: center; gap: 10px; min-width: 0; cursor: pointer; }
+.side-toggle { margin-left: auto; width: 26px; height: 26px; padding: 0; border: none; background: none; border-radius: 8px; color: var(--muted-3); font-size: 15px; flex-shrink: 0; }
+.side-toggle:hover { background: var(--panel-2); color: var(--text); }
 .brand .logo { width: 26px; height: 26px; border-radius: 9px; }
+.brand-home > span { overflow: hidden; text-overflow: ellipsis; }
 .brand span { font-family: var(--display); font-weight: 700; font-size: 16px; color: var(--strong); white-space: nowrap; }
 .task-btn { border-radius: var(--radius); padding: 9px 14px; margin: 0 2px 14px; white-space: nowrap; }
 .nav { display: flex; flex-direction: column; gap: 3px; }
@@ -239,6 +292,11 @@ onBeforeUnmount(() => {
 
 @media (max-width: 760px) {
   .mobile-sessions { display: block; }
+  /* On a phone the sidebar is the stacked navigation that the Sessions button opens, so the
+     desktop width and the collapsed choice do not apply; a collapsed desktop layout must not
+     leave a phone with no way to reach the session list. */
+  .shell.side-collapsed .side { display: flex; }
+  .side-resize, .side-toggle, .side-expand { display: none; }
   .shell.session-open:not(.mobile-navigation-open) .side { display: none; }
   .shell { flex-direction: column; }
   .side { width: 100%; border-right: 0; border-bottom: 1px solid var(--border); max-height: 45%; }

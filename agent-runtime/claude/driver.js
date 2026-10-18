@@ -3,11 +3,20 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const modelEndpoint = require('../common/model-endpoint');
+
 function prepare(env) {
   const apiKey = env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_API_KEY;
   if (env.AGENTHUB_STATE_RESTORED === undefined) {
     env.AGENTHUB_STATE_RESTORED = fs.existsSync('/tmp/.state-restored') ? '1' : '0';
+  }
+  if (env.AGENTHUB_AUTH_MODE === 'customendpoint') {
+    // Read before the key leaves the server's environment, which every shell the agent opens
+    // inherits; the CLI child gets it as ANTHROPIC_AUTH_TOKEN and nothing else does.
+    const childEnv = modelEndpoint.claudeChildEnv(env);
+    delete env[modelEndpoint.KEY_ENV];
+    return { childEnv };
   }
   if (apiKey !== undefined) {
     return { childEnv: { ANTHROPIC_API_KEY: apiKey } };
@@ -180,6 +189,7 @@ function resetFromText(text, from) {
 }
 
 module.exports = {
+  slashCommands: require('./slash-commands'),
   name: 'Claude',
   stateDir: '.claude',
   authFilename: '.credentials.json',

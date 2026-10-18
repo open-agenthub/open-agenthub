@@ -38,7 +38,7 @@ class FakeChildProcess {
       this.stdinWrites.push(data);
       if (callback) queueMicrotask(() => callback(null));
       return true;
-    }, on() {} };
+    }, on() {}, end: () => { this.stdinEnded = true; } };
     this.stdout = { on: (event, handler) => { if (event === 'data') this.stdoutHandlers.push(handler); } };
     this.stderr = { on: (event, handler) => { if (event === 'data') this.stderrHandlers.push(handler); } };
   }
@@ -82,6 +82,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
   const renames = [];
   const intervals = [];
   const exits = [];
+  const gitInstalls = [];
 
   const fileCalls = [];
   class FakeWebSocketServer {
@@ -170,6 +171,12 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
           if (harnessOptions.files && file in harnessOptions.files) return harnessOptions.files[file];
           throw new Error('ENOENT: ' + file);
         },
+        readdirSync(dir) {
+          const names = Object.keys(harnessOptions.files || {})
+            .filter(file => path.dirname(file) === dir).map(file => path.basename(file));
+          if (names.length === 0) throw new Error('ENOENT: ' + dir);
+          return names;
+        },
         statSync(file) {
           if (harnessOptions.files && file in harnessOptions.files) {
             return { size: Buffer.byteLength(harnessOptions.files[file]), mtimeMs: harnessOptions.mtimeMs || 1 };
@@ -205,6 +212,9 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       process: processLike,
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
       attachmentMaterializer: materializer,
+      pullSkills: harnessOptions.pullSkills,
+      // Recorded, never the real installer: that one runs git against the HOME it is given.
+      installGitIdentity: harnessOptions.installGitIdentity || (payload => gitInstalls.push(payload)),
       setTimeout(callback, ms) {
         if (harnessOptions.setTimeout) return harnessOptions.setTimeout(callback, ms);
         callback();
@@ -214,7 +224,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
     }
   });
 
-  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, renames, intervals, exits, fileCalls, materializer, pendingExec, signals };
+  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, renames, intervals, exits, fileCalls, materializer, pendingExec, signals, gitInstalls };
 }
 
 function requestHttp(harness, method, url, headers = {}, body = '', remoteAddress = '10.0.0.9') {

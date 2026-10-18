@@ -8,9 +8,19 @@ if [ -f /opt/agenthub/session-agent/common/entrypoint-common.sh ]; then
 fi
 source "$COMMON_ENTRYPOINT"
 
+# Updates belong to image rollouts; a background installer cannot write the pinned CLI.
+export DISABLE_AUTOUPDATER=1
+
 AUTH_EXPECT_CREATE=1
 AUTH_BASELINE_SHA256=""
-if [ -f /secrets/claude/credentials.json ]; then
+CUSTOM_ENDPOINT=0
+[ "${AGENTHUB_AUTH_MODE:-}" = "customendpoint" ] && CUSTOM_ENDPOINT=1
+if [ "$CUSTOM_ENDPOINT" = "1" ]; then
+  # A self-hosted server instead of a login (docs/custom-model-endpoints.md). Fails the start with
+  # a reason the session list shows when the server cannot serve Claude Code, rather than letting
+  # the CLI retry against it until the session looks hung.
+  node "$RUNTIME/common/model-endpoint.js" probe messages
+elif [ -f /secrets/claude/credentials.json ]; then
   mkdir -p "$HOME/.claude"
   cp /secrets/claude/credentials.json "$HOME/.claude/.credentials.json"
   chmod 600 "$HOME/.claude/.credentials.json"
@@ -33,7 +43,9 @@ node "$RUNTIME/claude/workspace-trust.mjs" "$HOME/.claude.json" "$CLAUDE_WORKDIR
 # and unlike a project .mcp.json it needs no interactive approval.
 node "$RUNTIME/claude/mcp-config.mjs" "$HOME/.claude.json" "${AGENTHUB_MCP_CONFIG:-}"
 
-if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
+# No watcher on a custom endpoint: there is no login to write back, and one the agent created in
+# the session would be uploaded as the owner's Claude login.
+if [ "$CUSTOM_ENDPOINT" = "0" ] && [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
   AGENTHUB_CLAUDE_AUTH_EXPECT_CREATE="$AUTH_EXPECT_CREATE" \
     AGENTHUB_CLAUDE_AUTH_BASELINE_SHA256="$AUTH_BASELINE_SHA256" \
     node "$RUNTIME/claude/auth-watcher.js" &
@@ -44,20 +56,7 @@ fi
 AGENTHUB_RUNTIME="$RUNTIME/claude/hooks" \
   "$RUNTIME/claude/hooks/mcp-policy-hook.sh" --settings > "$HOME/.claude/settings.json"
 
-# Materialize the user's skill library (own + shared + project) into ~/.claude/skills.
-# Runs after the state restore so removed skills are cleaned up via the manifest.
-if [ -n "${AGENTHUB_CALLBACK_URL:-}" ] && [ -n "${AGENTHUB_CALLBACK_TOKEN:-}" ]; then
-  if curl -fsS -H "X-Agent-Token: $AGENTHUB_CALLBACK_TOKEN" "$AGENTHUB_CALLBACK_URL/skills" \
-      | node "$RUNTIME/common/skills.js"; then
-    echo "[entrypoint] Skills synced."
-  else
-    echo "[entrypoint] WARN: skills sync failed - continuing without library skills."
-  fi
-  # Upward sync: skills created inside earlier runs of this session (restored from
-  # the state archive, unmanaged by the hub) are imported into the library.
-  node "$RUNTIME/common/skills-sync-up.js" \
-    || echo "[entrypoint] WARN: local skill import failed - continuing."
-fi
+sync_skill_library
 
 # The agenthub-fleet mod (docs/claude-code-mods.md) delivers pushed fleet messages into the
 # CLI. The token guards the loopback queue it polls on the session agent; minted per pod and

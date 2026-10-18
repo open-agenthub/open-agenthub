@@ -49,6 +49,11 @@ public sealed record PodBuildContext
     /// </summary>
     public string? SubscriptionAccountId { get; init; }
     public bool HasGitCredentials { get; init; }
+    /// <summary>The session's own secret copies exist (docs/session-secrets.md). False only for a
+    /// spec built without a spawn, such as a test or a preview.</summary>
+    public bool HasSessionSecrets { get; init; }
+    /// <summary>The selected secrets delivered as environment variables, by name.</summary>
+    public IReadOnlyList<string> SecretEnvNames { get; init; } = Array.Empty<string>();
     public required string CallbackUrl { get; init; }
     public required string StatePutUrl { get; init; }
     public required string StateGetUrl { get; init; }
@@ -62,7 +67,19 @@ public sealed record PodBuildContext
 /// <summary>Pure construction of provider- and authentication-specific pod specs.</summary>
 public static class AgentPodSpecFactory
 {
+    public static string RuntimeImage(AgentKind agent, AgentRuntimeImages images) => agent switch
+    {
+        AgentKind.Codex => images.CodexImage,
+        AgentKind.Cursor => images.CursorImage,
+        AgentKind.OpenClaw => images.OpenClawImage,
+        AgentKind.OpenCode => images.OpenCodeImage,
+        _ => images.ClaudeImage
+    };
+
     public readonly record struct OpenClawApiKeyEnvBinding(string EnvName, string SecretKey);
+
+    /// <summary>Key of the custom endpoint's bearer token in the owner's credential secret.</summary>
+    public const string CustomEndpointApiKeySecretKey = "custom_endpoint_api_key";
 
     /// <summary>Maps a selected OpenClaw API key source to the shared creds secret key, or null when unset.</summary>
     public static string? TryOpenClawApiKeySecretKey(OpenClawApiKeySource? source) => source switch
@@ -110,6 +127,9 @@ public static class AgentPodSpecFactory
             AgentAuthMode.ApiKey => context.HasSelectedApiKey,
             AgentAuthMode.Auto when record.Agent == AgentKind.Claude =>
                 context.HasSelectedSubscriptionCredential || context.HasSelectedApiKey,
+            // The key is optional: a self-hosted server often runs without one. One that does
+            // want a key refuses the runtime's start probe, which names the missing key.
+            AgentAuthMode.CustomEndpoint => true,
             _ => false
         };
         return available
@@ -120,14 +140,7 @@ public static class AgentPodSpecFactory
     public static V1PodSpec Build(SessionRecord record, CreateSessionRequest request, PodBuildContext context)
     {
         var images = context.RuntimeImages;
-        var runtimeImage = record.Agent switch
-        {
-            AgentKind.Codex => images.CodexImage,
-            AgentKind.Cursor => images.CursorImage,
-            AgentKind.OpenClaw => images.OpenClawImage,
-            AgentKind.OpenCode => images.OpenCodeImage,
-            _ => images.ClaudeImage
-        };
+        var runtimeImage = RuntimeImage(record.Agent, images);
         var repos = NormalizeRepos(request);
         var hasRepo = repos.Count > 0;
         var hasMcp = !string.IsNullOrWhiteSpace(request.McpConfigJson);
@@ -294,6 +307,15 @@ public static class AgentPodSpecFactory
                 AddSubscriptionVolume("claude", context.ClaudeCredentialSecretName);
                 AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
                 break;
+            case (AgentKind.Claude or AgentKind.Codex or AgentKind.OpenCode, AgentAuthMode.CustomEndpoint):
+                // Provider-neutral names; each runtime maps them onto what its CLI reads, because
+                // the three disagree on wire protocol and configuration (docs/custom-model-endpoints.md).
+                // No provider key and no login volume: neither is used, and a provider key in the
+                // pod is one the CLI could send to a server the provider never vetted.
+                env.Add(new V1EnvVar { Name = "AGENTHUB_MODEL_ENDPOINT_URL", Value = record.ModelEndpointUrl ?? "" });
+                env.Add(new V1EnvVar { Name = "AGENTHUB_MODEL_NAME", Value = record.ModelName ?? "" });
+                AddApiKey("AGENTHUB_MODEL_API_KEY", CustomEndpointApiKeySecretKey);
+                break;
             default:
                 throw new ArgumentException("Unsupported agent/authentication combination.");
         }
@@ -308,6 +330,27 @@ public static class AgentPodSpecFactory
             volumes.Add(new V1Volume { Name = "gitcreds", Secret = new V1SecretVolumeSource { SecretName = $"gitcreds-{record.Id}", DefaultMode = 0x1A0 } });
             mounts.Add(new V1VolumeMount { Name = "gitcreds", MountPath = "/secrets/gitcreds", ReadOnlyProperty = true });
             gitCloneMounts.Add(new V1VolumeMount { Name = "gitcreds", MountPath = "/secrets/gitcreds", ReadOnlyProperty = true });
+        }
+        if (context.HasSessionSecrets)
+        {
+            // Mounted even when nothing is selected yet: a secret the owner allows while the
+            // session runs then appears in the directory without a restart, which a volume added
+            // only when the selection is non-empty could not do. Agent container only; the clone
+            // container gets none of it.
+            var secretsDir = $"{home}/{SessionSecretDeliveryFactory.DirectoryName}";
+            volumes.Add(new V1Volume
+            {
+                Name = "session-secrets",
+                Secret = new V1SecretVolumeSource
+                {
+                    SecretName = SessionSecretDeliveryFactory.FilesSecretName(record.Id), Optional = true, DefaultMode = 0x1A0
+                }
+            });
+            mounts.Add(new V1VolumeMount { Name = "session-secrets", MountPath = secretsDir, ReadOnlyProperty = true });
+            env.Add(new V1EnvVar { Name = "AGENTHUB_SECRETS_DIR", Value = secretsDir });
+            // Names only, for the session agent to mask the values in what it uploads.
+            env.Add(new V1EnvVar { Name = "AGENTHUB_SECRET_ENV", Value = string.Join(",", context.SecretEnvNames) });
+            env.AddRange(SessionSecretDeliveryFactory.EnvVars(record.Id, context.SecretEnvNames));
         }
         if (customImage is not null)
         {

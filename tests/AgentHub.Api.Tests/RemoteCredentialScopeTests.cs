@@ -248,6 +248,87 @@ public sealed class RemoteCredentialScopeTests
         Assert.True(listing.ApiKeys.Anthropic);
     }
 
+    // ------------------------------------------------------------------ secrets (docs/session-secrets.md)
+
+    private static ApiTokenScope SecretScope(params string[]? secrets) =>
+        Scope(claude: ["*"], git: ["*"]) with { Secrets = secrets?.ToList() };
+
+    [Fact]
+    public void ApplySecrets_ANamedSecretOutsideTheScope_IsRefused()
+    {
+        var req = Request() with { SecretIds = ["s1", "s2"] };
+        Assert.Equal("secret_not_allowed", Code(() => CredentialScope.ApplySecrets(req, SecretScope("s1"), [])));
+        Assert.Equal(["s1"], CredentialScope.ApplySecrets(req with { SecretIds = ["s1"] }, SecretScope("s1"), []).SecretIds);
+    }
+
+    [Fact]
+    public void ApplySecrets_WithoutAList_GetsTheAllowedPartOfTheProjectsSelection_Explicitly()
+    {
+        var narrowed = CredentialScope.ApplySecrets(Request(), SecretScope("s2"), ["s1", "s2"]);
+        Assert.Equal(["s2"], narrowed.SecretIds);
+        // A token restricted before secrets existed names none: it hands out none.
+        Assert.Empty(CredentialScope.ApplySecrets(Request(), SecretScope(null), ["s1", "s2"]).SecretIds!);
+        Assert.Empty(CredentialScope.ApplySecrets(Request() with { SecretIds = ["*"] }, SecretScope(null), ["s1"]).SecretIds!);
+    }
+
+    [Fact]
+    public void ApplySecrets_TheWildcardAndNoScope_LeaveTheRequestAlone()
+    {
+        var req = Request() with { SecretIds = ["s9"] };
+        Assert.Same(req, CredentialScope.ApplySecrets(req, SecretScope("*"), []));
+        Assert.Same(req, CredentialScope.ApplySecrets(req, null, []));
+    }
+
+    [Fact]
+    public void TokenScopeNormalize_RefusesAnUnknownSecretId()
+    {
+        var e = Assert.Throws<ArgumentException>(() =>
+            ApiTokenScope.Normalize(new ApiTokenScope { Secrets = ["nope"] }, Accounts, Pats, ["s1"]));
+        Assert.Contains("nope", e.Message);
+        Assert.Equal(["s1"], ApiTokenScope.Normalize(new ApiTokenScope { Secrets = [" s1 ", "s1"] }, Accounts, Pats, ["s1"]).Secrets);
+        Assert.Equal(["*"], ApiTokenScope.Normalize(new ApiTokenScope { Secrets = ["s1", "*"] }, Accounts, Pats, ["s1"]).Secrets);
+        Assert.Null(ApiTokenScope.FromJson(new ApiTokenScope { GitPats = ["*"] }.ToJson())!.Secrets);
+    }
+
+    [Fact]
+    public async Task RemoteCreate_WithASecretOutsideTheScope_Is403_BeforeAnyIdIsLookedUp()
+    {
+        var svc = new ScopedSessions();
+        var controller = Remote(new RemoteCaller("alice", SecretScope("s1")), svc);
+
+        var result = await controller.Create(Request() with { ProjectId = "proj-1", SecretIds = ["s2"] }, CancellationToken.None);
+
+        var status = Assert.IsType<ObjectResult>(result.Result);
+        Assert.Equal(StatusCodes.Status403Forbidden, status.StatusCode);
+        Assert.Equal("secret_not_allowed", status.Value);
+        Assert.Equal(0, svc.SecretResolutions);
+        Assert.Null(svc.Created);
+    }
+
+    [Fact]
+    public async Task RemoteCreate_InAProject_GetsOnlyTheAllowedPartOfItsSecrets()
+    {
+        var svc = new ScopedSessions();
+        var controller = Remote(new RemoteCaller("alice", SecretScope("s2")), svc);
+
+        Assert.IsType<OkObjectResult>((await controller.Create(Request() with { ProjectId = "proj-1" }, CancellationToken.None)).Result);
+        Assert.Equal(["s2"], svc.Created!.SecretIds);
+        // A secret request of that session is held to the token's secrets as well.
+        Assert.Equal(["s2"], svc.Created.SecretCeiling);
+    }
+
+    [Fact]
+    public async Task RemoteListing_ShowsOnlyAllowedSecrets_ByNameAndDelivery()
+    {
+        var controller = Remote(new RemoteCaller("alice", SecretScope("s2")), new ScopedSessions());
+
+        var listing = Assert.IsType<RemoteCredentialListing>(
+            Assert.IsType<OkObjectResult>((await controller.Credentials(CancellationToken.None)).Result).Value);
+
+        var secret = Assert.Single(listing.Secrets!);
+        Assert.Equal(("s2", "key.pem", "file"), (secret.Id, secret.Name, secret.Delivery));
+    }
+
     private static RemoteController Remote(RemoteCaller caller, ISessionService svc)
     {
         var controller = new RemoteController((_, _) => Task.FromResult<RemoteCaller?>(caller), svc)
@@ -271,6 +352,23 @@ public sealed class RemoteCredentialScopeTests
             => Lookups
                 ? Task.FromResult(new CredentialStatus { GitPats = Pats, AnthropicApiKey = true })
                 : throw new InvalidOperationException("no lookup expected");
+
+        public int SecretResolutions { get; private set; }
+
+        // proj-1 selects s1 and s2.
+        public Task<IReadOnlyList<string>> ResolveSessionSecretIdsAsync(string owner, string? projectId,
+            IReadOnlyList<string>? requested, CancellationToken ct = default)
+        {
+            SecretResolutions++;
+            return Task.FromResult<IReadOnlyList<string>>(projectId == "proj-1" ? ["s1", "s2"] : []);
+        }
+
+        public Task<IReadOnlyList<SessionSecretInfo>> ListSessionSecretsAsync(string owner, CancellationToken ct = default)
+            => Task.FromResult<IReadOnlyList<SessionSecretInfo>>(
+            [
+                new("s1", "DEPLOY_TOKEN", "env", null, DateTime.UtcNow),
+                new("s2", "key.pem", "file", null, DateTime.UtcNow)
+            ]);
 
         public Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default)
         {

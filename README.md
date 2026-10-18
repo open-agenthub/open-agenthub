@@ -74,7 +74,10 @@ shift.
 - **Versioned skill library with a built-in MCP server** — save reusable skills
   (SKILL.md plus helper scripts and other files) personally or per project; every
   save keeps the previous versions restorable. Sessions materialize the matching
-  skills automatically, and the agent itself can search (full-text, optionally
+  skills into the agent's own skill directory and keep it in sync while they run, so a skill
+  another session just saved is listed to the agent within a minute — live for Claude Code,
+  Codex and OpenCode, at the next start for OpenClaw ([docs/skill-library-sync.md](docs/skill-library-sync.md)).
+  The agent itself can also search (full-text, optionally
   semantic via a configurable embeddings endpoint), read, upload, and roll back
   skills through the injected `skill-library` MCP server. Helper scripts move by path,
   not by value: `upload_skill` reads a directory, a file or a `.tar.gz` off the session's
@@ -499,6 +502,9 @@ as user `dev`.
 1. **Credentials** (SSH key, Git token, provider API keys, and provider subscription
    files) are stored per user in general and provider-specific Kubernetes Secrets. API fields are
    write-only and credential values cannot be read back through the public API.
+   Named **session secrets** are stored the same way and reach a session as environment variables
+   or files in `~/.secrets`, selected per project and narrowed per session; their values are
+   masked in uploaded scrollback, transcripts and chat relays ([docs/session-secrets.md](docs/session-secrets.md)).
 2. **Start a session**: pick agent, billing source, and mode. A repo may be cloned into
    `/workspace/repo`; optional MCP and structured policy configuration follows the
    selected provider. A custom glibc image can receive the selected provider runtime by
@@ -554,6 +560,11 @@ exhausted account. How the hub finds out depends on the runtime
 
 `account_status` and `account_switch` (every MCP server) and `PATCH /api/remote/sessions/{id}/credential`
 do the same by hand; a session may switch itself.
+
+An agent that needs a secret calls `secret_request` (in-session `agenthub_sessions` server) rather than
+asking in the conversation: the owner gets a question with a link to the pre-filled form, enters the
+value in the web app, and the tool learns only that the secret is there and under which name
+(`docs/session-secrets.md`). `secrets_list` names what the session has.
 
 ## Agents, authentication, and policy
 

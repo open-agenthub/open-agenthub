@@ -13,6 +13,7 @@ public sealed class CredentialScopeException(string code) : Exception(code)
     public const string AgentNotAllowed = "agent_not_allowed";
     public const string ApiKeysNotAllowed = "api_keys_not_allowed";
     public const string GitPatNotAllowed = "git_pat_not_allowed";
+    public const string SecretNotAllowed = "secret_not_allowed";
 }
 
 /// <summary>
@@ -34,7 +35,9 @@ public static class CredentialScope
     private static CreateSessionRequest ApplyProvider(CreateSessionRequest req, ApiTokenScope scope,
         IReadOnlyDictionary<string, IReadOnlyList<ProviderAccountInfo>> accounts)
     {
-        if (req.AuthMode == AgentAuthMode.ApiKey)
+        // A custom endpoint runs on the owner's stored endpoint key, so a token that may not use
+        // stored API keys may not start one either.
+        if (req.AuthMode is AgentAuthMode.ApiKey or AgentAuthMode.CustomEndpoint)
         {
             if (!scope.AllowsApiKeys) throw new CredentialScopeException(CredentialScopeException.ApiKeysNotAllowed);
             return req;
@@ -68,7 +71,7 @@ public static class CredentialScope
     private static CreateSessionRequest ApplyGit(CreateSessionRequest req, ApiTokenScope scope, IReadOnlyList<GitPatInfo> gitPats)
     {
         if (scope.AllowsAllGitPats) return req;
-        var allowedStored = gitPats.Where(p => scope.AllowsGitPat(p.Id)).Select(p => p.Id).ToList();
+        var allowedStored = OnePerHost(gitPats.Where(p => scope.AllowsGitPat(p.Id)).ToList());
         if (req.GitPatIds is null) return req with { GitPatIds = allowedStored };
 
         var ids = req.GitPatIds.Select(id => id?.Trim() ?? "").Where(id => id.Length > 0).ToList();
@@ -77,6 +80,35 @@ public static class CredentialScope
         if (ids.Any(id => !scope.AllowsGitPat(id)))
             throw new CredentialScopeException(CredentialScopeException.GitPatNotAllowed);
         return req with { GitPatIds = ids };
+    }
+
+    /// <summary>
+    /// What "the defaults" means for a token allowed only some PATs: per host, the owner's default
+    /// when the token may use it, else the first allowed one. Passing every allowed id on would be
+    /// refused by the one-token-per-host rule (GitPatSelection) as soon as a token is allowed a
+    /// personal and a group token for the same host — which is the case the scope exists for.
+    /// </summary>
+    private static List<string> OnePerHost(IReadOnlyList<GitPatInfo> allowed) =>
+        allowed.GroupBy(p => p.Host, StringComparer.OrdinalIgnoreCase)
+            .Select(host => (host.FirstOrDefault(p => p.IsDefault) ?? host.First()).Id)
+            .ToList();
+
+    /// <summary>
+    /// Narrows the session's secrets to the token's (docs/session-secrets.md). <paramref name="resolved"/>
+    /// is what the request would receive without a scope — the project's selection when it names
+    /// none. A request that names secrets may only name allowed ones; one that names none gets the
+    /// allowed part of what it would have received, written out as an explicit list so the session
+    /// does not start following a project selection the token never saw.
+    /// </summary>
+    public static CreateSessionRequest ApplySecrets(CreateSessionRequest req, ApiTokenScope? scope, IReadOnlyList<string> resolved)
+    {
+        if (scope is null || scope.AllowsAllSecrets) return req;
+        var ids = req.SecretIds?.Select(id => id?.Trim() ?? "").Where(id => id.Length > 0).ToList();
+        if (ids is null || ids.Contains(SessionSecretSelection.FollowProject))
+            return req with { SecretIds = resolved.Where(scope.AllowsSecret).ToList() };
+        if (ids.Any(id => !scope.AllowsSecret(id)))
+            throw new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
+        return req with { SecretIds = ids };
     }
 
     /// <summary>The listing narrowed to what the token may use: a leaked restricted token tells its
@@ -93,6 +125,7 @@ public static class CredentialScope
         }
         var pats = listing.GitPats.Where(p => scope.AllowsGitPat(p.Id)).ToList();
         var keys = scope.AllowsApiKeys ? listing.ApiKeys : new RemoteCredentialApiKeys(false, false, false);
-        return new RemoteCredentialListing(accounts, pats, keys);
+        return new RemoteCredentialListing(accounts, pats, keys,
+            listing.Secrets?.Where(s => scope.AllowsSecret(s.Id)).ToList());
     }
 }
