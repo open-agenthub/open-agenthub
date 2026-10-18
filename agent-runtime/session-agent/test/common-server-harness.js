@@ -165,6 +165,10 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       fs: {
         existsSync(file) { return exists.has(file); },
         writeFileSync(file, data) { writes.push({ file, data }); },
+        appendFileSync(file, data) {
+          writes.push({ file, data });
+          if (harnessOptions.files) harnessOptions.files[file] = (harnessOptions.files[file] || '') + data;
+        },
         mkdirSync() {},
         renameSync(from, to) { renames.push({ from, to }); },
         readFileSync(file) {

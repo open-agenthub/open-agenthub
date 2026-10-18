@@ -139,6 +139,18 @@ function createCommonServer(options = {}) {
   let promptSent = false;
   let firstLaunchedAt = 0;
   let transcriptFile = null;
+  let conversationCleared = false;
+  const conversationStateFile = require('node:path').join(home, driver.stateDir, 'agenthub-conversation.json');
+  try {
+    const saved = JSON.parse(fs.readFileSync(conversationStateFile, 'utf8'));
+    transcriptFile = typeof saved.file === 'string' ? saved.file : null;
+    conversationCleared = saved.cleared === true;
+  } catch {}
+  const conversationHistoryFile = require('node:path').join(home, driver.stateDir, 'agenthub-history.jsonl');
+  try { if (fs.statSync(conversationHistoryFile).size > 0) conversationCleared = true; } catch {}
+  function conversationHistory() {
+    try { return fs.readFileSync(conversationHistoryFile, 'utf8').toString(); } catch { return ''; }
+  }
   let transcriptUploaded = { size: -1, mtimeMs: -1 };
   // False while a resumed session's transcript may still be behind the hub's copy: until
   // catchUpTranscript has settled, the file is neither served to the hub nor uploaded over it.
@@ -245,9 +257,8 @@ function createCommonServer(options = {}) {
     execFile('curl', uploadArgs('/tmp/scrollback.log', scrollPut, insecureStorage), () => done && done());
   }
 
-  // The provider's own conversation file, once the driver can name it. Asked again on every
-  // persistence tick until found: providers create the file on the first turn or pick its
-  // name themselves after starting, so it does not exist when this process comes up.
+  // Rediscover on reads and persistence: /clear and /new replace a conversation without
+  // replacing the PTY, so retaining the first path would freeze both Workspace and resume.
   function locateTranscript() {
     if (!transcriptCaughtUp) return null;
     return findTranscriptFile();
@@ -257,15 +268,38 @@ function createCommonServer(options = {}) {
   // driver that falls back to the newest file since launch (one without a recorded thread id)
   // finds nothing rather than whichever thread happens to be newest in the archive.
   function findTranscriptFile() {
-    if (transcriptFile || typeof driver.findTranscript !== 'function') return transcriptFile;
+    if (typeof driver.findTranscript !== 'function') return transcriptFile;
     let found = null;
     try {
-      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt || now() });
+      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt || now(), pid: term && term.pid });
     } catch {}
     // The path is interpolated into a shell command below; anything a driver could not have
     // derived from a home directory, a slug and a uuid is not a transcript.
     if (typeof found === 'string' && found && !/["'$`\\\s]/.test(found)) {
+      if (found === transcriptFile) return transcriptFile;
+      const previous = transcriptFile || env.AGENTHUB_PREVIOUS_TRANSCRIPT;
+      const switched = previous && previous !== found;
+      if (switched) {
+        let history = '';
+        try {
+          const raw = fs.readFileSync(previous, 'utf8').toString();
+          history = raw.slice(0, raw.lastIndexOf('\n') + 1);
+        } catch {}
+        const boundary = JSON.stringify({ type: 'agenthub_conversation', id: require('node:path').basename(found), text: 'Conversation cleared' }) + '\n';
+        try { fs.appendFileSync(conversationHistoryFile, history + boundary); } catch (error) {
+          console.log('[agent] Conversation history could not be preserved: ' + error.message);
+        }
+      }
+      conversationCleared = conversationCleared || switched || env.AGENTHUB_CONVERSATION_CLEARED === '1';
       transcriptFile = found;
+      transcriptUploaded = { size: -1, mtimeMs: -1 };
+      stateTicksSinceUpload = STATE_ARCHIVE_EVERY_TICKS;
+      try { fs.writeFileSync(conversationStateFile, JSON.stringify({ file: found, cleared: conversationCleared })); } catch {}
+      if (conversationCleared) {
+        const boundary = '\r\n[agent] Conversation cleared.\r\n';
+        remember(boundary);
+        broadcast(boundary);
+      }
       console.log('[agent] Transcript: ' + found);
     }
     return transcriptFile;
@@ -280,7 +314,7 @@ function createCommonServer(options = {}) {
     return newline === -1 ? cut : cut.slice(newline + 1);
   }
 
-  // Uploads the native transcript next to the scrollback: the whole file to S3, the capped
+  // Uploads readable history plus the current native transcript: the whole view to S3, the capped
   // tail to the hub's Postgres copy. Skipped while the file has not changed — most 30-second
   // ticks of an idle session would otherwise re-upload megabytes for nothing.
   function persistTranscript(done) {
@@ -292,10 +326,12 @@ function createCommonServer(options = {}) {
       return done && done();
     }
     transcriptUploaded = { size: stat.size, mtimeMs: stat.mtimeMs };
+    const boundary = conversationHistory();
     const toHub = () => {
+      if (file !== transcriptFile) return done && done();
       if (!callback) return done && done();
       let text;
-      try { text = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return done && done(); }
+      try { text = secretMask.mask(boundary + fs.readFileSync(file, 'utf8')); } catch { return done && done(); }
       fetchImpl(callback + '/transcript', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': token },
@@ -303,7 +339,7 @@ function createCommonServer(options = {}) {
       }).catch(() => {}).finally(() => done && done());
     };
     if (!transcriptPut) return toHub();
-    if (secretMask.active()) return uploadMaskedTranscript(file, toHub);
+    if (secretMask.active() || conversationCleared) return uploadMaskedTranscript(file, toHub, boundary);
     // No shell here: the file name is whatever the CLI chose for its session file, and a quote
     // or `$(` in it would otherwise become part of the command.
     execFile('curl', uploadArgs(file, transcriptPut, insecureStorage), toHub);
@@ -336,11 +372,11 @@ function createCommonServer(options = {}) {
   // The CLI's own file stays as it is: the agent resumes from it, and a value replaced there
   // would be gone from its memory of the conversation. Not through a copy in /tmp, which is a
   // shared, predictable path that would hold the text a second time.
-  function uploadMaskedTranscript(file, done) {
+  function uploadMaskedTranscript(file, done, boundary = '') {
     let finished = false;
     const finish = () => { if (!finished) { finished = true; done(); } };
     let masked;
-    try { masked = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return finish(); }
+    try { masked = boundary + secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return finish(); }
     try {
       const child = spawnProcess('curl', uploadArgs('-', transcriptPut, insecureStorage),
         { stdio: ['pipe', 'ignore', 'ignore'] });
@@ -436,6 +472,10 @@ function createCommonServer(options = {}) {
         secretMask.refresh();
         const local = secretMask.mask(restored.toString('utf8'));
         if (typeof stored !== 'string' || stored.length <= local.length) return settle('archive is current');
+        // The owner's readable history includes previous contexts. Only the last segment
+        // belongs in the native file the CLI resumes; restoring history would undo /clear.
+        const boundaryAt = stored.lastIndexOf('{"type":"agenthub_conversation"');
+        if (boundaryAt >= 0) stored = stored.slice(stored.indexOf('\n', boundaryAt) + 1);
         if (!stored.startsWith(local)) return settle('hub copy is a different history, kept the archive');
         const extended = Buffer.concat([restored, Buffer.from(stored.slice(local.length), 'utf8')]);
         fs.writeFileSync(file + '.agenthub-tmp', extended);
@@ -1152,36 +1192,46 @@ function createCommonServer(options = {}) {
       fileError(response, 400, 'invalid_offset');
       return;
     }
-    const send = (size, next, body) => {
+    const file = locateTranscript();
+    const segments = [conversationHistoryFile, file].filter(Boolean).map(file => {
+      try { return { file, size: fs.statSync(file).size }; } catch { return { file, size: 0 }; }
+    });
+    const size = segments.reduce((total, segment) => total + segment.size, 0);
+    const send = (next, body) => {
       response.statusCode = 200;
       response.setHeader('Content-Type', 'application/x-ndjson');
+      response.setHeader('X-Transcript-Id', segments[0]?.size ? 'agenthub-history' : file ? require('node:path').basename(file) : '');
       response.setHeader('X-Transcript-Size', String(size));
       response.setHeader('X-Transcript-Next', String(next));
       response.setHeader('Content-Length', body.length);
       response.end(body);
     };
-    const file = locateTranscript();
-    let size;
-    try { size = file ? fs.statSync(file).size : 0; } catch { size = 0; }
-    if (!file || from >= size) return send(size, Math.min(from, size), Buffer.alloc(0));
+    if (from >= size) return send(Math.min(from, size), Buffer.alloc(0));
     const length = Math.min(size - from, MAX_TRANSCRIPT_CHUNK);
     const chunk = Buffer.alloc(length);
     let read = 0;
-    let fd;
-    try {
-      fd = fs.openSync(file, 'r');
-      while (read < length) {
-        const n = fs.readSync(fd, chunk, read, length - read, from + read);
-        if (n <= 0) break;
-        read += n;
+    let start = 0;
+    for (const segment of segments) {
+      let fd;
+      try {
+        if (from + read >= start + segment.size || read >= length) continue;
+        fd = fs.openSync(segment.file, 'r');
+        let position = Math.max(0, from + read - start);
+        while (read < length && position < segment.size) {
+          const count = fs.readSync(fd, chunk, read, Math.min(length - read, segment.size - position), position);
+          if (count <= 0) break;
+          read += count;
+          position += count;
+        }
+      } catch {
+        return send(from, Buffer.alloc(0));
+      } finally {
+        if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+        start += segment.size;
       }
-    } catch {
-      return send(size, from, Buffer.alloc(0));
-    } finally {
-      if (fd !== undefined) try { fs.closeSync(fd); } catch {}
     }
     const whole = chunk.lastIndexOf(0x0a, read - 1) + 1;
-    send(size, from + whole, chunk.subarray(0, whole));
+    send(from + whole, chunk.subarray(0, whole));
   }
 
   async function handleMessageRequest(request, response) {
@@ -1664,6 +1714,11 @@ function createCommonServer(options = {}) {
   // skill directory lists and rarely thinks of searching. A poll rather than a push from the hub: the
   // pod already talks to the hub on its own schedule and nothing has to reach into it, and with
   // the ETag an unchanged library costs one small request per interval.
+  // Discover even without a viewer: a coordinator can clear between persistence ticks.
+  if (typeof driver.findTranscript === 'function') {
+    setIntervalImpl(() => { if (!exited) locateTranscript(); }, 1000);
+  }
+
   const skillsSyncMs = skillsSyncIntervalMs(env);
   if (skillsSyncMs > 0 && callback && token) {
     const skills = require('./skills');

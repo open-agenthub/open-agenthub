@@ -22,6 +22,8 @@ public sealed record ConversationPage(
     IReadOnlyList<TranscriptEntry> Entries,
     string Text)
 {
+    public string? ConversationId { get; init; }
+
     public const string NativeSource = "native";
     public const string ScrollbackSource = "scrollback";
     public const int DefaultMaxEntries = 500;
@@ -36,7 +38,10 @@ public sealed record ConversationPage(
         var take = Math.Min(length - start, limit);
         return new ConversationPage(sessionId, phase, TranscriptPage.StillRunning(phase), NativeSource,
             start, start + take, length, take < length - start,
-            entries.Skip(start).Take(take).ToList(), "");
+            entries.Skip(start).Take(take).ToList(), "")
+        {
+            ConversationId = entries.FirstOrDefault(entry => entry.Role == "boundary")?.Tool
+        };
     }
 
     public static ConversationPage FromScrollback(string sessionId, string phase, string text, int? offset, int? maxChars)

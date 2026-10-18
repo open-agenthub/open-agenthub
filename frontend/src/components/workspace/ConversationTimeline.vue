@@ -52,7 +52,8 @@ watch([() => props.items, query], async () => {
         </div>
         <p v-else-if="!visible.length" class="empty">No matching messages.</p>
         <template v-for="item in visible" :key="item.index">
-          <WorkLog v-if="item.role === 'tool' || item.role === 'result'" :label="item.label" :state="item.role === 'result' ? 'output' : ''">
+          <div v-if="item.role === 'boundary'" class="conversation-boundary" role="separator" data-conversation-boundary>{{ item.text }}</div>
+          <WorkLog v-else-if="item.role === 'tool' || item.role === 'result'" :label="item.label" :state="item.role === 'result' ? 'output' : ''">
             <pre>{{ item.text }}</pre>
           </WorkLog>
           <article v-else class="message" :class="'message-' + item.role" :data-workspace-role="item.role">
@@ -77,6 +78,8 @@ watch([() => props.items, query], async () => {
 .conversation-toolbar input:focus { border-color: var(--border-2); background: var(--panel); }
 .conversation-scroll { flex: 1; overflow-y: auto; min-height: 0; }
 .timeline { display: flex; flex-direction: column; max-width: 840px; margin: auto; padding: 16px 32px 36px; gap: 12px; }
+.conversation-boundary { display: flex; align-items: center; gap: 12px; color: var(--muted-3); font-size: 12px; padding: 16px 0; }
+.conversation-boundary::before, .conversation-boundary::after { content: ""; flex: 1; border-top: 1px solid var(--border-2); }
 .message { min-width: 0; font-size: 14px; line-height: 1.7; padding: 10px 0; }
 .message-label { display: block; margin-bottom: 8px; color: var(--muted-3); font-size: 11px; font-weight: 600; }
 .message-user { align-self: flex-end; max-width: 88%; padding: 14px 18px; border: 1px solid var(--border); background: var(--panel-2); border-radius: 16px; }

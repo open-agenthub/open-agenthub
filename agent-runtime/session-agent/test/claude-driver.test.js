@@ -351,3 +351,31 @@ test('Claude image preserves runtime and custom-image injection paths', () => {
   assert.match(dockerfile, /claude --version 2>&1 \| grep -Fq "\$CLAUDE_CODE_VERSION"/);
   assert.match(dockerfile, /\/usr\/local\/bin\/claude/);
 });
+
+test('Claude follows the launched process after clear before its new transcript exists', () => {
+  const home = fs.mkdtempSync('/tmp/agenthub-claude-switch-');
+  const cwd = '/workspace/repo';
+  const first = '11111111-1111-1111-1111-111111111111';
+  const second = '22222222-2222-2222-2222-222222222222';
+  const env = environment({ HOME: home, AGENTHUB_CLAUDE_SESSION_ID: first });
+  fs.mkdirSync(path.join(home, '.claude', 'sessions'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'sessions', '42.json'), JSON.stringify({ pid: 42, cwd, sessionId: second }));
+  const file = driver.findTranscript({ env, home, cwd, fs, pid: 42 });
+  assert.ok(file.endsWith('/' + second + '.jsonl'));
+  env.AGENTHUB_RESUME = '1';
+  env.AGENTHUB_STATE_RESTORED = '1';
+  assert.deepEqual(driver.buildCommand(env, true).args, ['--resume', second]);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('restored Claude discovery uses the cleared ID before its process has launched', () => {
+  const home = fs.mkdtempSync('/tmp/agenthub-claude-restore-');
+  const id = '22222222-2222-2222-2222-222222222222';
+  const root = path.join(home, '.claude');
+  const file = path.join(root, 'projects', '-workspace-repo', id + '.jsonl');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{}\n');
+  fs.writeFileSync(path.join(root, 'agenthub-session-id'), id + '\n');
+  assert.equal(driver.findTranscript({ env: environment({ AGENTHUB_RESUME: '1', AGENTHUB_CLAUDE_SESSION_ID: 'original' }), home, cwd: '/workspace/repo', fs }), file);
+  fs.rmSync(home, { recursive: true, force: true });
+});

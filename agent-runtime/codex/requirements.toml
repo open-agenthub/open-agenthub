@@ -37,14 +37,6 @@ type = "command"
 command = "node /opt/session-agent/codex/fleet-turn-hook.js"
 timeout = 10
 
-# A prompt was submitted, so the agent works and is not waiting at its prompt.
-[[hooks.UserPromptSubmit]]
-
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command = "node /opt/session-agent/codex/fleet-turn-hook.js"
-timeout = 10
-
 # Records that the turn changed something, so the reminder below stays off a turn that only
 # answered a question.
 [[hooks.PostToolUse]]
@@ -82,3 +74,26 @@ type = "command"
 command = "node /opt/session-agent/codex/fleet-turn-hook.js"
 timeout = 15
 statusMessage = "Checking for fleet messages"
+
+# /new changes the thread without replacing the PTY. The lifecycle payload identifies the
+# user's rollout; helper sessions have no transcript and are filtered by the hook.
+[[hooks.SessionStart]]
+
+[[hooks.SessionStart.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/conversation-hook.js"
+timeout = 10
+
+[[hooks.UserPromptSubmit]]
+
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/conversation-hook.js"
+timeout = 10
+
+# A prompt was submitted, so the agent works and is not waiting at its prompt
+# (docs/priority-messages.md).
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/fleet-turn-hook.js"
+timeout = 10

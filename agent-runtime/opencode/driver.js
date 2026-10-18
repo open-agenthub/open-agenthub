@@ -29,6 +29,13 @@ function prepare(env) {
   return undefined;
 }
 
+function rememberedSession(env) {
+  try {
+    const id = fs.readFileSync(path.join(env.HOME || '/home/agent', '.opencode', 'agenthub-session-id'), 'utf8').trim();
+    return /^ses_[A-Za-z0-9]+$/.test(id) ? id : null;
+  } catch { return null; }
+}
+
 function buildCommand(env, allowResume) {
   // The default model in the user config was chosen for the login the session started with. A
   // login swapped in by the hub may be for another provider, and a Go model left in the config
@@ -48,7 +55,10 @@ function buildCommand(env, allowResume) {
 
   if (mode === 'interactive') {
     const args = [];
-    if (restoredResume) args.push('--continue');
+    if (restoredResume) {
+      const id = rememberedSession(env);
+      args.push(...(id ? ['--session', id] : ['--continue']));
+    }
     // The TUI submits --prompt as the first message, so a session created by an API arrives with
     // its task under way. Not on a resume, where the conversation already holds it.
     if (prompt && !restoredResume) args.push('--prompt', prompt);
@@ -73,7 +83,7 @@ function isResumeCommand(command) {
   if (!command || !Array.isArray(command.args)) return false;
   if (command.cmd === 'bash' && command.args[0] !== LOGIN_SCRIPT && command.args[0] !== REFRESH_SCRIPT) return false;
   if (command.cmd !== 'bash' && command.cmd !== 'opencode') return false;
-  return command.args.includes('--continue');
+  return command.args.includes('--continue') || command.args.includes('--session');
 }
 
 // The canonical auth.json the entrypoint links OpenCode's data directory to, which is also
