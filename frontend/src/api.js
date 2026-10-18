@@ -108,6 +108,7 @@ export const api = {
   listSessions: () => req('GET', '/sessions'),
   getSession: (id) => req('GET', `/sessions/${id}`),
   sessionCommands: id => req('GET', `/sessions/${encodeURIComponent(id)}/commands`),
+  terminalAttachments: (id, fileIds) => req('POST', `/sessions/${encodeURIComponent(id)}/terminal-attachments`, { fileIds }),
   workspaceDiff: (id, comparison = 'base') => req('GET', `/sessions/${encodeURIComponent(id)}/diff?comparison=${encodeURIComponent(comparison)}`),
   sessionFileCapabilities: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/capabilities`),
   reserveSessionFile: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/files/reserve`, data),

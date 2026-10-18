@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const modelEndpoint = require('../common/model-endpoint');
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function prepare(env) {
   const apiKey = env.ANTHROPIC_API_KEY;
@@ -91,7 +92,13 @@ function buildCommand(env, allowResume) {
   const uiMode = (env.AGENTHUB_UI_MODE || 'terminal').toLowerCase();
   const prompt = env.AGENTHUB_PROMPT || '';
   const systemPrompt = env.AGENTHUB_SYSTEM_PROMPT || '';
-  const sessionId = env.AGENTHUB_CLAUDE_SESSION_ID || '';
+  let sessionId = env.AGENTHUB_CLAUDE_SESSION_ID || '';
+  if (allowResume && env.AGENTHUB_RESUME === '1') {
+    try {
+      const saved = fs.readFileSync(path.join(env.HOME || '/home/agent', '.claude', 'agenthub-session-id'), 'utf8').trim();
+      if (UUID.test(saved)) { sessionId = saved; env.AGENTHUB_CLAUDE_SESSION_ID = saved; }
+    } catch {}
+  }
   const args = [];
 
   if (env.AGENTHUB_MCP_CONFIG) args.push('--mcp-config', env.AGENTHUB_MCP_CONFIG);
@@ -151,18 +158,39 @@ function isMissingResume(output, exitCode) {
   return exitCode !== 0 && output.includes('No conversation found');
 }
 
-// Claude Code files a conversation under the directory it was started in, with every character
-// outside [A-Za-z0-9] replaced by a dash, and names it after the session id. Both halves are
-// fixed by us — the id through --session-id/--resume, the directory through the PTY's cwd — so
-// the path is known in advance rather than discovered; it just does not exist until the first
-// turn has been written. Nothing is persisted from the archive on a resume here either: the
-// same file is appended to, because --resume keeps the id.
-function findTranscript({ env, home, cwd, fs: fileSystem }) {
-  const sessionId = env.AGENTHUB_CLAUDE_SESSION_ID || '';
+// The launch ID finds restored state before the CLI starts; its process record is the
+// authority afterwards because /clear changes the ID while keeping the same process.
+function findTranscript({ env, home, cwd, fs: fileSystem, pid }) {
+  let sessionId = env.AGENTHUB_CLAUDE_SESSION_ID || '';
+  if (env.AGENTHUB_RESUME === '1') {
+    try {
+      const saved = fileSystem.readFileSync(path.join(home, '.claude', 'agenthub-session-id'), 'utf8').trim();
+      if (UUID.test(saved)) sessionId = saved;
+    } catch {}
+  }
+  // The running CLI updates its process record on /clear, before the new transcript exists.
+  // Looking up this PID avoids adopting a shell-tab conversation or a subagent's newer file.
+  if (pid) {
+    try {
+      const active = JSON.parse(fileSystem.readFileSync(path.join(home, '.claude', 'sessions', pid + '.json'), 'utf8'));
+      if (active.pid === pid && active.cwd === cwd && UUID.test(active.sessionId)) {
+        if (sessionId && sessionId !== active.sessionId) {
+          env.AGENTHUB_CONVERSATION_CLEARED = '1';
+          env.AGENTHUB_PREVIOUS_TRANSCRIPT = path.join(home, '.claude', 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'), sessionId + '.jsonl');
+        }
+        sessionId = active.sessionId;
+        const marker = path.join(home, '.claude', 'agenthub-session-id');
+        let saved;
+        try { saved = fileSystem.readFileSync(marker, 'utf8').trim(); } catch {}
+        if (saved !== sessionId) fileSystem.writeFileSync(marker, sessionId + '\n');
+        env.AGENTHUB_CLAUDE_SESSION_ID = sessionId;
+      }
+    } catch {}
+  }
   if (!sessionId) return null;
   const slug = cwd.replace(/[^A-Za-z0-9]/g, '-');
   const file = path.join(home, '.claude', 'projects', slug, sessionId + '.jsonl');
-  return fileSystem.existsSync(file) ? file : null;
+  return pid || fileSystem.existsSync(file) ? file : null;
 }
 
 // The CLI's own words when a plan window is used up, read from the string table of
@@ -189,6 +217,9 @@ function resetFromText(text, from) {
 }
 
 module.exports = {
+  contextClearCommand: '/clear',
+  turnHooks: true,
+  fleetNextTurn: false,
   slashCommands: require('./slash-commands'),
   name: 'Claude',
   stateDir: '.claude',

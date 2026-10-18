@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 $fixturePath = Join-Path $PSScriptRoot "fixtures/codex-container"
 $policyFixturePath = Join-Path $PSScriptRoot "../fixtures/codex-policy-hook-smoke.js"
 $notifyFixturePath = Join-Path $PSScriptRoot "../fixtures/codex-turn-notify-smoke.js"
+$fleetFixturePath = Join-Path $PSScriptRoot "../fixtures/codex-fleet-turn-smoke.js"
 
 function Invoke-Docker {
     param([string[]]$Arguments)
@@ -43,6 +44,7 @@ Invoke-Docker @(
 $mount = "type=bind,source=$fixturePath,target=/fixtures,readonly"
 $policyFixtureMount = "type=bind,source=$policyFixturePath,target=/policy-smoke.js,readonly"
 $notifyFixtureMount = "type=bind,source=$notifyFixturePath,target=/notify-smoke.js,readonly"
+$fleetFixtureMount = "type=bind,source=$fleetFixturePath,target=/fleet-smoke.js,readonly"
 $authFixture = Join-Path $fixturePath "subscription-auth.json"
 $mcpFixture = Join-Path $fixturePath "mcp.json"
 $authMount = "type=bind,source=$authFixture,target=/secrets/codex/auth.json,readonly"
@@ -66,6 +68,11 @@ Invoke-Docker @(
     "run", "--rm", "--mount", $notifyFixtureMount,
     "--entrypoint", "node", $Image,
     "/notify-smoke.js"
+)
+Invoke-Docker @(
+    "run", "--rm", "--mount", $fleetFixtureMount,
+    "--entrypoint", "node", $Image,
+    "/fleet-smoke.js"
 )
 
 $previousErrorAction = $ErrorActionPreference

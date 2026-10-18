@@ -91,8 +91,8 @@ They cover terminal mode, a runtime returning 404, busy admission, pending quest
 404, maintenance contention, configured pause grace, old-pod disappearance before create, the
 current image and resume environment, missing archives, and restart restrictions. Cluster responses
 and storage are fixtures in these tests; they prove backend ordering rather than actual scheduling.
-The backend suite passed 1,967 tests; 148 database-dependent tests were skipped without Postgres.
-The full frontend suite passed (767 tests) and its production build passed.
+The backend suite passed 1,995 tests; 149 database-dependent tests were skipped without Postgres.
+The full frontend suite passed (808 tests) and its production build passed.
 
 The pinned CLI 2.1.287 also passed the real common transport proof again. An additional run held a
 model turn open in both chat and terminal modes, confirmed drain rejection, sent SIGTERM through ordinary manual pause, and restored

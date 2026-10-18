@@ -96,6 +96,10 @@ export class AgentHubClient {
     return { deleted: true };
   }
 
+  clearContext(id, followUp) {
+    return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(id)}/context-clear`, { followUp });
+  }
+
   /** Continues a finished autonomous session interactively (docs/session-mode-conversion.md). */
   convert(id, body = {}) {
     return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(id)}/convert`,

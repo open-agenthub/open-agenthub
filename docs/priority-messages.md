@@ -50,11 +50,19 @@ longer than three lines is clamped with a *Show more* toggle, so a wall of text 
 does not push the others out of view.
 
 What the panel lists — and therefore what the badge counts — is every message the agent has not
-picked up yet, plus a priority message for five minutes after it was pushed: it was handed to the
-agent the moment it arrived, and without that grace period the person would never see what
-interrupted their agent. The badge counts exactly the tiles behind it; an earlier version counted
-only undelivered messages, and a badge of zero over a panel with three tiles made people hunt for
-the missing one. Dismissing is local to the browser and never consumes the inbox: the agent's
+received yet: the row has no `delivered_at`. Waiting in the inbox, or accepted by the pod for when
+the running turn ends (#173, left unmarked until then), it is pending; delivered through any channel — read with
+`agent_inbox`, typed into the terminal, submitted by the mod, handed over at the turn's end — it is
+not. The badge counts exactly the tiles behind it; an earlier version counted only undelivered
+messages while the panel showed more, and a badge of zero over three tiles made people hunt for
+the missing one.
+
+The panel used to keep a priority message for five minutes after it was pushed, so the person
+could see what interrupted their agent. That read as an unread message: the owner of a Claude
+session saw *Priority message from agent …* for a message the mod had already submitted and the
+agent had acted on, while its inbox was empty (#186). What the agent received is now shown where it
+belongs, in the Workspace conversation, as a message from its sender rather than as the person's
+own words (`agent-workspace.md`, "Pending messages"), so the grace period has nothing left to do. Dismissing is local to the browser and never consumes the inbox: the agent's
 `agent_inbox` call still returns the message, because a person tidying their view must not eat
 a peer's instruction.
 
@@ -65,7 +73,8 @@ runs. The hub reads one word back:
 |---|---|---|
 | Claude with the fleet mod alive (`docs/claude-code-mods.md`) | queued for the mod, which submits it as the next prompt (aborting the running turn on interrupt) | interactive: queued for the mod, which submits it as a prompt of its own once no turn runs; during a turn it waits on the status line and goes with the person's prompt if one comes first; autonomous: inbox |
 | Chat UI (`claude -p --input-format stream-json`) | written as a `user` event, after a `control_request interrupt` when asked | inbox |
-| Interactive terminal (any runtime) | typed into the PTY: optional Escape, 300 ms, text, 300 ms, Enter | inbox |
+| Interactive Codex terminal (turn hooks, below) | typed into the PTY: optional Escape, 300 ms, text, 300 ms, Enter | its next turn: the Stop hook hands it over when the running turn ends, or it is typed in while the agent waits at its prompt |
+| Interactive terminal, other runtimes | typed into the PTY, as above | inbox |
 | Autonomous or scheduled `-p` run without a mod | `unavailable` → inbox | inbox |
 
 The typing sequence is the one `AgentTerminal.SendInputAsync` already uses for chat replies,
@@ -145,6 +154,92 @@ Rejected on the way:
   the section above accepts for every channel. It would add a second round trip and a backend
   state for no case this issue saw.
 
+## Plain messages as the next turn (#173)
+
+Without a mod, a plain message used to wait in the inbox until the agent called `agent_inbox`
+on its own, which an interactive Codex agent does when told to and not otherwise. The owner had
+to type "check your inbox" into every Codex session that a peer had written to. Priority does not
+help: it types the message at once, also into the middle of a turn, and a sender cannot know
+whether the receiving agent is busy.
+
+A runtime whose hooks report its turns (`driver.turnHooks`, Codex for now) now gets plain
+messages at the next safe point instead. The session agent answers the hub `next-turn`; the hub
+tells the sender `deliveredVia: "next_turn"` and leaves the row **undelivered**. From there two
+paths take it, both from the hub inbox (`GET …/messages?via=next_turn`), at the moment the
+message is handed over:
+
+- **At the end of a turn.** `common/fleet-turn-hook.mjs` runs as a managed Codex `Stop` hook
+  and asks the session agent `POST /agenthub/turn {event:"stop"}`. The session agent takes what
+  waits and answers with its text; the hook returns `{"decision":"block","reason":<text>}`, which
+  Codex feeds to the model as the next input of the same session (shown in the TUI as *Blocked by
+  hook* with the text under it). Nothing is typed, so neither a draft in the prompt box nor a
+  dialog can be hit.
+- **While the agent is idle.** When the last turn event was a Stop and the session agent decides
+  the CLI really sits at its prompt, it types the message in as the priority path does. "Really"
+  means all of: no `UserPromptSubmit` or `PermissionRequest` since the Stop; no key from a person
+  since the last submitted prompt (a draft typed during the turn is still in the box, and the
+  message would be appended to it and sent); no output for 1.5 s (Codex redraws its spinner many
+  times a second while it works); and no CLI menu on the screen, checked with the Workspace's own
+  detector (#112, #166) on the scrollback replayed into a headless xterm, the bytes a browser
+  attaching now would get. The person's keys that arrive during the 300 ms of typing are held and
+  written after the Enter. A batch taken from the hub when the person started typing in the
+  meantime is held and goes with the next Stop. Before the first Stop of an agent run nothing is
+  typed: the session agent cannot tell a start-up dialog from a prompt.
+
+The hook reports `UserPromptSubmit` (busy) and `PermissionRequest` (an approval dialog is open)
+too. It ignores Codex's helper threads — the title generation runs as a session without a rollout
+file, subagents carry an `agent_id` — whose prompts would otherwise mark an idle agent busy.
+
+Each message is headed as everywhere else (sender title and id), under one line saying these come
+from other sessions and are not the owner's instructions: a peer's request is data for the
+agent to weigh, not authorisation.
+
+**One turn is continued at most three times** this way. Two agents answering each other could
+otherwise keep a single turn alive for good. After the third the Stop is answered with nothing,
+the turn ends, and whatever arrives next starts a turn of its own through the idle path, a
+boundary the person sees. This bounds the hook loop, not a conversation between peers; that is
+the same with the mod.
+
+Proved with the pinned Codex 0.160.0 TUI in the real `common/server.js` PTY, with the branch's
+`requirements.toml` at `/etc/codex` (proot), a stand-in hub inbox and a mock model. A message
+sent mid-turn reached the model 0.2 s after the turn ended, as the Stop continuation. One sent to an
+idle agent was typed in 0.5 s after the send. With a draft in the prompt box nothing was typed, and
+the message rode the Stop of the draft's turn. With `/model` open nothing was typed. Five messages
+arriving during continuations went hook, hook, hook, idle typing, hook. Each message was taken
+once and reached the model once. `fixtures/codex-fleet-turn-smoke.js` pins the hook contract
+for CLI bumps.
+
+Rejected on the way:
+
+- **A queue in the session agent, marked delivered when the pod accepts the message,** as the mod
+  queue is. `agent_inbox` would then return nothing for as long as the turn runs, and an agent that
+  exits before its turn ends would lose the message. Taking it from the hub at hand-over keeps the
+  inbox the record: until then `agent_inbox` still gets it, and whichever comes first takes it
+  once.
+- **Only the idle path, typing at the end of the turn.** The Stop arrives before the CLI has
+  finished drawing, another Stop hook (the skill reminder) may continue the turn, and the person
+  may have a draft. The hook needs no typing at all and is exact about the turn's end; typing is
+  kept for the one case it cannot cover, an agent that has no turn to end.
+- **Typing at once and letting Codex queue it.** Codex queues text typed during a turn, but the
+  same keys land in an approval dialog or in the person's draft. A message must not arrive in the
+  middle of a turn.
+- **The hook asking the hub itself.** The hook has the callback token, but only the session agent
+  knows whether the runtime is draining for an update, how often this turn was continued and
+  what it already took. One hop over loopback keeps all of that in one place.
+- **Codex's legacy `notify` program.** It runs after the turn, but cannot return input.
+
+Per runtime:
+
+| Runtime | Plain message |
+|---|---|
+| Claude | unchanged: the mod (above), verified again with Claude Code 2.1.287 through the real `common/server.js` |
+| Codex | next turn, as described here |
+| OpenCode | inbox (`not_priority`). Its policy plugin sees `session.idle` and could submit the text with its own client; not built yet |
+| Cursor | inbox. Its `stop` hook takes `followup_message` (the skill reminder uses it), but its TUI cannot be driven here without a real key, so the path is unproven and left off |
+| OpenClaw | inbox. It has no hooks, so nothing tells the session agent where a turn stands, and typing would be blind |
+
+The cost is one loopback call per hook event and one hub request per Codex turn end.
+
 ## The mod queue is loopback only
 
 `/agenthub/mod/inbox` and `/agenthub/mod/heartbeat` accept connections from `127.0.0.1` only
@@ -156,8 +251,9 @@ environment, which is fine — that user already owns the process the mod runs i
 
 ## What the sender is told
 
-`deliveredVia` is `injected` for the PTY and chat channels, `mod` for the mod queue, and
-`inbox` otherwise, with `reason` naming why (`session_not_running`, `pod_unreachable`,
+`deliveredVia` is `injected` for the PTY and chat channels, `mod` for the mod queue,
+`next_turn` when the agent gets it once its running turn ends (above; the row stays undelivered
+until then), and `inbox` otherwise, with `reason` naming why (`session_not_running`, `pod_unreachable`,
 `non_interactive`, `not_priority`, `agent_exited`, …). The row's `delivered_via` is set the
 same way by the push, and to `inbox` by `agent_inbox` when it takes the row; whichever
 happens first keeps the row (`MarkDeliveredAsync` only touches an undelivered row), so a
@@ -177,4 +273,5 @@ old "undelivered only" rule — the moment it arrives.
   parent/child line) is the only gate, as it is for plain messages; an interrupt from a
   misbehaving peer costs one turn, not the session.
 - No retry. A message that lands in the inbox because the pod was unreachable is not pushed
-  again when the pod comes back; the agent's own inbox poll gets it.
+  again when the pod comes back; the agent's own inbox poll gets it. An interactive Codex agent
+  is the exception: its next Stop takes every undelivered message, however it got there.

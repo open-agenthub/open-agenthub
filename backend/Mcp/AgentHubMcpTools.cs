@@ -21,7 +21,8 @@ public sealed class AgentHubMcpTools(
     ISessionService sessions,
     ILogger<AgentHubMcpTools> logger,
     ISessionMessageStore? messages = null,
-    ISessionMessageDelivery? delivery = null)
+    ISessionMessageDelivery? delivery = null,
+    ISessionContextClear? contextClear = null)
 {
     /// <summary>The calling user; see <see cref="McpCallerIdentity"/>.</summary>
     private string Owner => McpCallerIdentity.Owner(http);
@@ -273,6 +274,20 @@ public sealed class AgentHubMcpTools(
         }
     }
 
+    [McpServerTool(Name = "context_clear")]
+    [Description("As the owner, schedule clearing a running session after its current turn ends and no CLI menu is open. "
+        + "followUp becomes its first new message; include a short handover of current state and open tasks. "
+        + "Workspace keeps previous history, and memory and skills stay. Only the owner may trigger this operation.")]
+    public async Task<ContextClearOutcome> ClearContext(string sessionId, string followUp, CancellationToken ct = default)
+    {
+        var session = await sessions.GetSessionAsync(Owner, sessionId, ct) ?? throw new McpException("session_not_found");
+        if (session.Owner != Owner) throw new McpException("session_owner_required");
+        if (contextClear is null) throw new McpException("context_clear_unavailable");
+        try { return await contextClear.ScheduleAsync(session, new ContextClearRequest(followUp), ct); }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or HttpRequestException or TaskCanceledException)
+        { throw new McpException(error is HttpRequestException or TaskCanceledException ? "context_clear_unavailable" : error.Message); }
+    }
+
     [McpServerTool(Name = "session_convert")]
     [Description("Continue a finished or paused Autonomous session as an Interactive one, so a person "
                  + "can take the conversation on. Claude and Codex keep the conversation; Cursor and "
@@ -332,7 +347,7 @@ public sealed class AgentHubMcpTools(
     [Description("Send a message or task to one of your agents. \"to\" is a session id or a unique title; "
                  + "scope the lookup with projectId. By default the agent reads it via its in-session "
                  + "agent_inbox tool; with priority the message is pushed straight into the running agent's "
-                 + "prompt. deliveredVia in the result says where it went: inbox, injected or mod.")]
+                 + "prompt. deliveredVia in the result says where it went: inbox, injected, mod or next_turn (handed over when its current turn ends).")]
     public async Task<AgentMessageResult> SendToAgent(
         [Description("Session id or unique agent title.")] string to,
         [Description("Message body, 1..4000 characters.")] string message,

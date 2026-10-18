@@ -28,11 +28,20 @@ function validateDriver(driver) {
   for (const key of ['buildCommand', 'isResumeCommand', 'isMissingResume', 'prepare']) {
     if (typeof driver[key] !== 'function') throw new Error('Agent driver ' + key + ' must be a function');
   }
+  if (driver.contextClearCommand !== undefined && !/^\/[a-z][a-z-]*$/.test(driver.contextClearCommand)) {
+    throw new Error('Agent driver contextClearCommand must be a native slash command');
+  }
   // Optional: findTranscript({ env, home, cwd, fs, launchedAt }) names the provider's own
   // conversation file (Claude's project JSONL, Codex's rollout) once it exists, or returns
   // null. Runtimes without a readable native transcript simply leave it out.
   if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
     throw new Error('Agent driver findTranscript must be a function');
+  }
+  // Optional: terminalAttachmentPath(file, { env, home, fs }) returns the path a materialized
+  // attachment is pasted into the CLI as, for a CLI that reads images only from its own
+  // directories. Without it the materialized path itself is pasted.
+  if (driver.terminalAttachmentPath !== undefined && typeof driver.terminalAttachmentPath !== 'function') {
+    throw new Error('Agent driver terminalAttachmentPath must be a function');
   }
   // Optional: the pinned CLI's slash commands as { cli, builtins: [{ name, description? }],
   // sources?: fn } for the Workspace composer's completion (common/slash-commands.js).
@@ -51,6 +60,12 @@ function validateDriver(driver) {
   // renewed can be installed without restarting it (PUT /agenthub/credentials/refresh).
   if (driver.reloadsCredentialLive !== undefined && typeof driver.reloadsCredentialLive !== 'boolean') {
     throw new Error('Agent driver reloadsCredentialLive must be a boolean when present');
+  }
+  // Optional: true when the runtime's hooks report its turns to POST /agenthub/turn
+  // (common/fleet-turn-hook.mjs), so plain fleet messages can wait for the turn's end instead of
+  // for agent_inbox (docs/priority-messages.md).
+  if (driver.turnHooks !== undefined && typeof driver.turnHooks !== 'boolean') {
+    throw new Error('Agent driver turnHooks must be a boolean when present');
   }
   // Optional: the CLI's own usage-limit notices as `{ pattern: RegExp, resetsAt?: fn }`
   // (common/limit-detector.js). A runtime whose CLI reports limits some other way leaves it out.

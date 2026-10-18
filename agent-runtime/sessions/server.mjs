@@ -131,6 +131,15 @@ register('account_switch', {
   })
 }, async ({ sessionId, credentialId }) => text(sanitizeSession(await client.switchAccount(sessionId, credentialId))));
 
+register('context_clear', {
+  description: 'Schedule clearing this session after the current turn ends and no CLI menu is open, '
+    + 'then deliver followUp as the first message of the fresh conversation. Put a short self-handover '
+    + '(current state and open tasks) in followUp so you can continue. The result acknowledges scheduling: '
+    + 'finish this turn naturally. Previous turns remain readable in Workspace; memory and skills stay. '
+    + 'This tool cannot target a child or another session.',
+  inputSchema: z.object({ followUp: z.string().min(1).max(16_000) }).strict()
+}, async ({ followUp }) => text(await client.clearContext(followUp)));
+
 register('session_get', {
   description: 'Get a descendant session by id.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
@@ -182,7 +191,7 @@ register('agent_send', {
     + 'unique agent title (see agents_list); an ambiguous title fails with the candidate list. '
     + 'By default the peer reads it via its agent_inbox tool. priority pushes it straight into the '
     + 'peer\'s running prompt; interrupt also stops the peer\'s current work first (implies priority). '
-    + 'The result\'s deliveredVia says where it went: inbox, injected or mod.',
+    + 'The result\'s deliveredVia says where it went: inbox, injected, mod or next_turn (handed over when its current turn ends).',
   inputSchema: z.object({
     to: z.string().min(1).max(256),
     message: z.string().min(1).max(4000),

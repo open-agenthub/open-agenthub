@@ -2,17 +2,39 @@
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { workspaceDrafts as drafts, workspaceQueues as queues } from '../../lib/session-drafts.js'
 import { completeCommand, leadingCommand, rankCommands, slashQuery } from '../../lib/slash-commands.js'
+import { api } from '../../api.js'
+import { createAttachmentQueue, terminalSafeFile } from '../../lib/attachments.js'
+import ChatAttachments from '../ChatAttachments.vue'
 // enabled: the agent takes input now. queueable: it will soon — the pod is starting or resuming,
 // or the agent socket is not connected yet — so a message is held and sent once enabled (#115).
 // loadCommands: resolves to the agent's slash commands ({ commands: [...] }); absent, or failing
 // (an older runtime, a shared link), the composer offers no completion and still sends.
-const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function })
+// attach: resolves uploaded file ids to the paths the session agent materialized them at, which
+// send then pastes ahead of the text (#148); absent (a shared link), files cannot be attached.
+const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function, attach: Function })
+// sent: a message reached the agent's terminal; the view follows it until the agent takes it (#153).
+const emit = defineEmits(['sent'])
 const text = ref(drafts.get(props.sessionId) || '')
 const input = ref(null)
 const pending = ref(false)
 const error = ref('')
 const queued = ref(queues.get(props.sessionId) || [])
 const accepting = computed(() => props.enabled || props.queueable)
+const fileInput = ref(null)
+const attachmentVersion = ref(0)
+let attachments = makeAttachmentQueue(props.sessionId)
+const attachmentItems = computed(() => { void attachmentVersion.value; return attachments.items.slice() })
+const readyAttachments = computed(() => attachmentItems.value.filter(item => item.state === 'ready'))
+const attachmentsSettled = computed(() => attachmentItems.value.every(item => item.state === 'ready'))
+const canAttach = computed(() => accepting.value && !!props.attach && !pending.value)
+const hasContent = computed(() => !!text.value.trim() || readyAttachments.value.length > 0)
+function makeAttachmentQueue(sessionId) {
+  return createAttachmentQueue({ sessionId, api, onChange: () => { attachmentVersion.value += 1 } })
+}
+// What a queued message keeps of an attachment: the stored file, not the upload in progress.
+function attachmentRecord(item) {
+  return { id: item.id, name: item.name, mimeType: item.mimeType, size: item.size }
+}
 let generation = 0
 let flushing = false
 function saveQueue(id = props.sessionId) {
@@ -26,6 +48,10 @@ watch(() => props.sessionId, (id, previous) => {
   commandsLoadedAt = 0
   text.value = drafts.get(id) || ''
   queued.value = queues.get(id) || []
+  // Uploaded files stay in the session's Files; only the rows go.
+  void attachments.cancelAll()
+  attachments = makeAttachmentQueue(id)
+  attachmentVersion.value += 1
   pending.value = false
   error.value = ''
   void flush()
@@ -46,7 +72,14 @@ async function flush() {
       const [next] = queued.value
       pending.value = true
       try {
-        await props.send(next.text)
+        const files = next.attachments || []
+        if (files.length) {
+          // A failure here wrote nothing, but materializing again would not help a refusal
+          // either: the message goes back to the draft with its files and the reason.
+          let paths
+          try { paths = await props.attach(files.map(file => file.id)) } catch (e) { throw Object.assign(e, { retryable: false }) }
+          await props.send(next.text, { paths })
+        } else await props.send(next.text)
       } catch (e) {
         if (generation !== current || e?.retryable) return
         queued.value = queued.value.filter(item => item !== next)
@@ -58,6 +91,7 @@ async function flush() {
       }
       if (generation !== current) return
       queued.value = queued.value.filter(item => item !== next)
+      emit('sent', next.text)
     }
   } finally {
     flushing = false
@@ -79,6 +113,8 @@ watch(accepting, (now, before) => {
 function restoreToDraft(items) {
   const parts = [...items.map(item => item.text), text.value].filter(part => part.trim())
   text.value = parts.join('\n\n')
+  const files = items.flatMap(item => item.attachments || [])
+  if (files.length) attachments.adopt(files)
 }
 function withdraw(item) {
   queued.value = queued.value.filter(entry => entry !== item)
@@ -90,14 +126,16 @@ function editQueued(item) {
   input.value?.focus()
 }
 async function submit() {
-  if (pending.value || !text.value.trim()) return
+  if (pending.value || !hasContent.value || !attachmentsSettled.value) return
+  const files = readyAttachments.value.map(attachmentRecord)
   if (!props.enabled) {
     if (!props.queueable) return
     // Ids only key the list; they are unique within the session's queue, which outlives a mount.
     const id = Math.max(0, ...queued.value.map(item => item.id)) + 1
-    queued.value = [...queued.value, { id, text: text.value }]
+    queued.value = [...queued.value, { id, text: text.value, ...(files.length ? { attachments: files } : {}) }]
     saveQueue()
     text.value = ''
+    attachments.clearReady()
     error.value = ''
     return
   }
@@ -106,10 +144,33 @@ async function submit() {
   pending.value = true
   error.value = ''
   try {
-    await props.send(value)
+    if (files.length) await props.send(value, { paths: await props.attach(files.map(file => file.id)) })
+    else await props.send(value)
+    emit('sent', value)
     if (generation === current && text.value === value) text.value = ''
-  } catch (e) { if (generation === current) error.value = e.message || 'Message could not be sent. Your draft is still here.' }
+    if (generation === current) attachments.clearReady()
+  } catch (e) {
+    if (generation === current) error.value = e.message || (files.length
+      ? 'Message could not be sent. Your draft and attachments are still here.'
+      : 'Message could not be sent. Your draft is still here.')
+  }
   finally { if (generation === current) pending.value = false }
+}
+function addFiles(list, pasted = false) {
+  const files = Array.from(list || [])
+  if (!canAttach.value || !files.length) return
+  const now = new Date()
+  attachments.add(files.map((file, index) => terminalSafeFile(file, { pasted, now, index })))
+}
+// Text wins over a file in the same paste, as in the terminal: a copied spreadsheet range or a
+// rich-text selection also carries a picture of itself, and the person meant the text.
+function pasteFiles(event) {
+  if (!props.attach || event.clipboardData?.getData('text/plain')) return
+  const files = event.clipboardData?.files
+  if (files?.length) {
+    event.preventDefault()
+    addFiles(files, true)
+  }
 }
 async function stop() {
   try { await props.interrupt() } catch { error.value = 'Could not interrupt. Open the terminal to check the connection.' }
@@ -189,14 +250,14 @@ function quote(value) {
 }
 function clearError() { error.value = '' }
 defineExpose({ quote, clearError })
-onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); generation += 1 })
+onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); generation += 1; void attachments.cancelAll() })
 </script>
 <template>
   <form class="workspace-composer" @submit.prevent="submit" data-workspace-composer>
     <ol v-if="queued.length" class="composer-queue" aria-label="Queued messages" data-composer-queue>
       <li v-for="item in queued" :key="item.id" data-queued-message>
         <span class="queued-label">Queued · will be sent when the agent is ready</span>
-        <span class="queued-text">{{ item.text }}</span>
+        <span class="queued-text">{{ item.text }}<span v-if="item.attachments?.length" class="queued-files"> · {{ item.attachments.length === 1 ? item.attachments[0].name : `${item.attachments.length} files` }}</span></span>
         <button type="button" data-queued-edit @click="editQueued(item)">Edit</button>
         <button type="button" data-queued-withdraw @click="withdraw(item)">Withdraw</button>
       </li>
@@ -210,17 +271,24 @@ onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); ge
         <span v-if="command.source !== 'builtin'" class="slash-source">{{ command.source }}</span>
       </li>
     </ul>
-    <div class="composer-card">
+    <div class="composer-card" @dragover.prevent @drop.prevent="addFiles($event.dataTransfer?.files)">
+      <ChatAttachments v-if="attachmentItems.length" class="composer-attachments" :items="attachmentItems"
+        :retry="attachments.retry" :remove="attachments.remove" />
       <textarea ref="input" v-model="text" :disabled="!accepting || pending" rows="3" aria-label="Message the agent"
         placeholder="Give your agent a task… Type / for commands" aria-autocomplete="list" :aria-expanded="menuOpen"
         :aria-controls="menuOpen ? `slash-menu-${sessionId}` : undefined"
         :aria-activedescendant="menuOpen ? `slash-${sessionId}-${menuIndex}` : undefined"
-        @keydown="keydown" @input="trackCaret" @click="trackCaret" @keyup="trackCaret"></textarea>
+        @keydown="keydown" @input="trackCaret" @click="trackCaret" @keyup="trackCaret" @paste="pasteFiles"></textarea>
       <div class="composer-controls">
-        <span>{{ agent || 'Agent' }} <span class="connection">· {{ status }}</span></span>
+        <input v-if="attach" ref="fileInput" class="file-input" type="file" multiple
+          accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.md,.markdown,.txt,.docx,.pptx,.xlsx"
+          @change="addFiles($event.target.files); $event.target.value = ''">
+        <button v-if="attach" type="button" class="attach" data-composer-attach aria-label="Attach files" title="Attach files — or paste an image"
+          :disabled="!canAttach" @click="fileInput?.click()">＋</button>
+        <span class="agent-label">{{ agent || 'Agent' }} <span class="connection">· {{ status }}</span></span>
         <span class="composer-shortcut">Enter to send · Shift+Enter for newline</span>
         <button type="button" :disabled="!enabled || pending" aria-label="Interrupt agent" @click="stop">◼ Stop</button>
-        <button type="submit" class="primary" :disabled="!accepting || pending || !text.trim()">{{ pending ? 'Sending…' : enabled ? '↑ Send' : '↑ Queue' }}</button>
+        <button type="submit" class="primary" :disabled="!accepting || pending || !hasContent || !attachmentsSettled">{{ pending ? 'Sending…' : enabled ? '↑ Send' : '↑ Queue' }}</button>
       </div>
     </div>
     <p v-if="error" class="composer-error" role="alert">{{ error }}</p>
@@ -239,11 +307,15 @@ textarea { width: 100%; min-height: 72px; max-height: 240px; resize: vertical; b
 textarea:focus { outline: none; }
 .composer-card:focus-within { border-color: var(--accent); }
 .composer-controls { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 11px; }
-.composer-controls > span:first-child { margin-right: auto; }
+.composer-controls > .agent-label { margin-right: auto; }
 .connection, .composer-shortcut { color: var(--muted-3); }
 button { padding: 6px 10px; font-size: 12px; border-radius: 9px; }
 .composer-queue { list-style: none; margin: 0 0 8px; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .composer-queue li { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px dashed var(--border-2); border-radius: 12px; background: var(--panel-2); font-size: 12px; }
+.file-input { display: none; }
+.attach { padding: 2px 9px; font-size: 16px; color: var(--muted); }
+.composer-attachments { margin-bottom: 10px; }
+.queued-files { color: var(--muted-3); }
 .queued-label { color: var(--muted-3); font-size: 10px; white-space: nowrap; }
 .queued-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .slash-menu { list-style: none; margin: 0 0 8px; padding: 6px; max-height: 280px; overflow-y: auto; border: 1px solid var(--border-2); border-radius: 14px; background: var(--panel); box-shadow: 0 6px 24px #0003; }

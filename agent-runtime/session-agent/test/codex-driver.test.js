@@ -34,7 +34,7 @@ test('Codex state archive leaves out the growing TUI log and scratch dirs, but k
   const { validateDriver } = require('../../common/driver-contract');
   assert.doesNotThrow(() => validateDriver(driver));
   assert.deepEqual(driver.stateExcludes, ['.codex/log', '.codex/tmp', '.codex/.tmp',
-    '.codex/packages', '.codex/app-server-daemon']);
+    '.codex/packages', '.codex/app-server-daemon', '.codex/agenthub-active']);
   assert.ok(!driver.stateExcludes.some(entry => entry.startsWith('.codex/sessions')));
 });
 
@@ -296,4 +296,25 @@ test('Codex image pins CLI and preserves custom-image injection paths', () => {
   // The app-server daemon behind `codex resume` needs `ps`; the slim base does not ship it.
   assert.match(dockerfile, /apt-get install[^&]*\bprocps\b/);
   assert.doesNotMatch(dockerfile, /@anthropic-ai/);
+});
+
+test('Codex follows the launched process marker instead of a remembered old thread', () => {
+  const home = fs.mkdtempSync('/tmp/agenthub-codex-switch-');
+  const id = '22222222-2222-2222-2222-222222222222';
+  const root = path.join(home, '.codex');
+  fs.mkdirSync(path.join(root, 'agenthub-active'), { recursive: true });
+  fs.writeFileSync(path.join(root, driver.THREAD_ID_FILE), '11111111-1111-1111-1111-111111111111\n');
+  const file = path.join(root, 'sessions', 'rollout-new-' + id + '.jsonl');
+  fs.writeFileSync(path.join(root, 'agenthub-active', '42.json'), JSON.stringify({ id, file, cwd: '/workspace/repo', at: 1000 }));
+  assert.equal(driver.findTranscript({ env: { HOME: home }, fs, pid: 42, cwd: '/workspace/repo', launchedAt: 900 }), file);
+  assert.equal(fs.readFileSync(path.join(root, driver.THREAD_ID_FILE), 'utf8').trim(), id);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('Codex clear confirmation rejects an old conversation or a menu with the composer', () => {
+  const welcome = ['  >_ Codex (v0.160.0)', '  How is life between the brackets?', '› Ask Codex to do anything'];
+  assert.equal(driver.contextClearScreen(welcome), true);
+  assert.equal(driver.contextClearScreen([...welcome, '› previous task']), false);
+  assert.equal(driver.contextClearScreen(['› Ask Codex to do anything']), false);
+  assert.equal(driver.contextClearScreen(['  >_ Codex', '› /model']), false);
 });

@@ -251,6 +251,42 @@ public class InternalAgentFleetTests
     }
 
     [Fact]
+    public async Task Inbox_TakenForTheNextTurn_RecordsThatChannelAndHandsOutOnce()
+    {
+        var world = World();
+        world.Messages.Pending.Add(new SessionMessageRecord
+        {
+            Id = "m-1", ProjectId = ProjectA, FromSessionId = "reviewer",
+            ToSessionId = "coder", Owner = Owner, Body = "Please fix MR 42"
+        });
+        var controller = world.Controller("coder");
+
+        var hook = MessagesOf(Assert.IsType<OkObjectResult>(
+            await controller.InboxMessages("coder", CancellationToken.None, wait: 0, via: "next_turn")).Value!);
+
+        Assert.Single(hook);
+        Assert.Equal("Code Reviewer", hook[0].FromTitle);
+        Assert.Equal(MessageDeliveryVia.NextTurn, world.Messages.Pending[0].DeliveredVia);
+        Assert.Empty(MessagesOf(Assert.IsType<OkObjectResult>(
+            await controller.InboxMessages("coder", CancellationToken.None, wait: 0)).Value!));
+    }
+
+    [Fact]
+    public async Task Inbox_AnyOtherVia_IsRecordedAsTheInbox()
+    {
+        var world = World();
+        world.Messages.Pending.Add(new SessionMessageRecord
+        {
+            Id = "m-1", ProjectId = ProjectA, FromSessionId = "reviewer",
+            ToSessionId = "coder", Owner = Owner, Body = "hi"
+        });
+
+        await world.Controller("coder").InboxMessages("coder", CancellationToken.None, wait: 0, via: "mod");
+
+        Assert.Equal(MessageDeliveryVia.Inbox, world.Messages.Pending[0].DeliveredVia);
+    }
+
+    [Fact]
     public async Task Inbox_LongPoll_TimesOutEmpty()
     {
         var world = World();
@@ -487,12 +523,17 @@ public class InternalAgentFleetTests
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default)
+        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, string via,
+            CancellationToken ct = default)
         {
             TakeCalls++;
             var taken = Pending.Where(m => m.ToSessionId == toSessionId && m.DeliveredAt is null)
                 .OrderBy(m => m.CreatedAt).Take(limit).ToList();
-            foreach (var m in taken) m.DeliveredAt = DateTime.UtcNow;
+            foreach (var m in taken)
+            {
+                m.DeliveredAt = DateTime.UtcNow;
+                m.DeliveredVia = via;
+            }
             return Task.FromResult<IReadOnlyList<SessionMessageRecord>>(taken);
         }
 
