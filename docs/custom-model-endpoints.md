@@ -99,7 +99,18 @@ container on 8080 is blocked although the URL says 80. Three ways to open it wer
 3. **The operator declares the in-cluster model servers once, in the chart.** Chosen. A static
    policy allows agent pods to reach exactly those peers on exactly those ports. The operator already
    decides what sessions may reach; a model server is one more such decision, made once instead of
-   per session.
+   per session. The chart value is `agent.modelEndpoints`:
+
+   ```yaml
+   agent:
+     modelEndpoints:
+       - namespace: llm
+         podLabels: { app: llama-server }
+         ports: [8080]   # the container port, not the Service's 80
+   ```
+
+   It renders one policy, `allow-agent-model-endpoints`. In it the namespace and pod selectors form
+   one peer, so the port opens only on those pods and not on the whole namespace.
 
 When the path is blocked, the start probe fails with a connection error and says that the egress
 policy is the likely cause, instead of the CLI retrying until a timeout.
