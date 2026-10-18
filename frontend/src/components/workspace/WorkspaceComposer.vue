@@ -7,6 +7,8 @@ import { completeCommand, leadingCommand, rankCommands, slashQuery } from '../..
 // loadCommands: resolves to the agent's slash commands ({ commands: [...] }); absent, or failing
 // (an older runtime, a shared link), the composer offers no completion and still sends.
 const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function })
+// sent: a message reached the agent's terminal; the view follows it until the agent takes it (#153).
+const emit = defineEmits(['sent'])
 const text = ref(drafts.get(props.sessionId) || '')
 const input = ref(null)
 const pending = ref(false)
@@ -58,6 +60,7 @@ async function flush() {
       }
       if (generation !== current) return
       queued.value = queued.value.filter(item => item !== next)
+      emit('sent', next.text)
     }
   } finally {
     flushing = false
@@ -107,6 +110,7 @@ async function submit() {
   error.value = ''
   try {
     await props.send(value)
+    emit('sent', value)
     if (generation === current && text.value === value) text.value = ''
   } catch (e) { if (generation === current) error.value = e.message || 'Message could not be sent. Your draft is still here.' }
   finally { if (generation === current) pending.value = false }

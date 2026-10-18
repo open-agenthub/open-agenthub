@@ -50,11 +50,19 @@ longer than three lines is clamped with a *Show more* toggle, so a wall of text 
 does not push the others out of view.
 
 What the panel lists — and therefore what the badge counts — is every message the agent has not
-picked up yet, plus a priority message for five minutes after it was pushed: it was handed to the
-agent the moment it arrived, and without that grace period the person would never see what
-interrupted their agent. The badge counts exactly the tiles behind it; an earlier version counted
-only undelivered messages, and a badge of zero over a panel with three tiles made people hunt for
-the missing one. Dismissing is local to the browser and never consumes the inbox: the agent's
+received yet: the row has no `delivered_at`. Waiting in the inbox, or accepted by the pod for when
+the running turn ends (`next_turn`, #173), it is pending; delivered through any channel — read with
+`agent_inbox`, typed into the terminal, submitted by the mod, handed over at the turn's end — it is
+not. The badge counts exactly the tiles behind it; an earlier version counted only undelivered
+messages while the panel showed more, and a badge of zero over three tiles made people hunt for
+the missing one.
+
+The panel used to keep a priority message for five minutes after it was pushed, so the person
+could see what interrupted their agent. That read as an unread message: the owner of a Claude
+session saw *Priority message from agent …* for a message the mod had already submitted and the
+agent had acted on, while its inbox was empty (#186). What the agent received is now shown where it
+belongs, in the Workspace conversation, as a message from its sender rather than as the person's
+own words (`agent-workspace.md`, "Pending messages"), so the grace period has nothing left to do. Dismissing is local to the browser and never consumes the inbox: the agent's
 `agent_inbox` call still returns the message, because a person tidying their view must not eat
 a peer's instruction.
 
