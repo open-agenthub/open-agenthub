@@ -58,6 +58,12 @@ function validateDriver(driver) {
   if (driver.reloadsCredentialLive !== undefined && typeof driver.reloadsCredentialLive !== 'boolean') {
     throw new Error('Agent driver reloadsCredentialLive must be a boolean when present');
   }
+  // Optional: true when the runtime's hooks report its turns to POST /agenthub/turn
+  // (common/fleet-turn-hook.mjs), so plain fleet messages can wait for the turn's end instead of
+  // for agent_inbox (docs/priority-messages.md).
+  if (driver.turnHooks !== undefined && typeof driver.turnHooks !== 'boolean') {
+    throw new Error('Agent driver turnHooks must be a boolean when present');
+  }
   // Optional: the CLI's own usage-limit notices as `{ pattern: RegExp, resetsAt?: fn }`
   // (common/limit-detector.js). A runtime whose CLI reports limits some other way leaves it out.
   if (driver.limitPatterns !== undefined) {

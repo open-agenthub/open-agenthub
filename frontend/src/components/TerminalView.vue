@@ -167,7 +167,9 @@ async function sendMessage() {
     sendText.value = ''
     sendNote.value = result?.deliveredVia === 'injected' || result?.deliveredVia === 'mod'
       ? 'Delivered to the agent.'
-      : 'Waiting in the inbox — the agent reads it on its next agent_inbox call.'
+      : result?.deliveredVia === 'next_turn'
+        ? 'The agent gets it as soon as its current turn ends.'
+        : 'Waiting in the inbox — the agent reads it on its next agent_inbox call.'
     await refreshMessages()
   } catch (e) {
     sendNote.value = e?.message || 'The message could not be sent.'

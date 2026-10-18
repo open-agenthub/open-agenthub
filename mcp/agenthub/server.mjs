@@ -217,7 +217,7 @@ register('agent_send', {
     + '(scope the lookup with projectId); an ambiguous title fails with the candidate list. By default '
     + 'the agent reads it via its in-session agent_inbox tool. priority pushes it straight into the '
     + 'running agent\'s prompt; interrupt also stops its current work first (implies priority). The '
-    + 'result\'s deliveredVia says where it went: inbox, injected or mod.',
+    + 'result\'s deliveredVia says where it went: inbox, injected, mod or next_turn (handed over when its current turn ends).',
   inputSchema: z.object({
     to: z.string().min(1).max(256),
     message: z.string().min(1).max(4000),

@@ -101,6 +101,10 @@ public sealed class SessionMessageDelivery : ISessionMessageDelivery
             "queued-for-mod" => MessageDeliveryVia.Mod,
             _ => null
         };
+        // The pod will hand it over when the running turn ends, by taking it from the inbox
+        // itself. Marking it here would hide it from agent_inbox for as long as the turn runs,
+        // and lose it if the agent exits first; left undelivered, whichever comes first takes it.
+        if (answer?.Delivered == "next-turn") return new MessageDelivery(MessageDeliveryVia.NextTurn);
         if (via is null) return new MessageDelivery(MessageDeliveryVia.Inbox, answer?.Reason ?? "unavailable");
 
         await _messages.MarkDeliveredAsync(message.Id, via, ct);

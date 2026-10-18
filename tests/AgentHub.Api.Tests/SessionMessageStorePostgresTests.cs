@@ -16,7 +16,7 @@ public class SessionMessageStorePostgresTests
         await Task.Delay(10); // created_at has finite resolution — make the ordering strict
         await database.Messages.AddAsync(Message("m-2", body: "second"));
 
-        var taken = await database.Messages.TakeUndeliveredAsync("target", limit: 10);
+        var taken = await database.Messages.TakeUndeliveredAsync("target", limit: 10, via: MessageDeliveryVia.Inbox);
 
         Assert.Equal(["m-1", "m-2"], taken.Select(m => m.Id));
         Assert.All(taken, m => Assert.NotNull(m.DeliveredAt));
@@ -25,7 +25,7 @@ public class SessionMessageStorePostgresTests
         Assert.Equal("first", taken[0].Body);
 
         // Delivered messages are never handed out again.
-        Assert.Empty(await database.Messages.TakeUndeliveredAsync("target", limit: 10));
+        Assert.Empty(await database.Messages.TakeUndeliveredAsync("target", limit: 10, via: MessageDeliveryVia.Inbox));
     }
 
     [PostgreSqlFact]
@@ -38,8 +38,8 @@ public class SessionMessageStorePostgresTests
             await Task.Delay(5);
         }
 
-        var first = await database.Messages.TakeUndeliveredAsync("target", limit: 2);
-        var second = await database.Messages.TakeUndeliveredAsync("target", limit: 2);
+        var first = await database.Messages.TakeUndeliveredAsync("target", limit: 2, via: MessageDeliveryVia.Inbox);
+        var second = await database.Messages.TakeUndeliveredAsync("target", limit: 2, via: MessageDeliveryVia.Inbox);
 
         Assert.Equal(["m-0", "m-1"], first.Select(m => m.Id));
         Assert.Equal(["m-2"], second.Select(m => m.Id));
@@ -52,7 +52,7 @@ public class SessionMessageStorePostgresTests
         await database.Messages.AddAsync(Message("mine"));
         await database.Messages.AddAsync(Message("other", to: "someone-else"));
 
-        var taken = await database.Messages.TakeUndeliveredAsync("target", limit: 10);
+        var taken = await database.Messages.TakeUndeliveredAsync("target", limit: 10, via: MessageDeliveryVia.Inbox);
 
         Assert.Equal(["mine"], taken.Select(m => m.Id));
     }
@@ -64,7 +64,7 @@ public class SessionMessageStorePostgresTests
         await database.Messages.AddAsync(Message("m-1"));
         await Task.Delay(10);
         await database.Messages.AddAsync(Message("m-2", from: null)); // external sender
-        await database.Messages.TakeUndeliveredAsync("target", limit: 1); // delivers m-1
+        await database.Messages.TakeUndeliveredAsync("target", limit: 1, via: MessageDeliveryVia.Inbox); // delivers m-1
 
         var recent = await database.Messages.ListRecentAsync("target", limit: 10);
 
@@ -122,7 +122,7 @@ public class SessionMessageStorePostgresTests
         var second = await database.Messages.ListPageAsync("alice", "target", cursor, 2);
         Assert.Equal("a", Assert.Single(second).Id);
         Assert.All(first.Concat(second), m => Assert.Null(m.DeliveredAt));
-        Assert.Equal(5, (await database.Messages.TakeUndeliveredAsync("target", 10)).Count);
+        Assert.Equal(5, (await database.Messages.TakeUndeliveredAsync("target", 10, via: MessageDeliveryVia.Inbox)).Count);
         Assert.Empty(await database.Messages.ListPageAsync("alice", "other", null, 2));
     }
 

@@ -30,6 +30,13 @@ command = "node /opt/session-agent/codex/policy-hook.js"
 timeout = 250
 statusMessage = "Waiting for session approval"
 
+# An approval dialog is open: the session agent must not type a fleet message into it
+# (docs/priority-messages.md). Reports only; the decision is policy-hook.js's alone.
+[[hooks.PermissionRequest.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/fleet-turn-hook.js"
+timeout = 10
+
 # Records that the turn changed something, so the reminder below stays off a turn that only
 # answered a question.
 [[hooks.PostToolUse]]
@@ -59,6 +66,15 @@ type = "command"
 command = "node /opt/session-agent/codex/turn-notify-hook.js"
 timeout = 10
 
+# Hands fleet messages that arrived during the turn to the agent as its next input, by blocking
+# the stop with them as the reason; with none waiting it tells the session agent the agent is
+# idle, so a later message can be typed in (docs/priority-messages.md).
+[[hooks.Stop.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/fleet-turn-hook.js"
+timeout = 15
+statusMessage = "Checking for fleet messages"
+
 # /new changes the thread without replacing the PTY. The lifecycle payload identifies the
 # user's rollout; helper sessions have no transcript and are filtered by the hook.
 [[hooks.SessionStart]]
@@ -73,4 +89,11 @@ timeout = 10
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
 command = "node /opt/session-agent/codex/conversation-hook.js"
+timeout = 10
+
+# A prompt was submitted, so the agent works and is not waiting at its prompt
+# (docs/priority-messages.md).
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/fleet-turn-hook.js"
 timeout = 10
