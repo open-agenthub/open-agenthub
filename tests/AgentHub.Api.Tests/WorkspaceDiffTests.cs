@@ -42,12 +42,13 @@ public class WorkspaceDiffTests
     private sealed class Pod(string body, HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
     {
         public int Calls;
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
+            await Task.Yield();
             Calls++;
             Assert.Equal("secret", request.Headers.GetValues("X-Agent-Token").Single());
             Assert.Equal("http://127.0.0.1:7681/agenthub/diff?comparison=head", request.RequestUri!.ToString());
-            return Task.FromResult(new HttpResponseMessage(status) { Content = new StringContent(body) });
+            return new HttpResponseMessage(status) { Content = new StringContent(body) };
         }
     }
     private static readonly SessionRecord Record = new() { Id = "s1", Owner = "owner", CallbackToken = "secret" };
@@ -91,13 +92,13 @@ public class WorkspaceDiffTests
     public async Task ProxyUsesStoredPodAndTokenAndBoundsResponses(int status, int length, bool available)
     {
         var sessions = DispatchProxy.Create<ISessionService, SessionProxy>();
-        ((SessionProxy)(object)sessions).Live = new SessionInfo
+        ((SessionProxy)sessions).Live = new SessionInfo
         { Id = "s1", Owner = "owner", Title = "Session", Mode = SessionMode.Interactive, Phase = "Running", PodIp = "127.0.0.1" };
         var pod = new Pod(new string(' ', length), (HttpStatusCode)status);
         using var http = new HttpClient(pod);
         var reader = new WorkspaceDiffReader(http, sessions, new ConfigurationBuilder().Build());
         Assert.Equal(available, await reader.ReadAsync(Record, "head", default) is not null);
-        ((SessionProxy)(object)sessions).Live = null;
+        ((SessionProxy)sessions).Live = null;
         Assert.Null(await reader.ReadAsync(Record, "head", default));
         Assert.Equal(1, pod.Calls);
     }
