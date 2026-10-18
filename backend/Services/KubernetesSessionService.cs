@@ -1146,9 +1146,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                     using var released = await client.DeleteAsync(drainUrl, releaseDeadline.Token);
                 }
             }
-            catch (HttpRequestException exception) { _log.LogDebug(exception, "Releasing runtime drain failed for {SessionId}", id); }
-            catch (OperationCanceledException exception) { _log.LogDebug(exception, "Releasing runtime drain timed out for {SessionId}", id); }
-            catch (k8s.Autorest.HttpOperationException exception) { _log.LogDebug(exception, "Reading runtime drain pod failed for {SessionId}", id); }
+            catch (HttpRequestException exception) { _log.LogDebug(exception, "Releasing runtime drain failed"); }
+            catch (OperationCanceledException exception) { _log.LogDebug(exception, "Releasing runtime drain timed out"); }
+            catch (k8s.Autorest.HttpOperationException exception) { _log.LogDebug(exception, "Reading runtime drain pod failed"); }
         }
     }
 
