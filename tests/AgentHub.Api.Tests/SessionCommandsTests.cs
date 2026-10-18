@@ -57,8 +57,9 @@ public class SessionCommandsTests
     [Theory]
     [InlineData(SessionAccessLevel.Owner, true)]
     [InlineData(SessionAccessLevel.Collaborator, true)]
-    [InlineData(SessionAccessLevel.Viewer, false)]
-    public async Task OnlyPeopleWhoCanTypeIntoTheAgentGetItsCommands(SessionAccessLevel level, bool allowed)
+    [InlineData(SessionAccessLevel.Viewer, true)]
+    [InlineData(SessionAccessLevel.None, false)]
+    public async Task FileReadersGetTheCommandsAndRevocationIsCheckedEveryTime(SessionAccessLevel level, bool allowed)
     {
         var access = new Access { Resolved = new(Record, level, null) };
         var reader = new Reader();

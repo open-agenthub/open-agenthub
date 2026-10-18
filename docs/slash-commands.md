@@ -18,7 +18,7 @@ checked against every pinned CLI in a PTY, fed the composer's exact bytes:
 | Codex 0.160.0 | `/model` | opens its model menu |
 | OpenCode 1.18.35 | `/models`, a custom command from its config | opens its model dialog; the command is listed in its own menu |
 | OpenClaw 2026.7.1-2 | `/help`, `/model` | both run |
-| Cursor (unpinned) | — | its TUI does not start without a real login, so it was not driven |
+| Cursor (unpinned) | — | not exercised: its TUI does not start without a real login |
 
 The rejected alternative was a structured command API per agent: an SDK call or JSON-RPC
 method that runs `/compact` or switches a model without the TUI. An existing open-source agent
@@ -45,7 +45,7 @@ already shows.
 transcript after `/clear` has a new session id). The Workspace follows the session's own transcript
 (`transcripts.md`), so it keeps showing the conversation from before the command, and the next
 turns appear only in the agent terminal. A session restart resumes that first conversation too,
-because the resume names its id. The catalogs mark such commands (`effect: "new-conversation"`):
+because the resume names its id. Following the switch is #174. The catalogs mark such commands (`effect: "new-conversation"`):
 
 - Claude `/clear`, `/resume`, `/branch`
 - Codex `/clear`, `/new`, `/resume`, `/fork`
@@ -56,7 +56,7 @@ because the resume names its id. The catalogs mark such commands (`effect: "new-
 The composer warns before sending them. It does not block them, because the command does what it
 says in the CLI. Only Claude's `/clear` was observed. The others are marked from what the CLI's
 own menu says they do. Following the new conversation needs the session agent to switch
-transcript and resume id when the CLI does, which is separate work.
+transcript and resume id when the CLI does (#174).
 
 ## Listing: a recorded catalog plus what is on disk
 
@@ -98,8 +98,9 @@ Rejected alternatives:
   its input box.
 
 The backend proxies the route as `GET /api/sessions/{id}/commands`, to the stored pod address with
-the session's callback token, the same way as the diff reader (`workspace-diff.md`). Only owners
-and collaborators get an answer: viewers have no composer, and the list names files on the pod.
+the session's callback token, the same way as the diff reader (`workspace-diff.md`), and with the
+same access as Files: the list names command and skill files that anyone who may read the
+session's files can already see. Only owners and collaborators have a composer to use it in.
 The answer is not cached (`no-store`). The browser keeps it for 30 seconds per session, and retries
 after 3 seconds while the pod is still starting.
 
