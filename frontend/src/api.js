@@ -104,6 +104,7 @@ async function sharedReq(path, method = 'GET', body) {
 export const api = {
   listSessions: () => req('GET', '/sessions'),
   getSession: (id) => req('GET', `/sessions/${id}`),
+  workspaceDiff: (id, comparison = 'base') => req('GET', `/sessions/${encodeURIComponent(id)}/diff?comparison=${encodeURIComponent(comparison)}`),
   sessionFileCapabilities: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/capabilities`),
   reserveSessionFile: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/files/reserve`, data),
   uploadSessionFile,
@@ -154,6 +155,12 @@ export const api = {
   listSecrets: () => req('GET', '/secrets'),
   upsertSecret: (data) => req('POST', '/secrets', data),
   deleteSecret: (id) => req('DELETE', `/secrets/${encodeURIComponent(id)}`),
+  // What agents asked for (docs/session-secrets.md): open requests, and the owner's answer — a
+  // stored secret granted to that one session, or a refusal.
+  listSecretRequests: (sessionId) => req('GET', sessionId ? `/secret-requests?sessionId=${encodeURIComponent(sessionId)}` : '/secret-requests'),
+  getSecretRequest: (id) => req('GET', `/secret-requests/${encodeURIComponent(id)}`),
+  provideSecretRequest: (id, secretId) => req('POST', `/secret-requests/${encodeURIComponent(id)}/provide`, { secretId }),
+  refuseSecretRequest: (id) => req('POST', `/secret-requests/${encodeURIComponent(id)}/refuse`),
   // A subscription login is captured from a session by its runtime rather than typed in here,
   // so this is the only way to get rid of one that stopped working.
   deleteSubscriptionCredential: (agent) =>
@@ -331,3 +338,5 @@ export async function getSharedTranscript(token) {
 
 // An interactive bash shell in the same pod.
 export const shellUrl = (id) => wsUrl(id, 'shell')
+
+export const getSharedWorkspaceDiff = (token, comparison = 'base') => sharedReq(`/shared/${encodeURIComponent(token)}/diff?comparison=${encodeURIComponent(comparison)}`)

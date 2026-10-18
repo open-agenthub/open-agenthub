@@ -163,6 +163,63 @@ project, which may select more than the parent was narrowed to); a child placed 
 keeps only what both select. Asking for a secret the parent does not have is `403
 secret_not_allowed` — refused rather than dropped, so the agent learns why the child lacks it.
 
+## Asking for a secret: `secret_request`
+
+An agent that needs a secret it does not have calls `secret_request` on `agenthub_sessions` with
+a name, `env` or `file`, and what it is for. It does not ask in the conversation, where the answer
+would be recorded for good.
+
+1. The backend checks the name against the same rules as a stored secret (reserved variables
+   included). If the session already has a secret of that name, the call is answered at once.
+   Otherwise a request is opened (`secret_requests`, Postgres, because the tool polls through one
+   replica while the owner answers through another).
+2. Opening it is the pending-question path. The session is flagged as waiting, which is the badge,
+   and every chat relay posts it as a `question` with a link to
+   `<FrontendOrigin>/settings/secrets?request=<id>`. The agent's purpose text goes into that message
+   as one bounded line, so it cannot add lines that look like the hub's own. In the web app the
+   session shows the request next to its permission prompts.
+3. The owner opens the link. The form is pre-filled with the name, delivery and purpose, or opens the
+   stored secret of that name, whose value can be kept. Saving stores the value, then grants the
+   secret to this one session. The link is taken off the address afterwards.
+4. The tool polls until the request is answered or `waitMinutes` (default 10, at most 30) have
+   passed; on a timeout it closes the request itself. It returns `provided`, with the name, the
+   delivery and where to find the secret, or `not provided` for a refusal or a timeout. A file is
+   waited for until the kubelet has put it into the pod. A variable is set from the next start, and
+   the Settings page offers the owner a restart (pause, then resume) in two steps. Neither the hub nor
+   the tool ever handles the value on the agent's side; the tool does not even read the file.
+
+**A grant is per session and kept apart from the selection.** `sessions.secret_grant_ids` adds to
+whatever the selection gives, even beyond the project. The owner answered this session's own
+request, and widening the project for every session would give it to agents that never asked. The
+edit dialog's PATCH can take grants back (`secretGrantIds`), never add them.
+
+**Asking cannot widen a limit.** A session created by a restricted token, or spawned by another
+session, records a ceiling at creation (`sessions.secret_ceiling`): the token's secrets, or the
+parent's at the moment of the spawn. A grant outside it is `403 secret_not_allowed`. The field is
+set by the hub only and is ignored in a request body; otherwise the caller could lift its own limit.
+
+- *Rejected: the backend handing the value to the tool.* It would put the value into the MCP
+  result and from there into the transcript, the one place the whole flow exists to avoid.
+- *Rejected: a value field in the chat relay.* The relays post into channels that outlive the
+  session and are read by others; they carry the link, nothing else.
+- *Rejected: growing the project's selection on a grant.* See above; the owner can still add the
+  secret to the project afterwards if every session there should have it.
+- In an interactive session a built-in MCP tool goes through the usual tool approval first, so the
+  owner may see an approval prompt for `secret_request` before the secret question itself.
+- At most five requests of a session can be open at once, and asking again for an open name waits
+  on the same request; an agent in a loop cannot flood the relays.
+
+Verified end to end in this pod. The real `agenthub_sessions` server ran over stdio with a real
+session's callback token against the real backend (real Postgres, the API server rig), and the
+owner answered in real Chromium through the banner and the pre-filled form. A watcher stood in for
+the kubelet, copying the session's secret into the directory.
+- The request was open and the session flagged as waiting; the link opened the pre-filled form.
+- The tool returned `provided` with the file's path once the file was there, and no value. The file
+  held the value typed in the browser.
+- `secrets_list` showed it; the waiting flag was cleared; the grant was recorded.
+- A refusal came back as `not provided`; a reserved name never reached the owner; no response the
+  browser received carried the value.
+
 ## The web app
 
 - **Settings → Secrets** is a tab of its own rather than a card in Credentials. Credentials are

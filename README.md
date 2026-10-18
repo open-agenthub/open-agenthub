@@ -561,6 +561,11 @@ exhausted account. How the hub finds out depends on the runtime
 `account_status` and `account_switch` (every MCP server) and `PATCH /api/remote/sessions/{id}/credential`
 do the same by hand; a session may switch itself.
 
+An agent that needs a secret calls `secret_request` (in-session `agenthub_sessions` server) rather than
+asking in the conversation: the owner gets a question with a link to the pre-filled form, enters the
+value in the web app, and the tool learns only that the secret is there and under which name
+(`docs/session-secrets.md`). `secrets_list` names what the session has.
+
 ## Agents, authentication, and policy
 
 Agent and billing choices are independent for Interactive, Autonomous, and Scheduled

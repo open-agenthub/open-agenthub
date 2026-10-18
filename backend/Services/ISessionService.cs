@@ -59,6 +59,19 @@ public interface ISessionService
     /// hook sends on to the chat relays. Default unchanged, for test doubles without secrets.</summary>
     Task<string> MaskSessionSecretsAsync(string sessionId, string text, CancellationToken ct = default)
         => Task.FromResult(text);
+    /// <summary>What the session receives right now, grants included — the ceiling a spawned child
+    /// is held to. Default: the selection alone, for test doubles without grants.</summary>
+    Task<IReadOnlyList<string>> SessionSecretIdsAsync(string owner, Persistence.SessionRecord session,
+        CancellationToken ct = default)
+        => ResolveSessionSecretIdsAsync(owner, session.ProjectId, SessionSecretSelection.Parse(session.SecretIdsJson), ct);
+    /// <summary>
+    /// Gives a session a stored secret in answer to its own request, and delivers it at once where
+    /// that is possible. Throws <see cref="KeyNotFoundException"/> (no such session),
+    /// <see cref="ArgumentException"/> (no such secret) or <see cref="CredentialScopeException"/>
+    /// (outside the limit the session was created with).
+    /// </summary>
+    Task<SessionSecretGrant> GrantSessionSecretAsync(string owner, string sessionId, string secretId,
+        CancellationToken ct = default) => throw new NotSupportedException();
 
     /// <summary>
     /// Stores a login a session pod uploaded, into the account it belongs to — the one the session
@@ -168,6 +181,13 @@ public interface ISessionService
     /// </summary>
     Task<IReadOnlyList<TranscriptEntry>?> GetConversationAsync(string owner, string id, CancellationToken ct = default)
         => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null);
+    /// <summary>
+    /// The provider's transcript file as the agent uploaded it (the S3 copy joined with the newer
+    /// Postgres tail), for a resuming pod whose restored file may be older (#146). Default null
+    /// for test doubles that never resume anything.
+    /// </summary>
+    Task<string?> GetTranscriptFileAsync(string owner, string id, CancellationToken ct = default)
+        => Task.FromResult<string?>(null);
     /// <summary>Opens the stored provider state archive — the same tar.gz a resuming pod unpacks
     /// into its home directory, and therefore the conversation history an agent CLI needs to
     /// continue the session off-cluster. Null when the session is unknown or nothing is stored.</summary>

@@ -126,3 +126,68 @@ test('a refreshed value that is not an http(s) url is not taken', async () => {
   const upload = harness.commands.find(c => c.file === 'curl' && c.args.includes('/tmp/scrollback.log'));
   assert.equal(upload.args.at(-1), 'https://storage.invalid/scroll?sig=old');
 });
+
+// A resumed pod's transcript comes from a state archive written at most every two minutes; the
+// hub's copy is at most 30 seconds old (#146).
+function resumeHarness(restored, stored, options = {}) {
+  return createHarness({
+    AGENTHUB_CALLBACK_TOKEN: 'correct-token',
+    AGENTHUB_RESUME: '1',
+    AGENTHUB_CALLBACK_URL: 'https://hub.invalid/internal/sessions/s1'
+  }, { findTranscript: () => FILE }, {
+    files: { [FILE]: restored },
+    // The release timer is what a hub that never answers runs into; it must not fire on its own.
+    setTimeout: () => 0,
+    fetchResponse: url => url.endsWith('/transcript')
+      ? options.transcript || { ok: true, text: async () => stored }
+      : { ok: true, text: async () => '' },
+    ...options.harness
+  });
+}
+
+test('a resumed session appends the turns its archive missed before the agent starts', async () => {
+  const harness = resumeHarness('{"n":1}\n', '{"n":1}\n{"n":2}\n');
+  await tick(); await tick();
+
+  const ask = harness.requests.find(r => r.url === 'https://hub.invalid/internal/sessions/s1/transcript');
+  assert.equal(ask.options.headers['X-Agent-Token'], 'correct-token');
+  assert.equal(ask.options.method, undefined);
+  const written = harness.writes.find(w => w.file === FILE + '.agenthub-tmp');
+  assert.equal(Buffer.from(written.data).toString(), '{"n":1}\n{"n":2}\n');
+  assert.deepEqual(harness.renames.at(-1), { from: FILE + '.agenthub-tmp', to: FILE });
+  assert.equal(harness.terminals.length, 1);
+});
+
+test('a resumed session keeps its archive when the hub has nothing newer or another history', async () => {
+  for (const stored of ['', '{"n":1}\n', '{"other":1}\n{"other":2}\n']) {
+    const harness = resumeHarness('{"n":1}\n', stored);
+    await tick(); await tick();
+    assert.equal(harness.writes.filter(w => w.file.startsWith(FILE)).length, 0, JSON.stringify(stored));
+    assert.equal(harness.terminals.length, 1);
+  }
+});
+
+test('a resumed session starts from its archive when the hub cannot be asked', async () => {
+  const harness = resumeHarness('{"n":1}\n', '', { transcript: { ok: false, status: 503, text: async () => '' } });
+  await tick(); await tick();
+  assert.equal(harness.writes.filter(w => w.file.startsWith(FILE)).length, 0);
+  assert.equal(harness.terminals.length, 1);
+});
+
+test('the restored transcript is neither served nor uploaded until it has caught up', async () => {
+  let answer;
+  const harness = resumeHarness('{"n":1}\n', '', {
+    transcript: { ok: true, text: () => new Promise(resolve => { answer = resolve; }) },
+    harness: {}
+  });
+  await tick(); await tick();
+
+  // The hub would read the older file live and shrink the Workspace, or upload it over its copy.
+  const early = await requestHttp(harness, 'GET', '/agenthub/transcript?from=0', auth);
+  assert.equal(early.headers['x-transcript-size'], '0');
+  assert.equal(harness.terminals.length, 0);
+
+  answer('{"n":1}\n{"n":2}\n');
+  await tick(); await tick();
+  assert.equal(harness.terminals.length, 1);
+});

@@ -114,6 +114,7 @@ builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api
 builder.Services.AddHttpClient<IAgentCredentialPusher, AgentCredentialPusher>();
 builder.Services.AddHttpClient<ISessionMessageDelivery, SessionMessageDelivery>();
 // A singleton, unlike the typed clients above: it holds each followed session's offset and entries.
+builder.Services.AddHttpClient<IWorkspaceDiffReader, WorkspaceDiffReader>();
 builder.Services.AddHttpClient(nameof(LiveTranscriptReader));
 builder.Services.AddSingleton<ILiveTranscriptReader>(sp => new LiveTranscriptReader(
     sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(LiveTranscriptReader)),
@@ -199,6 +200,7 @@ builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackThreadStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackClient>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.UserDirectory>();
 builder.Services.AddSingleton<AgentHub.Api.Permissions.PermissionStore>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.ISecretRequestStore, AgentHub.Api.Persistence.PostgresSecretRequestStore>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.ISlackTargetResolver, AgentHub.Api.Ee.Slack.SlackTargetResolver>();
 builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Ee.Slack.SlackNotifier>();
 // Slack permission prompts: one instance posts them (IPermissionNotifier) and later
@@ -471,6 +473,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatLinkCodeStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISecretRequestStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Network.IPortGrantStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
