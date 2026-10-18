@@ -177,7 +177,11 @@ message is handed over:
   times a second while it works); and no CLI menu on the screen, checked with the Workspace's own
   detector (#112, #166) on the scrollback replayed into a headless xterm, the bytes a browser
   attaching now would get. The person's keys that arrive during the 300 ms of typing are held and
-  written after the Enter. A batch taken from the hub when the person started typing in the
+  written one pause after the Enter. Written in the same instant, OpenCode read Enter and keys as
+  one burst, and the keys ended up in the peer's message. Those keys are a draft in the box of the
+  turn the message starts, and the prompt event of that turn arrives after them, so they are dated
+  after it. Dated by arrival, the next idle message was typed into that draft and sent with it
+  (`zz[AgentHub: …]`, reproduced on Codex; #192). A batch taken from the hub when the person started typing in the
   meantime is held and goes with the next Stop. Before the first Stop of an agent run nothing is
   typed: the session agent cannot tell a start-up dialog from a prompt.
 
