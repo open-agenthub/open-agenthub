@@ -627,11 +627,12 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             {
                 // The selection is stored and the next start uses it; failing the request would
                 // tell the owner nothing changed when it did.
-                _log.LogWarning(error, "Session {Id} did not take the new git credentials", id);
+                _log.LogWarning(error, "Session {Id} did not take the new git credentials", rec.Id);
             }
         }
-        _log.LogInformation("Session {Id} git tokens set to {Selection} (applied now: {Now})",
-            id, rec.GitPatIdsJson ?? "defaults", appliedNow);
+        // A count rather than the ids: they arrive in the request body, and the record holds them anyway.
+        _log.LogInformation("Session {Id} git tokens set ({Count}; applied now: {Now})",
+            rec.Id, GitPatSelection.Parse(rec.GitPatIdsJson)?.Count.ToString() ?? "defaults", appliedNow);
         var info = await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
             await _browsers.GetSummaryAsync(id, ct), ct);
         return new GitPatSwitchResult(info, appliedNow);

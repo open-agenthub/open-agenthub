@@ -194,9 +194,11 @@ public sealed class SessionCredentialSwitchTests
     [Fact]
     public async Task GitPusher_AnOlderPodWithoutTheRoute_MeansNextStart_AnythingElseIsAnError()
     {
-        Assert.False(await Pusher(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound)))
+        using var notFound = new HttpResponseMessage(HttpStatusCode.NotFound);
+        using var badRequest = new HttpResponseMessage(HttpStatusCode.BadRequest);
+        Assert.False(await Pusher(_ => Task.FromResult(notFound))
             .PushGitCredentialsAsync("10.0.0.5", "tok", [], CancellationToken.None));
-        await Assert.ThrowsAsync<HttpRequestException>(() => Pusher(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)))
+        await Assert.ThrowsAsync<HttpRequestException>(() => Pusher(_ => Task.FromResult(badRequest))
             .PushGitCredentialsAsync("10.0.0.5", "tok", [], CancellationToken.None));
     }
 
