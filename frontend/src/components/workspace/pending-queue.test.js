@@ -59,6 +59,8 @@ describe('pending queue below the conversation', () => {
     expect(pending.attributes('data-pending-kind')).toBe('sent')
     expect(pending.text()).toContain('Also update the docs')
     expect(pending.text()).toContain('waiting for the agent to take it')
+    // #147: a pending entry says when it was sent.
+    expect(Date.now() - new Date(pending.get('[data-message-time]').attributes('datetime')).getTime()).toBeLessThan(60000)
 
     mocks.api.getConversation.mockResolvedValue(page([{ role: 'user', text: 'Build it' }, { role: 'assistant', text: 'Working on it' },
       { role: 'user', text: 'Also update the docs' }]))
@@ -97,17 +99,19 @@ describe('pending queue below the conversation', () => {
     expect(pending.attributes('data-pending-kind')).toBe('fleet')
     expect(pending.text()).toContain('Message from agent “Code Reviewer”')
     expect(pending.text()).toContain('not yet received by the agent')
+    expect(pending.get('[data-message-time]').attributes('datetime')).toBe('2026-10-18T10:00:00.000Z')
 
     mocks.api.listSessionMessages.mockResolvedValue([
       { id: 'm1', from: 'abc123', fromTitle: 'Code Reviewer', body: 'Look at MR 42', createdAt: '2026-10-18T10:00:00Z', deliveredAt: '2026-10-18T10:00:05Z', priority: false, interrupt: false, deliveredVia: 'mod' }
     ])
     mocks.api.getConversation.mockResolvedValue(page([{ role: 'user', text: 'Build it' },
-      { role: 'user', text: '[AgentHub message from agent "Code Reviewer" (abc123)]\nLook at MR 42' }]))
+      { role: 'user', text: '[AgentHub message from agent "Code Reviewer" (abc123)]\nLook at MR 42', at: '2026-10-18T10:00:06Z' }]))
     await new Promise(resolve => setTimeout(resolve, 4100))
     await flushPromises()
     expect(wrapper.find('[data-pending-message]').exists()).toBe(false)
     const received = wrapper.get('[data-workspace-role=fleet]')
     expect(received.text()).toContain('Message from agent “Code Reviewer”')
     expect(received.text()).toContain('Look at MR 42')
+    expect(received.get('[data-message-time]').attributes('datetime')).toBe('2026-10-18T10:00:06.000Z')
   }, 10000)
 })

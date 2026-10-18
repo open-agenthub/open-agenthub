@@ -15,6 +15,7 @@ import { sessionCapabilities } from '../lib/access.js'
 import { canConvert, convertedLabel } from '../lib/conversion.js'
 import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
+import { fullMessageTime, shortMessageTime } from '../lib/message-time.js'
 import { terminalAttachmentPaths } from '../lib/attachments.js'
 import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
@@ -83,7 +84,7 @@ function saveSent() {
 }
 function onComposerSent(text) {
   if (!trackable(text, conversation.value?.source)) return
-  sentMessages.value = [...sentMessages.value, sentEntry(`sent-${++sentCounter}`, text, transcriptItems.value)]
+  sentMessages.value = [...sentMessages.value, { ...sentEntry(`sent-${++sentCounter}`, text, transcriptItems.value), at: new Date().toISOString() }]
   saveSent()
 }
 watch(transcriptItems, items => {
@@ -97,8 +98,8 @@ function dismissPending(key) {
   saveSent()
 }
 const pendingItems = computed(() => [
-  ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, dismissible: true })),
-  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, dismissible: true }))
+  ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, at: entry.at, dismissible: true })),
+  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, at: m.createdAt, dismissible: true }))
 ])
 const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '' })
@@ -147,11 +148,7 @@ const CLAMP_LINES = 3
 const CLAMP_CHARS = 240
 const needsClamp = m => m.body.split('\n').length > CLAMP_LINES || m.body.length > CLAMP_CHARS
 function messageTime(m) {
-  const at = new Date(m.createdAt)
-  if (Number.isNaN(at.getTime())) return ''
-  const sameDay = at.toDateString() === new Date().toDateString()
-  return sameDay ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : at.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return shortMessageTime(m.createdAt)
 }
 
 async function refreshMessages() {
@@ -580,7 +577,7 @@ function interruptWorkspaceAgent() {
              :data-priority="m.priority ? 'true' : null" :data-delivered-via="m.deliveredVia || null">
           <header class="msg-tile-head">
             <span class="msg-from"><span class="msg-kind" :class="{ priority: m.priority }">{{ m.interrupt ? 'Interrupt' : m.priority ? 'Priority message' : 'Message' }}</span> from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}</span>
-            <time class="msg-time" :datetime="m.createdAt">{{ messageTime(m) }}</time>
+            <time class="msg-time" :datetime="m.createdAt" :title="fullMessageTime(m.createdAt)">{{ messageTime(m) }}</time>
             <button class="ghost msg-dismiss" title="Dismiss" aria-label="Dismiss message" data-dismiss-message @click="dismissMessage(m.id)">✕</button>
           </header>
           <p class="msg-body" :class="{ clamped: !isExpanded(m.id) }" data-message-body>{{ m.body }}</p>

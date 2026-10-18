@@ -199,6 +199,26 @@ delivered — typed into the terminal (both CLIs), through the real fleet mod (C
 the inbox (Codex) — with no ✉ badge left behind. Against main's frontend the same run showed no
 pending entries, a badge of 1 after delivery, and the fleet message as the person's turn.
 
+**When a message was written (#147).** Each user and agent message in the conversation shows a
+compact time — the time alone for today, the day for earlier this year, the year beyond that — with
+the full date as its hover title. The time is the one the CLI wrote on that line of its own transcript
+(Claude Code's `timestamp`, Codex's rollout `timestamp`), which the backend already read into each
+entry's `at`; it is shown in the viewer's time zone and locale. A message that waited in the CLI's
+queue therefore shows when the CLI took it, not when it was typed. Tool rows stay compact and carry
+none. A terminal-history conversation (Cursor, OpenClaw, OpenCode) has no per-message times to show,
+and neither does a saved chat-mode stream: its events carry none, and a replay arrives all at once,
+so the time it reached the browser would be wrong. A received fleet message carries the time of the
+turn it arrived as; a pending entry the time it was sent — by the composer, or by the peer as the hub
+stored it — and the ✉ panel's tiles use the same format.
+
+Rejected: stamping messages with the time the browser first saw them. That is the poll's time, not
+the message's; after a reload every message of the session would carry the same minute.
+
+Verified in Chromium against the real Claude Code and Codex in this repository's session agent, with
+the conversation served by the backend's `NativeTranscript` parser: every message's `datetime` was
+the timestamp of its line in the CLI's own JSONL, and the label and title showed it in the browser's
+time zone.
+
 Only connected, writable interactive sessions can use the terminal composer. Viewers get the
 conversation and read-only agent terminal; the shell stays owner-only. Read-only markup is
 still escaped before Markdown rendering. Tool content is text, never executable HTML.

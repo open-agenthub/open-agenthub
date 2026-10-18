@@ -53,7 +53,7 @@ describe('fleet messages', () => {
       { role: 'user', text: '[AgentHub message from agent "Code Reviewer" (abc123)]\nLook at MR 42' },
       { role: 'user', text: 'my own words' }
     ] })
-    expect(items[0]).toEqual({ role: 'fleet', label: 'Message from agent “Code Reviewer”', text: 'Look at MR 42' })
+    expect(items[0]).toEqual({ role: 'fleet', label: 'Message from agent “Code Reviewer”', text: 'Look at MR 42', at: null })
     expect(items[1].role).toBe('user')
   })
 

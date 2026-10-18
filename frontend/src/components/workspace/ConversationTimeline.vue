@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { renderMarkdown } from '../../lib/markdown.js'
 import { renderMermaidBlocks } from '../../lib/mermaid.js'
+import { fullMessageTime, isoMessageTime, shortMessageTime } from '../../lib/message-time.js'
 import WorkLog from './WorkLog.vue'
 import MessageActions from './MessageActions.vue'
 
@@ -60,7 +61,8 @@ watch([() => props.items, () => props.pending, query], async () => {
             <pre>{{ item.text }}</pre>
           </WorkLog>
           <article v-else class="message" :class="'message-' + item.role" :data-workspace-role="item.role">
-            <span class="message-label">{{ item.label }}</span>
+            <span class="message-label">{{ item.label }}<time v-if="item.at" class="message-time" :datetime="isoMessageTime(item.at)"
+              :title="fullMessageTime(item.at)" data-message-time>{{ shortMessageTime(item.at) }}</time></span>
             <!-- What the person or the model wrote is markdown, as in the streaming Workspace;
                  scrollback text stays verbatim, where markdown rules would mangle a listing. -->
             <div v-if="item.role === 'assistant' || item.role === 'user' || item.role === 'fleet'" class="md" v-html="renderMarkdown(item.text)"></div>
@@ -70,7 +72,8 @@ watch([() => props.items, () => props.pending, query], async () => {
         </template>
         <ol v-if="pending.length && !query.trim()" class="pending" aria-label="Waiting for the agent" data-pending-messages>
           <li v-for="entry in pending" :key="entry.key" class="message message-pending" :class="'pending-' + entry.kind" data-pending-message :data-pending-kind="entry.kind">
-            <span class="message-label">{{ entry.label }} <span class="pending-state">· {{ entry.state }}</span></span>
+            <span class="message-label">{{ entry.label }} <span class="pending-state">· {{ entry.state }}</span><time v-if="entry.at" class="message-time"
+              :datetime="isoMessageTime(entry.at)" :title="fullMessageTime(entry.at)" data-message-time>{{ shortMessageTime(entry.at) }}</time></span>
             <pre>{{ entry.text }}</pre>
             <button v-if="entry.dismissible" type="button" class="pending-dismiss" aria-label="Stop showing as pending" title="Stop showing as pending"
               data-pending-dismiss @click="$emit('dismiss-pending', entry.key)">✕</button>
@@ -103,6 +106,7 @@ watch([() => props.items, () => props.pending, query], async () => {
 .message-pending pre { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .pending-dismiss { position: absolute; top: 6px; right: 6px; padding: 2px 6px; border: 0; background: transparent; color: var(--muted-3); font-size: 11px; }
 .pending-dismiss:hover { color: var(--text); }
+.message-time { margin-left: 8px; font-weight: 400; color: var(--muted-3); cursor: default; }
 .message pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .message-terminal pre { font: 12px/1.6 var(--mono); }
 .empty { text-align: center; color: var(--muted-3); padding: 36px 16px; font-size: 13px; }

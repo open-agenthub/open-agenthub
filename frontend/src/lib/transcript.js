@@ -169,8 +169,8 @@ export function toTranscriptItems(page) {
       // A fleet message reaches the CLI as a user turn headed with its sender (#186); shown as
       // the person's own words, it read as if they had written the peer's report.
       const fleet = entry.role === 'user' ? parseFleetMessage(entry.text) : null
-      if (fleet) return { role: 'fleet', label: fleetLabel(fleet), text: fleet.body }
-      return { role: entry.role, label: entryLabel(entry), text: entry.text }
+      if (fleet) return { role: 'fleet', label: fleetLabel(fleet), text: fleet.body, at: entry.at || null }
+      return { role: entry.role, label: entryLabel(entry), text: entry.text, at: entry.at || null }
     })
   }
   return toTranscriptBlocks(page.text).map(block => ({ role: 'terminal', label: 'Terminal', text: block }))
