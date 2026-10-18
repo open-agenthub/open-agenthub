@@ -237,6 +237,7 @@ builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepServic
 
 // Sessions with a self-deletion deadline (docs/session-expiry.md). The lock keeps two replicas
 // from deleting the same session at once.
+builder.Services.AddSingleton<SessionStorageCleanup>();
 builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
 builder.Services.AddHostedService<SessionExpirySweepService>();
 builder.Services.AddHostedService<SessionRuntimeImageSweepService>();

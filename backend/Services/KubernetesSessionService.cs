@@ -68,7 +68,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         IAgentCredentialPusher? credentialPusher = null,
         Containers.ISessionContainerCleanup? containerCleanup = null,
         ISessionExpiryLock? runtimeUpdateLock = null,
-        ISecretRequestStore? secretRequests = null)
+        ISecretRequestStore? secretRequests = null,
+        Kubernetes? cluster = null)
     {
         _secretRequests = secretRequests;
         _log = log;
@@ -108,10 +109,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // and not the request host.
         _frontendOrigin = cfg["FrontendOrigin"];
 
-        var config = KubernetesClientConfiguration.IsInCluster()
+        _k8s = cluster ?? new Kubernetes(KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
-            : KubernetesClientConfiguration.BuildConfigFromConfigFile();
-        _k8s = new Kubernetes(config);
+            : KubernetesClientConfiguration.BuildConfigFromConfigFile());
     }
 
     // ---------------------------------------------------------------- Credentials
@@ -1752,8 +1752,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await _browsers.GetSummaryAsync(id, ct), ct);
         if (pod is null && rec.Mode == SessionMode.Scheduled)
         {
-            var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
-            pod = new V1Pod { Spec = cron.Spec.JobTemplate.Spec.Template.Spec };
+            try
+            {
+                var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
+                pod = new V1Pod { Spec = cron.Spec.JobTemplate.Spec.Template.Spec };
+            }
+            catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // A storage failure can retain the row after its schedule was removed.
+            }
         }
         return info with { OutdatedImage = RuntimeImageOutdated(rec, pod) };
     }
@@ -1880,14 +1887,19 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // Dynamic port-request NetworkPolicies (and their grant rows) die with the session.
         if (_networkCleanup is not null) await _networkCleanup.CleanupSessionAsync(id, ct);
         if (_containerCleanup is not null) await _containerCleanup.CleanupSessionAsync(id, ct);
-        await TryDeletePodAsync($"session-{id}", ct);
-        try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
+        await new SessionProducerCleanup(_k8s, _opts.Namespace).DeleteAsync(id, ct);
+        // A retained row must show that its producers are stopped, including when storage
+        // fails or the request is cancelled after this point. This does not touch idle time.
+        await _store.SetFailureReasonAsync(id, "Session stopped; deletion pending. Retry delete to finish cleanup.", true, ct);
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(id), ct);
         await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct);
         if (_secretRequests is not null) await _secretRequests.DeleteBySessionAsync(id, ct);
         await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
+        // Keep the registry row until storage confirms deletion: expiry retries it next pass,
+        // and a failed manual delete can be retried without losing the owner/prefix mapping.
+        await SessionStorageCleanup.DeleteAsync(_artifacts, owner, id, ct);
         await _store.DeleteAsync(id, ct);
         _log.LogInformation("Deleted session {Id}", id);
     }
