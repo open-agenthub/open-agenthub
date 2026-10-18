@@ -11,7 +11,7 @@ import ChatAttachments from '../ChatAttachments.vue'
 // (an older runtime, a shared link), the composer offers no completion and still sends.
 // attach: resolves uploaded file ids to the paths the session agent materialized them at, which
 // send then pastes ahead of the text (#148); absent (a shared link), files cannot be attached.
-const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function, attach: Function })
+const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, disabledHint: String, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function, attach: Function })
 // sent: a message reached the agent's terminal; the view follows it until the agent takes it (#153).
 const emit = defineEmits(['sent'])
 const text = ref(drafts.get(props.sessionId) || '')
@@ -291,7 +291,8 @@ onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); ge
         <button type="submit" class="primary" :disabled="!accepting || pending || !hasContent || !attachmentsSettled">{{ pending ? 'Sending…' : enabled ? '↑ Send' : '↑ Queue' }}</button>
       </div>
     </div>
-    <p v-if="error" class="composer-error" role="alert">{{ error }}</p>
+    <p v-if="disabledHint" class="composer-hint">{{ disabledHint }}</p>
+    <p v-else-if="error" class="composer-error" role="alert">{{ error }}</p>
     <p v-else-if="draftCommand?.effect === 'new-conversation'" class="composer-hint warn" data-slash-warning>
       /{{ draftCommand.name }} switches the agent to another conversation. This view keeps showing the current one;
       follow the agent terminal from there.</p>

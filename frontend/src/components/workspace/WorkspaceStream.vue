@@ -308,7 +308,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <button v-if="!following" type="button" class="jump-latest" @click="scrollToEnd({ force: true })">↓ Jump to latest</button>
-    <div v-if="canSend" class="composer" @dragover.prevent @drop.prevent="dropFiles">
+    <div v-if="!readonly" class="composer" @dragover.prevent @drop.prevent="dropFiles">
       <ChatAttachments v-if="attachmentItems.length" :items="attachmentItems"
         :retry="attachmentQueue.retry" :remove="attachmentQueue.remove" />
       <div class="composer-row">
@@ -317,12 +317,13 @@ onBeforeUnmount(() => {
           @change="addFiles($event.target.files); $event.target.value = ''">
         <button v-if="canAttach" type="button" class="attach" data-chat-attach aria-label="Attach files" title="Attach files"
           @click="fileInput?.click()">＋</button>
-        <textarea ref="composerInput" v-model="text" data-chat-input rows="3" aria-label="Message the agent" placeholder="Message the agent — paste, drop, or attach files"
+        <textarea ref="composerInput" v-model="text" :disabled="!canSend" data-chat-input rows="3" aria-label="Message the agent" placeholder="Message the agent — paste, drop, or attach files"
           @paste="pasteFiles" @keydown="composerKey"></textarea>
-        <button v-if="busy" class="stop" data-chat-stop @click="interrupt">◼ Stop</button>
+        <button v-if="busy && canSend" class="stop" data-chat-stop @click="interrupt">◼ Stop</button>
         <button class="primary" data-chat-send :disabled="!canSubmit" @click="submit">Send</button>
       </div>
       <div class="composer-footer"><span>{{ session.agent || 'Agent' }} · {{ connectionStatus }}</span><span>Enter to send · Shift+Enter for newline</span></div>
+      <p v-if="!isLive" class="composer-footer">The session is stopped. Resume it to send a message; your draft is kept.</p>
       <p v-if="deliveryError" class="delivery-error" role="alert">{{ deliveryError }}</p>
     </div>
   </div>

@@ -142,6 +142,7 @@ describe('integrated workspace', () => {
     expect(mocks.api.getConversation).toHaveBeenNthCalledWith(2, 's1', 1)
     expect(wrapper.text()).toContain('Last page')
     expect(wrapper.get('textarea').attributes('disabled')).toBeDefined()
+    expect(wrapper.text()).toContain('Resume it to send a message; your draft is kept.')
   })
 
   it('offers retry on history failure and does not manufacture an empty successful transcript', async () => {
