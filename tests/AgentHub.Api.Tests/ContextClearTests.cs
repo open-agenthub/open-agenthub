@@ -25,7 +25,7 @@ public class ContextClearTests
     private static ISessionService Sessions(SessionInfo session)
     {
         var result = DispatchProxy.Create<ISessionService, Service>();
-        ((Service)(object)result).Session = session;
+        ((Service)result).Session = session;
         return result;
     }
 
