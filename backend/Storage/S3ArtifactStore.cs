@@ -317,7 +317,7 @@ public sealed class S3ArtifactStore : IArtifactStore
                     throw new IOException($"Object storage refused {deleted.DeleteErrors.Count} deletions.");
             }
             request.ContinuationToken = page.NextContinuationToken;
-        } while (page.IsTruncated == true);
+        } while (page.IsTruncated);
     }
 
     public async IAsyncEnumerable<string> ListSessionPrefixesAsync(
@@ -338,7 +338,7 @@ public sealed class S3ArtifactStore : IArtifactStore
             page = await _s3.ListObjectsV2Async(request, ct);
             foreach (var directory in page.CommonPrefixes ?? []) yield return directory;
             request.ContinuationToken = page.NextContinuationToken;
-        } while (page.IsTruncated == true);
+        } while (page.IsTruncated);
     }
 
     private static bool IsNotFound(AmazonS3Exception exception) =>

@@ -75,7 +75,10 @@ public sealed class SessionStorageCleanup(
                 deleted++;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-            catch (Exception ex)
+            // Transport/storage failures can be retried; programming errors must surface.
+            catch (Exception ex) when (ex is Amazon.Runtime.AmazonServiceException or
+                Amazon.Runtime.AmazonClientException or IOException or HttpRequestException or
+                TimeoutException or OperationCanceledException)
             {
                 failed++;
                 logger.LogWarning(ex, "Orphan session storage deletion failed; rerun the dry run to retry");
