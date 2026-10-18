@@ -6,7 +6,7 @@ import { completeCommand, leadingCommand, rankCommands, slashQuery } from '../..
 // or the agent socket is not connected yet — so a message is held and sent once enabled (#115).
 // loadCommands: resolves to the agent's slash commands ({ commands: [...] }); absent, or failing
 // (an older runtime, a shared link), the composer offers no completion and still sends.
-const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function })
+const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, disabledHint: String, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function })
 const text = ref(drafts.get(props.sessionId) || '')
 const input = ref(null)
 const pending = ref(false)
@@ -223,7 +223,8 @@ onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); ge
         <button type="submit" class="primary" :disabled="!accepting || pending || !text.trim()">{{ pending ? 'Sending…' : enabled ? '↑ Send' : '↑ Queue' }}</button>
       </div>
     </div>
-    <p v-if="error" class="composer-error" role="alert">{{ error }}</p>
+    <p v-if="disabledHint" class="composer-hint">{{ disabledHint }}</p>
+    <p v-else-if="error" class="composer-error" role="alert">{{ error }}</p>
     <p v-else-if="draftCommand?.effect === 'new-conversation'" class="composer-hint warn" data-slash-warning>
       /{{ draftCommand.name }} switches the agent to another conversation. This view keeps showing the current one;
       follow the agent terminal from there.</p>

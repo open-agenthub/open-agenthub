@@ -8,6 +8,7 @@ import ShareSessionDialog from './ShareSessionDialog.vue'
 import ConversationTimeline from './workspace/ConversationTimeline.vue'
 import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
 import CliMenuNotice from './workspace/CliMenuNotice.vue'
+import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import { CANCEL_KEYS, keysForOption } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
@@ -465,6 +466,7 @@ function interruptWorkspaceAgent() {
       </div>
     </div>
     <p v-if="runtimeUpdateError" role="alert">{{ runtimeUpdateError }}</p>
+    <SessionStoppedNotice :session="session" :shared-token="sharedToken" @resume="$emit('resume', $event)" />
     <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
@@ -601,7 +603,7 @@ function interruptWorkspaceAgent() {
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
-          ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
+          ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent" :disabled-hint="!isLive ? 'The session is stopped. Resume it to send a message; your draft is kept.' : ''"
           :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" :load-commands="sharedToken ? undefined : loadAgentCommands" />
       </div>
     </SessionWorkspace>
