@@ -164,6 +164,41 @@ since a retry could not tell whether it would be the second copy. When the sessi
 input without having started — it failed, or was stopped — the queue goes back into the draft.
 The queue is kept per session in memory, like drafts, so switching sessions does not lose it.
 
+**Pending messages (#153, #186).** A message the composer sent is not yet a turn: a CLI that is
+working keeps it in a queue of its own and writes it to its transcript only when it takes it. Verified
+with the pinned CLIs in a PTY against a model held for 15 s: Claude Code 2.1.287 shows *Press up to
+edit queued messages* and records a `queue-operation` until the turn ends, then the `user` entry;
+Codex 0.160.0 shows *Messages to be submitted after next tool call* and writes the user item when it
+submits it. Until then the message is shown below the conversation as *sent, waiting for the agent
+to take it*, and leaves that list when the conversation holds one more user turn with its text than
+it did when it was sent — so "continue" sent twice is two messages. A slash command is not followed
+(Codex records none of them), and neither is anything in a terminal-history conversation (Cursor,
+OpenClaw, OpenCode), where there is no user turn to find it in. Each entry has a ✕ that stops showing
+it as pending, in case a CLI ever records a message differently from how it was sent; that only
+changes this view.
+
+Fleet messages to the session join the same list while the hub has not recorded them delivered
+(`priority-messages.md`), labelled *not yet received by the agent*: the row cannot tell the inbox
+from a message the pod accepted for the end of the running turn (#173), which the hub leaves unmarked
+until it is handed over. Once delivered they leave the list and the ✉ badge. A fleet message
+reaches the CLI as a user turn headed `[AgentHub message from agent "<title>" (<id>)]` — typed into the
+terminal or submitted by the Claude fleet mod, which Claude Code 2.1.287 records wrapped in *The
+agenthub-fleet plugin sent a message:* and a note to the model — and the conversation shows that turn
+as *Message from agent “<title>”* with the body, not as the person's own words.
+
+Rejected: a delivery receipt from each CLI. None of them reports when it takes a queued message
+except by writing the transcript, which the Workspace already reads every second. Also rejected:
+reading the CLI's queue off its screen. The two CLIs draw it differently, and a redraw says only
+that the queue was there, not which entry left it.
+
+Verified in Chromium against the real Claude Code and Codex in this repository's session agent, with
+the conversation served by the backend's `NativeTranscript` parser from the CLI's own transcript: a
+message sent during a held turn was listed as pending and moved into the conversation when the CLI
+took it; a fleet message was pending while undelivered and appeared as a received fleet message once
+delivered — typed into the terminal (both CLIs), through the real fleet mod (Claude), and read from
+the inbox (Codex) — with no ✉ badge left behind. Against main's frontend the same run showed no
+pending entries, a badge of 1 after delivery, and the fleet message as the person's turn.
+
 Only connected, writable interactive sessions can use the terminal composer. Viewers get the
 conversation and read-only agent terminal; the shell stays owner-only. Read-only markup is
 still escaped before Markdown rendering. Tool content is text, never executable HTML.

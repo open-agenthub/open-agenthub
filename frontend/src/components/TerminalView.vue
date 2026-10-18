@@ -18,6 +18,8 @@ import { repoShortName } from '../lib/text.js'
 import { terminalAttachmentPaths } from '../lib/attachments.js'
 import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
+import { FLEET_WAITING, fleetLabel, pendingFleetMessages, sentEntry, stillPending, trackable } from '../lib/pending-messages.js'
+import { workspaceSent } from '../lib/session-drafts.js'
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
@@ -70,6 +72,34 @@ const shareOpen = ref(false)
 // the heuristics in lib/transcript.js because terminal output has no roles).
 const conversation = ref(null)
 const transcriptItems = computed(() => toTranscriptItems(conversation.value))
+// Composer messages that reached the terminal and that the CLI has not taken yet (#153), kept
+// per session like drafts so switching sessions does not forget them.
+const sentMessages = ref(workspaceSent.get(props.session?.id) || [])
+let sentCounter = 0
+function loadSent(id) { sentMessages.value = workspaceSent.get(id) || [] }
+function saveSent() {
+  if (sentMessages.value.length) workspaceSent.set(props.session.id, sentMessages.value)
+  else workspaceSent.delete(props.session.id)
+}
+function onComposerSent(text) {
+  if (!trackable(text, conversation.value?.source)) return
+  sentMessages.value = [...sentMessages.value, sentEntry(`sent-${++sentCounter}`, text, transcriptItems.value)]
+  saveSent()
+}
+watch(transcriptItems, items => {
+  if (!sentMessages.value.length) return
+  const left = stillPending(sentMessages.value, items)
+  if (left.length !== sentMessages.value.length) { sentMessages.value = left; saveSent() }
+})
+function dismissPending(key) {
+  if (key.startsWith('fleet-')) return dismissMessage(key.slice('fleet-'.length))
+  sentMessages.value = sentMessages.value.filter(entry => entry.id !== key)
+  saveSent()
+}
+const pendingItems = computed(() => [
+  ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, dismissible: true })),
+  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, dismissible: true }))
+])
 const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '' })
 
@@ -92,15 +122,16 @@ async function refreshPermissions() {
 // stays visible until the agent picks the message up or the user dismisses it. A priority
 // message was pushed into the agent the moment it arrived, so it is shown for a while after
 // delivery too: the person would otherwise never see what interrupted their agent.
-const PRIORITY_BANNER_MS = 5 * 60 * 1000
 const agentMessages = ref([])
 const dismissedMessages = ref(new Set())
 // Messages live in the ✉ panel, not above the terminal: a fleet of chatty peers used to stack
 // one banner per message over the agent's output until nothing underneath was readable. The
 // button carries a count of the open ones instead, and the panel lists them on demand.
-const visibleMessages = computed(() => agentMessages.value
-  .filter(m => !dismissedMessages.value.has(m.id))
-  .filter(m => !m.deliveredAt || (m.priority && Date.now() - new Date(m.deliveredAt).getTime() < PRIORITY_BANNER_MS)))
+// Open means not yet delivered (#186). A delivered priority message used to stay for five
+// minutes so the person could see what interrupted their agent; it read as an unread message
+// in an inbox that was already empty, and the conversation now shows what the agent received.
+const visibleMessages = computed(() => pendingFleetMessages(agentMessages.value)
+  .filter(m => !dismissedMessages.value.has(m.id)))
 // The badge counts exactly what the panel lists — a number on the button that does not match
 // the tiles behind it would only make people hunt for the missing one.
 const expandedMessages = ref(new Set())
@@ -121,12 +152,6 @@ function messageTime(m) {
   const sameDay = at.toDateString() === new Date().toDateString()
   return sameDay ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
     : at.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
-
-function deliveryLabel(m) {
-  if (!m.priority) return ''
-  if (m.deliveredVia === 'injected' || m.deliveredVia === 'mod') return 'delivered to the agent'
-  return m.deliveredAt ? 'picked up from the inbox' : 'waiting in inbox'
 }
 
 async function refreshMessages() {
@@ -288,6 +313,7 @@ watch(() => props.session?.id, () => {
   pendingPermissions.value = []
   agentMessages.value = []
   dismissedMessages.value = new Set()
+  loadSent(props.session?.id)
   conversation.value = null
   transcriptError.value = ''
   terminalOpened.value = false
@@ -559,7 +585,7 @@ function interruptWorkspaceAgent() {
           </header>
           <p class="msg-body" :class="{ clamped: !isExpanded(m.id) }" data-message-body>{{ m.body }}</p>
           <footer class="msg-tile-foot">
-            <span v-if="m.priority" class="msg-delivery" data-message-delivery>{{ deliveryLabel(m) }}</span>
+            <span class="msg-delivery" data-message-delivery>{{ FLEET_WAITING }}</span>
             <button v-if="needsClamp(m)" class="ghost msg-expand" data-message-expand :aria-expanded="isExpanded(m.id) ? 'true' : 'false'"
                     @click="toggleExpanded(m.id)">{{ isExpanded(m.id) ? 'Show less' : 'Show more' }}</button>
           </footer>
@@ -588,7 +614,7 @@ function interruptWorkspaceAgent() {
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
-          @retry="loadTranscript" @quote="composer?.quote($event)" />
+          :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
@@ -608,7 +634,7 @@ function interruptWorkspaceAgent() {
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
           ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
-          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" :load-commands="sharedToken ? undefined : loadAgentCommands"
+          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
           :attach="sharedToken ? undefined : attachWorkspaceFiles" />
       </div>
     </SessionWorkspace>

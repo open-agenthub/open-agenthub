@@ -190,29 +190,30 @@ describe('priority messages in the session view', () => {
     const banner = wrapper.get('[data-agent-message]')
     expect(banner.attributes('data-priority')).toBe('true')
     expect(banner.text()).toContain('Priority message from agent “Code Reviewer”')
-    expect(banner.get('[data-message-delivery]').text()).toBe('waiting in inbox')
+    expect(banner.get('[data-message-delivery]').text()).toBe('not yet received by the agent')
   })
 
-  it('keeps a delivered priority message visible for a while and says it reached the agent', async () => {
+  // #186: a message the agent received — through the mod, typed in, or read from its inbox — is
+  // no longer open, however recently it arrived; the badge counts only what still waits.
+  it('lists only messages the agent has not received yet', async () => {
     mocks.api.listSessionMessages.mockResolvedValue([
-      message({ id: 'fresh', priority: true, interrupt: true, deliveredAt: '2026-09-20T10:08:00Z', deliveredVia: 'injected' }),
-      message({ id: 'mod', priority: true, deliveredAt: '2026-09-20T10:09:00Z', deliveredVia: 'mod' }),
-      message({ id: 'stale', priority: true, deliveredAt: '2026-09-20T09:00:00Z', deliveredVia: 'injected' }),
-      message({ id: 'plain', deliveredAt: '2026-09-20T10:09:30Z', deliveredVia: 'inbox' })
+      message({ id: 'fresh', priority: true, interrupt: true, deliveredAt: '2026-09-20T10:09:58Z', deliveredVia: 'injected' }),
+      message({ id: 'mod', priority: true, deliveredAt: '2026-09-20T10:09:59Z', deliveredVia: 'mod' }),
+      message({ id: 'plain-read', deliveredAt: '2026-09-20T10:09:30Z', deliveredVia: 'inbox' }),
+      message({ id: 'waiting' })
     ])
     const wrapper = mountTerminal()
     await flushPromises()
+    expect(wrapper.get('[data-message-badge]').text()).toBe('1')
     await openPanel(wrapper)
 
     const banners = wrapper.findAll('[data-agent-message]')
-    expect(banners).toHaveLength(2)
-    expect(banners[0].text()).toContain('Interrupt from agent “Code Reviewer”')
-    expect(banners[0].get('[data-message-delivery]').text()).toBe('delivered to the agent')
-    expect(banners[1].attributes('data-delivered-via')).toBe('mod')
-    expect(banners[1].get('[data-message-delivery]').text()).toBe('delivered to the agent')
+    expect(banners).toHaveLength(1)
+    expect(banners[0].text()).toContain('Message from agent “Code Reviewer”')
+    expect(banners[0].text()).not.toContain('Priority')
   })
 
-  it('a plain message has no delivery label and no priority marker', async () => {
+  it('a plain message has no priority marker', async () => {
     mocks.api.listSessionMessages.mockResolvedValue([message()])
     const wrapper = mountTerminal()
     await flushPromises()
@@ -220,7 +221,8 @@ describe('priority messages in the session view', () => {
 
     const banner = wrapper.get('[data-agent-message]')
     expect(banner.attributes('data-priority')).toBeUndefined()
-    expect(banner.find('[data-message-delivery]').exists()).toBe(false)
+    expect(banner.text()).toContain('Message from')
+    expect(banner.text()).not.toContain('Priority')
   })
 })
 

@@ -12,6 +12,8 @@ import ChatAttachments from '../ChatAttachments.vue'
 // attach: resolves uploaded file ids to the paths the session agent materialized them at, which
 // send then pastes ahead of the text (#148); absent (a shared link), files cannot be attached.
 const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function, attach: Function })
+// sent: a message reached the agent's terminal; the view follows it until the agent takes it (#153).
+const emit = defineEmits(['sent'])
 const text = ref(drafts.get(props.sessionId) || '')
 const input = ref(null)
 const pending = ref(false)
@@ -89,6 +91,7 @@ async function flush() {
       }
       if (generation !== current) return
       queued.value = queued.value.filter(item => item !== next)
+      emit('sent', next.text)
     }
   } finally {
     flushing = false
@@ -143,6 +146,7 @@ async function submit() {
   try {
     if (files.length) await props.send(value, { paths: await props.attach(files.map(file => file.id)) })
     else await props.send(value)
+    emit('sent', value)
     if (generation === current && text.value === value) text.value = ''
     if (generation === current) attachments.clearReady()
   } catch (e) {
