@@ -8,6 +8,15 @@ purging remains a separate operation.
 
 ## Failure decision
 
+Before storage cleanup, deletion removes the CronJob with foreground propagation,
+deletes its Jobs and all session pods, and polls until all are absent. A DELETE
+response alone is insufficient: a terminating pod uploads its final state. Cluster
+errors or a two-minute termination timeout retain the row and storage for retry.
+
+After producers are gone, the row is marked failed with a retry-delete diagnostic.
+A scheduled session remains fetchable even though its CronJob is now absent. The
+status write does not reset its idle deadline, so expiry retries remain due.
+
 The registry row is removed **after** both object-storage deletions succeed. A
 storage exception (including an object-level error inside a successful bulk
 response) propagates. The row remains the durable owner/id mapping: retry the
@@ -30,9 +39,10 @@ existing row provides durable retries without a new table. We rejected an
 unconditional startup sweep because operators must review historical cleanup
 before any deletion.
 
-Stopping a pod does not revoke presigned upload URLs already issued to it. A late
-upload can recreate a prefix after deletion; the historical cleanup below also
-covers that case. This change does not add object version/lifecycle management.
+Waiting for producer disappearance closes the normal final-upload race. It does
+not revoke already-issued presigned upload URLs held outside those producers; the
+historical cleanup also covers prefixes recreated through such URLs. This change
+does not add object version/lifecycle management.
 
 ## Historical cleanup
 
@@ -75,7 +85,14 @@ an **isolated, disposable** object-storage bucket and database configured throug
 dotnet run --project tests/SessionStorageProof
 ```
 
-The cluster transport and browser teardown are fixtures; no cluster is required.
+By default the cluster transport and browser teardown are fixtures. Set
+`SessionStorageProof__KubeConfig` to a disposable control plane to use real cluster
+objects and garbage collection. The proof creates its own namespace and exercises
+both a direct pod and CronJob/Job/pod ownership. Finalizers hold real API objects
+during real delayed storage uploads after DELETE acceptance, without a kubelet.
+The no-wait implementation reproduces a deleted registry row with recreated
+objects; the fixed service waits and removes the final uploads. It also proves
+cluster authorization errors and termination timeouts preserve data.
 The proof asserts manual/expiry deletion, storage denial with
 row retention, restored-storage retries, admin-only HTTP access, a read-only
 preview, stale-plan protection, repeated apply, more than 1,000 objects in one
@@ -85,9 +102,12 @@ synthetic rows/objects in its disposable services.
 
 Verified for this change with rootless storage-server version 2.1.0 and database
 version 15, all running as uid 1000: all proof assertions passed and all 2,093
-backend tests passed with zero skips. Removing the new cleanup call reproduced
+backend tests passed with zero skips. The rootless control-plane proof also passed
+with API-server version 1.34.1 and its real garbage collector. Removing the new cleanup call reproduced
 `Object retained after success` against a separate bucket; restoring it passed.
-A real cluster, late producer uploads, and versioned buckets were not exercised.
+A kubelet, real container signal delivery, external presigned-URL holders, and
+versioned buckets were not exercised; delayed final uploads use real API finalizers
+and real storage requests.
 
 Plans use the backend data-protection key ring. A restart or a request to a replica
 without the issuing key rejects the token safely; issue a new preview on the

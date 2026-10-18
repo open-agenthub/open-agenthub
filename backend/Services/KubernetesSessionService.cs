@@ -1752,8 +1752,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await _browsers.GetSummaryAsync(id, ct), ct);
         if (pod is null && rec.Mode == SessionMode.Scheduled)
         {
-            var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
-            pod = new V1Pod { Spec = cron.Spec.JobTemplate.Spec.Template.Spec };
+            try
+            {
+                var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
+                pod = new V1Pod { Spec = cron.Spec.JobTemplate.Spec.Template.Spec };
+            }
+            catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+            {
+                // A storage failure can retain the row after its schedule was removed.
+            }
         }
         return info with { OutdatedImage = RuntimeImageOutdated(rec, pod) };
     }
@@ -1880,8 +1887,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // Dynamic port-request NetworkPolicies (and their grant rows) die with the session.
         if (_networkCleanup is not null) await _networkCleanup.CleanupSessionAsync(id, ct);
         if (_containerCleanup is not null) await _containerCleanup.CleanupSessionAsync(id, ct);
-        await TryDeletePodAsync($"session-{id}", ct);
-        try { await _k8s.BatchV1.DeleteNamespacedCronJobAsync($"session-{id}", _opts.Namespace, propagationPolicy: "Foreground", cancellationToken: ct); } catch { }
+        await new SessionProducerCleanup(_k8s, _opts.Namespace).DeleteAsync(id, ct);
+        // A retained row must show that its producers are stopped, including when storage
+        // fails or the request is cancelled after this point. This does not touch idle time.
+        await _store.SetFailureReasonAsync(id, "Session stopped; deletion pending. Retry delete to finish cleanup.", true, ct);
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"mcp-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         try { await _k8s.CoreV1.DeleteNamespacedSecretAsync($"gitcreds-{id}", _opts.Namespace, cancellationToken: ct); } catch { }
         await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(id), ct);
