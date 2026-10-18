@@ -11,6 +11,7 @@ import {
 import { openSessionEvents } from '../lib/live.js'
 import BrowserPane from './BrowserPane.vue'
 import FilesPane from './FilesPane.vue'
+import WorkspaceDiffPane from './workspace/WorkspaceDiffPane.vue'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -28,6 +29,7 @@ const browserHidden = ref(false)
 const browserVisible = computed(() => browserRunning.value && !browserHidden.value)
 let dragging = false
 const activeCompanion = ref(browserVisible.value ? 'browser' : 'files')
+const diffOpen = ref(false)
 const filesOpen = ref(false)
 const files = ref([])
 const selectedId = ref(null)
@@ -44,7 +46,7 @@ const LIVE_FALLBACK_POLL_MS = 30_000
 const liveConnected = ref(false)
 const selectedFile = computed(() => files.value.find(file => file.id === selectedId.value) || null)
 const filesVisible = computed(() => filesOpen.value || Boolean(selectedFile.value))
-const companionVisible = computed(() => browserVisible.value || filesVisible.value)
+const companionVisible = computed(() => browserVisible.value || filesVisible.value || diffOpen.value)
 const isPresented = computed(() => Boolean(selectedId.value && presentation.value?.fileId === selectedId.value))
 
 function capabilitiesRequest() {
@@ -139,7 +141,7 @@ function selectFile(id) {
 function closeFiles() {
   filesOpen.value = false
   selectedId.value = null
-  if (browserVisible.value) { activeCompanion.value = 'browser'; mobilePane.value = 'browser' } else mobilePane.value = 'agent'
+  if (browserVisible.value) { activeCompanion.value = 'browser'; mobilePane.value = 'browser' } else if (diffOpen.value) { activeCompanion.value = 'diff'; mobilePane.value = 'diff' } else mobilePane.value = 'agent'
 }
 async function dismissPresentation() {
   if (!props.canWrite || props.sharedToken) return
@@ -151,7 +153,7 @@ async function dismissPresentation() {
 }
 function closeBrowser() {
   browserHidden.value = true
-  if (filesVisible.value) { activeCompanion.value = 'files'; mobilePane.value = 'files' } else mobilePane.value = 'agent'
+  if (filesVisible.value) { activeCompanion.value = 'files'; mobilePane.value = 'files' } else if (diffOpen.value) { activeCompanion.value = 'diff'; mobilePane.value = 'diff' } else mobilePane.value = 'agent'
 }
 function openBrowser() {
   if (!browserRunning.value) return
@@ -160,6 +162,7 @@ function openBrowser() {
 }
 function closeCompanion(which) {
   if (which === 'browser') closeBrowser()
+  else if (which === 'diff') closeDiff()
   else closeFiles()
 }
 // Escape closes the pane only from its own chrome — tabs, file list, preview toolbar. While the
@@ -177,7 +180,13 @@ async function openFiles() {
   if (!selectedId.value && files.value.length) selectedId.value = files.value[0].id
   activeCompanion.value = 'files'; mobilePane.value = 'files'
 }
-defineExpose({ openFiles, openBrowser })
+function openDiff() { diffOpen.value = true; activeCompanion.value = 'diff'; mobilePane.value = 'diff' }
+function closeDiff() {
+  diffOpen.value = false
+  activeCompanion.value = filesVisible.value ? 'files' : 'browser'
+  mobilePane.value = (filesVisible.value || browserVisible.value) ? activeCompanion.value : 'agent'
+}
+defineExpose({ openFiles, openBrowser, openDiff })
 
 function clamp(value) { return Math.min(75, Math.max(25, value)) }
 function resizeBy(delta) { splitPercent.value = clamp(splitPercent.value + delta) }
@@ -206,15 +215,15 @@ function startDragging(event) {
 }
 onMounted(initializeFiles)
 watch(() => props.session.id, () => {
-  files.value = []; selectedId.value = null; filesOpen.value = false; browserHidden.value = false
+  diffOpen.value = false; files.value = []; selectedId.value = null; filesOpen.value = false; browserHidden.value = false
   presentation.value = null; presentationRevision = -1; void initializeFiles()
 })
 // A browser that stops and is requested again is a new lease the agent wants seen, so the
 // person's earlier "hide" does not carry over to it.
 watch(browserRunning, running => { if (!running) browserHidden.value = false })
 watch(browserVisible, visible => {
-  if (visible && !filesOpen.value && !selectedFile.value) { activeCompanion.value = 'browser'; mobilePane.value = 'browser' }
-  else if (!visible && activeCompanion.value === 'browser') activeCompanion.value = 'files'
+  if (visible && !filesOpen.value && !selectedFile.value && !diffOpen.value) { activeCompanion.value = 'browser'; mobilePane.value = 'browser' }
+  else if (!visible && activeCompanion.value === 'browser') activeCompanion.value = diffOpen.value ? 'diff' : 'files'
 })
 onBeforeUnmount(() => {
   stopDragging()
@@ -226,9 +235,11 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <div class="diff-toggle"><button type="button" :aria-pressed="diffOpen" @click="diffOpen ? closeDiff() : openDiff()">Changes</button></div>
   <div v-if="session?.failureReason" class="startup-failure" role="status" data-session-failure>{{ session.failureReason }}</div>
   <div v-if="companionVisible" class="workspace-shell">
     <nav class="workspace-tabs" aria-label="Session view">
+      <button v-if="diffOpen" :class="{ active: mobilePane === 'diff' }" @click="mobilePane = 'diff'; activeCompanion = 'diff'">Changes</button>
       <button v-if="filesVisible" data-mobile-workspace-tab="files" :class="{ active: mobilePane === 'files' }" @click="mobilePane = 'files'; activeCompanion = 'files'">Files</button>
       <button v-if="browserVisible" data-mobile-workspace-tab="browser" :class="{ active: mobilePane === 'browser' }" @click="mobilePane = 'browser'; activeCompanion = 'browser'">Browser</button>
       <button data-mobile-workspace-tab="agent" :class="{ active: mobilePane === 'agent' }" @click="mobilePane = 'agent'">Agent</button>
@@ -238,6 +249,10 @@ onBeforeUnmount(() => {
         <!-- Each pane closes from its own tab, which is the one row present for both panes at every
              width; the phone tab strip above only switches between panes and the agent. -->
         <nav class="companion-tabs" aria-label="Companion view">
+          <span v-if="diffOpen" class="companion-tab" :class="{ active: activeCompanion === 'diff' }">
+            <button data-workspace-tab="diff" @click="activeCompanion = 'diff'; mobilePane = 'diff'">Changes</button>
+            <button type="button" class="tab-close" aria-label="Close changes" @click="closeDiff">×</button>
+          </span>
           <span v-if="filesVisible" class="companion-tab" :class="{ active: activeCompanion === 'files' }">
             <button data-workspace-tab="files" @click="activeCompanion = 'files'">Files</button>
             <button type="button" class="tab-close" data-files-close aria-label="Close files" title="Close files (Esc)" @click="closeFiles">×</button>
@@ -248,6 +263,7 @@ onBeforeUnmount(() => {
           </span>
         </nav>
         <div class="companion-body">
+          <WorkspaceDiffPane v-if="diffOpen" v-show="activeCompanion === 'diff'" :session-id="session.id" :shared-token="sharedToken" :active="activeCompanion === 'diff' && mobilePane !== 'agent'" />
           <FilesPane v-show="activeCompanion === 'files'" :session-id="session.id" :files="files" :selected-id="selectedId"
             :capabilities="fileCapabilities" :can-write="canWrite && !sharedToken" :shared-token="sharedToken"
             :presented="isPresented" @select="selectFile" @dismiss="dismissPresentation"
@@ -263,6 +279,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.diff-toggle { padding: 3px 8px; }
+.diff-toggle button { color: var(--text); background: var(--panel-2); border: 1px solid var(--border); border-radius: 4px; padding: 4px 10px; }
 .startup-failure { padding: 12px; color: var(--danger, #e87979); white-space: pre-wrap; overflow-wrap: anywhere; }
 .workspace-shell, .terminal-only { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .session-split { flex: 1; display: flex; min-width: 0; min-height: 0; }

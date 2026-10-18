@@ -114,6 +114,7 @@ builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api
 builder.Services.AddHttpClient<IAgentCredentialPusher, AgentCredentialPusher>();
 builder.Services.AddHttpClient<ISessionMessageDelivery, SessionMessageDelivery>();
 // A singleton, unlike the typed clients above: it holds each followed session's offset and entries.
+builder.Services.AddHttpClient<IWorkspaceDiffReader, WorkspaceDiffReader>();
 builder.Services.AddHttpClient(nameof(LiveTranscriptReader));
 builder.Services.AddSingleton<ILiveTranscriptReader>(sp => new LiveTranscriptReader(
     sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(LiveTranscriptReader)),
