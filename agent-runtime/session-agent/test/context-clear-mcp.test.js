@@ -4,10 +4,18 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const http = require('node:http');
 const path = require('node:path');
+const fs = require('node:fs');
+const os = require('node:os');
 
 test('real in-pod MCP clears only its callback identity and refuses a peer target', async t => {
   const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
   const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+  // The image puts sessions and node_modules beside each other; source tests install
+  // dependencies under session-agent instead, so reproduce the image layout in isolation.
+  const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'context-clear-mcp-'));
+  t.after(() => fs.rmSync(runtime, { recursive: true, force: true }));
+  fs.cpSync(path.resolve(__dirname, '../../sessions'), path.join(runtime, 'sessions'), { recursive: true });
+  fs.symlinkSync(path.resolve(__dirname, '../node_modules'), path.join(runtime, 'node_modules'), 'dir');
   const requests = [];
   const backend = http.createServer((req, res) => {
     let body = '';
@@ -21,7 +29,7 @@ test('real in-pod MCP clears only its callback identity and refuses a peer targe
   await new Promise(resolve => backend.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise(resolve => backend.close(resolve)));
   const transport = new StdioClientTransport({ command: process.execPath,
-    args: [path.resolve(__dirname, '../../sessions/server.mjs')],
+    args: [path.join(runtime, 'sessions/server.mjs')],
     env: { ...process.env, AGENTHUB_CALLBACK_URL: `http://127.0.0.1:${backend.address().port}/internal/sessions/self`,
       AGENTHUB_CALLBACK_TOKEN: 'self-token', AGENTHUB_SESSION_ID: 'self' }, stderr: 'pipe' });
   const client = new Client({ name: 'context-clear-proof', version: '1.0.0' });
