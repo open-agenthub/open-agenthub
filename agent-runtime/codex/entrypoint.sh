@@ -16,6 +16,11 @@ mkdir -p "$CODEX_HOME"
 chmod 700 "$CODEX_HOME"
 umask 077
 printf '%s\n' 'cli_auth_credentials_store = "file"' > "$CODEX_HOME/config.toml"
+# Straight after the first line: the provider selection is top-level keys, which have to come
+# before the first table header below (docs/custom-model-endpoints.md).
+if [ "${AGENTHUB_AUTH_MODE:-}" = "customendpoint" ]; then
+  node "$RUNTIME/codex/model-provider.js" >> "$CODEX_HOME/config.toml"
+fi
 # Always omit runtime-owned server names from user MCP so they cannot be spoofed.
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   node "$RUNTIME/codex/mcp-config.js" /secrets/mcp/mcp.json agenthub_browser agenthub_sessions agenthub_files agenthub_network >> "$CODEX_HOME/config.toml"
@@ -46,6 +51,12 @@ apikey)
     unset CODEX_API_KEY
     [ ! -f "$CODEX_HOME/auth.json" ] || chmod 600 "$CODEX_HOME/auth.json"
   fi
+  ;;
+customendpoint)
+  # No login and no watcher: config.toml selects the provider written above, and the key reaches
+  # the CLI child only, through driver.prepare. The probe fails the start with a reason when the
+  # server lacks the Responses API or cannot be reached.
+  node "$RUNTIME/common/model-endpoint.js" probe responses
   ;;
 subscription)
   AUTH_EXPECT_CREATE=1
