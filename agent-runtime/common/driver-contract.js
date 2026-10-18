@@ -28,6 +28,9 @@ function validateDriver(driver) {
   for (const key of ['buildCommand', 'isResumeCommand', 'isMissingResume', 'prepare']) {
     if (typeof driver[key] !== 'function') throw new Error('Agent driver ' + key + ' must be a function');
   }
+  if (driver.contextClearCommand !== undefined && !/^\/[a-z][a-z-]*$/.test(driver.contextClearCommand)) {
+    throw new Error('Agent driver contextClearCommand must be a native slash command');
+  }
   // Optional: findTranscript({ env, home, cwd, fs, launchedAt }) names the provider's own
   // conversation file (Claude's project JSONL, Codex's rollout) once it exists, or returns
   // null. Runtimes without a readable native transcript simply leave it out.

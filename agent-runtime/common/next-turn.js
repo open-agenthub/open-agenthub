@@ -80,9 +80,10 @@ function createNextTurnDelivery(options) {
   let held = [];
   let busyTaking = false;
   let typing = null;
+  const actions = [];
 
   async function takeFromHub() {
-    if (!callback || !token) return [];
+    if (options.takeMessages === false || !callback || !token) return [];
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), HUB_TIMEOUT_MS);
     try {
@@ -117,6 +118,9 @@ function createNextTurnDelivery(options) {
       return null;
     }
     if (event !== 'stop') return null;
+    // A self-clear must finish the current turn, rather than continue it with peer messages.
+    // Those messages stay in the inbox until the handover starts the new conversation.
+    if (actions.length) { chained = 0; state = 'idle'; return null; }
     // Holding the flag across the take keeps an idle delivery from taking the same batch twice.
     if (busyTaking) await busyTaking;
     if (chained < MAX_CHAINED_TURNS) {
@@ -152,7 +156,7 @@ function createNextTurnDelivery(options) {
 
   /** Types what is waiting into an agent that sits at its prompt; does nothing otherwise. */
   async function deliverIfIdle(term, scrollback, screenSize) {
-    if (!pending && !held.length) return false;
+    if (!pending && !held.length && !actions.length) return false;
     if (busyTaking || idleReason(term, screenSize)) return false;
     const screen = await renderScreen(scrollback(), screenSize, Terminal());
     if (detectMenu(screen)) return false;
@@ -161,6 +165,13 @@ function createNextTurnDelivery(options) {
     let release;
     busyTaking = new Promise(resolve => { release = resolve; });
     try {
+      if (actions.length) {
+        const action = actions.shift();
+        state = 'busy';
+        typing = Promise.resolve().then(action).then(result => { if (result === false) state = 'idle'; });
+        await typing;
+        return true;
+      }
       const messages = await takeAll();
       if (!messages.length) return false;
       if (idleReason(term, screenSize)) {
@@ -182,6 +193,18 @@ function createNextTurnDelivery(options) {
     /** A plain message the hub will hear "next-turn" for. */
     accept() { pending = true; },
     turnEvent,
+    scheduleAtSafePoint(action) { actions.push(action); },
+    async waitForInputReady(term, scrollback, screenSize, isReady = () => true) {
+      const deadline = now() + 15_000;
+      while (now() < deadline) {
+        if (now() - lastOutput >= IDLE_QUIET_MS) {
+          const screen = await renderScreen(scrollback(), screenSize, Terminal());
+          if (!detectMenu(screen) && isReady(screen) && now() - lastOutput >= IDLE_QUIET_MS) return;
+        }
+        await wait(100);
+      }
+      throw new Error('context_clear_input_not_ready');
+    },
     deliverIfIdle,
     agentStarted() {
       state = 'unknown';
