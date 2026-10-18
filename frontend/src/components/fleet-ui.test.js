@@ -213,14 +213,6 @@ describe('priority messages in the session view', () => {
     expect(banners[0].text()).not.toContain('Priority')
   })
 
-  it('says a message accepted for the end of the running turn waits for that turn', async () => {
-    mocks.api.listSessionMessages.mockResolvedValue([message({ deliveredVia: 'next_turn' })])
-    const wrapper = mountTerminal()
-    await flushPromises()
-    await openPanel(wrapper)
-    expect(wrapper.get('[data-message-delivery]').text()).toBe('waiting for the agent’s turn to end')
-  })
-
   it('a plain message has no priority marker', async () => {
     mocks.api.listSessionMessages.mockResolvedValue([message()])
     const wrapper = mountTerminal()
@@ -277,6 +269,19 @@ describe('messaging the agent from the session view', () => {
 
     expect(mocks.api.sendSessionMessage).toHaveBeenCalledWith('s1', { body: 'later please', priority: true, interrupt: false })
     expect(wrapper.get('[data-send-message-note]').text()).toContain('Waiting in the inbox')
+  })
+
+  it('says a message for the next turn waits for the running one to end', async () => {
+    mocks.api.sendSessionMessage.mockResolvedValue({ id: 'm-9', to: 's1', deliveredVia: 'next_turn' })
+    const wrapper = mountTerminal()
+    await flushPromises()
+
+    await wrapper.get('[data-send-message-toggle]').trigger('click')
+    await wrapper.get('[data-send-message-text]').setValue('when you are done')
+    await wrapper.get('[data-send-message-submit]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-send-message-note]').text()).toBe('The agent gets it as soon as its current turn ends.')
   })
 
   it('offers the panel to managers only, and the send form only while the session is live', async () => {

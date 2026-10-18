@@ -56,7 +56,12 @@ public static partial class NativeTranscript
                 using var document = JsonDocument.Parse(line);
                 var root = document.RootElement;
                 if (root.ValueKind != JsonValueKind.Object) continue;
-                if (root.TryGetProperty("payload", out var payload) && payload.ValueKind == JsonValueKind.Object)
+                if (root.TryGetProperty("type", out var kind) && kind.ValueKind == JsonValueKind.String && kind.GetString() == "agenthub_conversation")
+                {
+                    var id = root.TryGetProperty("id", out var identity) ? identity.GetString() : null;
+                    entries.Add(new TranscriptEntry("boundary", "Conversation cleared", null, id));
+                }
+                else if (root.TryGetProperty("payload", out var payload) && payload.ValueKind == JsonValueKind.Object)
                     ParseCodexLine(root, payload, entries);
                 else
                     ParseClaudeLine(root, entries);
@@ -120,7 +125,12 @@ public static partial class NativeTranscript
         if (!message.TryGetProperty("content", out var content)) return;
         if (content.ValueKind == JsonValueKind.String)
         {
-            AddText(entries, type, type == "user" ? UnwrapPastes(content.GetString()) : content.GetString(), at);
+            var value = content.GetString();
+            // Clear commands are CLI bookkeeping; the Workspace renders its own readable boundary.
+            if (type == "user" && value is not null &&
+                (value.StartsWith("<command-name>/clear</command-name>", StringComparison.Ordinal) ||
+                 value.StartsWith("<command-name>/new</command-name>", StringComparison.Ordinal))) return;
+            AddText(entries, type, type == "user" ? UnwrapPastes(value) : value, at);
             return;
         }
         if (content.ValueKind != JsonValueKind.Array) return;

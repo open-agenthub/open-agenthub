@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { createGate } from './policy-gate.mjs';
 import { createLimitNotice } from './limit-notice.mjs';
 import { createTurnNotifier } from './turn-notify.mjs';
@@ -7,11 +9,24 @@ import { installSkillRefresher } from './skill-refresh.mjs';
 // this file exports the plugin and nothing else; the logic lives in policy-gate.mjs,
 // turn-notify.mjs, limit-notice.mjs and skill-refresh.mjs.
 export const AgentHubPolicy = async (input) => {
+  const inputClient = input && input.client;
   const gate = createGate();
   const notify = createTurnNotifier({ client: input && input.client });
   const limitNotice = createLimitNotice();
   const skills = installSkillRefresher({ client: input && input.client });
   return {
+    // The CLI creates its own session IDs; recording the submitted conversation prevents
+    // --continue from selecting a shell-tab session when this pod resumes.
+    'chat.message': async (input) => {
+      if (typeof input?.sessionID !== 'string' || !/^ses_[A-Za-z0-9]+$/.test(input.sessionID)) return;
+      try {
+        const session = await inputClient.session.get({ path: { id: input.sessionID } });
+        if (!session?.data || session.data.parentID) return;
+        const root = path.join(process.env.HOME || '/home/agent', '.opencode');
+        fs.mkdirSync(root, { recursive: true });
+        fs.writeFileSync(path.join(root, 'agenthub-session-id'), input.sessionID + '\n');
+      } catch {}
+    },
     'tool.execute.before': async (input, output) => {
       await gate(input && input.tool, output && output.args);
     },

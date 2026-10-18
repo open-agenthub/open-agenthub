@@ -56,15 +56,14 @@ export function stillPending(sent, items) {
   return sent.filter(entry => occurrences(items, entry.text) <= entry.baseline)
 }
 
-export const NEXT_TURN = 'next_turn'
-
 // A fleet message is pending until the hub records it as delivered, through whichever channel
 // (inbox read, typed into the terminal, the mod, or at the end of the running turn). One the
-// pod has accepted for "when the running turn ends" stays undelivered until then.
+// pod accepted for "when the running turn ends" (#173) is left unmarked until it is handed over,
+// so it too waits in the inbox as far as the row says.
 export function pendingFleetMessages(messages) {
   return (messages || []).filter(message => !message.deliveredAt)
 }
 
-export function fleetWaitingLabel(message) {
-  return message.deliveredVia === NEXT_TURN ? 'waiting for the agent’s turn to end' : 'waiting in the agent’s inbox'
+export function fleetWaitingLabel() {
+  return 'waiting in the agent’s inbox'
 }

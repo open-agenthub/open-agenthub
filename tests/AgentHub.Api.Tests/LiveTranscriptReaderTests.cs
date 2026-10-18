@@ -30,6 +30,7 @@ public class LiveTranscriptReaderTests
     private sealed class Pod : HttpMessageHandler
     {
         public byte[] File = [];
+        public string? TranscriptId;
         public HttpStatusCode Status = HttpStatusCode.OK;
         public bool More;
         public readonly List<Uri> Requests = [];
@@ -47,6 +48,7 @@ public class LiveTranscriptReaderTests
             var body = from >= File.Length ? [] : File[(int)from..];
             var whole = Array.LastIndexOf(body, (byte)'\n') + 1;
             var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(body[..whole]) };
+            if (TranscriptId is not null) response.Headers.Add("X-Transcript-Id", TranscriptId);
             response.Headers.Add("X-Transcript-Size", (File.Length + (More ? 1 : 0)).ToString());
             response.Headers.Add("X-Transcript-Next", (Math.Min(from, File.Length) + whole).ToString());
             return response;
@@ -63,6 +65,22 @@ public class LiveTranscriptReaderTests
             Calls++;
             return Task.FromResult(Live && Calls <= AllowedCalls);
         }
+    }
+
+    [Fact]
+    public async Task LargerReplacementConversationRestartsAtZeroInsteadOfKeepingTheOldCursor()
+    {
+        var pod = new Pod { TranscriptId = "old" };
+        pod.Append(Line("user", "old"));
+        var reader = new LiveTranscriptReader(new HttpClient(pod), new Store(),
+            new ConfigurationBuilder().Build(), new Identity());
+        Assert.Equal("old", Assert.Single((await reader.ReadAsync(Running(), CancellationToken.None))!).Text);
+        pod.File = [];
+        pod.TranscriptId = "new";
+        pod.Append("{\"type\":\"agenthub_conversation\",\"id\":\"new\"}\n" + Line("user", "a larger new conversation"));
+        var entries = await reader.ReadAsync(Running(), CancellationToken.None);
+        Assert.Equal(new[] { "Conversation cleared", "a larger new conversation" }, entries!.Select(entry => entry.Text));
+        Assert.Equal("?from=0", pod.Requests.Last().Query);
     }
 
     [Fact]

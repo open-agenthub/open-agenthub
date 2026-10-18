@@ -66,7 +66,6 @@ describe('fleet messages', () => {
     ]
     expect(pendingFleetMessages(messages).map(m => m.id)).toEqual(['1', '3'])
     expect(fleetWaitingLabel(messages[0])).toBe('waiting in the agent’s inbox')
-    expect(fleetWaitingLabel(messages[2])).toBe('waiting for the agent’s turn to end')
     expect(fleetLabel({ from: 'abc', fromTitle: null })).toBe('Message from agent “abc”')
     expect(fleetLabel({ from: null })).toBe('Message from outside the fleet')
   })

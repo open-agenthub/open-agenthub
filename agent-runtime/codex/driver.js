@@ -153,8 +153,23 @@ function readSessionMeta(file, fileSystem) {
 // On a resume by id the file already exists and is appended to; on a fresh start it only exists
 // after the first turn, so this runs on every persistence tick until it finds one. The id is
 // recorded next to the state so the next resume names it instead of taking whatever is newest.
-function findTranscript({ env, fs: fileSystem, launchedAt }) {
+function findTranscript({ env, fs: fileSystem, launchedAt, cwd, pid }) {
   const home = codexHome(env);
+  if (pid) {
+    try {
+      const active = JSON.parse(fileSystem.readFileSync(path.join(home, 'agenthub-active', pid + '.json'), 'utf8'));
+      if (UUID.test(active.id) && active.cwd === cwd && active.at >= (launchedAt || 0) - 1000 &&
+          typeof active.file === 'string' && active.file.startsWith(path.join(home, 'sessions') + path.sep) &&
+          active.file.endsWith('-' + active.id + '.jsonl')) {
+        if (active.cleared === true) env.AGENTHUB_CONVERSATION_CLEARED = '1';
+        if (typeof active.previousFile === 'string') env.AGENTHUB_PREVIOUS_TRANSCRIPT = active.previousFile;
+        if (rememberedThreadId(env, fileSystem) !== active.id) {
+          fileSystem.writeFileSync(path.join(home, THREAD_ID_FILE), active.id + '\n');
+        }
+        return active.file;
+      }
+    } catch {}
+  }
   const rollouts = listRollouts(path.join(home, 'sessions'), fileSystem);
   const remembered = rememberedThreadId(env, fileSystem);
   if (remembered) {
@@ -209,11 +224,13 @@ module.exports = {
   // resume, and every byte of them is re-compressed on each state archive.
   // packages/ is the TUI's app-server daemon install (~400 MB of binaries the image already
   // ships) and app-server-daemon/ its pid and lock files: neither belongs to a conversation.
-  stateExcludes: ['.codex/log', '.codex/tmp', '.codex/.tmp', '.codex/packages', '.codex/app-server-daemon'],
+  stateExcludes: ['.codex/log', '.codex/tmp', '.codex/.tmp', '.codex/packages', '.codex/app-server-daemon', '.codex/agenthub-active'],
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand, isResumeCommand, isMissingResume, findTranscript, prepare,
   THREAD_ID_FILE,
   credentialPath,
-  validCredential: require('./auth-watcher').validCredential
+  validCredential: require('./auth-watcher').validCredential,
+  // requirements.toml runs fleet-turn-hook.js on UserPromptSubmit, PermissionRequest and Stop.
+  turnHooks: true
 };

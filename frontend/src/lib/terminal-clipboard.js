@@ -51,12 +51,12 @@ function isPasteShortcut(event) {
   return !!(event.ctrlKey || event.metaKey)
 }
 
-// A paste without text (an image, a copied file) has nothing the PTY could carry, and xterm
-// would send an empty bracketed paste that both CLIs silently ignore. The paste is dropped,
-// and when it held a file the person is pointed at Files: its upload works for every agent,
-// which reads the file through the provider-neutral files MCP, whereas Workspace attachments
-// exist only on the streaming transport. docs/terminal-clipboard.md has why the terminal
-// does not upload the image itself.
+// A paste without text (an image, a copied file) has nothing the PTY could carry as it is, and
+// xterm would send an empty bracketed paste that every CLI silently ignores. The paste is taken
+// away from xterm. The agent terminal hands its files to `pasteFiles`, which uploads them and
+// pastes each one's path, the form in which every pinned CLI takes an image (#148,
+// docs/terminal-clipboard.md); a terminal without it (the shell, a shared link) points the person
+// at Files instead.
 function pasteText(clipboardData) {
   return clipboardData?.getData('text/plain') || ''
 }
@@ -65,9 +65,15 @@ export function pasteHasFile(clipboardData) {
   return Array.from(clipboardData?.items || []).some(item => item.kind === 'file')
 }
 
+export function pastedFiles(clipboardData) {
+  const files = Array.from(clipboardData?.files || [])
+  if (files.length) return files
+  return Array.from(clipboardData?.items || []).filter(item => item.kind === 'file').map(item => item.getAsFile?.()).filter(Boolean)
+}
+
 export const FILE_PASTE_NOTICE = 'Images and files cannot be pasted into the terminal. Upload them in Files, where the agent can read them.'
 
-export function attachTerminalClipboard(term, { allowOsc52 = true, write = defaultWrite, host, notify = () => {} } = {}) {
+export function attachTerminalClipboard(term, { allowOsc52 = true, write = defaultWrite, host, notify = () => {}, pasteFiles } = {}) {
   const copy = text => {
     if (!text) return
     Promise.resolve()
@@ -87,7 +93,10 @@ export function attachTerminalClipboard(term, { allowOsc52 = true, write = defau
     if (term.options?.disableStdin || pasteText(event.clipboardData)) return
     event.preventDefault()
     event.stopPropagation()
-    if (pasteHasFile(event.clipboardData)) notify(FILE_PASTE_NOTICE)
+    if (!pasteHasFile(event.clipboardData)) return
+    const files = pastedFiles(event.clipboardData)
+    if (pasteFiles && files.length) pasteFiles(files)
+    else notify(FILE_PASTE_NOTICE)
   }
   host?.addEventListener('paste', onPaste, true)
 

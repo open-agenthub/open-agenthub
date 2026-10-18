@@ -386,3 +386,41 @@ There is no fairness or one-second live-update guarantee under load; production 
 may justify smaller chunks and a fair scheduler later. The recorded 24-session memory probe used
 queued admission to measure all 96 reads; non-blocking admission keeps the same single-reader
 allocation bound while avoiding that queue.
+
+### Clearing a running conversation
+
+The launched process owns the active conversation, rather than the first transcript the
+session agent finds. Claude's pinned CLI updates `~/.claude/sessions/<pty-pid>.json` on
+`/clear`. Codex's managed `SessionStart` and `UserPromptSubmit` hooks report its rollout
+and thread ID; the hook records process ancestry so discovery can match the launched PTY.
+Title helpers have no transcript path and are ignored. This rejects newest-file discovery:
+a shell-tab CLI or a subagent can write a newer transcript without changing this session.
+
+Discovery runs on live reads and persistence. A switch resets upload deduplication, updates
+archived resume metadata, and emits **Conversation cleared**. The native conversation file
+stays untouched. Prior conversations and clear boundaries are archived as a Workspace history
+prefix; live reads and uploads concatenate that prefix with the active native transcript.
+Logical byte offsets include history, so previous turns remain readable above each boundary.
+A stable history identity lets later clears append naturally; `X-Transcript-Id` resets a
+reader transitioning from a single native file to combined history, even when it grew.
+Resume catch-up extracts only the segment after the final boundary: copying the complete
+Workspace view into the native transcript would silently undo the context clear. Keeping
+history only in backend memory was rejected because pause/resume and an unopened Workspace
+must retain it too. Discovery also polls while no viewer is attached.
+
+Claude resumes the recorded session ID; Codex resumes the recorded thread ID. OpenCode's
+message plugin records the top-level session and resumes with `--session` after `/new`.
+Older archives without a marker retain the provider's existing fallback. OpenCode still
+has no native Workspace transcript: its conversation lives in its database and the Workspace
+uses terminal scrollback. Exporting that database is a separate change; this fix does not
+introduce a second transcript format or couple discovery to its database schema.
+
+Verified on 2026-10-18 with the pinned Claude 2.1.287, Codex 0.160.0 and OpenCode
+1.18.35 CLIs against local recording model endpoints. Claude `/clear` and Codex `/new`
+were driven through real PTYs inside the common session server, then that server was
+restarted: the native transcript excluded the before-clear turn and included both the
+after-clear and resumed turns. The uploaded/readable view retained all three above/below
+the boundary. OpenCode's recorded new session matched its real database and accepted a
+new turn when launched with `--session`. Chromium drove the real Workspace composer
+through the real backend live reader and verified owner history above the boundary and
+new turns below it. These are local runtime proofs, not a rebuilt image or cluster rollout.

@@ -130,7 +130,7 @@ export function toTranscriptBlocks(text) {
   return packBlocks(deduplicateAdjacent(suppressShortBursts(meaningful)))
 }
 
-const ROLE_LABELS = { user: 'User', assistant: 'Agent', tool: 'Tool', result: 'Result' }
+const ROLE_LABELS = { boundary: 'Conversation cleared', user: 'User', assistant: 'Agent', tool: 'Tool', result: 'Result' }
 
 export function entryLabel(entry) {
   if (entry.role === 'tool' && entry.tool) return `Tool · ${entry.tool}`
@@ -139,7 +139,7 @@ export function entryLabel(entry) {
 
 export function conversationState(page) {
   return {
-    source: page.source, entries: page.entries || [], text: page.text || '',
+    source: page.source, conversationId: page.conversationId, entries: page.entries || [], text: page.text || '',
     nextOffset: page.nextOffset, length: page.length
   }
 }
@@ -151,7 +151,7 @@ export function conversationState(page) {
 // the offset. In all three cases the only honest answer is to reload from the start; appending
 // would stitch two different histories together.
 export function mergeConversationPage(current, page) {
-  if (!current || current.source !== page.source) return null
+  if (!current || current.source !== page.source || current.conversationId !== page.conversationId) return null
   if (page.length < current.length || page.offset !== current.nextOffset) return null
   const next = conversationState(page)
   if (page.source === 'native') next.entries = current.entries.concat(next.entries)

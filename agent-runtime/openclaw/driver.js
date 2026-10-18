@@ -125,6 +125,20 @@ const limitPatterns = [
   { pattern: /returned HTTP 429 before replying/ }
 ];
 
+// OpenClaw loads an image named in the prompt only from its own directories (its media, canvas
+// and workspace under the state dir, and its tmp dir). Verified on 2026.7.1-2: a path under
+// /workspace is detected and then dropped with "Local media path is not under an allowed
+// directory", and the model gets the path as text; the same file under media/ arrives as image
+// content. A copy rather than a link, because the check runs on the resolved path.
+function terminalAttachmentPath(file, { env, home, fs: files = fs }) {
+  const stateDir = env.OPENCLAW_STATE_DIR || path.join(home, '.openclaw');
+  const dir = path.join(stateDir, 'media', 'agenthub', file.id);
+  files.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const target = path.join(dir, file.name);
+  files.copyFileSync(file.localPath, target);
+  return target;
+}
+
 module.exports = {
   slashCommands: require('./slash-commands'),
   limitPatterns,
@@ -142,8 +156,11 @@ module.exports = {
     '.openclaw/agents/*/agent/auth-profiles.json',
     '.openclaw/agents/*/agent/openclaw-agent.sqlite',
     '.openclaw/agents/*/agent/openclaw-agent.sqlite-wal',
-    '.openclaw/agents/*/agent/openclaw-agent.sqlite-shm'
+    '.openclaw/agents/*/agent/openclaw-agent.sqlite-shm',
+    // Copies of session files (terminalAttachmentPath); the originals stay in session storage.
+    '.openclaw/media/agenthub'
   ],
+  terminalAttachmentPath,
   buildCommand, isResumeCommand, isMissingResume, prepare,
   credentialPath, validCredential, installCredential
 };

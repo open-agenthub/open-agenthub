@@ -15,6 +15,7 @@ import { sessionCapabilities } from '../lib/access.js'
 import { canConvert, convertedLabel } from '../lib/conversion.js'
 import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
+import { terminalAttachmentPaths } from '../lib/attachments.js'
 import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
 import { fleetLabel, fleetWaitingLabel, pendingFleetMessages, sentEntry, stillPending, trackable } from '../lib/pending-messages.js'
@@ -195,7 +196,9 @@ async function sendMessage() {
     sendText.value = ''
     sendNote.value = result?.deliveredVia === 'injected' || result?.deliveredVia === 'mod'
       ? 'Delivered to the agent.'
-      : 'Waiting in the inbox — the agent reads it on its next agent_inbox call.'
+      : result?.deliveredVia === 'next_turn'
+        ? 'The agent gets it as soon as its current turn ends.'
+        : 'Waiting in the inbox — the agent reads it on its next agent_inbox call.'
     await refreshMessages()
   } catch (e) {
     sendNote.value = e?.message || 'The message could not be sent.'
@@ -421,7 +424,7 @@ function toggleDrawer(kind) {
   terminalOpened.value = !(terminalOpened.value && drawerKind.value === kind)
   drawerKind.value = kind
 }
-function sendWorkspaceMessage(text) {
+function sendWorkspaceMessage(text, options) {
   if (!canCompose.value || !agentTerminal.value) {
     throw Object.assign(new Error('Agent is disconnected. Your draft is still here.'), { retryable: true })
   }
@@ -432,7 +435,10 @@ function sendWorkspaceMessage(text) {
       ? 'The agent is showing a menu. Answer it above or in the terminal first; your draft is still here.'
       : 'The agent is waiting for input in its terminal. Answer it there first; your draft is still here.')
   }
-  return agentTerminal.value.submitMessage(text)
+  return agentTerminal.value.submitMessage(text, options)
+}
+function attachWorkspaceFiles(fileIds) {
+  return terminalAttachmentPaths(api, props.session.id, fileIds)
 }
 // Commands that open one of the CLI's menus need nothing here: the composer sends them like any
 // message, and the menu is picked up from the screen like one the person opened in the terminal.
@@ -632,7 +638,8 @@ function interruptWorkspaceAgent() {
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
           ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
-          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands" />
+          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
+          :attach="sharedToken ? undefined : attachWorkspaceFiles" />
       </div>
     </SessionWorkspace>
   </div>

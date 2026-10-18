@@ -453,7 +453,8 @@ public class RemoteControllerTests
             Added.Add(message);
             return Task.CompletedTask;
         }
-        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, string via,
+            CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
         public Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);

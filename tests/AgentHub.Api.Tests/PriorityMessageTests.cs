@@ -78,6 +78,19 @@ public class PriorityMessageTests
     }
 
     [Fact]
+    public async Task Delivery_NextTurn_IsReportedButLeftForWhicheverTakesItFirst()
+    {
+        var world = new DeliveryWorld(new FakePod(HttpStatusCode.OK, """{"delivered":"next-turn"}"""));
+
+        var result = await world.Delivery.TryInjectAsync(Info("coder", "Running", "10.0.0.5"), Message("m-1"), null, CancellationToken.None);
+
+        Assert.Equal(MessageDeliveryVia.NextTurn, result.Via);
+        Assert.Null(result.Reason);
+        // The end-of-turn hook or agent_inbox marks it when one of them actually takes it.
+        Assert.Empty(world.Messages.Marked);
+    }
+
+    [Fact]
     public async Task Delivery_PendingSession_StaysInInboxWithoutTouchingThePod()
     {
         var pod = new FakePod(HttpStatusCode.OK, """{"delivered":"pty"}""");
@@ -309,8 +322,24 @@ public class PriorityMessageTests
         var later = Assert.Single(recent, m => m.Id == "m-2");
         Assert.False(later.Priority);
 
-        var taken = await database.Messages.TakeUndeliveredAsync("target", 10);
+        var taken = await database.Messages.TakeUndeliveredAsync("target", 10, MessageDeliveryVia.Inbox);
         Assert.All(taken, m => Assert.Equal(MessageDeliveryVia.Inbox, m.DeliveredVia));
+    }
+
+    [PostgreSqlFact]
+    public async Task Postgres_TakeForTheNextTurn_RecordsThatChannel_AndHandsOutOnce()
+    {
+        await using var database = await PostgresMessageDatabase.CreateAsync();
+        await database.Messages.AddAsync(new SessionMessageRecord
+        {
+            Id = "m-1", ProjectId = "p", FromSessionId = "a", ToSessionId = "target", Owner = Owner, Body = "review done"
+        });
+
+        var taken = await database.Messages.TakeUndeliveredAsync("target", 10, MessageDeliveryVia.NextTurn);
+
+        Assert.Equal(MessageDeliveryVia.NextTurn, Assert.Single(taken).DeliveredVia);
+        Assert.Equal(MessageDeliveryVia.NextTurn, Assert.Single(await database.Messages.ListRecentAsync("target", 10)).DeliveredVia);
+        Assert.Empty(await database.Messages.TakeUndeliveredAsync("target", 10, MessageDeliveryVia.Inbox));
     }
 
     [PostgreSqlFact]
@@ -329,7 +358,7 @@ public class PriorityMessageTests
         var stored = Assert.Single(await database.Messages.ListRecentAsync("target", 10));
         Assert.NotNull(stored.DeliveredAt);
         Assert.Equal(MessageDeliveryVia.Injected, stored.DeliveredVia);
-        Assert.Empty(await database.Messages.TakeUndeliveredAsync("target", 10));
+        Assert.Empty(await database.Messages.TakeUndeliveredAsync("target", 10, MessageDeliveryVia.Inbox));
     }
 
     [PostgreSqlFact]
@@ -401,7 +430,8 @@ public class PriorityMessageTests
         public List<(string Id, string Via)> Marked { get; } = [];
         public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task AddAsync(SessionMessageRecord message, CancellationToken ct = default) => Task.CompletedTask;
-        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, string via,
+            CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
         public Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
@@ -515,7 +545,8 @@ public class PriorityMessageTests
             Added.Add(message);
             return Task.CompletedTask;
         }
-        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, CancellationToken ct = default) =>
+        public Task<IReadOnlyList<SessionMessageRecord>> TakeUndeliveredAsync(string toSessionId, int limit, string via,
+            CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>([]);
         public Task<IReadOnlyList<SessionMessageRecord>> ListRecentAsync(string toSessionId, int limit, CancellationToken ct = default) =>
             Task.FromResult<IReadOnlyList<SessionMessageRecord>>(Recent.Where(m => m.ToSessionId == toSessionId).ToList());

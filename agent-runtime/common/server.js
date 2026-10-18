@@ -8,6 +8,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
+const { createNextTurnDelivery, IDLE_QUIET_MS } = require('./next-turn');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs } = require('./state-archive');
 const { createSecretMask } = require('./secret-mask');
@@ -49,6 +50,12 @@ const URL_REFRESH_EVERY_TICKS = 720;
 // The most transcript one GET /agenthub/transcript returns. A first read of a long session
 // takes a few of these; the hub asks again from where the last one stopped.
 const MAX_TRANSCRIPT_CHUNK = 8 * 1024 * 1024;
+// A POST /agenthub/attachments body: at most five 32-character file ids.
+const MAX_ATTACHMENT_REQUEST_BYTES = 4 * 1024;
+// What a path typed into a CLI's input box may contain. The CLIs recognise a pasted image path
+// only as the whole paste, and a space or quote would need each CLI's own escaping; the composer
+// names its uploads within this set, so anything else is refused rather than half-recognised.
+const TERMINAL_PATH = /^\/[A-Za-z0-9._/-]+$/;
 // The longest reason a credential swap may carry into the scrollback.
 const MAX_SWITCH_REASON_CHARS = 300;
 // How often the skill library is pulled while the session runs. A minute is "shortly" for a
@@ -132,6 +139,18 @@ function createCommonServer(options = {}) {
   let promptSent = false;
   let firstLaunchedAt = 0;
   let transcriptFile = null;
+  let conversationCleared = false;
+  const conversationStateFile = require('node:path').join(home, driver.stateDir, 'agenthub-conversation.json');
+  try {
+    const saved = JSON.parse(fs.readFileSync(conversationStateFile, 'utf8'));
+    transcriptFile = typeof saved.file === 'string' ? saved.file : null;
+    conversationCleared = saved.cleared === true;
+  } catch {}
+  const conversationHistoryFile = require('node:path').join(home, driver.stateDir, 'agenthub-history.jsonl');
+  try { if (fs.statSync(conversationHistoryFile).size > 0) conversationCleared = true; } catch {}
+  function conversationHistory() {
+    try { return fs.readFileSync(conversationHistoryFile, 'utf8').toString(); } catch { return ''; }
+  }
   let transcriptUploaded = { size: -1, mtimeMs: -1 };
   // False while a resumed session's transcript may still be behind the hub's copy: until
   // catchUpTranscript has settled, the file is neither served to the hub nor uploaded over it.
@@ -172,6 +191,19 @@ function createCommonServer(options = {}) {
   });
   // Mod reports already forwarded this start, keyed by window and reset time.
   const forwardedLimits = new Set();
+  // Plain fleet messages as the agent's next turn, for a runtime whose hooks report its turns
+  // (driver.turnHooks) and that has no mod to hand them to (docs/priority-messages.md, #173).
+  const nextTurn = driver.turnHooks === true && mode === 'interactive'
+    ? createNextTurnDelivery({
+      now, fetchImpl, callback, token,
+      wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms)),
+      Terminal: supplied.HeadlessTerminal && (() => supplied.HeadlessTerminal),
+      log: line => console.log('[agent] ' + line)
+    })
+    : null;
+  // Keys a person sends while a message is being typed in: they go in after its Enter instead of
+  // landing in the middle of it.
+  let inputHeldForTyping = [];
 
   function remember(chunk) {
     scrollback += chunk;
@@ -225,9 +257,8 @@ function createCommonServer(options = {}) {
     execFile('curl', uploadArgs('/tmp/scrollback.log', scrollPut, insecureStorage), () => done && done());
   }
 
-  // The provider's own conversation file, once the driver can name it. Asked again on every
-  // persistence tick until found: providers create the file on the first turn or pick its
-  // name themselves after starting, so it does not exist when this process comes up.
+  // Rediscover on reads and persistence: /clear and /new replace a conversation without
+  // replacing the PTY, so retaining the first path would freeze both Workspace and resume.
   function locateTranscript() {
     if (!transcriptCaughtUp) return null;
     return findTranscriptFile();
@@ -237,15 +268,38 @@ function createCommonServer(options = {}) {
   // driver that falls back to the newest file since launch (one without a recorded thread id)
   // finds nothing rather than whichever thread happens to be newest in the archive.
   function findTranscriptFile() {
-    if (transcriptFile || typeof driver.findTranscript !== 'function') return transcriptFile;
+    if (typeof driver.findTranscript !== 'function') return transcriptFile;
     let found = null;
     try {
-      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt || now() });
+      found = driver.findTranscript({ env, home, cwd, fs, launchedAt: firstLaunchedAt || now(), pid: term && term.pid });
     } catch {}
     // The path is interpolated into a shell command below; anything a driver could not have
     // derived from a home directory, a slug and a uuid is not a transcript.
     if (typeof found === 'string' && found && !/["'$`\\\s]/.test(found)) {
+      if (found === transcriptFile) return transcriptFile;
+      const previous = transcriptFile || env.AGENTHUB_PREVIOUS_TRANSCRIPT;
+      const switched = previous && previous !== found;
+      if (switched) {
+        let history = '';
+        try {
+          const raw = fs.readFileSync(previous, 'utf8').toString();
+          history = raw.slice(0, raw.lastIndexOf('\n') + 1);
+        } catch {}
+        const boundary = JSON.stringify({ type: 'agenthub_conversation', id: require('node:path').basename(found), text: 'Conversation cleared' }) + '\n';
+        try { fs.appendFileSync(conversationHistoryFile, history + boundary); } catch (error) {
+          console.log('[agent] Conversation history could not be preserved: ' + error.message);
+        }
+      }
+      conversationCleared = conversationCleared || switched || env.AGENTHUB_CONVERSATION_CLEARED === '1';
       transcriptFile = found;
+      transcriptUploaded = { size: -1, mtimeMs: -1 };
+      stateTicksSinceUpload = STATE_ARCHIVE_EVERY_TICKS;
+      try { fs.writeFileSync(conversationStateFile, JSON.stringify({ file: found, cleared: conversationCleared })); } catch {}
+      if (conversationCleared) {
+        const boundary = '\r\n[agent] Conversation cleared.\r\n';
+        remember(boundary);
+        broadcast(boundary);
+      }
       console.log('[agent] Transcript: ' + found);
     }
     return transcriptFile;
@@ -260,7 +314,7 @@ function createCommonServer(options = {}) {
     return newline === -1 ? cut : cut.slice(newline + 1);
   }
 
-  // Uploads the native transcript next to the scrollback: the whole file to S3, the capped
+  // Uploads readable history plus the current native transcript: the whole view to S3, the capped
   // tail to the hub's Postgres copy. Skipped while the file has not changed — most 30-second
   // ticks of an idle session would otherwise re-upload megabytes for nothing.
   function persistTranscript(done) {
@@ -272,10 +326,12 @@ function createCommonServer(options = {}) {
       return done && done();
     }
     transcriptUploaded = { size: stat.size, mtimeMs: stat.mtimeMs };
+    const boundary = conversationHistory();
     const toHub = () => {
+      if (file !== transcriptFile) return done && done();
       if (!callback) return done && done();
       let text;
-      try { text = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return done && done(); }
+      try { text = secretMask.mask(boundary + fs.readFileSync(file, 'utf8')); } catch { return done && done(); }
       fetchImpl(callback + '/transcript', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': token },
@@ -283,7 +339,7 @@ function createCommonServer(options = {}) {
       }).catch(() => {}).finally(() => done && done());
     };
     if (!transcriptPut) return toHub();
-    if (secretMask.active()) return uploadMaskedTranscript(file, toHub);
+    if (secretMask.active() || conversationCleared) return uploadMaskedTranscript(file, toHub, boundary);
     // No shell here: the file name is whatever the CLI chose for its session file, and a quote
     // or `$(` in it would otherwise become part of the command.
     execFile('curl', uploadArgs(file, transcriptPut, insecureStorage), toHub);
@@ -316,11 +372,11 @@ function createCommonServer(options = {}) {
   // The CLI's own file stays as it is: the agent resumes from it, and a value replaced there
   // would be gone from its memory of the conversation. Not through a copy in /tmp, which is a
   // shared, predictable path that would hold the text a second time.
-  function uploadMaskedTranscript(file, done) {
+  function uploadMaskedTranscript(file, done, boundary = '') {
     let finished = false;
     const finish = () => { if (!finished) { finished = true; done(); } };
     let masked;
-    try { masked = secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return finish(); }
+    try { masked = boundary + secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return finish(); }
     try {
       const child = spawnProcess('curl', uploadArgs('-', transcriptPut, insecureStorage),
         { stdio: ['pipe', 'ignore', 'ignore'] });
@@ -416,6 +472,10 @@ function createCommonServer(options = {}) {
         secretMask.refresh();
         const local = secretMask.mask(restored.toString('utf8'));
         if (typeof stored !== 'string' || stored.length <= local.length) return settle('archive is current');
+        // The owner's readable history includes previous contexts. Only the last segment
+        // belongs in the native file the CLI resumes; restoring history would undo /clear.
+        const boundaryAt = stored.lastIndexOf('{"type":"agenthub_conversation"');
+        if (boundaryAt >= 0) stored = stored.slice(stored.indexOf('\n', boundaryAt) + 1);
         if (!stored.startsWith(local)) return settle('hub copy is a different history, kept the archive');
         const extended = Buffer.concat([restored, Buffer.from(stored.slice(local.length), 'utf8')]);
         fs.writeFileSync(file + '.agenthub-tmp', extended);
@@ -819,7 +879,9 @@ function createCommonServer(options = {}) {
       cwd, env: agentEnv
     });
 
+    if (nextTurn) nextTurn.agentStarted();
     term.onData(data => {
+      if (nextTurn) nextTurn.agentOutput();
       attemptOutput += data;
       remember(data);
       broadcast(data);
@@ -925,6 +987,13 @@ function createCommonServer(options = {}) {
         return;
       }
       if (message.type === 'input' && typeof message.data === 'string') {
+        if (nextTurn) {
+          nextTurn.personInput(message.data);
+          if (nextTurn.isTyping()) {
+            inputHeldForTyping.push(message.data);
+            return;
+          }
+        }
         term.write(message.data);
       } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
         lastSize = { cols: message.cols, rows: message.rows };
@@ -1123,36 +1192,46 @@ function createCommonServer(options = {}) {
       fileError(response, 400, 'invalid_offset');
       return;
     }
-    const send = (size, next, body) => {
+    const file = locateTranscript();
+    const segments = [conversationHistoryFile, file].filter(Boolean).map(file => {
+      try { return { file, size: fs.statSync(file).size }; } catch { return { file, size: 0 }; }
+    });
+    const size = segments.reduce((total, segment) => total + segment.size, 0);
+    const send = (next, body) => {
       response.statusCode = 200;
       response.setHeader('Content-Type', 'application/x-ndjson');
+      response.setHeader('X-Transcript-Id', segments[0]?.size ? 'agenthub-history' : file ? require('node:path').basename(file) : '');
       response.setHeader('X-Transcript-Size', String(size));
       response.setHeader('X-Transcript-Next', String(next));
       response.setHeader('Content-Length', body.length);
       response.end(body);
     };
-    const file = locateTranscript();
-    let size;
-    try { size = file ? fs.statSync(file).size : 0; } catch { size = 0; }
-    if (!file || from >= size) return send(size, Math.min(from, size), Buffer.alloc(0));
+    if (from >= size) return send(Math.min(from, size), Buffer.alloc(0));
     const length = Math.min(size - from, MAX_TRANSCRIPT_CHUNK);
     const chunk = Buffer.alloc(length);
     let read = 0;
-    let fd;
-    try {
-      fd = fs.openSync(file, 'r');
-      while (read < length) {
-        const n = fs.readSync(fd, chunk, read, length - read, from + read);
-        if (n <= 0) break;
-        read += n;
+    let start = 0;
+    for (const segment of segments) {
+      let fd;
+      try {
+        if (from + read >= start + segment.size || read >= length) continue;
+        fd = fs.openSync(segment.file, 'r');
+        let position = Math.max(0, from + read - start);
+        while (read < length && position < segment.size) {
+          const count = fs.readSync(fd, chunk, read, Math.min(length - read, segment.size - position), position);
+          if (count <= 0) break;
+          read += count;
+          position += count;
+        }
+      } catch {
+        return send(from, Buffer.alloc(0));
+      } finally {
+        if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+        start += segment.size;
       }
-    } catch {
-      return send(size, from, Buffer.alloc(0));
-    } finally {
-      if (fd !== undefined) try { fs.closeSync(fd); } catch {}
     }
     const whole = chunk.lastIndexOf(0x0a, read - 1) + 1;
-    send(size, from + whole, chunk.subarray(0, whole));
+    send(from + whole, chunk.subarray(0, whole));
   }
 
   async function handleMessageRequest(request, response) {
@@ -1184,7 +1263,15 @@ function createCommonServer(options = {}) {
       sendJson(response, 200, { delivered: 'queued-for-mod' });
       return;
     }
-    if (!message.priority) return unavailable('not_priority');
+    if (!message.priority) {
+      if (!nextTurn || chatMode) return unavailable('not_priority');
+      // Not typed now: the agent may be mid-turn or in a menu. The hub leaves the row in the
+      // inbox, and the turn's end (or an idle prompt) takes it from there.
+      nextTurn.accept();
+      sendJson(response, 200, { delivered: 'next-turn' });
+      deliverNextTurnIfIdle();
+      return;
+    }
     // The agent is being swapped out (an account switch): the pipe or PTY it is about to leave
     // would swallow the text, so the message waits for the one that comes up. The answer names
     // the channel it will take, since that is what the hub records.
@@ -1214,6 +1301,47 @@ function createCommonServer(options = {}) {
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
     });
     sendJson(response, 200, { delivered: 'pty' });
+  }
+
+  function deliverNextTurnIfIdle() {
+    if (!nextTurn || chatMode || exited || restartReason !== null || runtimeDraining) return;
+    const target = term;
+    nextTurn.deliverIfIdle(target, () => scrollback, lastSize || { cols: 120, rows: 32 })
+      .catch(error => console.log('[agent] next-turn: delivery failed: ' + (error && error.message || error)))
+      .finally(() => {
+        // A check that found another one typing must leave the keys to that one's end.
+        if (nextTurn.isTyping()) return;
+        const keys = inputHeldForTyping;
+        inputHeldForTyping = [];
+        if (term === target && !exited) for (const data of keys) target.write(data);
+      });
+  }
+
+  /**
+   * POST /agenthub/turn: the agent's own turn hooks (common/fleet-turn-hook.mjs) say a prompt was
+   * submitted, an approval is being asked, or the turn ended. The answer to a Stop is the text of
+   * the next turn when fleet messages wait. Loopback only, with the callback token the hooks
+   * already carry for their calls to the hub.
+   */
+  async function handleTurnRequest(request, response) {
+    const address = request.socket && request.socket.remoteAddress;
+    if (!nextTurn || !isLoopback(address) || !tokenMatches(request.headers['x-agent-token'])) {
+      fileError(response, nextTurn ? 401 : 404, nextTurn ? 'unauthorized' : 'not_found');
+      return;
+    }
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      fileError(response, 405, 'method_not_allowed');
+      return;
+    }
+    const raw = await readBoundedBody(request, MAX_LIMIT_REPORT_BYTES);
+    let event = null;
+    try { event = raw && JSON.parse(raw.toString('utf8')).event; } catch {}
+    if (!['prompt', 'permission', 'stop'].includes(event)) return fileError(response, 400, 'invalid_event');
+    // A Stop during an update or restart is answered with nothing: the agent is about to go.
+    const text = runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
+    sendJson(response, 200, text ? { text } : {});
+    if (event === 'stop' && !text) setTimeoutImpl(deliverNextTurnIfIdle, IDLE_QUIET_MS + 100);
   }
 
   function parseFleetMessage(raw) {
@@ -1317,6 +1445,7 @@ function createCommonServer(options = {}) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
     if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
+    if (requestPath === '/agenthub/attachments') return handleAttachmentRequest(request, response);
     if (requestPath === '/agenthub/runtime-drain') {
       if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
       if (request.method === 'DELETE') {
@@ -1346,6 +1475,7 @@ function createCommonServer(options = {}) {
     if (requestPath === '/agenthub/git-credentials') return handleGitCredentialRequest(request, response);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
     if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
+    if (requestPath === '/agenthub/turn') return handleTurnRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
         requestPath === '/agenthub/mod/limit') {
       return handleModRequest(request, response, requestPath);
@@ -1381,6 +1511,50 @@ function createCommonServer(options = {}) {
     } catch {
       fileError(response, 503, 'commands_unavailable');
     }
+  }
+
+  /**
+   * POST /agenthub/attachments: files the person attached in the Workspace composer or pasted into
+   * the agent terminal of a terminal-transport session (#148). They are materialized exactly as a
+   * chat-mode attachment is, and the answer is the path each one has to be pasted as: every pinned
+   * CLI turns a pasted path to an image into an image of its own ("[Image #1]") and sends it to the
+   * model as image content (docs/terminal-clipboard.md). The browser pastes the paths itself, ahead
+   * of the message text, so the bytes keep the single order of the one terminal connection.
+   */
+  async function handleAttachmentRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    // A chat-mode turn carries its attachments in the message, with a delivery receipt.
+    if (chatMode) return fileError(response, 409, 'chat_transport');
+    if (exited) return fileError(response, 409, 'agent_exited');
+    if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
+    const raw = await readBoundedBody(request, MAX_ATTACHMENT_REQUEST_BYTES);
+    if (!raw) return fileError(response, 413, 'request_too_large');
+    let fileIds;
+    try { fileIds = JSON.parse(raw.toString('utf8')).fileIds; } catch { return fileError(response, 400, 'invalid_request'); }
+    let records;
+    try {
+      records = await attachmentMaterializer.materialize(fileIds);
+    } catch (error) {
+      return fileError(response, error && error.message === 'attachment_batch_invalid' ? 400 : 502, 'attachment_delivery_failed');
+    }
+    const attachments = [];
+    try {
+      for (const file of records) {
+        const pastePath = typeof driver.terminalAttachmentPath === 'function'
+          ? driver.terminalAttachmentPath(file, { env, home, fs })
+          : file.localPath;
+        if (!TERMINAL_PATH.test(pastePath)) return fileError(response, 422, 'attachment_path_unsafe');
+        attachments.push({ id: file.id, name: file.name, mimeType: file.mimeType, size: file.size, path: pastePath });
+      }
+    } catch {
+      return fileError(response, 502, 'attachment_delivery_failed');
+    }
+    sendJson(response, 200, { attachments });
   }
 
   function handleShell(socket) {
@@ -1523,6 +1697,9 @@ function createCommonServer(options = {}) {
   // first client and stays part of what we persist from here on.
   restoreScrollback(() => catchUpTranscript(() => startAgent(true)));
 
+  // An idle agent's waiting messages, once the screen has been still long enough to tell.
+  if (nextTurn) setIntervalImpl(deliverNextTurnIfIdle, 1_000);
+
   let ticksSinceUrlRefresh = 0;
   setIntervalImpl(() => {
     if (!exited) persistAll();
@@ -1537,6 +1714,11 @@ function createCommonServer(options = {}) {
   // skill directory lists and rarely thinks of searching. A poll rather than a push from the hub: the
   // pod already talks to the hub on its own schedule and nothing has to reach into it, and with
   // the ETag an unchanged library costs one small request per interval.
+  // Discover even without a viewer: a coordinator can clear between persistence ticks.
+  if (typeof driver.findTranscript === 'function') {
+    setIntervalImpl(() => { if (!exited) locateTranscript(); }, 1000);
+  }
+
   const skillsSyncMs = skillsSyncIntervalMs(env);
   if (skillsSyncMs > 0 && callback && token) {
     const skills = require('./skills');
@@ -1586,7 +1768,7 @@ function createCommonServer(options = {}) {
 
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
-    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands' +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands, /agenthub/attachments' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 

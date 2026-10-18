@@ -165,6 +165,10 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       fs: {
         existsSync(file) { return exists.has(file); },
         writeFileSync(file, data) { writes.push({ file, data }); },
+        appendFileSync(file, data) {
+          writes.push({ file, data });
+          if (harnessOptions.files) harnessOptions.files[file] = (harnessOptions.files[file] || '') + data;
+        },
         mkdirSync() {},
         renameSync(from, to) { renames.push({ from, to }); },
         readFileSync(file) {
@@ -211,6 +215,8 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       },
       process: processLike,
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
+      // The session agent's own dependency, resolved from its node_modules in the image.
+      HeadlessTerminal: require('@xterm/headless').Terminal,
       attachmentMaterializer: materializer,
       pullSkills: harnessOptions.pullSkills,
       // Recorded, never the real installer: that one runs git against the HOME it is given.
