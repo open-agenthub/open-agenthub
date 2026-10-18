@@ -1,6 +1,6 @@
 # Workspace code review (#154)
 
-The opt-in Changes companion pane reads Git in the session workspace through the common
+The opt-in Changes view of the Files pane reads Git in the session workspace through the common
 session agent. It works for every provider and discovers repositories below /workspace,
 including nested repositories and worktrees (.git files). Discovery never follows symlinks,
 skips dependency and metadata directories, and reports when its bounded scan is incomplete.
@@ -21,6 +21,13 @@ Recursive watchers were rejected because large dependency trees exhaust watch de
 and new repositories and atomic renames require a second discovery mechanism anyway.
 Hidden tabs stop requesting and reopening fetches current state. Closing the pane unmounts it.
 Opt-in and comparison are local to the viewer; neither changes session presentation.
+
+Changes is a view inside the Files pane, reached from the session bar's Files button (#180).
+It started as a button of its own above the Workspace. That was a second entry point to the same
+workspace, sitting apart from the rest of the session bar. Picking Changes in the pane is the
+opt-in: the diff pane mounts only then. Switching back to Files, closing the pane or moving to
+another session unmounts it, and reopening Files starts on the file list. A file the agent
+presents switches the pane to that file, as it did when Changes was a separate tab.
 
 Each response caps discovery at 10,000 directories and depth 12, repositories at 32, changed
 files at 200 across repositories, individual patches at 64 KiB and total patches at 512 KiB.

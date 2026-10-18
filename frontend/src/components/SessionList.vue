@@ -33,9 +33,9 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
 <style scoped>
 .startup-failure { color: var(--danger); font-size: 11px; margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list { list-style: none; margin: 0; padding: 0 0 4px; }
-.list li { display: flex; align-items: flex-start; gap: 9px; padding: 8px 6px 8px 8px; border-radius: 9px; margin-bottom: 1px; cursor: pointer; }
-.list li:hover { background: var(--hover); }
-.list li.active { background: var(--panel-2); }
+.list li { position: relative; display: flex; align-items: flex-start; gap: 9px; padding: 8px 6px 8px 8px; border-radius: 9px; margin-bottom: 1px; cursor: pointer; --row-bg: var(--sidebar); }
+.list li:hover, .list li:focus-within { --row-bg: var(--hover); background: var(--row-bg); }
+.list li.active { --row-bg: var(--panel-2); background: var(--row-bg); }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; margin-top: 6px; }
 .dot.ask { animation: blink 1.1s steps(2, start) infinite; }
 @keyframes blink { 50% { opacity: .25; } }
@@ -48,8 +48,14 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
 .cron { color: var(--sched); }
 .expires { color: var(--muted); }
 .expires.soon { color: var(--warn); font-weight: 700; }
-.acts { display: flex; gap: 1px; flex-shrink: 0; margin-top: 1px; opacity: 0; transition: opacity .12s; }
-li:hover .acts, li.active .acts { opacity: 1; }
+/* The actions float over the row instead of taking part in its flex layout. In the flow, the
+   strip kept its ~104px while invisible, so every title was cut to a few characters unless the
+   sidebar was dragged very wide (#179). Hidden, it ignores the pointer so a click on the end of
+   a title opens the session instead of hitting an invisible Delete. */
+.acts { position: absolute; top: 7px; right: 6px; display: flex; gap: 1px; padding-left: 14px; background: linear-gradient(to right, transparent, var(--row-bg) 12px); opacity: 0; pointer-events: none; transition: opacity .12s; }
+li:hover .acts, li:focus-within .acts { opacity: 1; pointer-events: auto; }
+/* Without hover (touch) the selected row is the only way to reach them. */
+@media (hover: none) { li.active .acts { opacity: 1; pointer-events: auto; } }
 .act { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; font-size: 10px; border-radius: 6px; border: none; background: none; color: var(--muted-3); padding: 0; font-weight: 400; }
 .act:hover { background: var(--border-2); color: var(--text); }
 .act.del:hover { background: rgba(245,122,106,0.12); color: var(--danger); }
