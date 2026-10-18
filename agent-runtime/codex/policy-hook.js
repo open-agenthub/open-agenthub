@@ -133,12 +133,12 @@ function boundedInteger(value, fallback, minimum, maximum) {
   return Number.isInteger(parsed) ? Math.min(maximum, Math.max(minimum, parsed)) : fallback;
 }
 
-async function emitApproved(tool, input) {
+async function emitApproved(tool, input, eventName) {
   try {
     const recheck = await policyDecision(tool, input);
-    emitDecision('PermissionRequest', recheck === 'deny' ? 'deny' : 'allow');
+    emitDecision(eventName, recheck === 'deny' ? 'deny' : 'allow');
   } catch {
-    if (isMcpTool(tool)) emitDecision('PermissionRequest', 'deny');
+    if (!isInteractive() || isMcpTool(tool)) emitDecision(eventName, 'deny');
     // Non-MCP interactive failures preserve Codex's normal permission flow.
   }
 }
@@ -146,19 +146,19 @@ async function emitApproved(tool, input) {
 // Leaving a PermissionRequest unanswered is only safe where a person can still answer it. In an
 // unattended session the absence of a decision is Codex's own approval policy deciding instead,
 // so every path out of here that has no answer ends in failClosed.
-async function handlePermissionRequest(tool, input) {
+async function handlePermissionRequest(tool, input, eventName = 'PermissionRequest') {
   const initial = await requestJson('/permission', {
     method: 'POST', body: { tool, input: approvalDescriptor(tool) }
   });
   if (typeof initial.decision === 'string') {
     const decision = parseDecision(initial, ['allow', 'allowAlways', 'deny', 'ask']);
-    if (decision === 'allow' || decision === 'allowAlways') await emitApproved(tool, input);
-    else if (decision === 'deny') emitDecision('PermissionRequest', 'deny');
-    else failClosed('PermissionRequest');
+    if (decision === 'allow' || decision === 'allowAlways') await emitApproved(tool, input, eventName);
+    else if (decision === 'deny') emitDecision(eventName, 'deny');
+    else failClosed(eventName);
     return;
   }
   if (typeof initial.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(initial.id)) {
-    failClosed('PermissionRequest');
+    failClosed(eventName);
     return;
   }
 
@@ -169,12 +169,12 @@ async function handlePermissionRequest(tool, input) {
     const response = await requestJson(`/permission/${encodeURIComponent(initial.id)}`);
     const decision = parseDecision(response, ['allow', 'allowAlways', 'deny', 'pending']);
     if (decision === 'pending') continue;
-    if (decision === 'deny') emitDecision('PermissionRequest', 'deny');
-    else await emitApproved(tool, input);
+    if (decision === 'deny') emitDecision(eventName, 'deny');
+    else await emitApproved(tool, input, eventName);
     return;
   }
   // Nobody answered inside the poll budget.
-  failClosed('PermissionRequest');
+  failClosed(eventName);
 }
 
 async function main() {
@@ -209,12 +209,18 @@ async function main() {
     emitDecision(eventName, 'deny');
     return;
   }
-  // "ask" now reaches unattended sessions too: the backend returns it for a tool the allow list
-  // does not cover once the session auto-approves, and the answer lives behind /permission. The
-  // PreToolUse pass stays silent so Codex raises the PermissionRequest that carries it there;
-  // denying here instead is what made auto-approve unreachable for an unattended session, which
-  // was then held to its allow list and stopped on its first uncovered call.
-  if (eventName === 'PreToolUse') return;
+  // Full-access exec never raises PermissionRequest on its own. Resolve an uncovered
+  // unattended call here so disabling the inner sandbox cannot skip backend approval.
+  if (eventName === 'PreToolUse') {
+    if (policy === 'ask' && !isInteractive()) {
+      try {
+        await handlePermissionRequest(tool, input, eventName);
+      } catch {
+        failClosed(eventName);
+      }
+    }
+    return;
+  }
 
   try {
     await handlePermissionRequest(tool, input);
