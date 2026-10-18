@@ -39,7 +39,7 @@ test('real Git covers repositories, staged/unstaged/untracked, branch commits, b
   const files = base.repositories.find(r => r.path === 'first').files;
   assert.match(files.find(f => f.path === 'code.txt').patch, /\+staged\n\+unstaged/);
   assert.match(files.find(f => f.path === 'committed.txt').patch, /branch commit/);
-  assert.match(files.find(f => f.path === 'new file.txt').patch, /<script>/);
+  assert.equal(files.find(f => f.path === 'new file.txt').patch.includes('<script>'), true);
   assert.equal(files.find(f => f.path === 'binary.dat').omitted, 'binary');
   assert.equal(files.find(f => f.path === 'large.txt').omitted, 'large');
   assert.equal(files.find(f => f.path === 'link').omitted, 'symlink');
