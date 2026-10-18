@@ -17,7 +17,8 @@ matcher = "*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = "node /opt/session-agent/codex/policy-hook.js"
-timeout = 10
+# Full-access exec resolves backend approvals here because no PermissionRequest is raised.
+timeout = 250
 statusMessage = "Checking session policy"
 
 [[hooks.PermissionRequest]]

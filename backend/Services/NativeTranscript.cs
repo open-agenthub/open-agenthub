@@ -35,6 +35,14 @@ public static partial class NativeTranscript
     [GeneratedRegex(@"^<([a-z_]+)>[\s\S]*</\1>\s*$")]
     private static partial Regex WrappedInjection();
 
+    // Claude Code records a collapsed paste in the prompt as <pasted_content id="1a2b">, newline,
+    // the pasted text, newline, </pasted_content id="1a2b">, set off by up to two newlines on each
+    // side. Its terminal shows the paste without them; left in, every pasted log or stack trace
+    // reads as markup in the Workspace. The id is four hex digits and the closing tag repeats it,
+    // so only a wrapper the CLI wrote matches, never angle brackets the person typed.
+    [GeneratedRegex("""\n{0,2}<pasted_content id="([0-9a-f]{4})">\n([\s\S]*?)\n</pasted_content id="\1">\n{0,2}""")]
+    private static partial Regex PastedContent();
+
     public static IReadOnlyList<TranscriptEntry> Parse(string? jsonl)
     {
         var entries = new List<TranscriptEntry>();
@@ -112,7 +120,7 @@ public static partial class NativeTranscript
         if (!message.TryGetProperty("content", out var content)) return;
         if (content.ValueKind == JsonValueKind.String)
         {
-            AddText(entries, type, content.GetString(), at);
+            AddText(entries, type, type == "user" ? UnwrapPastes(content.GetString()) : content.GetString(), at);
             return;
         }
         if (content.ValueKind != JsonValueKind.Array) return;
@@ -127,7 +135,8 @@ public static partial class NativeTranscript
                     if (part.TryGetProperty("text", out var textValue) && textValue.ValueKind == JsonValueKind.String)
                     {
                         if (text.Length > 0) text.Append('\n');
-                        text.Append(textValue.GetString());
+                        var value = textValue.GetString();
+                        text.Append(type == "user" ? UnwrapPastes(value) : value);
                     }
                     break;
                 case "tool_use":
@@ -143,6 +152,46 @@ public static partial class NativeTranscript
             }
         }
         Flush(entries, type, text, at);
+    }
+
+    /// <summary>
+    /// The prompt as the CLI's terminal shows it once submitted: a paste of several lines on lines
+    /// of its own, a one-line paste inline where it was inserted.
+    /// </summary>
+    public static string? UnwrapPastes(string? text)
+    {
+        if (text is null || !text.Contains("<pasted_content id=\"", StringComparison.Ordinal)) return text;
+        var sb = new StringBuilder();
+        var last = 0;
+        var previousMultiline = false;
+        foreach (Match match in PastedContent().Matches(text))
+        {
+            var body = match.Groups[2].Value;
+            var multiline = body.Contains('\n');
+            var typed = text[last..match.Index];
+            Join(sb, typed, previousMultiline, typed: true);
+            Join(sb, body, multiline || (typed.Length == 0 && previousMultiline), typed: false);
+            last = match.Index + match.Length;
+            previousMultiline = multiline;
+        }
+        Join(sb, text[last..], previousMultiline, typed: true);
+        return sb.ToString();
+    }
+
+    // The regex took the newlines the CLI put around the paste; what joins the pieces instead is
+    // a line break next to a paste of several lines, else a space where two words would touch.
+    private static void Join(StringBuilder sb, string piece, bool lineBreak, bool typed)
+    {
+        if (piece.Length == 0) return;
+        if (sb.Length > 0 && lineBreak)
+        {
+            while (sb.Length > 0 && char.IsWhiteSpace(sb[^1])) sb.Length--;
+            if (typed) piece = piece.TrimStart();
+            if (piece.Length == 0) return;
+            sb.Append('\n');
+        }
+        else if (sb.Length > 0 && !char.IsWhiteSpace(sb[^1]) && !char.IsWhiteSpace(piece[0])) sb.Append(' ');
+        sb.Append(piece);
     }
 
     // ------------------------------------------------------------------ Codex
