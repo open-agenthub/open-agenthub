@@ -1,6 +1,7 @@
 'use strict';
 const crypto = require('node:crypto');
 const { createWorkspaceDiff } = require('./workspace-diff');
+const { listSlashCommands } = require('./slash-commands');
 
 const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
@@ -1315,6 +1316,7 @@ function createCommonServer(options = {}) {
   function handleHttpRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
     if (requestPath === '/agenthub/diff') return handleDiffRequest(request, response);
+    if (requestPath === '/agenthub/commands') return handleCommandsRequest(request, response);
     if (requestPath === '/agenthub/runtime-drain') {
       if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
       if (request.method === 'DELETE') {
@@ -1362,6 +1364,23 @@ function createCommonServer(options = {}) {
     if (!['base', 'head'].includes(comparison)) return fileError(response, 400, 'invalid_comparison');
     try { sendJson(response, 200, await workspaceDiff(comparison)); }
     catch { fileError(response, 503, 'diff_unavailable'); }
+  }
+
+  // Read from disk on every request rather than cached: a skill the library sync or the agent
+  // itself adds mid-session is one the CLI may already offer, and the scan is bounded.
+  function handleCommandsRequest(request, response) {
+    response.setHeader('Cache-Control', 'no-store');
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'GET') {
+      response.setHeader('Allow', 'GET');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    if (!driver.slashCommands) return sendJson(response, 200, { agent: driver.name, commands: [], truncated: false });
+    try {
+      sendJson(response, 200, { agent: driver.name, ...listSlashCommands(driver.slashCommands, { env, home, cwd, fs }) });
+    } catch {
+      fileError(response, 503, 'commands_unavailable');
+    }
   }
 
   function handleShell(socket) {
@@ -1567,7 +1586,7 @@ function createCommonServer(options = {}) {
 
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
-    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript' +
+    ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands' +
     (modToken ? ', /agenthub/mod/*' : '') + ')');
   postStatus('Running');
 

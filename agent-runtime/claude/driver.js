@@ -189,6 +189,7 @@ function resetFromText(text, from) {
 }
 
 module.exports = {
+  slashCommands: require('./slash-commands'),
   name: 'Claude',
   stateDir: '.claude',
   authFilename: '.credentials.json',

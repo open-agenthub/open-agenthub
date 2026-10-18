@@ -126,6 +126,7 @@ const limitPatterns = [
 ];
 
 module.exports = {
+  slashCommands: require('./slash-commands'),
   limitPatterns,
   // authFilename: AgentHub Secret key + root state-tar exclusion under ~/.openclaw/.
   // stateExcludes: nested agent-store credentials (JSON + SQLite) for every agent id.

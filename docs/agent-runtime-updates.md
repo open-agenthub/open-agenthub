@@ -187,6 +187,14 @@ After a bump, check these names in the new version. A rename does not fail any u
 shows up as a session that silently talks to the provider's default endpoint, or that waits on
 the old 5-minute timeout.
 
+### Slash command lists
+
+Each runtime's `slash-commands.js` records the built-in commands of its pinned CLI for the
+Workspace composer's completion (`docs/slash-commands.md`), read off the CLI's own "/" menu in a
+PTY. After a bump, read the menu of the new version the same way and update the list and the
+`cli` label. A stale list fails nothing: a removed command is still offered and the CLI answers it
+as unknown, a new one is missing from the completion but still runs when typed.
+
 ## The nightly job
 
 [`update-agent-runtimes.yml`](../.github/workflows/update-agent-runtimes.yml) runs at

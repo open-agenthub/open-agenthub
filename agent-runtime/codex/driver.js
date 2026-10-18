@@ -202,6 +202,7 @@ function resetFromJson(match, text, { secondsFromNow }) {
 }
 
 module.exports = {
+  slashCommands: require('./slash-commands'),
   name: 'Codex', stateDir: '.codex', authFilename: 'auth.json',
   limitPatterns,
   // The TUI log only grows and the tmp dirs are per-process scratch; neither is needed to

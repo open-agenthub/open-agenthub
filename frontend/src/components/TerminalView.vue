@@ -417,6 +417,11 @@ function sendWorkspaceMessage(text) {
   }
   return agentTerminal.value.submitMessage(text)
 }
+// Commands that open one of the CLI's menus need nothing here: the composer sends them like any
+// message, and the menu is picked up from the screen like one the person opened in the terminal.
+function loadAgentCommands() {
+  return api.sessionCommands(props.session.id)
+}
 function interruptWorkspaceAgent() {
   if (!canCompose.value || !agentTerminal.value) throw new Error('Agent is disconnected')
   return agentTerminal.value.interruptAgent()
@@ -610,7 +615,7 @@ function interruptWorkspaceAgent() {
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
           ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
-          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" />
+          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" :load-commands="sharedToken ? undefined : loadAgentCommands" />
       </div>
     </SessionWorkspace>
   </div>

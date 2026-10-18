@@ -102,6 +102,7 @@ const limitPatterns = [
 ];
 
 module.exports = {
+  slashCommands: require('./slash-commands'),
   // authFilename: CLI file store (AGENT_CLI_CREDENTIAL_STORE=file, domain "cursor")
   // writes auth.json — confirmed from CLI package 2026.07.23-e383d2b source.
   name: 'Cursor', stateDir: '.cursor', authFilename: 'auth.json',
