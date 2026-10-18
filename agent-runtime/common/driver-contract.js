@@ -34,6 +34,12 @@ function validateDriver(driver) {
   if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
     throw new Error('Agent driver findTranscript must be a function');
   }
+  // Optional: terminalAttachmentPath(file, { env, home, fs }) returns the path a materialized
+  // attachment is pasted into the CLI as, for a CLI that reads images only from its own
+  // directories. Without it the materialized path itself is pasted.
+  if (driver.terminalAttachmentPath !== undefined && typeof driver.terminalAttachmentPath !== 'function') {
+    throw new Error('Agent driver terminalAttachmentPath must be a function');
+  }
   // Optional: the pinned CLI's slash commands as { cli, builtins: [{ name, description? }],
   // sources?: fn } for the Workspace composer's completion (common/slash-commands.js).
   if (driver.slashCommands !== undefined && (!driver.slashCommands || !Array.isArray(driver.slashCommands.builtins) ||
