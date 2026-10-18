@@ -37,14 +37,6 @@ type = "command"
 command = "node /opt/session-agent/codex/fleet-turn-hook.js"
 timeout = 10
 
-# A prompt was submitted, so the agent works and is not waiting at its prompt.
-[[hooks.UserPromptSubmit]]
-
-[[hooks.UserPromptSubmit.hooks]]
-type = "command"
-command = "node /opt/session-agent/codex/fleet-turn-hook.js"
-timeout = 10
-
 # Records that the turn changed something, so the reminder below stays off a turn that only
 # answered a question.
 [[hooks.PostToolUse]]
@@ -97,4 +89,11 @@ timeout = 10
 [[hooks.UserPromptSubmit.hooks]]
 type = "command"
 command = "node /opt/session-agent/codex/conversation-hook.js"
+timeout = 10
+
+# A prompt was submitted, so the agent works and is not waiting at its prompt
+# (docs/priority-messages.md).
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/fleet-turn-hook.js"
 timeout = 10
