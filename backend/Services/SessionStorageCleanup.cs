@@ -17,9 +17,11 @@ public sealed class SessionStorageCleanup(
 
     public static async Task DeleteAsync(IArtifactStore store, string owner, string id, CancellationToken ct)
     {
-        // A missing configuration can be an outage or a removed secret, not proof that
-        // this session never uploaded data. Preserve the row until storage is restored.
-        if (!store.IsConfigured) throw new InvalidOperationException("Object storage must be configured before deleting a session.");
+        // Without object storage the hub keeps nothing of the session's outside the database,
+        // so there is nothing to remove here. Refusing instead would make sessions undeletable
+        // on every installation that runs without it. Data left in a bucket the hub is no
+        // longer configured for is the operator's (docs/session-storage-deletion.md).
+        if (!store.IsConfigured) return;
         foreach (var prefix in new[] {
             $"sessions/{KubernetesSessionService.OwnerKey(owner)}/{id}/",
             $"sessions/{Uri.EscapeDataString(owner)}/{Uri.EscapeDataString(id)}/" }.Distinct())

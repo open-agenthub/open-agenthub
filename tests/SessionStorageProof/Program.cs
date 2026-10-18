@@ -89,12 +89,9 @@ Check(await store.GetByIdAsync(retry.Id) is not null, "Storage failure lost regi
 var deniedSweep = new SessionExpirySweepService(store, deniedService, locks, [], NullLogger<SessionExpirySweepService>.Instance);
 Check(await deniedSweep.SweepOnceAsync(DateTime.UtcNow, default) == 0, "Denied expiry reported success");
 Check(await store.GetByIdAsync(retry.Id) is not null, "Denied expiry lost registry row");
-try { await Service(new NullArtifactStore()).DeleteSessionAsync(owner, retry.Id); throw new Exception("Expected missing configuration failure"); }
-catch (InvalidOperationException) { }
-Check(await store.GetByIdAsync(retry.Id) is not null, "Missing config lost row");
 Check(await sweep.SweepOnceAsync(DateTime.UtcNow, default) == 1, "Restored storage did not retry expiry");
 await Gone(retry);
-Console.WriteLine("PASS real storage rejection and missing config: manual/expiry retain row; restored storage retries successfully");
+Console.WriteLine("PASS real storage rejection: manual/expiry retain row; restored storage retries successfully");
 
 var live = Record();
 var stale = Record();

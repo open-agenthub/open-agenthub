@@ -15,11 +15,13 @@ manual delete, or let the expiry sweep retry on its next pass. Earlier teardown
 steps may already have stopped the session; a failed request does not promise the
 session is still running. Repeating prefix deletion is safe after partial success.
 
-Missing storage configuration also refuses session deletion. A removed credential
-secret is indistinguishable from an installation that never configured storage;
-assuming an empty bucket could silently abandon sensitive archives. Consequently,
-installations without object storage must configure it before deleting sessions.
-This deliberately favors retaining the deletion target over reporting success.
+Without object storage configured, deletion proceeds and there is no prefix to remove:
+the hub acts on the storage it is configured with now. We rejected refusing deletion in
+that case. A removed credential secret looks the same as an installation that never had
+storage, and refusing would make sessions undeletable on every installation without it.
+An operator who removes the storage configuration after using it owns what is left in
+that bucket; once storage is configured again, the orphan cleanup below removes it. Only
+a configured store that fails keeps the session row for a retry.
 
 We rejected swallowing storage errors after deleting the registry row: that loses
 the retry target. A separate durable tombstone queue would allow the row to vanish
@@ -74,7 +76,7 @@ dotnet run --project tests/SessionStorageProof
 ```
 
 The cluster transport and browser teardown are fixtures; no cluster is required.
-The proof asserts manual/expiry deletion, storage denial and missing-configuration
+The proof asserts manual/expiry deletion, storage denial with
 row retention, restored-storage retries, admin-only HTTP access, a read-only
 preview, stale-plan protection, repeated apply, more than 1,000 objects in one
 prefix, and preservation of existing sessions, skills and other prefixes.

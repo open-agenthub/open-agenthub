@@ -18,7 +18,8 @@ public class SessionStorageCleanupTests
         Assert.Equal(new[] { $"sessions/{KubernetesSessionService.OwnerKey("alice/team")}/abc/", "sessions/alice%2Fteam/abc/" }, storage.Deleted);
         storage.Fail = true;
         await Assert.ThrowsAsync<IOException>(() => SessionStorageCleanup.DeleteAsync(storage, "alice", "abc", default));
-        await Assert.ThrowsAsync<InvalidOperationException>(() => SessionStorageCleanup.DeleteAsync(new NullArtifactStore(), "alice", "abc", default));
+        // Without object storage there is nothing to delete, and deletion must not be refused.
+        await SessionStorageCleanup.DeleteAsync(new NullArtifactStore(), "alice", "abc", default);
     }
 
     [Fact]
