@@ -311,11 +311,10 @@ test('Codex follows the launched process marker instead of a remembered old thre
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-
 test('Codex clear confirmation rejects an old conversation or a menu with the composer', () => {
-  const welcome = ['  >_ OpenAI Codex (v0.160.0)', '  How is life between the brackets?', '› Ask Codex to do anything'];
+  const welcome = ['  >_ Codex (v0.160.0)', '  How is life between the brackets?', '› Ask Codex to do anything'];
   assert.equal(driver.contextClearScreen(welcome), true);
   assert.equal(driver.contextClearScreen([...welcome, '› previous task']), false);
   assert.equal(driver.contextClearScreen(['› Ask Codex to do anything']), false);
-  assert.equal(driver.contextClearScreen(['  >_ OpenAI Codex', '› /model']), false);
+  assert.equal(driver.contextClearScreen(['  >_ Codex', '› /model']), false);
 });

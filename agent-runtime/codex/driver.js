@@ -220,7 +220,7 @@ module.exports = {
   contextClearCommand: '/new',
   // Codex creates its rollout only on the first prompt. Its fresh welcome screen is the
   // native acknowledgement of /new; requiring the sole empty composer rejects an old turn.
-  contextClearScreen: rows => rows.some(row => /OpenAI Codex/.test(row)) &&
+  contextClearScreen: rows => rows.some(row => />_ .*\bCodex\b/.test(row)) &&
     rows.filter(row => /^\s*›/.test(row)).length === 1 &&
     rows.some(row => /^\s*›\s+Ask Codex to do anything\s*$/.test(row)),
   slashCommands: require('./slash-commands'),
