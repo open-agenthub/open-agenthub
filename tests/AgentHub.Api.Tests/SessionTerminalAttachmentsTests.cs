@@ -36,7 +36,7 @@ public class SessionTerminalAttachmentsTests
     }
     private sealed class Relay : ISessionTerminalAttachments
     {
-        public List<IReadOnlyList<string>> Calls = [];
+        public readonly List<IReadOnlyList<string>> Calls = [];
         public (int Status, string Body)? Answer = (200, "{\"attachments\":[]}");
         public Task<(int Status, string Body)?> MaterializeAsync(SessionRecord session, IReadOnlyList<string> fileIds, CancellationToken ct)
         { Calls.Add(fileIds); return Task.FromResult(Answer); }
@@ -124,8 +124,10 @@ public class SessionTerminalAttachmentsTests
         using var http = new HttpClient(pod);
         var proxy = new SessionTerminalAttachments(http, sessions, new ConfigurationBuilder().Build());
         var answer = await proxy.MaterializeAsync(Record, [FileId], default);
-        Assert.Equal(200, answer!.Value.Status);
-        Assert.Contains("/workspace/x.png", answer.Value.Body);
+        Assert.NotNull(answer);
+        var (status, body) = answer.Value;
+        Assert.Equal(200, status);
+        Assert.Contains("/workspace/x.png", body);
         Assert.Equal(FileId, JsonDocument.Parse(pod.Sent!).RootElement.GetProperty("fileIds")[0].GetString());
         ((SessionProxy)sessions).Live = null;
         Assert.Null(await proxy.MaterializeAsync(Record, [FileId], default));
