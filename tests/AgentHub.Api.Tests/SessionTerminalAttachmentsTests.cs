@@ -124,8 +124,7 @@ public class SessionTerminalAttachmentsTests
         using var http = new HttpClient(pod);
         var proxy = new SessionTerminalAttachments(http, sessions, new ConfigurationBuilder().Build());
         var answer = await proxy.MaterializeAsync(Record, [FileId], default);
-        Assert.NotNull(answer);
-        var (status, body) = answer.Value;
+        var (status, body) = answer ?? throw new InvalidOperationException("the pod answered nothing");
         Assert.Equal(200, status);
         Assert.Contains("/workspace/x.png", body);
         Assert.Equal(FileId, JsonDocument.Parse(pod.Sent!).RootElement.GetProperty("fileIds")[0].GetString());
