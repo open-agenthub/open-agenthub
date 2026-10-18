@@ -71,6 +71,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
         public readonly SemaphoreSlim Gate = new(1, 1);
         public string? PodIp;
         public string? Token;
+        public string? TranscriptId;
         public long NextByte;
         public TranscriptEntry[] Entries = [];
         public DateTime UnsupportedUntil;
@@ -79,6 +80,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
         public void Reset(string podIp)
         {
             PodIp = podIp;
+            TranscriptId = null;
             NextByte = 0;
             Entries = [];
             UnsupportedUntil = default;
@@ -125,6 +127,14 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
                     follow.UnsupportedUntil = _now() + UnsupportedFor;
                     return null;
                 }
+                // A new conversation can be larger than the old one; size alone cannot identify it.
+                if (chunk.Id is not null && chunk.Id != follow.TranscriptId)
+                {
+                    var hadCursor = follow.NextByte != 0;
+                    follow.Reset(session.PodIp);
+                    follow.TranscriptId = chunk.Id;
+                    if (hadCursor) continue;
+                }
                 if (chunk.Size < follow.NextByte)
                 {
                     follow.Reset(session.PodIp);
@@ -133,7 +143,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
                 if (chunk.Text.Length > 0)
                 {
                     var added = NativeTranscript.Parse(chunk.Text);
-                    if (added.Count > 0) follow.Entries = [.. follow.Entries, .. added];
+                    if (added.Count > 0) follow.Entries = follow.NextByte == 0 ? [.. added] : [.. follow.Entries, .. added];
                 }
                 var advanced = chunk.Next > follow.NextByte;
                 follow.NextByte = Math.Max(follow.NextByte, chunk.Next);
@@ -152,7 +162,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
         }
     }
 
-    private sealed record Chunk(bool Unsupported, long Size, long Next, string Text);
+    private sealed record Chunk(bool Unsupported, long Size, long Next, string Text, string? Id = null);
 
     private async Task<Chunk?> FetchAsync(string podIp, string token, long from, CancellationToken ct)
     {
@@ -181,7 +191,8 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
             if (body.Length + count > MaxChunkBytes) return null;
             body.Write(buffer, 0, count);
         }
-        return new Chunk(false, size, next, Encoding.UTF8.GetString(body.GetBuffer(), 0, (int)body.Length));
+        var id = response.Headers.TryGetValues("X-Transcript-Id", out var ids) ? ids.FirstOrDefault() : null;
+        return new Chunk(false, size, next, Encoding.UTF8.GetString(body.GetBuffer(), 0, (int)body.Length), id);
     }
 
     private static bool TryHeader(HttpResponseMessage response, string name, out long value)
