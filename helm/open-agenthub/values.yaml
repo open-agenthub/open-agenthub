@@ -90,6 +90,15 @@ agent:
   # Extra TCP egress ports allowed from session pods (besides 53/80/443/22),
   # e.g. [3900] for self-hosted object storage on a non-standard port.
   extraEgressPorts: []
+  # In-cluster model servers that sessions with "Own endpoint" billing may reach
+  # (docs/custom-model-endpoints.md). An endpoint on the internet over 443/80 needs nothing here.
+  # NetworkPolicy matches the destination pod's port after the Service has translated it, so list
+  # the container port: 8080 for a llama-server Service that listens on 80. Rendered as one static
+  # policy; a URL a user types never opens a path by itself.
+  modelEndpoints: []
+  #  - namespace: llm
+  #    podLabels: { app: llama-server }
+  #    ports: [8080]
   # Runtime port requests: an agent may ask (via the built-in agenthub_network MCP
   # server) to open additional ports while the session runs — egress (e.g. Postgres
   # 5432) or browser→agent (a dev server beyond the default preview ports). The

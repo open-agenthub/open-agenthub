@@ -30,12 +30,31 @@ const PUBLIC_AUTH_OPTIONS = [
   { value: 'ApiKey', label: 'API key', hint: 'Use provider API billing' }
 ]
 
+// A self-hosted model server instead of a provider (docs/custom-model-endpoints.md). Only the
+// agents the backend accepts it for; each needs a different wire protocol, which the hint names
+// because "OpenAI-compatible" alone is not enough for two of them.
+const CUSTOM_ENDPOINT_OPTION = { value: 'CustomEndpoint', label: 'Own endpoint', hint: 'Use a self-hosted model server' }
+const CUSTOM_ENDPOINT_PROTOCOLS = {
+  Claude: 'Claude Code speaks the Anthropic Messages API: the server must offer /v1/messages. An OpenAI-only server will not work.',
+  Codex: 'Codex speaks only the OpenAI Responses API: the server must offer /v1/responses. /v1/chat/completions alone will not work.',
+  OpenCode: 'OpenCode speaks OpenAI Chat Completions: the server must offer /v1/chat/completions.'
+}
+
+export function supportsCustomEndpoint(agent) {
+  return Object.hasOwn(CUSTOM_ENDPOINT_PROTOCOLS, agent)
+}
+
+export function customEndpointProtocol(agent) {
+  return CUSTOM_ENDPOINT_PROTOCOLS[agent] || ''
+}
+
 export function needsOpenClawApiKeySource(agent, authMode) {
   return agent === 'OpenClaw' && authMode === 'ApiKey'
 }
 
 export function authOptions(agent, legacyMode) {
   const options = PUBLIC_AUTH_OPTIONS.map(option => ({ ...option }))
+  if (supportsCustomEndpoint(agent)) options.push({ ...CUSTOM_ENDPOINT_OPTION })
   return agent === 'Claude' && legacyMode === 'Auto'
     ? [{ value: 'Auto', label: 'Auto (legacy)', hint: 'Existing migrated selection' }, ...options]
     : options
@@ -93,6 +112,8 @@ export function defaultAgentForm(source = {}) {
     agent,
     authMode: source.authMode || 'Subscription',
     openClawApiKeySource: source.openClawApiKeySource || 'Anthropic',
+    modelEndpointUrl: source.modelEndpointUrl || '',
+    modelName: source.modelName || '',
     allowedToolsRaw: policy.allowedTools.join('\n'),
     allowedMcpToolsRaw: policy.allowedMcpTools.join('\n'),
     allowedCommandsRaw: policy.allowedCommands.join('\n')
@@ -106,6 +127,11 @@ export function agentPayload(form) {
   }
   if (needsOpenClawApiKeySource(form.agent, form.authMode)) {
     payload.openClawApiKeySource = form.openClawApiKeySource || 'Anthropic'
+  }
+  // Only with the mode: the backend refuses endpoint fields on any other one.
+  if (form.authMode === 'CustomEndpoint') {
+    payload.modelEndpointUrl = String(form.modelEndpointUrl || '').trim()
+    payload.modelName = String(form.modelName || '').trim()
   }
   return payload
 }
@@ -231,6 +257,12 @@ function apiKeyReadiness(provider, statusKey, status) {
 
 export function credentialReadiness(agent, authMode, mode, status = {}, openClawApiKeySource = null) {
   if (authMode === 'Auto') return { ready: true, text: 'Legacy automatic credential selection is preserved until you choose a billing source.' }
+  // The key is optional: many self-hosted servers run without one.
+  if (authMode === 'CustomEndpoint') {
+    return status.customEndpointApiKey
+      ? { ready: true, text: 'Custom endpoint API key is stored. The first turn can take minutes while the server reads the prompt.' }
+      : { ready: true, text: 'No custom endpoint API key is stored, which is fine for a server without auth. The first turn can take minutes.' }
+  }
   if (authMode === 'Subscription') {
     const ready = !!status[
       agent === 'Codex' ? 'codexSubscription'

@@ -171,6 +171,7 @@ async function submit() {
         </div>
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
           v-model:open-claw-api-key-source="form.openClawApiKeySource" v-model:credential-id="form.credentialId"
+          v-model:model-endpoint-url="form.modelEndpointUrl" v-model:model-name="form.modelName"
           :accounts="providerAccounts"
           :mode="form.mode" :credential-status="credentialStatus" :options="agentChoices" />
         <div class="field">

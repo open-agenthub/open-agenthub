@@ -191,9 +191,10 @@ async function save() {
       <template v-if="!scheduled">
         <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode"
           v-model:open-claw-api-key-source="f.openClawApiKeySource" v-model:credential-id="f.credentialId"
+          v-model:model-endpoint-url="f.modelEndpointUrl" v-model:model-name="f.modelName"
           :accounts="providerAccounts" :mode="session.mode"
           :legacy-auth-mode="session.authMode" :credential-status="credentialStatus" :options="agentChoices" />
-        <div v-if="f.authMode !== 'ApiKey'" class="card sect toggle-field failover-field">
+        <div v-if="!['ApiKey', 'CustomEndpoint'].includes(f.authMode)" class="card sect toggle-field failover-field">
           <label>Switch account automatically at usage limit <span class="dim">— move to another stored login when this one is used up</span></label>
           <button type="button" class="toggle" role="switch" data-account-failover
                   :aria-checked="f.accountFailover !== 'off' ? 'true' : 'false'" :class="{ on: f.accountFailover !== 'off' }"
