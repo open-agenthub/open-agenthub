@@ -37,6 +37,21 @@ viewer can read; no role can mutate Git through this endpoint. No diff is retain
 backend, browser storage or artifacts, and responses are marked no-store. A stopped session
 or old runtime reports unavailability instead of showing a cached patch from another pod.
 
+## Known limits
+
+- **Pod identity.** The backend reads the diff from the pod address stored for the session and
+  sends the session's callback token there, exactly as the file reader does. It does not first
+  confirm that the address still belongs to that session's pod. The transcript reader gains that
+  confirmation in #143; the diff and file readers should adopt the same check once it lands,
+  rather than each growing its own.
+- **Git configuration in the workspace.** The reader disables external diff drivers, textconv and
+  fsmonitor, but `git diff` against the working tree still applies clean filters that an in-repo
+  `.gitattributes` and the repository config name. Those are commands the agent could write. They
+  run in the session-agent process, inside the same pod and as the same user as the agent, which
+  can already run arbitrary commands there, so this grants nothing new. It would matter if the
+  reader ever moved into a more privileged process than the agent; disabling filters then is part
+  of that move.
+
 ## Verification
 
 The repeatable runtime tests create real repositories and a linked worktree, then exercise
