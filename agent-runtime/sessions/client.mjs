@@ -40,6 +40,11 @@ export class SessionsBackendClient {
     return { deleted: true };
   }
 
+  /** Only this callback identity can clear itself; there is deliberately no peer target. */
+  clearContext(followUp) {
+    return this.#request('POST', '/context-clear', { followUp });
+  }
+
   /** Continues a descendant's finished autonomous run interactively (docs/session-mode-conversion.md). */
   convert(childId, body = {}) {
     return this.#request('POST', `/peer/${encodeURIComponent(childId)}/convert`,

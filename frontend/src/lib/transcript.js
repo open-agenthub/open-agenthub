@@ -1,3 +1,4 @@
+import { fleetLabel, parseFleetMessage } from './pending-messages.js'
 const SPINNER_GLYPHS = new Set(['*', '·', '…', '✢', '✣', '✳', '✶', '✻', '✽'])
 const ELAPSED_TOKENS = /^(?:[*·…✢✣✳✶✻✽]\s*)*\d+s\s*·\s*↓\s*\d+(?:\.\d+)?\s*[kKmM]?\s*tokens\)?$/u
 const MAX_SHORT_CODE_POINTS = 12
@@ -164,7 +165,13 @@ export function mergeConversationPage(current, page) {
 export function toTranscriptItems(page) {
   if (!page) return []
   if (page.source === 'native') {
-    return (page.entries || []).map(entry => ({ role: entry.role, label: entryLabel(entry), text: entry.text, at: entry.at || null }))
+    return (page.entries || []).map(entry => {
+      // A fleet message reaches the CLI as a user turn headed with its sender (#186); shown as
+      // the person's own words, it read as if they had written the peer's report.
+      const fleet = entry.role === 'user' ? parseFleetMessage(entry.text) : null
+      if (fleet) return { role: 'fleet', label: fleetLabel(fleet), text: fleet.body, at: entry.at || null }
+      return { role: entry.role, label: entryLabel(entry), text: entry.text, at: entry.at || null }
+    })
   }
   return toTranscriptBlocks(page.text).map(block => ({ role: 'terminal', label: 'Terminal', text: block }))
 }
