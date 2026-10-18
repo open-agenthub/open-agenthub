@@ -664,9 +664,11 @@ Results flow back via `git push` or as artifacts to S3. What is persisted:
 
 ### Session files and visual previews
 
-Claude's streaming Workspace accepts images and documents by file picker, paste, and drag-and-drop.
-In the agent terminal and the shell, Ctrl+V pastes the local clipboard's text; an image pasted
-there is not sent and points to Files instead ([`docs/terminal-clipboard.md`](docs/terminal-clipboard.md)).
+The Workspace composer accepts images and documents by file picker, paste, and drag-and-drop, and
+an image pasted into the agent terminal is attached too: the file is uploaded to the session and
+its path pasted into the CLI, which Claude Code, Codex, OpenCode and OpenClaw turn into an image of
+their own (Cursor's TUI does the same, not verified end to end). In the shell, Ctrl+V pastes text
+only ([`docs/terminal-clipboard.md`](docs/terminal-clipboard.md)).
 Images, PDF, Markdown, and plain text can be opened in Files beside Workspace or Terminal.
 HTML and SVG are download-only. A managed `files` MCP gives every supported agent the same
 provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,

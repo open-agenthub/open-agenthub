@@ -189,3 +189,10 @@ describe('toTranscriptBlocks', () => {
     expect(toTranscriptBlocks(separated('*', '·', '✶', '✻10s · ↓ 2k tokens)'))).toEqual([])
   })
 })
+
+it('reloads a larger replacement conversation when its identity changed', () => {
+  const current = { source: 'native', conversationId: 'old', entries: [], nextOffset: 1, length: 1 };
+  const page = { source: 'native', conversationId: 'new', entries: [{ role: 'boundary', text: 'Conversation cleared' }], offset: 1, nextOffset: 2, length: 3 };
+  expect(mergeConversationPage(current, page)).toBeNull();
+  expect(entryLabel(page.entries[0])).toBe('Conversation cleared');
+});

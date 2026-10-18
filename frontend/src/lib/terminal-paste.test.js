@@ -116,3 +116,25 @@ describe('pasteHasFile', () => {
     expect(pasteHasFile(null)).toBe(false)
   })
 })
+
+describe('files pasted into the agent terminal (#148)', () => {
+  it('are handed to pasteFiles instead of the Files notice', async () => {
+    const pasteFiles = vi.fn()
+    const { sent, notify, textarea } = await openTerminal({ pasteFiles })
+    const file = new File(['x'], 'image.png', { type: 'image/png' })
+    const event = pasteEvent({ getData: () => '', files: [file], items: [{ kind: 'file', type: 'image/png' }] })
+    textarea.dispatchEvent(event)
+    expect(event.defaultPrevented).toBe(true)
+    expect(pasteFiles).toHaveBeenCalledWith([file])
+    expect(notify).not.toHaveBeenCalled()
+    expect(sent).toEqual([])
+  })
+
+  it('text in the same paste still goes to the CLI as text', async () => {
+    const pasteFiles = vi.fn()
+    const { sent, textarea } = await openTerminal({ pasteFiles })
+    textarea.dispatchEvent(pasteEvent({ getData: type => type === 'text/plain' ? 'hello' : '', files: [new File(['x'], 'image.png', { type: 'image/png' })], items: [{ kind: 'file', type: 'image/png' }] }))
+    expect(pasteFiles).not.toHaveBeenCalled()
+    expect(sent).toEqual(['\x1b[200~hello\x1b[201~'])
+  })
+})

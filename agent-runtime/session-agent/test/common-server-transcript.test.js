@@ -191,3 +191,35 @@ test('the restored transcript is neither served nor uploaded until it has caught
   await tick(); await tick();
   assert.equal(harness.terminals.length, 1);
 });
+
+test('conversation replacement changes identity even when the new file is larger and uploads its boundary', async () => {
+  const next = FILE.replace('s.jsonl', 'new.jsonl');
+  const files = { [FILE]: '{"old":1}\n', [next]: '{"new":"a larger conversation"}\n' };
+  let active = FILE;
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token',
+    AGENTHUB_CALLBACK_URL: 'https://example.com/internal/sessions/s1' },
+  { findTranscript: () => active }, { files });
+  const first = await requestHttp(harness, 'GET', '/agenthub/transcript?from=0', auth);
+  active = next;
+  const changed = await requestHttp(harness, 'GET', '/agenthub/transcript?from=' + first.headers['x-transcript-next'], auth);
+  assert.notEqual(changed.headers['x-transcript-id'], first.headers['x-transcript-id']);
+  const fresh = await requestHttp(harness, 'GET', '/agenthub/transcript?from=0', auth);
+  assert.match(fresh.body, /Conversation cleared/);
+  assert.match(fresh.body, /a larger conversation/);
+  assert.equal(fresh.body.includes('"old"'), true);
+  assert.ok(fresh.body.indexOf('"old"') < fresh.body.indexOf('Conversation cleared'));
+  harness.intervals[0].callback();
+  await tick(); await tick();
+  const upload = harness.requests.find(r => r.options.method === 'PUT' && r.url.endsWith('/transcript'));
+  assert.match(upload.options.body, /Conversation cleared/);
+  assert.match(upload.options.body, /a larger conversation/);
+});
+
+test('resume catch-up restores only the fresh context from the owner history view', async () => {
+  const restored = '{"new":1}\n';
+  const stored = '{"old":1}\n{"type":"agenthub_conversation","id":"new","text":"Conversation cleared"}\n' + restored + '{"new":2}\n';
+  const harness = resumeHarness(restored, stored);
+  await tick(); await tick();
+  const written = harness.writes.find(w => w.file === FILE + '.agenthub-tmp');
+  assert.equal(Buffer.from(written.data).toString(), restored + '{"new":2}\n');
+});

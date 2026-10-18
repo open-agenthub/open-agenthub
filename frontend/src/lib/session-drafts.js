@@ -5,3 +5,5 @@ export const chatDrafts = new Map()
 // Messages written while the session was still starting, per session, in the order they were
 // queued; WorkspaceComposer sends them once the agent is connected (#115).
 export const workspaceQueues = new Map()
+// Messages the composer sent that the agent's CLI has not taken yet, per session (#153).
+export const workspaceSent = new Map()

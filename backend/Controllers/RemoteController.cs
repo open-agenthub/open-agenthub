@@ -23,6 +23,7 @@ public sealed class RemoteController : ControllerBase
     private readonly ISessionService _svc;
     private readonly ISessionMessageStore? _messages;
     private readonly ISessionMessageDelivery? _delivery;
+    private readonly ISessionContextClear? _contextClear;
 
     /// <remarks>
     /// Marked as the one to construct from the container. MVC builds a controller through
@@ -33,17 +34,18 @@ public sealed class RemoteController : ControllerBase
     /// </remarks>
     [ActivatorUtilitiesConstructor]
     public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null,
-        ISessionMessageDelivery? delivery = null)
-        : this(tokens.FindCallerByTokenAsync, svc, messages, delivery) { }
+        ISessionMessageDelivery? delivery = null, ISessionContextClear? contextClear = null)
+        : this(tokens.FindCallerByTokenAsync, svc, messages, delivery, contextClear) { }
 
     /// <summary>Test seam: resolve the caller (owner and scope) from a plaintext token without Postgres.</summary>
     public RemoteController(Func<string, CancellationToken, Task<RemoteCaller?>> findCallerByToken, ISessionService svc,
-        ISessionMessageStore? messages = null, ISessionMessageDelivery? delivery = null)
+        ISessionMessageStore? messages = null, ISessionMessageDelivery? delivery = null, ISessionContextClear? contextClear = null)
     {
         _findCaller = findCallerByToken;
         _svc = svc;
         _messages = messages;
         _delivery = delivery;
+        _contextClear = contextClear;
     }
 
     /// <summary>Resolves the bearer token to its owner and scope, or null if missing/invalid.</summary>
@@ -54,6 +56,24 @@ public sealed class RemoteController : ControllerBase
     /// creation and the credential listing consult the scope: a session belongs to its owner,
     /// not to the token that created it (docs/credential-scopes.md).</summary>
     private async Task<string?> ResolveOwnerAsync(CancellationToken ct) => (await ResolveCallerAsync(ct))?.Owner;
+
+
+    [HttpPost("sessions/{id}/context-clear")]
+    public async Task<ActionResult<ContextClearOutcome>> ClearContext(string id,
+        [FromBody] ContextClearRequest request, CancellationToken ct)
+    {
+        var owner = await ResolveOwnerAsync(ct);
+        if (owner is null) return Unauthorized();
+        var session = await _svc.GetSessionAsync(owner, id, ct);
+        if (session is null) return NotFound();
+        if (session.Owner != owner) return Forbid();
+        if (_contextClear is null) return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        try { return Accepted(await _contextClear.ScheduleAsync(session, request, ct)); }
+        catch (ArgumentException error) { return BadRequest(error.Message); }
+        catch (InvalidOperationException error) { return Conflict(error.Message); }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+        { return StatusCode(StatusCodes.Status502BadGateway, "context_clear_unavailable"); }
+    }
 
     [HttpPost("sessions")]
     public async Task<ActionResult<SessionInfo>> Create([FromBody] CreateSessionRequest req, CancellationToken ct)

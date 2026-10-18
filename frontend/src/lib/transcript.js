@@ -1,3 +1,4 @@
+import { fleetLabel, parseFleetMessage } from './pending-messages.js'
 const SPINNER_GLYPHS = new Set(['*', '·', '…', '✢', '✣', '✳', '✶', '✻', '✽'])
 const ELAPSED_TOKENS = /^(?:[*·…✢✣✳✶✻✽]\s*)*\d+s\s*·\s*↓\s*\d+(?:\.\d+)?\s*[kKmM]?\s*tokens\)?$/u
 const MAX_SHORT_CODE_POINTS = 12
@@ -129,7 +130,7 @@ export function toTranscriptBlocks(text) {
   return packBlocks(deduplicateAdjacent(suppressShortBursts(meaningful)))
 }
 
-const ROLE_LABELS = { user: 'User', assistant: 'Agent', tool: 'Tool', result: 'Result' }
+const ROLE_LABELS = { boundary: 'Conversation cleared', user: 'User', assistant: 'Agent', tool: 'Tool', result: 'Result' }
 
 export function entryLabel(entry) {
   if (entry.role === 'tool' && entry.tool) return `Tool · ${entry.tool}`
@@ -138,7 +139,7 @@ export function entryLabel(entry) {
 
 export function conversationState(page) {
   return {
-    source: page.source, entries: page.entries || [], text: page.text || '',
+    source: page.source, conversationId: page.conversationId, entries: page.entries || [], text: page.text || '',
     nextOffset: page.nextOffset, length: page.length
   }
 }
@@ -150,7 +151,7 @@ export function conversationState(page) {
 // the offset. In all three cases the only honest answer is to reload from the start; appending
 // would stitch two different histories together.
 export function mergeConversationPage(current, page) {
-  if (!current || current.source !== page.source) return null
+  if (!current || current.source !== page.source || current.conversationId !== page.conversationId) return null
   if (page.length < current.length || page.offset !== current.nextOffset) return null
   const next = conversationState(page)
   if (page.source === 'native') next.entries = current.entries.concat(next.entries)
@@ -164,7 +165,13 @@ export function mergeConversationPage(current, page) {
 export function toTranscriptItems(page) {
   if (!page) return []
   if (page.source === 'native') {
-    return (page.entries || []).map(entry => ({ role: entry.role, label: entryLabel(entry), text: entry.text }))
+    return (page.entries || []).map(entry => {
+      // A fleet message reaches the CLI as a user turn headed with its sender (#186); shown as
+      // the person's own words, it read as if they had written the peer's report.
+      const fleet = entry.role === 'user' ? parseFleetMessage(entry.text) : null
+      if (fleet) return { role: 'fleet', label: fleetLabel(fleet), text: fleet.body, at: entry.at || null }
+      return { role: entry.role, label: entryLabel(entry), text: entry.text, at: entry.at || null }
+    })
   }
   return toTranscriptBlocks(page.text).map(block => ({ role: 'terminal', label: 'Terminal', text: block }))
 }
