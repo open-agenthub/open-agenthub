@@ -32,7 +32,7 @@ function buildCommand(env, allowResume) {
     // remaining argument. Without it the TUI stops on its workspace-trust question, so a session
     // created with a task would sit on a dialog instead of working — the non-interactive branch
     // below has passed it for the same reason since it was written.
-    const args = ['--trust'];
+    const args = ['--trust', '--disable-auto-update'];
     if (restoredResume) args.push('--resume', chatId);
     // `agent [options] [prompt...]` — the CLI documents the positional as the agent's initial
     // prompt and stays interactive with it, so a session created by an API arrives with its task
@@ -52,7 +52,8 @@ function buildCommand(env, allowResume) {
   // nothing at all: the agent kept running everything the deny list did not name. Without it the
   // session is held to `approvalMode: allowlist` and the policy's allow entries, and a call outside
   // them has nobody to approve it in a -p run.
-  const args = ['-p'];
+  // The CLI otherwise schedules a background installer against its image-owned files.
+  const args = ['-p', '--disable-auto-update'];
   if (env.AGENTHUB_AUTO_APPROVE === '1') args.push('--force');
   args.push('--trust');
   // Unconditional: this approves the MCP *servers* the hub configured, which is a startup

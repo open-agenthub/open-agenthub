@@ -1,4 +1,5 @@
 <script setup>
+import SessionIcon from './SessionIcon.vue'
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
@@ -427,7 +428,7 @@ function interruptWorkspaceAgent() {
           <span v-if="repoLabel" class="mono">· {{ repoLabel }}</span>
           <span v-if="session.schedule" class="cron">· ▶ {{ session.schedule }}</span>
           <span v-if="session.expiresAt" class="expires" :class="{ soon: isExpiringSoon(session.expiresAt) }"
-            data-expires-at :title="`Auto-delete ${session.autoDeleteFrom === 'start' ? 'after start' : 'after last activity'}`">· ⌛ expires in {{ formatRemaining(session.expiresAt) }}</span>
+            data-expires-at :title="`Auto-delete ${session.autoDeleteFrom === 'start' ? 'after start' : 'after last activity'}`">· <SessionIcon name="expiry" /> expires in {{ formatRemaining(session.expiresAt) }}</span>
           <span v-if="session.sharedBy" class="shared">· shared by {{ session.sharedBy }}</span>
         </div>
       </div>

@@ -8,6 +8,9 @@ if [ -f /opt/agenthub/session-agent/common/entrypoint-common.sh ]; then
 fi
 source "$COMMON_ENTRYPOINT"
 
+# Updates belong to image rollouts; a background installer cannot write the pinned CLI.
+export DISABLE_AUTOUPDATER=1
+
 AUTH_EXPECT_CREATE=1
 AUTH_BASELINE_SHA256=""
 if [ -f /secrets/claude/credentials.json ]; then

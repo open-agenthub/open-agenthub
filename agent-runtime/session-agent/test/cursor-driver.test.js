@@ -31,10 +31,10 @@ test('Cursor driver exposes the provider state contract', () => {
 });
 
 test('Cursor interactive starts TUI without resume flags', () => {
-  assert.deepEqual(driver.buildCommand(environment(), true), { cmd: 'agent', args: ['--trust'] });
+  assert.deepEqual(driver.buildCommand(environment(), true), { cmd: 'agent', args: ['--trust', '--disable-auto-update'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
-  }), false), { cmd: 'agent', args: ['--trust'] });
+  }), false), { cmd: 'agent', args: ['--trust', '--disable-auto-update'] });
 });
 
 test('Cursor interactive pre-accepts workspace trust so a started session is not left on a dialog', () => {
@@ -52,18 +52,18 @@ test('Cursor interactive pre-accepts workspace trust so a started session is not
 test('Cursor interactive session starts on its prompt, except when resuming', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_PROMPT: 'triage the failing build'
-  }), true), { cmd: 'agent', args: ['--trust', 'triage the failing build'] });
+  }), true), { cmd: 'agent', args: ['--trust', '--disable-auto-update', 'triage the failing build'] });
 
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_PROMPT: 'triage the failing build',
     AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1',
     AGENTHUB_CLAUDE_SESSION_ID: 'chat-1'
-  }), true), { cmd: 'agent', args: ['--trust', '--resume', 'chat-1'] });
+  }), true), { cmd: 'agent', args: ['--trust', '--disable-auto-update', '--resume', 'chat-1'] });
 
   const loginSh = path.join(runtimeDir, 'cursor', 'login.sh');
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CURSOR_LOGIN: '1', AGENTHUB_PROMPT: 'triage the failing build'
-  }), true), { cmd: 'bash', args: [loginSh, '--trust', 'triage the failing build'] });
+  }), true), { cmd: 'bash', args: [loginSh, '--trust', '--disable-auto-update', 'triage the failing build'] });
 });
 
 test('Cursor keeps every option ahead of the positional prompt', () => {
@@ -83,17 +83,17 @@ test('Cursor subscription login runs inside the agent PTY before the interactive
   const loginSh = path.join(runtimeDir, 'cursor', 'login.sh');
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CURSOR_LOGIN: '1'
-  }), true), { cmd: 'bash', args: [loginSh, '--trust'] });
+  }), true), { cmd: 'bash', args: [loginSh, '--trust', '--disable-auto-update'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CURSOR_LOGIN: '1',
     AGENTHUB_RESUME: '1',
     AGENTHUB_STATE_RESTORED: '1',
     AGENTHUB_CLAUDE_SESSION_ID: 'chat-1'
-  }), true), { cmd: 'bash', args: [loginSh, '--trust', '--resume', 'chat-1'] });
+  }), true), { cmd: 'bash', args: [loginSh, '--trust', '--disable-auto-update', '--resume', 'chat-1'] });
   assert.equal(driver.isResumeCommand({
-    cmd: 'bash', args: [loginSh, '--trust', '--resume', 'chat-1']
+    cmd: 'bash', args: [loginSh, '--trust', '--disable-auto-update', '--resume', 'chat-1']
   }), true);
-  assert.equal(driver.isResumeCommand({ cmd: 'bash', args: [loginSh, '--trust'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'bash', args: [loginSh, '--trust', '--disable-auto-update'] }), false);
 
   const script = fs.readFileSync(loginSh, 'utf8');
   assert.match(script, /if \[ ! -f "\$\{CURSOR_AUTH_FILE:-\}" \]; then\s+agent login\s+fi/);
@@ -108,19 +108,19 @@ test('Cursor resume uses --resume with Claude session id env when chat id presen
     AGENTHUB_RESUME: '1',
     AGENTHUB_STATE_RESTORED: '1',
     AGENTHUB_CLAUDE_SESSION_ID: 'chat-1'
-  }), true), { cmd: 'agent', args: ['--trust', '--resume', 'chat-1'] });
+  }), true), { cmd: 'agent', args: ['--trust', '--disable-auto-update', '--resume', 'chat-1'] });
 });
 
 test('Cursor autonomous uses print, force, and trust', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'fix it'
-  }), true), { cmd: 'agent', args: ['-p', '--force', '--trust', 'fix it'] });
+  }), true), { cmd: 'agent', args: ['-p', '--disable-auto-update', '--force', '--trust', 'fix it'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_MODE: 'scheduled', AGENTHUB_PROMPT: 'report',
     AGENTHUB_HAS_MCP: '1'
   }), true), {
     cmd: 'agent',
-    args: ['-p', '--force', '--trust', '--approve-mcps', 'report']
+    args: ['-p', '--disable-auto-update', '--force', '--trust', '--approve-mcps', 'report']
   });
 });
 
@@ -130,17 +130,17 @@ test('Cursor autonomous uses print, force, and trust', () => {
 test('Cursor drops --force when the session does not auto-approve', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'fix it', AGENTHUB_AUTO_APPROVE: '0'
-  }), true), { cmd: 'agent', args: ['-p', '--trust', 'fix it'] });
+  }), true), { cmd: 'agent', args: ['-p', '--disable-auto-update', '--trust', 'fix it'] });
   // Absent is not "on": a pod from before the variable existed must not be read as auto-approving.
   const legacy = environment({ AGENTHUB_MODE: 'scheduled', AGENTHUB_PROMPT: 'report' });
   delete legacy.AGENTHUB_AUTO_APPROVE;
   assert.deepEqual(driver.buildCommand(legacy, true),
-    { cmd: 'agent', args: ['-p', '--trust', 'report'] });
+    { cmd: 'agent', args: ['-p', '--disable-auto-update', '--trust', 'report'] });
   // MCP server trust is a startup question, not a per-call approval, so it stays either way.
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'fix it',
     AGENTHUB_AUTO_APPROVE: '0', AGENTHUB_HAS_MCP: '1'
-  }), true), { cmd: 'agent', args: ['-p', '--trust', '--approve-mcps', 'fix it'] });
+  }), true), { cmd: 'agent', args: ['-p', '--disable-auto-update', '--trust', '--approve-mcps', 'fix it'] });
 });
 
 test('Cursor autonomous resume keeps print flags before --resume', () => {
@@ -152,7 +152,7 @@ test('Cursor autonomous resume keeps print flags before --resume', () => {
     AGENTHUB_CLAUDE_SESSION_ID: 'chat-9'
   }), true), {
     cmd: 'agent',
-    args: ['-p', '--force', '--trust', '--resume', 'chat-9', 'continue']
+    args: ['-p', '--disable-auto-update', '--force', '--trust', '--resume', 'chat-9', 'continue']
   });
 });
 
@@ -160,13 +160,13 @@ test('Cursor resume recognition rejects fresh and merely resume-like commands', 
   const loginSh = path.join(runtimeDir, 'cursor', 'login.sh');
   assert.equal(driver.isResumeCommand({ cmd: 'agent', args: ['--resume', 'chat-1'] }), true);
   assert.equal(driver.isResumeCommand({
-    cmd: 'agent', args: ['-p', '--force', '--trust', '--resume', 'chat-1', 'prompt']
+    cmd: 'agent', args: ['-p', '--disable-auto-update', '--force', '--trust', '--resume', 'chat-1', 'prompt']
   }), true);
   assert.equal(driver.isResumeCommand({
-    cmd: 'bash', args: [loginSh, '--trust', '--resume', 'chat-1']
+    cmd: 'bash', args: [loginSh, '--trust', '--disable-auto-update', '--resume', 'chat-1']
   }), true);
-  assert.equal(driver.isResumeCommand({ cmd: 'bash', args: [loginSh, '--trust'] }), false);
-  assert.equal(driver.isResumeCommand({ cmd: 'agent', args: ['--trust'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'bash', args: [loginSh, '--trust', '--disable-auto-update'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'agent', args: ['--trust', '--disable-auto-update'] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'agent', args: ['--resume'] }), false);
   assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['--resume', 'x'] }), false);
   // A login command that is not the runtime's own login.sh must not count as a resume.
@@ -175,7 +175,7 @@ test('Cursor resume recognition rejects fresh and merely resume-like commands', 
   }), false);
   // An initial prompt sits after the flags, so recognition cannot depend on argument count.
   assert.equal(driver.isResumeCommand({
-    cmd: 'bash', args: [loginSh, '--trust', '--resume', 'chat-1', 'a task']
+    cmd: 'bash', args: [loginSh, '--trust', '--disable-auto-update', '--resume', 'chat-1', 'a task']
   }), true);
 });
 
