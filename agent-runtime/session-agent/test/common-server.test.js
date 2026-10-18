@@ -618,13 +618,15 @@ test('common transport retries a missing resume once and then launches fresh', (
   assert.equal(checks.length, 1);
 });
 
-test('Codex device-auth resume retries fresh exactly once without repeating login', () => {
+test('Codex device-auth resume retries fresh exactly once without repeating login', t => {
+  const home = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'codex-resume-test-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const codexDriver = require('../../codex/driver');
   const harness = createHarness({
     AGENTHUB_CODEX_DEVICE_AUTH: '1',
     AGENTHUB_RESUME: '1',
     AGENTHUB_STATE_RESTORED: '1',
-    CODEX_HOME: '/home/agent/.codex'
+    CODEX_HOME: home
   }, codexDriver);
 
   const wrapper = path.join(__dirname, '..', '..', 'codex', 'device-login.sh');

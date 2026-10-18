@@ -7,9 +7,12 @@ const test = require('node:test');
 
 const runtimeDir = path.join(__dirname, '..', '..');
 const driver = require('../../codex/driver');
+const emptyCodexHome = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'codex-driver-test-'));
+test.after(() => fs.rmSync(emptyCodexHome, { recursive: true, force: true }));
 
 function environment(overrides = {}) {
   return {
+    CODEX_HOME: emptyCodexHome,
     AGENTHUB_MODE: 'interactive', AGENTHUB_PROMPT: '', AGENTHUB_RESUME: '0',
     AGENTHUB_STATE_RESTORED: '0', ...overrides
   };
@@ -89,7 +92,7 @@ test('Codex device login runs inside the agent PTY before the interactive CLI', 
 });
 
 test('Codex autonomous and scheduled commands use pinned exec flags and valid resume ordering', () => {
-  const flags = ['--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust'];
+  const flags = ['--sandbox', 'danger-full-access', '--json', '--dangerously-bypass-hook-trust'];
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'fix it'
   }), true), { cmd: 'codex', args: ['exec', ...flags, 'fix it'] });
@@ -114,7 +117,7 @@ test('Codex resume recognition rejects fresh and merely resume-like commands', (
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] }), true);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume later'] }), false);
   assert.equal(driver.isResumeCommand({
-    cmd: 'codex', args: ['exec', '--sandbox', 'workspace-write', '--json',
+    cmd: 'codex', args: ['exec', '--sandbox', 'danger-full-access', '--json',
       '--dangerously-bypass-hook-trust', 'resume', '--last', 'prompt']
   }), true);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['exec', 'resume later'] }), false);
@@ -179,7 +182,7 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
       AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
     }), true), {
       cmd: 'codex',
-      args: ['exec', '--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust',
+      args: ['exec', '--sandbox', 'danger-full-access', '--json', '--dangerously-bypass-hook-trust',
         'resume', THREAD_A, 'go']
     });
     assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] }), true);

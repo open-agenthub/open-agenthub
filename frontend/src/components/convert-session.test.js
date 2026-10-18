@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     listPermissions: vi.fn().mockResolvedValue([]),
     listSessionMessages: vi.fn().mockResolvedValue([]),
     listProviderAccounts: vi.fn().mockResolvedValue({}),
+    updateRuntimeImage: vi.fn(),
     convertSession: vi.fn()
   },
   config: { gitEnabled: false }
@@ -209,3 +210,29 @@ describe('conversion helpers', () => {
     expect(conversionHint(undefined)).toContain('new conversation')
   })
 })
+
+
+describe('runtime image updates', () => {
+  it('shows the live-image badge but reserves updating for the owner', () => {
+    const owner = mountTerminal(finished({ outdatedImage: true }));
+    expect(owner.find('[data-outdated-image]').text()).toBe('outdated image');
+    expect(owner.findAll('button').some(b => b.text() === 'Update now')).toBe(true);
+    const viewer = mountTerminal(finished({ outdatedImage: true, accessRole: 'Viewer' }));
+    expect(viewer.findAll('button').some(b => b.text() === 'Update now')).toBe(false);
+    owner.unmount(); viewer.unmount();
+  });
+
+  it('surfaces busy refusal and refreshes only after an admitted update', async () => {
+    mocks.api.updateRuntimeImage.mockRejectedValueOnce(new Error('Runtime is busy'));
+    const wrapper = mountTerminal(finished({ outdatedImage: true }));
+    const button = wrapper.findAll('button').find(b => b.text() === 'Update now');
+    await button.trigger('click'); await flushPromises();
+    expect(wrapper.find('[role="alert"]').text()).toBe('Runtime is busy');
+    expect(wrapper.emitted('runtime-updated')).toBeUndefined();
+    mocks.api.updateRuntimeImage.mockResolvedValueOnce({ id: 's1', phase: 'Pending' });
+    await button.trigger('click'); await flushPromises();
+    expect(mocks.api.updateRuntimeImage).toHaveBeenCalledWith('s1');
+    expect(wrapper.emitted('runtime-updated')).toHaveLength(1);
+    wrapper.unmount();
+  });
+});

@@ -82,6 +82,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
   const renames = [];
   const intervals = [];
   const exits = [];
+  const gitInstalls = [];
 
   const fileCalls = [];
   class FakeWebSocketServer {
@@ -212,6 +213,8 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
       setInterval(callback, ms) { intervals.push({ callback, ms }); return intervals.length; },
       attachmentMaterializer: materializer,
       pullSkills: harnessOptions.pullSkills,
+      // Recorded, never the real installer: that one runs git against the HOME it is given.
+      installGitIdentity: harnessOptions.installGitIdentity || (payload => gitInstalls.push(payload)),
       setTimeout(callback, ms) {
         if (harnessOptions.setTimeout) return harnessOptions.setTimeout(callback, ms);
         callback();
@@ -221,7 +224,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
     }
   });
 
-  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, renames, intervals, exits, fileCalls, materializer, pendingExec, signals };
+  return { runtime, driver, terminals, spawns, children, pipeSpawns, requests, commands, writes, renames, intervals, exits, fileCalls, materializer, pendingExec, signals, gitInstalls };
 }
 
 function requestHttp(harness, method, url, headers = {}, body = '', remoteAddress = '10.0.0.9') {

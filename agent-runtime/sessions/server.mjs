@@ -54,7 +54,7 @@ const createSchema = z.object({
   // Which stored provider login the child mounts (omitted = the owner's default account) and
   // which stored git tokens it gets, as comma-separated ids — text, not an array, so an
   // already-connected client's call does not fail schema validation (see credentials.mjs).
-  // Omitted or "*" = every stored token, "none" = no token.
+  // Omitted or "*" = the default token of each host, "none" = no token; at most one per host.
   credentialId: z.string().max(64).optional(),
   gitPatIds: z.string().max(4096).optional(),
   // Whether the hub moves the child to another account when its own hits a usage limit
@@ -75,7 +75,7 @@ register('session_create', {
     + 'only user MCP servers; the built-in agenthub tools are there in every mode except Scheduled. '
     + 'autoDeleteAfter ("90m", "12h", "3d") makes the child delete itself after that long since '
     + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start. '
-    + 'credentialId picks the stored provider login and gitPatIds (comma-separated, "none" for no '
+    + 'credentialId picks the stored provider login and gitPatIds (comma-separated, one per host, "none" for no '
     + 'token) the git tokens the child gets. accountFailover "off" keeps the child on its account '
     + 'when that hits a usage limit; the default "auto" moves it to another available one.',
   inputSchema: createSchema

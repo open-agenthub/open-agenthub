@@ -80,8 +80,8 @@ public sealed class AgentHubMcpTools(
                      + "Subscription session mounts. Omit for the default account.")]
         string? credentialId = null,
         [Description("Comma-separated ids of the stored git personal access tokens (see "
-                     + "credentials_list → gitPats) the session gets. Omit or \"*\" for every "
-                     + "stored token; \"none\" for no token at all.")]
+                     + "credentials_list → gitPats) the session gets, at most one per host. Omit or \"*\" for "
+                     + "the default token of each host; \"none\" for no token at all.")]
         string? gitPatIds = null,
         [Description("\"auto\" (default) or \"off\". With auto, a running Subscription session whose "
                      + "account hits its usage limit is moved to another available account of the "
@@ -129,8 +129,9 @@ public sealed class AgentHubMcpTools(
 
     [McpServerTool(Name = "credentials_list")]
     [Description("List the credentials a session may use: provider logins (accounts, keyed by agent) "
-                 + "with id, label and identity, stored git personal access tokens (id, kind, host — "
-                 + "never the token), and which API keys are stored. Pass an account id as "
+                 + "with id, label and identity, stored git personal access tokens (id, kind, host, label, "
+                 + "isDefault and commit author — never the token; a host can have several, a session uses one), "
+                 + "and which API keys are stored. Pass an account id as "
                  + "credentialId and git token ids as gitPatIds to session_create.")]
     public async Task<RemoteCredentialListing> ListCredentials(CancellationToken ct = default)
     {

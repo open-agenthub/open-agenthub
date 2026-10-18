@@ -59,7 +59,7 @@ public static class CredentialSecretFactory
     {
         var data = existing is null ? new Dictionary<string, byte[]>() : new Dictionary<string, byte[]>(existing);
         var entry = GitPatStore.Upsert(data, request);
-        return (Secret(name, @namespace, ownerLabelValue, data), new GitPatInfo(entry.Id, entry.Kind, entry.Host));
+        return (Secret(name, @namespace, ownerLabelValue, data), entry.Info());
     }
 
     /// <summary>Removes one PAT; the secret is returned unchanged in content when the id is unknown.</summary>
@@ -79,9 +79,9 @@ public static class CredentialSecretFactory
         IDictionary<string, byte[]>? opencodeSubscription = null) => new()
     {
         SshPrivateKey = data.ContainsKey("ssh_key"),
-        // Projected to id/kind/host: the status answer is the one place the list is read back,
+        // Projected to everything but the token: the status answer is the one place the list is read back,
         // and the token must not be in it.
-        GitPats = GitPatStore.Read(data).Select(e => new GitPatInfo(e.Id, e.Kind, e.Host)).ToList(),
+        GitPats = GitPatStore.Read(data).Select(e => e.Info()).ToList(),
         AnthropicApiKey = data.ContainsKey("anthropic_api_key"),
         OpenAiApiKey = data.ContainsKey("openai_api_key"),
         CursorApiKey = data.ContainsKey("cursor_api_key"),

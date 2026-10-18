@@ -128,6 +128,7 @@ export const api = {
   updateShareLink: (id, linkId, data) => req('PATCH', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`, data),
   deleteShareLink: (id, linkId) => req('DELETE', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`),
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
+  updateRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/update-runtime`),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
   // Continues a finished autonomous session interactively; 409 while it runs or is not autonomous.
@@ -148,6 +149,11 @@ export const api = {
   // host that is already stored rotates that entry.
   addGitPat: (data) => req('POST', '/credentials/git-pats', data),
   deleteGitPat: (id) => req('DELETE', `/credentials/git-pats/${encodeURIComponent(id)}`),
+  // Named secrets for sessions (docs/session-secrets.md): id, name, delivery and description come
+  // back, never a value. Posting a name that exists updates it; a missing value keeps the stored one.
+  listSecrets: () => req('GET', '/secrets'),
+  upsertSecret: (data) => req('POST', '/secrets', data),
+  deleteSecret: (id) => req('DELETE', `/secrets/${encodeURIComponent(id)}`),
   // A subscription login is captured from a session by its runtime rather than typed in here,
   // so this is the only way to get rid of one that stopped working.
   deleteSubscriptionCredential: (agent) =>
@@ -159,6 +165,9 @@ export const api = {
     req('PATCH', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`, data),
   deleteProviderAccount: (agent, id) =>
     req('DELETE', `/credentials/accounts/${encodeURIComponent(agent)}/${encodeURIComponent(id)}`),
+  // Chooses the git tokens of a session (one per host); a running pod takes them without a restart.
+  switchSessionGitPats: (id, gitPatIds) =>
+    req('PATCH', `/sessions/${encodeURIComponent(id)}/git-pats`, { gitPatIds }),
   // Moves a running Subscription session to another account; the pod restarts its agent with resume.
   switchSessionCredential: (id, credentialId) =>
     req('PATCH', `/sessions/${encodeURIComponent(id)}/credential`, { credentialId }),

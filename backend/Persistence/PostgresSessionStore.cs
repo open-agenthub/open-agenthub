@@ -60,6 +60,7 @@ public sealed class SessionRecord
     public string Status { get; set; } = "Pending";
     public string? FailureReason { get; set; }
     public bool QuestionPending { get; set; }
+    public bool? AutoUpdateRuntimeImages { get; set; }
     /// <summary>Custom container image (null = default agent image).</summary>
     public string? Image { get; set; }
     public bool RunAsRoot { get; set; }
@@ -213,6 +214,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_failover TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS failure_reason TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_ids TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_update_runtime_images BOOLEAN;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_endpoint_url TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_name TEXT;
             """;
@@ -228,19 +230,20 @@ public sealed class PostgresSessionStore : ISessionStore
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
                                   mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at,
                                   auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids,
-                                  resolved_credential_id, account_failover, failure_reason, secret_ids,
+                                  resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images,
                                   model_endpoint_url, model_name)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now(),
                     @autoDeleteAfter, @autoDeleteFrom, @lastActivity, @convertedFrom, @gitPatIds,
-                    @resolvedCredentialId, @accountFailover, @failureReason, @secretIds,
+                    @resolvedCredentialId, @accountFailover, @failureReason, @secretIds, @autoUpdateRuntimeImages,
                     @modelEndpointUrl, @modelName)
             ON CONFLICT (id) DO UPDATE SET
                 resolved_credential_id = EXCLUDED.resolved_credential_id,
                 account_failover = EXCLUDED.account_failover,
                 failure_reason = EXCLUDED.failure_reason,
+                auto_update_runtime_images = EXCLUDED.auto_update_runtime_images,
                 auto_delete_after_seconds = EXCLUDED.auto_delete_after_seconds,
                 auto_delete_from = EXCLUDED.auto_delete_from,
                 -- The stored touch wins: an edit reads the record, changes a field and writes it
@@ -402,7 +405,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, model_endpoint_url, model_name FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, model_endpoint_url, model_name FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -414,6 +417,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     private static void Bind(NpgsqlCommand cmd, SessionRecord r)
     {
+        cmd.Parameters.AddWithValue("autoUpdateRuntimeImages", NpgsqlTypes.NpgsqlDbType.Boolean, (object?)r.AutoUpdateRuntimeImages ?? DBNull.Value);
         cmd.Parameters.AddWithValue("id", r.Id);
         cmd.Parameters.AddWithValue("owner", r.Owner);
         cmd.Parameters.AddWithValue("title", r.Title);
@@ -501,7 +505,8 @@ public sealed class PostgresSessionStore : ISessionStore
         AccountFailover = r.IsDBNull(38) ? null : r.GetString(38),
         FailureReason = r.IsDBNull(39) ? null : r.GetString(39),
         SecretIdsJson = r.IsDBNull(40) ? null : r.GetString(40),
-        ModelEndpointUrl = r.IsDBNull(41) ? null : r.GetString(41),
-        ModelName = r.IsDBNull(42) ? null : r.GetString(42)
+        AutoUpdateRuntimeImages = r.IsDBNull(41) ? null : r.GetBoolean(41),
+        ModelEndpointUrl = r.IsDBNull(42) ? null : r.GetString(42),
+        ModelName = r.IsDBNull(43) ? null : r.GetString(43)
     };
 }

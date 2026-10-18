@@ -67,6 +67,15 @@ public sealed record PodBuildContext
 /// <summary>Pure construction of provider- and authentication-specific pod specs.</summary>
 public static class AgentPodSpecFactory
 {
+    public static string RuntimeImage(AgentKind agent, AgentRuntimeImages images) => agent switch
+    {
+        AgentKind.Codex => images.CodexImage,
+        AgentKind.Cursor => images.CursorImage,
+        AgentKind.OpenClaw => images.OpenClawImage,
+        AgentKind.OpenCode => images.OpenCodeImage,
+        _ => images.ClaudeImage
+    };
+
     public readonly record struct OpenClawApiKeyEnvBinding(string EnvName, string SecretKey);
 
     /// <summary>Key of the custom endpoint's bearer token in the owner's credential secret.</summary>
@@ -131,14 +140,7 @@ public static class AgentPodSpecFactory
     public static V1PodSpec Build(SessionRecord record, CreateSessionRequest request, PodBuildContext context)
     {
         var images = context.RuntimeImages;
-        var runtimeImage = record.Agent switch
-        {
-            AgentKind.Codex => images.CodexImage,
-            AgentKind.Cursor => images.CursorImage,
-            AgentKind.OpenClaw => images.OpenClawImage,
-            AgentKind.OpenCode => images.OpenCodeImage,
-            _ => images.ClaudeImage
-        };
+        var runtimeImage = RuntimeImage(record.Agent, images);
         var repos = NormalizeRepos(request);
         var hasRepo = repos.Count > 0;
         var hasMcp = !string.IsNullOrWhiteSpace(request.McpConfigJson);

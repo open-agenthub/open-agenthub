@@ -13,7 +13,9 @@ const path = require('node:path');
 // `current` link without its binary — every later start then failed with "daemon executable
 // not found". In-process, the TUI needs neither the package nor the daemon's pid bookkeeping.
 const TUI_FLAGS = ['--no-alt-screen', '--no-daemon'];
-const EXEC_FLAGS = ['--sandbox', 'workspace-write', '--json', '--dangerously-bypass-hook-trust'];
+// Session pods already isolate the process and forbid the namespaces bubblewrap needs.
+// Keep managed hooks active: they enforce policy and route unattended approvals before tools run.
+const EXEC_FLAGS = ['--sandbox', 'danger-full-access', '--json', '--dangerously-bypass-hook-trust'];
 // Where the id of this session's Codex thread is kept, inside the state directory so the
 // archive a pause uploads carries it to the next resume.
 const THREAD_ID_FILE = 'agenthub-thread-id';
@@ -95,7 +97,7 @@ function isResumeCommand(command) {
   if (command.cmd !== 'codex') return false;
   if (args[0] !== 'exec') return isTuiResume(args);
   return args.length === 8 && args[0] === 'exec' && args[1] === '--sandbox' &&
-    args[2] === 'workspace-write' && args[3] === '--json' &&
+    args[2] === 'danger-full-access' && args[3] === '--json' &&
     args[4] === '--dangerously-bypass-hook-trust' && args[5] === 'resume' &&
     isResumeArgument(args[6]);
 }

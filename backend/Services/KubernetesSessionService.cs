@@ -25,6 +25,7 @@ namespace AgentHub.Api.Services;
 public sealed class KubernetesSessionService : ISessionService, IProviderLoginRepository
 {
     private readonly Kubernetes _k8s;
+    private readonly ISessionExpiryLock? _runtimeUpdateLock;
     private readonly ISessionStore _store;
     private readonly IProjectStore _projects;
     private readonly IArtifactStore _artifacts;
@@ -64,9 +65,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         IMcpGatewayTokenService mcpGatewayTokens, ILogger<KubernetesSessionService> log,
         ISessionFileCleanup? fileCleanup = null, Network.INetworkSessionCleanup? networkCleanup = null,
         IAgentCredentialPusher? credentialPusher = null,
-        Containers.ISessionContainerCleanup? containerCleanup = null)
+        Containers.ISessionContainerCleanup? containerCleanup = null,
+        ISessionExpiryLock? runtimeUpdateLock = null)
     {
         _log = log;
+        _runtimeUpdateLock = runtimeUpdateLock;
         _containerCleanup = containerCleanup;
         _credentialPusher = credentialPusher;
         _store = store;
@@ -595,6 +598,49 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         CancellationToken ct = default)
         => SwitchSessionCredentialAsync(owner, id, credentialId, reason: null, ct);
 
+    /// <summary>
+    /// Stores a new git token selection and, for a running pod, installs it there at once
+    /// (docs/git-credentials.md, "Switching the token of a running session"). Unlike a provider
+    /// account this needs no restart — git reads its store on every command — so the only reason to
+    /// fall back to "next start" is a pod that cannot take it: not running, or an image from before
+    /// the route. The selection is saved first either way, so the next start uses it regardless.
+    /// </summary>
+    public async Task<GitPatSwitchResult> SwitchSessionGitPatsAsync(string owner, string id,
+        IReadOnlyList<string>? gitPatIds, CancellationToken ct = default)
+    {
+        var rec = await _store.GetAsync(owner, id, ct)
+            ?? throw new KeyNotFoundException($"Session {id} not found.");
+        rec.GitPatIdsJson = GitPatSelection.Serialize(await ValidateGitPatIdsAsync(owner, gitPatIds, ct));
+        await _store.UpsertAsync(rec, ct);
+
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        var appliedNow = false;
+        if (pod?.Status?.Phase == "Running" && pod.Status.PodIP is { Length: > 0 } podIp && _credentialPusher is not null)
+        {
+            var git = await BuildGitCredentialsAsync(owner, rec, ParseRepos(rec), ct)
+                ?? new SessionGitCredentials("", Array.Empty<GitAuthor>());
+            // The mounted copy follows too: a container restart in the same pod copies the store
+            // from the secret again and must not bring the previous token back.
+            await UpsertSecretAsync(GitCredentialsSecret(owner, rec.Id, git), ct);
+            try
+            {
+                appliedNow = await _credentialPusher.PushGitCredentialsAsync(podIp, rec.CallbackToken, git.PodPayload(), ct);
+            }
+            catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+            {
+                // The selection is stored and the next start uses it; failing the request would
+                // tell the owner nothing changed when it did.
+                _log.LogWarning(error, "Session {Id} did not take the new git credentials", rec.Id);
+            }
+        }
+        // A count rather than the ids: they arrive in the request body, and the record holds them anyway.
+        _log.LogInformation("Session {Id} git tokens set ({Count}; applied now: {Now})",
+            rec.Id, GitPatSelection.Parse(rec.GitPatIdsJson)?.Count.ToString() ?? "defaults", appliedNow);
+        var info = await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
+            await _browsers.GetSummaryAsync(id, ct), ct);
+        return new GitPatSwitchResult(info, appliedNow);
+    }
+
     public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
         string? reason, CancellationToken ct = default)
     {
@@ -719,6 +765,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             SecretIdsJson = SessionSecretSelection.Serialize(secretIds),
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
+            AutoUpdateRuntimeImages = req.AutoUpdateRuntimeImages,
             Image = image, RunAsRoot = req.RunAsRoot,
             AutoApprove = CreateSessionRequest.AutoApproveFor(req.AutoApprove, req.Mode),
             Cpu = req.Cpu, Memory = req.Memory,
@@ -1031,7 +1078,135 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         return string.IsNullOrEmpty(name) ? "repo" : name;
     }
 
+    private AgentRuntimeImages ConfiguredRuntimeImages => new(
+        string.IsNullOrWhiteSpace(_opts.ClaudeAgentImage) ? _opts.AgentImage : _opts.ClaudeAgentImage,
+        _opts.CodexAgentImage, _opts.CursorAgentImage, _opts.OpenClawAgentImage,
+        _opts.OpenCodeAgentImage, _opts.AgentImagePullPolicy);
+
+    private bool RuntimeImageOutdated(SessionRecord record, V1Pod? pod) =>
+        string.IsNullOrWhiteSpace(record.Image) && pod?.Spec?.Containers?.FirstOrDefault(c => c.Name == "agent") is { } agent &&
+        agent.Image != AgentPodSpecFactory.RuntimeImage(record.Agent, ConfiguredRuntimeImages);
+
+    public async Task ReconcileRuntimeImagesAsync(CancellationToken ct)
+    {
+        var pods = await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace,
+            labelSelector: $"{ComponentLabel}=agent", cancellationToken: ct);
+        var ids = pods.Items.Select(p => (p.Metadata?.Labels is { } labels && labels.TryGetValue(SessionLabel, out var sid) ? sid : null))
+            .Where(id => id is not null).Distinct();
+        var cronJobs = await _k8s.BatchV1.ListNamespacedCronJobAsync(_opts.Namespace,
+            labelSelector: $"{ComponentLabel}=cronjob", cancellationToken: ct);
+        ids = ids.Concat(cronJobs.Items.Select(p => (p.Metadata?.Labels is { } labels && labels.TryGetValue(SessionLabel, out var sid) ? sid : null)))
+            .Where(id => id is not null).Distinct();
+        foreach (var id in ids)
+        {
+            try
+            {
+                var record = await _store.GetByIdAsync(id!, ct);
+                if (record is null || !(record.AutoUpdateRuntimeImages ?? _opts.AutoUpdateRuntimeImages)) continue;
+                await UpdateRuntimeImageAsync(record.Owner, record.Id, ct);
+            }
+            catch (InvalidOperationException exception) { _log.LogDebug(exception, "Runtime update deferred for {SessionId}", id); }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+            catch (HttpRequestException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (k8s.Autorest.HttpOperationException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (Npgsql.NpgsqlException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (Amazon.Runtime.AmazonServiceException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (KeyNotFoundException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (ArgumentException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (OperationCanceledException exception) { LogRuntimeUpdateFailure(exception, id); }
+            catch (AgentNotAllowedException exception) { LogRuntimeUpdateFailure(exception, id); }
+        }
+    }
+
+    private void LogRuntimeUpdateFailure(Exception exception, string? id) =>
+        _log.LogWarning(exception, "Runtime update deferred for {SessionId}", id);
+
+    public async Task<SessionInfo> UpdateRuntimeImageAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (_runtimeUpdateLock is null) throw new InvalidOperationException("Runtime update lock is unavailable.");
+        await using var held = await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
+        var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        if (!string.IsNullOrWhiteSpace(record.Image))
+            throw new InvalidOperationException("Custom runtime images are pinned.");
+        var desired = AgentPodSpecFactory.RuntimeImage(record.Agent, ConfiguredRuntimeImages);
+        if (record.Mode == SessionMode.Scheduled)
+        {
+            var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
+            var containers = cron.Spec.JobTemplate.Spec.Template.Spec.Containers;
+            var index = containers.ToList().FindIndex(c => c.Name == "agent");
+            if (index < 0) throw new InvalidOperationException("Agent container is missing.");
+            if (containers[index].Image != desired)
+            {
+                // An optimistic patch changes future jobs without replacing active jobs or losing history.
+                var operations = new List<object> {
+                    new { op = "test", path = "/metadata/resourceVersion", value = cron.Metadata.ResourceVersion },
+                    new { op = "replace", path = $"/spec/jobTemplate/spec/template/spec/containers/{index}/image", value = desired }
+                };
+                var init = cron.Spec.JobTemplate.Spec.Template.Spec.InitContainers;
+                for (var i = 0; i < (init?.Count ?? 0); i++)
+                    if (init![i].Image == containers[index].Image)
+                        operations.Add(new { op = "replace", path = $"/spec/jobTemplate/spec/template/spec/initContainers/{i}/image", value = desired });
+                var patch = new V1Patch(JsonSerializer.Serialize(operations), V1Patch.PatchType.JsonPatch);
+                await _k8s.BatchV1.PatchNamespacedCronJobAsync(patch, cron.Metadata.Name, _opts.Namespace, cancellationToken: ct);
+            }
+            return (await GetSessionAsync(owner, id, ct))!;
+        }
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        if (!RuntimeImageOutdated(record, pod)) return (await GetSessionAsync(owner, id, ct))!;
+        if (record.Mode != SessionMode.Interactive || record.Agent != AgentKind.Claude ||
+            record.UiMode != SessionUiMode.Chat || record.QuestionPending || pod?.Status?.Phase != SessionStatus.Running ||
+            string.IsNullOrEmpty(pod.Status.PodIP) || !_artifacts.IsConfigured)
+            throw new InvalidOperationException("Update requires a running idle resumable chat session with saved state and no pending question.");
+        await EnsureAgentAllowedAsync(record.Agent, ct);
+        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
+        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(260) };
+        client.DefaultRequestHeaders.Add("X-Agent-Token", record.CallbackToken);
+        var drainUrl = $"http://{pod.Status.PodIP}:{_opts.AgentPort}/agenthub/runtime-drain";
+        try
+        {
+            using var admitted = await client.PostAsync(drainUrl, null, ct);
+            if (!admitted.IsSuccessStatusCode)
+                throw new InvalidOperationException("Runtime is busy or does not support safe updates. Pause and resume manually when idle.");
+            record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+            if (record.QuestionPending) throw new InvalidOperationException("A question is pending.");
+            if (await _artifacts.HeadAsync(IArtifactStore.StateKey(owner, id, record.Agent), ct) is null)
+                throw new InvalidOperationException("No saved conversation archive is available yet.");
+            await PauseSessionCoreAsync(owner, id, ct);
+            // Deletion is asynchronous: the old process must finish uploading before resume downloads.
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            deadline.CancelAfter(TimeSpan.FromSeconds(_opts.PauseGracePeriodSeconds + 30));
+            while (await TryReadPodAsync($"session-{id}", deadline.Token) is not null)
+                await Task.Delay(250, deadline.Token);
+            return await ResumeSessionCoreAsync(owner, id, ct);
+        }
+        finally
+        {
+            // A failed maintenance request must not leave a surviving runtime refusing all input.
+            try
+            {
+                using var releaseDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                var surviving = await TryReadPodAsync($"session-{id}", releaseDeadline.Token);
+                if (surviving is { Metadata: { DeletionTimestamp: null } metadata } && metadata.Uid == pod.Metadata.Uid)
+                {
+                    using var released = await client.DeleteAsync(drainUrl, releaseDeadline.Token);
+                }
+            }
+            catch (HttpRequestException exception) { _log.LogDebug(exception, "Releasing runtime drain failed"); }
+            catch (OperationCanceledException exception) { _log.LogDebug(exception, "Releasing runtime drain timed out"); }
+            catch (k8s.Autorest.HttpOperationException exception) { _log.LogDebug(exception, "Reading runtime drain pod failed"); }
+        }
+    }
+
     public async Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default)
+    {
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null)
+            throw new InvalidOperationException("Session maintenance is already in progress.");
+        return await ResumeSessionCoreAsync(owner, id, ct);
+    }
+
+    private async Task<SessionInfo> ResumeSessionCoreAsync(string owner, string id, CancellationToken ct)
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
@@ -1107,6 +1282,14 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     /// </summary>
     public async Task<SessionInfo> PauseSessionAsync(string owner, string id, CancellationToken ct = default)
     {
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null)
+            throw new InvalidOperationException("Session maintenance is already in progress.");
+        return await PauseSessionCoreAsync(owner, id, ct);
+    }
+
+    private async Task<SessionInfo> PauseSessionCoreAsync(string owner, string id, CancellationToken ct)
+    {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         if (rec.Mode == SessionMode.Scheduled)
@@ -1139,9 +1322,19 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     /// </summary>
     public async Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default)
     {
+        // An edit must not change the agent or image between drain admission and resume.
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null)
+            throw new InvalidOperationException("Session maintenance is already in progress.");
+        return await UpdateSessionCoreAsync(owner, id, req, ct);
+    }
+
+    private async Task<SessionInfo> UpdateSessionCoreAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct)
+    {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         SessionUpdateValidator.Validate(rec, req);
+        if (req.AutoUpdateRuntimeImagesSpecified) rec.AutoUpdateRuntimeImages = req.AutoUpdateRuntimeImages;
         if (req.Agent is { } requestedAgent)
             await EnsureAgentAllowedAsync(requestedAgent, ct);
 
@@ -1324,6 +1517,38 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         catch { throw new ArgumentException($"Invalid {what} quantity: '{value}'."); }
     }
 
+    /// <summary>
+    /// The session's credential store and per-host authors: connected-provider lines for the
+    /// repositories it names, then the stored PATs its selection keeps (one per host). Null when
+    /// there is nothing to write. Shared by the spawn and the switch of a running session, so the
+    /// pod gets the same content either way.
+    /// </summary>
+    private async Task<SessionGitCredentials?> BuildGitCredentialsAsync(string owner, SessionRecord rec,
+        IReadOnlyList<RepoRef> repos, CancellationToken ct)
+    {
+        var oauthStore = await _gitAuth.BuildCredentialStoreAsync(owner, repos, ct);
+        var manualCredentials = (await ReadSecretOrNullAsync(CredsSecretName(owner), ct))?.Data;
+        var selectedPats = GitPatSelection.Apply(
+            GitPatStore.Read(manualCredentials), GitPatSelection.Parse(rec.GitPatIdsJson));
+        var store = ManualGitCredentials.ComposeStore(oauthStore, ManualGitCredentials.Lines(selectedPats));
+        return store is null ? null : new SessionGitCredentials(store, ManualGitCredentials.Authors(selectedPats, oauthStore));
+    }
+
+    private V1Secret GitCredentialsSecret(string owner, string sessionId, SessionGitCredentials git) => new()
+    {
+        Metadata = new V1ObjectMeta
+        {
+            Name = $"gitcreds-{sessionId}", NamespaceProperty = _opts.Namespace,
+            Labels = new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = sessionId }
+        },
+        Type = "Opaque",
+        Data = new Dictionary<string, byte[]>
+        {
+            ["credentials"] = Encoding.UTF8.GetBytes(git.Store),
+            ["authors"] = JsonSerializer.SerializeToUtf8Bytes(git.Authors, SessionGitCredentials.Json)
+        }
+    };
+
     private async Task SpawnAsync(string owner, SessionRecord rec, CreateSessionRequest req, bool resume, CancellationToken ct)
     {
         // Resolved fresh on every (re)start so catalog entries stay live:
@@ -1364,32 +1589,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 // Which PATs is read from the record, not the request: a resume rebuilds the
                 // request from the record anyway, and one source means a resumed session cannot
                 // come back with a different selection than it was created with.
-                var oauthStore = await _gitAuth.BuildCredentialStoreAsync(
-                    owner, NormalizeRepos(req), resourceCt);
-                var manualCredentials = (await ReadSecretOrNullAsync(
-                    CredsSecretName(owner), resourceCt))?.Data;
-                var selectedPats = GitPatSelection.Apply(
-                    GitPatStore.Read(manualCredentials), GitPatSelection.Parse(rec.GitPatIdsJson));
-                var credentialStore = ManualGitCredentials.ComposeStore(
-                    oauthStore, ManualGitCredentials.Lines(selectedPats));
-                if (credentialStore is null) return false;
-
-                await UpsertSecretAsync(new V1Secret
-                {
-                    Metadata = new V1ObjectMeta
-                    {
-                        Name = $"gitcreds-{rec.Id}", NamespaceProperty = _opts.Namespace,
-                        Labels = new Dictionary<string, string>
-                        {
-                            [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id
-                        }
-                    },
-                    Type = "Opaque",
-                    Data = new Dictionary<string, byte[]>
-                    {
-                        ["credentials"] = Encoding.UTF8.GetBytes(credentialStore)
-                    }
-                }, resourceCt);
+                var git = await BuildGitCredentialsAsync(owner, rec, NormalizeRepos(req), resourceCt);
+                if (git is null) return false;
+                await UpsertSecretAsync(GitCredentialsSecret(owner, rec.Id, git), resourceCt);
                 return true;
             },
             ct);
@@ -1465,6 +1667,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             if (p.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var sid))
                 byId[sid] = p;
 
+        var scheduledTemplates = new Dictionary<string, V1PodSpec>();
+        if (records.Any(r => r.Mode == SessionMode.Scheduled))
+        {
+            var schedules = await _k8s.BatchV1.ListNamespacedCronJobAsync(_opts.Namespace,
+                labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}=cronjob",
+                resourceVersion: "0", cancellationToken: ct);
+            foreach (var cron in schedules.Items.Where(cron => cron.Metadata.Labels.ContainsKey(SessionLabel)))
+                scheduledTemplates[cron.Metadata.Labels[SessionLabel]] = cron.Spec.JobTemplate.Spec.Template.Spec;
+        }
         var browserSummaries = await _browsers.GetSummariesAsync(
             records.Select(record => record.Id).ToArray(), ct);
         var withEphemeralMcp = await _ephemeralApiMcps.ListSessionsWithEntriesAsync(
@@ -1475,7 +1686,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             byId.TryGetValue(r.Id, out var pod);
             await ObserveFailureAsync(r, pod, ct);
             result.Add(ToInfo(r, EffectivePhase(r, pod), pod?.Status?.PodIP, browserSummaries[r.Id],
-                withEphemeralMcp.Contains(r.Id)));
+                withEphemeralMcp.Contains(r.Id)) with { OutdatedImage = RuntimeImageOutdated(r,
+                    pod ?? (scheduledTemplates.TryGetValue(r.Id, out var template) ? new V1Pod { Spec = template } : null)) });
         }
         return result;
     }
@@ -1486,8 +1698,14 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (rec is null) return null;
         var pod = await TryReadPodAsync($"session-{id}", ct);
         await ObserveFailureAsync(rec, pod, ct);
-        return await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
+        var info = await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
             await _browsers.GetSummaryAsync(id, ct), ct);
+        if (pod is null && rec.Mode == SessionMode.Scheduled)
+        {
+            var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
+            pod = new V1Pod { Spec = cron.Spec.JobTemplate.Spec.Template.Spec };
+        }
+        return info with { OutdatedImage = RuntimeImageOutdated(rec, pod) };
     }
 
     public async Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default)
@@ -1584,6 +1802,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     }
 
     public async Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default)
+    {
+        // A delete racing the pause's upsert could otherwise recreate the deleted session.
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null)
+            throw new InvalidOperationException("Session maintenance is already in progress.");
+        await DeleteSessionCoreAsync(owner, id, ct);
+    }
+
+    internal async Task DeleteSessionCoreAsync(string owner, string id, CancellationToken ct)
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
@@ -1788,6 +2015,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         SecretIds = SessionSecretSelection.Parse(r.SecretIdsJson),
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
+        AutoUpdateRuntimeImages = r.AutoUpdateRuntimeImages,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
         CanConvertToInteractive = SessionStatus.CanConvertToInteractive(r.Mode, phase),
         ConvertedFrom = r.ConvertedFrom,
@@ -1886,6 +2114,7 @@ public sealed class AgentHubOptions
     public string MaxMemory { get; set; } = "4Gi";
     /// <summary>Users may specify a custom container image for their session.</summary>
     public bool AllowCustomImage { get; set; } = true;
+    public bool AutoUpdateRuntimeImages { get; set; }
     /// <summary>Users may run their session as root (namespace needs PSA "baseline").</summary>
     public bool AllowRootSessions { get; set; } = true;
     /// <summary>Grace period (seconds) when pausing a session, so the agent can upload

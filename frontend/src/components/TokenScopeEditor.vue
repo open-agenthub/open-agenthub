@@ -9,6 +9,8 @@ import { AGENTS, draftAllowsAnything } from '../lib/token-scope.js'
 const props = defineProps({
   accounts: { type: Object, default: () => ({}) },
   pats: { type: Array, default: () => [] },
+  // Stored session secrets by id, name and delivery (docs/session-secrets.md); never a value.
+  secrets: { type: Array, default: () => [] },
   modelValue: { type: Object, required: true }
 })
 const emit = defineEmits(['update:modelValue'])
@@ -35,6 +37,14 @@ function togglePat(id) {
   })
 }
 
+function toggleSecret(id) {
+  const current = props.modelValue.secrets || []
+  emit('update:modelValue', {
+    ...props.modelValue,
+    secrets: current.includes(id) ? current.filter(item => item !== id) : [...current, id]
+  })
+}
+
 function toggleApiKeys(event) {
   emit('update:modelValue', { ...props.modelValue, apiKeys: event.target.checked })
 }
@@ -56,7 +66,14 @@ function toggleApiKeys(event) {
       <div class="group-label">Git tokens</div>
       <label v-for="pat in pats" :key="pat.id" class="check">
         <input type="checkbox" :checked="(modelValue.gitPats || []).includes(pat.id)" :data-scope-pat="pat.id" @change="togglePat(pat.id)" />
-        <span>{{ pat.host }} <span class="kind">{{ kindLabel(pat.kind) }}</span></span>
+        <span>{{ pat.host }} <span class="kind">{{ kindLabel(pat.kind) }}</span><span v-if="pat.label" class="dim"> {{ pat.label }}</span></span>
+      </label>
+    </div>
+    <div v-if="secrets.length" class="group" data-scope-secrets>
+      <div class="group-label">Secrets <span class="dim">— delivered into sessions created with this token</span></div>
+      <label v-for="secret in secrets" :key="secret.id" class="check">
+        <input type="checkbox" :checked="(modelValue.secrets || []).includes(secret.id)" :data-scope-secret="secret.id" @change="toggleSecret(secret.id)" />
+        <span><code>{{ secret.name }}</code> <span class="kind">{{ secret.delivery === 'file' ? 'file' : 'env' }}</span></span>
       </label>
     </div>
     <label class="check">
@@ -76,5 +93,6 @@ function toggleApiKeys(event) {
 .check input { width: auto; }
 .dim { color: var(--faint); font-weight: 400; }
 .kind { display: inline-block; margin-left: 6px; padding: 1px 6px; border: 1px solid var(--border-2); border-radius: 4px; color: var(--muted-3); font-size: 11px; font-weight: 700; }
+code { font-family: var(--mono); font-size: 12px; }
 .warn { margin: 8px 0 0; color: var(--warn); font-size: 12px; }
 </style>

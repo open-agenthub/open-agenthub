@@ -25,6 +25,7 @@ data:
   AgentHub__RuntimeClassName: {{ .Values.agent.runtimeClassName | quote }}
   AgentHub__MaxCpu: {{ .Values.agent.maxCpu | quote }}
   AgentHub__MaxMemory: {{ .Values.agent.maxMemory | quote }}
+  AgentHub__AutoUpdateRuntimeImages: {{ .Values.agent.autoUpdateRuntimeImages | quote }}
   AgentHub__AllowCustomImage: {{ .Values.agent.allowCustomImage | quote }}
   AgentHub__AllowRootSessions: {{ .Values.agent.allowRootSessions | quote }}
   AgentHub__CallbackBaseUrl: "http://agenthub-backend.{{ .Release.Namespace }}.svc.cluster.local"

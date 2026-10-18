@@ -23,6 +23,14 @@ public interface IAgentCredentialPusher
     /// </summary>
     Task<bool> RefreshAsync(string podIp, string callbackToken, AgentKind agent, byte[] file, CancellationToken ct)
         => Task.FromResult(false);
+
+    /// <summary>
+    /// Hands the pod a rebuilt git credential store and author list (docs/git-credentials.md,
+    /// "Switching the token of a running session"); installed without a restart. False when the pod
+    /// predates the route (404), so the caller can say "at the next start" instead of failing.
+    /// </summary>
+    Task<bool> PushGitCredentialsAsync(string podIp, string callbackToken, byte[] payload, CancellationToken ct)
+        => Task.FromResult(false);
 }
 
 public sealed class AgentCredentialPusher : IAgentCredentialPusher
@@ -66,6 +74,21 @@ public sealed class AgentCredentialPusher : IAgentCredentialPusher
         if (response.StatusCode is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Conflict) return false;
         throw new HttpRequestException(
             $"The session pod did not accept the renewed credential (HTTP {(int)response.StatusCode}).",
+            null, response.StatusCode);
+    }
+
+    public async Task<bool> PushGitCredentialsAsync(string podIp, string callbackToken, byte[] payload, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Put,
+            new UriBuilder("http", podIp, _agentPort, "agenthub/git-credentials").Uri);
+        request.Headers.Add("X-Agent-Token", callbackToken);
+        request.Content = new ByteArrayContent(payload);
+        request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (response.IsSuccessStatusCode) return true;
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound) return false;
+        throw new HttpRequestException(
+            $"The session pod did not accept the git credentials (HTTP {(int)response.StatusCode}).",
             null, response.StatusCode);
     }
 

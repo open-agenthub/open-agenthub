@@ -89,7 +89,8 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
         <span class="pill" :style="{ color: statusStyle(s).color, background: statusStyle(s).bg }">{{ sessionStatus(s) }}</span>
         <span class="row-title">{{ s.title }} <code v-if="repoLabel(s)" class="row-repo">— {{ repoLabel(s) }}</code></span>
         <span v-if="s.schedule" class="row-meta">{{ s.schedule }}</span>
-        <button v-if="s.canResume" class="ghost resume" @click.stop="$emit('resume', s.id)">Resume</button>
+        <span v-if="s.outdatedImage" class="status">outdated image</span>
+      <button v-if="s.canResume" class="ghost resume" @click.stop="$emit('resume', s.id)">Resume</button>
       </div>
       <div v-if="!listed.length" class="row none">No sessions yet — start one with “Give an agent a task”.</div>
     </div>
