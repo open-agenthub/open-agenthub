@@ -80,9 +80,13 @@ public sealed class AgentHubMcpTools(
                      + "Subscription session mounts. Omit for the default account.")]
         string? credentialId = null,
         [Description("Comma-separated ids of the stored git personal access tokens (see "
-                     + "credentials_list → gitPats) the session gets. Omit or \"*\" for every "
-                     + "stored token; \"none\" for no token at all.")]
+                     + "credentials_list → gitPats) the session gets, at most one per host. Omit or \"*\" for "
+                     + "the default token of each host; \"none\" for no token at all.")]
         string? gitPatIds = null,
+        [Description("Comma-separated ids of the stored secrets (see credentials_list → secrets) the "
+                     + "session gets as environment variables or files in ~/.secrets. Omit or \"*\" "
+                     + "to follow the project's selection (nothing outside a project); \"none\" for none.")]
+        string? secretIds = null,
         [Description("\"auto\" (default) or \"off\". With auto, a running Subscription session whose "
                      + "account hits its usage limit is moved to another available account of the "
                      + "same provider; off keeps it on its account.")]
@@ -111,6 +115,7 @@ public sealed class AgentHubMcpTools(
             AutoDeleteFrom = autoDeleteFrom,
             CredentialId = string.IsNullOrWhiteSpace(credentialId) ? null : credentialId.Trim(),
             GitPatIds = ParseIdList(gitPatIds),
+            SecretIds = ParseIdList(secretIds),
             AccountFailover = string.IsNullOrWhiteSpace(accountFailover) ? null : accountFailover.Trim()
         };
         if (ParseRepos(repos) is { Count: > 0 } parsedRepos) request = request with { Repos = parsedRepos };
@@ -129,15 +134,18 @@ public sealed class AgentHubMcpTools(
 
     [McpServerTool(Name = "credentials_list")]
     [Description("List the credentials a session may use: provider logins (accounts, keyed by agent) "
-                 + "with id, label and identity, stored git personal access tokens (id, kind, host — "
-                 + "never the token), and which API keys are stored. Pass an account id as "
-                 + "credentialId and git token ids as gitPatIds to session_create.")]
+                 + "with id, label and identity, stored git personal access tokens (id, kind, host, label, "
+                 + "isDefault and commit author — never the token; a host can have several, a session uses one), "
+                 + "and which API keys are stored. Pass an account id as credentialId, git token ids as "
+                 + "gitPatIds and secret ids as secretIds to session_create. Secrets are listed by name "
+                 + "and delivery, never with a value.")]
     public async Task<RemoteCredentialListing> ListCredentials(CancellationToken ct = default)
     {
         var owner = Owner;
         return RemoteCredentialListing.From(
             await sessions.ListProviderAccountsAsync(owner, ct),
-            await sessions.GetCredentialStatusAsync(owner, ct));
+            await sessions.GetCredentialStatusAsync(owner, ct),
+            await sessions.ListSessionSecretsAsync(owner, ct));
     }
 
     [McpServerTool(Name = "account_status")]

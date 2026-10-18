@@ -65,7 +65,7 @@ Tokens are still scoped to the repositories actually requested: `BuildCredential
 line only for a provider some repository in the session names. A manual PAT is the exception — the
 user stored one token for one host, so it is included whether or not a repository uses it, which is
 what it did before. Which PATs a session gets at all is now a per-session choice (`gitPatIds` on
-create, update and duplicate; null keeps "every stored token"), see `docs/credential-scopes.md`.
+create, update and duplicate; null is the default token of each host), see `docs/credential-scopes.md`.
 
 ## A list of tokens keyed by host, not one slot per provider
 
@@ -84,10 +84,11 @@ Tokens are now a JSON list in a single secret key, `git_pats`:
 
 with their own endpoints — `POST /api/credentials/git-pats {kind, host, token}` and
 `DELETE /api/credentials/git-pats/{id}` — and `GET /api/credentials` listing `gitPats` as
-`{id, kind, host}` only. The `PUT` no longer accepts the four legacy fields.
+`{id, kind, host, label, isDefault, authorName, authorEmail}` — never the token. The `PUT` no longer accepts the four legacy fields.
 
 - **Upsert per host, not append.** A `POST` for a host that is already stored replaces that
-  entry's token and keeps its id. The alternative, appending and letting the UI sort it out, fails
+  entry's token and keeps its id. (Since a host can carry several tokens, host *and label* pick the
+  entry — see "Several tokens per host" below; for a client that sends no label nothing changed.) The alternative, appending and letting the UI sort it out, fails
   in git itself: the store helper answers with the *first* line matching a host, so a rotation that
   appended would leave the stale token winning until the user found and removed the old line. The
   host is the identity because it is what the credential is scoped to; the kind only decides the
@@ -117,6 +118,96 @@ action that confirms inline (first click arms, second removes — no browser pop
 row to add a token. Adds and removes apply immediately rather than on Save: the list is keyed by
 host, so the user needs to see the result of each add on its own, and a token must not sit in a
 form field waiting on an unrelated Save that may never come.
+
+## Several tokens per host
+
+A shared session usually should not push under its owner's personal token. The work belongs to a
+group or a project, and GitLab and GitHub both issue tokens for exactly that (group and project
+access tokens, fine-grained tokens on a bot account). With the list keyed by host there was no room
+for one: a second token for `gitlab.example.com` replaced the first.
+
+The list now holds any number of tokens per host. Each entry gains three optional fields — a
+`label` the owner chooses ("personal", "group: platform"), and a commit `authorName`/`authorEmail` —
+and a `default` flag, of which every host has exactly one.
+
+- **What a request means.** `POST /api/credentials/git-pats` with an `id` edits that entry (label,
+  author, `default: true`) and needs no token. Without an id, an entry with the same host *and*
+  label is rotated in place — so a client that never sends a label still rotates the host's token
+  as before — and anything else is a new entry. Kind and host of an id are fixed: a session's
+  choice is judged per host, and an id that moved to another host would take every session that
+  picked it along.
+- **A session uses at most one token per host.** Git's store answers with the first line matching
+  a host, so two tokens for one host in a pod would make the choice depend on list order. The
+  selection (`gitPatIds`, `docs/credential-scopes.md`) refuses two ids for one host with a 400, and
+  the spawn keeps the first should an older stored selection still name two. `null` now means "the
+  default of every host" — the same set "every token" was while there was one per host.
+- **Migration is a read, not a write.** An entry written before this has no `default` flag; the
+  first entry of a host without a marked default is its default. Every existing entry was alone on
+  its host, so each keeps its id, becomes its host's default, and a session that never chose keeps
+  exactly the token it had. Removing a default hands the role to the next token of that host and
+  writes it down. `default: false` is ignored rather than leaving a host without one — the way off
+  a default is to mark another token.
+- **A removed chosen token is not replaced by the default.** A session pointed at a group token
+  whose token was deleted gets no token for that host, not the owner's. Falling back would quietly
+  turn shared work back into the owner's pushes, the one thing the choice exists to prevent.
+
+Rejected: letting one session hold several tokens for a host, picked per repository with
+`credential.useHttpPath`. That changes how git looks up *every* line in the store, the
+connected-provider ones included, and `gh`/`glab` keep one token per host anyway, so the CLIs would
+still act under one identity while git pushed under another.
+
+### The commit author follows the token
+
+A group token pushing commits that carry the owner's name is the same confusion one level down, so
+a token can carry the author its commits use. The author is per host, not global: a session can use
+a personal token on one host and a project bot on another. Git has no conditional `[user]`
+section, only conditional includes, so `common/git-identity.js` writes one small file per host with
+its `[user]` and one include file of
+
+```ini
+[includeIf "hasconfig:remote.*.url:https://gitlab.example.com/**"]
+	path = "/home/agent/.config/agenthub/git-authors/0.gitconfig"
+```
+
+(plus the `ssh://` and scp-style forms for hosts without a port), included from `~/.gitconfig` after
+the owner's own `user.name`/`user.email`, so for a matching remote the token's author wins.
+`hasconfig:remote.*.url` (git 2.36) follows the repository's remote, which is what the token is
+chosen by. The alternatives each miss a case: one global `user.name` is wrong as soon as two hosts
+are in use; writing the author into each clone's `.git/config` misses every repository the agent
+clones later; `includeIf "gitdir:"` follows a path the agent chooses, not the host it pushes to.
+Measured against git 2.39: a remote on `gitlab.example.com.evil.example` does not match the
+`gitlab.example.com` pattern, and neither does another host.
+
+A host the connected provider covers gets no PAT author: its OAuth line is first in the store and is
+what pushes authenticate with, so the PAT's identity would claim an author the push does not use.
+The authors reach the pod as the `authors` key of the `gitcreds` secret, next to `credentials`.
+Name and e-mail are refused when they contain quotes, backslashes, `<`, `>` or control characters —
+they end up as quoted git config values and in every commit's `Name <email>` line.
+
+### Switching the token of a running session
+
+`PATCH /api/sessions/{id}/git-pats {gitPatIds}` stores the selection and, for a running pod, sends
+the rebuilt store and authors to `PUT /agenthub/git-credentials` on the session agent, which
+rewrites `~/.git-credentials`, the author files and the `gh`/`glab` configs. No restart: unlike a
+provider login (`docs/provider-accounts.md`), git and both CLIs read their files on every command,
+so the next push already uses the new token. The answer's `appliedNow` is false when the pod cannot
+take it — not running, or an image from before the route (its 404) — and the dialog then says
+"applies at the next start". A failed push to the pod is logged, not returned as an error: the
+selection is saved either way, and an error would tell the owner nothing changed when it did.
+
+The `gitcreds` secret is rewritten as well, because a container restart within the same pod copies
+the store from it again and must not bring the previous token back. The CLI configs are deleted
+before they are derived again: `setup-cli-auth.sh` only writes them when the store has lines, so a
+switch to "no token for this host" would otherwise leave the old token in `glab`'s config.
+
+The share dialog is where the choice is offered, because that is when it matters: it shows "pushes
+as `<label>` on `<host>`" for each token in use and lets the owner move the session to another
+stored token before sending the invitation. Collaborators never see a token, and only the owner can
+open the dialog.
+
+Rolling the backend back to a version from before this keeps working with one caveat: the older
+reader ignores `label` and `default` and puts every token of a host into the store, so the first one
+stored wins for that host until the extra tokens are removed.
 
 ## Validation, and why it is at the edges
 

@@ -77,6 +77,24 @@ export class SessionsBackendClient {
     return this.#request('GET', `/messages?wait=${wait}`, undefined, MAX_COLLECTION_BYTES);
   }
 
+  /** The secrets this session receives, by name and delivery (docs/session-secrets.md). */
+  secrets() {
+    return this.#request('GET', '/secrets');
+  }
+
+  /** Asks the owner for a secret; answered at once when the session already has one of the name. */
+  secretRequest(body) {
+    return this.#request('POST', '/secret-requests', body);
+  }
+
+  secretRequestStatus(id) {
+    return this.#request('GET', `/secret-requests/${encodeURIComponent(id)}`);
+  }
+
+  secretRequestExpire(id) {
+    return this.#request('POST', `/secret-requests/${encodeURIComponent(id)}/expire`);
+  }
+
   /** Helper containers of this session (docs/session-containers.md). */
   containerRun(body) {
     return this.#request('POST', '/containers', body);

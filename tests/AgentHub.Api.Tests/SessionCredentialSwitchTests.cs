@@ -145,6 +145,63 @@ public sealed class SessionCredentialSwitchTests
         Assert.Equal(HttpStatusCode.Conflict, error.StatusCode);
     }
 
+    // ------------------------------------------------------------------ git tokens (issue #132)
+
+    [Fact]
+    public async Task GitPats_Patch_ReturnsWhetherThePodAlreadyUsesThem()
+    {
+        var service = new SwitchingSessionService { Result = Info("acct"), GitResult = true };
+
+        var result = await Controller(service).SwitchGitPats("s1", new SwitchSessionGitPatsRequest(["group"]), CancellationToken.None);
+
+        var ok = Assert.IsType<OkObjectResult>(result.Result);
+        Assert.True(Assert.IsType<GitPatSwitchResult>(ok.Value).AppliedNow);
+        Assert.Equal(("alice", "s1", "group"), service.GitCall);
+    }
+
+    [Theory]
+    [InlineData(typeof(KeyNotFoundException), 404)]
+    [InlineData(typeof(ArgumentException), 400)]
+    public async Task GitPats_Patch_MapsServiceFailuresToStatusCodes(Type exception, int status)
+    {
+        var service = new SwitchingSessionService { Throw = (Exception)Activator.CreateInstance(exception, "why")! };
+
+        var result = await Controller(service).SwitchGitPats("s1", new SwitchSessionGitPatsRequest(["a", "b"]), CancellationToken.None);
+
+        Assert.Equal(status, result.Result switch { NotFoundResult => 404, ObjectResult o => o.StatusCode, _ => -1 });
+    }
+
+    [Fact]
+    public async Task GitPusher_PutsThePayloadToTheGitRoute_WithTheToken()
+    {
+        HttpRequestMessage? captured = null;
+        string? body = null;
+        var pusher = Pusher(async request =>
+        {
+            captured = request;
+            body = await request.Content!.ReadAsStringAsync();
+            return new HttpResponseMessage(HttpStatusCode.OK);
+        });
+
+        Assert.True(await pusher.PushGitCredentialsAsync("10.0.0.5", "tok", "{\"credentials\":\"\"}"u8.ToArray(), CancellationToken.None));
+
+        Assert.Equal("http://10.0.0.5:7681/agenthub/git-credentials", captured!.RequestUri!.ToString());
+        Assert.Equal(HttpMethod.Put, captured.Method);
+        Assert.Equal("tok", captured.Headers.GetValues("X-Agent-Token").Single());
+        Assert.Equal("{\"credentials\":\"\"}", body);
+    }
+
+    [Fact]
+    public async Task GitPusher_AnOlderPodWithoutTheRoute_MeansNextStart_AnythingElseIsAnError()
+    {
+        using var notFound = new HttpResponseMessage(HttpStatusCode.NotFound);
+        using var badRequest = new HttpResponseMessage(HttpStatusCode.BadRequest);
+        Assert.False(await Pusher(_ => Task.FromResult(notFound))
+            .PushGitCredentialsAsync("10.0.0.5", "tok", [], CancellationToken.None));
+        await Assert.ThrowsAsync<HttpRequestException>(() => Pusher(_ => Task.FromResult(badRequest))
+            .PushGitCredentialsAsync("10.0.0.5", "tok", [], CancellationToken.None));
+    }
+
     private static AgentCredentialPusher Pusher(Func<HttpRequestMessage, Task<HttpResponseMessage>> handler)
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
@@ -183,6 +240,16 @@ public sealed class SessionCredentialSwitchTests
         public SessionInfo? Result { get; init; }
         public Exception? Throw { get; init; }
         public (string Owner, string Id, string CredentialId)? Call { get; private set; }
+        public bool GitResult { get; init; }
+        public (string Owner, string Id, string Ids)? GitCall { get; private set; }
+
+        public Task<GitPatSwitchResult> SwitchSessionGitPatsAsync(string owner, string id, IReadOnlyList<string>? gitPatIds, CancellationToken ct = default)
+        {
+            GitCall = (owner, id, string.Join(",", gitPatIds ?? []));
+            if (Throw is not null) throw Throw;
+            return Task.FromResult(new GitPatSwitchResult(Result!, GitResult));
+        }
+
 
         public Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId, CancellationToken ct = default)
         {

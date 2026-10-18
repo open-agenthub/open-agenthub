@@ -23,3 +23,16 @@ public sealed record SessionSecretInfo(string Id, string Name, string Delivery, 
 /// can be edited without the owner typing the secret again.
 /// </summary>
 public sealed record UpsertSessionSecretRequest(string? Name, string? Delivery, string? Value, string? Description);
+
+/// <summary>
+/// What answering a secret request gave the session: the secret, under the name the session sees
+/// it, and whether a restart is needed for it to arrive — a variable only reaches a container
+/// that starts after it was granted.
+/// </summary>
+public sealed record SessionSecretGrant(string SecretId, string Name, string Delivery, bool RestartRequired);
+
+/// <summary>An agent asks for a secret: a name, how it wants it, what it is for. Never a value.</summary>
+public sealed record SecretRequestBody(string? Name, string? Delivery, string? Purpose);
+
+/// <summary>The owner answers a request with a stored secret.</summary>
+public sealed record ProvideSecretRequestBody(string? SecretId);

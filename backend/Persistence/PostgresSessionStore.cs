@@ -45,6 +45,12 @@ public sealed class SessionRecord
     /// <summary>JSON array of the secret ids the session receives; null = its project's selection
     /// (docs/session-secrets.md).</summary>
     public string? SecretIdsJson { get; set; }
+    /// <summary>Secrets the owner granted this session by answering its own requests; added to
+    /// whatever the selection gives, project or not (docs/session-secrets.md).</summary>
+    public string? SecretGrantIdsJson { get; set; }
+    /// <summary>The most a request of this session may be granted: the restricted token's secrets
+    /// or the spawning parent's, recorded at creation; null = no limit.</summary>
+    public string? SecretCeilingJson { get; set; }
     public string? AgentPolicyJson { get; set; }
     public string? AllowedToolsJson { get; set; }
     /// <summary>Agent session ID assigned by us (used for --resume).</summary>
@@ -55,6 +61,7 @@ public sealed class SessionRecord
     public string Status { get; set; } = "Pending";
     public string? FailureReason { get; set; }
     public bool QuestionPending { get; set; }
+    public bool? AutoUpdateRuntimeImages { get; set; }
     /// <summary>Custom container image (null = default agent image).</summary>
     public string? Image { get; set; }
     public bool RunAsRoot { get; set; }
@@ -208,6 +215,9 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_failover TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS failure_reason TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_ids TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS auto_update_runtime_images BOOLEAN;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_grant_ids TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_ceiling TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -221,17 +231,20 @@ public sealed class PostgresSessionStore : ISessionStore
                                   status, question_pending, callback_token, image, run_as_root, cpu, memory,
                                   mcp_config, mcp_server_ids, repos, project_id, parent_session_id, prompt, system_prompt, allowed_tools, auto_approve, credential_id, created_at, updated_at,
                                   auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids,
-                                  resolved_credential_id, account_failover, failure_reason, secret_ids)
+                                  resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images,
+                                  secret_grant_ids, secret_ceiling)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
                     @mcp, @mcpServerIds, @repos, @project, @parent, @prompt, @systemPrompt, @allowedTools, @autoApprove, @credentialId, @created, now(),
                     @autoDeleteAfter, @autoDeleteFrom, @lastActivity, @convertedFrom, @gitPatIds,
-                    @resolvedCredentialId, @accountFailover, @failureReason, @secretIds)
+                    @resolvedCredentialId, @accountFailover, @failureReason, @secretIds, @autoUpdateRuntimeImages,
+                    @secretGrantIds, @secretCeiling)
             ON CONFLICT (id) DO UPDATE SET
                 resolved_credential_id = EXCLUDED.resolved_credential_id,
                 account_failover = EXCLUDED.account_failover,
                 failure_reason = EXCLUDED.failure_reason,
+                auto_update_runtime_images = EXCLUDED.auto_update_runtime_images,
                 auto_delete_after_seconds = EXCLUDED.auto_delete_after_seconds,
                 auto_delete_from = EXCLUDED.auto_delete_from,
                 -- The stored touch wins: an edit reads the record, changes a field and writes it
@@ -247,6 +260,8 @@ public sealed class PostgresSessionStore : ISessionStore
                 credential_id = EXCLUDED.credential_id,
                 git_pat_ids = EXCLUDED.git_pat_ids,
                 secret_ids = EXCLUDED.secret_ids,
+                secret_grant_ids = EXCLUDED.secret_grant_ids,
+                secret_ceiling = EXCLUDED.secret_ceiling,
                 agent_policy = EXCLUDED.agent_policy,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
@@ -392,7 +407,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -404,6 +419,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     private static void Bind(NpgsqlCommand cmd, SessionRecord r)
     {
+        cmd.Parameters.AddWithValue("autoUpdateRuntimeImages", NpgsqlTypes.NpgsqlDbType.Boolean, (object?)r.AutoUpdateRuntimeImages ?? DBNull.Value);
         cmd.Parameters.AddWithValue("id", r.Id);
         cmd.Parameters.AddWithValue("owner", r.Owner);
         cmd.Parameters.AddWithValue("title", r.Title);
@@ -440,6 +456,8 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("resolvedCredentialId", (object?)r.ResolvedCredentialId ?? DBNull.Value);
         cmd.Parameters.AddWithValue("accountFailover", (object?)r.AccountFailover ?? DBNull.Value);
         cmd.Parameters.AddWithValue("secretIds", (object?)r.SecretIdsJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("secretGrantIds", (object?)r.SecretGrantIdsJson ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("secretCeiling", (object?)r.SecretCeilingJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", r.CreatedAt);
         cmd.Parameters.AddWithValue("autoDeleteAfter", (object?)r.AutoDeleteAfterSeconds ?? DBNull.Value);
         cmd.Parameters.AddWithValue("autoDeleteFrom", (object?)r.AutoDeleteFrom ?? DBNull.Value);
@@ -488,6 +506,9 @@ public sealed class PostgresSessionStore : ISessionStore
         ResolvedCredentialId = r.IsDBNull(37) ? null : r.GetString(37),
         AccountFailover = r.IsDBNull(38) ? null : r.GetString(38),
         FailureReason = r.IsDBNull(39) ? null : r.GetString(39),
-        SecretIdsJson = r.IsDBNull(40) ? null : r.GetString(40)
+        SecretIdsJson = r.IsDBNull(40) ? null : r.GetString(40),
+        AutoUpdateRuntimeImages = r.IsDBNull(41) ? null : r.GetBoolean(41),
+        SecretGrantIdsJson = r.IsDBNull(42) ? null : r.GetString(42),
+        SecretCeilingJson = r.IsDBNull(43) ? null : r.GetString(43)
     };
 }

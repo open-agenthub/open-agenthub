@@ -1,6 +1,6 @@
 // A personal API token's credential restriction (docs/credential-scopes.md), as the settings
 // page edits it. The wire form is an allow list — { providerAccounts: { Claude: [ids|'*'] },
-// gitPats: [ids|'*'], apiKeys: bool } or null for "anything" — and the draft the checkboxes
+// gitPats: [ids|'*'], apiKeys: bool, secrets?: [ids|'*'] } or null for "anything" — and the draft the checkboxes
 // bind to is the same shape with every list spelled out.
 
 export const AGENTS = ['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode']
@@ -13,11 +13,11 @@ function listFor(accounts, agent) {
 
 /** An empty draft: nothing ticked, so a token restricted "to nothing" cannot start a session. */
 export function emptyScopeDraft() {
-  return { providerAccounts: Object.fromEntries(AGENTS.map(agent => [agent, []])), gitPats: [], apiKeys: false }
+  return { providerAccounts: Object.fromEntries(AGENTS.map(agent => [agent, []])), gitPats: [], apiKeys: false, secrets: [] }
 }
 
 /** The draft for an existing restriction; '*' ticks every stored entry at the time of editing. */
-export function draftFromScope(scope, accounts, pats) {
+export function draftFromScope(scope, accounts, pats, secrets = []) {
   const draft = emptyScopeDraft()
   if (!scope) return draft
   for (const agent of AGENTS) {
@@ -32,6 +32,10 @@ export function draftFromScope(scope, accounts, pats) {
   draft.gitPats = patIds.includes('*')
     ? (pats || []).map(pat => pat.id)
     : (pats || []).filter(pat => patIds.includes(pat.id)).map(pat => pat.id)
+  const secretIds = Array.isArray(scope.secrets) ? scope.secrets : []
+  draft.secrets = secretIds.includes('*')
+    ? (secrets || []).map(secret => secret.id)
+    : (secrets || []).filter(secret => secretIds.includes(secret.id)).map(secret => secret.id)
   draft.apiKeys = scope.apiKeys === true
   return draft
 }
@@ -46,7 +50,10 @@ export function scopeFromDraft(draft) {
   return {
     providerAccounts,
     gitPats: [...(draft?.gitPats || [])],
-    apiKeys: !!draft?.apiKeys
+    apiKeys: !!draft?.apiKeys,
+    // Omitted when empty: a missing part already means "none", and a token that never ticked a
+    // secret is then stored exactly as one created before secrets existed.
+    ...((draft?.secrets || []).length ? { secrets: [...draft.secrets] } : {})
   }
 }
 
@@ -61,7 +68,7 @@ export function draftAllowsAnything(draft) {
  * "unrestricted". Labels come from the current listing; an id whose account is gone is counted
  * but not named.
  */
-export function scopeSummary(scope, accounts, pats) {
+export function scopeSummary(scope, accounts, pats, secrets = []) {
   if (!scope) return 'unrestricted'
   const parts = []
   for (const [name, ids] of Object.entries(scope.providerAccounts || {})) {
@@ -75,5 +82,8 @@ export function scopeSummary(scope, accounts, pats) {
   if (patIds.includes('*')) parts.push('git: any')
   else if (patIds.length) parts.push(`git: ${patIds.length} of ${(pats || []).length}`)
   if (scope.apiKeys === true) parts.push('API keys')
+  const secretIds = Array.isArray(scope.secrets) ? scope.secrets : []
+  if (secretIds.includes('*')) parts.push('secrets: any')
+  else if (secretIds.length) parts.push(`secrets: ${secretIds.length} of ${(secrets || []).length}`)
   return parts.length ? parts.join(' · ') : 'nothing allowed'
 }

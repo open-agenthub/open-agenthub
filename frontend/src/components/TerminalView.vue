@@ -20,9 +20,19 @@ import { conversationState, mergeConversationPage, toTranscriptItems } from '../
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
+import SecretRequestBanner from './SecretRequestBanner.vue'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
-const emit = defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
+const runtimeUpdateError = ref('')
+const runtimeUpdating = ref(false)
+async function updateRuntime() {
+  runtimeUpdating.value = true
+  runtimeUpdateError.value = ''
+  try { await api.updateRuntimeImage(props.session.id); emit('runtime-updated') }
+  catch (error) { runtimeUpdateError.value = error.message || 'Update deferred' }
+  finally { runtimeUpdating.value = false }
+}
+const emit = defineEmits(['runtime-updated', 'back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 // Reopens a browser pane the person closed; it stays offered while the pane is open because on a
@@ -454,12 +464,15 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
+      <span v-if="session.outdatedImage" class="status" data-outdated-image>outdated image</span>
+      <button v-if="session.outdatedImage && capabilities.canManage" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
       <span class="status">{{ modern ? statuses.agent : statuses[activeTab] }}</span>
       <div v-if="shareOpen" class="share-pop">
         <div class="share-head"><span>Share session</span><button class="ghost" @click="shareOpen = false">✕</button></div>
         <ShareSessionDialog embedded :session="session" @close="shareOpen = false" />
       </div>
     </div>
+    <p v-if="runtimeUpdateError" role="alert">{{ runtimeUpdateError }}</p>
     <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
@@ -572,6 +585,7 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn danger" @click="decidePermission(p.id, 'deny')">Deny</button>
       </div>
     </div>
+    <SecretRequestBanner v-if="capabilities.canManage && !sharedToken" :session-id="session.id" />
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :items="transcriptItems" :loading="transcriptBusy"

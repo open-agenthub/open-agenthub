@@ -448,6 +448,8 @@ public class InternalSessionSpawnTests
 
         // Not null: null would follow proj-a, which also selects b, a secret the parent never had.
         Assert.Equal(["a"], svc.CreateRequest!.SecretIds);
+        // What the child may later ask for is held to the same set.
+        Assert.Equal(["a"], svc.CreateRequest.SecretCeiling);
     }
 
     [Fact]

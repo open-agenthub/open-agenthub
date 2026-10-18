@@ -7,7 +7,7 @@ export function sharedTokenFromPath(pathname) {
 // URL parser and the subnav agree on what a valid tab is — an unknown segment must fall back
 // to the default instead of rendering an empty settings body.
 export const SETTINGS_DEFAULT_TAB = 'credentials'
-export const PERSONAL_SETTINGS_TABS = ['profile', 'account', 'credentials', 'mcp', 'skills', 'notifications', 'tokens', 'webhooks']
+export const PERSONAL_SETTINGS_TABS = ['profile', 'account', 'credentials', 'secrets', 'mcp', 'skills', 'notifications', 'tokens', 'webhooks']
 export const ADMIN_SETTINGS_TABS = ['users', 'org-mcp', 'limits', 'groups', 'billing', 'license']
 
 export function isSettingsTab(tab) {
