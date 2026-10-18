@@ -297,18 +297,40 @@ test('an uncovered unattended call is auto-approved through the permission endpo
   }
 });
 
-test('an uncovered unattended PreToolUse stays silent so the request can be raised', async () => {
-  const server = await startServer([{ body: '{"decision":"ask"}' }]);
-  try {
-    const result = await runHook(preTool('WebFetch', { url: 'https://example.com' }), {
-      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous'
-    });
-    // Denying here would settle the call before Codex ever raises the PermissionRequest that
-    // carries it to the approval endpoint.
-    assert.equal(result.stdout, '');
-    assert.equal(result.stderr, '');
-  } finally {
-    await server.close();
+test('unattended PreToolUse resolves approval before full-access execution', async () => {
+  for (const decision of ['allow', 'deny']) {
+    const server = await startServer([
+      { body: '{"decision":"ask"}' },
+      { body: JSON.stringify({ decision }) },
+      { body: '{"decision":"allow"}' }
+    ]);
+    try {
+      const result = await runHook(preTool(), {
+        AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous'
+      });
+      if (decision === 'allow') assert.equal(result.stdout, '');
+      else assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+      assert.deepEqual(server.requests.map(request => request.path), decision === 'allow'
+        ? ['/agent-policy', '/permission', '/agent-policy'] : ['/agent-policy', '/permission']);
+    } finally {
+      await server.close();
+    }
+  }
+});
+
+test('unattended PreToolUse fails closed when approval is unavailable or policy changes', async () => {
+  for (const responses of [
+    [{ body: '{"decision":"ask"}' }],
+    [{ body: '{"decision":"ask"}' }, { body: '{"decision":"allow"}' }, { body: '{"decision":"deny"}' }],
+    [{ body: '{"decision":"ask"}' }, { body: '{"decision":"allow"}' }, { status: 500, body: '{}' }]
+  ]) {
+    const server = await startServer(responses);
+    try {
+      const result = await runHook(preTool(), {
+        AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous'
+      });
+      assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    } finally { await server.close(); }
   }
 });
 
@@ -493,6 +515,7 @@ test('system requirements own all tool hooks and exclude repository hooks', () =
   assert.match(requirements, /^hooks = true/m);
   assert.match(requirements, /^managed_dir = "\/opt\/session-agent\/codex"/m);
   assert.match(requirements, /\[\[hooks\.PreToolUse\]\][\s\S]*matcher = "\*"/m);
+  assert.match(requirements, /\[\[hooks\.PreToolUse\.hooks\]\][\s\S]*?timeout = 250/m);
   assert.match(requirements, /\[\[hooks\.PermissionRequest\]\][\s\S]*matcher = "\*"/m);
 });
 

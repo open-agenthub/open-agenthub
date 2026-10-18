@@ -105,6 +105,8 @@ internal class RecordingWebhookSessionService : ISessionService
         throw new NotSupportedException();
     public virtual Task<IReadOnlyList<TranscriptEntry>?> GetConversationAsync(string owner, string id, CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null);
+    public virtual Task<string?> GetTranscriptFileAsync(string owner, string id, CancellationToken ct = default) =>
+        Task.FromResult<string?>(null);
     public Task<string?> MintArtifactUploadUrlAsync(string sessionId, string token, string name, CancellationToken ct = default) =>
         throw new NotSupportedException();
     public Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default) =>

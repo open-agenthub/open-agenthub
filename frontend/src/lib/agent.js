@@ -30,12 +30,31 @@ const PUBLIC_AUTH_OPTIONS = [
   { value: 'ApiKey', label: 'API key', hint: 'Use provider API billing' }
 ]
 
+// A self-hosted model server instead of a provider (docs/custom-model-endpoints.md). Only the
+// agents the backend accepts it for; each needs a different wire protocol, which the hint names
+// because "OpenAI-compatible" alone is not enough for two of them.
+const CUSTOM_ENDPOINT_OPTION = { value: 'CustomEndpoint', label: 'Own endpoint', hint: 'Use a self-hosted model server' }
+const CUSTOM_ENDPOINT_PROTOCOLS = {
+  Claude: 'Claude Code speaks the Anthropic Messages API: the server must offer /v1/messages. An OpenAI-only server will not work.',
+  Codex: 'Codex speaks only the OpenAI Responses API: the server must offer /v1/responses. /v1/chat/completions alone will not work.',
+  OpenCode: 'OpenCode speaks OpenAI Chat Completions: the server must offer /v1/chat/completions.'
+}
+
+export function supportsCustomEndpoint(agent) {
+  return Object.hasOwn(CUSTOM_ENDPOINT_PROTOCOLS, agent)
+}
+
+export function customEndpointProtocol(agent) {
+  return CUSTOM_ENDPOINT_PROTOCOLS[agent] || ''
+}
+
 export function needsOpenClawApiKeySource(agent, authMode) {
   return agent === 'OpenClaw' && authMode === 'ApiKey'
 }
 
 export function authOptions(agent, legacyMode) {
   const options = PUBLIC_AUTH_OPTIONS.map(option => ({ ...option }))
+  if (supportsCustomEndpoint(agent)) options.push({ ...CUSTOM_ENDPOINT_OPTION })
   return agent === 'Claude' && legacyMode === 'Auto'
     ? [{ value: 'Auto', label: 'Auto (legacy)', hint: 'Existing migrated selection' }, ...options]
     : options
@@ -93,6 +112,8 @@ export function defaultAgentForm(source = {}) {
     agent,
     authMode: source.authMode || 'Subscription',
     openClawApiKeySource: source.openClawApiKeySource || 'Anthropic',
+    modelEndpointUrl: source.modelEndpointUrl || '',
+    modelName: source.modelName || '',
     allowedToolsRaw: policy.allowedTools.join('\n'),
     allowedMcpToolsRaw: policy.allowedMcpTools.join('\n'),
     allowedCommandsRaw: policy.allowedCommands.join('\n')
@@ -106,6 +127,11 @@ export function agentPayload(form) {
   }
   if (needsOpenClawApiKeySource(form.agent, form.authMode)) {
     payload.openClawApiKeySource = form.openClawApiKeySource || 'Anthropic'
+  }
+  // Only with the mode: the backend refuses endpoint fields on any other one.
+  if (form.authMode === 'CustomEndpoint') {
+    payload.modelEndpointUrl = String(form.modelEndpointUrl || '').trim()
+    payload.modelName = String(form.modelName || '').trim()
   }
   return payload
 }
@@ -178,40 +204,69 @@ export function availableAlternatives(list, currentId) {
   return (Array.isArray(list) ? list : []).filter(account => account?.id !== currentId && !isAccountExhausted(account))
 }
 
-/** The stored git PATs ({id, kind, host}) out of the credential status; never a token. */
+/** The stored git PATs ({id, kind, host, label, isDefault, …}) out of the credential status; never a token. */
 export function gitPatOptions(status) {
   return Array.isArray(status?.gitPats) ? status.gitPats : []
 }
 
-/** The ids a session's stored selection ticks: null ("all") ticks every option, a list ticks what still exists. */
-export function gitPatSelectionFor(current, options) {
-  const ids = options.map(pat => pat.id)
-  return Array.isArray(current) ? ids.filter(id => current.includes(id)) : ids
+/**
+ * The tokens grouped by host, in stored order: [{host, kind, tokens}]. A session uses at most one
+ * per host (git's store answers with the first line for a host), so the picker offers one choice
+ * per group rather than a checkbox per token.
+ */
+export function gitPatHosts(options) {
+  const hosts = new Map()
+  for (const pat of options) {
+    if (!hosts.has(pat.host)) hosts.set(pat.host, { host: pat.host, kind: pat.kind, tokens: [] })
+    hosts.get(pat.host).tokens.push(pat)
+  }
+  return [...hosts.values()]
 }
 
-function everyPatTicked(selected, options) {
-  return options.length > 0 && options.every(pat => selected.includes(pat.id))
+/** Each host's default token: the one marked, or the first for a backend that marks none. */
+export function gitPatDefaults(options) {
+  return gitPatHosts(options).map(group => (group.tokens.find(pat => pat.isDefault) || group.tokens[0]).id)
+}
+
+/** How a token is named in a picker: its label, else its host. */
+export function gitPatName(pat) {
+  return pat?.label || pat?.host || ''
 }
 
 /**
- * What a create sends: null when every stored token is ticked — "all, including ones added
- * later", which is what every session got before a selection existed — else the ticked ids.
+ * The tokens a session actually gets from its stored selection: null is every host's default, a
+ * list keeps what still exists, one per host.
+ */
+export function gitPatSelectionFor(current, options) {
+  if (!Array.isArray(current)) return gitPatDefaults(options)
+  const seen = new Set()
+  return options.filter(pat => current.includes(pat.id) && !seen.has(pat.host) && seen.add(pat.host)).map(pat => pat.id)
+}
+
+function defaultsChosen(selected, options) {
+  const defaults = gitPatDefaults(options)
+  return options.length > 0 && defaults.length === selected.length && defaults.every(id => selected.includes(id))
+}
+
+/**
+ * What a create sends: null when every host has its default chosen — "the defaults, including
+ * hosts added later", which is what a session got before a choice existed — else the chosen ids.
  */
 export function gitPatIdsPayload(selected, options) {
-  if (!options.length || everyPatTicked(selected, options)) return null
+  if (!options.length || defaultsChosen(selected, options)) return null
   return options.map(pat => pat.id).filter(id => selected.includes(id))
 }
 
 /**
  * What an edit or duplicate sends: nothing when the selection matches the session's, `['*']`
- * when a restricted session goes back to every token (null would mean "unchanged" there), else
- * the ticked ids.
+ * when a restricted session goes back to the defaults (null would mean "unchanged" there), else
+ * the chosen ids.
  */
 export function gitPatIdsChange(selected, options, current) {
   if (!options.length) return {}
-  const all = everyPatTicked(selected, options)
-  if (!Array.isArray(current)) return all ? {} : { gitPatIds: gitPatIdsPayload(selected, options) }
-  if (all) return { gitPatIds: ['*'] }
+  const defaults = defaultsChosen(selected, options)
+  if (!Array.isArray(current)) return defaults ? {} : { gitPatIds: gitPatIdsPayload(selected, options) }
+  if (defaults) return { gitPatIds: ['*'] }
   const chosen = options.map(pat => pat.id).filter(id => selected.includes(id))
   const kept = gitPatSelectionFor(current, options)
   const same = chosen.length === kept.length && chosen.every(id => kept.includes(id))
@@ -231,6 +286,12 @@ function apiKeyReadiness(provider, statusKey, status) {
 
 export function credentialReadiness(agent, authMode, mode, status = {}, openClawApiKeySource = null) {
   if (authMode === 'Auto') return { ready: true, text: 'Legacy automatic credential selection is preserved until you choose a billing source.' }
+  // The key is optional: many self-hosted servers run without one.
+  if (authMode === 'CustomEndpoint') {
+    return status.customEndpointApiKey
+      ? { ready: true, text: 'Custom endpoint API key is stored. The first turn can take minutes while the server reads the prompt.' }
+      : { ready: true, text: 'No custom endpoint API key is stored, which is fine for a server without auth. The first turn can take minutes.' }
+  }
   if (authMode === 'Subscription') {
     const ready = !!status[
       agent === 'Codex' ? 'codexSubscription'

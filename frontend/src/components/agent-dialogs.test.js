@@ -77,6 +77,50 @@ describe('agent-aware session dialogs', () => {
     expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('allowedTools')
   })
 
+  it('creates a Codex session on a custom endpoint and names the Responses API it needs', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-agent-option="Codex"]').trigger('click')
+    await wrapper.get('[data-auth-option="CustomEndpoint"]').trigger('click')
+    expect(wrapper.get('[data-endpoint-protocol]').text()).toContain('/v1/responses')
+    expect(wrapper.find('[data-account-choice]').exists()).toBe(false)
+    await wrapper.get('[data-endpoint-url]').setValue('https://llm.example.com/v1')
+    await wrapper.get('[data-endpoint-model]').setValue('qwen3-coder-30b')
+    await wrapper.get('[data-submit]').trigger('click')
+
+    expect(mocks.api.createSession).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'Codex', authMode: 'CustomEndpoint',
+      modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'qwen3-coder-30b'
+    }))
+  })
+
+  it('drops the custom endpoint when switching to an agent that cannot use one', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await wrapper.get('[data-auth-option="CustomEndpoint"]').trigger('click')
+    await wrapper.get('[data-agent-option="Cursor"]').trigger('click')
+
+    expect(wrapper.find('[data-auth-option="CustomEndpoint"]').exists()).toBe(false)
+    expect(wrapper.find('[data-endpoint-choice]').exists()).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0]).toMatchObject({ agent: 'Cursor', authMode: 'Subscription' })
+    expect(mocks.api.createSession.mock.calls[0][0]).not.toHaveProperty('modelEndpointUrl')
+  })
+
+  it('edits the model of a custom-endpoint session and hides account failover', async () => {
+    const session = { ...baseSession, mode: 'Interactive', authMode: 'CustomEndpoint',
+      modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'old-model' }
+    const wrapper = mount(EditSessionDialog, { props: { session, projects: [] }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.get('[data-endpoint-url]').element.value).toBe('https://llm.example.com/v1')
+    expect(wrapper.find('.failover-field').exists()).toBe(false)
+    await wrapper.get('[data-endpoint-model]').setValue('new-model')
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.api.updateSession).toHaveBeenCalledWith('s1', expect.objectContaining({
+      authMode: 'CustomEndpoint', modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'new-model'
+    }))
+  })
+
   it('creates a Cursor API-key autonomous session', async () => {
     const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
     await wrapper.get('[data-agent-option="Cursor"]').trigger('click')
@@ -633,6 +677,79 @@ describe('Git personal access tokens', () => {
   })
 })
 
+
+/// Several tokens for one host (issue #132): told apart by label, one marked default.
+describe('Git tokens sharing a host', () => {
+  const sameHost = [
+    { id: 'p', kind: 'gitlab', host: 'gitlab.example.com', label: 'personal', isDefault: true },
+    { id: 'g', kind: 'gitlab', host: 'gitlab.example.com', label: 'group: platform', isDefault: false,
+      authorName: 'Platform Bot', authorEmail: 'platform-bot@example.com' },
+    { id: 'h', kind: 'github', host: 'github.com', isDefault: true }
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mocks.api.getCredentialStatus.mockReset()
+    mocks.api.getCredentialStatus.mockResolvedValue({ gitPats: sameHost })
+    mocks.api.createSession.mockResolvedValue({ id: 'new' })
+    mocks.api.getAllowedAgents.mockResolvedValue({ agents: ['Claude'] })
+  })
+
+  it('lists label, default and author, and offers "Make default" only where it changes something', async () => {
+    mocks.api.addGitPat.mockResolvedValue({})
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+
+    const group = wrapper.get('[data-git-pat-id="g"]')
+    expect(group.get('[data-git-pat-label]').text()).toBe('group: platform')
+    expect(group.get('[data-git-pat-author]').text()).toBe('commits as Platform Bot <platform-bot@example.com>')
+    expect(wrapper.get('[data-git-pat-id="p"] [data-git-pat-default]').text()).toBe('default')
+    // Alone on its host, a token has no default to speak of.
+    expect(wrapper.find('[data-git-pat-id="h"] [data-git-pat-default]').exists()).toBe(false)
+    expect(wrapper.find('[data-git-pat-id="h"] [data-git-pat-make-default]').exists()).toBe(false)
+    expect(wrapper.find('[data-git-pat-id="p"] [data-git-pat-make-default]').exists()).toBe(false)
+
+    await group.get('[data-git-pat-make-default]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.addGitPat).toHaveBeenCalledWith({ id: 'g', default: true })
+  })
+
+  it('adds a labelled token with its author, and leaves empty optional fields out', async () => {
+    mocks.api.addGitPat.mockResolvedValue({})
+    const wrapper = mount(CredentialsDialog, { props: { embedded: true } })
+    await flushPromises()
+    await wrapper.get('[data-git-pat-host]').setValue('gitlab.example.com')
+    await wrapper.get('[data-git-pat-token]').setValue('glpat-bot')
+    await wrapper.get('[data-git-pat-label-input]').setValue(' project bot ')
+    await wrapper.get('[data-git-pat-author-email]').setValue('bot@example.com')
+    await wrapper.get('[data-git-pat-add]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.addGitPat).toHaveBeenCalledWith({
+      kind: 'gitlab', host: 'gitlab.example.com', token: 'glpat-bot', label: 'project bot', authorEmail: 'bot@example.com'
+    })
+  })
+
+  it('offers one choice per host in a new session, starting on the default', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects: [] }, ...mountOptions })
+    await flushPromises()
+    const select = wrapper.get('[data-git-pat-host="gitlab.example.com"]')
+    expect(select.element.value).toBe('p')
+    expect(select.text()).toContain('personal (default)')
+    expect(select.text()).toContain('group: platform')
+    expect(wrapper.get('[data-git-pat-option="h"]').element.checked).toBe(true)
+
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[0][0].gitPatIds).toBeNull()
+
+    await select.setValue('g')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[1][0].gitPatIds).toEqual(['g', 'h'])
+
+    await select.setValue('')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.createSession.mock.calls[2][0].gitPatIds).toEqual(['h'])
+  })
+})
 /// A session chooses which stored git tokens it is built with (docs/credential-scopes.md). The
 /// picker appears from the first stored token; every token ticked means "all, as before".
 describe('Git token selection per session', () => {

@@ -87,6 +87,43 @@ public class NativeTranscriptTests
     }
 
     [Fact]
+    public void Claude_ShowsAPasteWithoutTheWrapperTheCliRecordedAroundIt()
+    {
+        // The user line Claude Code 2.1.287 wrote after "see this <div> ", a bracketed paste of
+        // three lines and " and reply" were typed into its prompt.
+        const string jsonl =
+            """
+            {"type":"user","message":{"role":"user","content":"see this <div> \n\n<pasted_content id=\"d733\">\nline 0 <b>keep</b>\nline 1 <b>keep</b>\nline 2 <b>keep</b>\n</pasted_content id=\"d733\">\n\n and reply"},"uuid":"u1"}
+            """;
+
+        var entry = Assert.Single(NativeTranscript.Parse(jsonl));
+
+        Assert.Equal("see this <div>\nline 0 <b>keep</b>\nline 1 <b>keep</b>\nline 2 <b>keep</b>\nand reply", entry.Text);
+    }
+
+    [Theory]
+    [InlineData("a\n\n<pasted_content id=\"00ff\">\none\n</pasted_content id=\"00ff\">\n\n b", "a one b")]
+    [InlineData("<pasted_content id=\"0a0a\">\nx\ny\n</pasted_content id=\"0a0a\">\n\n<pasted_content id=\"0b0b\">\nz\n</pasted_content id=\"0b0b\">", "x\ny\nz")]
+    [InlineData("<pasted_content id=\"0a0a\">\nx\ny\n</pasted_content id=\"0a0a\">", "x\ny")]
+    // What the person typed stays: a different closing id, a non-hex id, and the bare tag name.
+    [InlineData("<pasted_content id=\"0a0a\">\nx\n</pasted_content id=\"0b0b\">", "<pasted_content id=\"0a0a\">\nx\n</pasted_content id=\"0b0b\">")]
+    [InlineData("<pasted_content id=\"zzzz\">\nx\n</pasted_content id=\"zzzz\">", "<pasted_content id=\"zzzz\">\nx\n</pasted_content id=\"zzzz\">")]
+    [InlineData("<pasted_content>x</pasted_content>", "<pasted_content>x</pasted_content>")]
+    public void UnwrapPastes_RemovesOnlyTheCliWrapper(string recorded, string shown)
+        => Assert.Equal(shown, NativeTranscript.UnwrapPastes(recorded));
+
+    [Fact]
+    public void AssistantTextKeepsAWrapperItQuotes()
+    {
+        const string jsonl =
+            """
+            {"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"<pasted_content id=\"0a0a\">\nx\n</pasted_content id=\"0a0a\">"}]}}
+            """;
+
+        Assert.StartsWith("<pasted_content", Assert.Single(NativeTranscript.Parse(jsonl)).Text);
+    }
+
+    [Fact]
     public void ToolArgumentsAndResultsAreClipped()
     {
         var huge = new string('x', NativeTranscript.MaxToolChars + 50);

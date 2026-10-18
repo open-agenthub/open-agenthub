@@ -313,6 +313,8 @@ public sealed class RemoteCredentialScopeTests
 
         Assert.IsType<OkObjectResult>((await controller.Create(Request() with { ProjectId = "proj-1" }, CancellationToken.None)).Result);
         Assert.Equal(["s2"], svc.Created!.SecretIds);
+        // A secret request of that session is held to the token's secrets as well.
+        Assert.Equal(["s2"], svc.Created.SecretCeiling);
     }
 
     [Fact]

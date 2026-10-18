@@ -17,7 +17,12 @@ public enum SessionMode
 }
 
 public enum AgentKind { Claude, Codex, Cursor, OpenClaw, OpenCode }
-public enum AgentAuthMode { Auto, Subscription, ApiKey }
+/// <summary>
+/// How a session's agent reaches its model. CustomEndpoint is a self-hosted, provider-compatible
+/// server named per session (docs/custom-model-endpoints.md); it bills no provider and mounts no
+/// provider login.
+/// </summary>
+public enum AgentAuthMode { Auto, Subscription, ApiKey, CustomEndpoint }
 public enum OpenClawApiKeySource { Anthropic, OpenAI, Cursor }
 
 public sealed record AgentPolicy
@@ -98,8 +103,72 @@ public static class AgentConfiguration
 
     private static void ValidateAuthMode(AgentAuthMode authMode)
     {
-        if (authMode is not AgentAuthMode.Subscription and not AgentAuthMode.ApiKey)
-            throw new ArgumentException("Authentication mode must be Subscription or ApiKey.");
+        if (authMode is not AgentAuthMode.Subscription and not AgentAuthMode.ApiKey and not AgentAuthMode.CustomEndpoint)
+            throw new ArgumentException("Authentication mode must be Subscription, ApiKey or CustomEndpoint.");
+    }
+
+    /// <summary>
+    /// Whether the session runs on a stored provider login. Several places used to read "not
+    /// ApiKey" as "on an account"; a custom-endpoint session has no account either, and taking it
+    /// for one would let a usage-limit report retire a login the session never used.
+    /// </summary>
+    public static bool UsesProviderAccount(AgentAuthMode authMode) =>
+        authMode is AgentAuthMode.Subscription or AgentAuthMode.Auto;
+
+    /// <summary>
+    /// The agents whose CLI can be pointed at a custom endpoint and was verified against one:
+    /// Claude Code speaks the Anthropic Messages API, Codex the OpenAI Responses API, OpenCode
+    /// OpenAI Chat Completions. Cursor's CLI talks only to Cursor's own backend, and OpenClaw's
+    /// provider config is not written by anything here yet.
+    /// </summary>
+    public static bool SupportsCustomEndpoint(AgentKind agent) =>
+        agent is AgentKind.Claude or AgentKind.Codex or AgentKind.OpenCode;
+
+    public const int MaxModelEndpointUrlLength = 500;
+    public const int MaxModelNameLength = 200;
+
+    /// <summary>
+    /// Checks the endpoint fields against the effective agent and auth mode and returns them
+    /// normalised, or both null when the mode is not CustomEndpoint. The URL is used only by the
+    /// session pod and never fetched by the backend, so it is no SSRF surface here; what the pod
+    /// may reach is the network policy's decision (docs/custom-model-endpoints.md).
+    /// </summary>
+    public static (string? Url, string? Model) ValidateModelEndpoint(AgentKind agent, AgentAuthMode authMode,
+        string? url, string? model)
+    {
+        url = string.IsNullOrWhiteSpace(url) ? null : url.Trim();
+        model = string.IsNullOrWhiteSpace(model) ? null : model.Trim();
+        if (authMode != AgentAuthMode.CustomEndpoint)
+        {
+            if (url is not null || model is not null)
+                throw new ArgumentException("A model endpoint and model name only apply to CustomEndpoint authentication.");
+            return (null, null);
+        }
+
+        if (!SupportsCustomEndpoint(agent))
+            throw new ArgumentException(
+                $"{agent} cannot use a custom model endpoint yet; choose Claude, Codex or OpenCode, or another authentication mode.");
+        if (url is null)
+            throw new ArgumentException("A model endpoint URL is required for CustomEndpoint authentication.");
+        if (model is null)
+            throw new ArgumentException("A model name is required for CustomEndpoint authentication.");
+        if (url.Length > MaxModelEndpointUrlLength
+            || !Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+            || parsed.Scheme is not ("http" or "https")
+            || string.IsNullOrEmpty(parsed.Host))
+            throw new ArgumentException("The model endpoint must be an absolute http:// or https:// URL.");
+        // A key in the URL would be stored in the session row and shown to everyone who can read
+        // the session; it belongs in the write-only credential instead.
+        if (!string.IsNullOrEmpty(parsed.UserInfo))
+            throw new ArgumentException("Store the endpoint's key as the custom endpoint API key, not in the URL.");
+        if (!string.IsNullOrEmpty(parsed.Query) || !string.IsNullOrEmpty(parsed.Fragment))
+            throw new ArgumentException("Give the endpoint's API base without query or fragment, e.g. https://llm.example.com/v1.");
+        // The name lands in a TOML string, a JSON object key and an environment variable. The
+        // runtimes escape it, but no model id needs whitespace or control characters, and refusing
+        // them here keeps a confusing pod failure from being the first report.
+        if (model.Length > MaxModelNameLength || model.Any(c => char.IsWhiteSpace(c) || char.IsControl(c)))
+            throw new ArgumentException($"The model name must be at most {MaxModelNameLength} characters, without spaces.");
+        return (url.TrimEnd('/'), model);
     }
 
     private static void ValidateOpenClawApiKeySource(AgentKind agent, AgentAuthMode authMode,
@@ -253,6 +322,7 @@ public record RepoRef
 /// <summary>Request to start a new session.</summary>
 public record CreateSessionRequest
 {
+    public bool? AutoUpdateRuntimeImages { get; init; }
     public string Title { get; init; } = "Untitled";
 
     /// <summary>What this agent is for — shown in the UI and to other agents of the project.</summary>
@@ -312,6 +382,11 @@ public record CreateSessionRequest
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Subscription;
     /// <summary>Which existing API key OpenClaw should use; required only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>API base of a self-hosted model server, e.g. <c>https://llm.example.com/v1</c>;
+    /// required for, and only valid with, CustomEndpoint authentication.</summary>
+    public string? ModelEndpointUrl { get; init; }
+    /// <summary>The model id the endpoint serves; required with CustomEndpoint.</summary>
+    public string? ModelName { get; init; }
     /// <summary>
     /// Which stored provider login (account) a Subscription session mounts. Null means the
     /// default account, resolved at every start — so a default changed later applies to the next
@@ -331,6 +406,13 @@ public record CreateSessionRequest
     /// lie within it; <c>["*"]</c> is accepted as a spelling of null. An unknown id fails the request.
     /// </summary>
     public List<string>? SecretIds { get; init; }
+    /// <summary>
+    /// The most a secret request of this session may later be granted (docs/session-secrets.md):
+    /// set by the hub for a session created by a restricted token or spawned by another session,
+    /// never read from a request body — a caller could otherwise lift its own limit.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<string>? SecretCeiling { get; init; }
     /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
     public AgentPolicy? Policy { get; init; }
     /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
@@ -419,6 +501,14 @@ public sealed record EphemeralApiSource
 /// </summary>
 public record UpdateSessionRequest
 {
+    private bool? _autoUpdateRuntimeImages;
+    [JsonIgnore]
+    public bool AutoUpdateRuntimeImagesSpecified { get; private set; }
+    public bool? AutoUpdateRuntimeImages
+    {
+        get => _autoUpdateRuntimeImages;
+        init { _autoUpdateRuntimeImages = value; AutoUpdateRuntimeImagesSpecified = true; }
+    }
     public string? Title { get; init; }
     /// <summary>Agent description; null = unchanged, empty string clears it. Applies immediately.</summary>
     public string? Description { get; init; }
@@ -454,6 +544,11 @@ public record UpdateSessionRequest
     public AgentAuthMode? AuthMode { get; init; }
     /// <summary>Which existing API key OpenClaw should use; only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>Endpoint for the next start; null = unchanged. Dropped when the session leaves
+    /// CustomEndpoint authentication.</summary>
+    public string? ModelEndpointUrl { get; init; }
+    /// <summary>Model for the next start; null = unchanged.</summary>
+    public string? ModelName { get; init; }
     /// <summary>Provider account for the next start; null = unchanged, empty string = back to the
     /// default account. A running session is switched live through the credential endpoint instead.</summary>
     public string? CredentialId { get; init; }
@@ -464,6 +559,9 @@ public record UpdateSessionRequest
     /// <summary>Secret selection; null = unchanged, <c>["*"]</c> = follow the project again. Files
     /// follow at once in a running session, variables at its next start.</summary>
     public List<string>? SecretIds { get; init; }
+    /// <summary>Keeps only these of the secrets granted on request; null = unchanged, [] = revoke all.
+    /// Nothing can be added this way (docs/session-secrets.md).</summary>
+    public List<string>? SecretGrantIds { get; init; }
     public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
@@ -563,7 +661,7 @@ public static class SessionDuplication
             // It is dropped for an API-key copy too: creation rejects any account on one, so
             // carrying it over would turn "copy as API key" into a 400 about a field never shown.
             CredentialId = request.CredentialId
-                ?? (agent == source.Agent && authMode != AgentAuthMode.ApiKey ? source.CredentialId : null),
+                ?? (agent == source.Agent && AgentConfiguration.UsesProviderAccount(authMode) ? source.CredentialId : null),
             // The PAT selection is configuration, not conversation, so a copy keeps it; the
             // stored form is a JSON array or null, which the create side reads back the same way.
             GitPatIds = request.GitPatIds ?? Services.GitPatSelection.Parse(source.GitPatIdsJson)?.ToList(),
@@ -598,6 +696,10 @@ public static class SessionDuplication
             OpenClawApiKeySource = agent == AgentKind.OpenClaw && authMode == AgentAuthMode.ApiKey
                 ? request.OpenClawApiKeySource ?? source.OpenClawApiKeySource
                 : null,
+            // Configuration like the agent itself, so a copy that stays on the endpoint keeps it;
+            // one switched to another mode would be refused for carrying it.
+            ModelEndpointUrl = authMode == AgentAuthMode.CustomEndpoint ? source.ModelEndpointUrl : null,
+            ModelName = authMode == AgentAuthMode.CustomEndpoint ? source.ModelName : null,
             Policy = request.Policy ?? DeserializeOptional<AgentPolicy>(source.AgentPolicyJson),
             // An explicit structured policy, including an empty default-deny policy,
             // supersedes legacy AllowedTools instead of rehydrating it later.
@@ -636,6 +738,7 @@ public static class SessionDuplication
 /// <summary>View of a running or scheduled session.</summary>
 public record SessionInfo
 {
+    public bool? AutoUpdateRuntimeImages { get; init; }
     public required string Id { get; init; }
     public required string Title { get; init; }
     /// <summary>What this agent is for (null = none set).</summary>
@@ -678,6 +781,9 @@ public record SessionInfo
     public AgentAuthMode AuthMode { get; init; } = AgentAuthMode.Auto;
     /// <summary>Which existing API key OpenClaw uses; set only for OpenClaw + ApiKey.</summary>
     public OpenClawApiKeySource? OpenClawApiKeySource { get; init; }
+    /// <summary>The self-hosted endpoint; set only for CustomEndpoint. Never carries the key.</summary>
+    public string? ModelEndpointUrl { get; init; }
+    public string? ModelName { get; init; }
     /// <summary>The provider account this session is pinned to; null = the default account.</summary>
     public string? CredentialId { get; init; }
     /// <summary>The account the last start mounted — what an unpinned session actually runs on
@@ -687,9 +793,12 @@ public record SessionInfo
     public IReadOnlyList<string>? GitPatIds { get; init; }
     /// <summary>The secret selection as stored; null = the project's. Ids and nothing else.</summary>
     public IReadOnlyList<string>? SecretIds { get; init; }
+    /// <summary>Secrets the owner granted this session by answering its requests.</summary>
+    public IReadOnlyList<string>? SecretGrantIds { get; init; }
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
+    public bool OutdatedImage { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>
     public bool CanResume { get; init; }
     /// <summary>A finished or paused autonomous session can be continued interactively.</summary>
@@ -734,6 +843,9 @@ public record UserCredentials
     /// <summary>OpenCode API key from the opencode.ai console. One key serves both the OpenCode Go
     /// subscription and Zen pay-as-you-go; OpenCode reads it as OPENCODE_API_KEY.</summary>
     public string? OpenCodeApiKey { get; init; }
+    /// <summary>Bearer key for the owner's self-hosted model endpoint (CustomEndpoint sessions).
+    /// One key for every endpoint the owner uses; an endpoint without auth needs none.</summary>
+    public string? CustomEndpointApiKey { get; init; }
     /// <summary>known_hosts entry of the git server (protects against MITM on the first clone).</summary>
     public string? GitKnownHosts { get; init; }
     public string? GitUserName { get; init; }
@@ -754,6 +866,7 @@ public record CredentialStatus
     public bool OpenAiApiKey { get; init; }
     public bool CursorApiKey { get; init; }
     public bool OpenCodeApiKey { get; init; }
+    public bool CustomEndpointApiKey { get; init; }
     public bool GitUserName { get; init; }
     public bool GitUserEmail { get; init; }
     public bool ClaudeSubscription { get; init; }
@@ -766,9 +879,12 @@ public record CredentialStatus
 /// <summary>
 /// One stored git personal access token as the API reports it. <c>Kind</c> is
 /// <c>gitlab</c> or <c>github</c> (see <see cref="GitPatKind"/>); the token itself is never
-/// included.
+/// included. A host can carry several tokens; <c>IsDefault</c> marks the one a session gets for
+/// that host unless it chose another (docs/git-credentials.md). The author, when set, is the git
+/// identity commits to that host are made with in a session using this token.
 /// </summary>
-public record GitPatInfo(string Id, string Kind, string Host);
+public record GitPatInfo(string Id, string Kind, string Host, string? Label = null, bool IsDefault = false,
+    string? AuthorName = null, string? AuthorEmail = null);
 
 /// <summary>The two kinds of PAT a session knows how to use; the kind decides the user part of
 /// the store line and therefore which CLI (<c>glab</c> or <c>gh</c>) is configured.</summary>
@@ -781,17 +897,35 @@ public static class GitPatKind
 }
 
 /// <summary>
-/// Stores or rotates a PAT. The host is the identity: a second request for a host that is
-/// already stored replaces that entry's token rather than adding a line, because git's store
-/// helper answers with the first entry matching the host and a stale one in front would keep
-/// winning after a rotation.
+/// Stores, rotates or edits a PAT; see <see cref="Services.GitPatStore.Upsert"/> for which entry a
+/// request means. Rotation keeps the id rather than appending a line, because git's store helper
+/// answers with the first entry matching the host and a stale one in front would keep winning.
 /// </summary>
 public record UpsertGitPatRequest
 {
+    /// <summary>Edits this stored entry; kind and host may then be omitted, and so may the token
+    /// when only the label, author or default changes.</summary>
+    public string? Id { get; init; }
     public string? Kind { get; init; }
-    /// <summary>Hostname with an optional port, e.g. <c>gitlab.example.com</c>. Required: the
-    /// token is only ever sent to this host, and defaulting to the public instance would be
+    /// <summary>Hostname with an optional port, e.g. <c>gitlab.example.com</c>. Required for a new
+    /// token: it is only ever sent to this host, and defaulting to the public instance would be
     /// silently wrong for a self-hosted one.</summary>
     public string? Host { get; init; }
     public string? Token { get; init; }
+    /// <summary>What the owner calls it ("personal", "group: platform"). Without an id, the host and
+    /// label together pick the entry a request rotates.</summary>
+    public string? Label { get; init; }
+    /// <summary>True makes this the host's default; false is ignored (mark another token instead).</summary>
+    public bool? Default { get; init; }
+    public string? AuthorName { get; init; }
+    public string? AuthorEmail { get; init; }
 }
+
+/// <summary>Body of <c>PATCH /api/sessions/{id}/git-pats</c>: the same values as
+/// <see cref="UpdateSessionRequest.GitPatIds"/>, except that null here means "the defaults"
+/// (there is nothing to leave unchanged).</summary>
+public record SwitchSessionGitPatsRequest(List<string>? GitPatIds);
+
+/// <summary>The session after a git token switch, and whether its running pod already uses the new
+/// tokens (<c>AppliedNow</c>) or gets them at the next start.</summary>
+public record GitPatSwitchResult(SessionInfo Session, bool AppliedNow);

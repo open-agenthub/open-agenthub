@@ -67,7 +67,19 @@ public sealed record PodBuildContext
 /// <summary>Pure construction of provider- and authentication-specific pod specs.</summary>
 public static class AgentPodSpecFactory
 {
+    public static string RuntimeImage(AgentKind agent, AgentRuntimeImages images) => agent switch
+    {
+        AgentKind.Codex => images.CodexImage,
+        AgentKind.Cursor => images.CursorImage,
+        AgentKind.OpenClaw => images.OpenClawImage,
+        AgentKind.OpenCode => images.OpenCodeImage,
+        _ => images.ClaudeImage
+    };
+
     public readonly record struct OpenClawApiKeyEnvBinding(string EnvName, string SecretKey);
+
+    /// <summary>Key of the custom endpoint's bearer token in the owner's credential secret.</summary>
+    public const string CustomEndpointApiKeySecretKey = "custom_endpoint_api_key";
 
     /// <summary>Maps a selected OpenClaw API key source to the shared creds secret key, or null when unset.</summary>
     public static string? TryOpenClawApiKeySecretKey(OpenClawApiKeySource? source) => source switch
@@ -115,6 +127,9 @@ public static class AgentPodSpecFactory
             AgentAuthMode.ApiKey => context.HasSelectedApiKey,
             AgentAuthMode.Auto when record.Agent == AgentKind.Claude =>
                 context.HasSelectedSubscriptionCredential || context.HasSelectedApiKey,
+            // The key is optional: a self-hosted server often runs without one. One that does
+            // want a key refuses the runtime's start probe, which names the missing key.
+            AgentAuthMode.CustomEndpoint => true,
             _ => false
         };
         return available
@@ -125,14 +140,7 @@ public static class AgentPodSpecFactory
     public static V1PodSpec Build(SessionRecord record, CreateSessionRequest request, PodBuildContext context)
     {
         var images = context.RuntimeImages;
-        var runtimeImage = record.Agent switch
-        {
-            AgentKind.Codex => images.CodexImage,
-            AgentKind.Cursor => images.CursorImage,
-            AgentKind.OpenClaw => images.OpenClawImage,
-            AgentKind.OpenCode => images.OpenCodeImage,
-            _ => images.ClaudeImage
-        };
+        var runtimeImage = RuntimeImage(record.Agent, images);
         var repos = NormalizeRepos(request);
         var hasRepo = repos.Count > 0;
         var hasMcp = !string.IsNullOrWhiteSpace(request.McpConfigJson);
@@ -298,6 +306,15 @@ public static class AgentPodSpecFactory
             case (AgentKind.Claude, AgentAuthMode.Auto):
                 AddSubscriptionVolume("claude", context.ClaudeCredentialSecretName);
                 AddApiKey("ANTHROPIC_API_KEY", "anthropic_api_key");
+                break;
+            case (AgentKind.Claude or AgentKind.Codex or AgentKind.OpenCode, AgentAuthMode.CustomEndpoint):
+                // Provider-neutral names; each runtime maps them onto what its CLI reads, because
+                // the three disagree on wire protocol and configuration (docs/custom-model-endpoints.md).
+                // No provider key and no login volume: neither is used, and a provider key in the
+                // pod is one the CLI could send to a server the provider never vetted.
+                env.Add(new V1EnvVar { Name = "AGENTHUB_MODEL_ENDPOINT_URL", Value = record.ModelEndpointUrl ?? "" });
+                env.Add(new V1EnvVar { Name = "AGENTHUB_MODEL_NAME", Value = record.ModelName ?? "" });
+                AddApiKey("AGENTHUB_MODEL_API_KEY", CustomEndpointApiKeySecretKey);
                 break;
             default:
                 throw new ArgumentException("Unsupported agent/authentication combination.");

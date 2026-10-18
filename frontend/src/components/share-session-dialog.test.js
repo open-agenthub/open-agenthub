@@ -10,7 +10,8 @@ const apiMocks = vi.hoisted(() => ({
     listSessionShares: vi.fn(),
     createShareUser: vi.fn(), updateShareUser: vi.fn(), deleteShareUser: vi.fn(),
     createShareLink: vi.fn(), updateShareLink: vi.fn(), deleteShareLink: vi.fn(),
-    updateMcpPolicy: vi.fn()
+    updateMcpPolicy: vi.fn(),
+    getCredentialStatus: vi.fn(), switchSessionGitPats: vi.fn()
   }
 }))
 
@@ -125,5 +126,53 @@ describe('ShareSessionDialog without a license', () => {
 
     expect(wrapper.get('.err').text()).toContain('unknown recipient')
     expect(wrapper.find('[data-license-gate]').exists()).toBe(false)
+  })
+})
+
+/// Before a session is handed to someone, the owner sees which git identity it pushes with and can
+/// move it to a group or project token (issue #132).
+describe('ShareSessionDialog git identity', () => {
+  const tokens = [
+    { id: 'p', kind: 'gitlab', host: 'gitlab.example.com', label: 'personal', isDefault: true },
+    { id: 'g', kind: 'gitlab', host: 'gitlab.example.com', label: 'group: platform', isDefault: false }
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMocks.api.listSessionShares.mockResolvedValue({ users: [], links: [], mcpPolicy: null })
+    apiMocks.api.getCredentialStatus.mockResolvedValue({ gitPats: tokens })
+  })
+
+  it('says which token the session pushes with and switches it in place', async () => {
+    apiMocks.api.switchSessionGitPats.mockResolvedValue({ session: { id: 's1', gitPatIds: ['g'] }, appliedNow: true })
+    const wrapper = mount(ShareSessionDialog, { props: { session: { ...session, gitPatIds: null } } })
+    await flushPromises()
+
+    expect(wrapper.get('[data-share-git-in-use]').text()).toBe('Pushes as personal on gitlab.example.com')
+    expect(wrapper.get('[data-share-git-apply]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-share-git-host="gitlab.example.com"]').setValue('g')
+    await wrapper.get('[data-share-git-apply]').trigger('click')
+    await flushPromises()
+
+    expect(apiMocks.api.switchSessionGitPats).toHaveBeenCalledWith('s1', ['g'])
+    expect(wrapper.get('[data-share-git-in-use]').text()).toBe('Pushes as group: platform on gitlab.example.com')
+    expect(wrapper.get('[data-share-git-note]').text()).toContain('next push already uses it')
+  })
+
+  it('says "at the next start" when the pod could not take it, and hides itself without tokens', async () => {
+    apiMocks.api.switchSessionGitPats.mockResolvedValue({ session: { id: 's1', gitPatIds: [] }, appliedNow: false })
+    const wrapper = mount(ShareSessionDialog, { props: { session: { ...session, gitPatIds: ['p'] } } })
+    await flushPromises()
+    await wrapper.get('[data-share-git-host="gitlab.example.com"]').setValue('')
+    await wrapper.get('[data-share-git-apply]').trigger('click')
+    await flushPromises()
+    expect(apiMocks.api.switchSessionGitPats).toHaveBeenCalledWith('s1', [])
+    expect(wrapper.find('[data-share-git-none]').exists()).toBe(true)
+    expect(wrapper.get('[data-share-git-note]').text()).toContain('next start')
+
+    apiMocks.api.getCredentialStatus.mockResolvedValue({})
+    const none = mount(ShareSessionDialog, { props: { session } })
+    await flushPromises()
+    expect(none.find('[data-share-git]').exists()).toBe(false)
   })
 })

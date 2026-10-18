@@ -81,17 +81,43 @@ the same menus as typing them. What was missing is that the Workspace did not sh
 so a person working there did not see that the agent waited for a choice.
 
 The view now reads the agent terminal's rendered screen — the xterm buffer the drawer would show,
-kept current while the drawer is closed — a moment after output pauses (`lib/cli-menu.js`). A
+kept current while the drawer is closed — with screen checks coalesced into 150 ms intervals
+(`TerminalPane.vue`, `lib/cli-menu.js`). A
 numbered list with the CLI's cursor in it, or above a dialog footer such as *Esc to cancel* or
 *Press enter to confirm*, is a menu; a numbered list in the agent's reply has neither and is left
 alone. A prompt for typed input inside such a dialog (*Paste code here if prompted >*) counts too.
-When one appears, the agent drawer opens with a notice, *The agent is showing a menu* and the
-dialog's question; a menu's options are buttons. A button sends the keys a person would press:
-arrows from the highlighted option, then Enter, one key per message, and *Cancel* sends Esc. When
-the menu goes, a drawer the view opened for it closes again; one the person opened or took over
-stays. While a menu is open the drawer is taller: a CLI fits its dialog into the rows it has, and
-Claude Code in the 14 rows of the normal drawer scrolled its login menu down to the one
+When one appears, a notice shows *The agent is showing a menu* and the dialog's question; a
+menu's options are buttons. A button sends the keys a person would press: arrows from the
+highlighted option, then Enter, one key per message, and *Cancel* sends Esc. The notice follows
+the rendered screen, including submenus, and disappears only when that screen leaves the menu.
+The drawer stays closed until the viewer uses *Open terminal* in the notice or *Agent terminal*
+in the toolbar. A drawer the viewer opened stays open when the menu disappears. This also
+applies to typed-input prompts: the notice offers the terminal rather than opening it.
+While a menu is open an opened drawer is taller: a CLI fits its dialog into the rows it has,
+and Claude Code in the 14 rows of the normal drawer scrolled its login menu down to the one
 highlighted entry. Such a cut list is marked as partial and its notice points at the terminal.
+
+**Continuous redraws must not keep an old menu alive (#166).** The original trailing debounce
+restarted on every PTY write. Codex 0.160.0 redraws its working spinner faster than the 150 ms
+settling interval, so selecting a menu option and starting work could leave the old notice
+visible although the live screen no longer contained a menu. Screen checks now have a bounded
+wait: later writes join the pending check rather than postponing it. This is shared by every
+agent; no provider-specific click handler or screen pattern is needed.
+
+Rejected: clearing on a button click, because a choice can open a submenu or fail to reach the
+CLI, and terminal keyboard input must dismiss the same notice. Also rejected: automatically
+opening the drawer, because the buttons already answer choice menus and a resize can clip the
+CLI's list. A bounded screen check preserves the screen as the source of truth during animation.
+
+Reproduction used the pinned Codex in a real PTY, with its output rendered by xterm 5.5: open
+`/model`, select a model and effort, then immediately start a turn against a local model endpoint
+that keeps the response open. The original scheduler retained the old menu throughout six
+seconds of spinner output; the bounded scheduler cleared it after 152 ms on the same output.
+Chromium against the Workspace reproduced the stale notice with the original scheduler and
+dismissed it during spinner output with the fix. The fixed browser flow was also verified
+through the real session-agent server for both pinned CLIs. Claude Code 2.1.287 closed the
+notice after selection and terminal Esc; the drawer stayed closed until explicitly opened,
+and remained open after Esc when the viewer had opened it.
 
 While the CLI shows one of these screens, the composer refuses to send and keeps the draft:
 its Enter would pick whatever option is highlighted, or submit the text as a login code. That
@@ -100,14 +126,14 @@ happened in testing: a `/login` sent into an open login menu chose the first opt
 Verified end to end in Chromium against the real CLI, through this repository's session agent:
 `/login` from the composer, the notice with the three login methods, the second option chosen by
 button (the CLI opened its next step, which the notice followed), a composer message refused
-while the menu was open, and Cancel closing menu and drawer.
+while the menu was open, and Cancel closing the menu.
 
 What is rendered natively and what falls back to the drawer, per agent:
 
 | Agent | Permission requests | Other menus and prompts |
 |---|---|---|
-| Claude | Native approvals in the Workspace (hook) | Detected and offered as buttons: verified for `/login`, its sub-steps and `/model`; a step that wants typed input (the login code) opens the drawer |
-| Codex | Native approvals (managed hook) | Same screen detection; its selection lists are numbered with a cursor, but this was not run against the Codex CLI here |
+| Claude | Native approvals in the Workspace (hook) | Detected and offered as buttons: verified for `/login`, its sub-steps and `/model`; a step that wants typed input (the login code) offers the drawer |
+| Codex | Native approvals (managed hook) | Verified with 0.160.0: model and effort submenus, selection, and dismissal during working-spinner output |
 | OpenCode | Native approvals (policy plugin) | Its TUI dialogs are not numbered lists and are not detected: the *Agent terminal* button, as before |
 | Cursor | Configured at start (`--force`), no per-call question | Same screen detection, not verified against the CLI |
 | OpenClaw | Asked in its own terminal only (no hook) | Same screen detection, not verified against the CLI |

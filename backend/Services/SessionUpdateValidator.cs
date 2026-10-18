@@ -15,12 +15,31 @@ public static class SessionUpdateValidator
         AgentConfiguration.ValidateForUpdate(
             record.Agent, record.AuthMode, request.Agent, request.AuthMode,
             record.OpenClawApiKeySource, request.OpenClawApiKeySource);
+        if (request.Agent is not null || request.AuthMode is not null
+            || request.ModelEndpointUrl is not null || request.ModelName is not null)
+            ModelEndpointAfterUpdate(record, request);
 
         // Not a runtime field — the pod knows nothing about it — but it has a rule of its own: a
         // scheduled session can only count from its start. Checked here, before anything is
         // mutated, like the rest.
         if (request.AutoDeleteAfterSeconds is not null || request.AutoDeleteFrom is not null)
             SessionExpiry.ForUpdate(record, request.AutoDeleteAfterSeconds, request.AutoDeleteFrom);
+    }
+
+    /// <summary>
+    /// The endpoint fields the record will hold after the update, validated. Judged on the record
+    /// as it will be: switching to CustomEndpoint needs an endpoint in the same request unless one
+    /// is stored, a switch of agent must land on one that can use it, and leaving CustomEndpoint
+    /// drops the stored values instead of failing on them.
+    /// </summary>
+    public static (string? Url, string? Model) ModelEndpointAfterUpdate(SessionRecord record, UpdateSessionRequest request)
+    {
+        var agent = request.Agent ?? record.Agent;
+        var authMode = request.AuthMode ?? record.AuthMode;
+        var stored = authMode == AgentAuthMode.CustomEndpoint;
+        return AgentConfiguration.ValidateModelEndpoint(agent, authMode,
+            request.ModelEndpointUrl ?? (stored ? record.ModelEndpointUrl : null),
+            request.ModelName ?? (stored ? record.ModelName : null));
     }
 
     // The system prompt counts as a runtime field because a CronJob bakes it into its pod
@@ -38,8 +57,11 @@ public static class SessionUpdateValidator
         request.Agent is not null ||
         request.AuthMode is not null ||
         request.OpenClawApiKeySource is not null ||
+        request.ModelEndpointUrl is not null ||
+        request.ModelName is not null ||
         request.CredentialId is not null ||
         request.GitPatIds is not null ||
         request.SecretIds is not null ||
+        request.SecretGrantIds is not null ||
         request.Policy is not null;
 }

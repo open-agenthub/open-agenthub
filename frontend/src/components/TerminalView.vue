@@ -20,9 +20,19 @@ import { conversationState, mergeConversationPage, toTranscriptItems } from '../
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
+import SecretRequestBanner from './SecretRequestBanner.vue'
 
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
-const emit = defineEmits(['back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
+const runtimeUpdateError = ref('')
+const runtimeUpdating = ref(false)
+async function updateRuntime() {
+  runtimeUpdating.value = true
+  runtimeUpdateError.value = ''
+  try { await api.updateRuntimeImage(props.session.id); emit('runtime-updated') }
+  catch (error) { runtimeUpdateError.value = error.message || 'Update deferred' }
+  finally { runtimeUpdating.value = false }
+}
+const emit = defineEmits(['runtime-updated', 'back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 // Reopens a browser pane the person closed; it stays offered while the pane is open because on a
@@ -42,10 +52,8 @@ const workspaceOpened = ref(activeTab.value === 'workspace')
 const conversationVisible = computed(() => modern.value && !isChat.value)
 const terminalOpened = ref(false)
 const drawerKind = ref('agent')
-// What the agent CLI shows of its own interactive screens (#112), and whether the drawer is open
-// because of it: only a drawer this view opened for a menu is closed again when the menu goes.
+// Keep menu detection independent of drawer visibility so answering never requires opening it.
 const cliMenu = ref(null)
-let drawerOpenedForMenu = false
 const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
@@ -281,7 +289,6 @@ watch(() => props.session?.id, () => {
   transcriptError.value = ''
   terminalOpened.value = false
   cliMenu.value = null
-  drawerOpenedForMenu = false
   shellOpened.value = false
   drawerKind.value = 'agent'
   statuses.agent = 'connecting…'
@@ -370,14 +377,6 @@ function onConverted(id, surface) {
 
 function onCliMenu(menu) {
   cliMenu.value = menu
-  if (menu && modern.value && !(terminalOpened.value && drawerKind.value === 'agent')) {
-    terminalOpened.value = true
-    drawerKind.value = 'agent'
-    drawerOpenedForMenu = true
-  } else if (!menu && drawerOpenedForMenu) {
-    terminalOpened.value = false
-    drawerOpenedForMenu = false
-  }
   // The composer's "answer the menu first" is about this menu; it goes when the menu does.
   if (!menu) composer.value?.clearError?.()
 }
@@ -388,8 +387,6 @@ function cancelCliMenu() {
   void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
 }
 function toggleDrawer(kind) {
-  // The person took the drawer over; a menu closing must not shut it under them.
-  drawerOpenedForMenu = false
   if (kind === 'shell') shellOpened.value = true
   terminalOpened.value = !(terminalOpened.value && drawerKind.value === kind)
   drawerKind.value = kind
@@ -454,12 +451,15 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
+      <span v-if="session.outdatedImage" class="status" data-outdated-image>outdated image</span>
+      <button v-if="session.outdatedImage && capabilities.canManage" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
       <span class="status">{{ modern ? statuses.agent : statuses[activeTab] }}</span>
       <div v-if="shareOpen" class="share-pop">
         <div class="share-head"><span>Share session</span><button class="ghost" @click="shareOpen = false">✕</button></div>
         <ShareSessionDialog embedded :session="session" @close="shareOpen = false" />
       </div>
     </div>
+    <p v-if="runtimeUpdateError" role="alert">{{ runtimeUpdateError }}</p>
     <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
@@ -572,6 +572,7 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn danger" @click="decidePermission(p.id, 'deny')">Deny</button>
       </div>
     </div>
+    <SecretRequestBanner v-if="capabilities.canManage && !sharedToken" :session-id="session.id" />
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :items="transcriptItems" :loading="transcriptBusy"
@@ -579,7 +580,7 @@ function interruptWorkspaceAgent() {
           @retry="loadTranscript" @quote="composer?.quote($event)" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
-          @choose="answerCliMenu" @cancel="cancelCliMenu" />
+          @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
           <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>

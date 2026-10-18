@@ -1,9 +1,46 @@
 import { describe, expect, it } from 'vitest'
 import {
   agentOptions, agentPayload, authOptions, credentialReadiness, defaultAgentForm, defaultPolicy,
-  filterAgentOptions, gitPatIdsChange, gitPatIdsPayload, gitPatOptions, gitPatSelectionFor,
-  needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload
+  filterAgentOptions, gitPatDefaults, gitPatHosts, gitPatIdsChange, gitPatIdsPayload, gitPatName, gitPatOptions,
+  gitPatSelectionFor,
+  needsOpenClawApiKeySource, openClawApiKeySourceOptions, policyFromForm, policyPayload,
+  customEndpointProtocol, supportsCustomEndpoint
 } from './agent.js'
+
+/// Sessions on a self-hosted model server (docs/custom-model-endpoints.md).
+describe('custom model endpoint', () => {
+  it('is offered only for the agents the backend accepts it for', () => {
+    for (const agent of ['Claude', 'Codex', 'OpenCode']) {
+      expect(supportsCustomEndpoint(agent)).toBe(true)
+      expect(authOptions(agent).map(option => option.value)).toContain('CustomEndpoint')
+    }
+    for (const agent of ['Cursor', 'OpenClaw']) {
+      expect(supportsCustomEndpoint(agent)).toBe(false)
+      expect(authOptions(agent).map(option => option.value)).not.toContain('CustomEndpoint')
+    }
+  })
+
+  it('names the wire protocol each agent needs, since "OpenAI-compatible" is not enough', () => {
+    expect(customEndpointProtocol('Claude')).toContain('/v1/messages')
+    expect(customEndpointProtocol('Codex')).toContain('/v1/responses')
+    expect(customEndpointProtocol('Codex')).toContain('/v1/chat/completions alone will not work')
+    expect(customEndpointProtocol('OpenCode')).toContain('/v1/chat/completions')
+  })
+
+  it('sends the endpoint only with its mode, trimmed', () => {
+    const form = { agent: 'Codex', authMode: 'CustomEndpoint', modelEndpointUrl: ' https://llm.example.com/v1 ', modelName: ' m1 ' }
+    expect(agentPayload(form)).toEqual({ agent: 'Codex', authMode: 'CustomEndpoint', modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' })
+    expect(agentPayload({ ...form, authMode: 'ApiKey' })).toEqual({ agent: 'Codex', authMode: 'ApiKey' })
+    expect(defaultAgentForm({ agent: 'Claude', authMode: 'CustomEndpoint', modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' }))
+      .toMatchObject({ modelEndpointUrl: 'https://llm.example.com/v1', modelName: 'm1' })
+  })
+
+  it('is ready without a stored key, and says the first turn is slow', () => {
+    expect(credentialReadiness('Claude', 'CustomEndpoint', 'Autonomous', {})).toMatchObject({ ready: true })
+    expect(credentialReadiness('Claude', 'CustomEndpoint', 'Autonomous', {}).text).toContain('without auth')
+    expect(credentialReadiness('Codex', 'CustomEndpoint', 'Interactive', { customEndpointApiKey: true }).text).toContain('minutes')
+  })
+})
 
 /// A session's git token selection (docs/credential-scopes.md): null = every stored token,
 /// including later ones; a list = exactly these; '*' = back to all on an update.
@@ -64,13 +101,13 @@ describe('agent session helpers', () => {
 
   it('offers both public agents and auth modes without Auto', () => {
     expect(agentOptions.map(option => option.value)).toEqual(['Claude', 'Codex', 'Cursor', 'OpenClaw', 'OpenCode'])
-    expect(authOptions('Codex').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
+    expect(authOptions('Codex').map(option => option.value)).toEqual(['Subscription', 'ApiKey', 'CustomEndpoint'])
     expect(authOptions('Cursor').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
     expect(authOptions('OpenClaw').map(option => option.value)).toEqual(['Subscription', 'ApiKey'])
   })
 
   it('offers Auto only for an existing migrated Claude Auto session', () => {
-    expect(authOptions('Claude', 'Auto').map(option => option.value)).toEqual(['Auto', 'Subscription', 'ApiKey'])
+    expect(authOptions('Claude', 'Auto').map(option => option.value)).toEqual(['Auto', 'Subscription', 'ApiKey', 'CustomEndpoint'])
     expect(authOptions('Codex', 'Auto').map(option => option.value)).not.toContain('Auto')
     expect(authOptions('Cursor', 'Auto').map(option => option.value)).not.toContain('Auto')
     expect(authOptions('OpenClaw', 'Auto').map(option => option.value)).not.toContain('Auto')
@@ -218,5 +255,33 @@ describe('agent session helpers', () => {
     expect(credentialReadiness('OpenCode', 'Subscription', 'Autonomous', { opencodeSubscription: true }).ready).toBe(true)
     expect(credentialReadiness('OpenCode', 'Subscription', 'Interactive', {}).text).toContain('sign in inside the session')
     expect(agentPayload({ agent: 'OpenCode', authMode: 'ApiKey' })).toEqual({ agent: 'OpenCode', authMode: 'ApiKey' })
+  })
+})
+
+/// Several tokens for one host (issue #132): one choice per host, the host's default unless the
+/// session picks another.
+describe('git PAT selection with several tokens per host', () => {
+  const tokens = [
+    { id: 'p', kind: 'gitlab', host: 'gitlab.example.com', label: 'personal', isDefault: true },
+    { id: 'g', kind: 'gitlab', host: 'gitlab.example.com', label: 'group: platform', isDefault: false },
+    { id: 'h', kind: 'github', host: 'github.com', isDefault: true }
+  ]
+
+  it('groups by host and starts a session without a choice on each default', () => {
+    expect(gitPatHosts(tokens).map(group => [group.host, group.tokens.map(pat => pat.id)]))
+      .toEqual([['gitlab.example.com', ['p', 'g']], ['github.com', ['h']]])
+    expect(gitPatDefaults(tokens)).toEqual(['p', 'h'])
+    expect(gitPatSelectionFor(null, tokens)).toEqual(['p', 'h'])
+    // A stored list with two for one host (an older backend) still shows one per host.
+    expect(gitPatSelectionFor(['g', 'p'], tokens)).toEqual(['p'])
+    expect(gitPatName(tokens[1])).toBe('group: platform')
+    expect(gitPatName(tokens[2])).toBe('github.com')
+  })
+
+  it('sends null while every host is on its default and the ids once one is not', () => {
+    expect(gitPatIdsPayload(['p', 'h'], tokens)).toBeNull()
+    expect(gitPatIdsPayload(['g', 'h'], tokens)).toEqual(['g', 'h'])
+    expect(gitPatIdsChange(['g', 'h'], tokens, null)).toEqual({ gitPatIds: ['g', 'h'] })
+    expect(gitPatIdsChange(['p', 'h'], tokens, ['g'])).toEqual({ gitPatIds: ['*'] })
   })
 })

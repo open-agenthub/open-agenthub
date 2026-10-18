@@ -145,3 +145,6 @@ jobs:
       - name: Verify deployment parity
         shell: pwsh
         run: ./tests/helm/deployment-parity.ps1
+      - name: Verify model endpoint egress values
+        shell: pwsh
+        run: ./tests/helm/model-endpoints-values.ps1

@@ -101,6 +101,7 @@ public sealed class AccountFailoverTests
 
     [Theory]
     [InlineData(AgentAuthMode.ApiKey, "work0001")]
+    [InlineData(AgentAuthMode.CustomEndpoint, "work0001")]
     [InlineData(AgentAuthMode.Subscription, null)]
     public async Task IgnoresSessionsWithoutAnAccount(AgentAuthMode auth, string? resolved)
     {

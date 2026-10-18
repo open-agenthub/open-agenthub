@@ -10,7 +10,7 @@ const props = defineProps({ embedded: { type: Boolean, default: false } })
 // Fields that are staged here and written together on Save. Git tokens are not among them:
 // they are a list with their own endpoints (see addPat/removePat below).
 const c = ref({
-  sshPrivateKey: '', anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '', openCodeApiKey: '',
+  sshPrivateKey: '', anthropicApiKey: '', openAiApiKey: '', cursorApiKey: '', openCodeApiKey: '', customEndpointApiKey: '',
   gitKnownHosts: '', gitUserName: '', gitUserEmail: ''
 })
 // Which fields already have a stored value (values are never sent back).
@@ -38,18 +38,26 @@ const apiKeys = [
   {
     field: 'openCodeApiKey', label: 'OpenCode API key', placeholder: 'sk-…',
     hint: 'OpenCode Go subscription or Zen billing — the key from the opencode.ai console.'
+  },
+  {
+    field: 'customEndpointApiKey', label: 'Custom endpoint API key', placeholder: 'bearer token of your model server',
+    hint: 'Sessions on your own model endpoint (Own endpoint billing). Leave empty for a server without auth.'
   }
 ]
 
 // --- Git personal access tokens -------------------------------------------------------------
 const pats = computed(() => stored.value.gitPats || [])
-const newPat = ref({ kind: 'gitlab', host: '', token: '' })
+const emptyPat = kind => ({ kind, host: '', token: '', label: '', authorName: '', authorEmail: '' })
+const newPat = ref(emptyPat('gitlab'))
 const patBusy = ref(false)
 const patError = ref('')
 // Inline two-step remove (no confirm() popup): the first click arms, the second removes.
 const confirmingPat = ref('')
 const canAddPat = computed(() => !patBusy.value && newPat.value.host.trim() && newPat.value.token.trim())
 const kindLabel = (kind) => (kind === 'github' ? 'GitHub' : 'GitLab')
+// "Default" only means something on a host with a second token; on its own a token is simply used.
+const sharesHost = pat => pats.value.filter(other => other.host === pat.host).length > 1
+const authorOf = pat => [pat.authorName, pat.authorEmail && `<${pat.authorEmail}>`].filter(Boolean).join(' ')
 
 async function refreshStatus() {
   try { stored.value = await api.getCredentialStatus() } catch { /* older backend */ }
@@ -58,22 +66,35 @@ async function refreshStatus() {
 onMounted(refreshStatus)
 
 /**
- * Adds a token immediately rather than staging it for Save: the list is keyed by host and a
- * second token for a host that is already listed rotates that entry, so the user needs to see
- * the result of each add on its own — and a token must not sit in a form field waiting on an
- * unrelated Save that may never come.
+ * Adds a token immediately rather than staging it for Save: a token with the host and label of a
+ * listed one rotates that entry, so the user needs to see the result of each add on its own — and
+ * a token must not sit in a form field waiting on an unrelated Save that may never come.
  */
 async function addPat() {
   if (!canAddPat.value) return
+  const draft = newPat.value
+  await patChange(async () => {
+    // Empty optional fields are left out rather than sent empty: a rotation (same host and label)
+    // keeps a field the request does not name, and clears one sent as an empty string.
+    const optional = Object.fromEntries(['label', 'authorName', 'authorEmail']
+      .map(key => [key, draft[key].trim()]).filter(([, value]) => value))
+    await api.addGitPat({ kind: draft.kind, host: draft.host.trim(), token: draft.token.trim(), ...optional })
+    newPat.value = emptyPat(draft.kind)
+  }, 'Could not store the token.')
+}
+
+/** Sessions that never chose a token for this host use the default from their next start on. */
+async function makeDefault(pat) {
+  await patChange(() => api.addGitPat({ id: pat.id, default: true }), `Could not make this the default for ${pat.host}.`)
+}
+
+async function patChange(action, failure) {
   patBusy.value = true; patError.value = ''
   try {
-    await api.addGitPat({
-      kind: newPat.value.kind, host: newPat.value.host.trim(), token: newPat.value.token.trim()
-    })
-    newPat.value = { kind: newPat.value.kind, host: '', token: '' }
+    await action()
     await refreshStatus()
   } catch (e) {
-    patError.value = e?.message || 'Could not store the token.'
+    patError.value = e?.message || failure
   } finally {
     patBusy.value = false
   }
@@ -189,17 +210,23 @@ async function save() {
 
         <div class="subsection" data-git-pats>
           <h5>Personal access tokens</h5>
-          <small class="lead">For HTTPS remotes when no account is connected. One token per host; a token is only
-            ever sent to its host, and it also authorizes <code>gh</code> / <code>glab</code> for that host. Adding a
-            token for a host that is already listed replaces it.</small>
+          <small class="lead">For HTTPS remotes when no account is connected. A token is only ever sent to its host,
+            and it also authorizes <code>gh</code> / <code>glab</code> for that host. A host can have several — a
+            personal one and a group or project token — told apart by their label; a session uses one per host, the
+            default unless it picks another. Adding a token with the host and label of a listed one replaces it.</small>
 
           <ul class="pat-list" data-git-pat-list>
             <li v-if="!pats.length" class="pat-empty" data-git-pat-empty>No tokens stored.</li>
-            <li v-for="pat in pats" :key="pat.id" class="pat" :data-git-pat="pat.host">
+            <li v-for="pat in pats" :key="pat.id" class="pat" :data-git-pat="pat.host" :data-git-pat-id="pat.id">
               <span class="pill kind" :class="pat.kind">{{ kindLabel(pat.kind) }}</span>
               <code class="pat-host">{{ pat.host }}</code>
-              <span class="pat-stored">stored ✓</span>
+              <span v-if="pat.label" class="pat-label" data-git-pat-label>{{ pat.label }}</span>
+              <span v-if="pat.isDefault && sharesHost(pat)" class="pat-default" data-git-pat-default>default</span>
+              <span v-if="authorOf(pat)" class="pat-author" data-git-pat-author>commits as {{ authorOf(pat) }}</span>
+              <span v-else class="pat-stored">stored ✓</span>
               <span class="pat-actions">
+                <button v-if="sharesHost(pat) && !pat.isDefault" type="button" class="ghost" data-git-pat-make-default :disabled="patBusy"
+                  @click="makeDefault(pat)">Make default</button>
                 <button v-if="confirmingPat === pat.id" type="button" class="ghost" data-git-pat-keep
                   @click="confirmingPat = ''">Keep</button>
                 <button type="button" class="del" :class="{ armed: confirmingPat === pat.id }" data-git-pat-remove
@@ -233,7 +260,26 @@ async function save() {
               </button>
             </div>
           </div>
-          <small>Hostname with an optional port, no scheme or path. Stored immediately; write-only.</small>
+          <div class="pat-add pat-add-meta">
+            <div class="field">
+              <label for="pat-label">Label <span class="dim">optional</span></label>
+              <input id="pat-label" v-model="newPat.label" data-git-pat-label-input type="text" autocomplete="off"
+                maxlength="80" placeholder="personal, group: platform, project bot" @keyup.enter="addPat" />
+            </div>
+            <div class="field">
+              <label for="pat-author-name">Commit as <span class="dim">optional</span></label>
+              <input id="pat-author-name" v-model="newPat.authorName" data-git-pat-author-name type="text"
+                autocomplete="off" placeholder="Platform Bot" @keyup.enter="addPat" />
+            </div>
+            <div class="field">
+              <label for="pat-author-email">Commit e-mail <span class="dim">optional</span></label>
+              <input id="pat-author-email" v-model="newPat.authorEmail" data-git-pat-author-email type="email"
+                autocomplete="off" placeholder="platform-bot@example.com" @keyup.enter="addPat" />
+            </div>
+          </div>
+          <small>Hostname with an optional port, no scheme or path. Stored immediately; write-only. The commit
+            author applies to repositories on this host in sessions using this token, in place of the git identity
+            above.</small>
           <p v-if="patError" class="err" data-git-pat-error>{{ patError }}</p>
         </div>
       </section>
@@ -335,6 +381,11 @@ small code { font-family: var(--mono); font-size: 11px; color: var(--muted); }
 .pill.kind.github { color: var(--text); }
 .pat-host { font-family: var(--mono); font-size: 12px; color: var(--text); min-width: 0; overflow-wrap: anywhere; }
 .pat-stored { font-family: var(--mono); font-size: 10px; color: var(--ok); }
+.pat-label { font-size: 12px; font-weight: 600; color: var(--text); }
+.pat-default { padding: 1px 6px; border: 1px solid var(--border-2); border-radius: 4px; font-size: 10px; font-weight: 700; color: var(--muted-3); text-transform: uppercase; }
+.pat-author { font-size: 11px; color: var(--muted-2); overflow-wrap: anywhere; }
+.pat-add.pat-add-meta { grid-template-columns: 1fr 1fr 1fr; margin-top: 10px; }
+.dim { color: var(--faint); font-weight: 400; }
 .pat-actions { margin-left: auto; display: flex; gap: 6px; }
 .pat-actions button { padding: 4px 10px; font-size: 12px; }
 .del { color: var(--danger); border-color: var(--border); }
@@ -349,6 +400,8 @@ small code { font-family: var(--mono); font-size: 11px; color: var(--muted); }
   .grid { grid-template-columns: 1fr; }
   .pat-add { grid-template-columns: 1fr 1fr; }
   .pat-add .field:nth-child(3), .pat-add-btn { grid-column: 1 / -1; }
+  .pat-add.pat-add-meta { grid-template-columns: 1fr; }
+  .pat-add-meta .field:nth-child(3) { grid-column: auto; }
   .git-hint { flex-direction: column; align-items: stretch; }
 }
 </style>

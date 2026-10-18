@@ -171,6 +171,54 @@ every change instead of every 30 seconds — the pod would PUT the whole file to
 to Postgres several times per turn, for every session, whether or not anyone is looking. The live
 read costs nothing while nobody is.
 
+## A resumed pod catches its transcript up from the hub (#146)
+
+After a restart the Workspace briefly showed the previous run and then dropped its last turns.
+The hub showed its stored copy while the pod came up, then read the new pod's file live. That
+file comes from the state archive, which is written at most every two minutes
+(`docs/state-archive.md`) and is missing the end of a pod that died without its SIGTERM. The
+transcript, by contrast, reaches the hub every 30 seconds. So the live file was shorter, and
+`mergeConversationPage` reloaded from it. The pod's next upload then replaced the hub's copy
+with the shorter file, so those turns were gone for good. The resumed agent never had them
+either. Reproduced with Claude Code 2.1.287 in this repo's `server.js`, killed without SIGTERM
+after the archive had turn 1 and the hub turns 1 and 2:
+
+- The pod's live route served turn 1 only.
+- The resumed model was sent turns 1 and 3.
+- The upload after the restart held turns 1 and 3.
+- Replaying the hub's real `SessionTranscripts.PageAsync` pages through the Workspace merge gave
+  *U1 U2 A2* while the pod was down and *RELOAD → U1* once the agent was up.
+
+With the change, the live route served turns 1 and 2 from its first answer, the model was sent
+turns 1, 2 and 3, and the view went on from *U1 U2 A2* to *U1 U2 A2 U3 A3* without a reload.
+
+**What the pod does.** On a resume, after the scrollback seed and before the agent starts, the
+session agent asks `GET /internal/sessions/{id}/transcript` for the stored file: the S3 copy
+joined with the newer Postgres tail, exactly as uploaded. If that copy is longer than the restored
+file and starts with it, it is the same append-only file further on, and the agent appends the
+difference. The comparison is made against the restored file masked the way uploads are, because
+the hub only ever received the masked text. The turns appended from it therefore reach the agent
+with secrets masked. A copy that does not start with the restored file is a different history.
+That also covers a hub that does not answer within 15 seconds. In both cases the archive is
+resumed as it is, which is the old behaviour. Until this has settled, the transcript route
+answers "no file" and nothing is uploaded, so neither the hub's live read nor the 30-second
+tick can see the older file.
+
+**Rejected:**
+
+- **Merging stored and live in the hub**, which would be "keep the previous run's entries and add
+  the live ones". The agent would still resume without the missing turns. Its first upload would
+  still overwrite them, so the hub would need a separate per-run history to merge from. The view
+  would also disagree with what the agent knows.
+- **Archiving the state on every tick.** That is the cost `docs/state-archive.md` removed, and it
+  still loses what a pod writes between its last tick and its death.
+- **Replacing the restored file with the hub's copy.** On an instance whose S3 copy is stale, the
+  hub has only the capped Postgres tail. When the copies disagree, the agent's own state is the
+  one its other files (todos, file history) were written alongside.
+
+**Not covered:** a resume that restored no state archive at all, where the CLI starts a fresh
+conversation. It writes a new file, and its upload replaces the stored one as before.
+
 ## Upload urls expire; the copies are read freshest first (#111)
 
 The presigned urls a pod gets in its environment are signed for twelve hours. A session that ran

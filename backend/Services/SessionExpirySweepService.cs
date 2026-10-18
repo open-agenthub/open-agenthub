@@ -59,7 +59,12 @@ public sealed class SessionExpirySweepService(
         var current = await store.GetByIdAsync(candidate.Id, ct);
         if (current is null || !SessionExpiry.IsDue(current, now)) return false;
 
-        await sessions.DeleteSessionAsync(current.Owner, current.Id, ct);
+        // The expiry sweep already holds the same lock as runtime maintenance; reacquiring it
+        // through the public delete would refuse every expiry on a real backend.
+        if (sessions is KubernetesSessionService cluster)
+            await cluster.DeleteSessionCoreAsync(current.Owner, current.Id, ct);
+        else
+            await sessions.DeleteSessionAsync(current.Owner, current.Id, ct);
         logger.LogInformation("Deleted session {SessionId} of {Owner}: auto-delete after {Seconds}s from {Basis}",
             current.Id, current.Owner, current.AutoDeleteAfterSeconds, current.AutoDeleteFrom);
 

@@ -55,7 +55,7 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
 describe('agent CLI menus in the Workspace', () => {
-  it('opens the agent terminal with a notice, offers the choices, and closes again when answered', async () => {
+  it('offers choices with the terminal closed and waits for the screen to leave the menu', async () => {
     const wrapper = view()
     await flushPromises()
     expect(wrapper.find('[data-cli-menu]').exists()).toBe(false)
@@ -65,11 +65,12 @@ describe('agent CLI menus in the Workspace', () => {
     await flushPromises()
     expect(wrapper.get('[data-cli-menu]').text()).toContain('The agent is showing a menu')
     expect(wrapper.get('[data-cli-menu]').text()).toContain('Select login method:')
-    expect(drawerOpen(wrapper)).toBe(true)
+    expect(drawerOpen(wrapper)).toBe(false)
 
     await wrapper.get('[data-cli-option="2"]').trigger('click')
     expect(mocks.sendKeys).toHaveBeenCalledWith(['\x1b[B', '\r'])
 
+    expect(wrapper.find('[data-cli-menu]').exists()).toBe(true)
     mocks.menu(null)
     await flushPromises()
     expect(wrapper.find('[data-cli-menu]').exists()).toBe(false)
@@ -85,14 +86,13 @@ describe('agent CLI menus in the Workspace', () => {
     expect(mocks.sendKeys).toHaveBeenCalledWith(['\x1b'])
   })
 
-  it('leaves a drawer the person opened, or took over, open when the menu goes', async () => {
+  it('leaves the explicitly opened drawer open when the menu goes', async () => {
     const wrapper = view()
     await flushPromises()
     mocks.menu(login)
     await flushPromises()
-    // Taking the drawer over: closing and reopening it hands it to the person.
-    await wrapper.get('[data-drawer-agent]').trigger('click')
-    await wrapper.get('[data-drawer-agent]').trigger('click')
+    await wrapper.get('[data-cli-open-terminal]').trigger('click')
+    expect(drawerOpen(wrapper)).toBe(true)
     mocks.menu(null)
     await flushPromises()
     expect(drawerOpen(wrapper)).toBe(true)
@@ -126,6 +126,8 @@ describe('agent CLI menus in the Workspace', () => {
     await flushPromises()
     expect(wrapper.get('[data-cli-menu]').text()).toContain('waiting for input')
     expect(wrapper.find('[data-cli-option]').exists()).toBe(false)
+    expect(drawerOpen(wrapper)).toBe(false)
+    await wrapper.get('[data-cli-open-terminal]').trigger('click')
     expect(drawerOpen(wrapper)).toBe(true)
   })
 })

@@ -9,6 +9,8 @@ import {
 import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
+import SecretPicker from './SecretPicker.vue'
+import { secretIdsPayload, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import { preferredUi, UI_OPTIONS } from '../lib/ui-preference.js'
 import AutoDeleteCard from './AutoDeleteCard.vue'
@@ -57,6 +59,12 @@ const form = ref({
   memory: '1Gi'
 })
 const autoDelete = ref(autoDeleteForm(null))
+// Stored secrets; the options follow the chosen project (docs/session-secrets.md).
+const storedSecrets = ref([])
+const selectedProject = computed(() => props.projects.find(project => project.id === form.value.projectId) || null)
+const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
+const selectedSecrets = ref([])
+watch(secrets, options => { selectedSecrets.value = secretSelectionFor(null, options, !!selectedProject.value) })
 const busy = ref(false)
 const error = ref('')
 
@@ -80,6 +88,7 @@ onMounted(async () => {
     }
   } catch { /* keep full catalog if the allowlist endpoint is unavailable */ }
   try { savedMcpServers.value = await api.mcpServers() } catch { /* library is optional */ }
+  try { storedSecrets.value = (await api.listSecrets()) || [] } catch { /* older backend: no secrets */ }
 })
 
 watch(ephemeralUrl, (url) => {
@@ -119,6 +128,7 @@ async function submit() {
       credentialId: form.value.credentialId || null,
       repos: repos.value,
       gitPatIds: gitPatIdsPayload(selectedGitPats.value, gitPats.value),
+      secretIds: secretIdsPayload(selectedSecrets.value, secrets.value, !!selectedProject.value),
       prompt: form.value.prompt || null,
       systemPrompt: form.value.systemPrompt.trim() || null,
       schedule: needsSchedule.value ? form.value.schedule : null,
@@ -171,6 +181,7 @@ async function submit() {
         </div>
         <AgentDecisionCard v-model:agent="form.agent" v-model:auth-mode="form.authMode"
           v-model:open-claw-api-key-source="form.openClawApiKeySource" v-model:credential-id="form.credentialId"
+          v-model:model-endpoint-url="form.modelEndpointUrl" v-model:model-name="form.modelName"
           :accounts="providerAccounts"
           :mode="form.mode" :credential-status="credentialStatus" :options="agentChoices" />
         <div class="field">
@@ -194,6 +205,8 @@ async function submit() {
           <label>Project</label>
           <select v-model="form.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select>
         </div>
+        <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
+          :project-has-none="!!selectedProject && storedSecrets.length > 0" />
       </div>
 
       <div class="card sect">

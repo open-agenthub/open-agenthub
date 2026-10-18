@@ -232,7 +232,7 @@ onBeforeUnmount(() => {
         <div v-else-if="page === 'edit' && editSession" class="page"><EditSessionDialog :key="editSession.id" embedded :session="editSession" :projects="projects" @close="closePage" @updated="created" /></div>
         <div v-else-if="page === 'duplicate' && editSession" class="page"><DuplicateSessionDialog :key="editSession.id" embedded :session="editSession" :projects="projects" @close="closePage" @duplicated="created" /></div>
         <div v-else-if="page === 'share' && editSession" class="page"><ShareSessionDialog :key="editSession.id" embedded :session="editSession" @close="closePage" /></div>
-        <TerminalView v-else-if="activeSession" :key="activeSession.id" :session="activeSession" :initial-ui="initialUi" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
+        <TerminalView @runtime-updated="refresh" v-else-if="activeSession" :key="activeSession.id" :session="activeSession" :initial-ui="initialUi" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
         <SessionsView v-else-if="page === 'sessions'" :sessions="sessions" :projects="projects" :query="query" @select="selectSession" @new="openPage('new')" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
         <UsageView v-else-if="page === 'usage'" />
         <HomeView v-else :sessions="sessions" @select="selectSession" @sessions="openPage('sessions')" @usage="openPage('usage')" @new="openPage('new')" @resume="resume" />

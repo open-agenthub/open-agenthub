@@ -75,6 +75,8 @@ public sealed class RemoteController : ControllerBase
                 req = CredentialScope.ApplySecrets(req, scope, followsProject && !scope.AllowsAllSecrets
                     ? await _svc.ResolveSessionSecretIdsAsync(caller.Owner, req.ProjectId, null, ct)
                     : Array.Empty<string>());
+                // What the session may later ask for is held to the token's secrets as well.
+                if (!scope.AllowsAllSecrets) req = req with { SecretCeiling = scope.Secrets?.ToList() ?? [] };
             }
             return Ok(await _svc.CreateSessionAsync(caller.Owner, req, ct));
         }
