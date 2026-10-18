@@ -99,7 +99,7 @@ test('real common server serves authenticated Git patches over TCP HTTP', { time
       attachmentCapabilities: { nativeImages: false, localImagePaths: false, mcpImages: false },
       prepare() {}, buildCommand: () => ({ cmd: process.execPath, args: ['-e', 'process.stdin.resume()'], pipe: true }),
       isResumeCommand: () => false, isMissingResume: () => false },
-    dependencies: { pty: {}, spawn: (cmd, args, options) => { child = require('node:child_process').spawn(cmd, args, options); return child; },
+    dependencies: { pty: {}, WebSocketServer: require('ws').WebSocketServer, spawn: (cmd, args, options) => { child = require('node:child_process').spawn(cmd, args, options); return child; },
       process: { on() {}, exit() {} }, setInterval: () => ({ unref() {} }) }
   });
   t.after(async () => {
