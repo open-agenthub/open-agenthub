@@ -33,7 +33,9 @@ function score(command, query) {
   return null
 }
 
-export function rankCommands(commands, query, limit = 50) {
+// Unbounded beyond what the session agent sends (400): a cut here would hide the last commands of
+// an empty "/" list, which is scrolled rather than filtered.
+export function rankCommands(commands, query, limit = 400) {
   const needle = (query || '').toLowerCase()
   return commands
     .map(command => ({ command, rank: score(command, needle) }))

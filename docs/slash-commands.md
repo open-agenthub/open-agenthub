@@ -110,10 +110,6 @@ after 3 seconds while the pod is still starting.
   gets no completion. Typed commands are still sent.
 - Account-dependent built-ins (Claude's bundled skills, plan-only commands) are not listed. They
   still run when typed.
-- The menu notice does not yet recognise a menu that a narrow terminal wraps. At 390 px the
-  drawer's 47 columns made Claude's `/model` menu wrap its option lines, and the notice did not
-  appear, though the menu was open in the terminal. That belongs to the menu detection (#166),
-  not to this list.
 
 ## Verification
 
@@ -128,8 +124,9 @@ after 3 seconds while the pod is still starting.
 - Frontend: ranking, completion, the start-of-message rule, keyboard and mouse, the warning and
   the fallbacks (`lib/slash-commands.test.js`, `workspace/composer-slash.test.js`).
 - End to end in Chromium at 1280 and 390 px: this branch's web app, through a stand-in hub to
-  this branch's session agent running the real Claude Code 2.1.287 against a mock model. Typing
-  `/` listed 53 commands. `/dep` + Tab + `prod` + Enter sent `/deploy-check prod`, and the model
-  received the expanded command. `/rig` + Enter + Enter ran the skill. `/mod` + Tab + Enter opened
-  the model menu, which the menu notice showed at 1280 px. Escape closed the list, and `/clear`
-  showed the warning.
+  this branch's session agent (merged with #166) running the real Claude Code 2.1.287 against a
+  mock model. Typing `/` listed all 53 commands. `/dep` + Tab + `prod` + Enter sent
+  `/deploy-check prod`, and the model received the expanded command. `/rig` + Enter + Enter ran
+  the skill. `/mod` + Tab + Enter opened the model menu, which the menu notice showed at both
+  widths. Escape closed the list, and `/clear` showed the warning. Codex, OpenCode and OpenClaw
+  share that transport and were checked in a PTY (above), not through the browser.
