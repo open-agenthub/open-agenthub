@@ -21,7 +21,8 @@ public sealed class AgentHubMcpTools(
     ISessionService sessions,
     ILogger<AgentHubMcpTools> logger,
     ISessionMessageStore? messages = null,
-    ISessionMessageDelivery? delivery = null)
+    ISessionMessageDelivery? delivery = null,
+    ISessionContextClear? contextClear = null)
 {
     /// <summary>The calling user; see <see cref="McpCallerIdentity"/>.</summary>
     private string Owner => McpCallerIdentity.Owner(http);
@@ -271,6 +272,20 @@ public sealed class AgentHubMcpTools(
             if (DateTimeOffset.UtcNow >= deadline) throw new McpException("session_wait_timeout");
             await Task.Delay(interval, ct);
         }
+    }
+
+    [McpServerTool(Name = "context_clear")]
+    [Description("As the owner, schedule clearing a running session after its current turn ends and no CLI menu is open. "
+        + "followUp becomes its first new message; include a short handover of current state and open tasks. "
+        + "Workspace keeps previous history, and memory and skills stay. Only the owner may trigger this operation.")]
+    public async Task<ContextClearOutcome> ClearContext(string sessionId, string followUp, CancellationToken ct = default)
+    {
+        var session = await sessions.GetSessionAsync(Owner, sessionId, ct) ?? throw new McpException("session_not_found");
+        if (session.Owner != Owner) throw new McpException("session_owner_required");
+        if (contextClear is null) throw new McpException("context_clear_unavailable");
+        try { return await contextClear.ScheduleAsync(session, new ContextClearRequest(followUp), ct); }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or HttpRequestException or TaskCanceledException)
+        { throw new McpException(error is HttpRequestException or TaskCanceledException ? "context_clear_unavailable" : error.Message); }
     }
 
     [McpServerTool(Name = "session_convert")]

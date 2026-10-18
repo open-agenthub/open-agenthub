@@ -192,6 +192,14 @@ register('session_delete', {
   inputSchema: z.object({ id: z.string().min(1).max(128) })
 }, async ({ id }) => text(sanitizeSession(await client.delete(id))));
 
+register('context_clear', {
+  description: 'As the owner, schedule clearing a running session after its current turn ends and '
+    + 'no CLI menu is open, then deliver followUp as the first message of the new conversation. '
+    + 'Include a short handover of current state and open tasks. Workspace retains previous history; '
+    + 'memory and skills stay. Only the session owner may trigger this operation.',
+  inputSchema: z.object({ id: z.string().min(1).max(128), followUp: z.string().min(1).max(16_000) }).strict()
+}, async ({ id, followUp }) => text(await client.clearContext(id, followUp)));
+
 register('session_convert', {
   description: 'Continue a finished or paused Autonomous session as an Interactive one, so a person '
     + 'can take the conversation on. Claude and Codex keep the conversation; Cursor and OpenClaw start '

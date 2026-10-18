@@ -43,6 +43,7 @@ public sealed class InternalController : ControllerBase
     private readonly IClaudeLoginSync? _loginSync;
     private readonly ISecretRequestStore? _secretRequests;
     private readonly string? _frontendOrigin;
+    private readonly ISessionContextClear? _contextClear;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
@@ -51,8 +52,10 @@ public sealed class InternalController : ControllerBase
         IConfiguration? configuration = null, IAgentCallbackAuthorizer? callbackAuthorizer = null,
         IUsageStore? usage = null, ISessionMessageStore? messages = null,
         ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null,
-        IClaudeLoginSync? loginSync = null, ISecretRequestStore? secretRequests = null)
+        IClaudeLoginSync? loginSync = null, ISecretRequestStore? secretRequests = null,
+        ISessionContextClear? contextClear = null)
     {
+        _contextClear = contextClear;
         _loginSync = loginSync;
         _secretRequests = secretRequests;
         _frontendOrigin = configuration?["FrontendOrigin"]?.TrimEnd('/');
@@ -76,6 +79,23 @@ public sealed class InternalController : ControllerBase
         // must not delay the others or the agent hook's POST. Every notifier catches
         // its own failures internally, so WhenAll never observes an exception.
         await Task.WhenAll(_notifiers.Select(n => n.NotifyAsync(rec, ev, message, ct)));
+    }
+
+
+    [HttpPost("context-clear")]
+    public async Task<ActionResult<ContextClearOutcome>> ClearContext(string id,
+        [FromBody] ContextClearRequest request, CancellationToken ct)
+    {
+        var record = await AuthAsync(id, ct);
+        if (record is null) return Unauthorized();
+        var session = await _svc.GetSessionAsync(record.Owner, record.Id, ct);
+        if (session is null) return NotFound();
+        if (_contextClear is null) return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        try { return Accepted(await _contextClear.ScheduleAsync(session, request, ct)); }
+        catch (ArgumentException error) { return BadRequest(error.Message); }
+        catch (InvalidOperationException error) { return Conflict(error.Message); }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+        { return StatusCode(StatusCodes.Status502BadGateway, "context_clear_unavailable"); }
     }
 
     public record StatusBody(string Status);
