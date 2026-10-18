@@ -15,6 +15,7 @@ import { sessionCapabilities } from '../lib/access.js'
 import { canConvert, convertedLabel } from '../lib/conversion.js'
 import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
+import { fullMessageTime, shortMessageTime } from '../lib/message-time.js'
 import { terminalAttachmentPaths } from '../lib/attachments.js'
 import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
@@ -116,11 +117,7 @@ const CLAMP_LINES = 3
 const CLAMP_CHARS = 240
 const needsClamp = m => m.body.split('\n').length > CLAMP_LINES || m.body.length > CLAMP_CHARS
 function messageTime(m) {
-  const at = new Date(m.createdAt)
-  if (Number.isNaN(at.getTime())) return ''
-  const sameDay = at.toDateString() === new Date().toDateString()
-  return sameDay ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : at.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+  return shortMessageTime(m.createdAt)
 }
 
 function deliveryLabel(m) {
@@ -554,7 +551,7 @@ function interruptWorkspaceAgent() {
              :data-priority="m.priority ? 'true' : null" :data-delivered-via="m.deliveredVia || null">
           <header class="msg-tile-head">
             <span class="msg-from"><span class="msg-kind" :class="{ priority: m.priority }">{{ m.interrupt ? 'Interrupt' : m.priority ? 'Priority message' : 'Message' }}</span> from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}</span>
-            <time class="msg-time" :datetime="m.createdAt">{{ messageTime(m) }}</time>
+            <time class="msg-time" :datetime="m.createdAt" :title="fullMessageTime(m.createdAt)">{{ messageTime(m) }}</time>
             <button class="ghost msg-dismiss" title="Dismiss" aria-label="Dismiss message" data-dismiss-message @click="dismissMessage(m.id)">✕</button>
           </header>
           <p class="msg-body" :class="{ clamped: !isExpanded(m.id) }" data-message-body>{{ m.body }}</p>

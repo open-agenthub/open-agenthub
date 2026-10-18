@@ -164,7 +164,7 @@ export function mergeConversationPage(current, page) {
 export function toTranscriptItems(page) {
   if (!page) return []
   if (page.source === 'native') {
-    return (page.entries || []).map(entry => ({ role: entry.role, label: entryLabel(entry), text: entry.text }))
+    return (page.entries || []).map(entry => ({ role: entry.role, label: entryLabel(entry), text: entry.text, at: entry.at || null }))
   }
   return toTranscriptBlocks(page.text).map(block => ({ role: 'terminal', label: 'Terminal', text: block }))
 }

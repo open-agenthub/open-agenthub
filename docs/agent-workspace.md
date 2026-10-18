@@ -164,6 +164,25 @@ since a retry could not tell whether it would be the second copy. When the sessi
 input without having started — it failed, or was stopped — the queue goes back into the draft.
 The queue is kept per session in memory, like drafts, so switching sessions does not lose it.
 
+**When a message was written (#147).** Each user and agent message in the conversation shows a
+compact time — the time alone for today, the day for earlier this year, the year beyond that — with
+the full date as its hover title. The time is the one the CLI wrote on that line of its own transcript
+(Claude Code's `timestamp`, Codex's rollout `timestamp`), which the backend already read into each
+entry's `at`; it is shown in the viewer's time zone and locale. A message that waited in the CLI's
+queue therefore shows when the CLI took it, not when it was typed. Tool rows stay compact and carry
+none. A terminal-history conversation (Cursor, OpenClaw, OpenCode) has no per-message times to show,
+and neither does a saved chat-mode stream: its events carry none, and a replay arrives all at once,
+so the time it reached the browser would be wrong. Fleet messages in the ✉ panel use the same format,
+from the time the hub stored them.
+
+Rejected: stamping messages with the time the browser first saw them. That is the poll's time, not
+the message's; after a reload every message of the session would carry the same minute.
+
+Verified in Chromium against the real Claude Code and Codex in this repository's session agent, with
+the conversation served by the backend's `NativeTranscript` parser: every message's `datetime` was
+the timestamp of its line in the CLI's own JSONL, and the label and title showed it in the browser's
+time zone.
+
 Only connected, writable interactive sessions can use the terminal composer. Viewers get the
 conversation and read-only agent terminal; the shell stays owner-only. Read-only markup is
 still escaped before Markdown rendering. Tool content is text, never executable HTML.

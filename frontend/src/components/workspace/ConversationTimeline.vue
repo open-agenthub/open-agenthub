@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue'
 import { renderMarkdown } from '../../lib/markdown.js'
 import { renderMermaidBlocks } from '../../lib/mermaid.js'
+import { fullMessageTime, isoMessageTime, shortMessageTime } from '../../lib/message-time.js'
 import WorkLog from './WorkLog.vue'
 import MessageActions from './MessageActions.vue'
 
@@ -57,7 +58,8 @@ watch([() => props.items, query], async () => {
             <pre>{{ item.text }}</pre>
           </WorkLog>
           <article v-else class="message" :class="'message-' + item.role" :data-workspace-role="item.role">
-            <span class="message-label">{{ item.label }}</span>
+            <span class="message-label">{{ item.label }}<time v-if="item.at" class="message-time" :datetime="isoMessageTime(item.at)"
+              :title="fullMessageTime(item.at)" data-message-time>{{ shortMessageTime(item.at) }}</time></span>
             <!-- What the person or the model wrote is markdown, as in the streaming Workspace;
                  scrollback text stays verbatim, where markdown rules would mangle a listing. -->
             <div v-if="item.role === 'assistant' || item.role === 'user'" class="md" v-html="renderMarkdown(item.text)"></div>
@@ -83,6 +85,7 @@ watch([() => props.items, query], async () => {
 .message { min-width: 0; font-size: 14px; line-height: 1.7; padding: 10px 0; }
 .message-label { display: block; margin-bottom: 8px; color: var(--muted-3); font-size: 11px; font-weight: 600; }
 .message-user { align-self: flex-end; max-width: 88%; padding: 14px 18px; border: 1px solid var(--border); background: var(--panel-2); border-radius: 16px; }
+.message-time { margin-left: 8px; font-weight: 400; color: var(--muted-3); cursor: default; }
 .message pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .message-terminal pre { font: 12px/1.6 var(--mono); }
 .empty { text-align: center; color: var(--muted-3); padding: 36px 16px; font-size: 13px; }
