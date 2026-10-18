@@ -17,10 +17,13 @@ export function parseIdList(value) {
 
 /** The create body with the text-form credential parameters turned into what the REST API takes. */
 export function withCredentialSelection(body) {
-  const { credentialId, gitPatIds, ...rest } = body ?? {};
+  const { credentialId, gitPatIds, secretIds, ...rest } = body ?? {};
   const out = { ...rest };
   if (typeof credentialId === 'string' && credentialId.trim()) out.credentialId = credentialId.trim();
   const ids = parseIdList(gitPatIds);
   if (ids !== undefined) out.gitPatIds = ids;
+  // The same text form for the session's secrets (docs/session-secrets.md).
+  const secrets = parseIdList(secretIds);
+  if (secrets !== undefined) out.secretIds = secrets;
   return out;
 }

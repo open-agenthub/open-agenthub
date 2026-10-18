@@ -332,6 +332,13 @@ public record CreateSessionRequest
     /// lie within it; <c>["*"]</c> is accepted as a spelling of null. An unknown id fails the request.
     /// </summary>
     public List<string>? SecretIds { get; init; }
+    /// <summary>
+    /// The most a secret request of this session may later be granted (docs/session-secrets.md):
+    /// set by the hub for a session created by a restricted token or spawned by another session,
+    /// never read from a request body — a caller could otherwise lift its own limit.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<string>? SecretCeiling { get; init; }
     /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
     public AgentPolicy? Policy { get; init; }
     /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
@@ -473,6 +480,9 @@ public record UpdateSessionRequest
     /// <summary>Secret selection; null = unchanged, <c>["*"]</c> = follow the project again. Files
     /// follow at once in a running session, variables at its next start.</summary>
     public List<string>? SecretIds { get; init; }
+    /// <summary>Keeps only these of the secrets granted on request; null = unchanged, [] = revoke all.
+    /// Nothing can be added this way (docs/session-secrets.md).</summary>
+    public List<string>? SecretGrantIds { get; init; }
     public AgentPolicy? Policy { get; init; }
     /// <summary>Replacement repo list; null = unchanged.</summary>
     public List<RepoRef>? Repos { get; init; }
@@ -697,6 +707,8 @@ public record SessionInfo
     public IReadOnlyList<string>? GitPatIds { get; init; }
     /// <summary>The secret selection as stored; null = the project's. Ids and nothing else.</summary>
     public IReadOnlyList<string>? SecretIds { get; init; }
+    /// <summary>Secrets the owner granted this session by answering its requests.</summary>
+    public IReadOnlyList<string>? SecretGrantIds { get; init; }
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
