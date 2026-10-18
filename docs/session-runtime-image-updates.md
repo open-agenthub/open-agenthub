@@ -24,7 +24,7 @@ fail closed; their existing manual pause/resume remains available. Adding termin
 requires reliable start/stop hooks, including inbox delivery, before enabling admission.
 
 The runtime uploads a fresh archive through its existing persistence path and refuses admission
-if that upload fails. Manual pause/resume, edits, expiry, and image updates share a database
+if that upload fails. Manual pause/resume/delete, edits, expiry, and image updates share a database
 advisory lock so another replica cannot replace the pod or change its agent during admission.
 Check provider availability and usage limits before draining; a later resume failure leaves the
 session paused for an ordinary manual resume rather than starting a fresh conversation.
@@ -49,7 +49,7 @@ endpoint and real HTTP/WebSockets: busy admission returned 409, incorrect authen
 the model. A second runtime restored that uploaded archive into a fresh home and resumed the same
 conversation ID; the next model request contained both turns. No real login was used.
 
-All 1,995 backend tests passed against rootless Postgres, including the nullable preference
+All 1,996 backend tests passed against rootless Postgres, including the nullable preference
 round trip. The frontend suite and production build passed; focused tests cover the badge,
 owner-only control and busy feedback. Runtime tests cover failed uploads and initial prompts.
 Five unrelated runtime assertions also fail on unchanged main because they read this session's

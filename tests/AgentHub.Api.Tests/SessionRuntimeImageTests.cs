@@ -33,6 +33,21 @@ public class SessionRuntimeImageTests
             new AgentRuntimeImages("chat", "code", "editor", "claw", "open", "IfNotPresent")));
 
     [PostgreSqlFact]
+    public async Task MaintenanceLockContendsAcrossBackendInstances()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        var first = new PostgresSessionExpiryLock(database.Configuration);
+        var second = new PostgresSessionExpiryLock(database.Configuration);
+        await using (var held = await first.TryAcquireAsync("runtime-maintenance"))
+        {
+            Assert.NotNull(held);
+            Assert.Null(await second.TryAcquireAsync("runtime-maintenance"));
+        }
+        await using var next = await second.TryAcquireAsync("runtime-maintenance");
+        Assert.NotNull(next);
+    }
+
+    [PostgreSqlFact]
     public async Task PreferenceRoundTripsAndCanReturnToDeploymentDefault()
     {
         await using var database = await PostgresSharingDatabase.CreateAsync();

@@ -222,6 +222,7 @@ public sealed class SessionsController : ControllerBase
     {
         try { await _svc.DeleteSessionAsync(Owner, id, ct); return NoContent(); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
     /// <summary>Recent agent messages sent to this session — a read-only view for the web

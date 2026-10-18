@@ -1736,6 +1736,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
 
     public async Task DeleteSessionAsync(string owner, string id, CancellationToken ct = default)
     {
+        // A delete racing the pause's upsert could otherwise recreate the deleted session.
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null)
+            throw new InvalidOperationException("Session maintenance is already in progress.");
+        await DeleteSessionCoreAsync(owner, id, ct);
+    }
+
+    internal async Task DeleteSessionCoreAsync(string owner, string id, CancellationToken ct)
+    {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         if (_fileCleanup is not null)
