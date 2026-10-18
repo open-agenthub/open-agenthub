@@ -70,6 +70,7 @@ public sealed class SessionsController : ControllerBase
         catch (KeyNotFoundException) { return NotFound(); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
     /// <summary>Resolves every still-pending request of the session as "allow" and defuses
@@ -112,6 +113,17 @@ public sealed class SessionsController : ControllerBase
         catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
+    [HttpPost("{id}/update-runtime")]
+    public async Task<ActionResult<SessionInfo>> UpdateRuntime(string id, CancellationToken ct)
+    {
+        try { return Ok(await _svc.UpdateRuntimeImageAsync(Owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (HttpRequestException) { return Conflict("Runtime is unavailable; update deferred."); }
+    }
+
     [HttpPost("{id}/resume")]
     public async Task<ActionResult<SessionInfo>> Resume(string id, CancellationToken ct)
     {
@@ -143,6 +155,7 @@ public sealed class SessionsController : ControllerBase
         try { return Ok(await _svc.PauseSessionAsync(Owner, id, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
     /// <summary>

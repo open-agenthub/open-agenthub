@@ -51,6 +51,7 @@ function reset(session) {
     image: session.image || '',
     runAsRoot: !!session.runAsRoot,
     autoApprove: !!session.autoApprove,
+    autoUpdateRuntimeImages: session.autoUpdateRuntimeImages ?? 'default',
     cpu: session.cpu || '500m',
     memory: session.memory || '1Gi',
     mcpConfigJson: session.mcpConfigJson || '',
@@ -147,6 +148,8 @@ async function save() {
       const storedFailover = props.session.accountFailover === 'off' ? 'off' : 'auto'
       if (f.value.accountFailover !== storedFailover) payload.accountFailover = f.value.accountFailover
     }
+    if (f.value.autoUpdateRuntimeImages !== (props.session.autoUpdateRuntimeImages ?? 'default'))
+      payload.autoUpdateRuntimeImages = f.value.autoUpdateRuntimeImages === 'default' ? null : f.value.autoUpdateRuntimeImages
     const updated = await api.updateSession(props.session.id, payload)
     emit('updated', updated)
   } catch (e) { error.value = String(e.message || e) }
@@ -187,6 +190,13 @@ async function save() {
           </p>
         </div>
       </div>
+      <label>Automatic runtime image updates
+        <select v-model="f.autoUpdateRuntimeImages">
+          <option value="default">Deployment default</option>
+          <option :value="true">On when safe</option>
+          <option :value="false">Off</option>
+        </select>
+      </label>
       <AutoDeleteCard v-model="autoDelete" :scheduled="scheduled" :expires-at="session.expiresAt || null" />
       <template v-if="!scheduled">
         <AgentDecisionCard v-model:agent="f.agent" v-model:auth-mode="f.authMode"

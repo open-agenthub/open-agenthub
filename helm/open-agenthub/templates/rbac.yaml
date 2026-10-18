@@ -28,6 +28,9 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs", "jobs"]
     verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["cronjobs"]
+    verbs: ["patch"]
   {{ if or .Values.browser.enabled .Values.agent.portRequests.enabled .Values.sessionContainers.enabled }}
   # Per-session network policies come from three features: the browser (CDP in/out), approved
   # runtime port requests, and session containers (the session pod's egress to its helper
