@@ -130,6 +130,9 @@ function resetFromDuration(match, text, { secondsFromNow }) {
 }
 
 module.exports = {
+  contextClearCommand: '/new',
+  turnHooks: true,
+  fleetNextTurn: false,
   slashCommands: require('./slash-commands'),
   limitPatterns,
   // ~/.local/share/opencode is linked to ~/.opencode by the entrypoint, so the session database,

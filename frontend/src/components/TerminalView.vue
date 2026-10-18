@@ -8,6 +8,7 @@ import ShareSessionDialog from './ShareSessionDialog.vue'
 import ConversationTimeline from './workspace/ConversationTimeline.vue'
 import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
 import CliMenuNotice from './workspace/CliMenuNotice.vue'
+import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import { CANCEL_KEYS, keysForOption } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
@@ -15,9 +16,12 @@ import { sessionCapabilities } from '../lib/access.js'
 import { canConvert, convertedLabel } from '../lib/conversion.js'
 import { api, getSharedConversation } from '../api.js'
 import { repoShortName } from '../lib/text.js'
+import { fullMessageTime, shortMessageTime } from '../lib/message-time.js'
 import { terminalAttachmentPaths } from '../lib/attachments.js'
 import { accountLimitLabel, accountOptionLabel, accountsFor, authLabel, availableAlternatives, defaultAccountId, isAccountExhausted } from '../lib/agent.js'
 import { conversationState, mergeConversationPage, toTranscriptItems } from '../lib/transcript.js'
+import { FLEET_WAITING, fleetLabel, pendingFleetMessages, sentEntry, stillPending, trackable } from '../lib/pending-messages.js'
+import { workspaceSent } from '../lib/session-drafts.js'
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { preferredUi } from '../lib/ui-preference.js'
@@ -26,11 +30,26 @@ import SecretRequestBanner from './SecretRequestBanner.vue'
 const props = defineProps({ session: Object, sharedToken: { type: String, default: null }, initialUi: { type: String, default: null } })
 const runtimeUpdateError = ref('')
 const runtimeUpdating = ref(false)
+const runtimeUpdateConfirmation = ref(false)
 async function updateRuntime() {
   runtimeUpdating.value = true
   runtimeUpdateError.value = ''
+  runtimeUpdateConfirmation.value = false
   try { await api.updateRuntimeImage(props.session.id); emit('runtime-updated') }
-  catch (error) { runtimeUpdateError.value = error.message || 'Update deferred' }
+  catch (error) {
+    runtimeUpdateError.value = error.message || 'Update deferred'
+    runtimeUpdateConfirmation.value = error.code === 'runtime_update_confirmation_required'
+  }
+  finally { runtimeUpdating.value = false }
+}
+async function pauseAndResumeRuntime() {
+  runtimeUpdating.value = true
+  runtimeUpdateError.value = ''
+  try {
+    await api.pauseAndResumeRuntimeImage(props.session.id)
+    runtimeUpdateConfirmation.value = false
+    emit('runtime-updated')
+  } catch (error) { runtimeUpdateError.value = error.message || 'Pause and resume failed' }
   finally { runtimeUpdating.value = false }
 }
 const emit = defineEmits(['runtime-updated', 'back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
@@ -70,6 +89,34 @@ const shareOpen = ref(false)
 // the heuristics in lib/transcript.js because terminal output has no roles).
 const conversation = ref(null)
 const transcriptItems = computed(() => toTranscriptItems(conversation.value))
+// Composer messages that reached the terminal and that the CLI has not taken yet (#153), kept
+// per session like drafts so switching sessions does not forget them.
+const sentMessages = ref(workspaceSent.get(props.session?.id) || [])
+let sentCounter = 0
+function loadSent(id) { sentMessages.value = workspaceSent.get(id) || [] }
+function saveSent() {
+  if (sentMessages.value.length) workspaceSent.set(props.session.id, sentMessages.value)
+  else workspaceSent.delete(props.session.id)
+}
+function onComposerSent(text) {
+  if (!trackable(text, conversation.value?.source)) return
+  sentMessages.value = [...sentMessages.value, { ...sentEntry(`sent-${++sentCounter}`, text, transcriptItems.value), at: new Date().toISOString() }]
+  saveSent()
+}
+watch(transcriptItems, items => {
+  if (!sentMessages.value.length) return
+  const left = stillPending(sentMessages.value, items)
+  if (left.length !== sentMessages.value.length) { sentMessages.value = left; saveSent() }
+})
+function dismissPending(key) {
+  if (key.startsWith('fleet-')) return dismissMessage(key.slice('fleet-'.length))
+  sentMessages.value = sentMessages.value.filter(entry => entry.id !== key)
+  saveSent()
+}
+const pendingItems = computed(() => [
+  ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, at: entry.at, dismissible: true })),
+  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, at: m.createdAt, dismissible: true }))
+])
 const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '' })
 
@@ -92,15 +139,16 @@ async function refreshPermissions() {
 // stays visible until the agent picks the message up or the user dismisses it. A priority
 // message was pushed into the agent the moment it arrived, so it is shown for a while after
 // delivery too: the person would otherwise never see what interrupted their agent.
-const PRIORITY_BANNER_MS = 5 * 60 * 1000
 const agentMessages = ref([])
 const dismissedMessages = ref(new Set())
 // Messages live in the ✉ panel, not above the terminal: a fleet of chatty peers used to stack
 // one banner per message over the agent's output until nothing underneath was readable. The
 // button carries a count of the open ones instead, and the panel lists them on demand.
-const visibleMessages = computed(() => agentMessages.value
-  .filter(m => !dismissedMessages.value.has(m.id))
-  .filter(m => !m.deliveredAt || (m.priority && Date.now() - new Date(m.deliveredAt).getTime() < PRIORITY_BANNER_MS)))
+// Open means not yet delivered (#186). A delivered priority message used to stay for five
+// minutes so the person could see what interrupted their agent; it read as an unread message
+// in an inbox that was already empty, and the conversation now shows what the agent received.
+const visibleMessages = computed(() => pendingFleetMessages(agentMessages.value)
+  .filter(m => !dismissedMessages.value.has(m.id)))
 // The badge counts exactly what the panel lists — a number on the button that does not match
 // the tiles behind it would only make people hunt for the missing one.
 const expandedMessages = ref(new Set())
@@ -116,17 +164,7 @@ const CLAMP_LINES = 3
 const CLAMP_CHARS = 240
 const needsClamp = m => m.body.split('\n').length > CLAMP_LINES || m.body.length > CLAMP_CHARS
 function messageTime(m) {
-  const at = new Date(m.createdAt)
-  if (Number.isNaN(at.getTime())) return ''
-  const sameDay = at.toDateString() === new Date().toDateString()
-  return sameDay ? at.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : at.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-}
-
-function deliveryLabel(m) {
-  if (!m.priority) return ''
-  if (m.deliveredVia === 'injected' || m.deliveredVia === 'mod') return 'delivered to the agent'
-  return m.deliveredAt ? 'picked up from the inbox' : 'waiting in inbox'
+  return shortMessageTime(m.createdAt)
 }
 
 async function refreshMessages() {
@@ -288,6 +326,7 @@ watch(() => props.session?.id, () => {
   pendingPermissions.value = []
   agentMessages.value = []
   dismissedMessages.value = new Set()
+  loadSent(props.session?.id)
   conversation.value = null
   transcriptError.value = ''
   terminalOpened.value = false
@@ -463,7 +502,7 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
       </template>
       <span v-if="session.outdatedImage" class="status" data-outdated-image>outdated image</span>
-      <button v-if="session.outdatedImage && capabilities.canManage" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
+      <button v-if="session.outdatedImage && capabilities.canManage && !sharedToken" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
       <span class="status">{{ modern ? statuses.agent : statuses[activeTab] }}</span>
       <div v-if="shareOpen" class="share-pop">
         <div class="share-head"><span>Share session</span><button class="ghost" @click="shareOpen = false">✕</button></div>
@@ -471,6 +510,17 @@ function interruptWorkspaceAgent() {
       </div>
     </div>
     <p v-if="runtimeUpdateError" role="alert">{{ runtimeUpdateError }}</p>
+    <SessionStoppedNotice :session="session" :shared-token="sharedToken" @resume="$emit('resume', $event)" />
+    <div v-if="runtimeUpdateConfirmation && capabilities.canManage && !sharedToken" role="alertdialog" aria-label="Confirm runtime update" class="perm">
+      <div class="perm-text">
+        <strong>Pause and resume on the current runtime image?</strong>
+        <span>The hub cannot tell whether the agent is mid-turn. Pausing may interrupt its work or a pending question. The runtime saves its state before resuming the conversation.</span>
+      </div>
+      <div class="perm-actions">
+        <button class="bar-btn primary" :disabled="runtimeUpdating" @click="pauseAndResumeRuntime">Pause and resume now</button>
+        <button class="bar-btn" :disabled="runtimeUpdating" @click="runtimeUpdateConfirmation = false">Cancel</button>
+      </div>
+    </div>
     <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
@@ -554,12 +604,12 @@ function interruptWorkspaceAgent() {
              :data-priority="m.priority ? 'true' : null" :data-delivered-via="m.deliveredVia || null">
           <header class="msg-tile-head">
             <span class="msg-from"><span class="msg-kind" :class="{ priority: m.priority }">{{ m.interrupt ? 'Interrupt' : m.priority ? 'Priority message' : 'Message' }}</span> from {{ m.fromTitle ? `agent “${m.fromTitle}”` : 'outside the fleet' }}</span>
-            <time class="msg-time" :datetime="m.createdAt">{{ messageTime(m) }}</time>
+            <time class="msg-time" :datetime="m.createdAt" :title="fullMessageTime(m.createdAt)">{{ messageTime(m) }}</time>
             <button class="ghost msg-dismiss" title="Dismiss" aria-label="Dismiss message" data-dismiss-message @click="dismissMessage(m.id)">✕</button>
           </header>
           <p class="msg-body" :class="{ clamped: !isExpanded(m.id) }" data-message-body>{{ m.body }}</p>
           <footer class="msg-tile-foot">
-            <span v-if="m.priority" class="msg-delivery" data-message-delivery>{{ deliveryLabel(m) }}</span>
+            <span class="msg-delivery" data-message-delivery>{{ FLEET_WAITING }}</span>
             <button v-if="needsClamp(m)" class="ghost msg-expand" data-message-expand :aria-expanded="isExpanded(m.id) ? 'true' : 'false'"
                     @click="toggleExpanded(m.id)">{{ isExpanded(m.id) ? 'Show less' : 'Show more' }}</button>
           </footer>
@@ -588,7 +638,7 @@ function interruptWorkspaceAgent() {
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
-          @retry="loadTranscript" @quote="composer?.quote($event)" />
+          :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
@@ -607,8 +657,8 @@ function interruptWorkspaceAgent() {
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
-          ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
-          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" :load-commands="sharedToken ? undefined : loadAgentCommands"
+          ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent" :disabled-hint="!isLive ? 'The session is stopped. Resume it to send a message; your draft is kept.' : ''"
+          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
           :attach="sharedToken ? undefined : attachWorkspaceFiles" />
       </div>
     </SessionWorkspace>

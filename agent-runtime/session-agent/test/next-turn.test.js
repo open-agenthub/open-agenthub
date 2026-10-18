@@ -226,3 +226,24 @@ test('keys held while a message is typed stay a draft after that message\'s own 
   const text = await delivery.turnEvent('stop');
   assert.ok(text.includes('later'));
 });
+
+test('context actions reuse turn, quiet-output and menu guards and reserve input before peer messages', async () => {
+  const w = world();
+  const actions = [];
+  await w.delivery.turnEvent('prompt');
+  w.delivery.scheduleAtSafePoint(async () => { actions.push('clear-and-handover'); });
+  w.advance(2000);
+  assert.equal(await w.deliver(), false);
+  w.hub.waiting.push(message('peer'));
+  assert.equal(await w.delivery.turnEvent('stop'), null);
+  assert.equal(w.hub.waiting.length, 1);
+  w.delivery.agentOutput();
+  assert.equal(await w.deliver(), false);
+  w.advance(2000);
+  w.setOutput('Select model\r\n› 1. Model A\r\n  2. Model B\r\n\r\nEnter to confirm · Esc to cancel\r\n');
+  assert.equal(await w.deliver(), false);
+  w.setOutput('› Ask the agent to do anything\r\n');
+  assert.equal(await w.deliver(), true);
+  assert.deepEqual(actions, ['clear-and-handover']);
+  assert.equal(w.hub.waiting.length, 1);
+});

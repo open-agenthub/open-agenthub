@@ -269,7 +269,7 @@ describe('saved conversation in the Workspace', () => {
     const wrapper = mountView()
     await wrapper.vm.$nextTick()
 
-    expect(wrapper.get('[role=status]').text()).toBe('Loading conversation…')
+    expect(wrapper.get('[data-workspace-conversation] [role=status]').text()).toBe('Loading conversation…')
 
     resolveTranscript(scrollbackPage('ready'))
     await flushPromises()

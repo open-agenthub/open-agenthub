@@ -20,13 +20,16 @@ public sealed class SessionsController : ControllerBase
     private readonly ISessionMessageStore? _messages;
     private readonly ISessionMessageDelivery? _delivery;
     private readonly ILiveTranscriptReader? _liveTranscripts;
+    private readonly ISessionContextClear? _contextClear;
 
     public SessionsController(ISessionService svc, PermissionStore permissions,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMessageStore? messages = null,
-        ISessionMessageDelivery? delivery = null, ILiveTranscriptReader? liveTranscripts = null)
+        ISessionMessageDelivery? delivery = null, ILiveTranscriptReader? liveTranscripts = null,
+        ISessionContextClear? contextClear = null)
     {
         _svc = svc; _permissions = permissions; _promptEditors = promptEditors; _messages = messages; _delivery = delivery;
         _liveTranscripts = liveTranscripts;
+        _contextClear = contextClear;
     }
 
     private string Owner =>
@@ -36,6 +39,22 @@ public sealed class SessionsController : ControllerBase
 
     private ObjectResult ForbiddenAgent(AgentNotAllowedException e)
         => StatusCode(StatusCodes.Status403Forbidden, e.Message);
+
+
+    [HttpPost("{id}/context-clear")]
+    public async Task<ActionResult<ContextClearOutcome>> ClearContext(string id,
+        [FromBody] ContextClearRequest request, CancellationToken ct)
+    {
+        var session = await _svc.GetSessionAsync(Owner, id, ct);
+        if (session is null) return NotFound();
+        if (session.Owner != Owner) return Forbid();
+        if (_contextClear is null) return StatusCode(StatusCodes.Status503ServiceUnavailable);
+        try { return Accepted(await _contextClear.ScheduleAsync(session, request, ct)); }
+        catch (ArgumentException error) { return BadRequest(error.Message); }
+        catch (InvalidOperationException error) { return Conflict(error.Message); }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+        { return StatusCode(StatusCodes.Status502BadGateway, "context_clear_unavailable"); }
+    }
 
     [HttpGet]
     public async Task<IReadOnlyList<SessionInfo>> List(CancellationToken ct)
@@ -131,11 +150,24 @@ public sealed class SessionsController : ControllerBase
     public async Task<ActionResult<SessionInfo>> UpdateRuntime(string id, CancellationToken ct)
     {
         try { return Ok(await _svc.UpdateRuntimeImageAsync(Owner, id, ct)); }
+        catch (RuntimeUpdateConfirmationRequiredException e)
+        { return Conflict(new { code = "runtime_update_confirmation_required", error = e.Message }); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
-        catch (HttpRequestException) { return Conflict("Runtime is unavailable; update deferred."); }
+        catch (HttpRequestException) { return Conflict(new { code = "runtime_update_confirmation_required",
+            error = "The hub cannot reach this runtime to confirm that it is idle." }); }
+    }
+
+    [HttpPost("{id}/pause-and-resume-runtime")]
+    public async Task<ActionResult<SessionInfo>> PauseAndResumeRuntime(string id, CancellationToken ct)
+    {
+        try { return Ok(await _svc.PauseAndResumeRuntimeImageAsync(Owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
     }
 
     [HttpPost("{id}/resume")]

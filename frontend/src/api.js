@@ -23,6 +23,9 @@ async function responseError(res) {
   const text = await res.text()
   const err = new Error(`${res.status} ${text}`)
   err.status = res.status
+  if (res.status === 409) {
+    try { const body = JSON.parse(text); err.code = body.code; err.message = body.error || err.message } catch {}
+  }
   if (res.status === 402) err.code = codeFromBody(text) || 'license_required'
   return err
 }
@@ -131,6 +134,7 @@ export const api = {
   updateShareLink: (id, linkId, data) => req('PATCH', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`, data),
   deleteShareLink: (id, linkId) => req('DELETE', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`),
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
+  pauseAndResumeRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/pause-and-resume-runtime`),
   updateRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/update-runtime`),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
