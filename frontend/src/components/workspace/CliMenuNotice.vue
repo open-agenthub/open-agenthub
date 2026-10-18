@@ -1,9 +1,9 @@
 <script setup>
 // The agent CLI is showing one of its own screens (#112): a menu is offered as buttons that send
 // the keys a person would press in the terminal; a prompt for typed input points at the
-// terminal drawer, which the view has opened for it.
+// terminal drawer, which the viewer can open when needed.
 defineProps({ menu: Object, canAnswer: Boolean })
-defineEmits(['choose', 'cancel'])
+defineEmits(['choose', 'cancel', 'open-terminal'])
 </script>
 <template>
   <section class="cli-menu" role="status" aria-live="polite" data-cli-menu>
@@ -19,9 +19,10 @@ defineEmits(['choose', 'cancel'])
       </button>
     </div>
     <p class="cli-menu-hint">
-      {{ menu.kind !== 'choice' ? 'Type the answer in the agent terminal below.'
-        : menu.partial ? 'The terminal shows only part of the list; the rest is in the agent terminal below.'
-          : 'Choose here or in the agent terminal below.' }}
+      {{ menu.kind !== 'choice' ? 'Type the answer in the agent terminal.'
+        : menu.partial ? 'The terminal shows only part of the list; the rest is in the agent terminal.'
+          : 'Choose here or in the agent terminal.' }}
+      <button type="button" class="link" data-cli-open-terminal @click="$emit('open-terminal')">Open terminal</button>
       <button v-if="canAnswer" type="button" class="link" data-cli-cancel @click="$emit('cancel')">Cancel (Esc)</button>
     </p>
   </section>
