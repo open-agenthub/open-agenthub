@@ -217,6 +217,9 @@ function resetFromText(text, from) {
 }
 
 module.exports = {
+  contextClearCommand: '/clear',
+  turnHooks: true,
+  fleetNextTurn: false,
   slashCommands: require('./slash-commands'),
   name: 'Claude',
   stateDir: '.claude',

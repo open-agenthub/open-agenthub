@@ -9,6 +9,7 @@ const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
 const { createNextTurnDelivery, IDLE_QUIET_MS } = require('./next-turn');
+const { createContextClear } = require('./context-clear');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs } = require('./state-archive');
 const { createSecretMask } = require('./secret-mask');
@@ -195,7 +196,7 @@ function createCommonServer(options = {}) {
   // (driver.turnHooks) and that has no mod to hand them to (docs/priority-messages.md, #173).
   const nextTurn = driver.turnHooks === true && mode === 'interactive'
     ? createNextTurnDelivery({
-      now, fetchImpl, callback, token,
+      now, fetchImpl, callback, token, takeMessages: driver.fleetNextTurn !== false,
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms)),
       Terminal: supplied.HeadlessTerminal && (() => supplied.HeadlessTerminal),
       log: line => console.log('[agent] ' + line)
@@ -204,6 +205,39 @@ function createCommonServer(options = {}) {
   // Keys a person sends while a message is being typed in: they go in after its Enter instead of
   // landing in the middle of it.
   let inputHeldForTyping = [];
+  let clearTarget = null;
+  const contextClear = nextTurn && driver.contextClearCommand && !chatMode
+    ? createContextClear({
+      scheduleAtSafePoint: action => nextTurn.scheduleAtSafePoint(action),
+      clear: async () => {
+        if (exited || !term || restartReason !== null || runtimeDraining) throw new Error('context_clear_unavailable');
+        clearTarget = term;
+        const previous = locateTranscript();
+        await injectTerminalInput(clearTarget, driver.contextClearCommand, {
+          wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
+        });
+        return previous;
+      },
+      waitForClear: async previous => {
+        if (typeof driver.findTranscript === 'function') {
+          const deadline = now() + 15_000;
+          while (locateTranscript() === previous && now() < deadline) {
+            await new Promise(resolve => setTimeoutImpl(resolve, 100));
+          }
+          if (locateTranscript() === previous) throw new Error('context_clear_identity_unchanged');
+        }
+        await nextTurn.waitForInputReady(clearTarget, () => scrollback, lastSize || { cols: 120, rows: 32 });
+        if (term !== clearTarget || exited || restartReason !== null) throw new Error('context_clear_agent_restarted');
+      },
+      deliver: text => injectTerminalInput(clearTarget, '\x1b[200~' + text + '\x1b[201~', {
+        wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
+      }),
+      onError: () => {
+        const notice = '\r\n[agent] Context clear failed; the follow-up was not sent. Check the terminal.\r\n';
+        remember(notice);
+        broadcast(notice);
+      }
+    }) : null;
 
   function remember(chunk) {
     scrollback += chunk;
@@ -1264,7 +1298,7 @@ function createCommonServer(options = {}) {
       return;
     }
     if (!message.priority) {
-      if (!nextTurn || chatMode) return unavailable('not_priority');
+      if (!nextTurn || driver.fleetNextTurn === false || chatMode) return unavailable('not_priority');
       // Not typed now: the agent may be mid-turn or in a menu. The hub leaves the row in the
       // inbox, and the turn's end (or an idle prompt) takes it from there.
       nextTurn.accept();
@@ -1344,6 +1378,23 @@ function createCommonServer(options = {}) {
     if (event === 'stop' && !text) setTimeoutImpl(deliverNextTurnIfIdle, IDLE_QUIET_MS + 100);
   }
 
+  async function handleContextClearRequest(request, response) {
+    if (!tokenMatches(request.headers['x-agent-token'])) return fileError(response, 401, 'unauthorized');
+    if (request.method !== 'POST') {
+      response.setHeader('Allow', 'POST');
+      return fileError(response, 405, 'method_not_allowed');
+    }
+    if (!contextClear || chatMode || exited || !term || runtimeDraining || restartReason !== null)
+      return fileError(response, 400, 'context_clear_unsupported');
+    const raw = await readBoundedBody(request, 128 * 1024);
+    if (!raw) return fileError(response, 413, 'context_clear_too_large');
+    let input;
+    try { input = JSON.parse(raw.toString('utf8')); } catch { return fileError(response, 400, 'invalid_follow_up'); }
+    if (!input || Object.keys(input).some(key => key !== 'followUp')) return fileError(response, 400, 'invalid_follow_up');
+    try { sendJson(response, 202, contextClear.schedule(input.followUp)); }
+    catch (error) { fileError(response, error.message === 'context_clear_pending' ? 409 : 400, error.message); }
+  }
+
   function parseFleetMessage(raw) {
     let parsed;
     try { parsed = JSON.parse(raw.toString('utf8')); } catch { return null; }
@@ -1421,6 +1472,8 @@ function createCommonServer(options = {}) {
       return;
     }
     if (runtimeDraining) return fileError(response, 409, 'runtime_updating');
+    // Reserve the fresh conversation's first input for its own handover.
+    if (contextClear && contextClear.executing) return sendJson(response, 200, { messages: [] });
     const messages = modQueue;
     if (chatMode) outstandingRuntimeTurns += messages.length;
     modQueue = [];
@@ -1475,6 +1528,7 @@ function createCommonServer(options = {}) {
     if (requestPath === '/agenthub/git-credentials') return handleGitCredentialRequest(request, response);
     if (requestPath === '/agenthub/messages') return handleMessageRequest(request, response);
     if (requestPath === '/agenthub/transcript') return handleTranscriptRequest(request, response);
+    if (requestPath === '/agenthub/context-clear') return handleContextClearRequest(request, response);
     if (requestPath === '/agenthub/turn') return handleTurnRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
         requestPath === '/agenthub/mod/limit') {

@@ -4,7 +4,7 @@ const MAX_FOLLOW_UP_CHARS = 16_000;
 
 function validateFollowUp(value) {
   if (typeof value !== 'string' || !value.trim() || value.length > MAX_FOLLOW_UP_CHARS ||
-      /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)) throw new Error('invalid_follow_up');
+      /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(value)) throw new Error('invalid_follow_up');
   return value.replace(/\r\n?/g, '\n');
 }
 
@@ -29,8 +29,10 @@ function createContextClear({ scheduleAtSafePoint, clear, waitForClear, deliver,
             await waitForClear(previous);
             // A handover beginning with '/' must be a message, not another CLI command.
             await deliver('[AgentHub context handover]\n' + handover);
+            return true;
           } catch (error) {
             onError(error);
+            return false;
           } finally {
             executing = false;
             pending = false;

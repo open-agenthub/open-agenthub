@@ -46,7 +46,7 @@ public class ContextClearTests
     {
         protected override object? Invoke(MethodInfo? method, object?[]? args)
         {
-            var id = method?.Name == "GetByCallbackTokenAsync" ? args?[0] as string switch
+            var id = method?.Name == "GetByCallbackTokenAsync" ? (args?[0] as string) switch
                 { "parent-token" => "parent", "child-token" => "child", _ => null } : args?[0] as string;
             return Task.FromResult(id is null ? null : new SessionRecord { Id = id, Owner = "alice", CallbackToken = id + "-token" });
         }

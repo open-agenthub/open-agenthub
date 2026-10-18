@@ -14,6 +14,7 @@ render_settings() {
   # Quoted: the local fallback interpreter above resolves to a path with a space in it,
   # and the hook command is handed to a shell.
   SKILL_REMINDER="'$NODE_BIN' '${RUNTIME:-/opt/session-agent}/common/skill-reminder-hook.mjs'"
+  FLEET_TURN="'$NODE_BIN' '${RUNTIME:-/opt/session-agent}/common/fleet-turn-hook.mjs'"
   # Every mode gets the same PreToolUse pair. Unattended modes used to register only the
   # MCP matcher, which left auto-approve unreachable for them: the session flag is read in
   # the backend's /permission endpoint, and that endpoint is called by nothing but
@@ -28,6 +29,12 @@ render_settings() {
   cat <<JSON
 {
   "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "$FLEET_TURN", "timeout": 10 } ] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "$FLEET_TURN", "timeout": 10 } ] }
+    ],
     "Notification": [
       { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/notify-hook.sh" } ] }
     ],
@@ -40,7 +47,8 @@ render_settings() {
       { "matcher": ".*upload_skill$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark uploaded", "timeout": 10 } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "$SKILL_REMINDER", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "$SKILL_REMINDER", "timeout": 10 },
+        { "type": "command", "command": "$FLEET_TURN", "timeout": 10 } ] }
     ]
   }
 }

@@ -217,6 +217,7 @@ function resetFromJson(match, text, { secondsFromNow }) {
 }
 
 module.exports = {
+  contextClearCommand: '/new',
   slashCommands: require('./slash-commands'),
   name: 'Codex', stateDir: '.codex', authFilename: 'auth.json',
   limitPatterns,
