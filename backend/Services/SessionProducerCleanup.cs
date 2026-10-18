@@ -1,6 +1,5 @@
 using System.Net;
 using k8s;
-using k8s.Models;
 
 namespace AgentHub.Api.Services;
 
@@ -21,18 +20,14 @@ public sealed class SessionProducerCleanup(Kubernetes cluster, string ns,
                 propagationPolicy: "Foreground", cancellationToken: token));
             while (true)
             {
-                V1CronJob? cron = null;
-                try { cron = await cluster.BatchV1.ReadNamespacedCronJobAsync(name, ns, cancellationToken: token); }
-                catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound) { }
+                var cron = await ReadIfPresentAsync(() => cluster.BatchV1.ReadNamespacedCronJobAsync(name, ns, cancellationToken: token));
                 var jobs = (await cluster.BatchV1.ListNamespacedJobAsync(ns, cancellationToken: token)).Items
                     .Where(job => job.Metadata.OwnerReferences?.Any(reference => reference.Kind == "CronJob" && reference.Name == name) == true)
                     .ToArray();
                 var pods = (await cluster.CoreV1.ListNamespacedPodAsync(ns,
                     labelSelector: $"agenthub.dev/session={id}", cancellationToken: token)).Items;
                 // The named lookup also covers old pods that did not carry the session label.
-                V1Pod? named = null;
-                try { named = await cluster.CoreV1.ReadNamespacedPodAsync(name, ns, cancellationToken: token); }
-                catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound) { }
+                var named = await ReadIfPresentAsync(() => cluster.CoreV1.ReadNamespacedPodAsync(name, ns, cancellationToken: token));
                 if (cron is null && jobs.Length == 0 && pods.Count == 0 && named is null) return;
                 foreach (var job in jobs)
                     await IgnoreMissingAsync(() => cluster.BatchV1.DeleteNamespacedJobAsync(job.Metadata.Name, ns,
@@ -48,9 +43,21 @@ public sealed class SessionProducerCleanup(Kubernetes cluster, string ns,
         }
     }
 
+    private static async Task<T?> ReadIfPresentAsync<T>(Func<Task<T>> read) where T : class
+    {
+        try { return await read(); }
+        catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+    }
+
     private static async Task IgnoreMissingAsync(Func<Task> delete)
     {
         try { await delete(); }
-        catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound) { }
+        catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
+        {
+            return;
+        }
     }
 }
