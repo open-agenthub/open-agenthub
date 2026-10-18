@@ -41,6 +41,8 @@ public interface IArtifactStore
     /// <summary>Deletes every object under the prefix (account purge). No-op when no
     /// object storage is configured.</summary>
     Task DeleteByPrefixAsync(string prefix, CancellationToken ct = default) => Task.CompletedTask;
+    IAsyncEnumerable<string> ListSessionPrefixesAsync(CancellationToken ct = default)
+        => throw new NotSupportedException("Session prefix enumeration is unavailable.");
     Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default) => Task.FromResult<ArtifactObjectInfo?>(null);
     Task<Stream?> OpenReadAsync(string key, CancellationToken ct = default) => Task.FromResult<Stream?>(null);
 
@@ -303,11 +305,38 @@ public sealed class S3ArtifactStore : IArtifactStore
         {
             page = await _s3.ListObjectsV2Async(request, ct);
             if (page.S3Objects is { Count: > 0 })
-                await _s3.DeleteObjectsAsync(new DeleteObjectsRequest
+            {
+                var deleted = await _s3.DeleteObjectsAsync(new DeleteObjectsRequest
                 {
                     BucketName = _bucket,
                     Objects = page.S3Objects.Select(o => new KeyVersion { Key = o.Key }).ToList()
                 }, ct);
+                // A successful HTTP response can contain per-object failures. Ignoring them
+                // would let the caller discard its last durable record of retained data.
+                if (deleted.DeleteErrors is { Count: > 0 })
+                    throw new IOException($"Object storage refused {deleted.DeleteErrors.Count} deletions.");
+            }
+            request.ContinuationToken = page.NextContinuationToken;
+        } while (page.IsTruncated == true);
+    }
+
+    public async IAsyncEnumerable<string> ListSessionPrefixesAsync(
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    {
+        await foreach (var owner in ListDirectoriesAsync("sessions/", ct))
+            await foreach (var session in ListDirectoriesAsync(owner, ct))
+                yield return session;
+    }
+
+    private async IAsyncEnumerable<string> ListDirectoriesAsync(string prefix,
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct)
+    {
+        var request = new ListObjectsV2Request { BucketName = _bucket, Prefix = prefix, Delimiter = "/" };
+        ListObjectsV2Response page;
+        do
+        {
+            page = await _s3.ListObjectsV2Async(request, ct);
+            foreach (var directory in page.CommonPrefixes ?? []) yield return directory;
             request.ContinuationToken = page.NextContinuationToken;
         } while (page.IsTruncated == true);
     }

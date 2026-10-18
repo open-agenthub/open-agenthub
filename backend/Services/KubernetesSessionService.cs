@@ -68,7 +68,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         IAgentCredentialPusher? credentialPusher = null,
         Containers.ISessionContainerCleanup? containerCleanup = null,
         ISessionExpiryLock? runtimeUpdateLock = null,
-        ISecretRequestStore? secretRequests = null)
+        ISecretRequestStore? secretRequests = null,
+        Kubernetes? cluster = null)
     {
         _secretRequests = secretRequests;
         _log = log;
@@ -108,10 +109,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // and not the request host.
         _frontendOrigin = cfg["FrontendOrigin"];
 
-        var config = KubernetesClientConfiguration.IsInCluster()
+        _k8s = cluster ?? new Kubernetes(KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
-            : KubernetesClientConfiguration.BuildConfigFromConfigFile();
-        _k8s = new Kubernetes(config);
+            : KubernetesClientConfiguration.BuildConfigFromConfigFile());
     }
 
     // ---------------------------------------------------------------- Credentials
@@ -1888,6 +1888,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct);
         if (_secretRequests is not null) await _secretRequests.DeleteBySessionAsync(id, ct);
         await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
+        // Keep the registry row until storage confirms deletion: expiry retries it next pass,
+        // and a failed manual delete can be retried without losing the owner/prefix mapping.
+        await SessionStorageCleanup.DeleteAsync(_artifacts, owner, id, ct);
         await _store.DeleteAsync(id, ct);
         _log.LogInformation("Deleted session {Id}", id);
     }
