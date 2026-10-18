@@ -68,10 +68,13 @@ public sealed class AccountFailover : IAccountFailover
 
     public async Task<AccountFailoverOutcome> HandleAsync(SessionRecord session, AccountExhaustedReport report, CancellationToken ct)
     {
+        // A custom-endpoint session runs on no login at all, like the API-key session below.
+        if (session.AuthMode == AgentAuthMode.CustomEndpoint)
+            return new AccountFailoverOutcome(null, null, AccountFailoverOutcome.Ignored);
         var accountId = session.CredentialId ?? session.ResolvedCredentialId;
-        // An API-key or custom-endpoint session has no account to retire, and a session that never
-        // mounted one (no login stored) has nothing the next start could avoid.
-        if (accountId is null || !AgentConfiguration.UsesProviderAccount(session.AuthMode))
+        // An API-key session has no account to retire, and a session that never mounted one
+        // (no login stored) has nothing the next start could avoid.
+        if (accountId is null || session.AuthMode == AgentAuthMode.ApiKey)
             return new AccountFailoverOutcome(null, null, AccountFailoverOutcome.Ignored);
 
         var now = _now();
