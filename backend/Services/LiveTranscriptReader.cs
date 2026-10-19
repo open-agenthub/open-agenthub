@@ -142,8 +142,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
                 }
                 if (chunk.Text.Length > 0)
                 {
-                    var added = NativeTranscript.Parse(chunk.Text);
-                    if (added.Count > 0) follow.Entries = follow.NextByte == 0 ? [.. added] : [.. follow.Entries, .. added];
+                    follow.Entries = [.. NativeTranscript.Append(follow.Entries, chunk.Text)];
                 }
                 var advanced = chunk.Next > follow.NextByte;
                 follow.NextByte = Math.Max(follow.NextByte, chunk.Next);

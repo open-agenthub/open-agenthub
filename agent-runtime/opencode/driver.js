@@ -131,6 +131,10 @@ function resetFromDuration(match, text, { secondsFromNow }) {
 
 module.exports = {
   contextClearCommand: '/new',
+  // /new redraws the welcome screen before creating a session. Waiting for its transcript
+  // would deadlock the handover; require the pinned CLI's fresh logo and empty composer.
+  contextClearScreen: rows => rows.some(row => row.includes('█▀▀█ █▀▀█ █▀▀█ █▀▀▄')) &&
+    rows.filter(row => /^\s*┃\s+Ask anything…/.test(row)).length === 1,
   turnHooks: true,
   fleetNextTurn: false,
   slashCommands: require('./slash-commands'),
@@ -142,6 +146,12 @@ module.exports = {
   stateExcludes: ['.opencode/mcp-auth.json', '.opencode/log', '.opencode/bin'],
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
+  findTranscript({ env, home, fs: fileSystem }) {
+    const id = rememberedSession(env);
+    if (!id) return null;
+    const file = path.join(home, '.opencode', 'agenthub-transcripts', id + '.jsonl');
+    try { return fileSystem.statSync(file).isFile() ? file : null; } catch { return null; }
+  },
   buildCommand, isResumeCommand, isMissingResume, prepare,
   credentialPath, validCredential, installCredential,
   // The policy plugin reports chat.message and session.idle to /agenthub/turn (next-turn.mjs).

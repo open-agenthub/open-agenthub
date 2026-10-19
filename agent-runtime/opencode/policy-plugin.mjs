@@ -5,13 +5,15 @@ import { createGate } from './policy-gate.mjs';
 import { createLimitNotice } from './limit-notice.mjs';
 import { createTurnNotifier } from './turn-notify.mjs';
 import { createNextTurnRelay } from './next-turn.mjs';
+import { createTranscriptRecorder } from './native-transcript.mjs';
 import { installSkillRefresher } from './skill-refresh.mjs';
 
 // OpenCode treats every function this module exports as a plugin and calls it at startup, so
 // this file exports the plugin and nothing else; the logic lives in policy-gate.mjs,
-// turn-notify.mjs, next-turn.mjs, limit-notice.mjs and skill-refresh.mjs.
+// turn-notify.mjs, next-turn.mjs, native-transcript.mjs, limit-notice.mjs and skill-refresh.mjs.
 export const AgentHubPolicy = async (input) => {
   const inputClient = input && input.client;
+  const recordTranscript = createTranscriptRecorder({ client: inputClient });
   const gate = createGate();
   const notify = createTurnNotifier({ client: input && input.client });
   const nextTurn = createNextTurnRelay({ client: input && input.client });
@@ -20,12 +22,14 @@ export const AgentHubPolicy = async (input) => {
   return {
     // The CLI creates its own session IDs; recording the submitted conversation prevents
     // --continue from selecting a shell-tab session when this pod resumes.
-    'chat.message': async (input) => {
+    'chat.message': async (input, output) => {
       await nextTurn.onChatMessage().catch(() => {});
       if (typeof input?.sessionID !== 'string' || !/^ses_[A-Za-z0-9]+$/.test(input.sessionID)) return;
       try {
         const session = await inputClient.session.get({ path: { id: input.sessionID } });
         if (!session?.data || session.data.parentID) return;
+        // Transcript I/O must not suppress turn hooks or forget the resumable session.
+        await recordTranscript(input.sessionID, output?.message && { info: output.message, parts: output.parts }).catch(() => {});
         await reportTurn('prompt');
         const root = path.join(process.env.HOME || '/home/agent', '.opencode');
         fs.mkdirSync(root, { recursive: true });
@@ -43,7 +47,10 @@ export const AgentHubPolicy = async (input) => {
         try {
           const sessionID = event.properties?.sessionID;
           const session = sessionID && await inputClient.session.get({ path: { id: sessionID } });
-          if (session?.data && !session.data.parentID) await reportTurn('stop');
+          if (session?.data && !session.data.parentID) {
+            await recordTranscript(sessionID).catch(() => {});
+            await reportTurn('stop');
+          }
         } catch {}
       }
       await notify(event).catch(() => {});

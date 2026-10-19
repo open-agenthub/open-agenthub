@@ -170,7 +170,7 @@ export function toTranscriptItems(page) {
       // the person's own words, it read as if they had written the peer's report.
       const fleet = entry.role === 'user' ? parseFleetMessage(entry.text) : null
       if (fleet) return { role: 'fleet', label: fleetLabel(fleet), text: fleet.body, at: entry.at || null }
-      return { role: entry.role, label: entryLabel(entry), text: entry.text, at: entry.at || null }
+      return { role: entry.role, label: entryLabel(entry), text: entry.text, at: entry.at || null, ...(entry.attachments?.length ? { attachments: entry.attachments } : {}) }
     })
   }
   return toTranscriptBlocks(page.text).map(block => ({ role: 'terminal', label: 'Terminal', text: block }))

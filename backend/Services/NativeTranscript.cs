@@ -4,6 +4,8 @@ using System.Text.RegularExpressions;
 
 namespace AgentHub.Api.Services;
 
+public sealed record TranscriptAttachment(string Id, string Name);
+
 /// <summary>
 /// One turn of a conversation, read from the provider's own transcript file.
 /// </summary>
@@ -13,7 +15,12 @@ namespace AgentHub.Api.Services;
 /// <see cref="NativeTranscript.MaxToolChars"/>.</param>
 /// <param name="At">The provider's timestamp for the line, when it recorded one.</param>
 /// <param name="Tool">The tool a <c>tool</c> entry called.</param>
-public sealed record TranscriptEntry(string Role, string Text, DateTime? At, string? Tool = null);
+public sealed record TranscriptEntry(string Role, string Text, DateTime? At, string? Tool = null)
+{
+    public IReadOnlyList<TranscriptAttachment>? Attachments { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public string? PromptId { get; init; }
+}
 
 /// <summary>
 /// Reads the JSONL files the agent CLIs write for themselves — Claude Code's project transcript,
@@ -45,7 +52,12 @@ public static partial class NativeTranscript
 
     public static IReadOnlyList<TranscriptEntry> Parse(string? jsonl)
     {
-        var entries = new List<TranscriptEntry>();
+        return Append([], jsonl);
+    }
+
+    public static IReadOnlyList<TranscriptEntry> Append(IReadOnlyList<TranscriptEntry> previous, string? jsonl)
+    {
+        var entries = previous.ToList();
         if (string.IsNullOrEmpty(jsonl)) return entries;
         foreach (var raw in jsonl.Split('\n'))
         {
@@ -118,7 +130,21 @@ public static partial class NativeTranscript
         if (type is not ("user" or "assistant")) return;
         // Meta lines are the CLI talking to itself (command caveats, injected tool guidance);
         // sidechains are sub-agents whose turns the main conversation already summarises.
-        if (IsTrue(root, "isMeta") || IsTrue(root, "isSidechain")) return;
+        if (IsTrue(root, "isSidechain")) return;
+        if (IsTrue(root, "isMeta"))
+        {
+            // The CLI keeps source paths in a companion with the same prompt identity. It can
+            // arrive in the next HTTP chunk; matching against previous entries avoids a lost image.
+            if (IsTrue(root, "turnCompanion") && StringOr(root, "promptId") is { } promptId &&
+                root.TryGetProperty("message", out var companion))
+            {
+                var attachments = PathAttachments(ContentText(companion, "content"));
+                var index = entries.FindLastIndex(entry => entry.Role == "user" && entry.PromptId == promptId);
+                if (index >= 0 && attachments.Count > 0)
+                    entries[index] = WithAttachments(entries[index], attachments);
+            }
+            return;
+        }
         if (!root.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object) return;
         var at = Timestamp(root, "timestamp");
 
@@ -135,12 +161,24 @@ public static partial class NativeTranscript
         }
         if (content.ValueKind != JsonValueKind.Array) return;
 
+        var first = entries.Count;
+        var hasImage = false;
+        var files = new List<TranscriptAttachment>();
         var text = new StringBuilder();
         foreach (var part in content.EnumerateArray())
         {
             var partType = part.TryGetProperty("type", out var pt) ? pt.GetString() : null;
             switch (partType)
             {
+                case "file":
+                    if (type == "user" && part.TryGetProperty("source", out var source) &&
+                        StringOr(source, "path") is { } sourcePath)
+                        files.AddRange(PathAttachments(sourcePath));
+                    hasImage = true;
+                    break;
+                case "image":
+                    hasImage = true;
+                    break;
                 case "text":
                     if (part.TryGetProperty("text", out var textValue) && textValue.ValueKind == JsonValueKind.String)
                     {
@@ -162,6 +200,14 @@ public static partial class NativeTranscript
             }
         }
         Flush(entries, type, text, at);
+        if (type == "user")
+        {
+            if (hasImage && entries.Count == first) entries.Add(new TranscriptEntry("user", "", at));
+            for (var index = first; index < entries.Count; index++)
+                if (entries[index].Role == "user")
+                    entries[index] = WithAttachments(entries[index] with { PromptId = StringOr(root, "promptId") },
+                        PathAttachments(entries[index].Text).Concat(files).ToArray());
+        }
     }
 
     /// <summary>
@@ -253,7 +299,9 @@ public static partial class NativeTranscript
 
     private static void AddText(List<TranscriptEntry> entries, string role, string? text, DateTime? at)
     {
-        if (!string.IsNullOrWhiteSpace(text)) entries.Add(new TranscriptEntry(role, text, at));
+        if (!string.IsNullOrWhiteSpace(text))
+            entries.Add(role == "user" ? WithAttachments(new TranscriptEntry(role, text, at), PathAttachments(text))
+                : new TranscriptEntry(role, text, at));
     }
 
     private static void Flush(List<TranscriptEntry> entries, string role, StringBuilder text, DateTime? at)
@@ -286,7 +334,7 @@ public static partial class NativeTranscript
     }
 
     private static string? StringOr(JsonElement element, string property)
-        => element.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+        => element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     private static bool IsTrue(JsonElement element, string property)
         => element.TryGetProperty(property, out var v) && v.ValueKind == JsonValueKind.True;
@@ -296,6 +344,24 @@ public static partial class NativeTranscript
            && DateTime.TryParse(v.GetString(), null, System.Globalization.DateTimeStyles.AdjustToUniversal
                | System.Globalization.DateTimeStyles.AssumeUniversal, out var at)
             ? at : null;
+
+    // The id is part of the materializer's canonical path, not inferred from a basename or a
+    // neighbouring turn. Content still goes through the session Files API's access checks.
+    [GeneratedRegex(@"(?:^|[\s\[\""'])/[A-Za-z0-9._/-]*/\.agenthub/files/([a-f0-9]{32})/([A-Za-z0-9._-]+)(?=$|[\s\]\""'])")]
+    private static partial Regex UploadedImagePath();
+
+    private static IReadOnlyList<TranscriptAttachment> PathAttachments(string text) =>
+        UploadedImagePath().Matches(text).Cast<Match>()
+            .Where(match => new[] { ".png", ".jpg", ".jpeg", ".webp", ".gif" }
+                .Contains(System.IO.Path.GetExtension(match.Groups[2].Value), StringComparer.OrdinalIgnoreCase))
+            .Select(match => new TranscriptAttachment(match.Groups[1].Value, match.Groups[2].Value))
+            .DistinctBy(file => file.Id).Take(5).ToArray();
+
+    private static TranscriptEntry WithAttachments(TranscriptEntry entry, IReadOnlyList<TranscriptAttachment> files)
+    {
+        var all = (entry.Attachments ?? []).Concat(files).DistinctBy(file => file.Id).Take(5).ToArray();
+        return all.Length == 0 ? entry : entry with { Attachments = all };
+    }
 
     private static string Clip(string text)
         => text.Length <= MaxToolChars ? text : text[..MaxToolChars] + "…";
