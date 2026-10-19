@@ -44,7 +44,9 @@ public static class SessionResources
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
         try { return new ResourceQuantity(value.Trim()).ToDecimal(); }
-        catch { return null; }
+        // What ResourceQuantity throws for text that is no quantity ("lots") or one too large to hold.
+        catch (FormatException) { return null; }
+        catch (OverflowException) { return null; }
     }
 
     private static string Capitalized(string what) =>

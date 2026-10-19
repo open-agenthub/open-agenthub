@@ -1655,8 +1655,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var memory = SessionResources.Effective(req.Memory, _opts.MinMemory, _opts.MaxMemory);
         if (cpu != req.Cpu || memory != req.Memory)
         {
-            _log.LogWarning("Session {Id} requests cpu {Cpu} / memory {Memory} outside {MinCpu}-{MaxCpu} / {MinMemory}-{MaxMemory}; starting it with {EffectiveCpu} / {EffectiveMemory}",
-                rec.Id, req.Cpu, req.Memory, _opts.MinCpu, _opts.MaxCpu, _opts.MinMemory, _opts.MaxMemory, cpu, memory);
+            // The stored values are the owner's text and stay out of the log; which one was moved,
+            // and the configured bounds, are enough to find the session and explain its pod.
+            var moved = cpu != req.Cpu && memory != req.Memory ? "cpu and memory" : cpu != req.Cpu ? "cpu" : "memory";
+            _log.LogWarning("Session {Id} has a stored {Resources} request outside {MinCpu}-{MaxCpu} cpu / {MinMemory}-{MaxMemory} memory; its pod starts with the nearest bound",
+                rec.Id, moved, _opts.MinCpu, _opts.MaxCpu, _opts.MinMemory, _opts.MaxMemory);
             req = req with { Cpu = cpu, Memory = memory };
         }
 
