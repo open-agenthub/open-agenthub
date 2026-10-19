@@ -78,10 +78,10 @@ public sealed class SessionFileVideoTests
     public async Task Inspection_counts_every_byte_and_stops_past_the_limit()
     {
         var video = VideoFixtures.Mp4;
-        var counted = await VideoContainerInspector.InspectAsync(
-            new MemoryStream(video), "video/mp4", video.Length);
-        var over = await VideoContainerInspector.InspectAsync(
-            new MemoryStream(video), "video/mp4", video.Length - 1);
+        await using var whole = new MemoryStream(video);
+        await using var again = new MemoryStream(video);
+        var counted = await VideoContainerInspector.InspectAsync(whole, "video/mp4", video.Length);
+        var over = await VideoContainerInspector.InspectAsync(again, "video/mp4", video.Length - 1);
 
         Assert.Equal(video.Length, counted.Size);
         Assert.Equal("file_too_large", over.Code);
@@ -189,8 +189,8 @@ public sealed class SessionFileVideoTests
     [Fact]
     public void A_full_read_advertises_ranges()
     {
-        var (context, result) = Respond(new FileContentResult(
-            new MemoryStream([1, 2, 3, 4]), null, "video/webm", "demo.webm", 4));
+        using var body = new MemoryStream([1, 2, 3, 4]);
+        var (context, result) = Respond(new FileContentResult(body, null, "video/webm", "demo.webm", 4));
 
         Assert.IsType<FileStreamResult>(result);
         Assert.Equal("bytes", context.Response.Headers.AcceptRanges.ToString());
@@ -205,9 +205,11 @@ public sealed class SessionFileVideoTests
         Assert.Equal("bytes */10", context.Response.Headers.ContentRange.ToString());
     }
 
-    private static async Task<SessionFileValidationResult> Detect(string name, byte[] bytes) =>
-        await SessionFileValidator.DetectAsync(name, new MemoryStream(bytes),
-            new SessionFileOptions());
+    private static async Task<SessionFileValidationResult> Detect(string name, byte[] bytes)
+    {
+        await using var content = new MemoryStream(bytes);
+        return await SessionFileValidator.DetectAsync(name, content, new SessionFileOptions());
+    }
 
     private static (DefaultHttpContext Context, IActionResult Result) Respond(FileContentResult content)
     {

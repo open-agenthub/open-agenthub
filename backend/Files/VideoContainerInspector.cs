@@ -62,11 +62,15 @@ public static class VideoContainerInspector
         var reader = new CountingReader(content, maximumBytes);
         try
         {
-            var accepted = string.Equals(expectedMime, Mp4, StringComparison.OrdinalIgnoreCase)
-                ? await InspectMp4Async(reader, ct)
-                : string.Equals(expectedMime, WebM, StringComparison.OrdinalIgnoreCase)
-                    ? await InspectWebMAsync(reader, ct)
-                    : false;
+            var accepted = false;
+            if (string.Equals(expectedMime, Mp4, StringComparison.OrdinalIgnoreCase))
+            {
+                accepted = await InspectMp4Async(reader, ct);
+            }
+            else if (string.Equals(expectedMime, WebM, StringComparison.OrdinalIgnoreCase))
+            {
+                accepted = await InspectWebMAsync(reader, ct);
+            }
             if (!accepted)
             {
                 return new VideoInspection(null, "content_type_mismatch", reader.Position);
@@ -153,9 +157,9 @@ public static class VideoContainerInspector
     private static bool Mp4TracksPlayable(byte[] moov)
     {
         var videoTracks = 0;
-        foreach (var trak in Boxes(moov, 0, moov.Length).Where(box => box.Type == "trak"))
+        foreach (var mdia in Boxes(moov, 0, moov.Length).Where(box => box.Type == "trak")
+                     .Select(trak => Child(moov, trak, "mdia")))
         {
-            var mdia = Child(moov, trak, "mdia");
             var hdlr = mdia is null ? null : Child(moov, mdia.Value, "hdlr");
             var stsd = mdia is null ? null
                 : Path(moov, mdia.Value, "minf", "stbl", "stsd");
@@ -274,9 +278,9 @@ public static class VideoContainerInspector
     private static bool WebMTracksPlayable(byte[] tracks)
     {
         var videoTracks = 0;
-        foreach (var entry in Elements(tracks).Where(element => element.Id == TrackEntryId))
+        foreach (var fields in Elements(tracks).Where(element => element.Id == TrackEntryId)
+                     .Select(entry => Elements(tracks, entry.Start, entry.Length)))
         {
-            var fields = Elements(tracks, entry.Start, entry.Length);
             var trackType = fields.Where(field => field.Id == TrackTypeId && field.Length is > 0 and <= 8)
                 .Select(field => ReadUnsigned(tracks, field)).FirstOrDefault();
             var codec = fields.Where(field => field.Id == CodecId)
