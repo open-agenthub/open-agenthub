@@ -323,7 +323,7 @@ async function save() {
       <div class="row">
         <button class="primary" data-submit :disabled="busy" @click="save">{{ busy ? (offerRestart && restartNow ? 'Saving and restarting…' : 'Saving…') : (offerRestart && restartNow ? 'Save and restart' : 'Save changes') }}</button>
         <button @click="$emit('close')">Cancel</button>
-        <span class="dim note-inline">Changes apply on next agent turn — the session keeps running.</span>
+        <span v-if="!(offerRestart && restartNow)" class="dim note-inline">Changes apply on next agent turn — the session keeps running.</span>
       </div>
     </div>
   </div>

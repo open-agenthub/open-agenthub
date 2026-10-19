@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import NewSessionDialog from './NewSessionDialog.vue'
 import EditSessionDialog from './EditSessionDialog.vue'
 import DuplicateSessionDialog from './DuplicateSessionDialog.vue'
+import SessionsView from './SessionsView.vue'
 import { canApplyNow, resourcePayload, resourcesChanged, resourceSummary } from '../lib/resources.js'
 
 // Per-session CPU/memory limits and restarting a running session to apply them (#215).
@@ -144,5 +145,11 @@ describe('session resources', () => {
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
     expect(mocks.api.duplicateSession.mock.calls[0][1]).toMatchObject({ cpu: '500m', memory: '2Gi', cpuLimit: '4', memoryLimit: '' })
+  })
+
+  it('lists the effective values in the Sessions overview, and when they still wait for a restart', async () => {
+    const wrapper = mount(SessionsView, { props: { sessions: [running, { ...running, id: 's2', resourcesPendingRestart: true }], projects: [], query: '' } })
+    const rows = wrapper.findAll('[data-session-resources]')
+    expect(rows.map(r => r.text())).toEqual(['CPU 500m / 2 · memory 1Gi / 4Gi', 'CPU 500m / 2 · memory 1Gi / 4Gi · applies at the next restart'])
   })
 })

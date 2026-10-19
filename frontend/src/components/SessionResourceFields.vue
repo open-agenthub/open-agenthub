@@ -26,17 +26,17 @@ const effective = computed(() => resourceSummary(props.session?.resources))
       <div class="field"><label>CPU request</label>
         <input :value="modelValue.cpu" class="mono" placeholder="500m" data-resource="cpu" @input="set('cpu', $event.target.value)" /></div>
       <div class="field"><label>CPU limit</label>
-        <input :value="modelValue.cpuLimit" class="mono" :placeholder="defaultCpuLimit ? `default (${defaultCpuLimit})` : 'instance default'"
+        <input :value="modelValue.cpuLimit" class="mono" :placeholder="defaultCpuLimit ? `default (${defaultCpuLimit})` : 'default'"
           data-resource="cpuLimit" @input="set('cpuLimit', $event.target.value)" /></div>
       <div class="field"><label>Memory request</label>
         <input :value="modelValue.memory" class="mono" placeholder="1Gi" data-resource="memory" @input="set('memory', $event.target.value)" /></div>
       <div class="field"><label>Memory limit</label>
-        <input :value="modelValue.memoryLimit" class="mono" :placeholder="defaultMemoryLimit ? `default (${defaultMemoryLimit})` : 'instance default'"
+        <input :value="modelValue.memoryLimit" class="mono" :placeholder="defaultMemoryLimit ? `default (${defaultMemoryLimit})` : 'default'"
           data-resource="memoryLimit" @input="set('memoryLimit', $event.target.value)" /></div>
     </div>
-    <p class="hint">The request is reserved on the node; above the limit CPU is throttled and the agent is killed for memory. Memory is given in Mi or Gi.</p>
+    <p class="hint">The request is reserved on the node; above the limit CPU is throttled and the agent is killed for memory. Memory is given in Mi or Gi; an empty limit is the instance default.</p>
     <p v-if="effective" class="hint" data-session-resources-effective>
-      Now: {{ effective }}<template v-if="session?.resourcesPendingRestart"> — the running pod still has its previous values until it restarts</template>
+      Effective: {{ effective }}<template v-if="session?.resourcesPendingRestart"> — from the next restart; the running pod still has its previous values</template>
     </p>
   </div>
 </template>
