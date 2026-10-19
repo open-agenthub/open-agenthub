@@ -52,7 +52,8 @@ agent need to start; real work wants the default 1Gi.
 
 Sessions created earlier may hold values outside the bounds, and so may sessions whose operator
 later moves the bounds. They keep their record. When such a session starts or resumes, its pod
-asks for the nearest value inside the bounds, and the backend logs a warning naming both values.
+asks for the nearest value inside the bounds, and the backend logs a warning naming which resource was moved,
+not the stored text, which is the owner's input.
 Editing such a session works as long as the stored value is sent back unchanged, as the edit dialog
 does with every save. A changed value is checked like a new one.
 
