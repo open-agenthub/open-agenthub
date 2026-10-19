@@ -111,22 +111,21 @@ else
 var sessionFileOptions = builder.Configuration.GetSection("Files")
     .Get<AgentHub.Api.Files.SessionFileOptions>() ?? new AgentHub.Api.Files.SessionFileOptions();
 builder.Services.AddSingleton(sessionFileOptions);
-builder.Services.AddHttpClient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api.Files.AgentFileClient>();
-builder.Services.AddHttpClient<IAgentCredentialPusher, AgentCredentialPusher>();
-builder.Services.AddHttpClient<ISessionMessageDelivery, SessionMessageDelivery>();
-builder.Services.AddHttpClient<ISessionContextClear, SessionContextClear>(client => client.Timeout = TimeSpan.FromSeconds(10))
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
-// A singleton, unlike the typed clients above: it holds each followed session's offset and entries.
-builder.Services.AddHttpClient<IWorkspaceDiffReader, WorkspaceDiffReader>();
-builder.Services.AddHttpClient<ISessionCommandsReader, SessionCommandsReader>();
-builder.Services.AddHttpClient<ISessionTerminalAttachments, SessionTerminalAttachments>();
-// A redirect target has not passed the live-pod identity check.
-builder.Services.AddHttpClient(nameof(LiveTranscriptReader))
-    .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+// Everything that sends a session's callback token or credentials to its pod goes through
+// IAgentPodRequests: the address is confirmed as the session's live pod before each request, and
+// its client follows no redirect (#177, docs/transcripts.md "Which pod gets the token").
+builder.Services.AddAgentPodRequests();
+builder.Services.AddTransient<AgentHub.Api.Files.IAgentFileClient, AgentHub.Api.Files.AgentFileClient>();
+builder.Services.AddTransient<IAgentCredentialPusher, AgentCredentialPusher>();
+builder.Services.AddTransient<ISessionMessageDelivery, SessionMessageDelivery>();
+builder.Services.AddTransient<ISessionContextClear, SessionContextClear>();
+builder.Services.AddTransient<IWorkspaceDiffReader, WorkspaceDiffReader>();
+builder.Services.AddTransient<ISessionCommandsReader, SessionCommandsReader>();
+builder.Services.AddTransient<ISessionTerminalAttachments, SessionTerminalAttachments>();
+// A singleton, unlike the services above: it holds each followed session's offset and entries.
 builder.Services.AddSingleton<ILiveTranscriptReader>(sp => new LiveTranscriptReader(
-    sp.GetRequiredService<IHttpClientFactory>().CreateClient(nameof(LiveTranscriptReader)),
-    sp.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>(), sp.GetRequiredService<IConfiguration>(),
-    sp.GetRequiredService<AgentHub.Api.Browser.IAgentPodIdentityResolver>()));
+    sp.GetRequiredService<IAgentPodRequests>(),
+    sp.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>(), sp.GetRequiredService<IConfiguration>()));
 // A pod's usage-limit report: marks the account and moves the session (docs/account-limits.md).
 builder.Services.AddSingleton<IAccountFailover, AccountFailover>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileService, AgentHub.Api.Files.SessionFileService>();

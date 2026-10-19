@@ -1,6 +1,7 @@
 using System.Net;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
+using AgentHub.Api.Services;
 
 namespace AgentHub.Api.Files;
 
@@ -37,13 +38,17 @@ public interface IAgentFileClient
 
 public sealed class AgentFileClient : IAgentFileClient
 {
-    private readonly HttpClient _http;
+    // HttpClient's default, which bounded these calls before they went through IAgentPodRequests:
+    // the upload of the body and the response headers, not the streamed download after them.
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(100);
+
+    private readonly IAgentPodRequests _pods;
     private readonly ISessionStore _sessions;
     private readonly int _agentPort;
 
-    public AgentFileClient(HttpClient http, ISessionStore sessions, IConfiguration configuration)
+    public AgentFileClient(IAgentPodRequests pods, ISessionStore sessions, IConfiguration configuration)
     {
-        _http = http;
+        _pods = pods;
         _sessions = sessions;
         _agentPort = configuration.GetValue("AgentHub:AgentPort", 7681);
     }
@@ -59,8 +64,8 @@ public sealed class AgentFileClient : IAgentFileClient
         request.Content = new StreamContent(content);
         request.Content.Headers.ContentType =
             new System.Net.Http.Headers.MediaTypeHeaderValue(file.DeclaredMimeType);
-        using var response = await _http.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _pods.SendAsync(
+            session.Id, request, HttpCompletionOption.ResponseHeadersRead, Timeout, ct);
         response.EnsureSuccessStatusCode();
     }
 
@@ -70,8 +75,8 @@ public sealed class AgentFileClient : IAgentFileClient
         CancellationToken ct)
     {
         using var request = await CreateRequestAsync(HttpMethod.Get, session, file, ct);
-        var response = await _http.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        var response = await _pods.SendAsync(
+            session.Id, request, HttpCompletionOption.ResponseHeadersRead, Timeout, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             response.Dispose();
@@ -99,8 +104,8 @@ public sealed class AgentFileClient : IAgentFileClient
     {
         using var request = await CreateRequestAsync(HttpMethod.Get, session, file, ct);
         request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(range.From, range.To);
-        var response = await _http.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        var response = await _pods.SendAsync(
+            session.Id, request, HttpCompletionOption.ResponseHeadersRead, Timeout, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             response.Dispose();
@@ -131,8 +136,8 @@ public sealed class AgentFileClient : IAgentFileClient
         CancellationToken ct)
     {
         using var request = await CreateRequestAsync(HttpMethod.Head, session, file, ct);
-        using var response = await _http.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _pods.SendAsync(
+            session.Id, request, HttpCompletionOption.ResponseHeadersRead, Timeout, ct);
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
             return false;
@@ -148,8 +153,8 @@ public sealed class AgentFileClient : IAgentFileClient
         CancellationToken ct)
     {
         using var request = await CreateRequestAsync(HttpMethod.Delete, session, file, ct);
-        using var response = await _http.SendAsync(
-            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _pods.SendAsync(
+            session.Id, request, HttpCompletionOption.ResponseHeadersRead, Timeout, ct);
         if (response.StatusCode != HttpStatusCode.NotFound)
         {
             response.EnsureSuccessStatusCode();

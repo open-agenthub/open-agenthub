@@ -16,7 +16,7 @@ public interface ISessionCommandsReader
 /// runtime has no such route — and the composer then completes nothing but still sends.
 /// </summary>
 public sealed class SessionCommandsReader(
-    HttpClient http, ISessionService sessions, IConfiguration configuration) : ISessionCommandsReader
+    IAgentPodRequests pods, ISessionService sessions, IConfiguration configuration) : ISessionCommandsReader
 {
     // The session agent caps its list at 400 entries of short text, well under this.
     private const int MaxBytes = 512 * 1024;
@@ -35,7 +35,8 @@ public sealed class SessionCommandsReader(
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.Add("X-Agent-Token", session.CallbackToken);
-            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            using var response = await pods.SendAsync(session.Id, request, HttpCompletionOption.ResponseHeadersRead,
+                TimeSpan.FromSeconds(5), deadline.Token);
             if (!response.IsSuccessStatusCode) return null;
             await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);
             using var body = new MemoryStream();

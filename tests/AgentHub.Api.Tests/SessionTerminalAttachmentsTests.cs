@@ -122,7 +122,7 @@ public class SessionTerminalAttachmentsTests
         { Id = "s1", Owner = "owner", Title = "Session", Mode = SessionMode.Interactive, Phase = "Running", PodIp = "127.0.0.1" };
         var pod = new Pod("{\"attachments\":[{\"id\":\"" + FileId + "\",\"path\":\"/workspace/x.png\"}]}");
         using var http = new HttpClient(pod);
-        var proxy = new SessionTerminalAttachments(http, sessions, new ConfigurationBuilder().Build());
+        var proxy = new SessionTerminalAttachments(TestPods.Live(http), sessions, new ConfigurationBuilder().Build());
         var answer = await proxy.MaterializeAsync(Record, [FileId], default);
         var (status, body) = answer ?? throw new InvalidOperationException("the pod answered nothing");
         Assert.Equal(200, status);
@@ -139,7 +139,7 @@ public class SessionTerminalAttachmentsTests
         ((SessionProxy)sessions).Live = new SessionInfo
         { Id = "s1", Owner = "owner", Title = "Session", Mode = SessionMode.Interactive, Phase = "Running", PodIp = "127.0.0.1" };
         using var http = new HttpClient(new Pod(new string(' ', 70 * 1024)));
-        var proxy = new SessionTerminalAttachments(http, sessions, new ConfigurationBuilder().Build());
+        var proxy = new SessionTerminalAttachments(TestPods.Live(http), sessions, new ConfigurationBuilder().Build());
         Assert.Null(await proxy.MaterializeAsync(Record, [FileId], default));
     }
 }

@@ -80,7 +80,7 @@ public sealed class AgentFileClientTests
                 ["AgentHub:AgentPort"] = "7681",
             })
             .Build();
-        return new AgentFileClient(http, new TokenSessionStore(), configuration);
+        return new AgentFileClient(TestPods.Live(http), new TokenSessionStore(), configuration);
     }
 
     private static SessionInfo Session() => new()

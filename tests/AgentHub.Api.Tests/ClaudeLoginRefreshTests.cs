@@ -408,7 +408,6 @@ public sealed class ClaudeLoginRefreshTests
         {
             Refresher = new ClaudeLoginRefresher(Repository, Endpoint, Locks, Pusher,
                 new ClaudeLoginRefreshOptions(), NullLogger<ClaudeLoginRefresher>.Instance);
-            Pusher.SessionFor = ip => Sessions.First(s => s.Session.PodIp == ip).Session.SessionId;
         }
 
         public string Add(byte[] file)
@@ -499,16 +498,13 @@ public sealed class ClaudeLoginRefreshTests
         public List<(string Session, byte[] File)> Refreshed { get; } = new();
         public Func<string, bool>? Answer { get; set; }
 
-        public Task PushAsync(string podIp, string callbackToken, AgentKind agent, byte[] file, string? reason, CancellationToken ct)
+        public Task PushAsync(string sessionId, string podIp, string callbackToken, AgentKind agent, byte[] file, string? reason, CancellationToken ct)
             => throw new NotSupportedException("A renewal never restarts the agent.");
 
-        public Task<bool> RefreshAsync(string podIp, string callbackToken, AgentKind agent, byte[] file, CancellationToken ct)
+        public Task<bool> RefreshAsync(string sessionId, string podIp, string callbackToken, AgentKind agent, byte[] file, CancellationToken ct)
         {
-            var session = SessionFor(podIp);
-            lock (Refreshed) Refreshed.Add((session, file));
-            return Task.FromResult(Answer?.Invoke(session) ?? true);
+            lock (Refreshed) Refreshed.Add((sessionId, file));
+            return Task.FromResult(Answer?.Invoke(sessionId) ?? true);
         }
-
-        public Func<string, string> SessionFor { get; set; } = ip => ip;
     }
 }

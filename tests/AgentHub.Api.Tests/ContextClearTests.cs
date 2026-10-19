@@ -110,7 +110,7 @@ public class ContextClearTests
         var identity = new Identity();
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string,string?> { ["AgentHub:AgentPort"] = port.ToString() }).Build();
         using var http = new HttpClient();
-        var service = new SessionContextClear(http, Records(), identity, configuration);
+        var service = new SessionContextClear(TestPods.Using(http, identity), Records(), configuration);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.ScheduleAsync(Session(), new ContextClearRequest("handover"), default));
         identity.Live = true;
         var receive = Task.Run(async () => {

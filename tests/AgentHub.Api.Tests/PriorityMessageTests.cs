@@ -417,7 +417,7 @@ public class PriorityMessageTests
                 Id = "coder", Owner = Owner, Title = "Coder", Mode = SessionMode.Interactive,
                 AgentSessionId = "a", CallbackToken = "token-coder"
             });
-            Delivery = new SessionMessageDelivery(new HttpClient(pod), store, Messages, config,
+            Delivery = new SessionMessageDelivery(TestPods.Live(new HttpClient(pod)), store, Messages, config,
                 NullLogger<SessionMessageDelivery>.Instance);
         }
 
