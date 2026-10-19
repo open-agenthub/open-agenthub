@@ -129,6 +129,7 @@ builder.Services.AddSingleton<ILiveTranscriptReader>(sp => new LiveTranscriptRea
 // A pod's usage-limit report: marks the account and moves the session (docs/account-limits.md).
 builder.Services.AddSingleton<IAccountFailover, AccountFailover>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileService, AgentHub.Api.Files.SessionFileService>();
+builder.Services.AddSingleton<AgentHub.Api.Files.SessionFileStreamTickets>();
 builder.Services.AddSingleton<AgentHub.Api.Files.ISessionFileCleanup, AgentHub.Api.Files.SessionFileCleanup>();
 builder.Services.AddHostedService<AgentHub.Api.Files.SessionFileSweepService>();
 builder.Services.AddHttpClient<AgentHub.Api.Files.IOfficePreviewClient, AgentHub.Api.Files.OfficePreviewClient>(client =>

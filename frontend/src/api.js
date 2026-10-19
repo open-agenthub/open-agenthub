@@ -115,6 +115,8 @@ export const api = {
   uploadSessionFile,
   completeSessionFile: (id, fileId) => req('POST', `/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/complete`),
   listSessionFiles: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files`),
+  // A url a <video> element can play from: it fetches ranges itself and cannot send our header.
+  issueSessionFileStream: (id, fileId) => req('POST', `/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/stream`),
   sessionFileContentUrl: (id, fileId) => `/api/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/content`,
   deleteSessionFile: (id, fileId) => req('DELETE', `/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
   getFilePresentation: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/presentation`),

@@ -210,7 +210,10 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
           return { id, name, size: Buffer.concat(chunks).length };
         },
         async head(id) { fileCalls.push({ method: 'HEAD', id }); return null; },
-        async open(id) { fileCalls.push({ method: 'GET', id }); return null; },
+        async open(id, range) {
+          fileCalls.push(range ? { method: 'GET', id, range } : { method: 'GET', id });
+          return harnessOptions.openFile?.(id, range) ?? null;
+        },
         async remove(id) { fileCalls.push({ method: 'DELETE', id }); }
       },
       process: processLike,

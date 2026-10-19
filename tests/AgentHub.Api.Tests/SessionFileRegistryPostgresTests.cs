@@ -98,6 +98,31 @@ public sealed class SessionFileRegistryPostgresTests
         Assert.Empty(await db.Registry.ListAsync("s1"));
     }
 
+    [PostgreSqlFact]
+    public async Task Stream_tickets_round_trip_are_swept_when_expired_and_end_with_their_file()
+    {
+        await using var db = await SessionFilePostgresFixture.CreateAsync();
+        await db.Registry.InsertAsync(File("f1", "s1", SessionFileState.Ready));
+        var live = new SessionFileStreamTicket("live", "s1", "f1", "alice", DateTime.UtcNow.AddHours(1));
+        await db.Registry.InsertStreamTicketAsync(
+            new SessionFileStreamTicket("stale", "s1", "f1", "alice", DateTime.UtcNow.AddMinutes(-1)));
+        await db.Registry.InsertStreamTicketAsync(live);
+
+        var read = await db.Registry.GetStreamTicketAsync("live");
+        Assert.Equal(live with { ExpiresAt = read!.ExpiresAt }, read);
+        Assert.True(Math.Abs((read.ExpiresAt - live.ExpiresAt).TotalSeconds) < 1);
+        // Issuing the second ticket removed the expired first one.
+        Assert.Null(await db.Registry.GetStreamTicketAsync("stale"));
+
+        await using (var connection = new NpgsqlConnection(db.ConnectionString))
+        {
+            await connection.OpenAsync();
+            await using var delete = new NpgsqlCommand("DELETE FROM session_files WHERE id = 'f1'", connection);
+            await delete.ExecuteNonQueryAsync();
+        }
+        Assert.Null(await db.Registry.GetStreamTicketAsync("live"));
+    }
+
     private static SessionFileRecord File(
         string id,
         string sessionId,

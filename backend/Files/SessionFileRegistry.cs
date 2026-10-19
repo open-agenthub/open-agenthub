@@ -57,6 +57,10 @@ public interface ISessionFileRegistry
     Task<IReadOnlyList<SessionFileRecord>> ListReadyPodFilesAsync(CancellationToken ct = default) =>
         Task.FromResult<IReadOnlyList<SessionFileRecord>>(Array.Empty<SessionFileRecord>());
     Task MarkSessionDeletedAsync(string sessionId, CancellationToken ct = default);
+    Task InsertStreamTicketAsync(SessionFileStreamTicket ticket, CancellationToken ct = default) =>
+        throw new NotSupportedException("Stream tickets need the Postgres registry.");
+    Task<SessionFileStreamTicket?> GetStreamTicketAsync(string hash, CancellationToken ct = default) =>
+        Task.FromResult<SessionFileStreamTicket?>(null);
 }
 
 public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
@@ -143,6 +147,18 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
                 AFTER INSERT OR UPDATE OR DELETE ON session_files
                 FOR EACH ROW EXECUTE FUNCTION agenthub_notify_session_files();
 
+            -- Hashes only: a stored row cannot be replayed as a ticket. The foreign key ends a
+            -- ticket together with its file, so a deleted video stops playing at the next range.
+            CREATE TABLE IF NOT EXISTS session_file_stream_tickets (
+                hash TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                file_id TEXT NOT NULL REFERENCES session_files(id) ON DELETE CASCADE,
+                principal TEXT NOT NULL,
+                expires_at TIMESTAMPTZ NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_session_file_stream_tickets_expiry
+                ON session_file_stream_tickets(expires_at);
+
             DROP TRIGGER IF EXISTS trg_session_file_presentations_notify
                 ON session_file_presentations;
             CREATE TRIGGER trg_session_file_presentations_notify
@@ -152,6 +168,42 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
 
         await using var command = _db.CreateCommand(ddl);
         await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task InsertStreamTicketAsync(
+        SessionFileStreamTicket ticket,
+        CancellationToken ct = default)
+    {
+        // Expired tickets are dropped here rather than by the sweep: issuing is the only thing
+        // that adds rows, so the table cannot outgrow the tickets of the last StreamTicketMinutes.
+        await using var command = _db.CreateCommand("""
+            DELETE FROM session_file_stream_tickets WHERE expires_at < now();
+            INSERT INTO session_file_stream_tickets (hash, session_id, file_id, principal, expires_at)
+            VALUES (@hash, @session, @file, @principal, @expiresAt)
+            """);
+        command.Parameters.AddWithValue("hash", ticket.Hash);
+        command.Parameters.AddWithValue("session", ticket.SessionId);
+        command.Parameters.AddWithValue("file", ticket.FileId);
+        command.Parameters.AddWithValue("principal", ticket.Principal);
+        command.Parameters.AddWithValue("expiresAt", EnsureUtc(ticket.ExpiresAt));
+        await command.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task<SessionFileStreamTicket?> GetStreamTicketAsync(
+        string hash,
+        CancellationToken ct = default)
+    {
+        await using var command = _db.CreateCommand("""
+            SELECT hash, session_id, file_id, principal, expires_at
+            FROM session_file_stream_tickets WHERE hash = @hash
+            """);
+        command.Parameters.AddWithValue("hash", hash);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct)
+            ? new SessionFileStreamTicket(
+                reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3),
+                EnsureUtc(reader.GetDateTime(4)))
+            : null;
     }
 
     public async Task<SessionFileReservationResult> TryReserveAsync(

@@ -30,6 +30,29 @@ test('file HTTP routes reject missing and incorrect tokens before touching stora
   assert.deepEqual(harness.fileCalls, []);
 });
 
+test('file GET passes one byte range to the store and answers 416 past the end', async () => {
+  const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' }, {}, {
+    openFile: (id, range) => range?.start === 4000 ? { name: 'demo.mp4', size: 3000, unsatisfiable: true } : null
+  });
+  const id = 'c'.repeat(32);
+  const headers = { 'X-Agent-Token': 'correct-token' };
+
+  await requestHttp(harness, 'GET', `/agenthub/files/${id}`, { ...headers, Range: 'bytes=100-199' });
+  await requestHttp(harness, 'GET', `/agenthub/files/${id}`, { ...headers, Range: 'bytes=-50' });
+  // Several ranges, or a malformed one, are served in full rather than refused.
+  await requestHttp(harness, 'GET', `/agenthub/files/${id}`, { ...headers, Range: 'bytes=0-1,5-6' });
+  const past = await requestHttp(harness, 'GET', `/agenthub/files/${id}`, { ...headers, Range: 'bytes=4000-' });
+
+  assert.deepEqual(harness.fileCalls, [
+    { method: 'GET', id, range: { start: 100, end: 199 } },
+    { method: 'GET', id, range: { suffix: 50 } },
+    { method: 'GET', id },
+    { method: 'GET', id, range: { start: 4000, end: null } }
+  ]);
+  assert.equal(past.status, 416);
+  assert.equal(past.headers['content-range'], 'bytes */3000');
+});
+
 test('file HTTP routes stream PUT and expose bounded metadata operations', async () => {
   const harness = createHarness({
     AGENTHUB_CALLBACK_TOKEN: 'correct-token',

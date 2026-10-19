@@ -14,6 +14,16 @@ class LocalFileError extends Error {
   }
 }
 
+function resolveRange(range, size) {
+  if (range.suffix !== undefined) {
+    if (!(range.suffix > 0) || size === 0) return null;
+    const length = Math.min(range.suffix, size);
+    return { start: size - length, end: size - 1 };
+  }
+  if (range.start >= size) return null;
+  return { start: range.start, end: Math.min(range.end ?? size - 1, size - 1) };
+}
+
 class LocalFileStore {
   constructor(options = {}) {
     this.root = path.resolve(options.root || '/workspace/.agenthub/files');
@@ -58,7 +68,12 @@ class LocalFileStore {
     }
   }
 
-  async open(id) {
+  /**
+   * Opens a stored file, or one byte range of it: `{start, end}` (end inclusive, null for the
+   * rest) or `{suffix}` for the last bytes. The range is resolved against the size of the
+   * handle that is read, not of the path, so it cannot describe a different file.
+   */
+  async open(id, range = null) {
     const metadata = await this.head(id);
     if (!metadata) return null;
     const flags = this.fs.constants.O_RDONLY | (this.fs.constants.O_NOFOLLOW || 0);
@@ -67,6 +82,19 @@ class LocalFileStore {
       handle = await this.fs.promises.open(metadata.path, flags);
       const stat = await handle.stat();
       if (!stat.isFile()) throw new LocalFileError('managed_root_escape');
+      if (range) {
+        const resolved = resolveRange(range, stat.size);
+        if (!resolved) {
+          await handle.close();
+          return { ...metadata, size: stat.size, unsatisfiable: true };
+        }
+        return {
+          ...metadata,
+          size: stat.size,
+          range: resolved,
+          stream: handle.createReadStream({ autoClose: true, start: resolved.start, end: resolved.end })
+        };
+      }
       return {
         ...metadata,
         stream: handle.createReadStream({ autoClose: true })

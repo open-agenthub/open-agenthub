@@ -56,11 +56,13 @@ data:
   Network__RequestablePorts: {{ join "," .Values.agent.portRequests.requestablePorts | quote }}
   Files__MaxImageBytes: {{ .Values.files.maxImageBytes | int64 | quote }}
   Files__MaxDocumentBytes: {{ .Values.files.maxDocumentBytes | int64 | quote }}
+  Files__MaxVideoBytes: {{ .Values.files.maxVideoBytes | int64 | quote }}
   Files__MaxMessageBytes: {{ .Values.files.maxMessageBytes | int64 | quote }}
   Files__MaxMessageFiles: {{ .Values.files.maxMessageFiles | quote }}
   Files__MaxSessionFiles: {{ .Values.files.maxSessionFiles | quote }}
   Files__MaxSessionBytes: {{ .Values.files.maxSessionBytes | int64 | quote }}
   Files__PresignMinutes: {{ .Values.files.presignMinutes | quote }}
+  Files__StreamTicketMinutes: {{ .Values.files.streamTicketMinutes | quote }}
   Files__ReservationMinutes: {{ .Values.files.reservationMinutes | quote }}
   Files__SweepSeconds: {{ .Values.files.sweepSeconds | quote }}
   Files__PresentationPollMilliseconds: {{ .Values.files.presentationPollMilliseconds | quote }}

@@ -76,20 +76,16 @@ public sealed class SessionFilesController(
     }
 
     [HttpPut("{fileId}/content")]
-    [RequestSizeLimit(52L * 1024 * 1024)]
+    [DisableRequestSizeLimit]
     public async Task<IActionResult> Upload(
         string id,
         string fileId,
         CancellationToken ct)
     {
+        if (SessionFileApi.LimitUploadBody(this, options) is { } tooLarge) return tooLarge;
         var actor = await ResolveActorAsync(id, ct);
         if (actor is null) return NotFound();
         if (!actor.CanWrite) return Forbid();
-        if (Request.ContentLength > options.MaxDocumentBytes)
-        {
-            return StatusCode(StatusCodes.Status413PayloadTooLarge,
-                new FileApiError("file_too_large", "file_too_large"));
-        }
 
         try
         {
@@ -146,7 +142,62 @@ public sealed class SessionFilesController(
 
         try
         {
-            return SessionFileApi.Content(this, await files.OpenContentAsync(actor, fileId, ct: ct));
+            return SessionFileApi.Content(this, await files.OpenContentRangeAsync(
+                actor, fileId, SessionFileApi.RequestedRange(Request), ct: ct));
+        }
+        catch (SessionFileException exception)
+        {
+            return SessionFileApi.Error(this, exception);
+        }
+    }
+
+    /// <summary>
+    /// Issues a url the Files pane can hand to a &lt;video&gt; element, which fetches its source
+    /// itself and cannot send the bearer header (see <see cref="SessionFileStreamTickets"/>).
+    /// </summary>
+    [HttpPost("{fileId}/stream")]
+    public async Task<IActionResult> IssueStream(
+        string id,
+        string fileId,
+        [FromServices] SessionFileStreamTickets tickets,
+        CancellationToken ct)
+    {
+        var resolved = await ResolveAsync(id, ct);
+        if (resolved is null) return NotFound();
+        if (!SessionAccessRules.CanReadFiles(resolved.Level)) return Forbid();
+        try
+        {
+            return Ok(await tickets.IssueAsync(SessionFileApi.Actor(resolved, Principal), fileId, ct));
+        }
+        catch (SessionFileException exception)
+        {
+            return SessionFileApi.Error(this, exception);
+        }
+    }
+
+    /// <summary>
+    /// Serves a video to whoever holds a ticket for it, honouring Range so the player can seek.
+    /// The ticket only says who asked; access is resolved for that principal on every request,
+    /// exactly as for the bearer route, so a revoked share stops the next range.
+    /// </summary>
+    [HttpGet("{fileId}/stream")]
+    [AllowAnonymous]
+    public async Task<IActionResult> Stream(
+        string id,
+        string fileId,
+        [FromQuery] string? ticket,
+        [FromServices] SessionFileStreamTickets tickets,
+        CancellationToken ct)
+    {
+        var principal = await tickets.RedeemAsync(ticket, id, fileId, ct);
+        if (principal is null) return NotFound();
+        var resolved = await access.ResolveUserAsync(principal, id, ct);
+        if (resolved is null || !SessionAccessRules.CanReadFiles(resolved.Level)) return NotFound();
+        try
+        {
+            return SessionFileApi.Content(this, await files.OpenContentRangeAsync(
+                SessionFileApi.Actor(resolved, principal), fileId,
+                SessionFileApi.RequestedRange(Request), ct: ct));
         }
         catch (SessionFileException exception)
         {
@@ -223,6 +274,7 @@ public static class SessionFileApi
     [
         "image/png", "image/jpeg", "image/webp", "image/gif",
         "application/pdf", "text/markdown", "text/plain",
+        VideoContainerInspector.Mp4, VideoContainerInspector.WebM,
     ];
 
     public static SessionFileActor Actor(SessionAccessResult access, string principal) => new(
@@ -273,7 +325,45 @@ public static class SessionFileApi
             return controller.Redirect(content.RedirectUrl);
         }
 
-        return controller.File(content.Content!, content.MimeType);
+        controller.Response.Headers.AcceptRanges = "bytes";
+        if (content.RangeNotSatisfiable)
+        {
+            controller.Response.Headers.ContentRange = $"bytes */{content.Size}";
+            return controller.StatusCode(StatusCodes.Status416RangeNotSatisfiable);
+        }
+
+        return content.Range is null
+            ? controller.File(content.Content!, content.MimeType)
+            : new SessionFileContentResult(content);
+    }
+
+    /// <summary>The single byte range a GET asks for, or null to serve the whole file.</summary>
+    public static ByteRangeRequest? RequestedRange(HttpRequest request) =>
+        ByteRangeRequest.Parse(request.Headers.Range.ToString());
+
+    /// <summary>
+    /// Raises the request body limit of an upload route to the largest file any type may
+    /// reserve. A fixed attribute cannot follow MaxVideoBytes from the chart, and the global
+    /// Kestrel limit sits at the document size. The reserved size, enforced while streaming,
+    /// stays the real bound for each file; this only stops a body no reservation could match.
+    /// </summary>
+    public static IActionResult? LimitUploadBody(ControllerBase controller, SessionFileOptions options)
+    {
+        var maximum = SessionFileValidator.MaxUploadBytes(options);
+        if (controller.Request.ContentLength > maximum)
+        {
+            return controller.StatusCode(StatusCodes.Status413PayloadTooLarge,
+                new FileApiError("file_too_large", "file_too_large"));
+        }
+
+        var feature = controller.HttpContext.Features
+            .Get<Microsoft.AspNetCore.Http.Features.IHttpMaxRequestBodySizeFeature>();
+        if (feature is { IsReadOnly: false })
+        {
+            feature.MaxRequestBodySize = maximum;
+        }
+
+        return null;
     }
 
     public static IActionResult Error(ControllerBase controller, SessionFileException exception)
@@ -282,6 +372,7 @@ public static class SessionFileApi
         return exception.Code switch
         {
             "file_not_found" => controller.NotFound(response),
+            "stream_unsupported" or "file_not_ready" => controller.BadRequest(response),
             "file_access_denied" => controller.StatusCode(StatusCodes.Status403Forbidden, response),
             "file_content_expired" => controller.StatusCode(StatusCodes.Status410Gone, response),
             "file_too_large" or "attachment_bytes_exceeded" =>
@@ -312,5 +403,27 @@ public static class SessionFileApi
         {
             response.Headers.ContentSecurityPolicy = "sandbox; default-src 'none'";
         }
+    }
+}
+
+/// <summary>
+/// Writes the requested range of a file as a 206.
+///
+/// FileStreamResult can only serve ranges of a seekable stream, and none of ours is: the bytes
+/// come from object storage or the session pod as a response body. The range is therefore
+/// asked of the source and this only frames the answer.
+/// </summary>
+public sealed class SessionFileContentResult(FileContentResult content) : IActionResult
+{
+    public async Task ExecuteResultAsync(ActionContext context)
+    {
+        var response = context.HttpContext.Response;
+        var range = content.Range!;
+        await using var body = content.Content!;
+        response.ContentType = content.MimeType;
+        response.StatusCode = StatusCodes.Status206PartialContent;
+        response.Headers.ContentRange = $"bytes {range.From}-{range.To}/{content.Size}";
+        response.ContentLength = range.Length;
+        await body.CopyToAsync(response.Body, context.HttpContext.RequestAborted);
     }
 }

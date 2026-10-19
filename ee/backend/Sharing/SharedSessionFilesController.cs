@@ -49,7 +49,8 @@ public sealed class SharedSessionFilesController(
         if (actor is null) return NotFound();
         try
         {
-            return SessionFileApi.Content(this, await files.OpenContentAsync(actor, fileId, ct: ct));
+            return SessionFileApi.Content(this, await files.OpenContentRangeAsync(
+                actor, fileId, SessionFileApi.RequestedRange(Request), ct: ct));
         }
         catch (SessionFileException exception)
         {

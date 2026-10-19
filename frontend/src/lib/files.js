@@ -5,6 +5,7 @@ const OFFICE_MIME_TYPES = new Set([
 ])
 
 const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/webm'])
 
 export function previewKind(file, capabilities = {}) {
   if (!file) return 'download'
@@ -14,6 +15,7 @@ export function previewKind(file, capabilities = {}) {
   if (Array.isArray(advertised) && advertised.length &&
       !advertised.includes(file.mimeType) && !OFFICE_MIME_TYPES.has(file.mimeType)) return 'download'
   if (IMAGE_MIME_TYPES.has(file.mimeType)) return 'image'
+  if (VIDEO_MIME_TYPES.has(file.mimeType)) return 'video'
   if (file.mimeType === 'application/pdf') return 'pdf'
   if (file.mimeType === 'text/markdown') return 'markdown'
   if (file.mimeType === 'text/plain') return 'text'
@@ -27,6 +29,7 @@ export function previewKind(file, capabilities = {}) {
 export function fileIcon(file) {
   const kind = previewKind(file)
   if (kind === 'image') return 'IMG'
+  if (kind === 'video') return 'VID'
   if (kind === 'pdf' || kind === 'office-pdf') return 'PDF'
   if (kind === 'markdown') return 'MD'
   if (kind === 'text') return 'TXT'

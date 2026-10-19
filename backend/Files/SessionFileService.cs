@@ -32,7 +32,12 @@ public sealed record FileContentResult(
     string? RedirectUrl,
     string MimeType,
     string Name,
-    long Size);
+    long Size,
+    ByteRange? Range = null)
+{
+    /// <summary>A range was asked for and none of its bytes exist: answered with 416.</summary>
+    public bool RangeNotSatisfiable => Content is null && RedirectUrl is null;
+}
 
 public sealed class SessionFileException(string code, string? message = null)
     : Exception(message ?? code)
@@ -64,6 +69,17 @@ public interface ISessionFileService
         string fileId,
         bool allowRedirect = true,
         CancellationToken ct = default);
+    /// <summary>
+    /// Like <see cref="OpenContentAsync"/>, but serves only the requested range when there is
+    /// one. The default ignores the range, which is a correct (if larger) answer to any request.
+    /// </summary>
+    Task<FileContentResult> OpenContentRangeAsync(
+        SessionFileActor actor,
+        string fileId,
+        ByteRangeRequest? range,
+        bool allowRedirect = true,
+        CancellationToken ct = default) =>
+        OpenContentAsync(actor, fileId, allowRedirect, ct);
     Task DeleteAsync(
         SessionFileActor actor,
         string fileId,
@@ -112,17 +128,17 @@ public sealed class SessionFileService : ISessionFileService
         CancellationToken ct = default)
     {
         RequireWrite(actor);
+        var storageKind = _artifacts.IsConfigured
+            ? SessionFileStorageKind.S3
+            : SessionFileStorageKind.Pod;
         var validation = SessionFileValidator.ValidateReservation(
-            _options, request.Name, request.MimeType, request.Size);
+            _options, request.Name, request.MimeType, request.Size, storageKind);
         if (!validation.Allowed)
         {
             throw new SessionFileException(validation.Code!);
         }
 
         SessionInfo? liveSession = null;
-        var storageKind = _artifacts.IsConfigured
-            ? SessionFileStorageKind.S3
-            : SessionFileStorageKind.Pod;
         if (storageKind == SessionFileStorageKind.Pod)
         {
             liveSession = await GetLiveSessionAsync(actor, ct);
@@ -297,6 +313,35 @@ public sealed class SessionFileService : ISessionFileService
             throw new SessionFileException("storage_verification_failed");
         }
 
+        if (SessionFileValidator.IsVideo(file.Name))
+        {
+            await using (source)
+            {
+                // Inspected while streaming rather than buffered: a video may exceed the
+                // document limit BufferAsync is bounded by, and only its container structure,
+                // not its frames, is needed to decide what it is.
+                var video = await VideoContainerInspector.InspectAsync(
+                    source, file.DeclaredMimeType, file.Size, ct);
+                if (!video.Allowed || video.Size != file.Size)
+                {
+                    await FailAsync(file, current, ct);
+                    throw new SessionFileException(video.Code switch
+                    {
+                        null or "file_too_large" => "storage_verification_failed",
+                        _ => video.Code,
+                    });
+                }
+
+                if (!await _registry.TransitionAsync(actor.SessionId, file.Id, current,
+                        SessionFileState.Ready, video.MimeType, video.Size, ct))
+                {
+                    throw new SessionFileException("file_state_conflict");
+                }
+            }
+
+            return await RequireFileAsync(actor.SessionId, file.Id, ct);
+        }
+
         await using (source)
         {
             var buffered = await BufferAsync(source, _options.MaxDocumentBytes, ct);
@@ -329,14 +374,31 @@ public sealed class SessionFileService : ISessionFileService
         SessionFileActor actor,
         CancellationToken ct = default) => _registry.ListAsync(actor.SessionId, ct);
 
-    public async Task<FileContentResult> OpenContentAsync(
+    public Task<FileContentResult> OpenContentAsync(
         SessionFileActor actor,
         string fileId,
+        bool allowRedirect = true,
+        CancellationToken ct = default) =>
+        OpenContentRangeAsync(actor, fileId, null, allowRedirect, ct);
+
+    public async Task<FileContentResult> OpenContentRangeAsync(
+        SessionFileActor actor,
+        string fileId,
+        ByteRangeRequest? rangeRequest,
         bool allowRedirect = true,
         CancellationToken ct = default)
     {
         var file = await RequireReadyFileAsync(actor.SessionId, fileId, ct);
         var mimeType = file.DetectedMimeType ?? file.DeclaredMimeType;
+        ByteRange? range = null;
+        if (rangeRequest is not null)
+        {
+            range = rangeRequest.Resolve(file.Size);
+            if (range is null)
+            {
+                return new FileContentResult(null, null, mimeType, file.Name, file.Size);
+            }
+        }
         if (file.StorageKind == SessionFileStorageKind.S3)
         {
             // Redirecting is cheaper, but only works if the client can reach storage, and the
@@ -354,9 +416,11 @@ public sealed class SessionFileService : ISessionFileService
                     file.Size);
             }
 
-            var objectStream = await _artifacts.OpenReadAsync(file.StorageLocator, ct)
+            var objectStream = (range is null
+                    ? await _artifacts.OpenReadAsync(file.StorageLocator, ct)
+                    : await _artifacts.OpenReadRangeAsync(file.StorageLocator, range.From, range.Length, ct))
                 ?? throw new SessionFileException("file_content_expired");
-            return new FileContentResult(objectStream, null, mimeType, file.Name, file.Size);
+            return new FileContentResult(objectStream, null, mimeType, file.Name, file.Size, range);
         }
 
         var liveSession = await TryGetLiveSessionAsync(actor.Owner, actor.SessionId, ct);
@@ -365,13 +429,15 @@ public sealed class SessionFileService : ISessionFileService
             await ExpireReadyPodFileAsync(file, ct);
             throw new SessionFileException("file_content_expired");
         }
-        var stream = await _agentFiles.OpenReadAsync(liveSession, file, ct);
+        var stream = range is null
+            ? await _agentFiles.OpenReadAsync(liveSession, file, ct)
+            : await _agentFiles.OpenReadRangeAsync(liveSession, file, range, ct);
         if (stream is null)
         {
             await ExpireReadyPodFileAsync(file, ct);
             throw new SessionFileException("file_content_expired");
         }
-        return new FileContentResult(stream, null, mimeType, file.Name, file.Size);
+        return new FileContentResult(stream, null, mimeType, file.Name, file.Size, range);
     }
 
     private async Task ExpireReadyPodFileAsync(SessionFileRecord file, CancellationToken ct)

@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { getSessionFileContent, getSharedSessionFileContent } from '../api.js'
+import { api, getSessionFileContent, getSharedSessionFileContent, sharedSessionFileContentUrl } from '../api.js'
 import { REPO_URL } from '../lib/docs.js'
 import { previewKind } from '../lib/files.js'
 import { renderMarkdown } from '../lib/markdown.js'
@@ -17,6 +17,9 @@ const MAX_TEXT_BYTES = 1024 * 1024
 const loading = ref(false)
 const error = ref('')
 const objectUrl = ref('')
+const videoUrl = ref('')
+const videoEl = ref(null)
+let videoRetried = false
 const markdownEl = ref(null)
 const text = ref('')
 const truncated = ref(false)
@@ -38,9 +41,20 @@ async function load() {
   text.value = ''
   truncated.value = false
   error.value = ''
+  videoUrl.value = ''
+  videoRetried = false
   if (!props.file || ['pending', 'expired'].includes(kind.value)) return
   loading.value = true
   try {
+    if (kind.value === 'video') {
+      // Not fetched into a blob like the other kinds: the element streams the file in ranges, so
+      // playback starts before the download ends and a seek fetches only what it needs. The
+      // owner's route needs a ticket because the element cannot send the bearer header; a share
+      // link already carries its credential in the url.
+      const url = await videoSource()
+      if (current === generation) videoUrl.value = url
+      return
+    }
     const targetId = kind.value === 'office-pdf' ? props.file.previewFileId : props.file.id
     const blob = props.sharedToken
       ? await getSharedSessionFileContent(props.sharedToken, targetId)
@@ -63,6 +77,34 @@ async function load() {
     if (current === generation) error.value = 'This file could not be loaded.'
   } finally {
     if (current === generation) loading.value = false
+  }
+}
+
+async function videoSource() {
+  if (props.sharedToken) return sharedSessionFileContentUrl(props.sharedToken, props.file.id)
+  return (await api.issueSessionFileStream(props.sessionId, props.file.id)).url
+}
+
+// A ticket expires after a couple of hours, and the element only notices at its next range
+// request — a seek in a video left open. One fresh ticket, resumed where it stopped, covers that;
+// a second failure is a real one and is shown as such.
+async function onVideoError() {
+  const element = videoEl.value
+  if (!element || props.sharedToken || videoRetried) {
+    error.value = 'This video could not be played.'
+    return
+  }
+  videoRetried = true
+  const current = generation
+  const position = element.currentTime
+  try {
+    const url = await videoSource()
+    if (current !== generation) return
+    videoUrl.value = url
+    await nextTick()
+    if (videoEl.value) videoEl.value.currentTime = position
+  } catch {
+    if (current === generation) error.value = 'This video could not be played.'
   }
 }
 
@@ -90,6 +132,8 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
       <strong>This temporary file has expired</strong><span>Ask the agent to create or upload it again.</span>
     </div>
     <img v-else-if="kind === 'image' && objectUrl" :src="objectUrl" :alt="file.name" data-file-preview="image">
+    <video v-else-if="kind === 'video' && videoUrl" ref="videoEl" :src="videoUrl" controls preload="metadata"
+      playsinline :aria-label="`Video ${file.name}`" data-file-preview="video" @error="onVideoError"></video>
     <!-- Deliberately no sandbox attribute. Chrome refuses to instantiate its PDF viewer inside a
          sandboxed frame under every token combination tried, including allow-scripts and
          allow-same-origin, so any sandbox here replaces the document with the grey "blocked
@@ -126,6 +170,7 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
 <style scoped>
 .preview { height: 100%; min-width: 0; min-height: 0; display: flex; overflow: auto; background: #0c1118; }
 .preview > img { max-width: 100%; max-height: 100%; margin: auto; padding: 24px; object-fit: contain; }
+.preview > video { max-width: 100%; max-height: 100%; margin: auto; padding: 24px; background: #000; }
 .preview > iframe { width: 100%; height: 100%; border: 0; background: white; }
 .preview-state { margin: auto; display: flex; max-width: 420px; flex-direction: column; align-items: center; gap: 8px; padding: 28px; color: #8692a2; text-align: center; font-size: 12px; }
 .preview-state strong { color: #dce5f1; font-size: 13px; }

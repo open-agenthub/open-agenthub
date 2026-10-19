@@ -3,10 +3,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import FilePreview from './FilePreview.vue'
 
-const mocks = vi.hoisted(() => ({ content: vi.fn() }))
+const mocks = vi.hoisted(() => ({ content: vi.fn(), stream: vi.fn() }))
 vi.mock('../api.js', () => ({
+  api: { issueSessionFileStream: mocks.stream },
   getSessionFileContent: mocks.content,
-  getSharedSessionFileContent: mocks.content
+  getSharedSessionFileContent: mocks.content,
+  sharedSessionFileContentUrl: (token, fileId) => `/api/shared/${token}/files/${fileId}/content`
 }))
 
 describe('FilePreview', () => {
@@ -58,6 +60,47 @@ describe('FilePreview', () => {
     expect(mocks.content).toHaveBeenCalledWith('s1', 'f1-pdf')
     expect(wrapper.get('[data-file-preview="pdf"]').attributes('sandbox')).toBeUndefined()
     expect(URL.createObjectURL.mock.calls[0][0].type).toBe('application/pdf')
+  })
+
+  it('plays a video from a stream ticket instead of downloading it into a blob', async () => {
+    mocks.stream.mockResolvedValueOnce({ url: '/api/sessions/s1/files/v1/stream?ticket=one' })
+    const wrapper = mount(FilePreview, { props: {
+      sessionId: 's1', file: { id: 'v1', name: 'demo.mp4', mimeType: 'video/mp4', size: 9, state: 'Ready' }, capabilities: {}
+    } })
+    await flushPromises()
+    const video = wrapper.get('[data-file-preview="video"]')
+    expect(video.attributes('src')).toBe('/api/sessions/s1/files/v1/stream?ticket=one')
+    expect(video.attributes('controls')).toBeDefined()
+    expect(mocks.stream).toHaveBeenCalledWith('s1', 'v1')
+    expect(mocks.content).not.toHaveBeenCalled()
+  })
+
+  it('asks for one fresh ticket when playback fails, then reports the error', async () => {
+    mocks.stream
+      .mockResolvedValueOnce({ url: '/stream?ticket=one' })
+      .mockResolvedValueOnce({ url: '/stream?ticket=two' })
+    const wrapper = mount(FilePreview, { props: {
+      sessionId: 's1', file: { id: 'v1', name: 'demo.webm', mimeType: 'video/webm', size: 9, state: 'Ready' }, capabilities: {}
+    } })
+    await flushPromises()
+    await wrapper.get('video').trigger('error')
+    await flushPromises()
+    expect(wrapper.get('video').attributes('src')).toBe('/stream?ticket=two')
+    await wrapper.get('video').trigger('error')
+    await flushPromises()
+    expect(wrapper.find('video').exists()).toBe(false)
+    expect(wrapper.text()).toContain('This video could not be played.')
+    expect(mocks.stream).toHaveBeenCalledTimes(2)
+  })
+
+  it('plays a shared video straight from the share link, which carries its own credential', async () => {
+    const wrapper = mount(FilePreview, { props: {
+      sessionId: 's1', sharedToken: 'tok',
+      file: { id: 'v1', name: 'demo.mp4', mimeType: 'video/mp4', size: 9, state: 'Ready' }, capabilities: {}
+    } })
+    await flushPromises()
+    expect(wrapper.get('video').attributes('src')).toBe('/api/shared/tok/files/v1/content')
+    expect(mocks.stream).not.toHaveBeenCalled()
   })
 
   it('leaves an image blob at its own type', async () => {
