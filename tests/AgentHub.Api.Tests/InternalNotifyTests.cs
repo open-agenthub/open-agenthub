@@ -20,6 +20,26 @@ namespace AgentHub.Api.Tests;
 public class InternalNotifyTests
 {
     [Theory]
+    [InlineData("token-s1", true)]
+    [InlineData("wrong", false)]
+    public async Task TurnStarted_ClearsThePreviousQuestionOnlyWithTheCallbackToken(string token, bool allowed)
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        var result = await world.Controller(token).TurnStarted("s1", CancellationToken.None);
+        if (allowed)
+        {
+            Assert.IsType<NoContentResult>(result);
+            Assert.Equal([("s1", false)], world.Store.QuestionPending);
+        }
+        else
+        {
+            Assert.IsType<UnauthorizedResult>(result);
+            Assert.Empty(world.Store.QuestionPending);
+        }
+        Assert.Empty(world.Notifier.Events);
+    }
+
+    [Theory]
     [InlineData(AgentKind.Codex)]
     [InlineData(AgentKind.Cursor)]
     [InlineData(AgentKind.OpenCode)]

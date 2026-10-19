@@ -67,6 +67,10 @@ function validateDriver(driver) {
   if (driver.turnHooks !== undefined && typeof driver.turnHooks !== 'boolean') {
     throw new Error('Agent driver turnHooks must be a boolean when present');
   }
+  // Optional: verified native interruption input, for a CLI without an interruption hook.
+  if (driver.isTurnInterrupt !== undefined && typeof driver.isTurnInterrupt !== 'function') {
+    throw new Error('Agent driver isTurnInterrupt must be a function');
+  }
   // Optional: an authoritative failed/aborted turn marker, for paths without a Stop hook.
   if (driver.failedTurnEnded !== undefined && typeof driver.failedTurnEnded !== 'function') {
     throw new Error('Agent driver failedTurnEnded must be a function');

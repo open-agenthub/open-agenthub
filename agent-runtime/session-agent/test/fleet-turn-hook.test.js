@@ -38,9 +38,10 @@ test('each Codex event is reported to the session agent under its own name', asy
   await run({ ...thread, hook_event_name: 'PermissionRequest', tool_name: 'shell' }, env, fetchImpl);
   await run(stop, env, fetchImpl);
   await run({ ...thread, hook_event_name: 'Interrupt' }, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'StopFailure' }, env, fetchImpl);
   await run({ ...thread, hook_event_name: 'PostToolUse' }, env, fetchImpl);
 
-  assert.deepEqual(calls.map(call => call.body.event), ['prompt', 'permission', 'stop', 'idle']);
+  assert.deepEqual(calls.map(call => call.body.event), ['prompt', 'permission', 'stop', 'idle', 'idle']);
   assert.equal(calls[0].url, 'http://127.0.0.1:8123/agenthub/turn');
   assert.equal(calls[0].token, 'tok');
 });

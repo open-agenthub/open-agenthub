@@ -1071,6 +1071,10 @@ function createCommonServer(options = {}) {
         return;
       }
       if (message.type === 'input' && typeof message.data === 'string') {
+        if (nextTurn?.state === 'busy' && !activityPermissionPending && driver.isTurnInterrupt?.(message.data)) {
+          activityIdleOverride = true;
+          publishActivity();
+        }
         // An approval selected in the terminal resumes the same turn, so there is no new prompt
         // hook. The client still gives a visible menu precedence until its screen clears.
         if (activityPermissionPending && /[\r\n]|^[yYnN]$/.test(message.data)) {
@@ -1431,7 +1435,17 @@ function createCommonServer(options = {}) {
     // A Stop during an update or restart is answered with nothing: the agent is about to go.
     // An interrupted/failed plugin turn is idle to viewers but is not a safe point for fleet
     // continuation. Keep that distinction instead of turning its idle report into a Stop.
-    if (event === 'prompt') activityPromptAt = now();
+    if (event === 'prompt') {
+      activityPromptAt = now();
+      // Complete before the prompt hook returns so a later question cannot be cleared by a
+      // delayed callback from the previous prompt. Failure must not prevent the native turn.
+      if (callback && token) {
+        try {
+          await fetchImpl(callback + '/turn-started', { method: 'POST',
+            headers: { 'X-Agent-Token': token }, signal: AbortSignal.timeout(5000) });
+        } catch {}
+      }
+    }
     activityIdleOverride = event === 'idle';
     activityPermissionPending = event === 'permission';
     const text = event === 'idle' || runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);

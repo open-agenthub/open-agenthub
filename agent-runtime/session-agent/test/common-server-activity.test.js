@@ -57,3 +57,29 @@ test('interrupts and failed plugin turns clear presentation without enabling a f
   await turn(h, 'idle'); assert.equal(frames(viewer).at(-1).state, 'idle');
   assert.equal(takes, 0);
 });
+
+test('verified provider interruption keys clear presentation only, and do not cancel approvals', async () => {
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token' }, {
+    turnHooks: true, isTurnInterrupt: data => data === '\x1b'
+  });
+  const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/'); subscribe(socket);
+  await turn(h, 'prompt');
+  socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
+  assert.equal(frames(socket).at(-1).state, 'idle');
+  await turn(h, 'prompt');
+  assert.equal(frames(socket).at(-1).state, 'working');
+  await turn(h, 'permission');
+  socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
+  assert.equal(frames(socket).at(-1).state, 'waiting');
+});
+
+test('a prompt clears the previous hub question before the native hook returns', async () => {
+  const callbacks = [];
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token', AGENTHUB_CALLBACK_URL: 'https://example.com/internal/sessions/s1' },
+    { turnHooks: true }, { fetchResponse: (url, options) => {
+      if (url.endsWith('/turn-started')) callbacks.push({ url, token: options.headers['X-Agent-Token'] });
+      return undefined;
+    } });
+  await turn(h, 'prompt');
+  assert.deepEqual(callbacks, [{ url: 'https://example.com/internal/sessions/s1/turn-started', token: 'activity-token' }]);
+});

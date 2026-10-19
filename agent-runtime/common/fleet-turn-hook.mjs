@@ -17,7 +17,7 @@
 import { pathToFileURL } from 'node:url';
 
 const CALL_TIMEOUT_MS = 8000;
-const EVENTS = { UserPromptSubmit: 'prompt', PermissionRequest: 'permission', Stop: 'stop', Interrupt: 'idle' };
+const EVENTS = { UserPromptSubmit: 'prompt', PermissionRequest: 'permission', Stop: 'stop', Interrupt: 'idle', StopFailure: 'idle' };
 
 async function readStdin() {
   const chunks = [];

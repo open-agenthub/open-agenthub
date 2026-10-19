@@ -219,6 +219,9 @@ function resetFromText(text, from) {
 module.exports = {
   contextClearCommand: '/clear',
   turnHooks: true,
+  // The pinned interactive CLI cancels a running turn on Escape without firing Stop.
+  // This only clears presentation; it must never release queued peer messages.
+  isTurnInterrupt: data => data === '\x1b',
   fleetNextTurn: false,
   slashCommands: require('./slash-commands'),
   name: 'Claude',
