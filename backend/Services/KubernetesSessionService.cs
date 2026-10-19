@@ -1269,7 +1269,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         while (await TryReadPodAsync($"session-{id}", deadline.Token) is not null)
             await Task.Delay(250, deadline.Token);
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
-        if (await _artifacts.HeadAsync(IArtifactStore.StateKey(owner, id, record.Agent), ct) is null)
+        // Archives are keyed by the hashed owner key, like every other session object; the raw
+        // owner name never matches one, so the update stopped here with the session paused.
+        if (await _artifacts.HeadAsync(IArtifactStore.StateKey(Sanitize(owner), id, record.Agent), ct) is null)
             throw new InvalidOperationException("No saved conversation archive is available. The session remains paused.");
         return await ResumeSessionCoreAsync(owner, id, ct);
     }
