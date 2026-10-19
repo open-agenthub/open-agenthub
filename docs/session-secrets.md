@@ -191,7 +191,8 @@ would be recorded for good.
 **A grant is per session and kept apart from the selection.** `sessions.secret_grant_ids` adds to
 whatever the selection gives, even beyond the project. The owner answered this session's own
 request, and widening the project for every session would give it to agents that never asked. The
-edit dialog's PATCH can take grants back (`secretGrantIds`), never add them.
+edit dialog's compatibility field `secretGrantIds` only revokes. The owner can now replace
+`secretGrants` explicitly, as described below.
 
 **Asking cannot widen a limit.** A session created by a restricted token, or spawned by another
 session, records a ceiling at creation (`sessions.secret_ceiling`): the token's secrets, or the
@@ -257,3 +258,58 @@ was not verifiable in a session pod.
 the chart's role does not grant. Against the real API server the call was refused with 403 and the
 purge stopped before it reached object storage. It now lists by the owner label and deletes one by
 one with the verbs the role has.
+
+## Explicit session grants (#209)
+
+The owner can now set `secretGrants: [{ secretId, inheritToChildren }]` alongside `secretIds`
+when creating or editing a session. The list replaces the grants; `[]` revokes them all and
+omitting it leaves them unchanged on edit. It does not widen the project selection or change
+what an explicit `secretIds` list may select. The older `secretGrantIds` edit field remains a
+revoke-only compatibility path. A duplicate starts without grants unless its owner explicitly
+chooses them in the duplicate dialog.
+
+**Inheritance defaults to false.** Giving a credential to one agent must not silently give it to
+agents that it starts later. This applies to existing request grants too. The persisted grant
+column accepts its old string-array form and reads it as `requested`, non-inheritable grants;
+new writes store the id, inheritance flag and service-assigned origin. No database rewrite or
+additional copy of a value is needed.
+
+A spawn receives the parent's effective project/session selection plus grants marked for
+inheritance, narrowed by an explicit child list if supplied. An inheritable grant stays a grant
+when the child joins a different project, with origin `inherited`; its inheritance flag remains
+set for further descendants. A grant with inheritance disabled cannot be requested by id to
+bypass that choice. Every child still records an immutable ceiling contained in what its parent
+currently holds. Delivery intersects this ceiling too, so moving the child to another project or
+changing a project's selection later cannot widen it. Revoking a parent's grant removes inherited descendant grants and rewrites their copies live.
+A grant the owner gives the child directly is independent and survives the parent's revocation.
+Disabling inheritance or deleting the parent also ends inherited access. Revoked inherited grants
+are removed even from unstarted sessions so regranting a parent cannot resurrect old child access.
+
+Restricted token creation and grant updates check every grant id against the token's secret
+scope before looking up secrets. Existing session ceilings also constrain owner grant updates
+and request answers. The agent's spawn endpoint rejects owner-grant fields; it only attaches
+inherited grants computed by the service. A client cannot supply provenance or a ceiling.
+
+`secrets_list` reports `provenance` (`project`, `granted`, `inherited`, `requested`) and
+`inheritToChildren` without values. The session view shows the same origin for effective secrets;
+the owner dialogs separately edit project selection and session grants. `project` labels the
+ordinary selection path, including explicitly selected secrets outside a project. When a secret
+is both selected and granted, the grant origin is shown; removing that grant leaves the ordinary
+selection in effect. Grant changes refresh the session's copies through the existing delivery
+path. Files update live; environment variables require the next start. Scheduled sessions can
+choose grants at creation, but changes are rejected like other runtime fields because the
+CronJob fixes variable names. Delete and recreate one to change grants.
+
+Rejected alternatives:
+
+- Widening the project selection would distribute a session-specific credential to unrelated
+  agents, and would defeat revocation for this one session.
+- Treating grants as explicit selection entries would either violate project validation or lose
+  the grant when its project changes. Separate grant metadata preserves both rules.
+- Inheritance on by default would silently expand access, including for old request grants.
+- Letting child agents submit their own grants or treating token grants as unscoped metadata
+  would make the grant list an escape from existing credential limits.
+- Independent copies for inherited grants would leave credentials in unattended descendants after
+  their parent was revoked. Inherited grants retain a service-assigned source-session link; only
+  an explicit owner grant on the child is independent. Replacing a child grant list deliberately
+  approves its listed grants as direct owner grants; omitted lists retain inherited provenance.

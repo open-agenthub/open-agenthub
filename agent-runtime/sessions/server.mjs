@@ -59,7 +59,7 @@ const createSchema = z.object({
   credentialId: z.string().max(64).optional(),
   gitPatIds: z.string().max(4096).optional(),
   // Which of this session's secrets (secrets_list → id) the child gets, comma-separated; omitted =
-  // all of them, "none" = none. At most what this session has (docs/session-secrets.md).
+  // eligible selection and inheritable grants, "none" = none (docs/session-secrets.md).
   secretIds: z.string().max(4096).optional(),
   // Whether the hub moves the child to another account when its own hits a usage limit
   // (docs/account-limits.md); omitted = auto.
@@ -81,7 +81,7 @@ register('session_create', {
     + 'its last activity (autoDeleteFrom "lastActivity", the default) or since its start. '
     + 'credentialId picks the stored provider login and gitPatIds (comma-separated, one per host, "none" for no '
     + 'token) the git tokens the child gets. secretIds (comma-separated ids from secrets_list, "none" for none) '
-    + 'narrows the secrets it gets; omitted, it gets exactly the ones this session has. accountFailover "off" keeps the child on its account '
+    + 'narrows the secrets it gets; omitted, it gets the project selection this session holds and grants marked inheritToChildren. Non-inheritable grants cannot be requested. accountFailover "off" keeps the child on its account '
     + 'when that hits a usage limit; the default "auto" moves it to another available one.',
   inputSchema: createSchema
 }, async (body) => text(sanitizeSession(await client.create(withCredentialSelection(withExpiry(body))))));
