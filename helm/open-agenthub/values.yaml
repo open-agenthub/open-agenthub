@@ -82,6 +82,10 @@ agent:
   runtimeClassName: ""
   maxCpu: "2"
   maxMemory: 4Gi
+  # Smallest CPU/memory request a session may ask for. Below it the pod reserves next to nothing
+  # on its node and is among the first evicted under memory pressure (docs/session-resources.md).
+  minCpu: 50m
+  minMemory: 256Mi
   # Users may specify a custom container image per session.
   allowCustomImage: true
   # Replace outdated runtime images only after positive idle admission.

@@ -15,6 +15,17 @@ import { decide, isInteractive, send } from '../common/turn-notify-hook.mjs';
  * - unattended modes send nothing, before any lookup: there the end of the turn is the end of
  *   `opencode run`, and the session agent posts Succeeded.
  */
+/**
+ * Whether the answer was stopped from the keyboard. Measured on 1.18.35 (#198): Escape fires
+ * session.idle before the abort is stored, so the answer then carries neither
+ * MessageAbortedError nor `time.completed`. An answer that finished has a completion time, and
+ * one that failed has an error of another name; both still notify.
+ */
+export function wasStopped(info) {
+  if (info.error) return info.error.name === 'MessageAbortedError';
+  return !(info.time && info.time.completed);
+}
+
 export function createTurnNotifier({ client, env = process.env, sendImpl = send } = {}) {
   return async function onEvent(event) {
     if (!event || event.type !== 'session.idle') return;
@@ -30,7 +41,7 @@ export function createTurnNotifier({ client, env = process.env, sendImpl = send 
       const last = (messages && Array.isArray(messages.data) ? messages.data : [])
         .filter(message => message && message.info && message.info.role === 'assistant').pop();
       if (last) {
-        if (last.info.error && last.info.error.name === 'MessageAbortedError') payload.status = 'aborted';
+        if (wasStopped(last.info)) payload.status = 'aborted';
         payload.last_assistant_message = (last.parts || [])
           .filter(part => part && part.type === 'text' && typeof part.text === 'string' && !part.synthetic)
           .map(part => part.text).join('\n');

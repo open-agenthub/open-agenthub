@@ -59,7 +59,8 @@ public sealed class AgentHubMcpTools(
         [Description("Cron expression; only for Scheduled sessions.")] string? schedule = null,
         [Description("CPU request, e.g. \"500m\". Lower it on a small cluster where the default "
                      + "would leave the pod unschedulable.")] string? cpu = null,
-        [Description("Memory request, e.g. \"1Gi\".")] string? memory = null,
+        [Description("Memory request in Mi or Gi, e.g. \"1Gi\"; at least the instance minimum "
+                     + "(256Mi by default). \"m\" means milli, so \"512m\" is half a byte.")] string? memory = null,
         [Description("\"true\" or \"false\". Approve tool-permission requests automatically. "
                      + "Defaults to on for Autonomous and Scheduled sessions, where nobody is "
                      + "watching to answer a prompt; pass false to keep such a session gated.")]
@@ -126,7 +127,11 @@ public sealed class AgentHubMcpTools(
         if (!string.IsNullOrWhiteSpace(cpu)) request = request with { Cpu = cpu.Trim() };
         if (!string.IsNullOrWhiteSpace(memory)) request = request with { Memory = memory.Trim() };
 
-        var created = await sessions.CreateSessionAsync(Owner, request, ct);
+        SessionInfo created;
+        // The service's ArgumentException names the mistake (e.g. memory "10m"); unhandled, the
+        // MCP SDK would replace it with a generic error and the agent could not correct itself.
+        try { created = await sessions.CreateSessionAsync(Owner, request, ct); }
+        catch (ArgumentException e) { throw new McpException("invalid_argument: " + e.Message); }
         logger.LogInformation("MCP client created session {SessionId} for {Owner}", created.Id, created.Owner);
         // The response carries `url`: the page a person opens to take this session over. It is null
         // on an instance with no FrontendOrigin configured — see SessionUrl.
