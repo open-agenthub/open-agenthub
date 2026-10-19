@@ -32,7 +32,7 @@ public sealed class SessionSecretAccessResolver(
     {
         if (grant.SourceSessionId is not { } id || !sessions.TryGetValue(id, out var parent)) return false;
         if (!Effective(parent, new HashSet<string>(path)).Contains(grant.SecretId)) return false;
-        return Selected(parent).Contains(grant.SecretId) || SessionSecretGrants.Parse(parent.SecretGrantIdsJson)
+        return SessionSecretGrants.Parse(parent.SecretGrantIdsJson)
             .Any(g => g.SecretId == grant.SecretId && g.InheritToChildren);
     }
 

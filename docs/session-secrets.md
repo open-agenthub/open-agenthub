@@ -158,7 +158,7 @@ token creating a session:
 `GET /api/remote/credentials` lists the allowed secrets by id, name and delivery.
 
 **A session spawned over MCP carries at most what its parent has.** Without a list the child
-inherits exactly the parent's current set, again as an explicit list (`null` would follow the
+inherits its parent's ordinary selection and grants enabled for inheritance, again as an explicit list (`null` would follow the
 project, which may select more than the parent was narrowed to); a child placed in another project
 keeps only what both select. Asking for a secret the parent does not have is `403
 secret_not_allowed` — refused rather than dropped, so the agent learns why the child lacks it.
@@ -272,7 +272,9 @@ chooses them in the duplicate dialog.
 agents that it starts later. This applies to existing request grants too. The persisted grant
 column accepts its old string-array form and reads it as `requested`, non-inheritable grants;
 new writes store the id, inheritance flag and service-assigned origin. No database rewrite or
-additional copy of a value is needed.
+additional copy of a value is needed. Inherited grants additionally record their source session;
+clients cannot supply that link. The editor can explicitly make an inherited grant direct.
+Saving a changed grant list is an owner approval of its entries; other edits omit that list.
 
 A spawn receives the parent's effective project/session selection plus grants marked for
 inheritance, narrowed by an explicit child list if supplied. An inheritable grant stays a grant
@@ -313,3 +315,15 @@ Rejected alternatives:
   their parent was revoked. Inherited grants retain a service-assigned source-session link; only
   an explicit owner grant on the child is independent. Replacing a child grant list deliberately
   approves its listed grants as direct owner grants; omitted lists retain inherited provenance.
+
+
+The #209 real-service proof uses actual session, project, token and callback controllers with
+Postgres and an isolated API server. It verifies owner grants beyond project selection, spawning
+with inheritance off/on, explicit-id bypass denial, cross-project grants, immutable ceilings,
+restricted tokens at creation/update, owner isolation and scheduled-session rejection. Admitted
+pods have the expected Secret copies. Rotation rewrites those copies; parent revocation removes
+inherited child and grandchild copies live, while a directly approved child keeps its grant.
+Regranting the parent does not resurrect revoked children; disabling inheritance also revokes.
+The rig has no kubelet, so projected-file timing and the running process environment are not
+established by this proof. Files follow within the kubelet sync period; variables still require
+restarting or pausing the process to revoke immediately.

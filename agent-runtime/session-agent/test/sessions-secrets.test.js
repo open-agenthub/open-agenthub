@@ -109,3 +109,14 @@ test('session_create passes secretIds in the text form, and the module never rea
   assert.match(server, /register\('secrets_list'/);
   assert.match(server, /register\('secret_request'/);
 });
+
+test('secrets_list preserves grant provenance and inheritance without values', async () => {
+  const { listSecrets } = await load();
+  const result = await listSecrets({ secrets: async () => ({ secrets: [{
+    id: 'grant-a', name: 'DEPLOY_FILE', delivery: 'file', provenance: 'inherited', inheritToChildren: true,
+    value: 'must-not-leave-backend'
+  }] }) }, { HOME: '/home/agent' }, () => true);
+  assert.equal(result.secrets[0].provenance, 'inherited');
+  assert.equal(result.secrets[0].inheritToChildren, true);
+  assert.equal(JSON.stringify(result).includes('must-not-leave-backend'), false);
+});

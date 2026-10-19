@@ -189,7 +189,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     {
         var records = (await _store.ListAsync(owner, ct)).ToDictionary(r => r.Id);
         var projects = (await _projects.ListAsync(owner, ct)).ToDictionary(p => p.Id,
-            p => (IReadOnlyList<string>)(p.SecretIds ?? []));
+            p => p.SecretIds ?? []);
         var stored = await ListSessionSecretsAsync(owner, ct);
         return new(records, projects, stored.Select(s => s.Id).ToList());
     }
@@ -220,7 +220,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         {
             if (await _store.GetAsync(owner, sessionId, ct) is { } rec)
             {
-                await WriteSessionSecretsAsync(owner, rec, store, ct);
+                await WriteSessionSecretsAsync(owner, rec, store, ct, resolver);
                 continue;
             }
             // The session is gone but its copies are not (a delete that failed half-way): they hold
@@ -261,9 +261,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     /// every change: the kubelet then carries a file change into the running pod by itself.
     /// </summary>
     private async Task<IReadOnlyList<string>> WriteSessionSecretsAsync(string owner, SessionRecord rec,
-        IDictionary<string, byte[]>? store, CancellationToken ct)
+        IDictionary<string, byte[]>? store, CancellationToken ct, SessionSecretAccessResolver? resolver = null)
     {
-        var ids = (await SecretAccessResolverAsync(owner, ct)).Effective(rec);
+        var ids = (resolver ?? await SecretAccessResolverAsync(owner, ct)).Effective(rec);
         var delivery = SessionSecretDeliveryFactory.Build(rec.Id, _opts.Namespace,
             new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id }, store, ids);
         await UpsertSecretAsync(delivery.Files, ct);
