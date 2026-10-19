@@ -91,7 +91,7 @@ async function flush() {
       }
       if (generation !== current) return
       queued.value = queued.value.filter(item => item !== next)
-      emit('sent', next.text)
+      emitSent(next.text, next.attachments || [])
     }
   } finally {
     flushing = false
@@ -125,6 +125,10 @@ function editQueued(item) {
   restoreToDraft([item])
   input.value?.focus()
 }
+function emitSent(value, files) {
+  if (files.length) emit('sent', value, { fileIds: files.map(file => file.id) })
+  else emit('sent', value)
+}
 async function submit() {
   if (pending.value || !hasContent.value || !attachmentsSettled.value) return
   const files = readyAttachments.value.map(attachmentRecord)
@@ -146,7 +150,7 @@ async function submit() {
   try {
     if (files.length) await props.send(value, { paths: await props.attach(files.map(file => file.id)) })
     else await props.send(value)
-    emit('sent', value)
+    emitSent(value, files)
     if (generation === current && text.value === value) text.value = ''
     if (generation === current) attachments.clearReady()
   } catch (e) {
