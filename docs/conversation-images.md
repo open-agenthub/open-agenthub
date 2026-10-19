@@ -89,3 +89,10 @@ Regression coverage includes cross-poll companion enrichment, wrong-prompt isola
 image-only turns, exact Codex/OpenCode source paths, unrecognized paths and active image types,
 shared versus signed-in fetch selection, denied/expired content, object URL cleanup, and adapter
 deduplication/completed-message/subagent behavior.
+
+After merging the single-reporter fix from main, the real `fleet-delivery-real-cli-rig` ran
+OpenCode `SCENARIO=all` under static proot with the branch managed configuration. Mid-turn and
+idle peers arrived as next turns; a peer waiting behind an owner draft stayed queued until the
+owner submitted; priority delivery used the PTY. Each of the four peer messages appeared in
+exactly one model request. This checks that the transcript adapter preserves the existing
+single-reporter delivery path.
