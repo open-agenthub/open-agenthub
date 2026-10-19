@@ -52,7 +52,7 @@ public sealed class RemoteController : ControllerBase
     private async Task<RemoteCaller?> ResolveCallerAsync(CancellationToken ct)
         => RemoteBearerToken.Read(Request) is { } token ? await _findCaller(token, ct) : null;
 
-    /// <summary>The owner alone, for the endpoints that act on existing sessions. Only session
+    /// <summary>The owner alone, for the endpoints that act on existing sessions. Secret grants, session
     /// creation and the credential listing consult the scope: a session belongs to its owner,
     /// not to the token that created it (docs/credential-scopes.md).</summary>
     private async Task<string?> ResolveOwnerAsync(CancellationToken ct) => (await ResolveCallerAsync(ct))?.Owner;
@@ -147,9 +147,13 @@ public sealed class RemoteController : ControllerBase
     [HttpPatch("sessions/{id}")]
     public async Task<ActionResult<SessionInfo>> Update(string id, [FromBody] RemoteUpdateSessionRequest req, CancellationToken ct)
     {
-        var owner = await ResolveOwnerAsync(ct);
-        if (owner is null) return Unauthorized();
-        try { return Ok(await _svc.UpdateSessionAsync(owner, id, req.ToUpdate(), ct)); }
+        var caller = await ResolveCallerAsync(ct);
+        if (caller is null) return Unauthorized();
+        if (caller.Scope is { } scope && req.SecretGrants?.Any(g => g is null || !scope.AllowsSecret(g.SecretId)) == true)
+            return StatusCode(StatusCodes.Status403Forbidden, CredentialScopeException.SecretNotAllowed);
+        try { return Ok(await _svc.UpdateSessionAsync(caller.Owner, id, req.ToUpdate(), ct)); }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
     }

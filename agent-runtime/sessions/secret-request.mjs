@@ -83,6 +83,7 @@ export async function listSecrets(client, env = process.env, exists = fs.existsS
     secrets: secrets.map(secret => ({
       id: secret.id, name: secret.name, delivery: secret.delivery,
       ...(secret.description ? { description: secret.description } : {}),
+      ...(secret.provenance ? { provenance: secret.provenance, inheritToChildren: secret.inheritToChildren } : {}),
       ...availability(secret, env, exists)
     }))
   };
