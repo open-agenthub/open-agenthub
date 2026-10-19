@@ -1,4 +1,5 @@
 using System.Net.WebSockets;
+using System.Text;
 using AgentHub.Api.Models;
 using AgentHub.Api.Services;
 
@@ -83,7 +84,15 @@ public static class TerminalProxy
         using var client = await ctx.WebSockets.AcceptWebSocketAsync();
         using var upstream = new ClientWebSocket();
         upstream.Options.AddSubProtocol("tty");
-        try { await upstream.ConnectAsync(new Uri($"ws://{session.PodIp}:{agentPort}{upstreamPath}"), ctx.RequestAborted); }
+        try
+        {
+            await upstream.ConnectAsync(new Uri($"ws://{session.PodIp}:{agentPort}{upstreamPath}"), ctx.RequestAborted);
+            // Subscribe on behalf of viewers without opening a browser-to-agent input channel.
+            // The query opt-in keeps older terminals from rendering metadata as terminal output.
+            if (!canWrite && upstreamPath == "/" && ctx.Request.Query["activity"] == "1")
+                await upstream.SendAsync(Encoding.UTF8.GetBytes("{\"type\":\"subscribe\",\"channel\":\"activity\"}"),
+                    WebSocketMessageType.Text, true, ctx.RequestAborted);
+        }
         catch (Exception ex)
         {
             log.LogWarning(ex, "Upstream connection to {Pod} failed", session.PodIp);

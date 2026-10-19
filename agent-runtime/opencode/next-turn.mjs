@@ -21,7 +21,7 @@ import { isInteractive, report } from '../common/fleet-turn-hook.mjs';
 export function createNextTurnRelay({ client, env = process.env, reportImpl = report } = {}) {
   async function topLevelIdle(sessionID) {
     const session = await client.session.get({ path: { id: sessionID } });
-    if (!session || !session.data || session.data.parentID) return false;
+    if (!session || !session.data || session.data.parentID) return null;
     const messages = await client.session.messages({ path: { id: sessionID } });
     const last = (messages && Array.isArray(messages.data) ? messages.data : [])
       .filter(message => message && message.info && message.info.role === 'assistant').pop();
@@ -41,9 +41,11 @@ export function createNextTurnRelay({ client, env = process.env, reportImpl = re
       if (!event || event.type !== 'session.idle') return;
       const sessionID = event.properties && event.properties.sessionID;
       if (typeof sessionID !== 'string' || !sessionID || !isInteractive(env)) return;
-      if (!(await topLevelIdle(sessionID))) return;
-      const text = await reportImpl('stop', env);
-      if (!text) return;
+      const completed = await topLevelIdle(sessionID);
+      if (completed === null) return;
+      // Aborts and errors still end the visible turn, but must not take a peer continuation.
+      const text = await reportImpl(completed ? 'stop' : 'idle', env);
+      if (!completed || !text) return;
       await client.session.promptAsync({ path: { id: sessionID }, body: { parts: [{ type: 'text', text }] } });
     }
   };

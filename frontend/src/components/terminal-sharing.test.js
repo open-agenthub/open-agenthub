@@ -52,8 +52,9 @@ describe('shared terminal capabilities', () => {
     terminalMocks.sockets[0].onopen()
     terminalMocks.observers[0].callback()
 
+    expect(new URL(terminalMocks.sockets[0].url).searchParams.get('activity')).toBe('1')
     expect(terminalMocks.terminals[0].input).toBeUndefined()
-    expect(terminalMocks.sockets[0].sent).toEqual([])
+    expect(terminalMocks.sockets[0].sent).toEqual([{ type: 'subscribe', channel: 'activity' }])
   })
 
   it('converts bare line feeds only when replaying a saved transcript', async () => {

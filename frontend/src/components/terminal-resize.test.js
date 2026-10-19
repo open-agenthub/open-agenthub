@@ -8,12 +8,12 @@ const mocks = vi.hoisted(() => ({ terminals: [], sockets: [], observers: [], dim
 vi.mock('@xterm/xterm', () => ({
   Terminal: class {
     constructor(options) {
-      this.options = options; this.cols = 80; this.rows = 24; this.resizeCalls = []
+      this.written = []; this.options = options; this.cols = 80; this.rows = 24; this.resizeCalls = []
       this.lines = []
       this.buffer = { active: { baseY: 0, getLine: y => ({ translateToString: () => this.lines[y] || '' }) } }
       mocks.terminals.push(this)
     }
-    loadAddon() {} open() {} write(data, callback) { callback?.() } dispose() {}
+    loadAddon() {} open() {} write(data, callback) { this.written.push(data); callback?.() } dispose() {}
     onData(callback) { this.input = callback }
     resize(cols, rows) { this.cols = cols; this.rows = rows; this.resizeCalls.push([cols, rows]) }
   }
@@ -77,6 +77,17 @@ describe('terminal fit/resize stability', () => {
     globalThis.cancelAnimationFrame = () => {}
   })
 
+  it('consumes activity frames without rendering them as terminal text', async () => {
+    const wrapper = await mountRunningPane()
+    const socket = mocks.sockets[0]
+    const frame = JSON.stringify({ type: 'agenthub', subtype: 'activity', state: 'working', source: 'hooks' })
+    socket.onmessage({ data: frame })
+    expect(wrapper.emitted('activity').at(-1)).toEqual([{ state: 'working', source: 'hooks' }])
+    expect(mocks.terminals[0].written).not.toContain(frame)
+    socket.onclose()
+    expect(wrapper.emitted('activity').at(-1)[0].state).toBe('unknown')
+    wrapper.unmount()
+  })
   it('clears a menu from the live screen while output continues faster than the settling interval', async () => {
     vi.useFakeTimers()
     const wrapper = await mountRunningPane()
@@ -165,7 +176,7 @@ describe('terminal fit/resize stability', () => {
 
   it('sends the initial size once on socket open', async () => {
     await mountRunningPane()
-    expect(mocks.sockets[0].sent).toEqual([{ type: 'resize', cols: 80, rows: 24 }])
+    expect(mocks.sockets[0].sent).toEqual([{ type: 'subscribe', channel: 'activity' }, { type: 'resize', cols: 80, rows: 24 }])
   })
 
   it('coalesces observer bursts into a single fit per animation frame', async () => {

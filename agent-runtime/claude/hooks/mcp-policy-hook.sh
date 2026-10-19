@@ -35,6 +35,9 @@ render_settings() {
     "PermissionRequest": [
       { "hooks": [ { "type": "command", "command": "$FLEET_TURN", "timeout": 10 } ] }
     ],
+    "StopFailure": [
+      { "hooks": [ { "type": "command", "command": "$FLEET_TURN", "timeout": 10 } ] }
+    ],
     "Notification": [
       { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/notify-hook.sh" } ] }
     ],

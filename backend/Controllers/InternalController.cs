@@ -139,6 +139,17 @@ public sealed class InternalController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("turn-started")]
+    public async Task<IActionResult> TurnStarted(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        // A reply can start another turn without reattaching the terminal. The old question
+        // would otherwise keep overriding live activity until the next socket connection.
+        await _store.SetQuestionPendingAsync(id, false, ct);
+        return NoContent();
+    }
+
     /// <summary>Called by the Claude Code notification hook when the agent is waiting or asks a question.</summary>
     [HttpPost("notify")]
     public async Task<IActionResult> Notify(string id, [FromBody] NotifyBody body, CancellationToken ct)
