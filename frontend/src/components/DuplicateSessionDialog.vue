@@ -10,6 +10,7 @@ import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
+import SecretGrantsPicker from './SecretGrantsPicker.vue'
 import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import SystemPromptField from './SystemPromptField.vue'
 
@@ -59,6 +60,7 @@ const storedSecrets = ref([])
 const selectedProject = computed(() => (props.projects || []).find(project => project.id === projectId.value) || null)
 const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
 const copiedSecretIds = computed(() => (projectId.value || '') === (props.session.projectId || '') ? props.session.secretIds : null)
+const selectedGrants = ref([])
 const selectedSecrets = ref([])
 watch([secrets, copiedSecretIds], ([options, copied]) => {
   selectedSecrets.value = secretSelectionFor(copied, options, !!selectedProject.value)
@@ -92,6 +94,7 @@ async function submit() {
       ...autoDeletePayload(autoDelete.value, { off: 0 }),
       // Omitted when unchanged, so the backend copies the source's selection.
       ...gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds),
+      secretGrants: selectedGrants.value,
       ...secretIdsChange(selectedSecrets.value, secrets.value, !!selectedProject.value, copiedSecretIds.value)
     }))
   }
@@ -107,6 +110,7 @@ async function submit() {
       <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
       <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
         :project-has-none="!!selectedProject && storedSecrets.length > 0" />
+        <SecretGrantsPicker v-model="selectedGrants" :options="storedSecrets" />
       <SystemPromptField v-model="systemPrompt" />
       <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration <span class="dim">— inline JSON config</span></span></label>
       <div v-if="savedMcpServers.length" class="field mcp-field" data-mcp-picker>

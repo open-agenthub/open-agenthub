@@ -103,6 +103,8 @@ public static class CredentialScope
     public static CreateSessionRequest ApplySecrets(CreateSessionRequest req, ApiTokenScope? scope, IReadOnlyList<string> resolved)
     {
         if (scope is null || scope.AllowsAllSecrets) return req;
+        if (req.SecretGrants?.Any(g => g is null || !scope.AllowsSecret(g.SecretId)) == true)
+            throw new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
         var ids = req.SecretIds?.Select(id => id?.Trim() ?? "").Where(id => id.Length > 0).ToList();
         if (ids is null || ids.Contains(SessionSecretSelection.FollowProject))
             return req with { SecretIds = resolved.Where(scope.AllowsSecret).ToList() };

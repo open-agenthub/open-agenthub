@@ -235,6 +235,10 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <details v-if="!sharedToken && session.effectiveSecrets?.length" class="session-secret-access">
+    <summary>Secrets ({{ session.effectiveSecrets.length }})</summary>
+    <div v-for="secret in session.effectiveSecrets" :key="secret.id">{{ secret.name }} · {{ secret.delivery }} · {{ secret.provenance }} · {{ secret.inheritToChildren ? 'inherits to children' : 'this session only' }}</div>
+  </details>
   <SessionStartupFailure v-if="session?.failureReason" :reason="session.failureReason" />
   <div v-if="companionVisible" class="workspace-shell">
     <nav class="workspace-tabs" aria-label="Session view">
@@ -279,6 +283,8 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.session-secret-access { padding: 6px 12px; color: var(--muted-3); font-size: 12px; border-bottom: 1px solid var(--border-2); }
+.session-secret-access summary { cursor: pointer; }
 .workspace-shell, .terminal-only { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .session-split { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .companion-side { flex: 0 0 var(--browser-width); display: grid; grid-template-rows: 34px minmax(0, 1fr); min-width: 0; min-height: 0; background: #111721; }
