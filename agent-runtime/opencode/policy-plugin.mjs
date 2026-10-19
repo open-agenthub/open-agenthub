@@ -1,4 +1,3 @@
-import { report as reportTurn } from '../common/fleet-turn-hook.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createGate } from './policy-gate.mjs';
@@ -26,7 +25,6 @@ export const AgentHubPolicy = async (input) => {
       try {
         const session = await inputClient.session.get({ path: { id: input.sessionID } });
         if (!session?.data || session.data.parentID) return;
-        await reportTurn('prompt');
         const root = path.join(process.env.HOME || '/home/agent', '.opencode');
         fs.mkdirSync(root, { recursive: true });
         fs.writeFileSync(path.join(root, 'agenthub-session-id'), input.sessionID + '\n');
@@ -39,13 +37,6 @@ export const AgentHubPolicy = async (input) => {
     event: async ({ event }) => {
       try { limitNotice(event); } catch {}
       try { skills.onEvent(event); } catch {}
-      if (event?.type === 'session.idle') {
-        try {
-          const sessionID = event.properties?.sessionID;
-          const session = sessionID && await inputClient.session.get({ path: { id: sessionID } });
-          if (session?.data && !session.data.parentID) await reportTurn('stop');
-        } catch {}
-      }
       await notify(event).catch(() => {});
       await nextTurn.onEvent(event).catch(() => {});
     }
