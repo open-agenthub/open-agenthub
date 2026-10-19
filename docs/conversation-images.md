@@ -27,7 +27,10 @@ native parts to its plugin, without coupling the transport to SQLite's schema or
 The adapter records user messages and completed assistant text; streaming tool details remain
 available in the terminal. SDK snapshots request the most recent 100 messages, normalized messages
 keep at most 100 parts, 50,000 text characters and five image sources. A 200-id side index and a
-512 KiB journal tail bound deduplication reads and recover an interrupted index update. Older
+512 KiB journal tail bound deduplication reads. The index commits after each append, so an
+interrupted initial snapshot can leave only one bounded record ahead of it. Recovery rows prove
+presence without displacing recent identities, and a process-wide queue serializes snapshots
+across plugin instance replacement. Older
 pre-adapter sessions can therefore export their most recent 100 messages rather than their entire
 SQLite history.
 
@@ -94,5 +97,5 @@ After merging the single-reporter fix from main, the real `fleet-delivery-real-c
 OpenCode `SCENARIO=all` under static proot with the branch managed configuration. Mid-turn and
 idle peers arrived as next turns; a peer waiting behind an owner draft stayed queued until the
 owner submitted; priority delivery used the PTY. Each of the four peer messages appeared in
-exactly one model request. This checks that the transcript adapter preserves the existing
+exactly one model request and exactly one exported native user entry. This checks that the transcript adapter preserves the existing
 single-reporter delivery path.

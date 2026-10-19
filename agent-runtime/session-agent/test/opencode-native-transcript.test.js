@@ -68,3 +68,59 @@ test('OpenCode export bounds text and files and recovers a missing deduplication
     assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 1);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
+
+test('recovery tail does not replace the most recent deduplication identities with older rows', async () => {
+  const { createTranscriptRecorder } = await import('../../opencode/native-transcript.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-index-'));
+  try {
+    const root = path.join(home, '.opencode/agenthub-transcripts');
+    fs.mkdirSync(root, { recursive: true });
+    const ids = Array.from({ length: 300 }, (_, n) => `msg_${n + 1}`);
+    const file = path.join(root, 'ses_test.jsonl');
+    fs.writeFileSync(file, ids.map(uuid => JSON.stringify({ type: 'user', uuid,
+      message: { content: [{ type: 'text', text: 'short' }] } })).join('\n') + '\n');
+    fs.writeFileSync(file + '.ids.json', JSON.stringify(ids.slice(-200)));
+    const client = { session: { get: async () => ({ data: {} }), messages: async () => ({ data: [] }) } };
+    await createTranscriptRecorder({ client, env: { HOME: home } })('ses_test');
+    assert.deepEqual(JSON.parse(fs.readFileSync(file + '.ids.json', 'utf8')), ids.slice(-200));
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('interrupted initial snapshot index update recovers without replaying an entire batch', async () => {
+  const { createTranscriptRecorder } = await import('../../opencode/native-transcript.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-interrupted-'));
+  try {
+    const messages = Array.from({ length: 20 }, (_, n) => ({
+      info: { id: `msg_${n}`, role: 'user', time: { created: 1000 + n } },
+      parts: [{ type: 'text', text: 'x'.repeat(50_000) }]
+    }));
+    const client = { session: { get: async () => ({ data: {} }), messages: async () => ({ data: messages }) } };
+    let fail = true;
+    const interruptedFs = { ...fs, writeFileSync(file, ...args) {
+      if (fail && file.endsWith('.part')) { fail = false; throw new Error('interrupted-index'); }
+      return fs.writeFileSync(file, ...args);
+    } };
+    await assert.rejects(createTranscriptRecorder({ client, env: { HOME: home }, fsImpl: interruptedFs })('ses_test'),
+      /interrupted-index/);
+    await createTranscriptRecorder({ client, env: { HOME: home } })('ses_test');
+    const file = path.join(home, '.opencode/agenthub-transcripts/ses_test.jsonl');
+    const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.equal(rows.length, 20);
+    assert.equal(new Set(rows.map(row => row.uuid)).size, 20);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
+
+test('plugin instance replacement serializes writes to the same native journal', async () => {
+  const { createTranscriptRecorder } = await import('../../opencode/native-transcript.mjs');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'transcript-reload-'));
+  try {
+    const user = { info: { id: 'msg_1', role: 'user', time: { created: 1000 } }, parts: [{ type: 'text', text: 'one turn' }] };
+    const client = { session: { get: async () => ({ data: {} }), messages: async () => ({ data: [user] }) } };
+    await Promise.all([
+      createTranscriptRecorder({ client, env: { HOME: home } })('ses_test'),
+      createTranscriptRecorder({ client, env: { HOME: home } })('ses_test')
+    ]);
+    const file = path.join(home, '.opencode/agenthub-transcripts/ses_test.jsonl');
+    assert.equal(fs.readFileSync(file, 'utf8').trim().split('\n').length, 1);
+  } finally { fs.rmSync(home, { recursive: true, force: true }); }
+});
