@@ -136,8 +136,6 @@ module.exports = {
   // the graphical logo and ellipsis can arrive through OSC 66, which headless xterm skips.
   contextClearScreen: rows => rows.filter(row => /^\s*┃\s+Ask anything(?:…)?(?:\s|$)/.test(row)).length === 1 &&
     rows.some(row => /\btab\s+agents\s+ctrl\+p\s+commands\b/.test(row)),
-  turnHooks: true,
-  fleetNextTurn: false,
   slashCommands: require('./slash-commands'),
   limitPatterns,
   // ~/.local/share/opencode is linked to ~/.opencode by the entrypoint, so the session database,

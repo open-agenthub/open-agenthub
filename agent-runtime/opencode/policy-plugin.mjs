@@ -1,4 +1,3 @@
-import { report as reportTurn } from '../common/fleet-turn-hook.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createGate } from './policy-gate.mjs';
@@ -30,7 +29,6 @@ export const AgentHubPolicy = async (input) => {
         if (!session?.data || session.data.parentID) return;
         // Transcript I/O must not suppress turn hooks or forget the resumable session.
         await recordTranscript(input.sessionID, output?.message && { info: output.message, parts: output.parts }).catch(() => {});
-        await reportTurn('prompt');
         const root = path.join(process.env.HOME || '/home/agent', '.opencode');
         fs.mkdirSync(root, { recursive: true });
         fs.writeFileSync(path.join(root, 'agenthub-session-id'), input.sessionID + '\n');
@@ -49,7 +47,6 @@ export const AgentHubPolicy = async (input) => {
           const session = sessionID && await inputClient.session.get({ path: { id: sessionID } });
           if (session?.data && !session.data.parentID) {
             await recordTranscript(sessionID).catch(() => {});
-            await reportTurn('stop');
           }
         } catch {}
       }
