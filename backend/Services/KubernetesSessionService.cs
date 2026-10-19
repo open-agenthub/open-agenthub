@@ -762,8 +762,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         }
         if (req.RunAsRoot && !_opts.AllowRootSessions)
             throw new ArgumentException("Root sessions are disabled on this instance.");
-        ValidateQuantity(req.Cpu, "cpu");
-        ValidateQuantity(req.Memory, "memory");
+        SessionResources.Validate(req.Cpu, "cpu", _opts.MinCpu, _opts.MaxCpu);
+        SessionResources.Validate(req.Memory, "memory", _opts.MinMemory, _opts.MaxMemory);
         await ValidateProjectAsync(owner, req.ProjectId, ct);
         await EnsureAgentAllowedAsync(req.Agent, ct);
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
@@ -1448,8 +1448,19 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // Unlike the fields around it this needs no respawn: the permission endpoint reads
         // the flag off the record on every request, so it applies to the live session.
         if (req.AutoApprove is { } autoApprove) rec.AutoApprove = autoApprove;
-        if (req.Cpu is not null) { ValidateQuantity(req.Cpu, "cpu"); rec.Cpu = req.Cpu; }
-        if (req.Memory is not null) { ValidateQuantity(req.Memory, "memory"); rec.Memory = req.Memory; }
+        // Only a changed value is checked: the edit dialog sends the stored one back with every
+        // edit, and a session stored before the bounds existed must stay editable. Its pod is
+        // started with the clamped value anyway (SpawnAsync).
+        if (req.Cpu is not null && req.Cpu != rec.Cpu)
+        {
+            SessionResources.Validate(req.Cpu, "cpu", _opts.MinCpu, _opts.MaxCpu);
+            rec.Cpu = req.Cpu;
+        }
+        if (req.Memory is not null && req.Memory != rec.Memory)
+        {
+            SessionResources.Validate(req.Memory, "memory", _opts.MinMemory, _opts.MaxMemory);
+            rec.Memory = req.Memory;
+        }
         if (req.Repos is not null)
         {
             var repos = req.Repos.Where(r => !string.IsNullOrWhiteSpace(r.Url)).ToList();
@@ -1597,12 +1608,6 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await _browsers.GetSummaryAsync(id, ct), ct);
     }
 
-    private static void ValidateQuantity(string value, string what)
-    {
-        try { _ = new ResourceQuantity(value).ToDecimal(); }
-        catch { throw new ArgumentException($"Invalid {what} quantity: '{value}'."); }
-    }
-
     /// <summary>
     /// The session's credential store and per-host authors: connected-provider lines for the
     /// repositories it names, then the stored PATs its selection keeps (one per host). Null when
@@ -1643,6 +1648,17 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // silently drop out. Own entries always survive.
         var effectiveMcp = await BuildEffectiveMcpConfigAsync(owner, rec, ct);
         req = req with { McpConfigJson = effectiveMcp };
+        // A session stored before the bounds existed (or before an operator moved them) keeps its
+        // record; its pod asks for the nearest value inside them. Rewriting the record would
+        // change what the owner set without telling them; this only changes what the node reserves.
+        var cpu = SessionResources.Effective(req.Cpu, _opts.MinCpu, _opts.MaxCpu);
+        var memory = SessionResources.Effective(req.Memory, _opts.MinMemory, _opts.MaxMemory);
+        if (cpu != req.Cpu || memory != req.Memory)
+        {
+            _log.LogWarning("Session {Id} requests cpu {Cpu} / memory {Memory} outside {MinCpu}-{MaxCpu} / {MinMemory}-{MaxMemory}; starting it with {EffectiveCpu} / {EffectiveMemory}",
+                rec.Id, req.Cpu, req.Memory, _opts.MinCpu, _opts.MaxCpu, _opts.MinMemory, _opts.MaxMemory, cpu, memory);
+            req = req with { Cpu = cpu, Memory = memory };
+        }
 
         var context = await BuildPodContextAsync(owner, rec, resume, hasGitCredentials: false, ct);
         var preparation = await AgentSessionResourceOrchestrator.PrepareAsync(
@@ -2218,6 +2234,10 @@ public sealed class AgentHubOptions
     public string RuntimeClassName { get; set; } = "";
     public string MaxCpu { get; set; } = "2";
     public string MaxMemory { get; set; } = "4Gi";
+    /// <summary>Smallest request a session may ask for (docs/session-resources.md): below it the
+    /// pod reserves next to nothing on its node and is among the first evicted.</summary>
+    public string MinCpu { get; set; } = "50m";
+    public string MinMemory { get; set; } = "256Mi";
     /// <summary>Users may specify a custom container image for their session.</summary>
     public bool AllowCustomImage { get; set; } = true;
     public bool AutoUpdateRuntimeImages { get; set; }
