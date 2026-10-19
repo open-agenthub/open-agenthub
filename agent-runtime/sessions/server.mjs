@@ -50,6 +50,10 @@ const createSchema = z.object({
   cpu: z.string().max(32).optional(),
   memory: z.string().max(32).optional()
     .describe('Memory request in Mi or Gi, e.g. "1Gi"; at least 256Mi by default. "m" means milli, so "512m" is half a byte.'),
+  cpuLimit: z.string().max(32).optional()
+    .describe('CPU limit, e.g. "4"; omitted = the instance default. At most the instance ceiling and at least cpu.'),
+  memoryLimit: z.string().max(32).optional()
+    .describe('Memory limit in Mi or Gi, e.g. "8Gi"; omitted = the instance default. At most the instance ceiling and at least memory.'),
   // Text with a unit, converted to seconds before the HTTP call — see expiry.mjs for why.
   autoDeleteAfter: z.string().max(16).optional(),
   autoDeleteFrom: z.enum(['start', 'lastActivity']).optional(),

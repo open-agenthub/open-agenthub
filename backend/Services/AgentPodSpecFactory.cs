@@ -650,7 +650,13 @@ public static class AgentPodSpecFactory
             Resources = new V1ResourceRequirements
             {
                 Requests = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(request.Cpu), ["memory"] = new(request.Memory) },
-                Limits = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(context.Runtime.MaxCpu), ["memory"] = new(context.Runtime.MaxMemory) }
+                // SpawnAsync always sets the limits; the instance maximum is for callers that build
+                // a pod from a bare request, as the tests do.
+                Limits = new Dictionary<string, ResourceQuantity>
+                {
+                    ["cpu"] = new(request.CpuLimit ?? context.Runtime.MaxCpu),
+                    ["memory"] = new(request.MemoryLimit ?? context.Runtime.MaxMemory)
+                }
             },
             ReadinessProbe = new V1Probe
             {

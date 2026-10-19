@@ -1,5 +1,7 @@
 /** Orchestration-safe SessionInfo fields for MCP tool responses. Never includes secrets. */
 const SAFE_KEYS = [
+  // What the pod requests and is limited to, so a caller can read back the cpu/memory it asked for.
+  'resources',
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status', 'failureReason',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
   'createdAt', 'hasMcp', 'autoApprove',

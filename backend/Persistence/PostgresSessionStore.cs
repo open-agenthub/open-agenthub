@@ -78,6 +78,9 @@ public sealed class SessionRecord
     public SessionMode? ConvertedFrom { get; set; }
     public string Cpu { get; set; } = "500m";
     public string Memory { get; set; } = "1Gi";
+    /// <summary>Null = the instance default limit (docs/session-resources.md).</summary>
+    public string? CpuLimit { get; set; }
+    public string? MemoryLimit { get; set; }
     /// <summary>MCP configuration (.mcp.json content); null/empty = no MCP servers.</summary>
     public string? McpConfigJson { get; set; }
     /// <summary>JSON array of catalog MCP server ids merged into the effective
@@ -225,6 +228,8 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_ceiling TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_endpoint_url TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_name TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cpu_limit TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS memory_limit TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -240,7 +245,7 @@ public sealed class PostgresSessionStore : ISessionStore
                                   auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids,
                                   resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images,
                                   secret_grant_ids, secret_ceiling,
-                                  model_endpoint_url, model_name)
+                                  model_endpoint_url, model_name, cpu_limit, memory_limit)
             VALUES (@id, @owner, @title, @description, @mode, @uiMode, @repo, @sched, @agentSessionId, @agent, @authMode,
                     @openClawApiKeySource, @policy,
                     @status, @qp, @tok, @image, @root, @cpu, @memory,
@@ -248,7 +253,7 @@ public sealed class PostgresSessionStore : ISessionStore
                     @autoDeleteAfter, @autoDeleteFrom, @lastActivity, @convertedFrom, @gitPatIds,
                     @resolvedCredentialId, @accountFailover, @failureReason, @secretIds, @autoUpdateRuntimeImages,
                     @secretGrantIds, @secretCeiling,
-                    @modelEndpointUrl, @modelName)
+                    @modelEndpointUrl, @modelName, @cpuLimit, @memoryLimit)
             ON CONFLICT (id) DO UPDATE SET
                 resolved_credential_id = EXCLUDED.resolved_credential_id,
                 account_failover = EXCLUDED.account_failover,
@@ -275,6 +280,7 @@ public sealed class PostgresSessionStore : ISessionStore
                 agent_policy = EXCLUDED.agent_policy,
                 image = EXCLUDED.image, run_as_root = EXCLUDED.run_as_root,
                 cpu = EXCLUDED.cpu, memory = EXCLUDED.memory,
+                cpu_limit = EXCLUDED.cpu_limit, memory_limit = EXCLUDED.memory_limit,
                 mcp_config = EXCLUDED.mcp_config, mcp_server_ids = EXCLUDED.mcp_server_ids,
                 repos = EXCLUDED.repos,
                 project_id = EXCLUDED.project_id, parent_session_id = EXCLUDED.parent_session_id,
@@ -417,7 +423,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling, model_endpoint_url, model_name FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling, model_endpoint_url, model_name, cpu_limit, memory_limit FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -452,6 +458,8 @@ public sealed class PostgresSessionStore : ISessionStore
         cmd.Parameters.AddWithValue("autoApprove", r.AutoApprove);
         cmd.Parameters.AddWithValue("cpu", r.Cpu);
         cmd.Parameters.AddWithValue("memory", r.Memory);
+        cmd.Parameters.AddWithValue("cpuLimit", (object?)r.CpuLimit ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("memoryLimit", (object?)r.MemoryLimit ?? DBNull.Value);
         cmd.Parameters.AddWithValue("mcp", (object?)r.McpConfigJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("mcpServerIds", (object?)r.McpServerIdsJson ?? DBNull.Value);
         cmd.Parameters.AddWithValue("repos", (object?)r.ReposJson ?? DBNull.Value);
@@ -523,6 +531,8 @@ public sealed class PostgresSessionStore : ISessionStore
         SecretGrantIdsJson = r.IsDBNull(42) ? null : r.GetString(42),
         SecretCeilingJson = r.IsDBNull(43) ? null : r.GetString(43),
         ModelEndpointUrl = r.IsDBNull(44) ? null : r.GetString(44),
-        ModelName = r.IsDBNull(45) ? null : r.GetString(45)
+        ModelName = r.IsDBNull(45) ? null : r.GetString(45),
+        CpuLimit = r.IsDBNull(46) ? null : r.GetString(46),
+        MemoryLimit = r.IsDBNull(47) ? null : r.GetString(47)
     };
 }

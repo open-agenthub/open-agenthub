@@ -762,8 +762,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         }
         if (req.RunAsRoot && !_opts.AllowRootSessions)
             throw new ArgumentException("Root sessions are disabled on this instance.");
-        SessionResources.Validate(req.Cpu, "cpu", _opts.MinCpu, _opts.MaxCpu);
-        SessionResources.Validate(req.Memory, "memory", _opts.MinMemory, _opts.MaxMemory);
+        var cpuLimit = SessionResources.ForCreate(req.Cpu, req.CpuLimit, ResourceBounds.Cpu(_opts));
+        var memoryLimit = SessionResources.ForCreate(req.Memory, req.MemoryLimit, ResourceBounds.Memory(_opts));
         await ValidateProjectAsync(owner, req.ProjectId, ct);
         await EnsureAgentAllowedAsync(req.Agent, ct);
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
@@ -810,7 +810,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             AutoUpdateRuntimeImages = req.AutoUpdateRuntimeImages,
             Image = image, RunAsRoot = req.RunAsRoot,
             AutoApprove = CreateSessionRequest.AutoApproveFor(req.AutoApprove, req.Mode),
-            Cpu = req.Cpu, Memory = req.Memory,
+            Cpu = req.Cpu, Memory = req.Memory, CpuLimit = cpuLimit, MemoryLimit = memoryLimit,
             AgentSessionId = Guid.NewGuid().ToString(),
             CallbackToken = RandomToken(),
             Status = req.Mode == SessionMode.Scheduled ? "Scheduled" : "Pending",
@@ -1260,6 +1260,97 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
     }
 
+    /// <summary>
+    /// Restarts a running interactive session so its pod gets the CPU/memory now stored for it
+    /// (#215, docs/session-resources.md), through the same pause → wait for the old pod → check
+    /// the archive → resume as the confirmed runtime update, so the conversation continues. A
+    /// session whose pod already has them is left alone, so a repeated click restarts nothing.
+    /// </summary>
+    public async Task<SessionInfo> ApplyResourcesAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (_runtimeUpdateLock is null) throw new InvalidOperationException("Runtime update lock is unavailable.");
+        await using var held = await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
+        var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        var pod = await TryReadPodAsync($"session-{id}", ct);
+        if (!ResourcesPendingRestart(record, pod)) return (await GetSessionAsync(owner, id, ct))!;
+        // An autonomous task resumed from its prompt may repeat what it already did outside, as
+        // docs/session-runtime-image-updates.md explains; it gets the values at its next start.
+        if (record.Mode != SessionMode.Interactive || pod!.Status?.Phase != SessionStatus.Running)
+            throw new InvalidOperationException("Only a running interactive session can be restarted to apply new resources; this one gets them at its next start.");
+        if (!_artifacts.IsConfigured)
+            throw new InvalidOperationException("State storage is unavailable. The conversation cannot be saved for resume.");
+        await EnsureAgentAllowedAsync(record.Agent, ct);
+        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
+        await AdmitResourcesAsync(record, pod, ct);
+        _log.LogInformation("Restarting session {Id} to apply new resources", id);
+        return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
+    }
+
+    /// <summary>
+    /// Asks the API server, in a dry run, whether it would admit the running pod with the new
+    /// resources. A LimitRange maximum or a quota below them is refused here, while the session
+    /// still runs; found only at the resume, the session would be paused into a pod that cannot
+    /// start. The probe has its own name because the running pod still holds the real one.
+    /// </summary>
+    private async Task AdmitResourcesAsync(SessionRecord record, V1Pod live, CancellationToken ct)
+    {
+        var want = EffectiveResources(record.Cpu, record.CpuLimit, record.Memory, record.MemoryLimit);
+        var spec = KubernetesJson.Deserialize<V1PodSpec>(KubernetesJson.Serialize(live.Spec));
+        // Set by the scheduler and by `kubectl debug`; a create request may carry neither.
+        spec.NodeName = null;
+        spec.EphemeralContainers = null;
+        var agent = spec.Containers.First(c => c.Name == "agent");
+        agent.Resources = new V1ResourceRequirements
+        {
+            Requests = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(want.CpuRequest), ["memory"] = new(want.MemoryRequest) },
+            Limits = new Dictionary<string, ResourceQuantity> { ["cpu"] = new(want.CpuLimit), ["memory"] = new(want.MemoryLimit) }
+        };
+        var probe = new V1Pod
+        {
+            Metadata = new V1ObjectMeta
+            {
+                Name = $"session-{record.Id}-resources", NamespaceProperty = _opts.Namespace,
+                Labels = live.Metadata.Labels, Annotations = live.Metadata.Annotations
+            },
+            Spec = spec
+        };
+        try { await _k8s.CoreV1.CreateNamespacedPodAsync(probe, _opts.Namespace, dryRun: "All", cancellationToken: ct); }
+        catch (k8s.Autorest.HttpOperationException ex) when ((int)ex.Response.StatusCode is 400 or 403 or 422)
+        {
+            var message = KubernetesStatusMessage(ex);
+            // A webhook that cannot run in a dry run fails every one; that says nothing about the
+            // resources, and refusing on it would make the restart impossible on such a cluster.
+            if (message.Contains("does not support dry run", StringComparison.OrdinalIgnoreCase))
+            {
+                _log.LogInformation("Session {Id}: resource admission dry run unsupported by a webhook; restarting unchecked", record.Id);
+                return;
+            }
+            // The running pod still counts against the quota during the dry run, so a quota
+            // refusal may be one the restart itself would not hit.
+            var quota = message.Contains("exceeded quota", StringComparison.OrdinalIgnoreCase)
+                ? " The running pod still counts against the namespace quota in this check; if the new values fit once it is gone, pause the session and resume it."
+                : "";
+            throw new InvalidOperationException(
+                $"The cluster would not start this session with the new resources, so it keeps running unchanged: {message}.{quota}");
+        }
+    }
+
+    private static string KubernetesStatusMessage(k8s.Autorest.HttpOperationException ex)
+    {
+        var content = ex.Response.Content;
+        if (string.IsNullOrWhiteSpace(content)) return ex.Message;
+        try
+        {
+            using var status = JsonDocument.Parse(content);
+            if (status.RootElement.ValueKind == JsonValueKind.Object
+                && status.RootElement.TryGetProperty("message", out var detail) && detail.ValueKind == JsonValueKind.String)
+                return detail.GetString()!;
+        }
+        catch (JsonException) { }
+        return content;
+    }
+
     private async Task<SessionInfo> PauseAndResumeRuntimeCoreAsync(string owner, string id, CancellationToken ct)
     {
         await PauseSessionCoreAsync(owner, id, ct);
@@ -1316,7 +1407,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             Policy = ParsePolicy(rec),
             AllowedTools = ParseAllowedTools(rec),
             Image = rec.Image, RunAsRoot = rec.RunAsRoot, AutoApprove = rec.AutoApprove,
-            Cpu = rec.Cpu, Memory = rec.Memory
+            Cpu = rec.Cpu, Memory = rec.Memory, CpuLimit = rec.CpuLimit, MemoryLimit = rec.MemoryLimit
         };
         await SpawnAsync(owner, rec, req, resume: true, ct);
         _log.LogInformation("Resuming session {Id} (claudeSessionId={Csid})", id, rec.AgentSessionId);
@@ -1451,16 +1542,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // Only a changed value is checked: the edit dialog sends the stored one back with every
         // edit, and a session stored before the bounds existed must stay editable. Its pod is
         // started with the clamped value anyway (SpawnAsync).
-        if (req.Cpu is not null && req.Cpu != rec.Cpu)
-        {
-            SessionResources.Validate(req.Cpu, "cpu", _opts.MinCpu, _opts.MaxCpu);
-            rec.Cpu = req.Cpu;
-        }
-        if (req.Memory is not null && req.Memory != rec.Memory)
-        {
-            SessionResources.Validate(req.Memory, "memory", _opts.MinMemory, _opts.MaxMemory);
-            rec.Memory = req.Memory;
-        }
+        (rec.Cpu, rec.CpuLimit) = SessionResources.ForUpdate(rec.Cpu, rec.CpuLimit, req.Cpu, req.CpuLimit, ResourceBounds.Cpu(_opts));
+        (rec.Memory, rec.MemoryLimit) = SessionResources.ForUpdate(rec.Memory, rec.MemoryLimit, req.Memory, req.MemoryLimit, ResourceBounds.Memory(_opts));
         if (req.Repos is not null)
         {
             var repos = req.Repos.Where(r => !string.IsNullOrWhiteSpace(r.Url)).ToList();
@@ -1605,7 +1688,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var pod = await TryReadPodAsync($"session-{id}", ct);
         await ObserveFailureAsync(rec, pod, ct);
         return await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
-            await _browsers.GetSummaryAsync(id, ct), ct);
+            await _browsers.GetSummaryAsync(id, ct), ct) with { ResourcesPendingRestart = ResourcesPendingRestart(rec, pod) };
     }
 
     /// <summary>
@@ -1651,17 +1734,22 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // A session stored before the bounds existed (or before an operator moved them) keeps its
         // record; its pod asks for the nearest value inside them. Rewriting the record would
         // change what the owner set without telling them; this only changes what the node reserves.
-        var cpu = SessionResources.Effective(req.Cpu, _opts.MinCpu, _opts.MaxCpu);
-        var memory = SessionResources.Effective(req.Memory, _opts.MinMemory, _opts.MaxMemory);
-        if (cpu != req.Cpu || memory != req.Memory)
+        var effective = EffectiveResources(req.Cpu, req.CpuLimit, req.Memory, req.MemoryLimit);
+        if (effective.CpuRequest != req.Cpu || effective.MemoryRequest != req.Memory
+            || (req.CpuLimit is not null && effective.CpuLimit != req.CpuLimit.Trim())
+            || (req.MemoryLimit is not null && effective.MemoryLimit != req.MemoryLimit.Trim()))
         {
             // The stored values are the owner's text and stay out of the log; which one was moved,
             // and the configured bounds, are enough to find the session and explain its pod.
-            var moved = cpu != req.Cpu && memory != req.Memory ? "cpu and memory" : cpu != req.Cpu ? "cpu" : "memory";
-            _log.LogWarning("Session {Id} has a stored {Resources} request outside {MinCpu}-{MaxCpu} cpu / {MinMemory}-{MaxMemory} memory; its pod starts with the nearest bound",
-                rec.Id, moved, _opts.MinCpu, _opts.MaxCpu, _opts.MinMemory, _opts.MaxMemory);
-            req = req with { Cpu = cpu, Memory = memory };
+            var cpuMoved = effective.CpuRequest != req.Cpu || (req.CpuLimit is not null && effective.CpuLimit != req.CpuLimit.Trim());
+            var memoryMoved = effective.MemoryRequest != req.Memory || (req.MemoryLimit is not null && effective.MemoryLimit != req.MemoryLimit.Trim());
+            var moved = cpuMoved && memoryMoved ? "cpu and memory" : cpuMoved ? "cpu" : "memory";
+            _log.LogWarning("Session {Id} has a stored {Resources} request or limit outside {MinCpu}-{CpuCeiling} cpu / {MinMemory}-{MemoryCeiling} memory; its pod starts with the nearest bound",
+                rec.Id, moved, _opts.MinCpu, ResourceBounds.Cpu(_opts).Ceiling, _opts.MinMemory, ResourceBounds.Memory(_opts).Ceiling);
         }
+        // The pod factory reads the limits off the request, so they are always set from here on.
+        req = req with { Cpu = effective.CpuRequest, Memory = effective.MemoryRequest,
+            CpuLimit = effective.CpuLimit, MemoryLimit = effective.MemoryLimit };
 
         var context = await BuildPodContextAsync(owner, rec, resume, hasGitCredentials: false, ct);
         var preparation = await AgentSessionResourceOrchestrator.PrepareAsync(
@@ -1791,7 +1879,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             byId.TryGetValue(r.Id, out var pod);
             await ObserveFailureAsync(r, pod, ct);
             result.Add(ToInfo(r, EffectivePhase(r, pod), pod?.Status?.PodIP, browserSummaries[r.Id],
-                withEphemeralMcp.Contains(r.Id)) with { OutdatedImage = RuntimeImageOutdated(r,
+                withEphemeralMcp.Contains(r.Id)) with { ResourcesPendingRestart = ResourcesPendingRestart(r, pod), OutdatedImage = RuntimeImageOutdated(r,
                     pod ?? (scheduledTemplates.TryGetValue(r.Id, out var template) ? new V1Pod { Spec = template } : null)) });
         }
         return result;
@@ -1817,7 +1905,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 // A storage failure can retain the row after its schedule was removed.
             }
         }
-        return info with { OutdatedImage = RuntimeImageOutdated(rec, pod) };
+        return info with { OutdatedImage = RuntimeImageOutdated(rec, pod), ResourcesPendingRestart = ResourcesPendingRestart(rec, pod) };
     }
 
     public async Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default)
@@ -2145,11 +2233,40 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         CanConvertToInteractive = SessionStatus.CanConvertToInteractive(r.Mode, phase),
         ConvertedFrom = r.ConvertedFrom,
         Image = r.Image, RunAsRoot = r.RunAsRoot, AutoApprove = r.AutoApprove, Cpu = r.Cpu, Memory = r.Memory,
+        CpuLimit = r.CpuLimit, MemoryLimit = r.MemoryLimit,
+        Resources = EffectiveResources(r.Cpu, r.CpuLimit, r.Memory, r.MemoryLimit),
         Browser = browser ?? BrowserSummary.Stopped,
         AutoDeleteAfterSeconds = r.AutoDeleteAfterSeconds, AutoDeleteFrom = r.AutoDeleteFrom,
         ExpiresAt = SessionExpiry.ExpiresAt(r), LastActivityAt = r.LastActivityAt,
         AccountFailover = AccountFailoverMode.Display(r.AccountFailover)
     };
+
+    /// <summary>What a pod started now gets for these stored values (docs/session-resources.md).</summary>
+    private EffectiveSessionResources EffectiveResources(string? cpu, string? cpuLimit, string? memory, string? memoryLimit)
+    {
+        var (cpuRequest, cpuMax) = SessionResources.EffectivePair(cpu, cpuLimit, ResourceBounds.Cpu(_opts));
+        var (memoryRequest, memoryMax) = SessionResources.EffectivePair(memory, memoryLimit, ResourceBounds.Memory(_opts));
+        return new EffectiveSessionResources(cpuRequest, cpuMax, memoryRequest, memoryMax);
+    }
+
+    /// <summary>
+    /// Whether the live pod runs with other resources than the record now resolves to: an edit
+    /// was saved without restarting, or the operator moved the bounds. False without a live pod,
+    /// whose next start uses the record anyway. Compared as amounts, so "1" matches "1000m".
+    /// </summary>
+    private bool ResourcesPendingRestart(SessionRecord rec, V1Pod? pod)
+    {
+        if (pod?.Metadata?.DeletionTimestamp is not null || pod?.Status?.Phase is not ("Pending" or "Running")) return false;
+        var agent = pod.Spec?.Containers?.FirstOrDefault(c => c.Name == "agent");
+        if (agent?.Resources is not { } live) return false;
+        var want = EffectiveResources(rec.Cpu, rec.CpuLimit, rec.Memory, rec.MemoryLimit);
+        static string? Read(IDictionary<string, ResourceQuantity>? values, string key) =>
+            values is not null && values.TryGetValue(key, out var quantity) ? quantity.ToString() : null;
+        return !SessionResources.SameAmount(Read(live.Requests, "cpu"), want.CpuRequest)
+            || !SessionResources.SameAmount(Read(live.Limits, "cpu"), want.CpuLimit)
+            || !SessionResources.SameAmount(Read(live.Requests, "memory"), want.MemoryRequest)
+            || !SessionResources.SameAmount(Read(live.Limits, "memory"), want.MemoryLimit);
+    }
 
     private V1ObjectMeta Meta(string name, string owner, string id, string component,
         string? title = null)
@@ -2241,6 +2358,11 @@ public sealed class AgentHubOptions
     /// pod reserves next to nothing on its node and is among the first evicted.</summary>
     public string MinCpu { get; set; } = "50m";
     public string MinMemory { get; set; } = "256Mi";
+    /// <summary>The most CPU/memory a session may set as its own limit (#215); empty = MaxCpu /
+    /// MaxMemory, the limit of every session that sets none. Raising it lets an owner give one
+    /// session more without raising the limit of all of them.</summary>
+    public string CpuLimitCeiling { get; set; } = "";
+    public string MemoryLimitCeiling { get; set; } = "";
     /// <summary>Users may specify a custom container image for their session.</summary>
     public bool AllowCustomImage { get; set; } = true;
     public bool AutoUpdateRuntimeImages { get; set; }

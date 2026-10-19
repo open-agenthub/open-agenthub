@@ -27,6 +27,8 @@ data:
   AgentHub__MaxMemory: {{ .Values.agent.maxMemory | quote }}
   AgentHub__MinCpu: {{ .Values.agent.minCpu | quote }}
   AgentHub__MinMemory: {{ .Values.agent.minMemory | quote }}
+  AgentHub__CpuLimitCeiling: {{ .Values.agent.cpuLimitCeiling | quote }}
+  AgentHub__MemoryLimitCeiling: {{ .Values.agent.memoryLimitCeiling | quote }}
   AgentHub__AutoUpdateRuntimeImages: {{ .Values.agent.autoUpdateRuntimeImages | quote }}
   AgentHub__AllowCustomImage: {{ .Values.agent.allowCustomImage | quote }}
   AgentHub__AllowRootSessions: {{ .Values.agent.allowRootSessions | quote }}

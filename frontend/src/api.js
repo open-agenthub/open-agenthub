@@ -137,6 +137,7 @@ export const api = {
   deleteShareLink: (id, linkId) => req('DELETE', `/ee/sessions/${encodeURIComponent(id)}/shares/links/${encodeURIComponent(linkId)}`),
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
   pauseAndResumeRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/pause-and-resume-runtime`),
+  applySessionResources: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/apply-resources`),
   updateRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/update-runtime`),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),

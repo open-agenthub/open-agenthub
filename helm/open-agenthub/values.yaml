@@ -86,6 +86,11 @@ agent:
   # on its node and is among the first evicted under memory pressure (docs/session-resources.md).
   minCpu: 50m
   minMemory: 256Mi
+  # maxCpu/maxMemory above are the limit of every session that sets none. A session may set its
+  # own limit up to these ceilings; empty = maxCpu/maxMemory, so nothing changes unless they are
+  # raised. A namespace ResourceQuota or LimitRange still applies on top (docs/session-resources.md).
+  cpuLimitCeiling: ""
+  memoryLimitCeiling: ""
   # Users may specify a custom container image per session.
   allowCustomImage: true
   # Replace outdated runtime images only after positive idle admission.
