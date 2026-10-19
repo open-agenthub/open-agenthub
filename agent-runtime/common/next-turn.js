@@ -113,6 +113,10 @@ function createNextTurnDelivery(options) {
   // The typed message's own prompt event arrived; keys from then on are the next draft.
   let typedSubmitted = false;
   const actions = [];
+  // Priority messages typed in. Their row stays undelivered until the hub reads the answer, which
+  // waits for the prompt hook; the Stop of the very turn they started took them from the inbox
+  // and handed them over a second time (#222). Bounded: only the latest ones can still race.
+  const typedIds = new Set();
 
   async function takeFromHub() {
     if (options.takeMessages === false || !callback || !token) return [];
@@ -124,7 +128,9 @@ function createNextTurnDelivery(options) {
       });
       if (!response || !response.ok) return [];
       const body = await response.json();
-      return Array.isArray(body && body.messages) ? body.messages.filter(m => m && typeof m.body === 'string') : [];
+      return Array.isArray(body && body.messages)
+        ? body.messages.filter(m => m && typeof m.body === 'string' && !typedIds.has(m.id))
+        : [];
     } catch (error) {
       log('next-turn: inbox take failed: ' + (error && error.message || error));
       return [];
@@ -214,7 +220,9 @@ function createNextTurnDelivery(options) {
     for (let poll = 0; poll < SHOWN_TIMEOUT_MS / POLL_MS; poll++) {
       const screen = await render();
       const shown = screen !== before && ((tail && screen.includes(tail)) || PASTE_PLACEHOLDER.test(screen));
-      if (shown && now() - lastOutput >= POLL_MS) break;
+      // A working CLI redraws its spinner without pause, so the paste on the screen is the check,
+      // not quiet output.
+      if (shown) break;
       await wait(POLL_MS);
     }
     if (!confirm) {
@@ -284,8 +292,12 @@ function createNextTurnDelivery(options) {
    * once it shows. Resolves false when the CLI did not take it; what is left in the prompt box
    * then counts as a draft, as on the idle path.
    */
-  async function typeMessage(term, text, scrollback, screenSize, { interrupt = false } = {}) {
+  async function typeMessage(term, text, scrollback, screenSize, { interrupt = false, id } = {}) {
     while (typing) await typing.catch(() => {});
+    if (typeof id === 'string' && id) {
+      typedIds.add(id);
+      if (typedIds.size > 64) typedIds.delete(typedIds.values().next().value);
+    }
     // During a turn the CLI queues the Enter and reports the prompt only when the turn ends —
     // Codex 0.160.0 when the running turn was done, which can be any time later. There is no
     // event to wait for then; the paste on the screen is the check.

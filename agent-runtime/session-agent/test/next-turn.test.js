@@ -411,3 +411,15 @@ test('a priority message the CLI does not take leaves a draft the idle path does
   assert.equal(await w.deliver(), false);
   assert.equal(w.terminal.writes.length, 4);
 });
+
+test('the Stop of the turn a priority message started does not take that message from the inbox again', async () => {
+  const w = await idleWorld();
+  // The hub row stays undelivered until the hub has the answer, which waits for the prompt hook.
+  w.hub.waiting.push({ ...message('p-1', 'PRIORITY'), priority: true }, message('m-2', 'plain'));
+
+  assert.equal(await w.delivery.typeMessage(w.terminal, 'PRIORITY', () => '› \r\n', SIZE, { id: 'p-1' }), true);
+  w.advance(100);
+  const text = await w.delivery.turnEvent('stop');
+  assert.ok(text.includes('plain'));
+  assert.ok(!text.includes('PRIORITY'));
+});

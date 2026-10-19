@@ -1251,7 +1251,7 @@ function createCommonServer(options = {}) {
           if (term !== target || exited) return;
           if (nextTurn) {
             void nextTurn.typeMessage(target, formatFleetMessage(message), () => scrollback,
-              lastSize || { cols: 120, rows: 32 })
+              lastSize || { cols: 120, rows: 32 }, { id: message.id })
               .catch(error => console.log('[agent] Deferred message not typed: ' + (error && error.message || error)))
               .finally(() => releaseHeldKeys(target));
             return;
@@ -1405,7 +1405,7 @@ function createCommonServer(options = {}) {
       let submitted = false;
       try {
         submitted = await nextTurn.typeMessage(target, formatFleetMessage(message), () => scrollback,
-          lastSize || { cols: 120, rows: 32 }, { interrupt: message.interrupt });
+          lastSize || { cols: 120, rows: 32 }, { interrupt: message.interrupt, id: message.id });
       } finally {
         releaseHeldKeys(target);
       }
