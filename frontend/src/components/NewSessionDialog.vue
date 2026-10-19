@@ -15,6 +15,8 @@ import AgentDecisionCard from './AgentDecisionCard.vue'
 import { preferredUi, UI_OPTIONS } from '../lib/ui-preference.js'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
+import SessionResourceFields from './SessionResourceFields.vue'
+import { resourceForm, resourcePayload } from '../lib/resources.js'
 
 const emit = defineEmits(['close', 'created'])
 const props = defineProps({ embedded: { type: Boolean, default: false }, projects: { type: Array, default: () => [] } })
@@ -54,10 +56,9 @@ const form = ref({
   credentialId: '',
   image: '',
   runAsRoot: false,
-  autoApprove: false,
-  cpu: '500m',
-  memory: '1Gi'
+  autoApprove: false
 })
+const resources = ref(resourceForm(null))
 const autoDelete = ref(autoDeleteForm(null))
 // Stored secrets; the options follow the chosen project (docs/session-secrets.md).
 const storedSecrets = ref([])
@@ -144,8 +145,7 @@ async function submit() {
       image: form.value.image.trim() || null,
       runAsRoot: form.value.runAsRoot,
       autoApprove: form.value.autoApprove,
-      cpu: form.value.cpu,
-      memory: form.value.memory,
+      ...resourcePayload(resources.value),
       ...autoDeletePayload(autoDelete.value)
     })
     emit('created', session, form.value.uiMode)
@@ -263,11 +263,8 @@ async function submit() {
             <label>Extra tools <span class="dim">— MCP servers the agent can use (.mcp.json)</span></label>
             <textarea v-model="form.mcpConfigJson" placeholder='{ "mcpServers": { "snipe-it": { "url": "https://…/sse" } } }'></textarea>
           </div>
-          <div class="grid3">
-            <div class="field"><label>Container image</label><input v-model="form.image" class="mono" placeholder="default agent image" /></div>
-            <div class="field"><label>CPU</label><input v-model="form.cpu" class="mono" /></div>
-            <div class="field"><label>Memory</label><input v-model="form.memory" class="mono" /></div>
-          </div>
+          <div class="field"><label>Container image</label><input v-model="form.image" class="mono" placeholder="default agent image" /></div>
+          <SessionResourceFields v-model="resources" />
           <label class="check">
             <input type="checkbox" v-model="form.runAsRoot" />
             <span><b>Run as root</b> — only if the task needs system packages (apt, npm&nbsp;-g, …)</span>

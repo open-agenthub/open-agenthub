@@ -24,6 +24,7 @@ import { FLEET_WAITING, fleetLabel, pendingFleetMessages, sentEntry, stillPendin
 import { workspaceSent } from '../lib/session-drafts.js'
 import { permissionTitle } from '../lib/permissions.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
+import { resourceSummary } from '../lib/resources.js'
 import { preferredUi } from '../lib/ui-preference.js'
 import SecretRequestBanner from './SecretRequestBanner.vue'
 
@@ -477,6 +478,8 @@ function interruptWorkspaceAgent() {
           <span v-if="session.expiresAt" class="expires" :class="{ soon: isExpiringSoon(session.expiresAt) }"
             data-expires-at :title="`Auto-delete ${session.autoDeleteFrom === 'start' ? 'after start' : 'after last activity'}`">· <SessionIcon name="expiry" /> expires in {{ formatRemaining(session.expiresAt) }}</span>
           <span v-if="session.sharedBy" class="shared">· shared by {{ session.sharedBy }}</span>
+          <span v-if="session.resources" class="mono resources" data-session-resources
+            :title="`Request / limit` + (session.resourcesPendingRestart ? '. The running pod still has its previous values until it restarts.' : '')">· {{ resourceSummary(session.resources) }}<template v-if="session.resourcesPendingRestart"> (after restart)</template></span>
         </div>
       </div>
       <label v-if="showAccountSwitch" class="acct" data-account-switch>
