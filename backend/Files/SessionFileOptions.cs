@@ -10,7 +10,7 @@ public sealed class SessionFileOptions
     public int MaxSessionFiles { get; init; } = 200;
     public long MaxSessionBytes { get; init; } = 1024L * 1024 * 1024;
     public int PresignMinutes { get; init; } = 10;
-    public int StreamTicketMinutes { get; init; } = 120;
+    public int StreamTicketMinutes { get; init; } = 10;
     public int ReservationMinutes { get; init; } = 15;
     public int SweepSeconds { get; init; } = 60;
     public int PresentationPollMilliseconds { get; init; } = 1500;

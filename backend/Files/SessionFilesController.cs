@@ -162,6 +162,7 @@ public sealed class SessionFilesController(
         [FromServices] SessionFileStreamTickets tickets,
         CancellationToken ct)
     {
+        SessionFileApi.KeepTicketPrivate(Response);
         var resolved = await ResolveAsync(id, ct);
         if (resolved is null) return NotFound();
         if (!SessionAccessRules.CanReadFiles(resolved.Level)) return Forbid();
@@ -178,7 +179,9 @@ public sealed class SessionFilesController(
     /// <summary>
     /// Serves a video to whoever holds a ticket for it, honouring Range so the player can seek.
     /// The ticket only says who asked; access is resolved for that principal on every request,
-    /// exactly as for the bearer route, so a revoked share stops the next range.
+    /// exactly as for the bearer route, so a revoked share stops the next range. That case is a
+    /// 403 rather than the 404 of an unknown ticket: the ticket was genuine, and the player can
+    /// tell "you lost access" from "this link is wrong or expired" (which a fresh ticket fixes).
     /// </summary>
     [HttpGet("{fileId}/stream")]
     [AllowAnonymous]
@@ -189,10 +192,14 @@ public sealed class SessionFilesController(
         [FromServices] SessionFileStreamTickets tickets,
         CancellationToken ct)
     {
+        SessionFileApi.KeepTicketPrivate(Response);
         var principal = await tickets.RedeemAsync(ticket, id, fileId, ct);
         if (principal is null) return NotFound();
         var resolved = await access.ResolveUserAsync(principal, id, ct);
-        if (resolved is null || !SessionAccessRules.CanReadFiles(resolved.Level)) return NotFound();
+        if (resolved is null || !SessionAccessRules.CanReadFiles(resolved.Level))
+        {
+            return StatusCode(StatusCodes.Status403Forbidden);
+        }
         try
         {
             return SessionFileApi.Content(this, await files.OpenContentRangeAsync(
@@ -335,6 +342,18 @@ public static class SessionFileApi
         return content.Range is null
             ? controller.File(content.Content!, content.MimeType)
             : new SessionFileContentResult(content);
+    }
+
+    /// <summary>
+    /// Headers for every answer that carries or is fetched with a stream ticket, errors included.
+    /// The ticket is a credential in a url: no-referrer keeps a media document opened on it from
+    /// sending that url on as a Referer, and no-store keeps the response — and with it the url as
+    /// a cache key — out of shared and on-disk caches.
+    /// </summary>
+    public static void KeepTicketPrivate(HttpResponse response)
+    {
+        response.Headers["Referrer-Policy"] = "no-referrer";
+        response.Headers.CacheControl = "private, no-store";
     }
 
     /// <summary>The single byte range a GET asks for, or null to serve the whole file.</summary>

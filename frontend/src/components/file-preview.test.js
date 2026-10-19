@@ -93,6 +93,23 @@ describe('FilePreview', () => {
     expect(mocks.stream).toHaveBeenCalledTimes(2)
   })
 
+  it('renews the ticket again once playback has resumed, so a long video outlives several', async () => {
+    mocks.stream
+      .mockResolvedValueOnce({ url: '/stream?ticket=one' })
+      .mockResolvedValueOnce({ url: '/stream?ticket=two' })
+      .mockResolvedValueOnce({ url: '/stream?ticket=three' })
+    const wrapper = mount(FilePreview, { props: {
+      sessionId: 's1', file: { id: 'v1', name: 'demo.mp4', mimeType: 'video/mp4', size: 9, state: 'Ready' }, capabilities: {}
+    } })
+    await flushPromises()
+    await wrapper.get('video').trigger('error')
+    await flushPromises()
+    await wrapper.get('video').trigger('playing')
+    await wrapper.get('video').trigger('error')
+    await flushPromises()
+    expect(wrapper.get('video').attributes('src')).toBe('/stream?ticket=three')
+  })
+
   it('plays a shared video straight from the share link, which carries its own credential', async () => {
     const wrapper = mount(FilePreview, { props: {
       sessionId: 's1', sharedToken: 'tok',

@@ -19,6 +19,19 @@ if ($default -match 'name: agenthub-artifact-renderer') {
 if ($default -notmatch 'Files__MaxDocumentBytes: "52428800"') {
     throw 'file limits are missing from the backend config'
 }
+if ($default -notmatch 'Files__MaxVideoBytes: "104857600"') {
+    throw 'the video limit is missing from the backend config'
+}
+if ($default -notmatch 'Files__StreamTicketMinutes: "10"') {
+    throw 'the video stream ticket lifetime is missing from the backend config'
+}
+$video = Render @('--set', 'files.maxVideoBytes=314572800', '--set', 'ingress.host=example.test')
+if ($video -notmatch 'Files__MaxVideoBytes: "314572800"') {
+    throw 'files.maxVideoBytes was not honored'
+}
+if ($video -notmatch 'Files__MaxImageBytes: "20971520"') {
+    throw 'the video limit must not move the image limit'
+}
 
 $enabled = Render @('--set', 'files.officePreview.enabled=true', '--set', 'ingress.host=example.test')
 if ($enabled -notmatch 'name: agenthub-artifact-renderer') { throw 'enabled renderer missing' }

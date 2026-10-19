@@ -111,6 +111,51 @@ public sealed class SessionFileAccessTests
         Assert.Equal(new[] { "Capabilities", "Content", "List", "Presentation" }, actionNames);
     }
 
+    [Fact]
+    public async Task Stream_answers_are_never_cached_or_referred_on_and_revoked_access_is_403()
+    {
+        var registry = new TicketRegistry();
+        var tickets = new SessionFileStreamTickets(registry, new SessionFileOptions());
+        var owner = UserController(SessionAccessLevel.Owner, new RecordingFileService { ContentMimeType = "video/mp4" });
+
+        var issued = Assert.IsType<IssuedStreamTicket>(
+            Assert.IsType<OkObjectResult>(await owner.IssueStream("s1", "v1", tickets, default)).Value);
+        AssertPrivate(owner.Response);
+        Assert.True(issued.ExpiresAt <= DateTime.UtcNow.AddMinutes(10).AddSeconds(5));
+        var ticket = issued.Url.Split("ticket=")[1];
+
+        var playing = UserController(SessionAccessLevel.Owner, new RecordingFileService { ContentMimeType = "video/mp4" });
+        Assert.IsType<FileStreamResult>(await playing.Stream("s1", "v1", ticket, tickets, default));
+        AssertPrivate(playing.Response);
+
+        // The share behind the ticket was revoked between two range requests.
+        var revoked = UserController(SessionAccessLevel.None, new RecordingFileService());
+        Assert.Equal(403, Assert.IsType<StatusCodeResult>(
+            await revoked.Stream("s1", "v1", ticket, tickets, default)).StatusCode);
+        AssertPrivate(revoked.Response);
+
+        var unknown = UserController(SessionAccessLevel.Owner, new RecordingFileService());
+        Assert.IsType<NotFoundResult>(await unknown.Stream("s1", "v1", "not-a-ticket", tickets, default));
+        AssertPrivate(unknown.Response);
+    }
+
+    [Fact]
+    public async Task Shared_content_carries_the_same_no_referrer_and_no_store()
+    {
+        var controller = SharedController(ShareRole.Viewer, new RecordingFileService { ContentMimeType = "video/mp4" });
+        controller.ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() };
+
+        Assert.IsType<FileStreamResult>(await controller.Content("token", "v1", default));
+
+        AssertPrivate(controller.Response);
+    }
+
+    private static void AssertPrivate(HttpResponse response)
+    {
+        Assert.Equal("no-referrer", response.Headers["Referrer-Policy"].ToString());
+        Assert.Equal("private, no-store", response.Headers.CacheControl.ToString());
+    }
+
     private static SessionFilesController UserController(
         SessionAccessLevel level,
         RecordingFileService files)
@@ -154,6 +199,35 @@ public sealed class SessionFileAccessTests
                 Owner = "alice",
                 CallbackToken = "secret",
             }, level, level == SessionAccessLevel.Owner ? null : "alice");
+    }
+
+    private sealed class TicketRegistry : ISessionFileRegistry
+    {
+        private readonly Dictionary<string, SessionFileStreamTicket> _tickets = new();
+        public Task<SessionFileRecord?> GetAsync(string sessionId, string fileId, CancellationToken ct = default) =>
+            Task.FromResult<SessionFileRecord?>(new SessionFileRecord(fileId, sessionId, "alice", "demo.mp4", ".mp4",
+                "video/mp4", "video/mp4", 3, SessionFileStorageKind.S3, "k", SessionFileState.Ready,
+                SessionFilePreviewState.None, null, "alice", "agent", DateTime.UtcNow, DateTime.UtcNow, null));
+        public Task InsertStreamTicketAsync(SessionFileStreamTicket ticket, CancellationToken ct = default)
+        {
+            _tickets[ticket.Hash] = ticket;
+            return Task.CompletedTask;
+        }
+        public Task<SessionFileStreamTicket?> GetStreamTicketAsync(string hash, CancellationToken ct = default) =>
+            Task.FromResult(_tickets.GetValueOrDefault(hash));
+        public Task InitializeAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task InsertAsync(SessionFileRecord file, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<SessionFileRecord>> ListAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionFileUsage> GetUsageAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<bool> TransitionAsync(string sessionId, string fileId, SessionFileState expected, SessionFileState next,
+            string? detectedMime, long? actualSize, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionFilePresentation?> GetPresentationAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionFilePresentation> SetPresentationAsync(string sessionId, string? fileId, string presenter,
+            CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionFileRecord?> ClaimPreviewAsync(CancellationToken ct = default) => throw new NotSupportedException();
+        public Task LinkPreviewAsync(string sourceId, string previewId, bool succeeded, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<IReadOnlyList<SessionFileRecord>> ExpireReservationsAsync(DateTime cutoff, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task MarkSessionDeletedAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
     }
 
     private sealed class RecordingFileService : ISessionFileService

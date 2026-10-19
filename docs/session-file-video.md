@@ -68,10 +68,16 @@ answer is correct either way. Multi-range and malformed headers get the whole fi
 allows.
 
 A `<video>` element fetches its source itself, in ranges, and cannot send the `Authorization`
-header every other file read carries. Three ways round that were considered:
+header every other file read carries. These ways round that were considered:
 
 - **Fetch the whole file into a blob first**, as the other previews do. Rejected: playback waits
-  for the full download, and the tab holds up to `maxVideoBytes` in memory.
+  for the full download, and the tab holds up to `maxVideoBytes` in memory. Seeking only works
+  within what has already arrived.
+- **Cookie authentication for the content route.** Rejected: the API authenticates by bearer
+  token only, and a cookie would be a second way in to every route it is scoped to, sent
+  automatically by the browser. That brings in CSRF defences and `SameSite` handling the API
+  does not have today. A cookie also cannot be narrowed to one file without becoming a ticket
+  that has to be stored and checked anyway.
 - **The access token in the query string**, as the terminal WebSocket does. Rejected: the token is
   good for every API call for its whole lifetime, and a media URL lands in proxy logs and the media
   cache.
@@ -79,16 +85,49 @@ header every other file read carries. Three ways round that were considered:
   (two by default), so a URL issued by one pod would fail on the other.
 
 What was built is a **stream ticket**: `POST /api/sessions/{id}/files/{fileId}/stream` returns a
-URL with a random ticket whose SHA-256 is stored in Postgres (`session_file_stream_tickets`),
-bound to one file and the requesting principal, valid for `files.streamTicketMinutes` (120). The
-ticket only says who asked: `GET …/stream?ticket=` resolves that principal's access to the session
-on every request, so revoking a share or deleting the file (the row cascades) stops the next
-range. Tickets are issued for video only — for any other type it would be a second, header-free
-way to read a file that already has one. When a ticket expires under an open player, the pane
-asks for one fresh ticket and resumes at the same position.
+URL with a random ticket whose SHA-256 is stored in Postgres (`session_file_stream_tickets`).
+Tickets are issued for video only. For any other type a ticket would be a second, header-free way
+to read a file that already has one.
 
-A shared link needs none of this: its credential is already in the URL, so the player is pointed
-at `/api/shared/{token}/files/{fileId}/content`, which honours ranges like the owner's routes and
+### The ticket is a credential in a URL
+
+It ends up in browser history, can be copied, and could travel in a `Referer` or a log line. So
+it is kept as weak as possible and as quiet as possible:
+
+- **One file, one viewer.** A ticket names a file and the principal it was issued to. Another
+  file id in the path gets 404.
+- **Minutes, not hours.** `files.streamTicketMinutes` defaults to 10. When a ticket runs out
+  under an open player, the next range fails. The pane then fetches a fresh ticket and resumes at
+  the same position. The allowance renews each time playback resumes, so a long video outlives
+  many tickets. A failure straight after a fresh ticket is shown instead of retried.
+- **Access is checked on every request.** The ticket only says who asked. Every range request
+  resolves that principal's current access to the session, exactly like the bearer route. A
+  revoked share gets **403** on its next range. An unknown or expired ticket gets 404, so the
+  player can tell "you lost access" from "get a new link". Deleting the file deletes its tickets
+  (the foreign key cascades).
+- **No `Referer`, no cache.** Every ticket answer, including error answers, carries
+  `Referrer-Policy: no-referrer` and `Cache-Control: private, no-store`. The share-link content
+  route sends the same, since its token is just as much a credential in the URL. The app page
+  itself sets `<meta name="referrer" content="no-referrer">`: media elements have no
+  `referrerpolicy` attribute, and no request of this app needs a `Referer`. Chromium still plays
+  and seeks with `no-store`; it only stops the bytes, and the URL as a cache key, from being
+  kept on disk.
+- **Never logged.** In the backend, the only framework log line that prints a query string is
+  `Microsoft.AspNetCore.Hosting.Diagnostics` ("Request starting/finished"). It is written before
+  any middleware runs, so the query cannot be rewritten first, and editing the message would
+  mean wrapping every logging provider. That category is held at Warning in code, after the
+  configuration is applied (`SessionFileLogging`), so raising log levels for debugging does not
+  bring it back. Routing and endpoint logs carry the path, never the query. The frontend image's
+  nginx logs the `combined` format with the ticket value replaced by `redacted`; other query
+  strings are logged as before.
+
+  **Not covered:** the cluster's ingress controller. Its access-log format is configured on the
+  controller, not by this chart. Operators who keep ingress access logs should log `$uri` rather
+  than `$request_uri`, or apply the same `map` as `frontend/nginx.conf`. A provider-specific
+  level for that category (`Logging:Console:LogLevel:…`) also outranks the code rule.
+
+A shared link needs no ticket. Its credential is already in the URL, so the player is pointed at
+`/api/shared/{token}/files/{fileId}/content`. That route honours ranges like the owner's and
 applies the same viewer/collaborator rules as before.
 
 Video is served `inline` with its detected type and `X-Content-Type-Options: nosniff`. Download

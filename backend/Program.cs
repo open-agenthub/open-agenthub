@@ -15,6 +15,7 @@ using OpenIddict.Validation.AspNetCore;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
 var builder = WebApplication.CreateBuilder(args);
+AgentHub.Api.Files.SessionFileLogging.KeepStreamTicketsOutOfLogs(builder.Services);
 
 // (De)serialize enums as strings – the frontend sends e.g. mode: "Interactive".
 builder.Services.AddControllers().AddJsonOptions(o =>

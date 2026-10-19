@@ -142,9 +142,9 @@ public sealed record IssuedStreamTicket(string Url, DateTime ExpiresAt);
 /// the query string — the same credential the WebSocket uses, but leaked into every proxy log
 /// and the media cache for its whole lifetime and good for every API call — or a Data
 /// Protection token, whose keys are per replica here and would fail on the other backend pod.
-/// A ticket is a random value whose hash is stored in Postgres: it names one file, expires,
-/// and is checked against the holder's current access on every request, so revoking a share
-/// still ends playback.
+/// A ticket is a random value whose hash is stored in Postgres: it names one file and one
+/// viewer, expires within minutes, and is checked against the holder's current access on every
+/// request, so revoking a share still ends playback (docs/session-file-video.md).
 /// </summary>
 public sealed class SessionFileStreamTickets(ISessionFileRegistry registry, SessionFileOptions options)
 {

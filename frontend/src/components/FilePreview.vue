@@ -85,9 +85,10 @@ async function videoSource() {
   return (await api.issueSessionFileStream(props.sessionId, props.file.id)).url
 }
 
-// A ticket expires after a couple of hours, and the element only notices at its next range
-// request — a seek in a video left open. One fresh ticket, resumed where it stopped, covers that;
-// a second failure is a real one and is shown as such.
+// A ticket lasts minutes, and the element only notices at its next range request — a seek, or
+// buffering further into a long video. A fresh ticket, resumed where it stopped, covers that. The
+// allowance is renewed each time playback resumes, so a long video can outlive many tickets, while
+// a failure straight after a fresh one (access revoked, file gone) is shown instead of retried.
 async function onVideoError() {
   const element = videoEl.value
   if (!element || props.sharedToken || videoRetried) {
@@ -133,7 +134,8 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
     </div>
     <img v-else-if="kind === 'image' && objectUrl" :src="objectUrl" :alt="file.name" data-file-preview="image">
     <video v-else-if="kind === 'video' && videoUrl" ref="videoEl" :src="videoUrl" controls preload="metadata"
-      playsinline :aria-label="`Video ${file.name}`" data-file-preview="video" @error="onVideoError"></video>
+      playsinline :aria-label="`Video ${file.name}`" data-file-preview="video" @error="onVideoError"
+      @playing="videoRetried = false"></video>
     <!-- Deliberately no sandbox attribute. Chrome refuses to instantiate its PDF viewer inside a
          sandboxed frame under every token combination tried, including allow-scripts and
          allow-same-origin, so any sandbox here replaces the document with the grey "blocked
