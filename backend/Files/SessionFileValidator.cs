@@ -27,6 +27,8 @@ public static class SessionFileValidator
             [".docx"] = DocxMime,
             [".pptx"] = PptxMime,
             [".xlsx"] = XlsxMime,
+            [".mp4"] = VideoContainerInspector.Mp4,
+            [".webm"] = VideoContainerInspector.WebM,
         };
 
     private static readonly HashSet<string> ImageMimeTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -41,7 +43,8 @@ public static class SessionFileValidator
         SessionFileOptions options,
         string name,
         string mimeType,
-        long size)
+        long size,
+        SessionFileStorageKind storage = SessionFileStorageKind.S3)
     {
         ArgumentNullException.ThrowIfNull(options);
 
@@ -61,16 +64,44 @@ public static class SessionFileValidator
             return SessionFileValidationResult.Reject("content_type_mismatch");
         }
 
-        var maximum = ImageMimeTypes.Contains(expectedMime)
-            ? options.MaxImageBytes
-            : options.MaxDocumentBytes;
-        if (size < 0 || size > maximum)
+        if (size < 0 || size > MaximumBytes(options, expectedMime, storage))
         {
             return SessionFileValidationResult.Reject("file_too_large");
         }
 
         return SessionFileValidationResult.Accept();
     }
+
+    /// <summary>
+    /// The size ceiling for one file of this type.
+    ///
+    /// Without object storage a video is refused past the document limit, however high the video
+    /// limit is set. That copy lives only on the pod and disappears when it stops, and the pod's
+    /// own file store caps every file at the document limit (AGENTHUB_FILE_MAX_BYTES), so a larger
+    /// reservation would only fail halfway through the transfer with nothing to show for it.
+    /// </summary>
+    public static long MaximumBytes(
+        SessionFileOptions options,
+        string mimeType,
+        SessionFileStorageKind storage = SessionFileStorageKind.S3)
+    {
+        if (VideoContainerInspector.IsVideoMime(mimeType))
+        {
+            return storage == SessionFileStorageKind.Pod
+                ? Math.Min(options.MaxVideoBytes, options.MaxDocumentBytes)
+                : options.MaxVideoBytes;
+        }
+
+        return ImageMimeTypes.Contains(mimeType) ? options.MaxImageBytes : options.MaxDocumentBytes;
+    }
+
+    /// <summary>The largest single upload any type may reserve; the upload routes' body limit.</summary>
+    public static long MaxUploadBytes(SessionFileOptions options) =>
+        Math.Max(options.MaxVideoBytes, Math.Max(options.MaxImageBytes, options.MaxDocumentBytes));
+
+    public static bool IsVideo(string name) =>
+        MimeByExtension.TryGetValue(Path.GetExtension(name ?? ""), out var mime) &&
+        VideoContainerInspector.IsVideoMime(mime);
 
     public static SessionFileValidationResult ValidateBatch(
         SessionFileOptions options,
@@ -111,6 +142,15 @@ public static class SessionFileValidator
             !MimeByExtension.TryGetValue(Path.GetExtension(name), out var expectedMime))
         {
             return SessionFileValidationResult.Reject("unsupported_file_type");
+        }
+
+        if (VideoContainerInspector.IsVideoMime(expectedMime))
+        {
+            var video = await VideoContainerInspector.InspectAsync(
+                content, expectedMime, options.MaxVideoBytes, ct);
+            return video.Allowed
+                ? SessionFileValidationResult.Accept(video.MimeType)
+                : SessionFileValidationResult.Reject(video.Code!);
         }
 
         var bytes = await ReadBoundedAsync(content, options.MaxDocumentBytes, ct);

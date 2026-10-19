@@ -15,6 +15,16 @@ public interface IAgentFileClient
         SessionInfo session,
         SessionFileRecord file,
         CancellationToken ct);
+    /// <summary>The default reads from the start and discards the prefix.</summary>
+    async Task<Stream?> OpenReadRangeAsync(
+        SessionInfo session,
+        SessionFileRecord file,
+        ByteRange range,
+        CancellationToken ct)
+    {
+        var whole = await OpenReadAsync(session, file, ct);
+        return whole is null ? null : new SlicedReadStream(whole, range.From, range.Length);
+    }
     Task<bool> ExistsAsync(
         SessionInfo session,
         SessionFileRecord file,
@@ -73,6 +83,40 @@ public sealed class AgentFileClient : IAgentFileClient
             response.EnsureSuccessStatusCode();
             return new ResponseOwnedStream(
                 await response.Content.ReadAsStreamAsync(ct), response, file.Size);
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
+    public async Task<Stream?> OpenReadRangeAsync(
+        SessionInfo session,
+        SessionFileRecord file,
+        ByteRange range,
+        CancellationToken ct)
+    {
+        using var request = await CreateRequestAsync(HttpMethod.Get, session, file, ct);
+        request.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(range.From, range.To);
+        var response = await _http.SendAsync(
+            request, HttpCompletionOption.ResponseHeadersRead, ct);
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            response.Dispose();
+            return null;
+        }
+
+        try
+        {
+            response.EnsureSuccessStatusCode();
+            var body = new ResponseOwnedStream(
+                await response.Content.ReadAsStreamAsync(ct), response, file.Size);
+            // A pod still running a runtime from before range support answers 200 with the
+            // whole file; the image tag moves every component, but a running pod keeps its own.
+            return response.StatusCode == HttpStatusCode.PartialContent
+                ? new SlicedReadStream(body, 0, range.Length)
+                : new SlicedReadStream(body, range.From, range.Length);
         }
         catch
         {

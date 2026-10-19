@@ -15,6 +15,17 @@ describe('chat attachments', () => {
       .toBe('file_too_large')
   })
 
+  it('accepts MP4 and WebM video, held to the message limit like any upload', () => {
+    const video = (name, type, size = 12) => new File([new Uint8Array(size)], name, { type })
+    expect(validateAttachmentBatch([video('demo.mp4', 'video/mp4'), video('demo.webm', 'video/webm')]).accepted)
+      .toHaveLength(2)
+    expect(validateAttachmentBatch([video('demo.mov', 'video/quicktime')]).errors[0].code).toBe('unsupported_file_type')
+    expect(validateAttachmentBatch([video('demo.mp4', 'video/webm')]).errors[0].code).toBe('content_type_mismatch')
+    // Above the document limit is fine for a video; above the message limit is not.
+    const big = { name: 'demo.mp4', type: 'video/mp4', size: 50 * 1024 * 1024 + 1, lastModified: 1 }
+    expect(validateAttachmentBatch([big]).errors[0].code).toBe('message_too_large')
+  })
+
   it('uploads, completes, retries, and deletes reserved files on removal', async () => {
     let fail = true
     const calls = []

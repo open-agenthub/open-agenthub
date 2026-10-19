@@ -45,7 +45,10 @@ const MIME = new Map([
   ['.md', 'text/markdown'], ['.markdown', 'text/markdown'], ['.txt', 'text/plain'],
   ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
   ['.pptx', 'application/vnd.openxmlformats-officedocument.presentationml.presentation'],
-  ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet']
+  ['.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'],
+  // Video is checked by content on the backend (H.264/AAC in MP4, VP8/VP9/AV1 in WebM) and never
+  // returned inline by read_file: neither IMAGE nor TEXT below names it, so an agent gets the path.
+  ['.mp4', 'video/mp4'], ['.webm', 'video/webm']
 ]);
 const IMAGE = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif']);
 const TEXT = new Set(['text/plain', 'text/markdown']);
@@ -286,7 +289,8 @@ export function createFilesServer(options = {}) {
     // adding a parameter would hit (docs/development-log.md, 2026-09-29).
     read_file: 'Fetch a session file onto this pod\'s disk and return its path, so you can read, '
       + 'search or copy it. Small images and text files also come back inline.',
-    upload_file: 'Upload a file from the workspace or managed output directory.',
+    upload_file: 'Upload a file from the workspace or managed output directory: images, PDF, '
+      + 'Markdown/text, Office documents, or video (MP4 with H.264/AAC, WebM).',
     present_file: 'Present an existing session file or upload and present a local file.',
     dismiss_presentation: 'Dismiss the shared file presentation.',
     // Two tools of their own instead of a flag on list_files and read_file. A connected client

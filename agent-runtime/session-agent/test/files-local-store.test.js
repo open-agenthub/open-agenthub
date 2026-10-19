@@ -71,3 +71,28 @@ test('put atomically round-trips a normalized display name and supports removal'
   await harness.store.remove(FILE_ID);
   assert.equal(await harness.store.head(FILE_ID), null);
 });
+
+test('local store opens one byte range of a stored file', async t => {
+  const harness = await temporaryStore();
+  t.after(() => harness.dispose());
+  const bytes = Buffer.from(Array.from({ length: 1000 }, (_, index) => index % 256));
+  await harness.store.put(FILE_ID, 'demo.mp4', Readable.from([bytes]), 2000);
+  const read = async range => {
+    const opened = await harness.store.open(FILE_ID, range);
+    if (!opened.stream) return opened;
+    const chunks = [];
+    for await (const chunk of opened.stream) chunks.push(chunk);
+    return { ...opened, body: Buffer.concat(chunks) };
+  };
+
+  const middle = await read({ start: 100, end: 199 });
+  assert.deepEqual(middle.range, { start: 100, end: 199 });
+  assert.deepEqual(middle.body, bytes.subarray(100, 200));
+  assert.equal(middle.size, 1000);
+  assert.deepEqual((await read({ start: 990, end: null })).body, bytes.subarray(990));
+  assert.deepEqual((await read({ start: 990, end: 5000 })).range, { start: 990, end: 999 });
+  assert.deepEqual((await read({ suffix: 10 })).body, bytes.subarray(990));
+  assert.equal((await read({ start: 1000, end: null })).unsatisfiable, true);
+  assert.equal((await read({ suffix: 0 })).unsatisfiable, true);
+  assert.deepEqual((await read(null)).body, bytes);
+});

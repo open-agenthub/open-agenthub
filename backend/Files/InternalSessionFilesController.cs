@@ -131,15 +131,13 @@ public sealed class InternalSessionFilesController(
     }
 
     [HttpPut("{fileId}/content")]
-    [RequestSizeLimit(52L * 1024 * 1024)]
+    [DisableRequestSizeLimit]
     public async Task<IActionResult> Upload(
         string id, string fileId, CancellationToken ct)
     {
+        if (SessionFileApi.LimitUploadBody(this, options) is { } tooLarge) return tooLarge;
         var actor = await ActorAsync(id, ct);
         if (actor is null) return Unauthorized();
-        if (Request.ContentLength > options.MaxDocumentBytes)
-            return StatusCode(StatusCodes.Status413PayloadTooLarge,
-                new FileApiError("file_too_large", "file_too_large"));
         try
         {
             await files.PutPodContentAsync(actor, fileId, Request.Body, Request.ContentLength, ct);

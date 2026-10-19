@@ -9,6 +9,9 @@ describe('file preview routing', () => {
     ['application/pdf', 'pdf'],
     ['text/markdown', 'markdown'],
     ['text/plain', 'text'],
+    ['video/mp4', 'video'],
+    ['video/webm', 'video'],
+    ['video/quicktime', 'download'],
     ['text/html', 'download'],
     ['image/svg+xml', 'download']
   ])('routes %s to %s', (mimeType, expected) => {

@@ -59,6 +59,37 @@ test('upload_file returns JSON text and structured metadata', async t => {
   assert.equal(result.structuredContent.id, 'c'.repeat(32));
   assert.equal(result.content[0].text, JSON.stringify(result.structuredContent));
 });
+test('upload_file reserves a video under its video type and read_file never inlines one', async t => {
+  const { createFilesToolHandlers } = await import('../../files/server.mjs');
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agenthub-files-video-'));
+  t.after(() => fs.promises.rm(root, { recursive: true, force: true }));
+  const workspace = path.join(root, 'workspace');
+  await fs.promises.mkdir(workspace);
+  const reserved = [];
+  const client = {
+    reserve: async value => {
+      reserved.push(value);
+      return { file: { id: 'f'.repeat(32), name: value.name }, upload: { kind: 'proxy', url: '/upload', headers: {} } };
+    },
+    upload: async () => {},
+    complete: async id => ({ id, name: 'demo', mimeType: 'video/mp4', size: 3 })
+  };
+  for (const name of ['demo.mp4', 'demo.webm']) await fs.promises.writeFile(path.join(workspace, name), 'abc');
+  const { handlers } = createFilesToolHandlers({ client, workspace, managedRoot: path.join(root, 'managed') });
+
+  await handlers.upload_file({ path: path.join(workspace, 'demo.mp4') });
+  await handlers.upload_file({ path: path.join(workspace, 'demo.webm') });
+  assert.deepEqual(reserved.map(value => value.mimeType), ['video/mp4', 'video/webm']);
+
+  const record = { id: 'f'.repeat(32), name: 'demo.mp4', mimeType: 'video/mp4', size: 3,
+    localPath: path.join(workspace, 'demo.mp4') };
+  const read = await createFilesToolHandlers({ client: { materialize: async () => [record] } })
+    .handlers.read_file({ fileId: record.id });
+  // Metadata and a path only: a video's bytes have no business in the model's context.
+  assert.equal(read.content.length, 1);
+  assert.equal(read.structuredContent.localPath, record.localPath);
+});
+
 test('read_file returns inline content and a path for both an image and oversized text', async t => {
   const { createFilesToolHandlers } = await import('../../files/server.mjs');
   const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agenthub-files-tools-'));

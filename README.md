@@ -669,7 +669,8 @@ an image pasted into the agent terminal is attached too: the file is uploaded to
 its path pasted into the CLI, which Claude Code, Codex, OpenCode and OpenClaw turn into an image of
 their own (Cursor's TUI does the same, not verified end to end). In the shell, Ctrl+V pastes text
 only ([`docs/terminal-clipboard.md`](docs/terminal-clipboard.md)).
-Images, PDF, Markdown, and plain text can be opened in Files beside Workspace or Terminal.
+Images, PDF, Markdown, plain text and video (MP4 with H.264/AAC, WebM) can be opened in Files
+beside Workspace or Terminal; a video plays in the browser's own player and can be seeked.
 HTML and SVG are download-only. A managed `files` MCP gives every supported agent the same
 provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,
 `upload_file`, `present_file`, and `dismiss_presentation`.
@@ -682,7 +683,9 @@ shared with someone — see [`docs/project-files.md`](docs/project-files.md).
 With S3 configured, session files are persistent. Without S3, their content lives only in
 the running agent pod and expires when that pod is gone; the capabilities endpoint reports
 the active storage mode and every format that can be displayed graphically. Limits default
-to five files per message, 20 MiB per image, and 50 MiB per document/message.
+to five files per message, 20 MiB per image, 50 MiB per document/message, and 100 MiB per
+video (`files.maxVideoBytes`; without S3 a video is held to the document limit). Videos are
+checked by content, not by name — see [`docs/session-file-video.md`](docs/session-file-video.md).
 
 #### Office document previews
 

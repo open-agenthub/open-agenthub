@@ -166,11 +166,20 @@ sessionContainers:
 files:
   maxImageBytes: 20971520
   maxDocumentBytes: 52428800
+  # MP4 (H.264/AAC) and WebM, checked by content. Applies in full only with object storage:
+  # without it a video lives on the pod alone and is held to maxDocumentBytes, the pod store's
+  # own cap (docs/session-file-video.md). Agent uploads reach the backend in-cluster; a browser
+  # upload of a larger video through the ingress also needs ingress.bodySize raised.
+  maxVideoBytes: 104857600
   maxMessageBytes: 52428800
   maxMessageFiles: 5
   maxSessionFiles: 200
   maxSessionBytes: 1073741824
   presignMinutes: 10
+  # Lifetime of the url the Files pane plays a video from (a <video> cannot send the bearer
+  # header). Kept short because it is a credential in a url; the pane fetches a fresh one when
+  # it runs out mid-playback. Access is rechecked on every range request regardless.
+  streamTicketMinutes: 10
   reservationMinutes: 15
   sweepSeconds: 60
   presentationPollMilliseconds: 1500

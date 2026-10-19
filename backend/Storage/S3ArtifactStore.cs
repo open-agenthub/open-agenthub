@@ -45,6 +45,13 @@ public interface IArtifactStore
         => throw new NotSupportedException("Session prefix enumeration is unavailable.");
     Task<ArtifactObjectInfo?> HeadAsync(string key, CancellationToken ct = default) => Task.FromResult<ArtifactObjectInfo?>(null);
     Task<Stream?> OpenReadAsync(string key, CancellationToken ct = default) => Task.FromResult<Stream?>(null);
+    /// <summary>Streams <paramref name="length"/> bytes from <paramref name="from"/>. The default
+    /// reads from the start and discards the prefix; S3 asks the server for the range.</summary>
+    async Task<Stream?> OpenReadRangeAsync(string key, long from, long length, CancellationToken ct = default)
+    {
+        var whole = await OpenReadAsync(key, ct);
+        return whole is null ? null : new AgentHub.Api.Files.SlicedReadStream(whole, from, length);
+    }
 
     static string StateKey(string owner, string id) => StateKey(owner, id, AgentKind.Claude);
     static string StateKey(string owner, string id, AgentKind agent) =>
@@ -218,6 +225,29 @@ public sealed class S3ArtifactStore : IArtifactStore
             return null;
         }
     }
+    public async Task<Stream?> OpenReadRangeAsync(
+        string key, long from, long length, CancellationToken ct = default)
+    {
+        try
+        {
+            var response = await _s3.GetObjectAsync(new GetObjectRequest
+            {
+                BucketName = _bucket,
+                Key = key,
+                ByteRange = new ByteRange(from, from + length - 1),
+            }, ct);
+            // A server that ignores Range answers 200 with the whole object. Slicing it here
+            // keeps the response honest instead of sending the start of the file as the range.
+            return response.HttpStatusCode == System.Net.HttpStatusCode.PartialContent
+                ? response.ResponseStream
+                : new AgentHub.Api.Files.SlicedReadStream(response.ResponseStream, from, length);
+        }
+        catch (AmazonS3Exception exception) when (IsNotFound(exception))
+        {
+            return null;
+        }
+    }
+
     public async Task<string?> GetTextAsync(string key, CancellationToken ct = default)
     {
         try

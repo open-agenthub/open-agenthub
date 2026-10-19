@@ -45,11 +45,15 @@ public sealed class SharedSessionFilesController(
         string fileId,
         CancellationToken ct)
     {
+        // The share token sits in this url just as a stream ticket sits in the owner's, and a
+        // shared video plays from it directly; it gets the same no-referrer and no-store.
+        SessionFileApi.KeepTicketPrivate(Response);
         var actor = await ResolveActorAsync(token, ct);
         if (actor is null) return NotFound();
         try
         {
-            return SessionFileApi.Content(this, await files.OpenContentAsync(actor, fileId, ct: ct));
+            return SessionFileApi.Content(this, await files.OpenContentRangeAsync(
+                actor, fileId, SessionFileApi.RequestedRange(Request), ct: ct));
         }
         catch (SessionFileException exception)
         {

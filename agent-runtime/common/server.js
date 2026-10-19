@@ -1667,6 +1667,19 @@ function createCommonServer(options = {}) {
     sendJson(response, status, { error: code });
   }
 
+  // One "bytes=" range, or null for the whole file — a malformed or multi-range header is
+  // answered in full, which RFC 9110 permits and the backend handles either way.
+  function parseByteRange(header) {
+    const match = /^bytes=(\d*)-(\d*)$/.exec(typeof header === 'string' ? header.trim() : '');
+    if (!match || (match[1] === '' && match[2] === '')) return null;
+    if (match[1] === '') return { suffix: Number(match[2]) };
+    const start = Number(match[1]);
+    const end = match[2] === '' ? null : Number(match[2]);
+    if (!Number.isSafeInteger(start) || (end !== null && (!Number.isSafeInteger(end) || end < start)))
+      return null;
+    return { start, end };
+  }
+
   async function handleFileRequest(request, response) {
     const requestPath = (request.url || '').split('?')[0];
     const match = /^\/agenthub\/files\/([a-f0-9]{32})$/.exec(requestPath);
@@ -1713,15 +1726,33 @@ function createCommonServer(options = {}) {
       }
 
       if (request.method === 'GET') {
-        const opened = await fileStore.open(id);
+        // The backend asks for one range when the Files pane seeks in a video on a pod-backed
+        // file. Without this every seek streamed the file from its first byte to the backend,
+        // which discarded everything before the offset.
+        const range = parseByteRange(request.headers.range);
+        const opened = await fileStore.open(id, range);
         if (!opened) {
           fileError(response, 404, 'file_not_found');
           return;
         }
-        response.statusCode = 200;
+        if (opened.unsatisfiable) {
+          response.statusCode = 416;
+          response.setHeader('Content-Range', `bytes */${opened.size}`);
+          response.end();
+          return;
+        }
+        response.setHeader('Accept-Ranges', 'bytes');
         response.setHeader('Content-Type', 'application/octet-stream');
-        response.setHeader('Content-Length', opened.size);
         response.setHeader('X-Agent-File-Name', opened.name);
+        if (opened.range) {
+          response.statusCode = 206;
+          response.setHeader('Content-Range',
+            `bytes ${opened.range.start}-${opened.range.end}/${opened.size}`);
+          response.setHeader('Content-Length', opened.range.end - opened.range.start + 1);
+        } else {
+          response.statusCode = 200;
+          response.setHeader('Content-Length', opened.size);
+        }
         opened.stream.on('error', () => response.destroy());
         opened.stream.pipe(response);
         return;

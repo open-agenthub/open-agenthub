@@ -332,6 +332,129 @@ public sealed class SessionFileServiceTests
         Assert.Equal(2, second.Revision);
     }
 
+    [Fact]
+    public async Task A_video_larger_than_the_document_limit_completes_without_being_buffered()
+    {
+        // Completion buffered every file up to MaxDocumentBytes before detection. A video is
+        // allowed to be larger than that, so it has to be inspected while streaming; padding
+        // the real fixture with a free box past the document limit proves it was.
+        var options = new SessionFileOptions { MaxDocumentBytes = 1024, MaxVideoBytes = 1024 * 1024 };
+        var harness = Harness(s3Configured: true, podPhase: "Paused", options);
+        var video = VideoFixtures.Mp4.Concat(FreeBox(64 * 1024)).ToArray();
+        var reserved = await harness.Service.ReserveAsync(Actor,
+            new ReserveSessionFileCommand("demo.mp4", "video/mp4", video.Length, null, "agent"));
+
+        await harness.Service.PutPodContentAsync(Actor, reserved.File.Id, new MemoryStream(video), video.Length);
+        var completed = await harness.Service.CompleteAsync(Actor, reserved.File.Id);
+
+        Assert.Equal(SessionFileState.Ready, completed.State);
+        Assert.Equal("video/mp4", completed.DetectedMimeType);
+        Assert.Equal(video.Length, completed.Size);
+    }
+
+    [Fact]
+    public async Task A_renamed_non_video_fails_completion()
+    {
+        var harness = Harness(s3Configured: false, podPhase: "Running");
+        var bytes = Encoding.UTF8.GetBytes("plain text pretending to be a video\n");
+        var reserved = await harness.Service.ReserveAsync(Actor,
+            new ReserveSessionFileCommand("demo.mp4", "video/mp4", bytes.Length, null, "agent"));
+        await harness.Service.PutPodContentAsync(Actor, reserved.File.Id, new MemoryStream(bytes));
+
+        var error = await Assert.ThrowsAsync<SessionFileException>(
+            () => harness.Service.CompleteAsync(Actor, reserved.File.Id));
+
+        Assert.Equal("content_type_mismatch", error.Code);
+        Assert.Equal(SessionFileState.Failed, harness.Registry.Files[reserved.File.Id].State);
+    }
+
+    [Fact]
+    public async Task Without_object_storage_a_large_video_is_refused_at_reservation()
+    {
+        var harness = Harness(s3Configured: false, podPhase: "Running");
+
+        var error = await Assert.ThrowsAsync<SessionFileException>(() => harness.Service.ReserveAsync(Actor,
+            new ReserveSessionFileCommand("demo.mp4", "video/mp4", 60L * 1024 * 1024, null, "agent")));
+
+        Assert.Equal("file_too_large", error.Code);
+        Assert.Empty(harness.Registry.Files);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_range_is_read_from_storage_and_reported_with_the_full_size(bool s3)
+    {
+        var harness = Harness(s3Configured: s3, podPhase: "Running");
+        var video = VideoFixtures.Mp4;
+        var reserved = await harness.Service.ReserveAsync(Actor,
+            new ReserveSessionFileCommand("demo.mp4", "video/mp4", video.Length, null, "agent"));
+        await harness.Service.PutPodContentAsync(Actor, reserved.File.Id, new MemoryStream(video), video.Length);
+        await harness.Service.CompleteAsync(Actor, reserved.File.Id);
+
+        var content = await harness.Service.OpenContentRangeAsync(
+            Actor, reserved.File.Id, ByteRangeRequest.Parse("bytes=100-199"));
+        using var read = new MemoryStream();
+        await content.Content!.CopyToAsync(read);
+        var unsatisfiable = await harness.Service.OpenContentRangeAsync(
+            Actor, reserved.File.Id, ByteRangeRequest.Parse($"bytes={video.Length}-"));
+
+        Assert.Equal(new ByteRange(100, 100), content.Range);
+        Assert.Equal(video.Length, content.Size);
+        Assert.Equal(video.AsSpan(100, 100).ToArray(), read.ToArray());
+        Assert.True(unsatisfiable.RangeNotSatisfiable);
+    }
+
+    [Fact]
+    public async Task A_stream_ticket_grants_one_ready_video_until_it_expires()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        await harness.Registry.InsertAsync(Ready("v1", "demo.mp4", "video/mp4"));
+        await harness.Registry.InsertAsync(Ready("v2", "other.mp4", "video/mp4"));
+        var tickets = new SessionFileStreamTickets(harness.Registry, new SessionFileOptions());
+
+        var issued = await tickets.IssueAsync(Actor, "v1");
+        var ticket = issued.Url.Split("ticket=")[1];
+
+        Assert.StartsWith("/api/sessions/s1/files/v1/stream?ticket=", issued.Url, StringComparison.Ordinal);
+        Assert.Equal("alice", await tickets.RedeemAsync(ticket, "s1", "v1"));
+        Assert.Null(await tickets.RedeemAsync(ticket, "s1", "v2"));
+        Assert.Null(await tickets.RedeemAsync(ticket, "s2", "v1"));
+        Assert.Null(await tickets.RedeemAsync(ticket + "x", "s1", "v1"));
+        Assert.Null(await tickets.RedeemAsync(null, "s1", "v1"));
+        Assert.DoesNotContain(harness.Registry.Tickets.Keys, hash => hash.Contains(ticket, StringComparison.Ordinal));
+
+        foreach (var key in harness.Registry.Tickets.Keys.ToArray())
+            harness.Registry.Tickets[key] = harness.Registry.Tickets[key] with { ExpiresAt = DateTime.UtcNow.AddSeconds(-1) };
+        Assert.Null(await tickets.RedeemAsync(ticket, "s1", "v1"));
+    }
+
+    [Fact]
+    public async Task A_stream_ticket_is_only_issued_for_video()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        await harness.Registry.InsertAsync(Ready("p1", "shot.png", "image/png"));
+        var tickets = new SessionFileStreamTickets(harness.Registry, new SessionFileOptions());
+
+        var error = await Assert.ThrowsAsync<SessionFileException>(() => tickets.IssueAsync(Actor, "p1"));
+
+        Assert.Equal("stream_unsupported", error.Code);
+        Assert.Empty(harness.Registry.Tickets);
+    }
+
+    private static SessionFileRecord Ready(string id, string name, string mime) => new(
+        id, "s1", "alice", name, Path.GetExtension(name), mime, mime, 8,
+        SessionFileStorageKind.S3, $"sessions/alice/s1/files/{id}/{name}", SessionFileState.Ready,
+        SessionFilePreviewState.None, null, "alice", "agent", DateTime.UtcNow, DateTime.UtcNow, null);
+
+    private static byte[] FreeBox(int size)
+    {
+        var box = new byte[size];
+        System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(box, (uint)size);
+        Encoding.ASCII.GetBytes("free").CopyTo(box, 4);
+        return box;
+    }
+
     private static TestHarness Harness(
         bool s3Configured,
         string podPhase,
@@ -416,6 +539,14 @@ public sealed class SessionFileServiceTests
                 Files[file.Id] = file with { State = SessionFileState.Deleted };
             return Task.CompletedTask;
         }
+        public Dictionary<string, SessionFileStreamTicket> Tickets { get; } = new();
+        public Task InsertStreamTicketAsync(SessionFileStreamTicket ticket, CancellationToken ct = default)
+        {
+            Tickets.Add(ticket.Hash, ticket);
+            return Task.CompletedTask;
+        }
+        public Task<SessionFileStreamTicket?> GetStreamTicketAsync(string hash, CancellationToken ct = default) =>
+            Task.FromResult(Tickets.GetValueOrDefault(hash));
     }
 
     private sealed class MemoryArtifacts(bool configured) : IArtifactStore
