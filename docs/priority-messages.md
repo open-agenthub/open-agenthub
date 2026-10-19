@@ -73,8 +73,8 @@ runs. The hub reads one word back:
 |---|---|---|
 | Claude with the fleet mod alive (`docs/claude-code-mods.md`) | queued for the mod, which submits it as the next prompt (aborting the running turn on interrupt) | interactive: queued for the mod, which submits it as a prompt of its own once no turn runs; during a turn it waits on the status line and goes with the person's prompt if one comes first; autonomous: inbox |
 | Chat UI (`claude -p --input-format stream-json`) | written as a `user` event, after a `control_request interrupt` when asked | inbox |
-| Interactive Codex or OpenCode terminal (turn hooks, below) | typed into the PTY: optional Escape, 300 ms, text, 300 ms, Enter | its next turn: the end-of-turn hook hands it over when the running turn ends, or it is typed in while the agent waits at its prompt |
-| Interactive terminal, other runtimes | typed into the PTY, as above | inbox |
+| Interactive Codex or OpenCode terminal (turn hooks, below) | pasted into the PTY like an idle message (optional Escape first); "unavailable" if the CLI does not take it (#222) | its next turn: the end-of-turn hook hands it over when the running turn ends, or it is typed in while the agent waits at its prompt |
+| Interactive terminal, other runtimes | typed into the PTY: optional Escape, 300 ms, text, 300 ms, Enter | inbox |
 | Autonomous or scheduled `-p` run without a mod | `unavailable` → inbox | inbox |
 
 The typing sequence is the one `AgentTerminal.SendInputAsync` already uses for chat replies,
@@ -221,8 +221,8 @@ same blind spot and uses the same reading since #198 (`docs/chat-relay.md`).
 **How an idle message is typed (#219).** The message is written as one bracketed paste. Enter is
 sent once the replayed screen shows it, either its last line or the CLI's placeholder for a long
 paste, with a 3 s cap. The CLI's own prompt hook then has to report the submit: Codex's
-`UserPromptSubmit`, OpenCode's `chat.message`. With no report after 5 s, Enter is pressed once
-more. After another 5 s the messages go back to wait for the next Stop. The text left in the box
+`UserPromptSubmit`, OpenCode's `chat.message`. With no report after 4 s, Enter is pressed once
+more. After another 4 s the messages go back to wait for the next Stop. The text left in the box
 then counts as the person's draft, so nothing is typed onto it. Paste markers inside a message
 body are removed, because a body that carried the end marker would turn the rest of itself into
 keys.
@@ -251,6 +251,32 @@ Rejected:
   after all, and it quits an OpenCode whose box is already empty. The price of leaving the text
   is that a person who submits it sends the message once more, at the next Stop. A message that
   was never sent and that nobody can see would be worse.
+
+**Priority messages take the same way in (#222)** on a runtime with turn hooks. Typed as plain
+keys, a 3.9 KB priority message stayed in the Codex prompt whether the agent was idle, working,
+or interrupted first. OpenCode took 16 to 18 s to take it in. A priority message is typed while a
+turn may be running, and that changes the confirmation:
+
+- Idle, or after the Escape of an interrupt: the prompt hook confirms the submit, as above.
+  Measured with 3.9 KB: Codex 0.5 s idle and 0.7 s after an interrupt, OpenCode 1.4 s.
+- During a turn without an interrupt: the CLI queues the text and submits it when the turn ends.
+  Codex reports the prompt only then, which can be any time later. Waiting for the hook would
+  outlast the 15 s the hub waits for an answer. The paste being on the screen is the check, and
+  Enter goes out once.
+- Not confirmed: the session agent answers `unavailable` / `not_submitted`, so the hub leaves
+  the row in the inbox instead of recording it as injected. As on the idle path, the leftover
+  text counts as a draft. 4 s for each of the two confirmations, plus the Escape and the paste,
+  stays under the hub's 15 s.
+
+A priority message waits for an idle message that is still being typed, and the other way round.
+Both used to type into the same prompt box at once. Runtimes without turn hooks (Cursor,
+OpenClaw) keep the plain keys. Neither CLI was measured with a paste, and there is no prompt
+hook to confirm with. A message held during an agent restart is pasted the same way once the new
+agent is up.
+
+On OpenCode 1.18.35 a single Escape does not stop a working turn; it takes two. An interrupting
+priority message is therefore queued behind the running turn on OpenCode, as before. Sending a
+second Escape is left to its own change, because it decides what an interrupt means there.
 
 **The menu check does not recognise OpenCode's dialogs.** They are lists without numbers (model
 picker, command palette) that the Workspace's detector does not treat as menus. On OpenCode a

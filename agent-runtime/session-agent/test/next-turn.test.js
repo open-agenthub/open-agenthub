@@ -378,3 +378,36 @@ test('keys typed after the typed message was submitted are a draft only until th
   w.terminal.write = function (data) { this.writes.push(data); if (data === '\r') void w.delivery.turnEvent('prompt'); };
   assert.equal(await w.deliver(), true);
 });
+
+test('a priority message waits until a message being typed is in, then goes in on its own', async () => {
+  let started = null;
+  const w = await idleWorld({
+    duringPause: delivery => {
+      if (started === null && w.terminal.writes.length === 1) started = delivery.typeMessage(w.terminal, 'PRIORITY', () => '› \r\n', SIZE);
+    }
+  });
+  w.hub.waiting.push(message('m-1'));
+  w.delivery.accept();
+
+  assert.equal(await w.deliver(), true);
+  // The agent now works on the typed message: the priority one is queued with one Enter.
+  assert.equal(await started, true);
+  const pastes = w.terminal.writes.filter(data => data.startsWith('\x1b[200~'));
+  assert.equal(pastes.length, 2);
+  assert.ok(pastes[0].includes('Please fix MR 42'));
+  assert.equal(pastes[1], '\x1b[200~PRIORITY\x1b[201~');
+  assert.deepEqual(w.terminal.writes.slice(-2), [pastes[1], '\r']);
+});
+
+test('a priority message the CLI does not take leaves a draft the idle path does not type onto', async () => {
+  const w = await idleWorld({ submitOn: 0 });
+
+  assert.equal(await w.delivery.typeMessage(w.terminal, 'PRIORITY', () => '› \r\n', SIZE, { interrupt: true }), false);
+  assert.deepEqual(w.terminal.writes.map(data => data.slice(0, 6)), ['\x1b', '\x1b[200~', '\r', '\r']);
+
+  w.advance(5_000);
+  w.hub.waiting.push(message('m-1'));
+  w.delivery.accept();
+  assert.equal(await w.deliver(), false);
+  assert.equal(w.terminal.writes.length, 4);
+});

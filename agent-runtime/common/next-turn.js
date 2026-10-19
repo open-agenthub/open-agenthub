@@ -16,7 +16,7 @@
 // was submitted) and approval requests too, since an approval dialog during a hook continuation
 // is exactly the open menu a typed message must not land in.
 
-const { formatFleetMessage, SUBMIT_PAUSE_MS } = require('./terminal-inject');
+const { formatFleetMessage, SUBMIT_PAUSE_MS, INTERRUPT_PAUSE_MS, ESCAPE } = require('./terminal-inject');
 const { detectMenu } = require('./cli-menu');
 
 // The CLI's own spinner redraws several times a second while a turn runs (Codex 0.160.0: faster
@@ -46,9 +46,10 @@ const SHOWN_TIMEOUT_MS = 3_000;
 // "[Pasted ~95 lines]", Claude Code "[Pasted text #1 +95 lines]".
 const PASTE_PLACEHOLDER = /\[Pasted[^\]\n]{0,40}\]/;
 // The CLI's own prompt hook confirms the Enter submitted; the hook is a node process the CLI
-// starts, so this allows for a slow start. Without it the Enter is pressed once more, then the
-// messages go back to wait for the next Stop.
-const SUBMIT_CONFIRM_MS = 5_000;
+// starts, so this allows for a slow start (measured: 0.5 s Codex, 1.4 s OpenCode). Without it the
+// Enter is pressed once more, then the message counts as not handed over. Two rounds of this, an
+// Escape and the paste stay under the 15 s the hub waits for a priority message's answer.
+const SUBMIT_CONFIRM_MS = 4_000;
 const POLL_MS = 100;
 
 /** The text a batch of messages becomes: what kind of input this is, then each message headed
@@ -194,11 +195,15 @@ function createNextTurnDelivery(options) {
 
   /**
    * Pastes `text` into the prompt, presses Enter once the screen shows it has arrived, and
-   * resolves true once the CLI reports the prompt as submitted. False means the text may still
-   * sit in the prompt box.
+   * resolves true once the CLI reports the prompt as submitted (or, without `confirm`, once Enter
+   * is out). False means the text may still sit in the prompt box.
    */
-  async function typeAndSubmit(term, text, scrollback, screenSize) {
+  async function typeAndSubmit(term, text, scrollback, screenSize, { interrupt = false, confirm = true } = {}) {
     const render = async () => (await renderScreen(scrollback(), screenSize, Terminal())).join('\n');
+    if (interrupt) {
+      term.write(ESCAPE);
+      await wait(INTERRUPT_PAUSE_MS);
+    }
     const before = await render();
     // A body that carried the end marker would end the paste early and turn the rest into keys.
     term.write(PASTE_START + text.split(PASTE_START).join('').split(PASTE_END).join('') + PASTE_END);
@@ -211,6 +216,10 @@ function createNextTurnDelivery(options) {
       const shown = screen !== before && ((tail && screen.includes(tail)) || PASTE_PLACEHOLDER.test(screen));
       if (shown && now() - lastOutput >= POLL_MS) break;
       await wait(POLL_MS);
+    }
+    if (!confirm) {
+      term.write('\r');
+      return true;
     }
     for (let attempt = 0; attempt < 2; attempt++) {
       term.write('\r');
@@ -270,6 +279,33 @@ function createNextTurnDelivery(options) {
     }
   }
 
+  /**
+   * Types a priority message (#222) the way the idle path types a plain one: one paste, Enter
+   * once it shows. Resolves false when the CLI did not take it; what is left in the prompt box
+   * then counts as a draft, as on the idle path.
+   */
+  async function typeMessage(term, text, scrollback, screenSize, { interrupt = false } = {}) {
+    while (typing) await typing.catch(() => {});
+    // During a turn the CLI queues the Enter and reports the prompt only when the turn ends —
+    // Codex 0.160.0 when the running turn was done, which can be any time later. There is no
+    // event to wait for then; the paste on the screen is the check.
+    const confirm = interrupt || state !== 'busy';
+    typedSubmitted = false;
+    typing = typeAndSubmit(term, text, scrollback, screenSize, { interrupt, confirm })
+      .then(async submitted => { await wait(SUBMIT_PAUSE_MS); return submitted; });
+    try {
+      const submitted = await typing;
+      if (!submitted) {
+        lastPersonInput = now();
+        log('next-turn: typed priority message not submitted');
+      }
+      return submitted;
+    } finally {
+      typing = null;
+      typedSubmitted = false;
+    }
+  }
+
   return {
     /** A plain message the hub will hear "next-turn" for. */
     accept() { pending = true; },
@@ -287,6 +323,7 @@ function createNextTurnDelivery(options) {
       throw new Error('context_clear_input_not_ready');
     },
     deliverIfIdle,
+    typeMessage,
     agentStarted() {
       state = 'unknown';
       chained = 0;

@@ -1249,6 +1249,13 @@ function createCommonServer(options = {}) {
         const target = term;
         setTimeoutImpl(() => {
           if (term !== target || exited) return;
+          if (nextTurn) {
+            void nextTurn.typeMessage(target, formatFleetMessage(message), () => scrollback,
+              lastSize || { cols: 120, rows: 32 })
+              .catch(error => console.log('[agent] Deferred message not typed: ' + (error && error.message || error)))
+              .finally(() => releaseHeldKeys(target));
+            return;
+          }
           void injectTerminalInput(target, formatFleetMessage(message), {
             interrupt: false,
             wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
@@ -1390,6 +1397,22 @@ function createCommonServer(options = {}) {
       sendJson(response, 200, { delivered: 'pty', deferred: true });
       return;
     }
+    if (nextTurn) {
+      // Typed as plain keys, a message of 1 KB or more stayed in one TUI's prompt for good and
+      // took another 15 s and more to arrive (#222, docs/priority-messages.md). Not taken, it
+      // stays in the inbox for agent_inbox rather than counting as delivered.
+      const target = term;
+      let submitted = false;
+      try {
+        submitted = await nextTurn.typeMessage(target, formatFleetMessage(message), () => scrollback,
+          lastSize || { cols: 120, rows: 32 }, { interrupt: message.interrupt });
+      } finally {
+        releaseHeldKeys(target);
+      }
+      if (!submitted) return unavailable('not_submitted');
+      sendJson(response, 200, { delivered: 'pty' });
+      return;
+    }
     await injectTerminalInput(term, formatFleetMessage(message), {
       interrupt: message.interrupt,
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
@@ -1397,18 +1420,21 @@ function createCommonServer(options = {}) {
     sendJson(response, 200, { delivered: 'pty' });
   }
 
+  /** Writes the person's keys held while a message was typed, unless another one is typing now. */
+  function releaseHeldKeys(target) {
+    if (nextTurn.isTyping()) return;
+    const keys = inputHeldForTyping;
+    inputHeldForTyping = [];
+    if (term === target && !exited) for (const data of keys) target.write(data);
+  }
+
   function deliverNextTurnIfIdle() {
     if (!nextTurn || chatMode || exited || restartReason !== null || runtimeDraining) return;
     const target = term;
     nextTurn.deliverIfIdle(target, () => scrollback, lastSize || { cols: 120, rows: 32 })
       .catch(error => console.log('[agent] next-turn: delivery failed: ' + (error && error.message || error)))
-      .finally(() => {
-        // A check that found another one typing must leave the keys to that one's end.
-        if (nextTurn.isTyping()) return;
-        const keys = inputHeldForTyping;
-        inputHeldForTyping = [];
-        if (term === target && !exited) for (const data of keys) target.write(data);
-      });
+      // A check that found another one typing must leave the keys to that one's end.
+      .finally(() => releaseHeldKeys(target));
   }
 
   /**
