@@ -281,21 +281,25 @@ test('an idle agent gets the message typed in, with the person\'s keys held unti
   hub.waiting.push({ id: 'm-1', from: 'rev-1', fromTitle: 'Code Reviewer', body: 'Please fix MR 42' });
   await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ priority: false }));
   await eventually(() => harness.terminals[0].writes.length > 0);
-  // The text is in, Enter waits for its pause — and the person presses a key right then.
-  assert.equal(harness.terminals[0].writes.length, 1);
+  const writes = harness.terminals[0].writes;
+  assert.match(writes[0], /^\x1b\[200~[^\x1b]*Please fix MR 42\x1b\[201~$/);
+  // The CLI draws the paste, Enter waits for that — and the person presses a key right then.
+  harness.terminals[0].emitData('Please fix MR 42');
+  advance(500);
   socket.emit('message', JSON.stringify({ type: 'input', data: 'x' }));
+  for (let i = 0; i < 50 && writes.length < 2; i++) { runTimers(); await settle(); }
+  assert.deepEqual(writes.slice(1), ['\r']);
+  // Until the CLI's prompt hook reports the submit, the key stays held and Enter is not repeated.
   runTimers();
-  await eventually(() => harness.terminals[0].writes.length >= 2);
+  await settle();
+  assert.equal(writes.length, 2);
+  await turn(harness, 'prompt');
+  runTimers();
   await settle();
   // Enter went out alone; the key still waits one more pause, so the TUI reads Enter by itself.
-  assert.equal(harness.terminals[0].writes.length, 2);
-  runTimers();
-  await eventually(() => harness.terminals[0].writes.length >= 3);
-
-  const writes = harness.terminals[0].writes;
-  assert.match(writes[0], /Please fix MR 42$/);
-  assert.equal(writes[1], '\r');
-  assert.deepEqual(writes.slice(2), ['x']);
+  assert.equal(writes.length, 2);
+  for (let i = 0; i < 50 && writes.length < 3; i++) { runTimers(); await settle(); }
+  assert.deepEqual(writes.slice(1), ['\r', 'x']);
 });
 
 test('the one-second check delivers once the screen settles, and not while the agent is drawing', async () => {
@@ -311,5 +315,5 @@ test('the one-second check delivers once the screen settles, and not while the a
   advance(2_000);
   intervalTick(harness);
   await eventually(() => harness.terminals[0].writes.length > 0);
-  assert.match(harness.terminals[0].writes[0], /Please fix MR 42$/);
+  assert.match(harness.terminals[0].writes[0], /Please fix MR 42\x1b\[201~$/);
 });

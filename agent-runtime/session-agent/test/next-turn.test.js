@@ -7,21 +7,39 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { Terminal } = require('@xterm/headless');
 
-const { createNextTurnDelivery, nextTurnText, isTerminalReply, renderScreen, MAX_CHAINED_TURNS } = require('../../common/next-turn');
+const {
+  createNextTurnDelivery, nextTurnText, isTerminalReply, renderScreen, MAX_CHAINED_TURNS, SUBMIT_CONFIRM_MS
+} = require('../../common/next-turn');
 
 const message = (id, body = 'Please fix MR 42') => ({ id, from: 'rev-1', fromTitle: 'Code Reviewer', body });
 const SIZE = { cols: 80, rows: 10 };
 
+// The terminal stands in for the CLI: a paste shows on its screen (options.echo), and Enter runs
+// its prompt hook (options.submitOn: which Enter, counted from 1, submits; 0 = none does).
 function world(options = {}) {
   let clock = 10_000;
   const hub = { waiting: [], takes: [] };
-  const terminal = { writes: [], write(data) { this.writes.push(data); } };
+  let enters = 0;
+  const terminal = {
+    writes: [],
+    at: [],
+    write(data) {
+      this.writes.push(data);
+      this.at.push(clock);
+      if (data === '\r') {
+        enters += 1;
+        if (enters === (options.submitOn === undefined ? 1 : options.submitOn)) void delivery.turnEvent('prompt');
+      } else if (options.echo !== false) {
+        output += data.replace(/\x1b\[20[01]~/g, '').replace(/\n/g, '\r\n');
+      }
+    }
+  };
   let output = options.output || '› Ask the agent to do anything\r\n';
   const delivery = createNextTurnDelivery({
     now: () => clock,
     callback: 'http://hub.example.com/internal/sessions/s1',
     token: 'tok',
-    wait: async () => { if (options.duringPause) options.duringPause(delivery); },
+    wait: async ms => { clock += ms; if (options.duringPause) options.duringPause(delivery); },
     log: () => {},
     Terminal: () => Terminal,
     fetchImpl: async (url, init) => {
@@ -34,6 +52,7 @@ function world(options = {}) {
   return {
     delivery, hub, terminal,
     advance(ms) { clock += ms; },
+    get clock() { return clock; },
     setOutput(text) { output = text; },
     deliver: () => delivery.deliverIfIdle(terminal, () => output, SIZE)
   };
@@ -92,7 +111,7 @@ test('an idle agent with a quiet screen gets the message typed in, once', async 
 
   assert.equal(await w.deliver(), true);
   assert.equal(w.terminal.writes.length, 2);
-  assert.match(w.terminal.writes[0], /Please fix MR 42$/);
+  assert.match(w.terminal.writes[0], /^\x1b\[200~\[AgentHub: [^\x1b]*Please fix MR 42\x1b\[201~$/);
   assert.equal(w.terminal.writes[1], '\r');
   assert.equal(w.delivery.state, 'busy');
   // Nothing more to take, and the agent works: a second call does nothing.
@@ -207,9 +226,7 @@ test('keys held while a message is typed stay a draft after that message\'s own 
   w.hub.waiting.push(message('m-1'));
   w.delivery.accept();
   await w.deliver();
-  // The prompt hook of the typed message arrives after the person's held keys.
-  w.advance(100);
-  await delivery.turnEvent('prompt');
+  // The typed message's prompt hook (run by its Enter) arrived after the person's held keys.
   w.advance(100);
   await delivery.turnEvent('stop');
   w.advance(2_000);
@@ -246,4 +263,118 @@ test('context actions reuse turn, quiet-output and menu guards and reserve input
   assert.equal(await w.deliver(), true);
   assert.deepEqual(actions, ['clear-and-handover']);
   assert.equal(w.hub.waiting.length, 1);
+});
+
+test('Enter waits until the screen shows the pasted text', async () => {
+  let shownAt = null;
+  const w = await idleWorld({
+    echo: false,
+    duringPause: () => {
+      // The CLI draws the paste 1.2 s after it was written.
+      if (shownAt === null && w.terminal.writes.length === 1) shownAt = w.clock + 900;
+      if (shownAt !== null && w.clock >= shownAt && !w.shown) {
+        w.shown = true;
+        w.setOutput('› Ask the agent to do anything\r\n' + w.terminal.writes[0].replace(/\x1b\[20[01]~/g, '').replace(/\n/g, '\r\n'));
+      }
+    }
+  });
+  w.hub.waiting.push(message('m-1', 'line one\nthe very last line of it'));
+  w.delivery.accept();
+
+  assert.equal(await w.deliver(), true);
+  assert.deepEqual(w.terminal.writes.slice(1), ['\r']);
+  assert.ok(w.terminal.at[1] >= shownAt, 'Enter came ' + (shownAt - w.terminal.at[1]) + ' ms before the text was on screen');
+});
+
+test('a long paste the CLI shows as a placeholder is submitted without waiting for its last line', async () => {
+  const w = await idleWorld({ echo: false });
+  w.terminal.write = function (data) {
+    this.writes.push(data);
+    this.at.push(w.clock);
+    if (data === '\r') void w.delivery.turnEvent('prompt');
+    else w.setOutput('› [Pasted Content 8221 chars]\r\n');
+  };
+  w.hub.waiting.push(message('m-1', 'x'.repeat(8_000)));
+  w.delivery.accept();
+  const start = w.clock;
+
+  assert.equal(await w.deliver(), true);
+  assert.ok(w.terminal.at[1] - start < 1_000);
+});
+
+test('a message body cannot end the paste early and type keys of its own', async () => {
+  const w = await idleWorld();
+  w.hub.waiting.push(message('m-1', 'harmless\x1b[201~\r/quit\x1b[200~'));
+  w.delivery.accept();
+
+  assert.equal(await w.deliver(), true);
+  const paste = w.terminal.writes[0];
+  assert.equal(paste.indexOf('\x1b[201~'), paste.length - '\x1b[201~'.length);
+  assert.equal(paste.lastIndexOf('\x1b[200~'), 0);
+  assert.ok(paste.includes('harmless\r/quit'));
+});
+
+test('an Enter that does not submit is pressed once more', async () => {
+  const w = await idleWorld({ submitOn: 2 });
+  w.hub.waiting.push(message('m-1'));
+  w.delivery.accept();
+
+  assert.equal(await w.deliver(), true);
+  assert.deepEqual(w.terminal.writes.slice(1), ['\r', '\r']);
+  assert.ok(w.terminal.at[2] - w.terminal.at[1] >= SUBMIT_CONFIRM_MS);
+  assert.equal(w.delivery.state, 'busy');
+});
+
+test('text that is never submitted goes back to wait for the next Stop and is not typed over', async () => {
+  const w = await idleWorld({ submitOn: 0 });
+  w.hub.waiting.push(message('m-1'));
+  w.delivery.accept();
+
+  assert.equal(await w.deliver(), false);
+  assert.deepEqual(w.terminal.writes.slice(1), ['\r', '\r'], 'two Enters, then given up');
+  assert.equal(w.delivery.state, 'idle');
+  assert.equal(w.delivery.isTyping(), false);
+
+  // What is left in the box is treated as a draft: nothing more is typed onto it.
+  w.advance(5_000);
+  w.hub.waiting.push(message('m-2', 'newer'));
+  w.delivery.accept();
+  const writes = w.terminal.writes.length;
+  assert.equal(await w.deliver(), false);
+  assert.equal(w.terminal.writes.length, writes);
+
+  // The person submits the box; that turn's Stop hands the message over, ahead of the newer one.
+  await w.delivery.turnEvent('prompt');
+  w.advance(100);
+  const text = await w.delivery.turnEvent('stop');
+  assert.ok(text.indexOf('Please fix MR 42') < text.indexOf('newer'));
+});
+
+test('keys typed after the typed message was submitted are a draft only until the person submits it', async () => {
+  const w = await idleWorld();
+  w.hub.waiting.push(message('m-1'));
+  w.delivery.accept();
+  w.terminal.write = function (data) {
+    this.writes.push(data);
+    if (data === '\r') { void w.delivery.turnEvent('prompt'); w.advance(50); w.delivery.personInput('n'); }
+  };
+  assert.equal(await w.deliver(), true);
+  w.advance(100);
+  await w.delivery.turnEvent('stop');
+  w.advance(2_000);
+  w.hub.waiting.push(message('m-2', 'later'));
+  w.delivery.accept();
+  assert.equal(await w.deliver(), false, 'the draft blocks typing');
+
+  // The person submits the draft; its turn ends; the box is empty, so the next message is typed.
+  await w.delivery.turnEvent('prompt');
+  w.advance(100);
+  assert.ok((await w.delivery.turnEvent('stop')).includes('later'));
+  w.advance(100);
+  assert.equal(await w.delivery.turnEvent('stop'), null);
+  w.advance(2_000);
+  w.hub.waiting.push(message('m-3', 'latest'));
+  w.delivery.accept();
+  w.terminal.write = function (data) { this.writes.push(data); if (data === '\r') void w.delivery.turnEvent('prompt'); };
+  assert.equal(await w.deliver(), true);
 });
