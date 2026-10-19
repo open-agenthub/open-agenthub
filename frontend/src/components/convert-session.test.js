@@ -37,7 +37,7 @@ const finished = (extra = {}) => ({
 function mountTerminal(session, props = {}) {
   return mount(TerminalView, {
     props: { session, ...props },
-    global: { stubs: { TerminalPane: true, ChatPane: true, ShareSessionDialog: true, SessionWorkspace: true } }
+    global: { stubs: { TerminalPane: true, ChatPane: true, ShareSessionDialog: true, SessionWorkspace: { template: '<div><slot /></div>' } } }
   })
 }
 

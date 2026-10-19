@@ -215,8 +215,8 @@ turn. Codex runs no Stop hook for an interrupted turn. OpenCode fires `session.i
 and on 1.18.35 it does so before the abort is stored: the last answer then has neither
 `MessageAbortedError` nor `time.completed`. The plugin therefore delivers only after an answer
 that completed without an error. A failed turn waits as well, since the person has something to
-look at first. (The chat relay's own abort filter in `turn-notify.mjs` looks for the error only and
-so misses this case; that is outside this change.)
+look at first. The chat relay's abort filter in `turn-notify.mjs` had the
+same blind spot and uses the same reading since #198 (`docs/chat-relay.md`).
 
 **The menu check does not recognise OpenCode's dialogs.** They are lists without numbers (model
 picker, command palette) that the Workspace's detector does not treat as menus. On OpenCode a
