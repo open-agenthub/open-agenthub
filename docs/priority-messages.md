@@ -268,6 +268,12 @@ turn may be running, and that changes the confirmation:
   text counts as a draft. 4 s for each of the two confirmations, plus the Escape and the paste,
   stays under the hub's 15 s.
 
+Waiting for the hook opens a race the plain keys did not have. The hub records the row as
+delivered only once it reads the answer. With a fast turn, the Stop of the very turn the
+message started took the row from the inbox before that, and handed it over a second time: the
+real Codex sent it to the model twice. The session agent now remembers the ids of the priority
+messages it typed (the latest 64) and leaves them out of what it takes.
+
 A priority message waits for an idle message that is still being typed, and the other way round.
 Both used to type into the same prompt box at once. Runtimes without turn hooks (Cursor,
 OpenClaw) keep the plain keys. Neither CLI was measured with a paste, and there is no prompt
