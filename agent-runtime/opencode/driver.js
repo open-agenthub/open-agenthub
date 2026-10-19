@@ -132,9 +132,10 @@ function resetFromDuration(match, text, { secondsFromNow }) {
 module.exports = {
   contextClearCommand: '/new',
   // /new redraws the welcome screen before creating a session. Waiting for its transcript
-  // would deadlock the handover; require the pinned CLI's fresh logo and empty composer.
-  contextClearScreen: rows => rows.some(row => row.includes('█▀▀█ █▀▀█ █▀▀█ █▀▀▄')) &&
-    rows.filter(row => /^\s*┃\s+Ask anything…/.test(row)).length === 1,
+  // would deadlock the handover. Match the welcome composer's text and command footer:
+  // the graphical logo and ellipsis can arrive through OSC 66, which headless xterm skips.
+  contextClearScreen: rows => rows.filter(row => /^\s*┃\s+Ask anything(?:…)?(?:\s|$)/.test(row)).length === 1 &&
+    rows.some(row => /\btab\s+agents\s+ctrl\+p\s+commands\b/.test(row)),
   turnHooks: true,
   fleetNextTurn: false,
   slashCommands: require('./slash-commands'),

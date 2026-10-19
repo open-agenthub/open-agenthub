@@ -69,8 +69,12 @@ created a new session, changed the followed transcript, retained the old history
 Workspace clear boundary. A real state archive was extracted into a fresh home at the same
 absolute path. The actual driver launched the CLI with --session targeting the new id; a subsequent
 model request retained the post-clear text and the resumed prompt and excluded the old task.
-The native welcome logo plus its single empty composer now confirm context-clear readiness,
-because waiting for the lazy transcript would deadlock a handover.
+The native welcome composer text plus its command footer confirm context-clear readiness,
+because waiting for the lazy transcript would deadlock a handover. The graphical logo and
+ellipsis can use OSC 66, which headless xterm skips, so they cannot be readiness requirements.
+The corrected predicate also passed the real runtime HTTP context-clear route: after an owner
+turn, /new ran and the model received the handover without the previous task. This additional
+probe does not exercise the full MCP-to-backend forwarding chain.
 
 A second HTTP host ran the actual SessionFilesController, SharedSessionFilesController,
 SessionAccessService, SessionFileService and AgentFileClient against the real pod file store,

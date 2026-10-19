@@ -36,10 +36,12 @@ test('OpenCode records native file sources once, skips subagents and waits for c
 
 test('OpenCode confirms its fresh /new screen before the lazy transcript exists', () => {
   const driver = require('../../opencode/driver');
-  const fresh = ['   █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█', '  ┃  Ask anything… "Fix broken tests"'];
+  const fresh = ['  ┃  Ask anything… "Fix broken tests"', '  tab agents  ctrl+p commands'];
   assert.equal(driver.contextClearScreen(fresh), true);
-  assert.equal(driver.contextClearScreen([' ┃  Ask anything… "Fix broken tests"']), false);
-  assert.equal(driver.contextClearScreen([fresh[0], ' ┃ unsent draft']), false);
+  assert.equal(driver.contextClearScreen(['  ┃ Ask anything "Fix a TODO"', fresh[1]]), true);
+  assert.equal(driver.contextClearScreen([fresh[0]]), false);
+  assert.equal(driver.contextClearScreen([' ┃ unsent draft', fresh[1]]), false);
+  assert.equal(driver.contextClearScreen([' ┃ NORMAL-MATCHER-PROBE', 'NO-IMAGE', ' ┃', fresh[1]]), false);
 });
 
 test('OpenCode export bounds text and files and recovers a missing deduplication index', async () => {
