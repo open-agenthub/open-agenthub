@@ -98,9 +98,9 @@ function saveSent() {
   if (sentMessages.value.length) workspaceSent.set(props.session.id, sentMessages.value)
   else workspaceSent.delete(props.session.id)
 }
-function onComposerSent(text) {
+function onComposerSent(text, { fileIds = [] } = {}) {
   if (!trackable(text, conversation.value?.source)) return
-  sentMessages.value = [...sentMessages.value, { ...sentEntry(`sent-${++sentCounter}`, text, transcriptItems.value), at: new Date().toISOString() }]
+  sentMessages.value = [...sentMessages.value, { ...sentEntry(`sent-${++sentCounter}`, text, transcriptItems.value, fileIds), at: new Date().toISOString() }]
   saveSent()
 }
 watch(transcriptItems, items => {
