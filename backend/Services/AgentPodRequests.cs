@@ -42,6 +42,7 @@ public sealed class AgentPodRequests : IAgentPodRequests
     private readonly HttpClient _http;
     private readonly IAgentPodIdentityResolver _pods;
 
+    /// <summary>Sends with <paramref name="http"/> once <paramref name="pods"/> confirms the address.</summary>
     /// <param name="http">Must not follow redirects: a pod answering 307 to another address would
     /// otherwise get the token sent on to it, past the check. <see cref="AddAgentPodRequests"/>
     /// registers it that way.</param>
