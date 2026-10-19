@@ -36,3 +36,11 @@ public sealed record SecretRequestBody(string? Name, string? Delivery, string? P
 
 /// <summary>The owner answers a request with a stored secret.</summary>
 public sealed record ProvideSecretRequestBody(string? SecretId);
+
+/// <summary>An owner grant is private to this session unless inheritance is explicitly enabled.</summary>
+public sealed record SessionSecretAccess(string SecretId, bool InheritToChildren = false);
+
+/// <summary>Persisted provenance is assigned by the service, never trusted from a request.</summary>
+public sealed record StoredSessionSecretGrant(string SecretId, bool InheritToChildren, string Source, string? SourceSessionId = null);
+
+public sealed record SessionSecretProvenance(string Id, string Name, string Delivery, string Provenance, bool InheritToChildren);

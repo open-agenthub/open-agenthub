@@ -406,6 +406,7 @@ public record CreateSessionRequest
     /// lie within it; <c>["*"]</c> is accepted as a spelling of null. An unknown id fails the request.
     /// </summary>
     public List<string>? SecretIds { get; init; }
+    public List<SessionSecretAccess>? SecretGrants { get; init; }
     /// <summary>
     /// The most a secret request of this session may later be granted (docs/session-secrets.md):
     /// set by the hub for a session created by a restricted token or spawned by another session,
@@ -413,6 +414,8 @@ public record CreateSessionRequest
     /// </summary>
     [System.Text.Json.Serialization.JsonIgnore]
     public List<string>? SecretCeiling { get; init; }
+    [System.Text.Json.Serialization.JsonIgnore]
+    public List<StoredSessionSecretGrant>? InheritedSecretGrants { get; init; }
     /// <summary>Structured policy. When supplied, including as an empty object, it supersedes AllowedTools.</summary>
     public AgentPolicy? Policy { get; init; }
     /// <summary>Deprecated compatibility input; used only when Policy is omitted.</summary>
@@ -559,6 +562,7 @@ public record UpdateSessionRequest
     /// <summary>Secret selection; null = unchanged, <c>["*"]</c> = follow the project again. Files
     /// follow at once in a running session, variables at its next start.</summary>
     public List<string>? SecretIds { get; init; }
+    public List<SessionSecretAccess>? SecretGrants { get; init; }
     /// <summary>Keeps only these of the secrets granted on request; null = unchanged, [] = revoke all.
     /// Nothing can be added this way (docs/session-secrets.md).</summary>
     public List<string>? SecretGrantIds { get; init; }
@@ -595,6 +599,7 @@ public record UpdateSessionRequest
 /// </summary>
 public sealed record RemoteUpdateSessionRequest
 {
+    public List<SessionSecretAccess>? SecretGrants { get; init; }
     public string? Title { get; init; }
     public string? Description { get; init; }
     /// <summary>Null = unchanged, 0 = off. See <see cref="UpdateSessionRequest.AutoDeleteAfterSeconds"/>.</summary>
@@ -609,7 +614,8 @@ public sealed record RemoteUpdateSessionRequest
         Description = Description,
         AutoDeleteAfterSeconds = AutoDeleteAfterSeconds,
         AutoDeleteFrom = AutoDeleteFrom,
-        AccountFailover = AccountFailover
+        AccountFailover = AccountFailover,
+        SecretGrants = SecretGrants
     };
 }
 
@@ -646,7 +652,7 @@ public sealed record DuplicateSessionRequest(string Title, string? ProjectId, bo
     string? SystemPrompt = null, string? CredentialId = null,
     int? AutoDeleteAfterSeconds = null, string? AutoDeleteFrom = null,
     List<string>? GitPatIds = null, string? AccountFailover = null,
-    List<string>? SecretIds = null);
+    List<string>? SecretIds = null, List<SessionSecretAccess>? SecretGrants = null);
 
 public static class SessionDuplication
 {
@@ -671,6 +677,7 @@ public static class SessionDuplication
             SecretIds = request.SecretIds ?? (request.ProjectId == source.ProjectId
                 ? Services.SessionSecretSelection.Parse(source.SecretIdsJson)?.ToList()
                 : null),
+            SecretGrants = request.SecretGrants,
             Title = request.Title,
             Description = source.Description,
             ProjectId = request.ProjectId,
@@ -795,6 +802,8 @@ public record SessionInfo
     public IReadOnlyList<string>? SecretIds { get; init; }
     /// <summary>Secrets the owner granted this session by answering its requests.</summary>
     public IReadOnlyList<string>? SecretGrantIds { get; init; }
+    public IReadOnlyList<StoredSessionSecretGrant> SecretGrants { get; init; } = [];
+    public IReadOnlyList<SessionSecretProvenance> EffectiveSecrets { get; init; } = [];
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }

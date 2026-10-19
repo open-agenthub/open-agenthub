@@ -18,7 +18,7 @@ function client({ parentID, messages = [] } = {}) {
 }
 
 const assistant = (text, extra = {}) => ({
-  info: { role: 'assistant', ...extra },
+  info: { role: 'assistant', time: { created: 1, completed: 2 }, ...extra },
   parts: [{ type: 'step-start' }, { type: 'text', text }, { type: 'step-finish', reason: 'stop' }]
 });
 
@@ -47,6 +47,12 @@ test('a subagent finishing inside the turn is not relayed', async () => {
 test('an interrupted turn and unattended modes are not relayed', async () => {
   const aborted = assistant('partial', { error: { name: 'MessageAbortedError' } });
   assert.deepEqual(await notified({ client: client({ messages: [aborted] }) }), []);
+  // What session.idle sees right after Escape on 1.18.35: stopped, not yet marked aborted (#198).
+  const stopped = assistant('partial', { time: { created: 1 } });
+  assert.deepEqual(await notified({ client: client({ messages: [stopped] }) }), []);
+  // A failed turn still leaves the agent waiting and is relayed.
+  const failed = assistant('', { time: { created: 1 }, error: { name: 'APIError' } });
+  assert.equal((await notified({ client: client({ messages: [failed] }) })).length, 1);
   for (const mode of ['autonomous', 'scheduled']) {
     assert.deepEqual(await notified({ env: { AGENTHUB_MODE: mode }, client: client({ messages: [assistant('x')] }) }), []);
   }

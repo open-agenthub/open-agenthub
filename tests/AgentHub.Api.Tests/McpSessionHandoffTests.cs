@@ -62,6 +62,20 @@ public class McpSessionHandoffTests
     }
 
     [Fact]
+    public async Task SessionCreate_PassesTheServicesReasonOn_SoTheAgentCanCorrectItself()
+    {
+        // The service's own message for memory "10m" (SessionResources); unhandled, the MCP SDK
+        // would answer with a generic error instead.
+        var svc = new FakeSessions { CreateError = new ArgumentException("Memory request '10m' is below the minimum of 256Mi.") };
+        var tools = Tools(svc);
+
+        var error = await Assert.ThrowsAsync<McpException>(() => tools.CreateSession(title: "x", memory: "10m"));
+
+        Assert.Equal("invalid_argument: Memory request '10m' is below the minimum of 256Mi.", error.Message);
+        Assert.Equal("10m", svc.LastRequest!.Memory);
+    }
+
+    [Fact]
     public async Task SessionTranscript_PagesFromTheCursorAndReportsWhenToStop()
     {
         var svc = new FakeSessions
@@ -164,9 +178,12 @@ public class McpSessionHandoffTests
         public string? Transcript { get; init; }
         public int TranscriptCalls { get; private set; }
 
+        public Exception? CreateError { get; init; }
+
         public Task<SessionInfo> CreateSessionAsync(string owner, CreateSessionRequest req, CancellationToken ct = default)
         {
             LastRequest = req;
+            if (CreateError is not null) throw CreateError;
             return Task.FromResult(Info("Pending"));
         }
 

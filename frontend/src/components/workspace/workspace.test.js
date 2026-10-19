@@ -141,8 +141,24 @@ describe('integrated workspace', () => {
     await workspace(wrapper)
     expect(mocks.api.getConversation).toHaveBeenNthCalledWith(2, 's1', 1)
     expect(wrapper.text()).toContain('Last page')
-    expect(wrapper.get('textarea').attributes('disabled')).toBeDefined()
-    expect(wrapper.text()).toContain('Resume it to send a message; your draft is kept.')
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    expect(wrapper.get('[data-session-input-state]').text()).toContain('Session has finished')
+  })
+
+  it('replaces input at the bottom while stopped and restores the saved draft on resume', async () => {
+    const wrapper = view({ initialUi: 'workspace' })
+    await flushPromises()
+    await wrapper.get('textarea').setValue('Keep this draft')
+    await wrapper.setProps({ session: { ...session, phase: 'Paused', canResume: true } })
+    expect(wrapper.find('textarea').exists()).toBe(false)
+    const footer = wrapper.get('[data-session-input-state]')
+    expect(footer.element.parentElement.lastElementChild).toBe(footer.element)
+    expect(footer.text()).toContain('Session is paused')
+    await footer.get('[data-stopped-resume]').trigger('click')
+    expect(wrapper.emitted('resume')).toEqual([['s1']])
+    await wrapper.setProps({ session })
+    expect(wrapper.find('[data-session-input-state]').exists()).toBe(false)
+    expect(wrapper.get('textarea').element.value).toBe('Keep this draft')
   })
 
   it('offers retry on history failure and does not manufacture an empty successful transcript', async () => {

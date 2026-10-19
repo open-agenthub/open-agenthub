@@ -185,8 +185,27 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         return SessionSecretSelection.Effective(selected, projectId, await ProjectSecretIdsAsync(owner, projectId, ct), stored);
     }
 
+    private async Task<SessionSecretAccessResolver> SecretAccessResolverAsync(string owner, CancellationToken ct)
+    {
+        var records = (await _store.ListAsync(owner, ct)).ToDictionary(r => r.Id);
+        var projects = (await _projects.ListAsync(owner, ct)).ToDictionary(p => p.Id,
+            p => p.SecretIds ?? []);
+        var stored = await ListSessionSecretsAsync(owner, ct);
+        return new(records, projects, stored.Select(s => s.Id).ToList());
+    }
+
     public async Task SyncSessionSecretsAsync(string owner, CancellationToken ct = default)
     {
+        var resolver = await SecretAccessResolverAsync(owner, ct);
+        // Prune even sessions that never spawned. Otherwise a later regrant on the parent could
+        // resurrect a revoked child grant before that child has written its first secret copy.
+        foreach (var session in await _store.ListAsync(owner, ct))
+        {
+            var active = resolver.ActiveGrants(session);
+            if (active.Count == SessionSecretGrants.Parse(session.SecretGrantIdsJson).Count) continue;
+            session.SecretGrantIdsJson = SessionSecretGrants.Serialize(active);
+            await _store.UpsertAsync(session, ct);
+        }
         // Every session that was ever spawned has a file copy, so the copies are the list of
         // sessions to bring up to date; a session that never ran has nothing to update.
         var copies = await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
@@ -201,7 +220,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         {
             if (await _store.GetAsync(owner, sessionId, ct) is { } rec)
             {
-                await WriteSessionSecretsAsync(owner, rec, store, ct);
+                await WriteSessionSecretsAsync(owner, rec, store, ct, resolver);
                 continue;
             }
             // The session is gone but its copies are not (a delete that failed half-way): they hold
@@ -242,11 +261,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     /// every change: the kubelet then carries a file change into the running pod by itself.
     /// </summary>
     private async Task<IReadOnlyList<string>> WriteSessionSecretsAsync(string owner, SessionRecord rec,
-        IDictionary<string, byte[]>? store, CancellationToken ct)
+        IDictionary<string, byte[]>? store, CancellationToken ct, SessionSecretAccessResolver? resolver = null)
     {
-        var projectIds = await ProjectSecretIdsAsync(owner, rec.ProjectId, ct);
-        var ids = SessionSecretSelection.Effective(SessionSecretSelection.Parse(rec.SecretIdsJson), rec.ProjectId,
-            projectIds, SessionSecretStore.Read(store), SessionSecretSelection.Parse(rec.SecretGrantIdsJson));
+        var ids = (resolver ?? await SecretAccessResolverAsync(owner, ct)).Effective(rec);
         var delivery = SessionSecretDeliveryFactory.Build(rec.Id, _opts.Namespace,
             new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id }, store, ids);
         await UpsertSecretAsync(delivery.Files, ct);
@@ -257,28 +274,27 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     public async Task<IReadOnlyList<string>> SessionSecretIdsAsync(string owner, SessionRecord session,
         CancellationToken ct = default)
     {
-        var stored = SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data);
-        return SessionSecretSelection.Effective(SessionSecretSelection.Parse(session.SecretIdsJson), session.ProjectId,
-            await ProjectSecretIdsAsync(owner, session.ProjectId, ct), stored,
-            SessionSecretSelection.Parse(session.SecretGrantIdsJson));
+        return (await SecretAccessResolverAsync(owner, ct)).Effective(session);
     }
 
     public async Task<SessionSecretGrant> GrantSessionSecretAsync(string owner, string sessionId, string secretId,
         CancellationToken ct = default)
     {
         var rec = await _store.GetAsync(owner, sessionId, ct) ?? throw new KeyNotFoundException($"Session {sessionId} not found.");
+        if (rec.Mode == SessionMode.Scheduled)
+            throw new ArgumentException("Recreate a scheduled session to change its secrets.");
+        if (SessionSecretSelection.Parse(rec.SecretCeilingJson) is { } allowed && !allowed.Contains(secretId))
+            throw new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
         var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;
         var entry = SessionSecretStore.Read(store).FirstOrDefault(e => e.Id == secretId)
             ?? throw new ArgumentException($"No stored secret with id '{secretId}'.");
         // The limit a restricted token or a spawning parent set holds for what the agent asks for
         // later, too; otherwise asking would be the way around it.
-        if (SessionSecretSelection.Parse(rec.SecretCeilingJson) is { } ceiling && !ceiling.Contains(secretId))
-            throw new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
-        var grants = SessionSecretSelection.Parse(rec.SecretGrantIdsJson)?.ToList() ?? [];
-        if (!grants.Contains(secretId))
+        var grants = SessionSecretGrants.Parse(rec.SecretGrantIdsJson).ToList();
+        if (!grants.Any(g => g.SecretId == secretId))
         {
-            grants.Add(secretId);
-            rec.SecretGrantIdsJson = SessionSecretSelection.Serialize(grants);
+            grants.Add(new(secretId, false, "requested"));
+            rec.SecretGrantIdsJson = SessionSecretGrants.Serialize(grants);
             await _store.UpsertAsync(rec, ct);
         }
         await RefreshSessionSecretsAsync(owner, rec, ct);
@@ -299,6 +315,21 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.FilesSecretName(rec.Id), ct) is null) return;
         await WriteSessionSecretsAsync(owner, rec,
             (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data, ct);
+    }
+
+    private async Task<IReadOnlyList<StoredSessionSecretGrant>> ValidateSecretGrantsAsync(string owner,
+        IReadOnlyList<SessionSecretAccess> requested, IReadOnlyList<string>? ceiling,
+        IReadOnlyList<StoredSessionSecretGrant> previous, CancellationToken ct)
+    {
+        if (requested.Any(g => g is null || string.IsNullOrWhiteSpace(g.SecretId) || g.SecretId != g.SecretId.Trim()))
+            throw new ArgumentException("A grant must name a stored secret id without surrounding whitespace.");
+        if (ceiling is not null && requested.Any(g => !ceiling.Contains(g.SecretId)))
+            throw new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
+        var stored = await ListSessionSecretsAsync(owner, ct);
+        SessionSecretSelection.NormalizeProject(requested.Select(g => g.SecretId), stored.Select(s => s.Id).ToList());
+        return requested.DistinctBy(g => g.SecretId).Select(g => new StoredSessionSecretGrant(g.SecretId,
+            g.InheritToChildren, previous.FirstOrDefault(p => p.SecretId == g.SecretId)?.Source is "requested" ? "requested" : "granted"))
+            .ToList();
     }
 
     private async Task<IReadOnlyList<string>> ProjectSecretIdsAsync(string owner, string? projectId, CancellationToken ct)
@@ -762,8 +793,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         }
         if (req.RunAsRoot && !_opts.AllowRootSessions)
             throw new ArgumentException("Root sessions are disabled on this instance.");
-        ValidateQuantity(req.Cpu, "cpu");
-        ValidateQuantity(req.Memory, "memory");
+        SessionResources.Validate(req.Cpu, "cpu", _opts.MinCpu, _opts.MaxCpu);
+        SessionResources.Validate(req.Memory, "memory", _opts.MinMemory, _opts.MaxMemory);
         await ValidateProjectAsync(owner, req.ProjectId, ct);
         await EnsureAgentAllowedAsync(req.Agent, ct);
         await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
@@ -771,6 +802,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var credentialId = await ValidateCredentialIdAsync(owner, req.Agent, req.AuthMode, req.CredentialId, ct);
         var gitPatIds = await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct);
         var secretIds = await ValidateSecretIdsAsync(owner, req.ProjectId, req.SecretIds, ct);
+        var secretGrants = await ValidateSecretGrantsAsync(owner, (req.SecretGrants ?? []).Concat(
+            (req.InheritedSecretGrants ?? []).Select(g => new SessionSecretAccess(g.SecretId, g.InheritToChildren))).ToList(), req.SecretCeiling,
+            req.InheritedSecretGrants ?? [], ct);
 
         var repos = NormalizeRepos(req);
         SessionRepos.Validate(repos);
@@ -805,6 +839,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             GitPatIdsJson = GitPatSelection.Serialize(gitPatIds),
             SecretIdsJson = SessionSecretSelection.Serialize(secretIds),
             SecretCeilingJson = SessionSecretSelection.Serialize(req.SecretCeiling),
+            SecretGrantIdsJson = SessionSecretGrants.Serialize(secretGrants.Select(g =>
+                req.InheritedSecretGrants?.FirstOrDefault(i => i.SecretId == g.SecretId) ?? g)),
             AgentPolicyJson = SerializePolicy(policy),
             AllowedToolsJson = SerializeAllowedTools(policy.AllowedTools),
             AutoUpdateRuntimeImages = req.AutoUpdateRuntimeImages,
@@ -1448,8 +1484,19 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // Unlike the fields around it this needs no respawn: the permission endpoint reads
         // the flag off the record on every request, so it applies to the live session.
         if (req.AutoApprove is { } autoApprove) rec.AutoApprove = autoApprove;
-        if (req.Cpu is not null) { ValidateQuantity(req.Cpu, "cpu"); rec.Cpu = req.Cpu; }
-        if (req.Memory is not null) { ValidateQuantity(req.Memory, "memory"); rec.Memory = req.Memory; }
+        // Only a changed value is checked: the edit dialog sends the stored one back with every
+        // edit, and a session stored before the bounds existed must stay editable. Its pod is
+        // started with the clamped value anyway (SpawnAsync).
+        if (req.Cpu is not null && req.Cpu != rec.Cpu)
+        {
+            SessionResources.Validate(req.Cpu, "cpu", _opts.MinCpu, _opts.MaxCpu);
+            rec.Cpu = req.Cpu;
+        }
+        if (req.Memory is not null && req.Memory != rec.Memory)
+        {
+            SessionResources.Validate(req.Memory, "memory", _opts.MinMemory, _opts.MaxMemory);
+            rec.Memory = req.Memory;
+        }
         if (req.Repos is not null)
         {
             var repos = req.Repos.Where(r => !string.IsNullOrWhiteSpace(r.Url)).ToList();
@@ -1553,17 +1600,23 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             rec.GitPatIdsJson = GitPatSelection.Serialize(await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct));
         // Checked against the project the session is in after this update, so moving a session and
         // narrowing its secrets in one request is judged by the project it ends up in.
+        if (req.SecretIds is not null && !req.SecretIds.Contains(SessionSecretSelection.FollowProject)
+            && SessionSecretSelection.Parse(rec.SecretCeilingJson) is { } selectionCeiling
+            && req.SecretIds.Any(s => !selectionCeiling.Contains(s)))
+            throw new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
         if (req.SecretIds is not null)
             rec.SecretIdsJson = SessionSecretSelection.Serialize(
                 await ValidateSecretIdsAsync(owner, rec.ProjectId, req.SecretIds, ct));
-        // Grants can only be taken back here, never added: adding is answering a request, which
-        // checks the limit the session was created with.
+        // Keep the older revoke-only field for clients that have not adopted grant metadata.
+        // New grant writes below still enforce the immutable ceiling.
         if (req.SecretGrantIds is not null)
         {
-            var current = SessionSecretSelection.Parse(rec.SecretGrantIdsJson) ?? [];
-            var kept = current.Where(req.SecretGrantIds.Contains).ToList();
-            rec.SecretGrantIdsJson = kept.Count == 0 ? null : SessionSecretSelection.Serialize(kept);
+            var current = SessionSecretGrants.Parse(rec.SecretGrantIdsJson);
+            rec.SecretGrantIdsJson = SessionSecretGrants.Serialize(current.Where(g => req.SecretGrantIds.Contains(g.SecretId)));
         }
+        if (req.SecretGrants is not null)
+            rec.SecretGrantIdsJson = SessionSecretGrants.Serialize(await ValidateSecretGrantsAsync(owner, req.SecretGrants,
+                SessionSecretSelection.Parse(rec.SecretCeilingJson), SessionSecretGrants.Parse(rec.SecretGrantIdsJson), ct));
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
@@ -1588,19 +1641,13 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         }
         _log.LogInformation("Updated session {Id} settings", id);
         // Files follow at once in a running session; variables are fixed when its container starts.
-        if (req.SecretIds is not null || req.SecretGrantIds is not null || req.ProjectIdSpecified)
-            await RefreshSessionSecretsAsync(owner, rec, ct);
+        if (req.SecretIds is not null || req.SecretGrants is not null || req.SecretGrantIds is not null || req.ProjectIdSpecified)
+            await SyncSessionSecretsAsync(owner, ct);
 
         var pod = await TryReadPodAsync($"session-{id}", ct);
         await ObserveFailureAsync(rec, pod, ct);
         return await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
             await _browsers.GetSummaryAsync(id, ct), ct);
-    }
-
-    private static void ValidateQuantity(string value, string what)
-    {
-        try { _ = new ResourceQuantity(value).ToDecimal(); }
-        catch { throw new ArgumentException($"Invalid {what} quantity: '{value}'."); }
     }
 
     /// <summary>
@@ -1643,6 +1690,20 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // silently drop out. Own entries always survive.
         var effectiveMcp = await BuildEffectiveMcpConfigAsync(owner, rec, ct);
         req = req with { McpConfigJson = effectiveMcp };
+        // A session stored before the bounds existed (or before an operator moved them) keeps its
+        // record; its pod asks for the nearest value inside them. Rewriting the record would
+        // change what the owner set without telling them; this only changes what the node reserves.
+        var cpu = SessionResources.Effective(req.Cpu, _opts.MinCpu, _opts.MaxCpu);
+        var memory = SessionResources.Effective(req.Memory, _opts.MinMemory, _opts.MaxMemory);
+        if (cpu != req.Cpu || memory != req.Memory)
+        {
+            // The stored values are the owner's text and stay out of the log; which one was moved,
+            // and the configured bounds, are enough to find the session and explain its pod.
+            var moved = cpu != req.Cpu && memory != req.Memory ? "cpu and memory" : cpu != req.Cpu ? "cpu" : "memory";
+            _log.LogWarning("Session {Id} has a stored {Resources} request outside {MinCpu}-{MaxCpu} cpu / {MinMemory}-{MaxMemory} memory; its pod starts with the nearest bound",
+                rec.Id, moved, _opts.MinCpu, _opts.MaxCpu, _opts.MinMemory, _opts.MaxMemory);
+            req = req with { Cpu = cpu, Memory = memory };
+        }
 
         var context = await BuildPodContextAsync(owner, rec, resume, hasGitCredentials: false, ct);
         var preparation = await AgentSessionResourceOrchestrator.PrepareAsync(
@@ -1766,13 +1827,19 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             records.Select(record => record.Id).ToArray(), ct);
         var withEphemeralMcp = await _ephemeralApiMcps.ListSessionsWithEntriesAsync(
             records.Select(record => record.Id).ToArray(), ct);
+        var storedSecrets = await ListSessionSecretsAsync(owner, ct);
+        var secretResolver = await SecretAccessResolverAsync(owner, ct);
+        var projectSecrets = (await _projects.ListAsync(owner, ct)).ToDictionary(p => p.Id, p => p.SecretIds);
         var result = new List<SessionInfo>();
         foreach (var r in records)
         {
             byId.TryGetValue(r.Id, out var pod);
             await ObserveFailureAsync(r, pod, ct);
             result.Add(ToInfo(r, EffectivePhase(r, pod), pod?.Status?.PodIP, browserSummaries[r.Id],
-                withEphemeralMcp.Contains(r.Id)) with { OutdatedImage = RuntimeImageOutdated(r,
+                withEphemeralMcp.Contains(r.Id)) with { EffectiveSecrets = SecretProvenance(r, storedSecrets,
+                    r.ProjectId is not null && projectSecrets.TryGetValue(r.ProjectId, out var selection) ? selection ?? [] : [])
+                    .Where(s => secretResolver.Effective(r).Contains(s.Id)).ToList(),
+                OutdatedImage = RuntimeImageOutdated(r,
                     pod ?? (scheduledTemplates.TryGetValue(r.Id, out var template) ? new V1Pod { Spec = template } : null)) });
         }
         return result;
@@ -1937,6 +2004,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // and a failed manual delete can be retried without losing the owner/prefix mapping.
         await SessionStorageCleanup.DeleteAsync(_artifacts, owner, id, ct);
         await _store.DeleteAsync(id, ct);
+        await SyncSessionSecretsAsync(owner, ct);
         _log.LogInformation("Deleted session {Id}", id);
     }
 
@@ -2099,7 +2167,30 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
 
     private async Task<SessionInfo> ToInfoAsync(
         SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, CancellationToken ct = default) =>
-        ToInfo(r, phase, podIp, browser, await SessionHasEphemeralMcpAsync(r.Id, ct));
+        ToInfo(r, phase, podIp, browser, await SessionHasEphemeralMcpAsync(r.Id, ct)) with
+        { EffectiveSecrets = await SecretProvenanceAsync(r, ct) };
+
+    private async Task<IReadOnlyList<SessionSecretProvenance>> SecretProvenanceAsync(SessionRecord r, CancellationToken ct)
+    {
+        var effective = await SessionSecretIdsAsync(r.Owner, r, ct);
+        return SecretProvenance(r, await ListSessionSecretsAsync(r.Owner, ct),
+            await ProjectSecretIdsAsync(r.Owner, r.ProjectId, ct)).Where(s => effective.Contains(s.Id)).ToList();
+    }
+
+    private static IReadOnlyList<SessionSecretProvenance> SecretProvenance(SessionRecord r, IReadOnlyList<SessionSecretInfo> stored, IReadOnlyList<string> projectIds)
+    {
+        var selected = SessionSecretSelection.Parse(r.SecretIdsJson) ?? (r.ProjectId is null ? [] : projectIds);
+        if (r.ProjectId is not null) selected = selected.Where(projectIds.Contains).ToList();
+        var grants = SessionSecretGrants.Parse(r.SecretGrantIdsJson);
+        var ids = selected.Concat(grants.Select(g => g.SecretId));
+        if (SessionSecretSelection.Parse(r.SecretCeilingJson) is { } ceiling) ids = ids.Where(ceiling.Contains);
+        return stored.Where(s => ids.Contains(s.Id)).Select(s =>
+        {
+            var grant = grants.FirstOrDefault(g => g.SecretId == s.Id);
+            return new SessionSecretProvenance(s.Id, s.Name, s.Delivery, grant?.Source ?? "project",
+                selected.Contains(s.Id) || grant?.InheritToChildren == true);
+        }).ToList();
+    }
 
     private SessionInfo ToInfo(
         SessionRecord r, string phase, string? podIp, BrowserSummary? browser = null, bool hasEphemeralMcp = false) => new()
@@ -2118,7 +2209,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         CredentialId = r.CredentialId, ResolvedCredentialId = r.ResolvedCredentialId,
         GitPatIds = GitPatSelection.Parse(r.GitPatIdsJson),
         SecretIds = SessionSecretSelection.Parse(r.SecretIdsJson),
-        SecretGrantIds = SessionSecretSelection.Parse(r.SecretGrantIdsJson),
+        SecretGrantIds = SessionSecretGrants.Ids(r.SecretGrantIdsJson),
+        SecretGrants = SessionSecretGrants.Parse(r.SecretGrantIdsJson),
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
         AutoUpdateRuntimeImages = r.AutoUpdateRuntimeImages,
@@ -2218,6 +2310,10 @@ public sealed class AgentHubOptions
     public string RuntimeClassName { get; set; } = "";
     public string MaxCpu { get; set; } = "2";
     public string MaxMemory { get; set; } = "4Gi";
+    /// <summary>Smallest request a session may ask for (docs/session-resources.md): below it the
+    /// pod reserves next to nothing on its node and is among the first evicted.</summary>
+    public string MinCpu { get; set; } = "50m";
+    public string MinMemory { get; set; } = "256Mi";
     /// <summary>Users may specify a custom container image for their session.</summary>
     public bool AllowCustomImage { get; set; } = true;
     public bool AutoUpdateRuntimeImages { get; set; }
