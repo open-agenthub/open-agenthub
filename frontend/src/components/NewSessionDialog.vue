@@ -10,11 +10,14 @@ import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
+import SecretGrantsPicker from './SecretGrantsPicker.vue'
 import { secretIdsPayload, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import { preferredUi, UI_OPTIONS } from '../lib/ui-preference.js'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
+import SessionResourceFields from './SessionResourceFields.vue'
+import { resourceForm, resourcePayload } from '../lib/resources.js'
 
 const emit = defineEmits(['close', 'created'])
 const props = defineProps({ embedded: { type: Boolean, default: false }, projects: { type: Array, default: () => [] } })
@@ -54,15 +57,15 @@ const form = ref({
   credentialId: '',
   image: '',
   runAsRoot: false,
-  autoApprove: false,
-  cpu: '500m',
-  memory: '1Gi'
+  autoApprove: false
 })
+const resources = ref(resourceForm(null))
 const autoDelete = ref(autoDeleteForm(null))
 // Stored secrets; the options follow the chosen project (docs/session-secrets.md).
 const storedSecrets = ref([])
 const selectedProject = computed(() => props.projects.find(project => project.id === form.value.projectId) || null)
 const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
+const selectedGrants = ref([])
 const selectedSecrets = ref([])
 watch(secrets, options => { selectedSecrets.value = secretSelectionFor(null, options, !!selectedProject.value) })
 const busy = ref(false)
@@ -128,6 +131,7 @@ async function submit() {
       credentialId: form.value.credentialId || null,
       repos: repos.value,
       gitPatIds: gitPatIdsPayload(selectedGitPats.value, gitPats.value),
+      secretGrants: selectedGrants.value,
       secretIds: secretIdsPayload(selectedSecrets.value, secrets.value, !!selectedProject.value),
       prompt: form.value.prompt || null,
       systemPrompt: form.value.systemPrompt.trim() || null,
@@ -144,8 +148,7 @@ async function submit() {
       image: form.value.image.trim() || null,
       runAsRoot: form.value.runAsRoot,
       autoApprove: form.value.autoApprove,
-      cpu: form.value.cpu,
-      memory: form.value.memory,
+      ...resourcePayload(resources.value),
       ...autoDeletePayload(autoDelete.value)
     })
     emit('created', session, form.value.uiMode)
@@ -207,6 +210,7 @@ async function submit() {
         </div>
         <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
           :project-has-none="!!selectedProject && storedSecrets.length > 0" />
+        <SecretGrantsPicker v-model="selectedGrants" :options="storedSecrets" />
       </div>
 
       <div class="card sect">
@@ -263,11 +267,8 @@ async function submit() {
             <label>Extra tools <span class="dim">— MCP servers the agent can use (.mcp.json)</span></label>
             <textarea v-model="form.mcpConfigJson" placeholder='{ "mcpServers": { "snipe-it": { "url": "https://…/sse" } } }'></textarea>
           </div>
-          <div class="grid3">
-            <div class="field"><label>Container image</label><input v-model="form.image" class="mono" placeholder="default agent image" /></div>
-            <div class="field"><label>CPU</label><input v-model="form.cpu" class="mono" /></div>
-            <div class="field"><label>Memory</label><input v-model="form.memory" class="mono" /></div>
-          </div>
+          <div class="field"><label>Container image</label><input v-model="form.image" class="mono" placeholder="default agent image" /></div>
+          <SessionResourceFields v-model="resources" />
           <label class="check">
             <input type="checkbox" v-model="form.runAsRoot" />
             <span><b>Run as root</b> — only if the task needs system packages (apt, npm&nbsp;-g, …)</span>

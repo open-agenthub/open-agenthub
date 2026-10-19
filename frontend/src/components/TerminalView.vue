@@ -9,6 +9,7 @@ import ConversationTimeline from './workspace/ConversationTimeline.vue'
 import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
 import CliMenuNotice from './workspace/CliMenuNotice.vue'
 import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
+import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
 import { CANCEL_KEYS, keysForOption } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, isSessionStopped, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
@@ -75,6 +76,14 @@ const terminalOpened = ref(false)
 const drawerKind = ref('agent')
 // Keep menu detection independent of drawer visibility so answering never requires opening it.
 const cliMenu = ref(null)
+const agentActivity = ref({ state: 'unknown', source: 'hooks' })
+const workspaceActivity = computed(() => {
+  if (!isLive.value) return { state: 'idle' }
+  if (pendingPermissions.value.length || agentActivity.value.state === 'waiting') return { state: 'waiting', reason: 'approval' }
+  if (cliMenu.value || props.session.questionPending) return { state: 'waiting', reason: 'answer' }
+  return statuses.agent === 'connected' ? agentActivity.value : { state: 'unknown' }
+})
+watch(() => props.session.id, () => { agentActivity.value = { state: 'unknown', source: 'hooks' } })
 const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
@@ -99,9 +108,9 @@ function saveSent() {
   if (sentMessages.value.length) workspaceSent.set(props.session.id, sentMessages.value)
   else workspaceSent.delete(props.session.id)
 }
-function onComposerSent(text) {
+function onComposerSent(text, { fileIds = [] } = {}) {
   if (!trackable(text, conversation.value?.source)) return
-  sentMessages.value = [...sentMessages.value, { ...sentEntry(`sent-${++sentCounter}`, text, transcriptItems.value), at: new Date().toISOString() }]
+  sentMessages.value = [...sentMessages.value, { ...sentEntry(`sent-${++sentCounter}`, text, transcriptItems.value, fileIds), at: new Date().toISOString() }]
   saveSent()
 }
 watch(transcriptItems, items => {
@@ -638,7 +647,8 @@ function interruptWorkspaceAgent() {
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
           :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
-        <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" />
+        <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
+        <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
@@ -651,7 +661,7 @@ function interruptWorkspaceAgent() {
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
             :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
-            @menu="onCliMenu" />
+            @menu="onCliMenu" @activity="agentActivity = $event" />
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>

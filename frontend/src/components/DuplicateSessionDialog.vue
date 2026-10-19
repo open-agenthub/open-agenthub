@@ -10,13 +10,17 @@ import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
+import SecretGrantsPicker from './SecretGrantsPicker.vue'
 import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import SystemPromptField from './SystemPromptField.vue'
+import SessionResourceFields from './SessionResourceFields.vue'
+import { resourceForm, resourcePayload } from '../lib/resources.js'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'duplicated'])
 const title = ref('')
 const autoDelete = ref(autoDeleteForm(null))
+const resources = ref(resourceForm(null))
 const scheduled = computed(() => props.session.mode === 'Scheduled')
 const projectId = ref('')
 const systemPrompt = ref('')
@@ -45,6 +49,7 @@ function reset(session) {
   includeMcp.value = true
   agentForm.value = { ...defaultAgentForm(session), credentialId: session.credentialId || '' }
   autoDelete.value = autoDeleteForm(session)
+  resources.value = resourceForm(session)
   selectedMcpIds.value = [...(session.mcpServerIds || [])]
   advOpen.value = false
   busy.value = false
@@ -59,6 +64,7 @@ const storedSecrets = ref([])
 const selectedProject = computed(() => (props.projects || []).find(project => project.id === projectId.value) || null)
 const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
 const copiedSecretIds = computed(() => (projectId.value || '') === (props.session.projectId || '') ? props.session.secretIds : null)
+const selectedGrants = ref([])
 const selectedSecrets = ref([])
 watch([secrets, copiedSecretIds], ([options, copied]) => {
   selectedSecrets.value = secretSelectionFor(copied, options, !!selectedProject.value)
@@ -90,8 +96,11 @@ async function submit() {
       // Always sent, prefilled from the source: 0 means a copy without a deadline, so a setting
       // cleared in the dialog is dropped rather than copied back in (null would copy it).
       ...autoDeletePayload(autoDelete.value, { off: 0 }),
+      // Prefilled from the source; an emptied limit gives the copy the instance default.
+      ...resourcePayload(resources.value),
       // Omitted when unchanged, so the backend copies the source's selection.
       ...gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds),
+      secretGrants: selectedGrants.value,
       ...secretIdsChange(selectedSecrets.value, secrets.value, !!selectedProject.value, copiedSecretIds.value)
     }))
   }
@@ -107,6 +116,7 @@ async function submit() {
       <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
       <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
         :project-has-none="!!selectedProject && storedSecrets.length > 0" />
+        <SecretGrantsPicker v-model="selectedGrants" :options="storedSecrets" />
       <SystemPromptField v-model="systemPrompt" />
       <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration <span class="dim">— inline JSON config</span></span></label>
       <div v-if="savedMcpServers.length" class="field mcp-field" data-mcp-picker>
@@ -125,6 +135,10 @@ async function submit() {
       <GitPatPicker v-model="selectedGitPats" :options="gitPats" />
     </div>
     <AutoDeleteCard v-model="autoDelete" :scheduled="scheduled" />
+    <div class="card sect">
+      <label>Resources</label>
+      <SessionResourceFields v-model="resources" />
+    </div>
     <div v-if="automated" class="card adv">
       <button type="button" class="adv-head" data-advanced :aria-expanded="advOpen" @click="advOpen = !advOpen">
         <span><b>Advanced</b><span class="adv-sub">automation policy</span></span><span>{{ advOpen ? '▾' : '▸' }}</span>

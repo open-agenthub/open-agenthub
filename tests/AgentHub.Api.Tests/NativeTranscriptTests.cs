@@ -39,6 +39,50 @@ public class NativeTranscriptTests
         """;
 
     [Fact]
+    public void Codex_MidTurnInputIsAUserEntryEvenWithinTheSameNativeTurn()
+    {
+        var entries = NativeTranscript.Parse("""
+            {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"begin work"}],"internal_chat_message_metadata_passthrough":{"turn_id":"same-turn"}}}
+            {"type":"response_item","payload":{"type":"function_call_output","call_id":"sleep","output":"process running"}}
+            {"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"also\n  keep spacing"}],"internal_chat_message_metadata_passthrough":{"turn_id":"same-turn"}}}
+            {"type":"event_msg","payload":{"type":"user_message","message":"also\n  keep spacing"}}
+            """);
+        Assert.Equal(new[] { "begin work", "also\n  keep spacing" }, entries.Where(e => e.Role == "user").Select(e => e.Text));
+    }
+
+    [Fact]
+    public void Claude_MidTurnHumanAttachmentIsAUserEntryButQueueEventsAreNot()
+    {
+        // Captured from 2.1.287 during Bash. Use the structured prompt, not the rendered reminder,
+        // so changes to the model-facing wrapper cannot alter the owner's exact words.
+        var entries = NativeTranscript.Parse("""
+            {"type":"queue-operation","operation":"enqueue","content":"also\n  keep spacing"}
+            {"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"also\n  keep spacing"}
+            {"type":"attachment","attachment":{"type":"queued_command","prompt":"also\n  keep spacing","commandMode":"prompt","origin":{"kind":"human"},"humanTurn":true},"timestamp":"2026-10-19T19:09:30.564Z","rendered":[{"content":"wrapper text"}],"renderedRole":"system"}
+            """);
+        var entry = Assert.Single(entries);
+        Assert.Equal("user", entry.Role);
+        Assert.Equal("also\n  keep spacing", entry.Text);
+        Assert.Equal(new DateTime(2026, 10, 19, 19, 9, 30, 564, DateTimeKind.Utc), entry.At);
+    }
+
+    [Theory]
+    [InlineData(true, "human", "prompt", true)]
+    [InlineData(false, "plugin", "prompt", true)]
+    [InlineData(false, "human", "command", true)]
+    [InlineData(false, "human", "prompt", false)]
+    public void Claude_OtherAttachmentsAreNotOwnerMessages(bool sidechain, string origin, string mode, bool human)
+    {
+        var line = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type = "attachment", isSidechain = sidechain,
+            attachment = new { type = "queued_command", prompt = "keep pending", commandMode = mode,
+                origin = new { kind = origin }, humanTurn = human }
+        });
+        Assert.Empty(NativeTranscript.Parse(line));
+    }
+
+    [Fact]
     public void Claude_ReadsPeopleTurnsToolCallsAndResultsAndSkipsTheRest()
     {
         var entries = NativeTranscript.Parse(ClaudeJsonl);

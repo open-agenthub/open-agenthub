@@ -10,9 +10,9 @@ describe('sent messages', () => {
     const sent = [sentEntry('a', 'continue', before), sentEntry('b', 'Fix the\n  failing test ', before)]
     expect(sent.map(entry => entry.baseline)).toEqual([1, 0])
     expect(stillPending(sent, before).map(entry => entry.id)).toEqual(['a', 'b'])
-    // The CLI took the second one; its line breaks and indentation are not what decides.
-    expect(stillPending(sent, [...before, user('Fix the failing test')]).map(entry => entry.id)).toEqual(['a'])
-    expect(stillPending(sent, [...before, user('Fix the failing test'), user('continue')])).toEqual([])
+    // Only the exact owner text consumes a pending send.
+    expect(stillPending(sent, [...before, user('Fix the\n  failing test ')]).map(entry => entry.id)).toEqual(['a'])
+    expect(stillPending(sent, [...before, user('Fix the\n  failing test '), user('continue')])).toEqual([])
   })
 
   it('an assistant echo of the text does not count as taken', () => {
@@ -27,8 +27,25 @@ describe('sent messages', () => {
     expect(trackable('  ', 'native')).toBe(false)
   })
 
-  it('normalizes control characters and whitespace', () => {
-    expect(normalizeMessage(' a\r\n\tb \x1b c ')).toBe('a b c')
+  it('normalizes only PTY line endings', () => {
+    expect(normalizeMessage(' a\r\n\tb \x1b c ')).toBe(' a\n\tb \x1b c ')
+  })
+
+  it('rejects substrings, whitespace variants and tool echoes', () => {
+    const sent = [sentEntry('a', 'keep  both\nlines', [])]
+    const unrelated = [user('quoted: keep  both\nlines'), user('keep both lines'), { role: 'result', text: 'keep  both\nlines' }]
+    expect(stillPending(sent, unrelated)).toEqual(sent)
+    expect(stillPending(sent, [...unrelated, user('keep  both\r\nlines')])).toEqual([])
+  })
+
+  it('matches image framing only with uploaded identities and the exact caption', () => {
+    const sent = [sentEntry('a', 'caption', [], ['abc'])]
+    const image = (text, id = 'abc') => ({ role: 'user', text, attachments: [{ id }] })
+    expect(stillPending(sent, [image('[Image #1] caption')])).toEqual([])
+    expect(stillPending(sent, [image('<image name=[Image #1] path="/work/.agenthub/files/abc/image.png">\n</image>\n[Image #1]  caption')])).toEqual([])
+    expect(stillPending(sent, [image('[Image #1] caption', 'other')])).toEqual(sent)
+    expect(stillPending(sent, [image('[Image #1] quoted caption')])).toEqual(sent)
+    expect(stillPending([sentEntry('b', 'caption', [])], [image('[Image #1] caption')])).toHaveLength(1)
   })
 })
 

@@ -37,9 +37,11 @@ test('each Codex event is reported to the session agent under its own name', asy
   await run({ ...thread, hook_event_name: 'UserPromptSubmit', prompt: 'hi' }, env, fetchImpl);
   await run({ ...thread, hook_event_name: 'PermissionRequest', tool_name: 'shell' }, env, fetchImpl);
   await run(stop, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'Interrupt' }, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'StopFailure' }, env, fetchImpl);
   await run({ ...thread, hook_event_name: 'PostToolUse' }, env, fetchImpl);
 
-  assert.deepEqual(calls.map(call => call.body.event), ['prompt', 'permission', 'stop']);
+  assert.deepEqual(calls.map(call => call.body.event), ['prompt', 'permission', 'stop', 'idle', 'idle']);
   assert.equal(calls[0].url, 'http://127.0.0.1:8123/agenthub/turn');
   assert.equal(calls[0].token, 'tok');
 });
@@ -100,7 +102,7 @@ test('the Codex wrapper prints the block decision as its only output', async () 
   }
 });
 
-test('requirements.toml runs the hook on the three events, after the policy hook on approvals', () => {
+test('requirements.toml runs the hook on turn events, after the policy hook on approvals', () => {
   const requirements = fs.readFileSync(path.join(runtimeRoot, 'codex', 'requirements.toml'), 'utf8');
   const command = 'command = "node /opt/session-agent/codex/fleet-turn-hook.js"';
   // Everything from an event's [[hooks.<Event>]] header to the next event's header.
@@ -109,7 +111,7 @@ test('requirements.toml runs the hook on the three events, after the policy hook
     const index = headers.findIndex(match => match[1] === name);
     return requirements.slice(headers[index].index, headers[index + 1]?.index);
   };
-  for (const event of ['UserPromptSubmit', 'PermissionRequest', 'Stop']) {
+  for (const event of ['UserPromptSubmit', 'PermissionRequest', 'Stop', 'Interrupt']) {
     assert.ok(section(event).includes(command), event + ' runs fleet-turn-hook.js');
   }
   const permission = section('PermissionRequest');

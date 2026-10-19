@@ -69,6 +69,7 @@ public sealed class SessionsController : ControllerBase
     {
         try { return Ok(await _svc.CreateSessionAsync(Owner, req, ct)); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
@@ -88,6 +89,7 @@ public sealed class SessionsController : ControllerBase
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
@@ -141,6 +143,7 @@ public sealed class SessionsController : ControllerBase
         try { return Ok(await _svc.DuplicateSessionAsync(Owner, id, request, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
@@ -164,6 +167,22 @@ public sealed class SessionsController : ControllerBase
     public async Task<ActionResult<SessionInfo>> PauseAndResumeRuntime(string id, CancellationToken ct)
     {
         try { return Ok(await _svc.PauseAndResumeRuntimeImageAsync(Owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+    }
+
+    /// <summary>
+    /// Restarts a running interactive session so its pod gets the CPU/memory saved for it, with
+    /// the conversation resumed (docs/session-resources.md). 409 when it cannot be restarted (not
+    /// running or not interactive, no state storage, maintenance in progress) or the cluster
+    /// would refuse the new pod; the session then keeps running and gets them at its next start.
+    /// </summary>
+    [HttpPost("{id}/apply-resources")]
+    public async Task<ActionResult<SessionInfo>> ApplyResources(string id, CancellationToken ct)
+    {
+        try { return Ok(await _svc.ApplyResourcesAsync(Owner, id, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }

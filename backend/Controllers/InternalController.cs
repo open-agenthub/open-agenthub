@@ -139,6 +139,17 @@ public sealed class InternalController : ControllerBase
         return NoContent();
     }
 
+    [HttpPost("turn-started")]
+    public async Task<IActionResult> TurnStarted(string id, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        // A reply can start another turn without reattaching the terminal. The old question
+        // would otherwise keep overriding live activity until the next socket connection.
+        await _store.SetQuestionPendingAsync(id, false, ct);
+        return NoContent();
+    }
+
     /// <summary>Called by the Claude Code notification hook when the agent is waiting or asks a question.</summary>
     [HttpPost("notify")]
     public async Task<IActionResult> Notify(string id, [FromBody] NotifyBody body, CancellationToken ct)
@@ -477,23 +488,36 @@ public sealed class InternalController : ControllerBase
         // more is refused, not quietly narrowed: the agent asked for a secret by id, and a child
         // started without it would fail later on a missing variable with nothing pointing here.
         var parentSecrets = await _svc.SessionSecretIdsAsync(rec.Owner, rec, ct);
+        var parentGrants = SessionSecretGrants.Parse(rec.SecretGrantIdsJson);
+        // Resolve the selection separately so a non-inheritable grant does not hide an id that
+        // the project independently gives the parent. Revocation is evaluated at spawn time.
+        var selected = await _svc.ResolveSessionSecretIdsAsync(rec.Owner, rec.ProjectId,
+            SessionSecretSelection.Parse(rec.SecretIdsJson)?.ToList(), ct);
+        var eligible = parentSecrets.Where(s => selected.Contains(s)
+            || parentGrants.Any(g => g.SecretId == s && g.InheritToChildren)).ToList();
         var requestedSecrets = req.SecretIds?.Select(s => s?.Trim() ?? "").Where(s => s.Length > 0).ToList();
-        if (requestedSecrets is null || requestedSecrets.Contains(SessionSecretSelection.FollowProject))
-        {
-            // Without a list the child inherits, written out explicitly: left at null it would
-            // follow its project's selection, which can be wider than the parent's. A child moved
-            // to another project keeps only what that project selects as well.
-            var inherited = forced.ProjectId is null
-                ? parentSecrets
-                : parentSecrets.Intersect(await _svc.ResolveSessionSecretIdsAsync(rec.Owner, forced.ProjectId, null, ct)).ToList();
-            forced = forced with { SecretIds = inherited.ToList() };
-        }
-        else if (requestedSecrets.Any(s => !parentSecrets.Contains(s)))
-        {
+        // Public owner-grant fields are not an agent's route around inheritance policy.
+        if (req.SecretGrants is { Count: > 0 })
             return StatusCode(StatusCodes.Status403Forbidden, CredentialScopeException.SecretNotAllowed);
-        }
-        // A secret request of the child is held to the same limit, so asking cannot widen it either.
-        forced = forced with { SecretCeiling = parentSecrets.ToList() };
+        if (requestedSecrets is null || requestedSecrets.Contains(SessionSecretSelection.FollowProject))
+            requestedSecrets = eligible;
+        if (requestedSecrets.Any(s => !eligible.Contains(s)))
+            return StatusCode(StatusCodes.Status403Forbidden, CredentialScopeException.SecretNotAllowed);
+        var projectSecrets = forced.ProjectId is null ? null
+            : await _svc.ResolveSessionSecretIdsAsync(rec.Owner, forced.ProjectId, null, ct);
+        if (req.SecretIds is { } explicitIds && !explicitIds.Contains(SessionSecretSelection.FollowProject)
+            && projectSecrets is not null && requestedSecrets.Any(s => !projectSecrets.Contains(s)
+                && !parentGrants.Any(g => g.SecretId == s && g.InheritToChildren)))
+            return BadRequest("The requested secret is not selected for the child project.");
+        var inheritedGrants = parentGrants.Where(g => g.InheritToChildren && requestedSecrets.Contains(g.SecretId))
+            .Select(g => g with { Source = "inherited", SourceSessionId = rec.Id }).ToList();
+        forced = forced with
+        {
+            SecretIds = requestedSecrets.Where(s => projectSecrets is null || projectSecrets.Contains(s)).ToList(),
+            SecretGrants = null,
+            InheritedSecretGrants = inheritedGrants,
+            SecretCeiling = eligible
+        };
         try
         {
             return Ok(await _svc.CreateSessionAsync(rec.Owner, forced, ct));
@@ -526,7 +550,11 @@ public sealed class InternalController : ControllerBase
         if (rec is null) return Unauthorized();
         var ids = await _svc.SessionSecretIdsAsync(rec.Owner, rec, ct);
         var secrets = (await _svc.ListSessionSecretsAsync(rec.Owner, ct)).Where(s => ids.Contains(s.Id));
-        return Ok(new { secrets = secrets.Select(s => new { id = s.Id, name = s.Name, delivery = s.Delivery, description = s.Description }) });
+        var selected = await _svc.ResolveSessionSecretIdsAsync(rec.Owner, rec.ProjectId,
+            SessionSecretSelection.Parse(rec.SecretIdsJson), ct);
+        return Ok(new { secrets = secrets.Select(s => new { id = s.Id, name = s.Name, delivery = s.Delivery, description = s.Description,
+            provenance = SessionSecretGrants.Parse(rec.SecretGrantIdsJson).FirstOrDefault(g => g.SecretId == s.Id)?.Source ?? "project",
+            inheritToChildren = selected.Contains(s.Id) || SessionSecretGrants.Parse(rec.SecretGrantIdsJson).FirstOrDefault(g => g.SecretId == s.Id)?.InheritToChildren == true }) });
     }
 
     /// <summary>

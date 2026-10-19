@@ -20,6 +20,39 @@ namespace AgentHub.Api.Tests;
 public class InternalNotifyTests
 {
     [Theory]
+    [InlineData("token-s1", true)]
+    [InlineData("wrong", false)]
+    public async Task TurnStarted_ClearsThePreviousQuestionOnlyWithTheCallbackToken(string token, bool allowed)
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        var result = await world.Controller(token).TurnStarted("s1", CancellationToken.None);
+        if (allowed)
+        {
+            Assert.IsType<NoContentResult>(result);
+            Assert.Equal([("s1", false)], world.Store.QuestionPending);
+        }
+        else
+        {
+            Assert.IsType<UnauthorizedResult>(result);
+            Assert.Empty(world.Store.QuestionPending);
+        }
+        Assert.Empty(world.Notifier.Events);
+    }
+
+    [Fact]
+    public async Task NextPromptClearsTheOldQuestion_AndANewQuestionRemainsPending()
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        var controller = world.Controller();
+        await controller.Notify("s1", new InternalController.NotifyBody("Old question", "question"), default);
+        await controller.TurnStarted("s1", default);
+        await controller.Notify("s1", new InternalController.NotifyBody("New question", "question"), default);
+
+        Assert.Equal([("s1", true), ("s1", false), ("s1", true)], world.Store.QuestionPending);
+        Assert.Equal("New question", world.Notifier.Events.Last().Item3);
+    }
+
+    [Theory]
     [InlineData(AgentKind.Codex)]
     [InlineData(AgentKind.Cursor)]
     [InlineData(AgentKind.OpenCode)]
