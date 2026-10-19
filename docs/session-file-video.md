@@ -52,8 +52,9 @@ would accept a reservation the pod then refuses halfway through the transfer. Re
 returns `file_too_large` before any byte moves.
 
 An agent's upload reaches the backend in the cluster, so the ingress body limit (`ingress.bodySize`,
-55m) does not apply to it. A browser upload of a larger video would need it raised; the composer
-does not offer video attachments, since a message attachment is bounded at 50 MiB anyway.
+55m) does not apply to it. The Files pane and the composer accept video too, but their uploads go
+through the ingress and the browser's queue holds every upload to the 50 MiB message limit; a
+larger video from the browser would need both raised, which was left for when someone asks.
 
 ## Playback: Range, and a ticket instead of the bearer header
 

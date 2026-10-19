@@ -3,6 +3,9 @@ export const ATTACHMENT_LIMITS = Object.freeze({
   maxFiles: 5,
   maxImageBytes: 20 * MIB,
   maxDocumentBytes: 50 * MIB,
+  // The per-file ceiling the backend applies with object storage. In practice the message limit
+  // below binds first: a browser upload goes through the ingress, whose default body size is 55m.
+  maxVideoBytes: 100 * MIB,
   maxMessageBytes: 50 * MIB
 })
 
@@ -18,8 +21,16 @@ const MIME_BY_EXTENSION = Object.freeze({
   '.txt': 'text/plain',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+  '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm'
 })
+
+function maxBytes(mimeType) {
+  if (mimeType.startsWith('image/')) return ATTACHMENT_LIMITS.maxImageBytes
+  if (mimeType.startsWith('video/')) return ATTACHMENT_LIMITS.maxVideoBytes
+  return ATTACHMENT_LIMITS.maxDocumentBytes
+}
 
 const COPY = Object.freeze({
   unsupported_file_type: 'This file type is not supported.',
@@ -70,7 +81,7 @@ export function validateAttachmentBatch(files, existing = []) {
     if (!expectedMime) code = 'unsupported_file_type'
     else if (file.type !== expectedMime) code = 'content_type_mismatch'
     else if (seen.has(fingerprint)) code = 'duplicate_file'
-    else if (file.size > (expectedMime.startsWith('image/') ? ATTACHMENT_LIMITS.maxImageBytes : ATTACHMENT_LIMITS.maxDocumentBytes)) code = 'file_too_large'
+    else if (file.size > maxBytes(expectedMime)) code = 'file_too_large'
     else if (total + file.size > ATTACHMENT_LIMITS.maxMessageBytes) code = 'message_too_large'
     if (code) errors.push({ file, code, message: COPY[code] })
     else {
