@@ -150,7 +150,8 @@ public class ApplySessionResourcesTests
     public async Task EditsOutsideTheBoundsAreRefusedBeforeAnythingIsStored(string body, string expected)
     {
         await using var rig = await Rig.Start();
-        var response = await rig.Http.PatchAsync("/api/sessions/session", new StringContent(body, Encoding.UTF8, "application/json"));
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        var response = await rig.Http.PatchAsync("/api/sessions/session", content);
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains(expected, await response.Content.ReadAsStringAsync());
         Assert.Null(rig.Record.MemoryLimit);

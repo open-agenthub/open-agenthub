@@ -1319,7 +1319,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await EnsureAgentAllowedAsync(record.Agent, ct);
         await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
         await AdmitResourcesAsync(record, pod, ct);
-        _log.LogInformation("Restarting session {Id} to apply new resources", id);
+        _log.LogInformation("Restarting session {Id} to apply new resources", record.Id);
         return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
     }
 
@@ -1382,9 +1382,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             if (status.RootElement.ValueKind == JsonValueKind.Object
                 && status.RootElement.TryGetProperty("message", out var detail) && detail.ValueKind == JsonValueKind.String)
                 return detail.GetString()!;
+            return content;
         }
-        catch (JsonException) { }
-        return content;
+        // Not a Status document (a proxy in front of the API server, say): its text is the message.
+        catch (JsonException) { return content; }
     }
 
     private async Task<SessionInfo> PauseAndResumeRuntimeCoreAsync(string owner, string id, CancellationToken ct)
