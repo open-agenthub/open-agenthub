@@ -16,7 +16,7 @@
 // was submitted) and approval requests too, since an approval dialog during a hook continuation
 // is exactly the open menu a typed message must not land in.
 
-const { injectTerminalInput, formatFleetMessage, SUBMIT_PAUSE_MS } = require('./terminal-inject');
+const { formatFleetMessage, SUBMIT_PAUSE_MS } = require('./terminal-inject');
 const { detectMenu } = require('./cli-menu');
 
 // The CLI's own spinner redraws several times a second while a turn runs (Codex 0.160.0: faster
@@ -31,6 +31,25 @@ const MAX_CHAINED_TURNS = 3;
 // occupies, and a TUI redraws them often.
 const SCREEN_REPLAY_BYTES = 256 * 1024;
 const HUB_TIMEOUT_MS = 5_000;
+// A typed message goes in as one bracketed paste (#219). Typed as plain keys, Codex 0.160.0
+// classifies the stream as a paste burst and keeps its tail buffered until a UI tick that does
+// not come; every Enter after that is appended to the burst as a newline, so a message of about
+// 1 KB or more stayed in the prompt for good. OpenCode 1.18.35 reads plain keys one at a time:
+// 4 KB took 15 s to arrive and 8 KB had not after a minute. As a paste, 8 KB was in the composer
+// of both within 300 ms.
+const PASTE_START = '\x1b[200~';
+const PASTE_END = '\x1b[201~';
+// How long Enter waits for the screen to show the paste. Measured at under 300 ms for 8 KB, so
+// this only bounds a CLI that draws it somewhere the check below does not look.
+const SHOWN_TIMEOUT_MS = 3_000;
+// What a CLI shows instead of a long paste: Codex "[Pasted Content 8221 chars]", OpenCode
+// "[Pasted ~95 lines]", Claude Code "[Pasted text #1 +95 lines]".
+const PASTE_PLACEHOLDER = /\[Pasted[^\]\n]{0,40}\]/;
+// The CLI's own prompt hook confirms the Enter submitted; the hook is a node process the CLI
+// starts, so this allows for a slow start. Without it the Enter is pressed once more, then the
+// messages go back to wait for the next Stop.
+const SUBMIT_CONFIRM_MS = 5_000;
+const POLL_MS = 100;
 
 /** The text a batch of messages becomes: what kind of input this is, then each message headed
  * with its sender as everywhere else. Peers are not the owner; the model has to be able to tell. */
@@ -63,9 +82,15 @@ function renderScreen(output, size, Terminal) {
   });
 }
 
+/** The last non-empty line of `text`, or its end, as the screen would show it once typed. */
+function shownTail(text) {
+  const lines = text.split('\n').map(line => line.trim()).filter(Boolean);
+  return lines.length ? lines[lines.length - 1].slice(-24) : '';
+}
+
 function createNextTurnDelivery(options) {
   const { now, fetchImpl, callback, token, log } = options;
-  const wait = options.wait;
+  const wait = options.wait || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const Terminal = options.Terminal || (() => require('@xterm/headless').Terminal);
 
   let state = 'unknown';
@@ -84,6 +109,8 @@ function createNextTurnDelivery(options) {
   // so they are a draft in the box of the turn that message starts — but the prompt event of that
   // turn arrives after the keys did and would make them look older than it (#192).
   let keysDuringTyping = false;
+  // The typed message's own prompt event arrived; keys from then on are the next draft.
+  let typedSubmitted = false;
   const actions = [];
 
   async function takeFromHub() {
@@ -119,6 +146,7 @@ function createNextTurnDelivery(options) {
     if (event === 'prompt' || event === 'permission') {
       if (event === 'prompt') {
         lastPrompt = now();
+        if (typing) typedSubmitted = true;
         if (keysDuringTyping) {
           keysDuringTyping = false;
           lastPersonInput = lastPrompt;
@@ -164,6 +192,35 @@ function createNextTurnDelivery(options) {
     return screenSize ? null : 'no_screen';
   }
 
+  /**
+   * Pastes `text` into the prompt, presses Enter once the screen shows it has arrived, and
+   * resolves true once the CLI reports the prompt as submitted. False means the text may still
+   * sit in the prompt box.
+   */
+  async function typeAndSubmit(term, text, scrollback, screenSize) {
+    const render = async () => (await renderScreen(scrollback(), screenSize, Terminal())).join('\n');
+    const before = await render();
+    // A body that carried the end marker would end the paste early and turn the rest into keys.
+    term.write(PASTE_START + text.split(PASTE_START).join('').split(PASTE_END).join('') + PASTE_END);
+    const tail = shownTail(text);
+    await wait(SUBMIT_PAUSE_MS);
+    // Counted in polls rather than against the clock, so a clock that stands still cannot keep
+    // the loop going.
+    for (let poll = 0; poll < SHOWN_TIMEOUT_MS / POLL_MS; poll++) {
+      const screen = await render();
+      const shown = screen !== before && ((tail && screen.includes(tail)) || PASTE_PLACEHOLDER.test(screen));
+      if (shown && now() - lastOutput >= POLL_MS) break;
+      await wait(POLL_MS);
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      term.write('\r');
+      for (let poll = 0; poll < SUBMIT_CONFIRM_MS / POLL_MS && !typedSubmitted; poll++) await wait(POLL_MS);
+      if (typedSubmitted) return true;
+      log('next-turn: no prompt event ' + SUBMIT_CONFIRM_MS + ' ms after Enter' + (attempt ? '' : '; pressing it once more'));
+    }
+    return false;
+  }
+
   /** Types what is waiting into an agent that sits at its prompt; does nothing otherwise. */
   async function deliverIfIdle(term, scrollback, screenSize) {
     if (!pending && !held.length && !actions.length) return false;
@@ -189,15 +246,25 @@ function createNextTurnDelivery(options) {
         return false;
       }
       state = 'busy';
+      typedSubmitted = false;
       // The person's keys stay held for one more pause after the Enter. Written in the same instant,
       // OpenCode 1.18.35 read Enter and keys as one burst: the Enter was lost and the keys joined
       // the peer's message instead of starting a draft of their own.
-      typing = injectTerminalInput(term, nextTurnText(messages), { wait })
-        .then(() => (wait || (ms => new Promise(resolve => setTimeout(resolve, ms))))(SUBMIT_PAUSE_MS));
-      await typing;
-      return true;
+      typing = typeAndSubmit(term, nextTurnText(messages), scrollback, screenSize)
+        .then(async submitted => { await wait(SUBMIT_PAUSE_MS); return submitted; });
+      if (await typing) return true;
+      // Not handed over: the messages wait for the next Stop, ahead of anything newer. What is
+      // left in the prompt box counts as a draft, so nothing is typed onto it; clearing it would
+      // take a key such as Ctrl+C, which interrupts a turn that did start and quits an OpenCode
+      // whose box is already empty.
+      held = messages.concat(held);
+      lastPersonInput = now();
+      state = 'idle';
+      log('next-turn: typed message not submitted; ' + messages.length + ' message(s) wait for the next Stop');
+      return false;
     } finally {
       typing = null;
+      typedSubmitted = false;
       busyTaking = false;
       release();
     }
@@ -229,7 +296,7 @@ function createNextTurnDelivery(options) {
     personInput(data) {
       if (isTerminalReply(data)) return;
       lastPersonInput = now();
-      if (typing) keysDuringTyping = true;
+      if (typing && !typedSubmitted) keysDuringTyping = true;
     },
     /** True while text is being typed in: person keys held back meanwhile go in after Enter. */
     isTyping() { return typing !== null; },
@@ -237,4 +304,6 @@ function createNextTurnDelivery(options) {
   };
 }
 
-module.exports = { createNextTurnDelivery, nextTurnText, isTerminalReply, renderScreen, IDLE_QUIET_MS, MAX_CHAINED_TURNS };
+module.exports = {
+  createNextTurnDelivery, nextTurnText, isTerminalReply, renderScreen, IDLE_QUIET_MS, MAX_CHAINED_TURNS, SUBMIT_CONFIRM_MS
+};
