@@ -131,6 +131,11 @@ function resetFromDuration(match, text, { secondsFromNow }) {
 
 module.exports = {
   contextClearCommand: '/new',
+  // /new redraws the welcome screen before creating a session. Waiting for its transcript
+  // would deadlock the handover. Match the welcome composer's text and command footer:
+  // the graphical logo and ellipsis can arrive through OSC 66, which headless xterm skips.
+  contextClearScreen: rows => rows.filter(row => /^\s*┃\s+Ask anything(?:…)?(?:\s|$)/.test(row)).length === 1 &&
+    rows.some(row => /\btab\s+agents\s+ctrl\+p\s+commands\b/.test(row)),
   slashCommands: require('./slash-commands'),
   limitPatterns,
   // ~/.local/share/opencode is linked to ~/.opencode by the entrypoint, so the session database,
@@ -140,6 +145,12 @@ module.exports = {
   stateExcludes: ['.opencode/mcp-auth.json', '.opencode/log', '.opencode/bin'],
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
+  findTranscript({ env, home, fs: fileSystem }) {
+    const id = rememberedSession(env);
+    if (!id) return null;
+    const file = path.join(home, '.opencode', 'agenthub-transcripts', id + '.jsonl');
+    try { return fileSystem.statSync(file).isFile() ? file : null; } catch { return null; }
+  },
   buildCommand, isResumeCommand, isMissingResume, prepare,
   credentialPath, validCredential, installCredential,
   // The policy plugin reports chat.message and session.idle to /agenthub/turn (next-turn.mjs).

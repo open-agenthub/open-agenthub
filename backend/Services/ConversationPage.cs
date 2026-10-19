@@ -33,6 +33,9 @@ public sealed record ConversationPage(
         string sessionId, string phase, IReadOnlyList<TranscriptEntry> entries, int? offset, int? max)
     {
         var length = entries.Count;
+        var boundary = entries.FirstOrDefault(entry => entry.Role == "boundary")?.Tool;
+        var images = string.Join(',', entries.SelectMany((entry, index) =>
+            (entry.Attachments ?? []).Select(file => index + ":" + file.Id)));
         var start = Math.Clamp(offset ?? 0, 0, length);
         var limit = Math.Clamp(max ?? DefaultMaxEntries, 1, MaxEntries);
         var take = Math.Min(length - start, limit);
@@ -40,7 +43,10 @@ public sealed record ConversationPage(
             start, start + take, length, take < length - start,
             entries.Skip(start).Take(take).ToList(), "")
         {
-            ConversationId = entries.FirstOrDefault(entry => entry.Role == "boundary")?.Tool
+            // A companion can enrich a turn already paged to the browser. Change the identity
+            // then so its next poll reloads that turn instead of retaining the text-only copy.
+            ConversationId = images.Length == 0 ? boundary : boundary + ":images:" +
+                Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(images)))
         };
     }
 

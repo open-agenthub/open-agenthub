@@ -5,13 +5,14 @@ import { renderMermaidBlocks } from '../../lib/mermaid.js'
 import { fullMessageTime, isoMessageTime, shortMessageTime } from '../../lib/message-time.js'
 import WorkLog from './WorkLog.vue'
 import MessageActions from './MessageActions.vue'
+import ConversationImage from './ConversationImage.vue'
 
 // inviting: the person can give this session a task. Otherwise — a finished run, a read-only
 // share, an autonomous session — an empty conversation is a record with nothing saved in it,
 // and "Give your agent a task" would point at a composer that is not there.
 // pending: sent or fleet messages the agent has not taken yet (#153), { key, label, state, text,
 // dismissible }; shown after the conversation and gone once the conversation holds them.
-const props = defineProps({ items: { type: Array, default: () => [] }, loading: Boolean, error: String, canQuote: Boolean, source: String, inviting: Boolean,
+const props = defineProps({ sessionId: String, sharedToken: String, items: { type: Array, default: () => [] }, loading: Boolean, error: String, canQuote: Boolean, source: String, inviting: Boolean,
   pending: { type: Array, default: () => [] } })
 defineEmits(['quote', 'retry', 'dismiss-pending'])
 const scroller = ref(null)
@@ -67,6 +68,7 @@ watch([() => props.items, () => props.pending, query], async () => {
                  scrollback text stays verbatim, where markdown rules would mangle a listing. -->
             <div v-if="item.role === 'assistant' || item.role === 'user' || item.role === 'fleet'" class="md" v-html="renderMarkdown(item.text)"></div>
             <pre v-else>{{ item.text }}</pre>
+            <ConversationImage v-for="file in item.attachments || []" :key="file.id" :file="file" :session-id="sessionId" :shared-token="sharedToken" />
             <MessageActions :text="item.text" :can-quote="canQuote" @quote="$emit('quote', $event)" />
           </article>
         </template>
