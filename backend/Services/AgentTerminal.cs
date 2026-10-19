@@ -13,8 +13,16 @@ namespace AgentHub.Api.Services;
 /// </summary>
 public static class AgentTerminal
 {
-    public static async Task SendInputAsync(string podIp, int port, string text, CancellationToken ct)
+    /// <summary>
+    /// Types <paramref name="text"/> into the session's terminal once <paramref name="podIp"/> is
+    /// confirmed as its live pod (#229): a chat reply can hold anything the person would type,
+    /// and the stored IP may already be another session's pod. Throws
+    /// <see cref="AgentPodNotConfirmedException"/> without connecting otherwise.
+    /// </summary>
+    public static async Task SendInputAsync(IAgentPodRequests pods, string sessionId, string podIp, int port,
+        string text, CancellationToken ct)
     {
+        await pods.ConfirmAsync(sessionId, podIp, ct);
         using var ws = new ClientWebSocket();
         ws.Options.AddSubProtocol("tty");
         await ws.ConnectAsync(new Uri($"ws://{podIp}:{port}/"), ct);

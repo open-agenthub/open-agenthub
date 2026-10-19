@@ -20,7 +20,7 @@ public static class TerminalProxy
     public static readonly TimeSpan ActivityInterval = TimeSpan.FromMinutes(1);
 
     public static async Task HandleAsync(HttpContext ctx, string owner, string sessionId,
-        ISessionService sessions, ILoggerFactory lf, int agentPort, string upstreamPath = "/")
+        ISessionService sessions, IAgentPodRequests pods, ILoggerFactory lf, int agentPort, string upstreamPath = "/")
     {
         var log = lf.CreateLogger("TerminalProxy");
 
@@ -32,6 +32,7 @@ public static class TerminalProxy
             await ctx.Response.WriteAsync($"Session not ready (phase={session.Phase}).");
             return;
         }
+        if (!await PodConfirmedAsync(ctx, pods, session, log)) return;
 
         // Opening the terminal counts as "seen" — clear the waiting-for-reply flag so
         // the badge does not stick around after the user engages with the session.
@@ -71,7 +72,7 @@ public static class TerminalProxy
     /// is watching, not using).
     /// </summary>
     public static async Task HandleAsync(HttpContext ctx, SessionInfo session, bool canWrite,
-        ILoggerFactory lf, int agentPort, string upstreamPath = "/",
+        IAgentPodRequests pods, ILoggerFactory lf, int agentPort, string upstreamPath = "/",
         Func<CancellationToken, Task>? onActivity = null)
     {
         var log = lf.CreateLogger("TerminalProxy");
@@ -81,6 +82,7 @@ public static class TerminalProxy
             await ctx.Response.WriteAsync($"Session not ready (phase={session.Phase}).");
             return;
         }
+        if (!await PodConfirmedAsync(ctx, pods, session, log)) return;
         using var client = await ctx.WebSockets.AcceptWebSocketAsync();
         using var upstream = new ClientWebSocket();
         upstream.Options.AddSubProtocol("tty");
@@ -112,6 +114,28 @@ public static class TerminalProxy
         else await toBrowser;
         cts.Cancel();
     }
+    /// <summary>
+    /// The stored IP can already belong to another session's pod after a replacement, and what
+    /// the person types (secrets included) would go there (#229). Checked once per connection:
+    /// a replaced pod drops this TCP connection, and the browser's reconnect is checked again.
+    /// Refused before the upgrade, so the browser sees the same 409 as a session that is not ready.
+    /// </summary>
+    private static async Task<bool> PodConfirmedAsync(HttpContext ctx, IAgentPodRequests pods, SessionInfo session, ILogger log)
+    {
+        try
+        {
+            await pods.ConfirmAsync(session.Id, session.PodIp, ctx.RequestAborted);
+            return true;
+        }
+        catch (AgentPodNotConfirmedException error)
+        {
+            log.LogWarning("Terminal for session {Id} not opened: {Reason}", session.Id, error.Message);
+            ctx.Response.StatusCode = 409;
+            await ctx.Response.WriteAsync("Session pod not confirmed; it may be restarting.");
+            return false;
+        }
+    }
+
     private static async Task Pump(WebSocket from, WebSocket to, CancellationToken ct, ActivityThrottle? activity = null)
     {
         var buf = new byte[16 * 1024];

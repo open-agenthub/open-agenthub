@@ -31,6 +31,7 @@ public sealed class SignalReceiveService : BackgroundService
     private readonly ISessionService _sessions;
     private readonly ChatRepoService _repos;
     private readonly WorkingIndicator _indicator;
+    private readonly IAgentPodRequests _pods;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
     private readonly ILogger<SignalReceiveService> _log;
@@ -39,8 +40,9 @@ public sealed class SignalReceiveService : BackgroundService
 
     public SignalReceiveService(SignalOptions opts, SignalClient signal, ChatBindingStore bindings,
         UserDirectory users, PermissionStore permissions, ISessionService sessions,
-        ChatRepoService repos, WorkingIndicator indicator, IConfiguration cfg, ILogger<SignalReceiveService> log)
+        ChatRepoService repos, WorkingIndicator indicator, IAgentPodRequests pods, IConfiguration cfg, ILogger<SignalReceiveService> log)
     {
+        _pods = pods;
         _opts = opts; _signal = signal; _bindings = bindings; _users = users;
         _permissions = permissions; _sessions = sessions; _repos = repos; _indicator = indicator;
         _agentPort = cfg.GetValue("AgentHub:AgentPort", 7681);
@@ -336,7 +338,16 @@ public sealed class SignalReceiveService : BackgroundService
             return;
         }
 
-        await AgentTerminal.SendInputAsync(podIp, _agentPort, text, ct);
+        try
+        {
+            await AgentTerminal.SendInputAsync(_pods, binding.SessionId, podIp, _agentPort, text, ct);
+        }
+        catch (AgentPodNotConfirmedException)
+        {
+            // The stored address is no longer this session's pod (#229); the reply goes nowhere.
+            await _signal.SendAsync(e.Sender, "⚠️ Session is not running — cannot deliver the reply.", ct);
+            return;
+        }
         await _sessions.TouchActivityAsync(binding.Owner, binding.SessionId, ct);
         _log.LogInformation("Delivered Signal reply to session {Id}", binding.SessionId);
 

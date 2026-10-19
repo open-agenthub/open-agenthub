@@ -471,7 +471,33 @@ Rejected:
   switches do read it live, but the pod can still be replaced between that read and the send. One
   path for all keeps the rule simple: confirm, then send.
 
-Not covered: the terminal WebSocket and the chat relays (`AgentTerminal`) carry no token. They
-do, however, write a person's keys to whichever pod has the stored address, a related hazard
-left to its own change. The race between the confirmation and the send remains, as described
-under #133.
+The race between the confirmation and the send remains, as described under #133.
+
+### A person's keys go to the confirmed pod too (#229)
+
+The terminal WebSocket (browser ↔ pod, `TerminalProxy`) and the chat relays' replies
+(`AgentTerminal.SendInputAsync`, from Telegram, Signal and Slack) carry no token. They do carry
+what a person types, and that can be a password pasted into a prompt. On main both connected to
+the stored address unchecked. In the same probe they delivered a typed terminal line and a
+relay reply to the stale address.
+
+Both now call `IAgentPodRequests.ConfirmAsync(sessionId, podIp)` before they connect: the same
+rule, kept in the same place.
+
+- The proxy checks before it accepts the browser's upgrade. A refusal is the 409 the Workspace
+  already gets for a session that is not ready, so its reconnect behaviour does not change.
+- A relay answers "Session is not running — cannot deliver the reply", the message it sends for
+  a stopped session.
+
+On the branch, with the real resolver:
+
+| Case | Result |
+|---|---|
+| Stale IP | Both were refused, and nothing reached the stand-in pod. |
+| Live IP | Both arrived. |
+| A pod with a deletion timestamp | Both were refused. |
+
+The check runs once per connection, not per keystroke. A terminal socket outlives many
+keystrokes, but not its pod: when the pod is replaced, the TCP connection to it ends. The next
+connection, the browser's reconnect, is checked again. Checking every frame would put an API
+server call on every keypress and would protect nothing the closed connection does not.

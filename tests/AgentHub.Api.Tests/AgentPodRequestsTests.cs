@@ -159,6 +159,21 @@ public class AgentPodRequestsTests
         Assert.False(elsewhere.Pending(), "the redirect target was contacted");
     }
 
+    /// <summary>#229: a chat relay's reply is typed into the terminal only after the same check;
+    /// the socket to an unconfirmed address is never opened.</summary>
+    [Fact]
+    public async Task AChatReplyIsNotTypedIntoAnUnconfirmedPod()
+    {
+        using var pod = new TcpListener(IPAddress.Loopback, 0);
+        pod.Start();
+        var port = ((IPEndPoint)pod.LocalEndpoint).Port;
+
+        await Assert.ThrowsAsync<AgentPodNotConfirmedException>(() => AgentTerminal.SendInputAsync(
+            TestPods.Stale(new HttpClient()), "s1", "127.0.0.1", port, "a reply with a secret", default));
+
+        Assert.False(pod.Pending(), "the relay connected to the unconfirmed address");
+    }
+
     // ---- every caller that sends the token, against an address that is not the live pod ----
 
     private class Fake<T> : DispatchProxy where T : class

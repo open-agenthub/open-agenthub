@@ -23,6 +23,14 @@ public interface IAgentPodRequests
     /// </summary>
     Task<HttpResponseMessage> SendAsync(string sessionId, HttpRequestMessage request,
         HttpCompletionOption completion, TimeSpan timeout, CancellationToken ct);
+
+    /// <summary>
+    /// The same confirmation, for a connection that is not an HTTP request through this helper:
+    /// the terminal WebSocket the browser proxy and the chat relays open (#229). Throws
+    /// <see cref="AgentPodNotConfirmedException"/> unless <paramref name="podIp"/> is
+    /// <paramref name="sessionId"/>'s live agent pod; connect only after it returns.
+    /// </summary>
+    Task ConfirmAsync(string sessionId, string? podIp, CancellationToken ct);
 }
 
 /// <summary>
@@ -57,8 +65,18 @@ public sealed class AgentPodRequests : IAgentPodRequests
     public async Task<HttpResponseMessage> SendAsync(string sessionId, HttpRequestMessage request,
         HttpCompletionOption completion, TimeSpan timeout, CancellationToken ct)
     {
-        if (request.RequestUri is not { IsAbsoluteUri: true } uri ||
-            !IPAddress.TryParse(uri.IdnHost, out var address))
+        if (request.RequestUri is not { IsAbsoluteUri: true } uri)
+            throw new AgentPodNotConfirmedException("The pod address is not an IP address.");
+        await ConfirmAsync(sessionId, uri.IdnHost, ct);
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(timeout);
+        return await _http.SendAsync(request, completion, deadline.Token);
+    }
+
+    public async Task ConfirmAsync(string sessionId, string? podIp, CancellationToken ct)
+    {
+        if (!IPAddress.TryParse(podIp, out var address))
             throw new AgentPodNotConfirmedException("The pod address is not an IP address.");
         bool live;
         using (var confirmation = CancellationTokenSource.CreateLinkedTokenSource(ct))
@@ -75,10 +93,6 @@ public sealed class AgentPodRequests : IAgentPodRequests
             }
         }
         if (!live) throw new AgentPodNotConfirmedException("The address no longer belongs to the session's pod.");
-
-        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
-        deadline.CancelAfter(timeout);
-        return await _http.SendAsync(request, completion, deadline.Token);
     }
 }
 
