@@ -3,6 +3,7 @@
 // the agent's next turn when one ends (#173, docs/priority-messages.md).
 //
 //   Codex  requirements.toml  UserPromptSubmit, PermissionRequest  -> POST /agenthub/turn, no output
+//                             Interrupt                            -> presentation idle, no output
 //                             Stop                                 -> {"decision":"block","reason":<messages>}
 //
 // The session agent does the deciding: it takes the messages from the hub inbox, counts how
@@ -16,7 +17,7 @@
 import { pathToFileURL } from 'node:url';
 
 const CALL_TIMEOUT_MS = 8000;
-const EVENTS = { UserPromptSubmit: 'prompt', PermissionRequest: 'permission', Stop: 'stop' };
+const EVENTS = { UserPromptSubmit: 'prompt', PermissionRequest: 'permission', Stop: 'stop', Interrupt: 'idle' };
 
 async function readStdin() {
   const chunks = [];

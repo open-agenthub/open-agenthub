@@ -1,8 +1,9 @@
 <script setup>
 import { computed } from 'vue'
-const props = defineProps({ state: String, reason: String, source: String })
+const props = defineProps({ state: String, reason: String, source: String, canRespond: Boolean })
 const label = computed(() => props.state === 'working' ? 'Working…' :
-  props.reason === 'approval' ? 'Waiting for your approval…' : 'Waiting for your answer…')
+  props.reason === 'approval' ? (props.canRespond ? 'Waiting for your approval…' : 'Waiting for approval…')
+    : (props.canRespond ? 'Waiting for your answer…' : 'Waiting for an answer…'))
 </script>
 <template>
   <div v-if="state === 'working' || state === 'waiting'" class="workspace-activity" :class="{ working: state === 'working' }"

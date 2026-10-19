@@ -67,6 +67,10 @@ function validateDriver(driver) {
   if (driver.turnHooks !== undefined && typeof driver.turnHooks !== 'boolean') {
     throw new Error('Agent driver turnHooks must be a boolean when present');
   }
+  // Optional: an authoritative failed/aborted turn marker, for paths without a Stop hook.
+  if (driver.failedTurnEnded !== undefined && typeof driver.failedTurnEnded !== 'function') {
+    throw new Error('Agent driver failedTurnEnded must be a function');
+  }
   // Optional: the CLI's own usage-limit notices as `{ pattern: RegExp, resetsAt?: fn }`
   // (common/limit-detector.js). A runtime whose CLI reports limits some other way leaves it out.
   if (driver.limitPatterns !== undefined) {

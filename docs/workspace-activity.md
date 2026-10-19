@@ -15,8 +15,13 @@ Permission hooks mean waiting. A terminal approval submission clears that waitin
 the visible CLI menu and the hub's pending approvals/questions always take precedence in the UI.
 OpenCode reports an interrupted or failed top-level session.idle as presentation-only idle. It
 must not become a delivery safe point: an abort must not immediately start a queued peer turn.
-Likewise explicit terminal interrupt keys clear presentation without changing the coordinator's
-safe-point state, since the pinned CLI does not run its Stop hook for a keyboard interruption.
+The native Interrupt hook likewise clears presentation without changing the coordinator's
+safe-point state, since Stop is not run for a keyboard interruption. A failed model call also skips Stop. For that path the driver reads the structured
+task_complete.error marker from a bounded, cached tail of its existing native transcript. A
+completion older than the latest prompt cannot suppress the new turn. Successful completion
+markers do not override hooks, since a Stop may still be handing over a continuation.
+Inferring this from Escape
+was rejected: another runtime may require two presses, or use Escape just to dismiss a menu.
 
 For sessions without interactive turn hooks, recent PTY output is only an approximation of work.
 It expires after 1.5 seconds of quiet and is identified by a tooltip. QuestionPending, pending

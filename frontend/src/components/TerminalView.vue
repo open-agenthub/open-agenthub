@@ -648,7 +648,7 @@ function interruptWorkspaceAgent() {
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
           :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
-        <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" />
+        <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">

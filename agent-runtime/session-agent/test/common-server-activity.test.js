@@ -44,7 +44,12 @@ test('interrupts and failed plugin turns clear presentation without enabling a f
     takes++; return { ok: true, json: async () => ({ messages: [] }) };
   } });
   const viewer = new FakeSocket(); h.runtime.webSocketServer.connect(viewer, '/'); subscribe(viewer);
-  await turn(h, 'prompt'); viewer.emit('message', JSON.stringify({ type: 'input', data: '\x03' }));
+  await turn(h, 'prompt');
+  viewer.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
+  assert.equal(frames(viewer).at(-1).state, 'working');
+  viewer.emit('message', JSON.stringify({ type: 'input', data: '\x03' }));
+  assert.equal(frames(viewer).at(-1).state, 'working');
+  await turn(h, 'idle');
   assert.equal(frames(viewer).at(-1).state, 'idle');
   h.terminals[0].emitData('prompt redraw'); h.intervals.find(i => i.ms === 500).callback();
   assert.equal(frames(viewer).at(-1).state, 'idle');

@@ -233,11 +233,16 @@ async function connect() {
   clearReconnect()
   const generation = ++connectionGeneration
   const sessionId = props.session.id
-  const url = props.sharedToken
+  let url = props.sharedToken
     ? sharedTerminalUrl(props.sharedToken)
     : await (props.kind === 'shell' ? shellUrl(sessionId) : terminalUrl(sessionId))
   if (disposed || generation !== connectionGeneration || sessionId !== props.session.id) return
 
+  if (props.kind === 'agent' && !canSend.value) {
+    const activityUrl = new URL(url, window.location.href)
+    activityUrl.searchParams.set('activity', '1')
+    url = activityUrl.toString()
+  }
   const socket = new WebSocket(url)
   ws = socket
   if (term) term.options.convertEol = false

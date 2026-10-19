@@ -257,11 +257,15 @@ function createCommonServer(options = {}) {
   let activityTimer = null;
   let activityPermissionPending = false;
   let activityIdleOverride = false;
+  let activityPromptAt = now();
   let activityLastOutput = 0;
   let activityLastFrame = '';
   function activityFrame() {
     let state = 'idle';
     const source = nextTurn ? 'hooks' : 'output';
+    if (!activityIdleOverride && nextTurn?.state === 'busy' && !activityPermissionPending && driver.failedTurnEnded) {
+      try { activityIdleOverride = driver.failedTurnEnded({ file: transcriptFile, after: activityPromptAt, fs }); } catch {}
+    }
     if (!exited && restartReason === null && !runtimeDraining && !activityIdleOverride) {
       if (nextTurn) state = nextTurn.state === 'busy'
         ? (activityPermissionPending ? 'waiting' : 'working') : nextTurn.state;
@@ -925,6 +929,8 @@ function createCommonServer(options = {}) {
   }
 
   function startAgent(allowResume) {
+    activityPromptAt = now();
+    activityIdleOverride = false;
     const command = driver.buildCommand(env, allowResume);
     attemptedResume = driver.isResumeCommand(command);
     attemptOutput = '';
@@ -1041,7 +1047,7 @@ function createCommonServer(options = {}) {
         activityClients.add(socket);
         if (activityTimer === null) {
           activityTimer = setIntervalImpl(publishActivity, 500);
-          activityTimer.unref?.();
+          activityTimer?.unref?.();
         }
         safeSend(socket, activityFrame());
         return;
@@ -1065,14 +1071,6 @@ function createCommonServer(options = {}) {
         return;
       }
       if (message.type === 'input' && typeof message.data === 'string') {
-        // The pinned CLI returns to its prompt on interrupt without running Stop. This affects
-        // presentation only: changing next-turn's safe-point state could deliver a queued message
-        // immediately after the person deliberately stopped the agent.
-        if (message.data === '\x03' || message.data === '\x1b') {
-          activityIdleOverride = true;
-          activityPermissionPending = false;
-          publishActivity();
-        } else if (!nextTurn && /[\r\n]/.test(message.data)) activityIdleOverride = false;
         // An approval selected in the terminal resumes the same turn, so there is no new prompt
         // hook. The client still gives a visible menu precedence until its screen clears.
         if (activityPermissionPending && /[\r\n]|^[yYnN]$/.test(message.data)) {
@@ -1433,6 +1431,7 @@ function createCommonServer(options = {}) {
     // A Stop during an update or restart is answered with nothing: the agent is about to go.
     // An interrupted/failed plugin turn is idle to viewers but is not a safe point for fleet
     // continuation. Keep that distinction instead of turning its idle report into a Stop.
+    if (event === 'prompt') activityPromptAt = now();
     activityIdleOverride = event === 'idle';
     activityPermissionPending = event === 'permission';
     const text = event === 'idle' || runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);

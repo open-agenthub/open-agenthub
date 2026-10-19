@@ -217,6 +217,7 @@ function resetFromJson(match, text, { secondsFromNow }) {
 }
 
 module.exports = {
+  failedTurnEnded: require('./turn-activity').failedTurnEnded,
   contextClearCommand: '/new',
   // Codex creates its rollout only on the first prompt. Its fresh welcome screen is the
   // native acknowledgement of /new; requiring the sole empty composer rejects an old turn.
@@ -237,6 +238,6 @@ module.exports = {
   THREAD_ID_FILE,
   credentialPath,
   validCredential: require('./auth-watcher').validCredential,
-  // requirements.toml runs fleet-turn-hook.js on UserPromptSubmit, PermissionRequest and Stop.
+  // requirements.toml runs fleet-turn-hook.js on UserPromptSubmit, PermissionRequest, Stop and Interrupt.
   turnHooks: true
 };
