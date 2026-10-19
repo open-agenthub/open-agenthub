@@ -198,6 +198,7 @@ function createCommonServer(options = {}) {
   const nextTurn = driver.turnHooks === true && mode === 'interactive'
     ? createNextTurnDelivery({
       now, fetchImpl, callback, token, takeMessages: driver.fleetNextTurn !== false,
+      interruptKeys: driver.interruptKeys,
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms)),
       Terminal: supplied.HeadlessTerminal && (() => supplied.HeadlessTerminal),
       log: line => console.log('[agent] ' + line)
@@ -1415,6 +1416,7 @@ function createCommonServer(options = {}) {
     }
     await injectTerminalInput(term, formatFleetMessage(message), {
       interrupt: message.interrupt,
+      interruptKeys: driver.interruptKeys,
       wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
     });
     sendJson(response, 200, { delivered: 'pty' });

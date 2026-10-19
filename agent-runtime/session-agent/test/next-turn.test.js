@@ -41,6 +41,7 @@ function world(options = {}) {
     token: 'tok',
     wait: async ms => { clock += ms; if (options.duringPause) options.duringPause(delivery); },
     log: () => {},
+    interruptKeys: options.interruptKeys,
     Terminal: () => Terminal,
     fetchImpl: async (url, init) => {
       hub.takes.push({ url, token: init.headers['X-Agent-Token'] });
@@ -422,4 +423,14 @@ test('the Stop of the turn a priority message started does not take that message
   const text = await w.delivery.turnEvent('stop');
   assert.ok(text.includes('plain'));
   assert.ok(!text.includes('PRIORITY'));
+});
+
+test('an interrupting priority message sends the driver\'s interrupt keys, one pause after each', async () => {
+  const pauses = [];
+  const w = await idleWorld({ interruptKeys: ['\x1b', '\x1b'], duringPause: () => pauses.push(w.terminal.writes.length) });
+
+  assert.equal(await w.delivery.typeMessage(w.terminal, 'STOP', () => '› \r\n', SIZE, { interrupt: true }), true);
+  assert.deepEqual(w.terminal.writes.slice(0, 3), ['\x1b', '\x1b', '\x1b[200~STOP\x1b[201~']);
+  // A pause after the first Escape and after the second, before the paste.
+  assert.deepEqual(pauses.slice(0, 2), [1, 2]);
 });

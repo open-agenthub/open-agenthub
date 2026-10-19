@@ -280,9 +280,27 @@ OpenClaw) keep the plain keys. Neither CLI was measured with a paste, and there 
 hook to confirm with. A message held during an agent restart is pasted the same way once the new
 agent is up.
 
-On OpenCode 1.18.35 a single Escape does not stop a working turn; it takes two. An interrupting
-priority message is therefore queued behind the running turn on OpenCode, as before. Sending a
-second Escape is left to its own change, because it decides what an interrupt means there.
+**An interrupt is the driver's key sequence (#224).** By default an interrupt is one Escape, which
+stops a turn in Codex and Claude Code. OpenCode 1.18.35 needs a second Escape to stop a working turn.
+With one Escape, an interrupting message waited behind a 30 s turn
+and reached the model after 29 s. Its driver therefore declares `interruptKeys: [Esc, Esc]`. The
+keys go out with the usual 300 ms pause after each, and then the paste follows. Measured against
+the same 30 s turn, the plugin reported the abort (`idle`) and the message reached the model:
+
+- 0.8 s after the send, with 100 ms between the Escapes;
+- 1.0 s with 300 ms;
+- 1.7 s with 1,000 ms.
+
+Rejected:
+
+- **Both Escapes without a pause between them.** Written back to back, they did not stop the
+  turn: the message again reached the model after 29 s.
+- **Two Escapes for every CLI.** Codex and Claude Code stop on the first. A second one did not
+  break delivery in either, but Claude Code then shows "Esc again to clear". A person's next
+  Escape would clear their prompt box.
+- **Waiting for the abort event before pasting.** Claude Code has no interrupt hook, so the wait
+  would cost every Claude interrupt its full timeout. A paste that arrives before the abort is not
+  lost: the CLI queues it until the turn has stopped.
 
 **The menu check does not recognise OpenCode's dialogs.** They are lists without numbers (model
 picker, command palette) that the Workspace's detector does not treat as menus. On OpenCode a

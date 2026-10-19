@@ -19,8 +19,10 @@ function injectTerminalInput(term, text, options = {}) {
   const wait = options.wait || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const steps = [];
   if (options.interrupt) {
-    steps.push(() => term.write(ESCAPE));
-    steps.push(() => wait(INTERRUPT_PAUSE_MS));
+    for (const key of options.interruptKeys || [ESCAPE]) {
+      steps.push(() => term.write(key));
+      steps.push(() => wait(INTERRUPT_PAUSE_MS));
+    }
   }
   steps.push(() => term.write(text));
   steps.push(() => wait(SUBMIT_PAUSE_MS));

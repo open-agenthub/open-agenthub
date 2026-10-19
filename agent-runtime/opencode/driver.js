@@ -154,5 +154,8 @@ module.exports = {
   buildCommand, isResumeCommand, isMissingResume, prepare,
   credentialPath, validCredential, installCredential,
   // The policy plugin reports chat.message and session.idle to /agenthub/turn (next-turn.mjs).
-  turnHooks: true
+  turnHooks: true,
+  // 1.18.35 stops a working turn on the second Escape only, and only with a pause between them.
+  // With one, an interrupting message was queued behind a 30 s turn instead (#224).
+  interruptKeys: ['\x1b', '\x1b']
 };

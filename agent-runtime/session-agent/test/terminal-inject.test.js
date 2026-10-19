@@ -46,3 +46,12 @@ test('the header names the sending agent, or says the message came from outside 
   assert.equal(formatFleetMessage({ from: null, body: 'look' }),
     '[AgentHub message from outside the fleet]\nlook');
 });
+
+test('a driver\'s interrupt keys replace the single Escape, one pause after each', async () => {
+  const { events, term, wait } = recorder();
+
+  await injectTerminalInput(term, 'stop', { interrupt: true, interruptKeys: [ESCAPE, ESCAPE], wait });
+
+  assert.deepEqual(events, [['write', ESCAPE], ['wait', 300], ['write', ESCAPE], ['wait', 300],
+    ['write', 'stop'], ['wait', 300], ['write', '\r']]);
+});

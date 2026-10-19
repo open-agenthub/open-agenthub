@@ -23,6 +23,10 @@ test('OpenCode driver satisfies the provider state contract', () => {
   assert.deepEqual(driver.stateExcludes, ['.opencode/mcp-auth.json', '.opencode/log', '.opencode/bin']);
 });
 
+test('an interrupt is two Escapes: OpenCode 1.18.35 stops a working turn on the second only', () => {
+  assert.deepEqual(driver.interruptKeys, ['\x1b', '\x1b']);
+});
+
 test('prepare scopes OPENCODE_API_KEY to the agent child', () => {
   const env = environment({ OPENCODE_API_KEY: 'secret' });
   assert.deepEqual(driver.prepare(env), { childEnv: { OPENCODE_API_KEY: 'secret' } });
