@@ -149,9 +149,9 @@ public class ManualRuntimeUpdateTests
                 "UpsertAsync" => Task.CompletedTask,
                 _ => null
             });
-            var artifacts = RuntimeProofProxy.Make<IArtifactStore>((method, _) => method.Name switch {
+            var artifacts = RuntimeProofProxy.Make<IArtifactStore>((method, args) => method.Name switch {
                 "get_IsConfigured" => StorageConfigured,
-                "HeadAsync" => Head(),
+                "HeadAsync" => Head((string)args![0]!),
                 "PresignGet" or "PresignPut" => "http://example.com/state.tgz",
                 _ => null
             });
@@ -164,9 +164,12 @@ public class ManualRuntimeUpdateTests
                 new UsageLimitService(RuntimeProofProxy.Make<IUsageStore>(), RuntimeProofProxy.Make<IPersonalUsageLimitSource>(), []), new AllowAllAgentsProvider(), null!, null!,
                 new InMemoryEphemeralApiMcpStore(), null!, NullLogger<KubernetesSessionService>.Instance, runtimeUpdateLock: new MemoryLock(), cluster: _cluster);
         }
-        private Task<ArtifactObjectInfo?> Head() {
+        // Answers only for the key the pod uploads to: a check under any other key (the raw owner
+        // name, for instance) finds nothing, as it would against real object storage.
+        private Task<ArtifactObjectInfo?> Head(string key) {
             ArchiveCheckedAfterDeletion = OldPodGone;
-            return Task.FromResult(ArchiveAvailable ? new ArtifactObjectInfo(1, "application/gzip") : null);
+            var uploaded = IArtifactStore.StateKey(KubernetesSessionService.OwnerKey(Record.Owner), Record.Id, Record.Agent);
+            return Task.FromResult(ArchiveAvailable && key == uploaded ? new ArtifactObjectInfo(1, "application/gzip") : null);
         }
         public async ValueTask DisposeAsync() { OldPodGone = true; Http.Dispose(); _cluster.Dispose(); await _app.DisposeAsync(); }
     }
