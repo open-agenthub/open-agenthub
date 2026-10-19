@@ -63,5 +63,6 @@ public static class SessionUpdateValidator
         request.GitPatIds is not null ||
         request.SecretIds is not null ||
         request.SecretGrantIds is not null ||
+        request.SecretGrants is not null ||
         request.Policy is not null;
 }

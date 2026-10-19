@@ -231,6 +231,7 @@ public class ApplySessionResourcesTests
             var store = RuntimeProofProxy.Make<ISessionStore>((method, args) => method.Name switch {
                 "GetAsync" => Task.FromResult(args![0] as string == Record.Owner ? Record : null),
                 "UpsertAsync" => Task.CompletedTask,
+                "ListAsync" => Task.FromResult<IReadOnlyList<SessionRecord>>([Record]),
                 _ => null
             });
             var artifacts = RuntimeProofProxy.Make<IArtifactStore>((method, args) => method.Name switch {
@@ -245,7 +246,8 @@ public class ApplySessionResourcesTests
                 ["AgentHub:SkillLibraryMcp"] = "false",
                 ["AgentHub:CpuLimitCeiling"] = "8", ["AgentHub:MemoryLimitCeiling"] = "16Gi"
             }).Build();
-            return new(config, store, null!, artifacts, RuntimeProofProxy.Make<IBrowserService>(), RuntimeProofProxy.Make<IGitAuthService>(),
+            return new(config, store, RuntimeProofProxy.Make<IProjectStore>((method, _) => method.Name == "ListAsync"
+                    ? Task.FromResult<IReadOnlyList<ProjectInfo>>([]) : null), artifacts, RuntimeProofProxy.Make<IBrowserService>(), RuntimeProofProxy.Make<IGitAuthService>(),
                 new UsageLimitService(RuntimeProofProxy.Make<IUsageStore>(), RuntimeProofProxy.Make<IPersonalUsageLimitSource>(), []), new AllowAllAgentsProvider(), null!, null!,
                 new InMemoryEphemeralApiMcpStore(), null!, NullLogger<KubernetesSessionService>.Instance, runtimeUpdateLock: new MemoryLock(), cluster: _cluster);
         }

@@ -127,6 +127,17 @@ public static partial class NativeTranscript
     private static void ParseClaudeLine(JsonElement root, List<TranscriptEntry> entries)
     {
         var type = root.TryGetProperty("type", out var t) && t.ValueKind == JsonValueKind.String ? t.GetString() : null;
+        // A mid-turn human prompt is delivered beside the next tool result as an attachment.
+        // Queue operations describe scheduling and can be cancelled; they do not prove delivery.
+        if (type == "attachment" && !IsTrue(root, "isSidechain") &&
+            root.TryGetProperty("attachment", out var attachment) && attachment.ValueKind == JsonValueKind.Object &&
+            StringOr(attachment, "type") == "queued_command" && StringOr(attachment, "commandMode") == "prompt" &&
+            IsTrue(attachment, "humanTurn") && attachment.TryGetProperty("origin", out var origin) &&
+            StringOr(origin, "kind") == "human")
+        {
+            AddText(entries, "user", UnwrapPastes(ContentText(attachment, "prompt")), Timestamp(root, "timestamp"));
+            return;
+        }
         if (type is not ("user" or "assistant")) return;
         // Meta lines are the CLI talking to itself (command caveats, injected tool guidance);
         // sidechains are sub-agents whose turns the main conversation already summarises.

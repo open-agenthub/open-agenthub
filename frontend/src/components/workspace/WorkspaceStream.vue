@@ -11,7 +11,7 @@ import WorkLog from './WorkLog.vue'
 import MessageActions from './MessageActions.vue'
 
 const props = defineProps({ session: Object, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null } })
-const emit = defineEmits(['status'])
+const emit = defineEmits(['status', 'activity'])
 
 const scroller = ref(null)
 const text = ref(sessionDrafts.get(props.session.id) || '')
@@ -31,6 +31,7 @@ const version = ref(0)
 const items = computed(() => { void version.value; return log.items.slice() })
 const drafts = computed(() => { void version.value; return log.drafts.filter(d => d.text) })
 const busy = computed(() => { void version.value; return log.busy })
+watch(busy, value => emit('activity', { state: value ? 'working' : 'idle', source: 'stream' }))
 
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 const canSend = computed(() => isLive.value && !props.readonly)
@@ -304,7 +305,7 @@ onBeforeUnmount(() => {
             <div v-else class="md" v-html="renderMarkdown(draft.text)"></div>
           </template>
         </div>
-        <div v-else-if="busy" class="typing" data-chat-busy><span></span><span></span><span></span></div>
+
       </div>
     </div>
     <button v-if="!following" type="button" class="jump-latest" @click="scrollToEnd({ force: true })">↓ Jump to latest</button>
@@ -345,11 +346,6 @@ onBeforeUnmount(() => {
 .note { align-self: center; color: var(--muted-3); font-size: 12px; }
 .note.err { align-self: stretch; color: var(--danger); }
 .note.err pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12px/1.5 var(--mono); }
-.typing { display: flex; gap: 5px; padding: 4px 2px; }
-.typing span { width: 7px; height: 7px; border-radius: 50%; background: var(--muted-3); animation: pulse 1.2s infinite ease-in-out; }
-.typing span:nth-child(2) { animation-delay: 0.15s; }
-.typing span:nth-child(3) { animation-delay: 0.3s; }
-@keyframes pulse { 0%, 80%, 100% { opacity: 0.25; } 40% { opacity: 1; } }
 .composer button { align-self: flex-end; padding: 9px 18px; white-space: nowrap; }
 .composer .stop { color: var(--danger); border-color: var(--border-3); }
 .composer .attach { width: 42px; height: 42px; padding: 0; color: var(--muted); border-color: var(--border-2); font-size: 20px; }

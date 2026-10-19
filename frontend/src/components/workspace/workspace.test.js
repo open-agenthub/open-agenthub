@@ -27,7 +27,7 @@ function view(props = {}) {
     global: { stubs: {
       SessionWorkspace: { template: '<div><slot /></div>' }, ShareSessionDialog: true,
       TerminalPane: defineComponent({
-        props: ['kind'], emits: ['status'],
+        props: ['kind'], emits: ['status', 'activity', 'menu'],
         setup(props, { emit, expose }) {
           expose({ submitMessage: mocks.send, interruptAgent: mocks.stop })
           onMounted(() => {
@@ -159,6 +159,23 @@ describe('integrated workspace', () => {
     await wrapper.setProps({ session })
     expect(wrapper.find('[data-session-input-state]').exists()).toBe(false)
     expect(wrapper.get('textarea').element.value).toBe('Keep this draft')
+  })
+
+  it('shows working separately from an approval, question or menu and clears it when stopped', async () => {
+    const wrapper = view({ initialUi: 'workspace' })
+    await flushPromises()
+    const terminal = wrapper.findComponent({ ref: 'agentTerminal' })
+    terminal.vm.$emit('activity', { state: 'working', source: 'hooks' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-workspace-activity]').text()).toBe('Working…')
+    terminal.vm.$emit('activity', { state: 'waiting', source: 'hooks' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.get('[data-workspace-activity]').text()).toBe('Waiting for your approval…')
+    terminal.vm.$emit('activity', { state: 'working', source: 'hooks' })
+    await wrapper.setProps({ session: { ...session, questionPending: true } })
+    expect(wrapper.get('[data-workspace-activity]').text()).toBe('Waiting for your answer…')
+    await wrapper.setProps({ session: { ...session, phase: 'Paused' } })
+    expect(wrapper.find('[data-workspace-activity]').exists()).toBe(false)
   })
 
   it('offers retry on history failure and does not manufacture an empty successful transcript', async () => {

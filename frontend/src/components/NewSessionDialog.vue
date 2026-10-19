@@ -10,6 +10,7 @@ import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
+import SecretGrantsPicker from './SecretGrantsPicker.vue'
 import { secretIdsPayload, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import { preferredUi, UI_OPTIONS } from '../lib/ui-preference.js'
@@ -64,6 +65,7 @@ const autoDelete = ref(autoDeleteForm(null))
 const storedSecrets = ref([])
 const selectedProject = computed(() => props.projects.find(project => project.id === form.value.projectId) || null)
 const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
+const selectedGrants = ref([])
 const selectedSecrets = ref([])
 watch(secrets, options => { selectedSecrets.value = secretSelectionFor(null, options, !!selectedProject.value) })
 const busy = ref(false)
@@ -129,6 +131,7 @@ async function submit() {
       credentialId: form.value.credentialId || null,
       repos: repos.value,
       gitPatIds: gitPatIdsPayload(selectedGitPats.value, gitPats.value),
+      secretGrants: selectedGrants.value,
       secretIds: secretIdsPayload(selectedSecrets.value, secrets.value, !!selectedProject.value),
       prompt: form.value.prompt || null,
       systemPrompt: form.value.systemPrompt.trim() || null,
@@ -207,6 +210,7 @@ async function submit() {
         </div>
         <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
           :project-has-none="!!selectedProject && storedSecrets.length > 0" />
+        <SecretGrantsPicker v-model="selectedGrants" :options="storedSecrets" />
       </div>
 
       <div class="card sect">

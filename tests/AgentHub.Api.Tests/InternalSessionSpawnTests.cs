@@ -429,6 +429,24 @@ public class InternalSessionSpawnTests
 
     // ------------------------------------------------------------------ secrets (docs/session-secrets.md)
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Spawn_GrantOutsideProjectRequiresInheritance(bool inherit)
+    {
+        var svc = new RecordingSessionService { Secrets = ProjectSecrets };
+        var parent = Parent();
+        parent.ProjectId = "proj-a";
+        parent.SecretGrantIdsJson = SessionSecretGrants.Serialize([new("outside", inherit, "granted")]);
+        var controller = Controller(parent, svc);
+        await controller.Spawn(ParentId, new CreateSessionRequest { Title = "child" }, CancellationToken.None);
+        Assert.Equal(inherit, svc.CreateRequest!.InheritedSecretGrants!.Any(g => g.SecretId == "outside" && g.Source == "inherited"));
+        Assert.Equal(inherit, svc.CreateRequest.SecretCeiling!.Contains("outside"));
+        var explicitRequest = await controller.Spawn(ParentId, new CreateSessionRequest { Title = "child", SecretIds = ["outside"] }, CancellationToken.None);
+        if (inherit) Assert.IsType<OkObjectResult>(explicitRequest);
+        else Assert.Equal(403, Assert.IsType<ObjectResult>(explicitRequest).StatusCode);
+    }
+
     // The parent follows proj-a, which selects a and b; proj-b selects b and c.
     private static IReadOnlyList<string> ProjectSecrets(string? project, IReadOnlyList<string>? requested)
     {
@@ -586,6 +604,10 @@ public class InternalSessionSpawnTests
         public Task<IReadOnlyList<string>> ResolveSessionSecretIdsAsync(string owner, string? projectId,
             IReadOnlyList<string>? requested, CancellationToken ct = default) =>
             Task.FromResult(Secrets?.Invoke(projectId, requested) ?? Array.Empty<string>());
+
+        public async Task<IReadOnlyList<string>> SessionSecretIdsAsync(string owner, SessionRecord session, CancellationToken ct = default)
+            => (await ResolveSessionSecretIdsAsync(owner, session.ProjectId, SessionSecretSelection.Parse(session.SecretIdsJson), ct))
+                .Concat(SessionSecretGrants.Ids(session.SecretGrantIdsJson)).Distinct().ToList();
 
         public Task StoreCredentialsAsync(string owner, UserCredentials creds, CancellationToken ct = default) =>
             throw new NotSupportedException();

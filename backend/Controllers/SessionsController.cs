@@ -69,6 +69,7 @@ public sealed class SessionsController : ControllerBase
     {
         try { return Ok(await _svc.CreateSessionAsync(Owner, req, ct)); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
@@ -88,6 +89,7 @@ public sealed class SessionsController : ControllerBase
         }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
@@ -141,6 +143,7 @@ public sealed class SessionsController : ControllerBase
         try { return Ok(await _svc.DuplicateSessionAsync(Owner, id, request, ct)); }
         catch (KeyNotFoundException) { return NotFound(); }
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }

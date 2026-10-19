@@ -97,3 +97,12 @@ timeout = 10
 type = "command"
 command = "node /opt/session-agent/codex/fleet-turn-hook.js"
 timeout = 10
+
+# An interruption ends the visible turn but must not hand over a fleet continuation.
+# Stop is not run on this path, so viewers otherwise keep showing work at an idle prompt.
+[[hooks.Interrupt]]
+
+[[hooks.Interrupt.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/fleet-turn-hook.js"
+timeout = 10

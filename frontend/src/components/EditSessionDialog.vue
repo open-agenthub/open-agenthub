@@ -10,6 +10,7 @@ import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
+import SecretGrantsPicker from './SecretGrantsPicker.vue'
 import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
@@ -88,6 +89,8 @@ watch(() => props.session.id, () => reset(props.session))
 const storedSecrets = ref([])
 const selectedProject = computed(() => (props.projects || []).find(project => project.id === f.value.projectId) || null)
 const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
+const selectedGrants = ref([])
+watch(() => props.session.id, () => { selectedGrants.value = (props.session.secretGrants || []).map(g => ({ ...g })) }, { immediate: true })
 const selectedSecrets = ref([])
 watch([secrets, () => props.session.id], ([options]) => {
   selectedSecrets.value = secretSelectionFor(props.session.secretIds, options, !!selectedProject.value)
@@ -161,6 +164,7 @@ async function save() {
       Object.assign(payload, agentPayload(f.value))
     }
     if (!scheduled.value) {
+      if (JSON.stringify(selectedGrants.value) !== JSON.stringify(props.session.secretGrants || [])) payload.secretGrants = selectedGrants.value
       Object.assign(payload, credentialChange())
       Object.assign(payload, gitPatIdsChange(selectedGitPats.value, gitPats.value, props.session.gitPatIds))
       Object.assign(payload, secretIdsChange(selectedSecrets.value, secrets.value, !!selectedProject.value, props.session.secretIds))
@@ -208,6 +212,7 @@ async function save() {
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
         <SecretPicker v-if="!scheduled" v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
           :project-has-none="!!selectedProject && storedSecrets.length > 0" />
+        <SecretGrantsPicker v-if="!scheduled" v-model="selectedGrants" :options="storedSecrets" />
         <div class="field last toggle-field">
           <label>Auto approve <span class="dim">— run tools without asking</span></label>
           <button type="button" class="toggle" role="switch" data-auto-approve

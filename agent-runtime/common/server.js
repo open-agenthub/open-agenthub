@@ -84,6 +84,7 @@ function createCommonServer(options = {}) {
   const fetchImpl = supplied.fetch || fetch;
   const processLike = supplied.process || process;
   const setIntervalImpl = supplied.setInterval || setInterval;
+  const clearIntervalImpl = supplied.clearInterval || clearInterval;
   const setTimeoutImpl = supplied.setTimeout || setTimeout;
   const now = supplied.now || Date.now;
   const fileStore = supplied.fileStore || new LocalFileStore({
@@ -248,6 +249,43 @@ function createCommonServer(options = {}) {
     if (socket && socket.readyState === socket.OPEN) {
       try { socket.send(data); } catch {}
     }
+  }
+
+  // Activity is opt-in so older terminal viewers keep receiving only PTY bytes. Control frames
+  // are never remembered: replaying an old working state would leave a finished turn spinning.
+  const activityClients = new Set();
+  let activityTimer = null;
+  let activityPermissionPending = false;
+  let activityIdleOverride = false;
+  let activityPromptAt = now();
+  let activityLastOutput = 0;
+  let activityLastFrame = '';
+  function activityFrame() {
+    let state = 'idle';
+    const source = nextTurn ? 'hooks' : 'output';
+    if (!activityIdleOverride && nextTurn?.state === 'busy' && !activityPermissionPending && driver.failedTurnEnded) {
+      try { activityIdleOverride = driver.failedTurnEnded({ file: transcriptFile, after: activityPromptAt, fs }); } catch {}
+    }
+    if (!exited && restartReason === null && !runtimeDraining && !activityIdleOverride) {
+      if (nextTurn) state = nextTurn.state === 'busy'
+        ? (activityPermissionPending ? 'waiting' : 'working') : nextTurn.state;
+      else state = activityLastOutput > 0 && now() - activityLastOutput < IDLE_QUIET_MS ? 'working' : 'idle';
+    }
+    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source });
+  }
+  function removeActivityClient(socket) {
+    activityClients.delete(socket);
+    if (!activityClients.size && activityTimer !== null) {
+      clearIntervalImpl(activityTimer);
+      activityTimer = null;
+    }
+  }
+  function publishActivity() {
+    if (!activityClients.size) return;
+    const frame = activityFrame();
+    if (frame === activityLastFrame) return;
+    activityLastFrame = frame;
+    for (const socket of activityClients) safeSend(socket, frame);
   }
 
   function broadcast(data) {
@@ -891,6 +929,8 @@ function createCommonServer(options = {}) {
   }
 
   function startAgent(allowResume) {
+    activityPromptAt = now();
+    activityIdleOverride = false;
     const command = driver.buildCommand(env, allowResume);
     attemptedResume = driver.isResumeCommand(command);
     attemptOutput = '';
@@ -915,6 +955,7 @@ function createCommonServer(options = {}) {
 
     if (nextTurn) nextTurn.agentStarted();
     term.onData(data => {
+      activityLastOutput = now();
       if (nextTurn) nextTurn.agentOutput();
       attemptOutput += data;
       remember(data);
@@ -1002,6 +1043,15 @@ function createCommonServer(options = {}) {
     socket.on('message', raw => {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
+      if (message.type === 'subscribe' && message.channel === 'activity') {
+        activityClients.add(socket);
+        if (activityTimer === null) {
+          activityTimer = setIntervalImpl(publishActivity, 500);
+          activityTimer?.unref?.();
+        }
+        safeSend(socket, activityFrame());
+        return;
+      }
       if (exited) return;
       if (runtimeDraining) {
         safeSend(socket, agenthubEvent('error', { code: 'runtime_updating', clientTurnId: message.clientTurnId }));
@@ -1021,6 +1071,16 @@ function createCommonServer(options = {}) {
         return;
       }
       if (message.type === 'input' && typeof message.data === 'string') {
+        if (nextTurn?.state === 'busy' && !activityPermissionPending && driver.isTurnInterrupt?.(message.data)) {
+          activityIdleOverride = true;
+          publishActivity();
+        }
+        // An approval selected in the terminal resumes the same turn, so there is no new prompt
+        // hook. The client still gives a visible menu precedence until its screen clears.
+        if (activityPermissionPending && /[\r\n]|^[yYnN]$/.test(message.data)) {
+          activityPermissionPending = false;
+          publishActivity();
+        }
         if (nextTurn) {
           nextTurn.personInput(message.data);
           if (nextTurn.isTyping()) {
@@ -1034,8 +1094,8 @@ function createCommonServer(options = {}) {
         try { term.resize(message.cols, message.rows); } catch {}
       }
     });
-    socket.on('close', () => clients.delete(socket));
-    socket.on('error', () => clients.delete(socket));
+    socket.on('close', () => { clients.delete(socket); removeActivityClient(socket); });
+    socket.on('error', () => { clients.delete(socket); activityClients.delete(socket); });
   }
 
   async function readBoundedBody(request, maxBytes) {
@@ -1371,9 +1431,25 @@ function createCommonServer(options = {}) {
     const raw = await readBoundedBody(request, MAX_LIMIT_REPORT_BYTES);
     let event = null;
     try { event = raw && JSON.parse(raw.toString('utf8')).event; } catch {}
-    if (!['prompt', 'permission', 'stop'].includes(event)) return fileError(response, 400, 'invalid_event');
+    if (!['prompt', 'permission', 'stop', 'idle'].includes(event)) return fileError(response, 400, 'invalid_event');
     // A Stop during an update or restart is answered with nothing: the agent is about to go.
-    const text = runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
+    // An interrupted/failed plugin turn is idle to viewers but is not a safe point for fleet
+    // continuation. Keep that distinction instead of turning its idle report into a Stop.
+    if (event === 'prompt') {
+      activityPromptAt = now();
+      // Complete before the prompt hook returns so a later question cannot be cleared by a
+      // delayed callback from the previous prompt. Failure must not prevent the native turn.
+      if (callback && token) {
+        try {
+          await fetchImpl(callback + '/turn-started', { method: 'POST',
+            headers: { 'X-Agent-Token': token }, signal: AbortSignal.timeout(5000) });
+        } catch {}
+      }
+    }
+    activityIdleOverride = event === 'idle';
+    activityPermissionPending = event === 'permission';
+    const text = event === 'idle' || runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
+    publishActivity();
     sendJson(response, 200, text ? { text } : {});
     if (event === 'stop' && !text) setTimeoutImpl(deliverNextTurnIfIdle, IDLE_QUIET_MS + 100);
   }
