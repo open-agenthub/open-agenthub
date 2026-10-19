@@ -317,3 +317,68 @@ test('the one-second check delivers once the screen settles, and not while the a
   await eventually(() => harness.terminals[0].writes.length > 0);
   assert.match(harness.terminals[0].writes[0], /Please fix MR 42\x1b\[201~$/);
 });
+
+// #222: with turn hooks, a priority message is pasted and its submit confirmed by the prompt hook.
+async function drive(runTimers, condition, rounds = 400) {
+  for (let i = 0; i < rounds && !condition(); i++) { runTimers(); await settle(); }
+}
+
+test('a priority message to an idle turn-hook agent is pasted and answered once its prompt hook reports it', async () => {
+  const { harness, advance, runTimers } = turnHarness({}, { holdTimers: true });
+  await turn(harness, 'prompt');
+  await turn(harness, 'stop');
+  const writes = harness.terminals[0].writes;
+
+  let answer = null;
+  const pending = requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage())
+    .then(response => { answer = JSON.parse(response.body); });
+  await eventually(() => writes.length > 0);
+  assert.equal(writes[0], '\x1b[200~' + EXPECTED_TEXT + '\x1b[201~');
+  harness.terminals[0].emitData('Please fix MR 42');
+  advance(500);
+  await drive(runTimers, () => writes.length >= 2);
+  assert.deepEqual(writes.slice(1), ['\r']);
+  assert.equal(answer, null, 'not answered before the CLI reports the submit');
+
+  await turn(harness, 'prompt');
+  await drive(runTimers, () => answer !== null);
+  await pending;
+  assert.deepEqual(answer, { delivered: 'pty' });
+  assert.deepEqual(writes.slice(1), ['\r']);
+});
+
+test('a priority message the CLI never submits is pressed once more, then left to the inbox', async () => {
+  const { harness, advance, runTimers } = turnHarness({}, { holdTimers: true });
+  await turn(harness, 'prompt');
+  await turn(harness, 'stop');
+  const writes = harness.terminals[0].writes;
+
+  let answer = null;
+  const pending = requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ interrupt: true }))
+    .then(response => { answer = JSON.parse(response.body); });
+  await eventually(() => writes.length > 0);
+  assert.equal(writes[0], '\x1b');
+  harness.terminals[0].emitData('Please fix MR 42');
+  advance(500);
+  await drive(runTimers, () => answer !== null);
+  await pending;
+  assert.deepEqual(answer, { delivered: 'unavailable', reason: 'not_submitted' });
+  assert.deepEqual(writes.slice(1), ['\x1b[200~' + EXPECTED_TEXT + '\x1b[201~', '\r', '\r']);
+});
+
+test('a priority message during a turn is queued by the CLI: one Enter, no wait for a prompt hook', async () => {
+  const { harness, advance, runTimers } = turnHarness({}, { holdTimers: true });
+  await turn(harness, 'prompt');
+  const writes = harness.terminals[0].writes;
+
+  let answer = null;
+  const pending = requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage())
+    .then(response => { answer = JSON.parse(response.body); });
+  await eventually(() => writes.length > 0);
+  harness.terminals[0].emitData('Please fix MR 42');
+  advance(500);
+  await drive(runTimers, () => answer !== null);
+  await pending;
+  assert.deepEqual(answer, { delivered: 'pty' });
+  assert.deepEqual(writes, ['\x1b[200~' + EXPECTED_TEXT + '\x1b[201~', '\r']);
+});
