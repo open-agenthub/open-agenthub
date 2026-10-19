@@ -48,7 +48,8 @@ const createSchema = z.object({
   runAsRoot: z.boolean().optional(),
   autoApprove: z.boolean().optional(),
   cpu: z.string().max(32).optional(),
-  memory: z.string().max(32).optional(),
+  memory: z.string().max(32).optional()
+    .describe('Memory request in Mi or Gi, e.g. "1Gi"; at least 256Mi by default. "m" means milli, so "512m" is half a byte.'),
   // Text with a unit, converted to seconds before the HTTP call — see expiry.mjs for why.
   autoDeleteAfter: z.string().max(16).optional(),
   autoDeleteFrom: z.enum(['start', 'lastActivity']).optional(),

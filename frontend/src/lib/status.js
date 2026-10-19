@@ -51,3 +51,8 @@ export const STATUS_STYLES = {
 export function statusStyle(session) {
   return STATUS_STYLES[sessionStatus(session)] || { color: 'var(--muted)', bg: 'rgba(163,158,150,0.1)' }
 }
+
+/** Ended or scheduled sessions replace input with their saved-state notice. */
+export function isSessionStopped(session) {
+  return ['Paused', 'Succeeded', 'Failed', 'Stopped', 'Scheduled'].includes(session?.phase)
+}
