@@ -57,7 +57,8 @@ public class TerminalProxyActivityTests
         {
             Id = "s1", Title = "Session", Owner = "owner", Mode = SessionMode.Interactive,
             Phase = "Running", PodIp = "127.0.0.1"
-        }, false, app.Services.GetRequiredService<ILoggerFactory>(), new Uri(app.Urls.Single()).Port, path == "/" ? "/" : path));
+        }, false, TestPods.Live(new HttpClient()), app.Services.GetRequiredService<ILoggerFactory>(),
+            new Uri(app.Urls.Single()).Port, path == "/" ? "/" : path));
         await app.StartAsync();
         using var browser = new ClientWebSocket();
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -76,6 +77,38 @@ public class TerminalProxyActivityTests
         using var noInput = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await received.Reader.ReadAsync(noInput.Token));
         browser.Abort();
+        await app.StopAsync(timeout.Token);
+    }
+
+    /// <summary>#229: the stored IP is not the session's live pod any more. Whoever has it now
+    /// must not get the terminal: the browser's upgrade is refused and nothing connects upstream.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ATerminalToAnUnconfirmedPodIsRefusedBeforeAnythingConnects(bool canWrite)
+    {
+        var upstreamConnections = 0;
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseUrls("http://127.0.0.1:0");
+        await using var app = builder.Build();
+        app.UseWebSockets();
+        app.Map("/", ctx => { Interlocked.Increment(ref upstreamConnections); return ctx.WebSockets.AcceptWebSocketAsync("tty"); });
+        app.Map("/viewer", ctx => TerminalProxy.HandleAsync(ctx, new SessionInfo
+        {
+            Id = "s1", Title = "Session", Owner = "owner", Mode = SessionMode.Interactive,
+            Phase = "Running", PodIp = "127.0.0.1"
+        }, canWrite, TestPods.Stale(new HttpClient()), app.Services.GetRequiredService<ILoggerFactory>(),
+            new Uri(app.Urls.Single()).Port));
+        await app.StartAsync();
+        using var browser = new ClientWebSocket();
+        browser.Options.CollectHttpResponseDetails = true;
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+
+        await Assert.ThrowsAsync<WebSocketException>(() =>
+            browser.ConnectAsync(new Uri(app.Urls.Single().Replace("http:", "ws:") + "/viewer"), timeout.Token));
+
+        Assert.Equal(System.Net.HttpStatusCode.Conflict, browser.HttpStatusCode);
+        Assert.Equal(0, upstreamConnections);
         await app.StopAsync(timeout.Token);
     }
 }

@@ -26,6 +26,7 @@ public sealed class TelegramUpdateService : BackgroundService
     private readonly TelegramConversationFactory _conversations;
     private readonly ChatRepoService _repos;
     private readonly WorkingIndicator _indicator;
+    private readonly IAgentPodRequests _pods;
     private readonly int _agentPort;
     private readonly string _frontendOrigin;
     private readonly ILogger<TelegramUpdateService> _log;
@@ -38,8 +39,9 @@ public sealed class TelegramUpdateService : BackgroundService
     public TelegramUpdateService(TelegramOptions opts, TelegramClient tg, ChatBindingStore bindings,
         ChatLinkCodeStore codes, UserDirectory users, PermissionStore permissions,
         ISessionService sessions, TelegramConversationFactory conversations, ChatRepoService repos,
-        WorkingIndicator indicator, IConfiguration cfg, ILogger<TelegramUpdateService> log)
+        WorkingIndicator indicator, IAgentPodRequests pods, IConfiguration cfg, ILogger<TelegramUpdateService> log)
     {
+        _pods = pods;
         _opts = opts; _tg = tg; _bindings = bindings; _codes = codes; _users = users;
         _permissions = permissions; _sessions = sessions; _conversations = conversations;
         _repos = repos; _indicator = indicator;
@@ -398,7 +400,16 @@ public sealed class TelegramUpdateService : BackgroundService
             return;
         }
 
-        await AgentTerminal.SendInputAsync(podIp, _agentPort, text, ct);
+        try
+        {
+            await AgentTerminal.SendInputAsync(_pods, binding.SessionId, podIp, _agentPort, text, ct);
+        }
+        catch (AgentPodNotConfirmedException)
+        {
+            // The stored address is no longer this session's pod (#229); the reply goes nowhere.
+            await ReplyAsync(u, "⚠️ Session is not running — cannot deliver the reply.", ct);
+            return;
+        }
         await _sessions.TouchActivityAsync(binding.Owner, binding.SessionId, ct);
         _log.LogInformation("Delivered Telegram reply to session {Id}", binding.SessionId);
 

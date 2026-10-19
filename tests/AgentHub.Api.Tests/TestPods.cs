@@ -10,6 +10,9 @@ internal static class TestPods
 {
     public static IAgentPodRequests Live(HttpClient http) => new AgentPodRequests(http, new Fixed(true));
 
+    /// <summary>The stored address is not the session's live pod.</summary>
+    public static IAgentPodRequests Stale(HttpClient http) => new AgentPodRequests(http, new Fixed(false));
+
     public static IAgentPodRequests Using(HttpClient http, IAgentPodIdentityResolver identity) =>
         new AgentPodRequests(http, identity);
 

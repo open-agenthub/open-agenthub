@@ -699,7 +699,8 @@ async Task ProxyWs(HttpContext ctx, string id, ISessionService sessions, ILogger
     if (ctx.User.Identity?.IsAuthenticated != true) { ctx.Response.StatusCode = 401; return; }
     var owner = WsOwner(ctx);
     if (owner is null) { ctx.Response.StatusCode = 401; return; }
-    await TerminalProxy.HandleAsync(ctx, owner, id, sessions, lf, agentPort, upstreamPath);
+    await TerminalProxy.HandleAsync(ctx, owner, id, sessions, ctx.RequestServices.GetRequiredService<IAgentPodRequests>(),
+        lf, agentPort, upstreamPath);
 }
 
 app.Map("/ws/sessions/{id}/terminal", (HttpContext ctx, string id,
@@ -717,7 +718,8 @@ async Task ProxyResolvedWs(HttpContext ctx, SessionAccessResult resolved, ISessi
         try { await sessions.ClearQuestionAsync(resolved.Session.Owner, resolved.Session.Id, ctx.RequestAborted); } catch { }
     // Anyone allowed to type — owner or collaborator — keeps the idle countdown from running
     // out; the proxy ignores the callback for a read-only viewer.
-    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level), lf, agentPort,
+    await TerminalProxy.HandleAsync(ctx, live, SessionAccessRules.CanWriteTerminal(resolved.Level),
+        ctx.RequestServices.GetRequiredService<IAgentPodRequests>(), lf, agentPort,
         onActivity: ct => sessions.TouchActivityAsync(resolved.Session.Owner, resolved.Session.Id, ct));
 }
 
