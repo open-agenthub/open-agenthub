@@ -10,7 +10,7 @@ public interface IWorkspaceDiffReader
 }
 
 public sealed class WorkspaceDiffReader(
-    HttpClient http, ISessionService sessions, IConfiguration configuration) : IWorkspaceDiffReader
+    IAgentPodRequests pods, ISessionService sessions, IConfiguration configuration) : IWorkspaceDiffReader
 {
     public async Task<string?> ReadAsync(SessionRecord session, string comparison, CancellationToken ct)
     {
@@ -27,7 +27,8 @@ public sealed class WorkspaceDiffReader(
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, uri);
             request.Headers.Add("X-Agent-Token", session.CallbackToken);
-            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            using var response = await pods.SendAsync(session.Id, request, HttpCompletionOption.ResponseHeadersRead,
+                TimeSpan.FromSeconds(15), deadline.Token);
             if (response.StatusCode == HttpStatusCode.NotFound || !response.IsSuccessStatusCode) return null;
             // Bound an older or faulty pod too, rather than trusting its Content-Length header.
             await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);

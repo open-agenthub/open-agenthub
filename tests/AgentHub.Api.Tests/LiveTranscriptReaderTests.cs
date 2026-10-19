@@ -72,8 +72,7 @@ public class LiveTranscriptReaderTests
     {
         var pod = new Pod { TranscriptId = "old" };
         pod.Append(Line("user", "old"));
-        var reader = new LiveTranscriptReader(new HttpClient(pod), new Store(),
-            new ConfigurationBuilder().Build(), new Identity());
+        var reader = new LiveTranscriptReader(TestPods.Using(new HttpClient(pod), new Identity()), new Store(), new ConfigurationBuilder().Build());
         Assert.Equal("old", Assert.Single((await reader.ReadAsync(Running(), CancellationToken.None))!).Text);
         pod.File = [];
         pod.TranscriptId = "new";
@@ -89,8 +88,7 @@ public class LiveTranscriptReaderTests
         var pod = new Pod();
         pod.Append(Line("user", "hello"));
         var identity = new Identity();
-        var reader = new LiveTranscriptReader(new HttpClient(pod), new Store(),
-            new ConfigurationBuilder().Build(), identity);
+        var reader = new LiveTranscriptReader(TestPods.Using(new HttpClient(pod), identity), new Store(), new ConfigurationBuilder().Build());
         Assert.NotNull(await reader.ReadAsync(Running(), CancellationToken.None));
         identity.Live = false;
         Assert.Null(await reader.ReadAsync(Running(), CancellationToken.None));
@@ -157,8 +155,8 @@ public class LiveTranscriptReaderTests
             using var http = new HttpClient();
             var config = new ConfigurationBuilder().AddInMemoryCollection(
                 new Dictionary<string, string?> { ["AgentHub:AgentPort"] = port.ToString() }).Build();
-            var reader = new LiveTranscriptReader(http, new Store(), config,
-                new KubernetesAgentPodIdentityResolver(client, "sessions"));
+            var reader = new LiveTranscriptReader(
+                TestPods.Using(http, new KubernetesAgentPodIdentityResolver(client, "sessions")), new Store(), config);
             Assert.Null(await reader.ReadAsync(Running("127.0.0.1"), stop.Token));
             Assert.Equal(0, tokenRequests);
             live = true;
@@ -192,7 +190,7 @@ public class LiveTranscriptReaderTests
         pod.Append(Line("user", "hello"));
         using var http = new HttpClient(pod);
         var identity = new Identity { AllowedCalls = 1 };
-        var reader = new LiveTranscriptReader(http, new Store(), new ConfigurationBuilder().Build(), identity);
+        var reader = new LiveTranscriptReader(TestPods.Using(http, identity), new Store(), new ConfigurationBuilder().Build());
         Assert.Null(await reader.ReadAsync(Running(), CancellationToken.None));
         Assert.Single(pod.Requests);
         Assert.Equal(2, identity.Calls);
@@ -228,7 +226,7 @@ public class LiveTranscriptReaderTests
     {
         using var pod = new BusyPod();
         using var http = new HttpClient(pod);
-        var reader = new LiveTranscriptReader(http, new Store(), new ConfigurationBuilder().Build(), new Identity());
+        var reader = new LiveTranscriptReader(TestPods.Using(http, new Identity()), new Store(), new ConfigurationBuilder().Build());
         using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var reads = Enumerable.Range(0, 24).Select(i =>
             reader.ReadAsync(Running() with { Id = "s" + i }, stop.Token)).ToArray();
@@ -271,7 +269,7 @@ public class LiveTranscriptReaderTests
         var pod = new Pod();
         var store = new Store();
         var now = new DateTime(2026, 10, 17, 12, 0, 0, DateTimeKind.Utc);
-        var reader = new LiveTranscriptReader(new HttpClient(pod), store, new ConfigurationBuilder().Build(), new Identity(), () => now);
+        var reader = new LiveTranscriptReader(TestPods.Using(new HttpClient(pod), new Identity()), store, new ConfigurationBuilder().Build(), () => now);
         return (reader, pod, store, by => now += by);
     }
 

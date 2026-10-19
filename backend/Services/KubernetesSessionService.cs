@@ -40,6 +40,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     private readonly ISessionFileCleanup? _fileCleanup;
     private readonly Network.INetworkSessionCleanup? _networkCleanup;
     private readonly IAgentCredentialPusher? _credentialPusher;
+    private readonly IAgentPodRequests? _podRequests;
     private readonly Containers.ISessionContainerCleanup? _containerCleanup;
     private readonly ISecretRequestStore? _secretRequests;
     private readonly ILogger<KubernetesSessionService> _log;
@@ -69,8 +70,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         Containers.ISessionContainerCleanup? containerCleanup = null,
         ISessionExpiryLock? runtimeUpdateLock = null,
         ISecretRequestStore? secretRequests = null,
-        Kubernetes? cluster = null)
+        Kubernetes? cluster = null,
+        IAgentPodRequests? podRequests = null)
     {
+        _podRequests = podRequests;
         _secretRequests = secretRequests;
         _log = log;
         _runtimeUpdateLock = runtimeUpdateLock;
@@ -696,7 +699,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await UpsertSecretAsync(GitCredentialsSecret(owner, rec.Id, git), ct);
             try
             {
-                appliedNow = await _credentialPusher.PushGitCredentialsAsync(podIp, rec.CallbackToken, git.PodPayload(), ct);
+                appliedNow = await _credentialPusher.PushGitCredentialsAsync(rec.Id, podIp, rec.CallbackToken, git.PodPayload(), ct);
             }
             catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
             {
@@ -736,7 +739,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await _store.SetResolvedCredentialIdAsync(rec.Id, account.Id, ct);
         rec.CredentialId = account.Id;
         rec.ResolvedCredentialId = account.Id;
-        await _credentialPusher.PushAsync(pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, reason, ct);
+        await _credentialPusher.PushAsync(rec.Id, pod!.Status.PodIP, rec.CallbackToken, rec.Agent, file, reason, ct);
 
         await MutateProviderAccountsAsync(owner, rec.Agent, latest =>
         {
@@ -1245,12 +1248,19 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                     : "This session cannot confirm that it is idle and ready for an automatic update.");
         await EnsureAgentAllowedAsync(record.Agent, ct);
         await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
-        using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(260) };
-        client.DefaultRequestHeaders.Add("X-Agent-Token", record.CallbackToken);
-        var drainUrl = $"http://{pod.Status.PodIP}:{_opts.AgentPort}/agenthub/runtime-drain";
+        if (_podRequests is null) throw new InvalidOperationException("Runtime updates are not available on this instance.");
+        var drainUrl = new Uri($"http://{pod.Status.PodIP}:{_opts.AgentPort}/agenthub/runtime-drain");
+        HttpRequestMessage Drain(HttpMethod method)
+        {
+            var request = new HttpRequestMessage(method, drainUrl);
+            request.Headers.Add("X-Agent-Token", record.CallbackToken);
+            return request;
+        }
         try
         {
-            using var admitted = await client.PostAsync(drainUrl, null, ct);
+            using var admitRequest = Drain(HttpMethod.Post);
+            using var admitted = await _podRequests.SendAsync(id, admitRequest, HttpCompletionOption.ResponseContentRead,
+                TimeSpan.FromSeconds(260), ct);
             if (!admitted.IsSuccessStatusCode)
                 throw new RuntimeUpdateConfirmationRequiredException("The agent may still be working, or this runtime cannot confirm that it is idle.");
             record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
@@ -1268,7 +1278,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 var surviving = await TryReadPodAsync($"session-{id}", releaseDeadline.Token);
                 if (surviving is { Metadata: { DeletionTimestamp: null } metadata } && metadata.Uid == pod.Metadata.Uid)
                 {
-                    using var released = await client.DeleteAsync(drainUrl, releaseDeadline.Token);
+                    using var releaseRequest = Drain(HttpMethod.Delete);
+                    using var released = await _podRequests.SendAsync(id, releaseRequest, HttpCompletionOption.ResponseContentRead,
+                        TimeSpan.FromSeconds(5), releaseDeadline.Token);
                 }
             }
             catch (HttpRequestException exception) { _log.LogDebug(exception, "Releasing runtime drain failed"); }

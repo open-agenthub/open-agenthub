@@ -164,7 +164,8 @@ public class ManualRuntimeUpdateTests
             return new(config, store, RuntimeProofProxy.Make<IProjectStore>((method, _) => method.Name == "ListAsync"
                     ? Task.FromResult<IReadOnlyList<ProjectInfo>>([]) : null), artifacts, RuntimeProofProxy.Make<IBrowserService>(), RuntimeProofProxy.Make<IGitAuthService>(),
                 new UsageLimitService(RuntimeProofProxy.Make<IUsageStore>(), RuntimeProofProxy.Make<IPersonalUsageLimitSource>(), []), new AllowAllAgentsProvider(), null!, null!,
-                new InMemoryEphemeralApiMcpStore(), null!, NullLogger<KubernetesSessionService>.Instance, runtimeUpdateLock: new MemoryLock(), cluster: _cluster);
+                new InMemoryEphemeralApiMcpStore(), null!, NullLogger<KubernetesSessionService>.Instance, runtimeUpdateLock: new MemoryLock(), cluster: _cluster,
+                podRequests: TestPods.Live(new HttpClient()));
         }
         // Answers only for the key the pod uploads to: a check under any other key (the raw owner
         // name, for instance) finds nothing, as it would against real object storage.

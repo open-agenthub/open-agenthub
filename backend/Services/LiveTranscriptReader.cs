@@ -2,7 +2,6 @@ using System.Collections.Concurrent;
 using System.Globalization;
 using System.Net;
 using System.Text;
-using AgentHub.Api.Browser;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 
@@ -45,25 +44,23 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
     // Parsing also allocates: two concurrent 8 MiB readers exhausted the backend heap budget
     // in the 24-view probe. Serialize catch-up reads; docs/transcripts.md records the result.
     private readonly SemaphoreSlim _downloads = new(1, 1);
-    private readonly IAgentPodIdentityResolver _pods;
-    private readonly HttpClient _http;
+    // A poll that waits on a wedged pod holds the Workspace's request; the stored copy is the
+    // better answer after this long.
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(5);
+    private readonly IAgentPodRequests _pods;
     private readonly ISessionStore _sessions;
     private readonly int _agentPort;
     private readonly Func<DateTime> _now;
     private readonly ConcurrentDictionary<string, Follow> _follows = new();
     private DateTime _lastSweep;
 
-    public LiveTranscriptReader(HttpClient http, ISessionStore sessions, IConfiguration configuration,
-        IAgentPodIdentityResolver pods, Func<DateTime>? now = null)
+    public LiveTranscriptReader(IAgentPodRequests pods, ISessionStore sessions, IConfiguration configuration,
+        Func<DateTime>? now = null)
     {
-        _http = http;
         _pods = pods;
         _sessions = sessions;
         _agentPort = configuration.GetValue("AgentHub:AgentPort", 7681);
         _now = now ?? (() => DateTime.UtcNow);
-        // A poll that waits on a wedged pod holds the Workspace's request; the stored copy is
-        // the better answer after this long.
-        _http.Timeout = TimeSpan.FromSeconds(5);
     }
 
     private sealed class Follow
@@ -111,13 +108,9 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
 
             for (var round = 0; round < MaxRoundsPerRead; round++)
             {
-                // Status can outlive a pod and its IP can be reused by another session.
-                // Confirm immediately before each request; caching would reopen that window.
-                using var confirmation = CancellationTokenSource.CreateLinkedTokenSource(ct);
-                confirmation.CancelAfter(TimeSpan.FromSeconds(5));
-                if (!IPAddress.TryParse(session.PodIp, out var address) ||
-                    !await _pods.IsLiveSessionPodAsync(session.Id, address, confirmation.Token)) return null;
-                var chunk = await FetchAsync(session.PodIp, follow.Token, follow.NextByte, ct);
+                // Each round is confirmed on its own (IAgentPodRequests): caching the answer
+                // would reopen the window in which the address passes to another pod.
+                var chunk = await FetchAsync(session.Id, session.PodIp, follow.Token, follow.NextByte, ct);
                 if (chunk is null)
                 {
                     return null;
@@ -150,7 +143,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
             }
             return follow.Entries.Length > 0 ? follow.Entries : null;
         }
-        catch (Exception e) when ((e is HttpRequestException or OperationCanceledException or k8s.Autorest.HttpOperationException) && !ct.IsCancellationRequested)
+        catch (Exception e) when ((e is HttpRequestException or OperationCanceledException) && !ct.IsCancellationRequested)
         {
             return null;
         }
@@ -163,7 +156,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
 
     private sealed record Chunk(bool Unsupported, long Size, long Next, string Text, string? Id = null);
 
-    private async Task<Chunk?> FetchAsync(string podIp, string token, long from, CancellationToken ct)
+    private async Task<Chunk?> FetchAsync(string sessionId, string podIp, string token, long from, CancellationToken ct)
     {
         var uri = new UriBuilder("http", podIp, _agentPort, "agenthub/transcript")
         {
@@ -171,7 +164,7 @@ public sealed class LiveTranscriptReader : ILiveTranscriptReader
         }.Uri;
         using var request = new HttpRequestMessage(HttpMethod.Get, uri);
         request.Headers.Add("X-Agent-Token", token);
-        using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        using var response = await _pods.SendAsync(sessionId, request, HttpCompletionOption.ResponseHeadersRead, Timeout, ct);
         if (response.StatusCode == HttpStatusCode.NotFound) return new Chunk(true, 0, 0, "");
         if (!response.IsSuccessStatusCode) return null;
         if (!TryHeader(response, "X-Transcript-Size", out var size) ||

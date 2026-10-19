@@ -36,23 +36,24 @@ public static class AgentMessageDispatch
 
 public sealed class SessionMessageDelivery : ISessionMessageDelivery
 {
-    private readonly HttpClient _http;
+    // The session agent answers once the text is in the terminal (under a second of typing
+    // pauses) or queued; a wedged pod must not hold the sender's request open.
+    private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(15);
+
+    private readonly IAgentPodRequests _pods;
     private readonly ISessionStore _sessions;
     private readonly ISessionMessageStore _messages;
     private readonly ILogger<SessionMessageDelivery> _log;
     private readonly int _agentPort;
 
-    public SessionMessageDelivery(HttpClient http, ISessionStore sessions, ISessionMessageStore messages,
+    public SessionMessageDelivery(IAgentPodRequests pods, ISessionStore sessions, ISessionMessageStore messages,
         IConfiguration configuration, ILogger<SessionMessageDelivery> log)
     {
-        _http = http;
+        _pods = pods;
         _sessions = sessions;
         _messages = messages;
         _log = log;
         _agentPort = configuration.GetValue("AgentHub:AgentPort", 7681);
-        // The session agent answers once the text is in the terminal (under a second of typing
-        // pauses) or queued; a wedged pod must not hold the sender's request open.
-        _http.Timeout = TimeSpan.FromSeconds(15);
     }
 
     public async Task<MessageDelivery> TryInjectAsync(SessionInfo target, SessionMessageRecord message,
@@ -80,7 +81,8 @@ public sealed class SessionMessageDelivery : ISessionMessageDelivery
                 priority = message.Priority,
                 interrupt = message.Interrupt
             });
-            using var response = await _http.SendAsync(request, ct);
+            using var response = await _pods.SendAsync(target.Id, request, HttpCompletionOption.ResponseContentRead,
+                Timeout, ct);
             if (!response.IsSuccessStatusCode)
             {
                 _log.LogWarning("Session {Id} pod refused message {Message} with HTTP {Status}",
@@ -88,6 +90,11 @@ public sealed class SessionMessageDelivery : ISessionMessageDelivery
                 return new MessageDelivery(MessageDeliveryVia.Inbox, $"pod_http_{(int)response.StatusCode}");
             }
             answer = await response.Content.ReadFromJsonAsync<PodDeliveryResponse>(JsonOptions, ct);
+        }
+        catch (AgentPodNotConfirmedException e)
+        {
+            _log.LogWarning("Session {Id} pod not confirmed for message {Message}: {Reason}", target.Id, message.Id, e.Message);
+            return new MessageDelivery(MessageDeliveryVia.Inbox, "pod_not_confirmed");
         }
         catch (Exception e) when (e is HttpRequestException or TaskCanceledException or JsonException)
         {

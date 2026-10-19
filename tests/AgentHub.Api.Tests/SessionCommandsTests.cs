@@ -92,7 +92,7 @@ public class SessionCommandsTests
         { Id = "s1", Owner = "owner", Title = "Session", Mode = SessionMode.Interactive, Phase = "Running", PodIp = "127.0.0.1" };
         var pod = new Pod(new string(' ', length), (HttpStatusCode)status);
         using var http = new HttpClient(pod);
-        var reader = new SessionCommandsReader(http, sessions, new ConfigurationBuilder().Build());
+        var reader = new SessionCommandsReader(TestPods.Live(http), sessions, new ConfigurationBuilder().Build());
         Assert.Equal(available, await reader.ReadAsync(Record, default) is not null);
         ((SessionProxy)sessions).Live = null;
         Assert.Null(await reader.ReadAsync(Record, default));

@@ -106,7 +106,7 @@ public sealed class SessionCredentialSwitchTests
             return new HttpResponseMessage(HttpStatusCode.Accepted);
         });
 
-        await pusher.PushAsync("10.0.0.8", "secret-token", AgentKind.OpenClaw, [1, 2, 3], default);
+        await pusher.PushAsync("s1", "10.0.0.8", "secret-token", AgentKind.OpenClaw, [1, 2, 3], default);
 
         Assert.Equal(HttpMethod.Put, captured!.Method);
         Assert.Equal("http://10.0.0.8:7681/agenthub/credentials", captured.RequestUri!.ToString());
@@ -127,8 +127,8 @@ public sealed class SessionCredentialSwitchTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Accepted));
         });
 
-        await pusher.PushAsync("10.0.0.8", "t", AgentKind.Claude, [1], "Switched to \"Büro\" — limit", default);
-        await pusher.PushAsync("10.0.0.8", "t", AgentKind.Claude, [1], default);
+        await pusher.PushAsync("s1", "10.0.0.8", "t", AgentKind.Claude, [1], "Switched to \"Büro\" — limit", default);
+        await pusher.PushAsync("s1", "10.0.0.8", "t", AgentKind.Claude, [1], default);
 
         Assert.Equal(Uri.EscapeDataString("Switched to \"Büro\" — limit"), headers[0]);
         Assert.Null(headers[1]);
@@ -140,7 +140,7 @@ public sealed class SessionCredentialSwitchTests
         var pusher = Pusher(_ => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Conflict)));
 
         var error = await Assert.ThrowsAsync<HttpRequestException>(() =>
-            pusher.PushAsync("10.0.0.8", "t", AgentKind.Claude, [1], default));
+            pusher.PushAsync("s1", "10.0.0.8", "t", AgentKind.Claude, [1], default));
 
         Assert.Equal(HttpStatusCode.Conflict, error.StatusCode);
     }
@@ -183,7 +183,7 @@ public sealed class SessionCredentialSwitchTests
             return new HttpResponseMessage(HttpStatusCode.OK);
         });
 
-        Assert.True(await pusher.PushGitCredentialsAsync("10.0.0.5", "tok", "{\"credentials\":\"\"}"u8.ToArray(), CancellationToken.None));
+        Assert.True(await pusher.PushGitCredentialsAsync("s1", "10.0.0.5", "tok", "{\"credentials\":\"\"}"u8.ToArray(), CancellationToken.None));
 
         Assert.Equal("http://10.0.0.5:7681/agenthub/git-credentials", captured!.RequestUri!.ToString());
         Assert.Equal(HttpMethod.Put, captured.Method);
@@ -197,9 +197,9 @@ public sealed class SessionCredentialSwitchTests
         using var notFound = new HttpResponseMessage(HttpStatusCode.NotFound);
         using var badRequest = new HttpResponseMessage(HttpStatusCode.BadRequest);
         Assert.False(await Pusher(_ => Task.FromResult(notFound))
-            .PushGitCredentialsAsync("10.0.0.5", "tok", [], CancellationToken.None));
+            .PushGitCredentialsAsync("s1", "10.0.0.5", "tok", [], CancellationToken.None));
         await Assert.ThrowsAsync<HttpRequestException>(() => Pusher(_ => Task.FromResult(badRequest))
-            .PushGitCredentialsAsync("10.0.0.5", "tok", [], CancellationToken.None));
+            .PushGitCredentialsAsync("s1", "10.0.0.5", "tok", [], CancellationToken.None));
     }
 
     private static AgentCredentialPusher Pusher(Func<HttpRequestMessage, Task<HttpResponseMessage>> handler)
@@ -208,7 +208,7 @@ public sealed class SessionCredentialSwitchTests
         {
             ["AgentHub:AgentPort"] = "7681"
         }).Build();
-        return new AgentCredentialPusher(new HttpClient(new DelegatingHandlerStub(handler)), configuration);
+        return new AgentCredentialPusher(TestPods.Live(new HttpClient(new DelegatingHandlerStub(handler))), configuration);
     }
 
     private sealed class DelegatingHandlerStub(Func<HttpRequestMessage, Task<HttpResponseMessage>> handler) : HttpMessageHandler

@@ -18,7 +18,7 @@ public interface ISessionTerminalAttachments
 /// pasting nothing.
 /// </summary>
 public sealed class SessionTerminalAttachments(
-    HttpClient http, ISessionService sessions, IConfiguration configuration) : ISessionTerminalAttachments
+    IAgentPodRequests pods, ISessionService sessions, IConfiguration configuration) : ISessionTerminalAttachments
 {
     // Five entries of id, name, type, size and path.
     private const int MaxBytes = 64 * 1024;
@@ -39,7 +39,8 @@ public sealed class SessionTerminalAttachments(
                 Content = JsonContent.Create(new { fileIds })
             };
             request.Headers.Add("X-Agent-Token", session.CallbackToken);
-            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            using var response = await pods.SendAsync(session.Id, request, HttpCompletionOption.ResponseHeadersRead,
+                TimeSpan.FromMinutes(5), deadline.Token);
             await using var stream = await response.Content.ReadAsStreamAsync(deadline.Token);
             using var body = new MemoryStream();
             var buffer = new byte[16384];

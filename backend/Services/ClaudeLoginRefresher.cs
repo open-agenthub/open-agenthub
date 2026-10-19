@@ -186,7 +186,7 @@ public sealed class ClaudeLoginRefresher : IClaudeLoginSync
         {
             try
             {
-                if (await _pusher.RefreshAsync(session.PodIp, session.CallbackToken, AgentKind.Claude, file, ct)) return true;
+                if (await _pusher.RefreshAsync(session.SessionId, session.PodIp, session.CallbackToken, AgentKind.Claude, file, ct)) return true;
                 // An image from before the refresh route: it keeps its token until it refreshes
                 // by itself, and its writeback then comes back through the newer-wins rule.
                 _log.LogInformation("Session {SessionId} cannot take a renewed login without a restart; left as is",
@@ -224,7 +224,7 @@ public sealed class ClaudeLoginRefresher : IClaudeLoginSync
             var self = (await _logins.ListRunningSessionsAsync(secret, AgentKind.Claude, accountId, ct))
                 .FirstOrDefault(s => s.SessionId == session.Id);
             if (self is not null && !ClaudeCredentialFile.IsBlank(stored))
-                await _pusher.RefreshAsync(self.PodIp, self.CallbackToken, AgentKind.Claude, stored, ct);
+                await _pusher.RefreshAsync(self.SessionId, self.PodIp, self.CallbackToken, AgentKind.Claude, stored, ct);
         }
         catch (Exception error) when (!ct.IsCancellationRequested)
         {

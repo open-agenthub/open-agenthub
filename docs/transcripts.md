@@ -424,3 +424,54 @@ the boundary. OpenCode's recorded new session matched its real database and acce
 new turn when launched with `--session`. Chromium drove the real Workspace composer
 through the real backend live reader and verified owner history above the boundary and
 new turns below it. These are local runtime proofs, not a rebuilt image or cluster rollout.
+
+## Which pod gets the token (#177)
+
+The live transcript was the first caller to confirm the pod (#133), and context clear had its own
+copy of that check. Every other request that carries a session's callback token or a credential
+still went to the stored IP:
+- session files;
+- the Workspace diff, slash-command discovery and terminal attachments;
+- fleet message delivery;
+- the account, login-refresh and git-token pushes;
+- the runtime drain.
+
+Against a real API server that placed `session-s1` at another address, all six callers the probe
+drove sent their token to the stale IP: git push, login refresh, diff, commands, message and
+file.
+
+They all go through one helper now, `IAgentPodRequests.SendAsync(sessionId, request, …)`
+(`backend/Services/AgentPodRequests.cs`). It confirms the request's IP as the session's live
+agent pod immediately before sending, with the resolver from #133 and no cache. When the address
+is not confirmed, it throws `AgentPodNotConfirmedException` and sends nothing. The exception is an
+`HttpRequestException`, so each caller's existing "pod unreachable" handling applies unchanged.
+Message delivery reports it as `pod_not_confirmed` instead of `pod_unreachable`. The helper owns
+the only HTTP client these callers use, registered with `AllowAutoRedirect = false`. Each call
+passes its own timeout, which bounds the send the way `HttpClient.Timeout` did before.
+
+The same probe, run on the branch, with the real `KubernetesAgentPodIdentityResolver` and the DI
+registration:
+
+| Case | Result |
+|---|---|
+| Stale IP | Nothing reached the stand-in pod. |
+| The live pod's IP | All six requests arrived with their tokens. |
+| The live pod answers 307 to another address | Nothing reached that address. |
+| The pod has a deletion timestamp | Nothing was sent. |
+
+Rejected:
+
+- **A check per caller.** That is what existed: one copy in the transcript reader, one in
+  context clear, and none anywhere else. The next caller would have started without one again.
+- **The check in a `DelegatingHandler` on a shared client.** The handler does not know which
+  session a request is for unless the caller smuggles the id through request options. A request
+  without it could then only be refused at runtime. As a parameter of `SendAsync`, the session id
+  cannot be left out.
+- **Trusting a pod address read from the API a moment earlier.** The git-token and account
+  switches do read it live, but the pod can still be replaced between that read and the send. One
+  path for all keeps the rule simple: confirm, then send.
+
+Not covered: the terminal WebSocket and the chat relays (`AgentTerminal`) carry no token. They
+do, however, write a person's keys to whichever pod has the stored address, a related hazard
+left to its own change. The race between the confirmation and the send remains, as described
+under #133.
