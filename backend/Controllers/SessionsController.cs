@@ -173,6 +173,22 @@ public sealed class SessionsController : ControllerBase
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
     }
 
+    /// <summary>
+    /// Restarts a running interactive session so its pod gets the CPU/memory saved for it, with
+    /// the conversation resumed (docs/session-resources.md). 409 when it cannot be restarted (not
+    /// running or not interactive, no state storage, maintenance in progress) or the cluster
+    /// would refuse the new pod; the session then keeps running and gets them at its next start.
+    /// </summary>
+    [HttpPost("{id}/apply-resources")]
+    public async Task<ActionResult<SessionInfo>> ApplyResources(string id, CancellationToken ct)
+    {
+        try { return Ok(await _svc.ApplyResourcesAsync(Owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
+        catch (InvalidOperationException e) { return Conflict(e.Message); }
+        catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
+    }
+
     [HttpPost("{id}/resume")]
     public async Task<ActionResult<SessionInfo>> Resume(string id, CancellationToken ct)
     {

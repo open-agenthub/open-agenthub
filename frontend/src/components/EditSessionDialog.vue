@@ -15,11 +15,19 @@ import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secre
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
+import SessionResourceFields from './SessionResourceFields.vue'
+import { canApplyNow, resourceForm, resourcePayload, resourcesChanged } from '../lib/resources.js'
 
 const props = defineProps({ session: Object, projects: Array, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close', 'updated'])
 
 const f = ref({})
+const resources = ref(resourceForm(null))
+// A running interactive session gets new resources only through a restart; the owner chooses
+// between now (pause and resume, conversation kept) and its next start.
+const restartNow = ref(true)
+const resourcesDirty = computed(() => resourcesChanged(resources.value, props.session))
+const offerRestart = computed(() => !scheduled.value && canApplyNow(props.session) && (resourcesDirty.value || props.session.resourcesPendingRestart))
 const autoDelete = ref(autoDeleteForm(null))
 const repos = ref([])
 const advOpen = ref(false)
@@ -55,8 +63,6 @@ function reset(session) {
     runAsRoot: !!session.runAsRoot,
     autoApprove: !!session.autoApprove,
     autoUpdateRuntimeImages: session.autoUpdateRuntimeImages ?? 'default',
-    cpu: session.cpu || '500m',
-    memory: session.memory || '1Gi',
     mcpConfigJson: session.mcpConfigJson || '',
     projectId: session.projectId || '',
     ...defaultAgentForm(session),
@@ -64,6 +70,8 @@ function reset(session) {
     accountFailover: session.accountFailover === 'off' ? 'off' : 'auto'
   }
   autoDelete.value = autoDeleteForm(session)
+  resources.value = resourceForm(session)
+  restartNow.value = true
   repos.value = (session.repos || []).map(repo => ({ ...repo }))
   selectedMcpIds.value = [...(session.mcpServerIds || [])]
   ephemeralUrl.value = ''
@@ -144,8 +152,7 @@ async function save() {
           image: f.value.image.trim(),          // empty = default agent image
           runAsRoot: f.value.runAsRoot,
           autoApprove: f.value.autoApprove,
-          cpu: f.value.cpu.trim(),
-          memory: f.value.memory.trim(),
+          ...resourcePayload(resources.value),
           repos: repos.value,
           mcpConfigJson: f.value.mcpConfigJson,  // "" clears it
           mcpServerIds: selectedMcpIds.value,    // [] = none, null would mean unchanged
@@ -168,7 +175,16 @@ async function save() {
     }
     if (f.value.autoUpdateRuntimeImages !== (props.session.autoUpdateRuntimeImages ?? 'default'))
       payload.autoUpdateRuntimeImages = f.value.autoUpdateRuntimeImages === 'default' ? null : f.value.autoUpdateRuntimeImages
-    const updated = await api.updateSession(props.session.id, payload)
+    const restart = offerRestart.value && restartNow.value
+    let updated = await api.updateSession(props.session.id, payload)
+    if (restart) {
+      // Saved first, so a refused restart loses nothing: the values then apply at the next start.
+      try { updated = await api.applySessionResources(props.session.id) }
+      catch (e) {
+        error.value = `Saved, but the session was not restarted: ${e.message || e} The new resources apply the next time it starts.`
+        return
+      }
+    }
     emit('updated', updated)
   } catch (e) { error.value = String(e.message || e) }
   finally { busy.value = false }
@@ -180,7 +196,7 @@ async function save() {
     <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3 class="form-title">Edit session</h3>
       <p class="note" v-if="scheduled">Scheduled sessions run from a fixed CronJob spec — delete and recreate the session to change its agent, billing, policy, or runtime settings.</p>
-      <p class="note" v-else>The title, auto approve and auto-delete apply immediately. Image, root mode, resources and the system prompt take effect the next time the session is resumed.</p>
+      <p class="note" v-else>The title, auto approve and auto-delete apply immediately. Image, root mode, resources and the system prompt take effect the next time the session is resumed; new resources can also restart a running session at once.</p>
 
       <div class="card sect">
         <div class="field">
@@ -286,11 +302,8 @@ async function save() {
               <label>Extra tools <span class="dim">— MCP servers (.mcp.json), empty = none</span></label>
               <textarea v-model="f.mcpConfigJson" placeholder='{ "mcpServers": { … } }'></textarea>
             </div>
-            <div class="grid3">
-              <div class="field"><label>Container image</label><input v-model="f.image" class="mono" placeholder="default agent image" /></div>
-              <div class="field"><label>CPU</label><input v-model="f.cpu" class="mono" placeholder="500m" /></div>
-              <div class="field"><label>Memory</label><input v-model="f.memory" class="mono" placeholder="1Gi" /></div>
-            </div>
+            <div class="field"><label>Container image</label><input v-model="f.image" class="mono" placeholder="default agent image" /></div>
+            <SessionResourceFields v-model="resources" :session="session" />
             <label class="check">
               <input type="checkbox" v-model="f.runAsRoot" />
               <span><b>Run as root</b> — install tools via apt, npm&nbsp;-g, …</span>
@@ -299,11 +312,23 @@ async function save() {
         </div>
       </template>
 
+      <div v-if="offerRestart" class="card sect restart-note" data-resources-restart>
+        <label class="check">
+          <input type="checkbox" v-model="restartNow" data-resources-restart-now />
+          <span><b>Restart now to apply the new resources.</b> The session is paused and resumed: its state is saved,
+            the pod is replaced and the conversation continues. A turn in progress is interrupted, and the terminal
+            reconnects after the restart.</span>
+        </label>
+        <p v-if="!restartNow" class="note restart-later">The new resources apply the next time the session is paused and resumed.</p>
+      </div>
+      <p v-else-if="resourcesDirty && !scheduled && session.phase === 'Running'" class="note" data-resources-next-start>
+        New resources apply at the session's next start; a running {{ session.mode.toLowerCase() }} session is not restarted for them.
+      </p>
       <p v-if="error" class="err">{{ error }}</p>
       <div class="row">
-        <button class="primary" data-submit :disabled="busy" @click="save">{{ busy ? 'Saving…' : 'Save changes' }}</button>
+        <button class="primary" data-submit :disabled="busy" @click="save">{{ busy ? (offerRestart && restartNow ? 'Saving and restarting…' : 'Saving…') : (offerRestart && restartNow ? 'Save and restart' : 'Save changes') }}</button>
         <button @click="$emit('close')">Cancel</button>
-        <span class="dim note-inline">Changes apply on next agent turn — the session keeps running.</span>
+        <span v-if="!(offerRestart && restartNow)" class="dim note-inline">Changes apply on next agent turn — the session keeps running.</span>
       </div>
     </div>
   </div>
@@ -350,6 +375,9 @@ async function save() {
 .toggle.on .knob { background: var(--warn); }
 .toggle.on .knob::after { transform: translateX(13px); }
 .toggle-label { font-weight: 700; }
+.restart-note { border-color: var(--warn); }
+.restart-note .check { margin: 0; }
+.restart-later { margin: 10px 0 0; }
 @media (max-width: 760px) {
   .grid3 { grid-template-columns: 1fr; }
   .row { align-items: stretch; flex-wrap: wrap; }

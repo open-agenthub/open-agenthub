@@ -138,6 +138,10 @@ public interface ISessionService
         => throw new NotSupportedException();
     Task<SessionInfo> PauseAndResumeRuntimeImageAsync(string owner, string id, CancellationToken ct = default)
         => throw new NotSupportedException();
+    /// <summary>Restarts a running interactive session (pause, resume) so its pod gets the stored
+    /// CPU/memory; a no-op when it already has them (docs/session-resources.md).</summary>
+    Task<SessionInfo> ApplyResourcesAsync(string owner, string id, CancellationToken ct = default)
+        => throw new NotSupportedException();
     Task<SessionInfo> ResumeSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Pauses a running session: uploads its state, removes the pod and marks it "Paused".
     /// A paused session is resumable via the normal resume path.</summary>

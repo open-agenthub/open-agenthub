@@ -61,6 +61,10 @@ public sealed class AgentHubMcpTools(
                      + "would leave the pod unschedulable.")] string? cpu = null,
         [Description("Memory request in Mi or Gi, e.g. \"1Gi\"; at least the instance minimum "
                      + "(256Mi by default). \"m\" means milli, so \"512m\" is half a byte.")] string? memory = null,
+        [Description("CPU limit, e.g. \"4\"; omitted = the instance default. At most the instance "
+                     + "ceiling and at least the CPU request.")] string? cpuLimit = null,
+        [Description("Memory limit in Mi or Gi, e.g. \"8Gi\"; omitted = the instance default. At most "
+                     + "the instance ceiling and at least the memory request; the agent is killed above it.")] string? memoryLimit = null,
         [Description("\"true\" or \"false\". Approve tool-permission requests automatically. "
                      + "Defaults to on for Autonomous and Scheduled sessions, where nobody is "
                      + "watching to answer a prompt; pass false to keep such a session gated.")]
@@ -126,6 +130,8 @@ public sealed class AgentHubMcpTools(
         // null through would blank them and produce a pod spec with no resource request.
         if (!string.IsNullOrWhiteSpace(cpu)) request = request with { Cpu = cpu.Trim() };
         if (!string.IsNullOrWhiteSpace(memory)) request = request with { Memory = memory.Trim() };
+        if (!string.IsNullOrWhiteSpace(cpuLimit)) request = request with { CpuLimit = cpuLimit.Trim() };
+        if (!string.IsNullOrWhiteSpace(memoryLimit)) request = request with { MemoryLimit = memoryLimit.Trim() };
 
         SessionInfo created;
         // The service's ArgumentException names the mistake (e.g. memory "10m"); unhandled, the

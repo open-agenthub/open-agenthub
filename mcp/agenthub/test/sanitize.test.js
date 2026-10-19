@@ -94,3 +94,8 @@ test('session_get and child responses keep the backend failure reason', async ()
   const failureReason = 'clone: Branch main does not exist. Edit the session repositories.';
   assert.equal(sanitizeSession({ id: 'child', phase: 'Failed', failureReason }).failureReason, failureReason);
 });
+
+test('sanitizeSession keeps the effective resources so a caller can read back the limits it set', () => {
+  const resources = { cpuRequest: '1', cpuLimit: '4', memoryRequest: '1Gi', memoryLimit: '6Gi' };
+  assert.deepEqual(sanitizeSession({ id: 's1', resources, cpuLimit: '4' }).resources, resources);
+});
