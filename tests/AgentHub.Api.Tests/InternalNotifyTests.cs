@@ -39,6 +39,19 @@ public class InternalNotifyTests
         Assert.Empty(world.Notifier.Events);
     }
 
+    [Fact]
+    public async Task NextPromptClearsTheOldQuestion_AndANewQuestionRemainsPending()
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        var controller = world.Controller();
+        await controller.Notify("s1", new InternalController.NotifyBody("Old question", "question"), default);
+        await controller.TurnStarted("s1", default);
+        await controller.Notify("s1", new InternalController.NotifyBody("New question", "question"), default);
+
+        Assert.Equal([("s1", true), ("s1", false), ("s1", true)], world.Store.QuestionPending);
+        Assert.Equal("New question", world.Notifier.Events.Last().Item3);
+    }
+
     [Theory]
     [InlineData(AgentKind.Codex)]
     [InlineData(AgentKind.Cursor)]

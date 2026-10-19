@@ -41,8 +41,14 @@ public class TerminalProxyActivityTests
                     await socket.SendAsync(Encoding.UTF8.GetBytes("activity snapshot"), WebSocketMessageType.Text, true, ctx.RequestAborted);
                 }
             }
-            catch (OperationCanceledException) { }
-            catch (WebSocketException) { }
+            catch (OperationCanceledException ex) when (agentTimeout.IsCancellationRequested)
+            {
+                app.Logger.LogDebug(ex, "Recording agent reached its test connection timeout.");
+            }
+            catch (WebSocketException ex) when (socket.State == WebSocketState.Aborted)
+            {
+                app.Logger.LogDebug(ex, "Recording agent connection was aborted during test cleanup.");
+            }
         }
         app.Map("/", Agent);
         app.Map("/shell", Agent);

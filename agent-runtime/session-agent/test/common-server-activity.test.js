@@ -81,5 +81,7 @@ test('a prompt clears the previous hub question before the native hook returns',
       return undefined;
     } });
   await turn(h, 'prompt');
+  await turn(h, 'permission');
+  await turn(h, 'stop');
   assert.deepEqual(callbacks, [{ url: 'https://example.com/internal/sessions/s1/turn-started', token: 'activity-token' }]);
 });
