@@ -38,13 +38,19 @@ plugin's own SDK client reads the session's messages for the text; the alternati
 OpenCode's storage from disk, would tie the relay to a layout that is not an interface.
 
 Two idles are not the user's turn ending and are skipped: a session with a `parentID` is a
-subagent the `task` tool started (its idle is a step inside the parent's turn), and a last
-message that ended in `MessageAbortedError` was interrupted from the keyboard.
+subagent the `task` tool started (its idle is a step inside the parent's turn), and a turn
+interrupted from the keyboard. The second is not what the error name suggests. On 1.18.35,
+Escape fires `session.idle` before the abort is stored, so the last answer then has neither
+`MessageAbortedError` nor `time.completed`. Checking for the error alone let every Escape post
+a "waiting for your reply" question (#198). An answer without a completion time and without an
+error therefore counts as stopped. A failed turn has an error of another name, and it is still
+relayed: the agent waits after it, and the owner should hear of it.
 
 Verified against the pinned 1.18.35 with a mock model and a mock hub: an interactive `run`
 posts one question with the final text; a turn that ran a `task` subagent posts one question,
-for the parent, not two; `autonomous` posts none. The TUI could not be driven here (it waits
-for terminal query answers); it runs the same server and plugin, but the TUI path is unverified.
+for the parent, not two; `autonomous` posts none. The TUI was later driven in a real PTY through
+`common/server.js` (#198): a completed turn posts its text, a turn stopped with Escape posts
+nothing, and a turn the model failed with HTTP 400 posts the generic question.
 
 ### Why Stop, and why one turn early
 
