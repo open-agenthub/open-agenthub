@@ -178,13 +178,13 @@ message is handed over:
   route and submits the answer with the plugin's own client as a new prompt of the session
   (`session.promptAsync`), which the TUI shows as an ordinary user message. Also nothing typed.
 - **While the agent is idle.** When the last turn event was a Stop and the session agent decides
-  the CLI really sits at its prompt, it types the message in as the priority path does. "Really"
+  the CLI really sits at its prompt, it pastes the message in (see *How an idle message is typed*). "Really"
   means all of: no `UserPromptSubmit` or `PermissionRequest` since the Stop; no key from a person
   since the last submitted prompt (a draft typed during the turn is still in the box, and the
   message would be appended to it and sent); no output for 1.5 s (Codex redraws its spinner many
   times a second while it works); and no CLI menu on the screen, checked with the Workspace's own
   detector (#112, #166) on the scrollback replayed into a headless xterm, the bytes a browser
-  attaching now would get. The person's keys that arrive during the 300 ms of typing are held and
+  attaching now would get. The person's keys that arrive while the message is typed are held and
   written one pause after the Enter. Written in the same instant, OpenCode read Enter and keys as
   one burst, and the keys ended up in the peer's message. Those keys are a draft in the box of the
   turn the message starts, and the prompt event of that turn arrives after them, so they are dated
@@ -217,6 +217,40 @@ and on 1.18.35 it does so before the abort is stored: the last answer then has n
 that completed without an error. A failed turn waits as well, since the person has something to
 look at first. The chat relay's abort filter in `turn-notify.mjs` had the
 same blind spot and uses the same reading since #198 (`docs/chat-relay.md`).
+
+**How an idle message is typed (#219).** The message is written as one bracketed paste. Enter is
+sent once the replayed screen shows it, either its last line or the CLI's placeholder for a long
+paste, with a 3 s cap. The CLI's own prompt hook then has to report the submit: Codex's
+`UserPromptSubmit`, OpenCode's `chat.message`. With no report after 5 s, Enter is pressed once
+more. After another 5 s the messages go back to wait for the next Stop. The text left in the box
+then counts as the person's draft, so nothing is typed onto it. Paste markers inside a message
+body are removed, because a body that carried the end marker would turn the rest of itself into
+keys.
+
+Before #219 the message was typed as plain keys, with Enter 300 ms later. Codex 0.160.0 left
+every idle message of 1 KB or more in its prompt, unsent. Codex classifies plain keys arriving
+this fast as a paste burst (`paste_burst.rs`). The burst's tail stays buffered until a UI tick
+that does not come, and each Enter after that is appended to the burst as a newline. The screen
+showed the text minus its last line, and a second Enter one second later was a newline too.
+OpenCode 1.18.35 reads plain keys one at a time: 4 KB took about 15 s to arrive and 8 KB was
+still not submitted after a minute. As one paste, 8 KB was on the screen of both CLIs within
+300 ms. The context-clear handover already used a paste.
+
+Rejected:
+
+- **A longer, size-dependent pause before Enter.** It does not help Codex: the tail waits for a
+  tick, not for time, and an Enter at any point joins the burst.
+- **Plain keys in chunks with pauses between them.** 512 bytes every 30 ms got through Codex in
+  the rig, but only because of the 8 ms and 60 ms timings inside Codex's burst detector, and it
+  would keep OpenCode's per-key speed.
+- **The screen check alone as proof of the submit.** Codex shows a paste over 1,000 characters
+  as `[Pasted Content N chars]`, and the submitted text then stays visible in the history above
+  the box. The screen can tell that the paste has arrived, but not that Enter took it. The
+  prompt hook reports exactly that.
+- **Clearing text that was not submitted (Ctrl+C).** Ctrl+C interrupts a turn that did start
+  after all, and it quits an OpenCode whose box is already empty. The price of leaving the text
+  is that a person who submits it sends the message once more, at the next Stop. A message that
+  was never sent and that nobody can see would be worse.
 
 **The menu check does not recognise OpenCode's dialogs.** They are lists without numbers (model
 picker, command palette) that the Workspace's detector does not treat as menus. On OpenCode a
