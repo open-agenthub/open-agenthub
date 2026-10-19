@@ -79,3 +79,13 @@ test('the policy plugin wires the relay in and the driver declares turn hooks', 
   assert.match(plugin, /nextTurn\.onEvent\(event\)/);
   assert.equal(require('../../opencode/driver.js').turnHooks, true);
 });
+
+test('the plugin reports each turn event once and lets the session agent deliver', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const plugin = fs.readFileSync(path.join(__dirname, '..', '..', 'opencode', 'policy-plugin.mjs'), 'utf8');
+  // A second reporter would make the session agent take messages for a stop whose answer nobody
+  // submits; next-turn.mjs is the only one.
+  assert.doesNotMatch(plugin, /fleet-turn-hook/);
+  assert.notEqual(require('../../opencode/driver.js').fleetNextTurn, false);
+});
