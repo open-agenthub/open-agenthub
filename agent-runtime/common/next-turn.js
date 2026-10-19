@@ -47,8 +47,8 @@ const SHOWN_TIMEOUT_MS = 3_000;
 const PASTE_PLACEHOLDER = /\[Pasted[^\]\n]{0,40}\]/;
 // The CLI's own prompt hook confirms the Enter submitted; the hook is a node process the CLI
 // starts, so this allows for a slow start (measured: 0.5 s Codex, 1.4 s OpenCode). Without it the
-// Enter is pressed once more, then the message counts as not handed over. Two rounds of this, an
-// Escape and the paste stay under the 15 s the hub waits for a priority message's answer.
+// Enter is pressed once more, then the message counts as not handed over. Two rounds of this, the
+// interrupt keys and the paste stay under the 15 s the hub waits for a priority message's answer.
 const SUBMIT_CONFIRM_MS = 4_000;
 const POLL_MS = 100;
 
@@ -91,6 +91,7 @@ function shownTail(text) {
 
 function createNextTurnDelivery(options) {
   const { now, fetchImpl, callback, token, log } = options;
+  const interruptKeys = options.interruptKeys || [ESCAPE];
   const wait = options.wait || (ms => new Promise(resolve => setTimeout(resolve, ms)));
   const Terminal = options.Terminal || (() => require('@xterm/headless').Terminal);
 
@@ -207,8 +208,10 @@ function createNextTurnDelivery(options) {
   async function typeAndSubmit(term, text, scrollback, screenSize, { interrupt = false, confirm = true } = {}) {
     const render = async () => (await renderScreen(scrollback(), screenSize, Terminal())).join('\n');
     if (interrupt) {
-      term.write(ESCAPE);
-      await wait(INTERRUPT_PAUSE_MS);
+      for (const key of interruptKeys) {
+        term.write(key);
+        await wait(INTERRUPT_PAUSE_MS);
+      }
     }
     const before = await render();
     // A body that carried the end marker would end the paste early and turn the rest into keys.

@@ -67,6 +67,12 @@ function validateDriver(driver) {
   if (driver.turnHooks !== undefined && typeof driver.turnHooks !== 'boolean') {
     throw new Error('Agent driver turnHooks must be a boolean when present');
   }
+  // Optional: the keys that stop the CLI's running turn, written one pause apart, when one Escape
+  // is not enough (docs/priority-messages.md, #224). An interrupting message sends them first.
+  if (driver.interruptKeys !== undefined && (!Array.isArray(driver.interruptKeys) || !driver.interruptKeys.length ||
+      driver.interruptKeys.some(key => typeof key !== 'string' || !key))) {
+    throw new Error('Agent driver interruptKeys must be a non-empty array of strings');
+  }
   // Optional: verified native interruption input, for a CLI without an interruption hook.
   if (driver.isTurnInterrupt !== undefined && typeof driver.isTurnInterrupt !== 'function') {
     throw new Error('Agent driver isTurnInterrupt must be a function');

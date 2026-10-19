@@ -140,6 +140,18 @@ test('common transport accepts only safe single relative archive names', () => {
   }
 });
 
+test('driver interruptKeys, when present, is a non-empty list of keys', () => {
+  const valid = {
+    name: 'Example', stateDir: '.example', authFilename: 'auth.json',
+    attachmentCapabilities: { nativeImages: false, localImagePaths: true, mcpImages: true },
+    buildCommand() {}, isResumeCommand() {}, isMissingResume() {}, prepare() {}
+  };
+  assert.doesNotThrow(() => validateDriver({ ...valid, interruptKeys: ['\x1b', '\x1b'] }));
+  for (const interruptKeys of ['\x1b', [], [''], ['\x1b', 27]]) {
+    assert.throws(() => validateDriver({ ...valid, interruptKeys }), /interruptKeys must be a non-empty array of strings/);
+  }
+});
+
 test('common transport accepts optional safe stateExcludes paths and globs', () => {
   const valid = {
     name: 'Example', stateDir: '.openclaw', authFilename: 'auth-profiles.json',
