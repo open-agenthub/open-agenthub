@@ -309,7 +309,7 @@ onBeforeUnmount(() => {
       </div>
     </div>
     <button v-if="!following" type="button" class="jump-latest" @click="scrollToEnd({ force: true })">↓ Jump to latest</button>
-    <div v-if="!readonly" class="composer" @dragover.prevent @drop.prevent="dropFiles">
+    <div v-if="canSend" class="composer" @dragover.prevent @drop.prevent="dropFiles">
       <ChatAttachments v-if="attachmentItems.length" :items="attachmentItems"
         :retry="attachmentQueue.retry" :remove="attachmentQueue.remove" />
       <div class="composer-row">
@@ -324,7 +324,6 @@ onBeforeUnmount(() => {
         <button class="primary" data-chat-send :disabled="!canSubmit" @click="submit">Send</button>
       </div>
       <div class="composer-footer"><span>{{ session.agent || 'Agent' }} · {{ connectionStatus }}</span><span>Enter to send · Shift+Enter for newline</span></div>
-      <p v-if="!isLive" class="composer-footer">The session is stopped. Resume it to send a message; your draft is kept.</p>
       <p v-if="deliveryError" class="delivery-error" role="alert">{{ deliveryError }}</p>
     </div>
   </div>

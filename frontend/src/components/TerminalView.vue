@@ -12,7 +12,7 @@ import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
 import { CANCEL_KEYS, keysForOption } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
-import { canPause, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
+import { canPause, isSessionStopped, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { canConvert, convertedLabel } from '../lib/conversion.js'
 import { api, getSharedConversation } from '../api.js'
@@ -56,6 +56,7 @@ async function pauseAndResumeRuntime() {
 const emit = defineEmits(['runtime-updated', 'back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
+const isStopped = computed(() => isSessionStopped(props.session))
 // Reopens a browser pane the person closed; it stays offered while the pane is open because on a
 // phone it is also the quickest way back to the browser from the agent.
 const browserRunning = computed(() => (props.session?.browser?.phase || 'Stopped') !== 'Stopped')
@@ -519,7 +520,6 @@ function interruptWorkspaceAgent() {
       </div>
     </div>
     <p v-if="runtimeUpdateError" role="alert">{{ runtimeUpdateError }}</p>
-    <SessionStoppedNotice :session="session" :shared-token="sharedToken" @resume="$emit('resume', $event)" />
     <div v-if="runtimeUpdateConfirmation && capabilities.canManage && !sharedToken" role="alertdialog" aria-label="Confirm runtime update" class="perm">
       <div class="perm-text">
         <strong>Pause and resume on the current runtime image?</strong>
@@ -530,7 +530,6 @@ function interruptWorkspaceAgent() {
         <button class="bar-btn" :disabled="runtimeUpdating" @click="runtimeUpdateConfirmation = false">Cancel</button>
       </div>
     </div>
-    <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
     <div v-if="pendingAccount" class="perm acct-confirm" data-account-confirm>
       <span class="ask-dot"></span>
       <div class="perm-text">
@@ -666,10 +665,14 @@ function interruptWorkspaceAgent() {
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
-        <WorkspaceComposer v-if="workspaceOpened && !isChat && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
-          ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent" :disabled-hint="!isLive ? 'The session is stopped. Resume it to send a message; your draft is kept.' : ''"
+        <WorkspaceComposer v-if="workspaceOpened && !isChat && !isStopped && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
+          ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
           :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
           :attach="sharedToken ? undefined : attachWorkspaceFiles" />
+        <div v-if="isStopped" class="session-input-state" data-session-input-state>
+          <SessionStoppedNotice :session="session" :shared-token="sharedToken" @resume="$emit('resume', $event)" />
+          <ConvertSessionCard v-if="showConvert" :session="session" @converted="onConverted" />
+        </div>
       </div>
     </SessionWorkspace>
   </div>
@@ -749,6 +752,7 @@ function interruptWorkspaceAgent() {
 .msg-expand { margin-left: auto; padding: 0; font-size: 11px; color: var(--accent); }
 .messages-empty { padding: 14px 20px; color: var(--muted); font-size: 12px; }
 .msg-body { color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; }
+.session-input-state { flex: none; min-width: 0; }
 .terminal-stack { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .terminal-host { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .terminal-host.terminal-drawer { flex: 0 0 32%; min-height: 140px; border-block: 1px solid var(--border); }

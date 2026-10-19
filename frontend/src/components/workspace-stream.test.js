@@ -63,7 +63,7 @@ describe('WorkspaceStream', () => {
     expect(wrapper.find('[data-chat-user]').text()).toContain('fix the bug')
     expect(wrapper.find('[data-chat-assistant]').html()).toContain('<code>app.js</code>')
     expect(wrapper.text()).toContain('Session ended (code 0).')
-    expect(wrapper.get('[data-chat-input]').element.disabled).toBe(true)
+    expect(wrapper.find('[data-chat-input]').exists()).toBe(false)
     expect(mocks.sockets).toHaveLength(0)
   })
 
@@ -181,14 +181,14 @@ describe('WorkspaceStream', () => {
     expect(el.scrollTop).toBe(contentHeight)
   })
 
-  it('keeps a stopped session draft visible with disabled input and a resume hint', async () => {
+  it('preserves a stopped draft while the parent replaces input with its notice', async () => {
     chatDrafts.set('stopped-draft', 'Unsent task')
     const wrapper = mount(WorkspaceStream, { props: { session: { id: 'stopped-draft', phase: 'Paused' } } })
     await flushPromises()
-    expect(wrapper.get('[data-chat-input]').element.disabled).toBe(true)
+    expect(wrapper.find('[data-chat-input]').exists()).toBe(false)
+    await wrapper.setProps({ session: { id: 'stopped-draft', phase: 'Running' } })
+    await flushPromises()
     expect(wrapper.get('[data-chat-input]').element.value).toBe('Unsent task')
-    expect(wrapper.get('[data-chat-send]').element.disabled).toBe(true)
-    expect(wrapper.text()).toContain('Resume it to send a message; your draft is kept.')
     wrapper.unmount()
   })
 
