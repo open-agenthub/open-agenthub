@@ -11,7 +11,7 @@ import WorkLog from './WorkLog.vue'
 import MessageActions from './MessageActions.vue'
 
 const props = defineProps({ session: Object, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null } })
-const emit = defineEmits(['status'])
+const emit = defineEmits(['status', 'activity'])
 
 const scroller = ref(null)
 const text = ref(sessionDrafts.get(props.session.id) || '')
@@ -31,6 +31,7 @@ const version = ref(0)
 const items = computed(() => { void version.value; return log.items.slice() })
 const drafts = computed(() => { void version.value; return log.drafts.filter(d => d.text) })
 const busy = computed(() => { void version.value; return log.busy })
+watch(busy, value => emit('activity', { state: value ? 'working' : 'idle', source: 'stream' }))
 
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 const canSend = computed(() => isLive.value && !props.readonly)
@@ -304,7 +305,7 @@ onBeforeUnmount(() => {
             <div v-else class="md" v-html="renderMarkdown(draft.text)"></div>
           </template>
         </div>
-        <div v-else-if="busy" class="typing" data-chat-busy><span></span><span></span><span></span></div>
+
       </div>
     </div>
     <button v-if="!following" type="button" class="jump-latest" @click="scrollToEnd({ force: true })">↓ Jump to latest</button>

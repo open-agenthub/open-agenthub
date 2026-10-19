@@ -53,7 +53,7 @@ describe('shared terminal capabilities', () => {
     terminalMocks.observers[0].callback()
 
     expect(terminalMocks.terminals[0].input).toBeUndefined()
-    expect(terminalMocks.sockets[0].sent).toEqual([])
+    expect(terminalMocks.sockets[0].sent).toEqual([{ type: 'subscribe', channel: 'activity' }])
   })
 
   it('converts bare line feeds only when replaying a saved transcript', async () => {

@@ -58,7 +58,9 @@ test('subagents, stopped or failed turns, other events and autonomous runs repor
   ];
   for (const [w, env, event] of cases) {
     await createNextTurnRelay({ client: w.client, env, reportImpl: w.reportImpl }).onEvent(event);
-    assert.deepEqual(w.reports, []);
+    const topLevelIdle = event.type === 'session.idle' && env.AGENTHUB_MODE === 'interactive' &&
+      !((await w.client.session.get()).data.parentID);
+    assert.deepEqual(w.reports, topLevelIdle ? ['idle'] : []);
     assert.deepEqual(w.prompts, []);
   }
 });

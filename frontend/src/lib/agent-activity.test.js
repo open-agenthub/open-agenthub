@@ -1,0 +1,8 @@
+import { describe, expect, it } from 'vitest'
+import { parseActivityFrame } from './agent-activity.js'
+describe('activity control frame', () => {
+  it('accepts only a complete known control frame and leaves PTY content alone', () => {
+    expect(parseActivityFrame(JSON.stringify({ type: 'agenthub', subtype: 'activity', state: 'working', source: 'hooks' }))).toEqual({ state: 'working', source: 'hooks' })
+    for (const data of ['ordinary terminal text', '{"type":"tool"}', '{"type":"agenthub","subtype":"activity","state":"bogus"}', new Uint8Array([1])]) expect(parseActivityFrame(data)).toBeNull()
+  })
+})

@@ -1,4 +1,5 @@
 <script setup>
+import { parseActivityFrame } from '../lib/agent-activity.js'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -9,7 +10,7 @@ import { terminalAttachmentPaths, terminalSafeFile, uploadAttachmentFiles } from
 import { detectMenu, sameMenu } from '../lib/cli-menu.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, showComposer: { type: Boolean, default: true } })
-const emit = defineEmits(['status', 'menu'])
+const emit = defineEmits(['status', 'menu', 'activity'])
 const host = ref(null)
 const mobileInput = ref('')
 const pasteNotice = ref('')
@@ -243,16 +244,21 @@ async function connect() {
   socket.onopen = () => {
     if (disposed || ws !== socket) return
     emit('status', 'connected')
+    if (props.kind === 'agent') socket.send(JSON.stringify({ type: 'subscribe', channel: 'activity' }))
     resize(true)
   }
   socket.onmessage = event => {
-    if (!disposed && ws === socket && term) term.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data), scheduleMenuCheck)
+    if (disposed || ws !== socket) return
+    const activity = props.kind === 'agent' && parseActivityFrame(event.data)
+    if (activity) { emit('activity', activity); return }
+    if (term) term.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data), scheduleMenuCheck)
   }
   socket.onclose = () => {
     if (disposed || ws !== socket) return
     cancelSubmission?.()
     ws = undefined
     reportMenu(null)
+    emit('activity', { state: 'unknown', source: 'hooks' })
     emit('status', 'disconnected')
     if (isLive.value) reconnectTimer = setTimeout(connect, 2000)
   }
