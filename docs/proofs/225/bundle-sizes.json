@@ -1,0 +1,30 @@
+{
+  "before": {
+    "initialEntry": {
+      "bytes": 783944,
+      "gzipBytes": 216207
+    },
+    "allJavaScript": {
+      "bytes": 4348222,
+      "gzipBytes": 1224972
+    },
+    "chunks": 118
+  },
+  "after": {
+    "initialEntry": {
+      "bytes": 785281,
+      "gzipBytes": 216671
+    },
+    "allJavaScript": {
+      "bytes": 6070677,
+      "gzipBytes": 1744695
+    },
+    "chunks": 118
+  },
+  "delta": {
+    "initialBytes": 1337,
+    "initialGzipBytes": 464,
+    "allBytes": 1722455,
+    "allGzipBytes": 519723
+  }
+}
