@@ -124,5 +124,4 @@ await page.close()
 
 check('no page errors', errors.length === 0, errors.join(' | '))
 await browser.close()
-fs.writeFileSync(`${out}/results.json`, JSON.stringify(results, null, 2))
 process.exit(results.every(r => r.ok) ? 0 : 1)
