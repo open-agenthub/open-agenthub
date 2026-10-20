@@ -1,0 +1,46 @@
+{
+  "sessionAgent": 747,
+  "mcp": 51,
+  "frontend": {
+    "tests": 854,
+    "files": 95
+  },
+  "backend": {
+    "passed": 2281,
+    "failed": 0,
+    "skipped": 0,
+    "postgres": 15
+  },
+  "backendBuild": {
+    "warnings": 0,
+    "errors": 0
+  },
+  "frontendBuild": "passed",
+  "nugetAudit": "no vulnerable packages",
+  "npmAudits": {
+    "session-agent": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "agenthub": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "frontend": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    }
+  }
+}
