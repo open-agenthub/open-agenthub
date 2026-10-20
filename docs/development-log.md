@@ -9,6 +9,34 @@ when the fake in the test is more forgiving than production.
 
 ---
 
+## 2026-10-20 — A required field made agents overwrite their own skills (#175)
+
+`upload_skill` listed `content` as required. The hub needs it, because it cannot read the
+pod's disk, and the in-pod proxy forwarded that schema unchanged. Yet with `path` the proxy fills
+`content` from the directory's SKILL.md, and an explicit `content` always won over that file.
+Agents that wanted the file obeyed the schema with a placeholder: "see path", "(from SKILL.md in
+path)". The placeholder became the skill. It happened at least twice in one day, and one skill
+lost its body in every version and had to be rebuilt from its scripts. Nothing failed; the upload
+answered with a new version number.
+
+The proxy now advertises `content` as optional and says in its description to leave it out when
+`path` holds a SKILL.md. With such a path, a `content` that differs from the file must look like a
+SKILL.md, meaning it starts with `---` frontmatter, or the call is refused and nothing is saved.
+A complete SKILL.md passed on purpose still replaces the file, and the result now says the file
+was not uploaded.
+
+Rejected:
+
+- **Making the hub's `content` optional.** The hub has no path to read from; there it is genuinely
+  required.
+- **Always preferring the file.** An agent that edits the body in the call and keeps the scripts
+  on disk would silently lose its edit, the same failure the other way round.
+- **A length threshold instead of frontmatter.** A placeholder can be long ("the full text is in
+  the SKILL.md next to these scripts, please use that") and a real SKILL.md can be short. Every
+  SKILL.md the hub recommends starts with frontmatter; no placeholder seen so far did.
+
+---
+
 ## 2026-10-11 — The state archive compressed 33 MB every 30 seconds, idle or not
 
 Every persistence tick ran `tar czf` over the agent's whole state directory and uploaded it:

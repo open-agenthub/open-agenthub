@@ -29,7 +29,9 @@ function fakeHub(options = {}) {
           id: message.id,
           result: {
             tools: [
-              { name: 'upload_skill', description: 'Save a skill.', inputSchema: { properties: { name: {} } } },
+              { name: 'upload_skill', description: 'Save a skill.', inputSchema: {
+                properties: { name: {}, content: { type: 'string', description: 'The full SKILL.md markdown content.' } },
+                required: ['name', 'content'] } },
               { name: 'get_skill', description: 'Read a skill.', inputSchema: { properties: { name: {} } } }
             ]
           }
@@ -69,6 +71,10 @@ test('tools/list gains path and out_dir without losing the hub wording', async (
   assert.match(get.inputSchema.properties.out_dir.description, /never passes through your context/);
   // The hub's own arguments survive.
   assert.ok(upload.inputSchema.properties.name);
+  // #175: content can come from path, so it is not required here, and its text says so. Listed as
+  // required, it made agents send a placeholder that replaced the real SKILL.md.
+  assert.deepEqual(upload.inputSchema.required, ['name']);
+  assert.match(upload.inputSchema.properties.content.description, /^The full SKILL\.md markdown content\. Leave it out when path holds a SKILL\.md/);
 });
 
 test('initialize keeps the hub instructions and adds the local capability', async () => {
@@ -104,19 +110,70 @@ test('upload_skill(path) sends the files inline and never asks the hub for the p
   assert.match(text, /none of it passed through your context/);
 });
 
-test('upload_skill(path) with an explicit content keeps the argument', async () => {
+test('upload_skill(path) with a complete SKILL.md as content keeps it and says the file was not used', async () => {
   const { createProxy } = await import('../../skills/server.mjs');
   const dir = workdir();
-  write(path.join(dir, 'SKILL.md'), '# on disk');
+  write(path.join(dir, 'SKILL.md'), '---\nname: deploy\n---\n# on disk');
   write(path.join(dir, 'a.md'), 'A');
+  const hub = fakeHub();
+  const content = '---\nname: deploy\ndescription: x\n---\n# from the call';
+
+  const response = await createProxy({ client: hub }).handle({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'upload_skill', arguments: { name: 'deploy', path: dir, content } }
+  });
+
+  assert.equal(hub.calls[0].params.arguments.content, content);
+  assert.match(response.result.content[0].text, /The content argument replaced the SKILL\.md at .*; that file was not uploaded\./);
+});
+
+// #175: "see path" and the like became the body of a skill whose SKILL.md sat in the directory.
+for (const placeholder of ['see path', '(from SKILL.md in path)', '# Deploy\nShort note without frontmatter.']) {
+  test(`upload_skill(path) refuses ${JSON.stringify(placeholder.slice(0, 20))} as content when the path has a SKILL.md`, async () => {
+    const { createProxy } = await import('../../skills/server.mjs');
+    const dir = workdir();
+    write(path.join(dir, 'SKILL.md'), '---\nname: deploy\n---\n# The real runbook\n' + 'step\n'.repeat(50));
+    const hub = fakeHub();
+
+    const response = await createProxy({ client: hub }).handle({
+      jsonrpc: '2.0', id: 1, method: 'tools/call',
+      params: { name: 'upload_skill', arguments: { name: 'deploy', path: dir, content: placeholder } }
+    });
+
+    assert.equal(response.result.isError, true);
+    assert.match(response.result.content[0].text, /is not a SKILL\.md \(it has no --- frontmatter\).*Leave content out to upload that file.*Nothing was saved\./s);
+    assert.equal(hub.calls.length, 0, 'the placeholder must not reach the hub');
+  });
+}
+
+test('upload_skill(path) accepts content identical to the SKILL.md, frontmatter or not', async () => {
+  const { createProxy } = await import('../../skills/server.mjs');
+  const dir = workdir();
+  write(path.join(dir, 'SKILL.md'), '# Deploy runbook');
+  const hub = fakeHub();
+
+  const response = await createProxy({ client: hub }).handle({
+    jsonrpc: '2.0', id: 1, method: 'tools/call',
+    params: { name: 'upload_skill', arguments: { name: 'deploy', path: dir, content: '# Deploy runbook' } }
+  });
+
+  assert.equal(response.result.isError, undefined);
+  assert.equal(hub.calls[0].params.arguments.content, '# Deploy runbook');
+  assert.doesNotMatch(response.result.content[0].text, /replaced/);
+});
+
+test('upload_skill(path) to a lone script still takes any content, there being no SKILL.md to lose', async () => {
+  const { createProxy } = await import('../../skills/server.mjs');
+  const dir = workdir();
+  write(path.join(dir, 'helper.sh'), 'echo x');
   const hub = fakeHub();
 
   await createProxy({ client: hub }).handle({
     jsonrpc: '2.0', id: 1, method: 'tools/call',
-    params: { name: 'upload_skill', arguments: { name: 'deploy', path: dir, content: '# from the call' } }
+    params: { name: 'upload_skill', arguments: { name: 'deploy', path: path.join(dir, 'helper.sh'), content: 'Run helper.sh.' } }
   });
 
-  assert.equal(hub.calls[0].params.arguments.content, '# from the call');
+  assert.equal(hub.calls[0].params.arguments.content, 'Run helper.sh.');
 });
 
 test('upload_skill(path) for a lone script without content explains what is missing', async () => {
