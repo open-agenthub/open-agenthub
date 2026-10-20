@@ -22,7 +22,14 @@ const PATH_ARGUMENT_DOC =
   + 'the files next to it), a single helper script, or a .tar.gz. The content is read here in '
   + 'the session and sent straight to the hub, so it never passes through your context — a '
   + 'large script is no reason to skip the upload. With a directory or archive its SKILL.md is '
-  + 'used unless you also pass content.';
+  + 'the skill body: leave content out then.';
+
+// What content says when the proxy can fill it from the path. The hub needs content, since it
+// cannot read this filesystem, and lists it as required; agents obeyed that with a placeholder
+// ("see path") that then replaced the real SKILL.md, in every version of one skill (#175).
+const CONTENT_WITH_PATH_DOC =
+  ' Leave it out when path holds a SKILL.md; that file is used then. Passed together with such a '
+  + 'path, it must be the complete SKILL.md, frontmatter included, and replaces the file.';
 
 const OUT_DIR_ARGUMENT_DOC =
   'Directory to write the skill into (SKILL.md plus every extra file). The files are written '
@@ -38,6 +45,15 @@ export function augmentTools(toolsResult) {
     if (!properties) continue;
     if (tool.name === 'upload_skill') {
       properties.path = { type: 'string', description: PATH_ARGUMENT_DOC };
+      if (Array.isArray(tool.inputSchema.required)) {
+        tool.inputSchema.required = tool.inputSchema.required.filter(name => name !== 'content');
+      }
+      if (properties.content) {
+        properties.content = {
+          ...properties.content,
+          description: `${properties.content.description ?? ''}${CONTENT_WITH_PATH_DOC}`.trim()
+        };
+      }
       tool.description = `${tool.description} Prefer 'path' over 'files' whenever the files `
         + 'are already on disk.';
     }
@@ -55,6 +71,11 @@ export function augmentInstructions(initializeResult) {
     + 'files never need to pass through your context: upload_skill takes a local path (directory, '
     + 'script or .tar.gz) and get_skill takes out_dir to write the skill to disk.';
   return initializeResult;
+}
+
+/** A SKILL.md starts with its frontmatter; a placeholder such as "see path" does not. */
+function looksLikeSkillMd(text) {
+  return /^\uFEFF?\s*---\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/.test(text);
 }
 
 function errorResult(text) {
@@ -86,6 +107,18 @@ export function createProxy(options = {}) {
         `No SKILL.md found at ${collected.source} and no content argument given. Pass content, or `
         + 'put a SKILL.md next to the files.');
     }
+    let replaced = '';
+    if (args.content && collected.content && args.content !== collected.content) {
+      if (!looksLikeSkillMd(args.content)) {
+        const preview = args.content.length > 60 ? `${args.content.slice(0, 60)}…` : args.content;
+        return errorResult(
+          `content "${preview}" is not a SKILL.md (it has no --- frontmatter), and ${collected.source} `
+          + `has one (${formatSize(collected.content.length)}). Leave content out to upload that file, or `
+          + 'pass the complete SKILL.md to replace it. Nothing was saved.');
+      }
+      replaced = `\nThe content argument replaced the SKILL.md at ${collected.source}; that file was not `
+        + 'uploaded.';
+    }
     if (!args.content) args.content = collected.content;
     // An explicit empty files array is how the agent clears a skill's files; a path upload
     // always replaces the set with what is on disk, which may legitimately be nothing.
@@ -106,7 +139,7 @@ export function createProxy(options = {}) {
         content: [{
           type: 'text',
           text: `${existing}\nRead from ${collected.source} (${collected.kind}): ${read} — none of it `
-            + `passed through your context.${describeSkipped(collected.skipped)}`
+            + `passed through your context.${describeSkipped(collected.skipped)}${replaced}`
         }]
       }
     };
