@@ -13,11 +13,41 @@ import BrowserPane from './BrowserPane.vue'
 import FilesPane from './FilesPane.vue'
 import WorkspaceDiffPane from './workspace/WorkspaceDiffPane.vue'
 import SessionStartupFailure from './SessionStartupFailure.vue'
+import SecretGrantsPicker from './SecretGrantsPicker.vue'
 
 const props = defineProps({
   session: { type: Object, required: true },
   canWrite: { type: Boolean, default: false },
+  canManage: { type: Boolean, default: false },
   sharedToken: { type: String, default: null }
+})
+const emit = defineEmits(['updated'])
+
+// The owner changes grants here as in the edit dialog, and each choice is saved at once: a grant
+// reaches the running pod (files live), so a separate Save step would only be a second chance to
+// forget it. Scheduled sessions refuse grant changes, so they stay read-only.
+const storedSecrets = ref([])
+const grants = ref([])
+const grantError = ref('')
+const grantsEditable = computed(() => props.canManage && !props.sharedToken)
+watch(() => JSON.stringify(props.session.secretGrants || []), () => {
+  grants.value = (props.session.secretGrants || []).map(g => ({ ...g }))
+}, { immediate: true })
+async function saveGrants(next) {
+  const previous = grants.value
+  grants.value = next
+  grantError.value = ''
+  try {
+    await api.updateSession(props.session.id, { secretGrants: next })
+    emit('updated')
+  } catch (e) {
+    grants.value = previous
+    grantError.value = String(e.message || e)
+  }
+}
+onMounted(async () => {
+  if (!grantsEditable.value) return
+  try { storedSecrets.value = (await api.listSecrets()) || [] } catch { /* older backend: no secrets */ }
 })
 const splitPercent = ref(50)
 const mobilePane = ref((props.session?.browser?.phase || 'Stopped') !== 'Stopped' ? 'browser' : 'agent')
@@ -235,9 +265,15 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <details v-if="!sharedToken && session.effectiveSecrets?.length" class="session-secret-access">
-    <summary>Secrets ({{ session.effectiveSecrets.length }})</summary>
-    <div v-for="secret in session.effectiveSecrets" :key="secret.id">{{ secret.name }} · {{ secret.delivery }} · {{ secret.provenance }} · {{ secret.inheritToChildren ? 'inherits to children' : 'this session only' }}</div>
+  <details v-if="!sharedToken && (session.effectiveSecrets?.length || (grantsEditable && storedSecrets.length))" class="session-secret-access" data-session-secrets>
+    <summary>Secrets ({{ session.effectiveSecrets?.length || 0 }})</summary>
+    <template v-if="grantsEditable">
+      <SecretGrantsPicker :model-value="grants" :options="storedSecrets" :effective="session.effectiveSecrets || []"
+        :disabled="session.mode === 'Scheduled'" @update:model-value="saveGrants" />
+      <small v-if="session.mode === 'Scheduled'">A scheduled session's grants are fixed; delete and recreate it to change them.</small>
+      <small v-if="grantError" class="grant-error" role="alert" data-grant-error>{{ grantError }}</small>
+    </template>
+    <div v-for="secret in session.effectiveSecrets" v-else :key="secret.id">{{ secret.name }} · {{ secret.delivery }} · {{ secret.provenance }} · {{ secret.inheritToChildren ? 'inherits to children' : 'this session only' }}</div>
   </details>
   <SessionStartupFailure v-if="session?.failureReason" :reason="session.failureReason" />
   <div v-if="companionVisible" class="workspace-shell">
@@ -285,6 +321,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .session-secret-access { padding: 6px 12px; color: var(--muted-3); font-size: 12px; border-bottom: 1px solid var(--border-2); }
 .session-secret-access summary { cursor: pointer; }
+.session-secret-access small { display: block; }
+.session-secret-access .grant-error { color: var(--danger); }
 .workspace-shell, .terminal-only { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .session-split { flex: 1; display: flex; min-width: 0; min-height: 0; }
 .companion-side { flex: 0 0 var(--browser-width); display: grid; grid-template-rows: 34px minmax(0, 1fr); min-width: 0; min-height: 0; background: #111721; }

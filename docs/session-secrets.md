@@ -308,6 +308,25 @@ Rejected alternatives:
   agents, and would defeat revocation for this one session.
 - Treating grants as explicit selection entries would either violate project validation or lose
   the grant when its project changes. Separate grant metadata preserves both rules.
+
+### One control per grant (#233)
+
+Each stored secret has one three-way switch — *Not allowed* · *This session* · *Also child
+sessions* — in the new, edit and duplicate dialogs and in the session view's Secrets panel. It is a
+`radiogroup` (arrow keys, Home/End, one tab stop per secret) in the look of the session bar's
+Workspace | Terminal | Shell switch. *Not allowed* is the revoke; a new grant starts as *This
+session*, so inheritance still has to be chosen. The session view saves each choice at once with a
+PATCH that carries only `secretGrants`, puts the previous choice back when the hub refuses it, and
+stays read-only for a scheduled session and for anyone who cannot manage the session. A secret the
+project selects but nobody granted is labelled `project`, so *Not allowed* on its row is not read
+as "the agent cannot see it".
+
+- *Rejected: the grant checkbox plus an "Inherit to children" checkbox.* The second box appeared
+  only once the first was ticked, so the row moved under the pointer, and the state a child would
+  get was split across two controls. Three named states are the only valid combinations.
+- *Rejected: editing grants in the session view behind a Save button.* A grant reaches the running
+  pod's files at once; a pending, unsaved choice there would be one more way to believe a secret
+  was revoked when it was not.
 - Inheritance on by default would silently expand access, including for old request grants.
 - Letting child agents submit their own grants or treating token grants as unscoped metadata
   would make the grant list an escape from existing credential limits.

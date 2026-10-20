@@ -212,7 +212,7 @@ async function save() {
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
         <SecretPicker v-if="!scheduled" v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
           :project-has-none="!!selectedProject && storedSecrets.length > 0" />
-        <SecretGrantsPicker v-if="!scheduled" v-model="selectedGrants" :options="storedSecrets" />
+        <SecretGrantsPicker v-if="!scheduled" v-model="selectedGrants" :options="storedSecrets" :effective="session.effectiveSecrets || []" />
         <div class="field last toggle-field">
           <label>Auto approve <span class="dim">— run tools without asking</span></label>
           <button type="button" class="toggle" role="switch" data-auto-approve

@@ -642,7 +642,7 @@ function interruptWorkspaceAgent() {
       </div>
     </div>
     <SecretRequestBanner v-if="capabilities.canManage && !sharedToken" :session-id="session.id" />
-    <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :shared-token="sharedToken">
+    <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :can-manage="capabilities.canManage" :shared-token="sharedToken" @updated="emit('runtime-updated')">
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
