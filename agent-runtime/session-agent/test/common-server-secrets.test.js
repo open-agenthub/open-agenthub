@@ -5,6 +5,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const { waitForExport } = require('./sign-in-test-wait');
 const { createHarness, tick } = require('./common-server-harness');
 
 const transcript = '/home/agent/.test-agent/t.jsonl';
@@ -36,6 +37,8 @@ test('common transport masks secret values in the scrollback and transcript it u
   harness.intervals[0].callback();
   await tick();
 
+  // The export observer must finish rendering both terminal chunks before persistence.
+  await waitForExport(() => harness.writes.some(w => w.file === '/tmp/scrollback.log'));
   const masked = '[secret:API_TOKEN]\r\n[secret:DEPLOY_TOKEN]\r\n';
   assert.equal(harness.writes.find(w => w.file === '/tmp/scrollback.log').data, masked);
   const backup = harness.requests.find(r => r.url.endsWith('/scrollback') && r.options.method === 'PUT');
@@ -62,6 +65,7 @@ test('common transport uploads the transcript file as before when there is nothi
   harness.intervals[0].callback();
   await tick();
 
+  await waitForExport(() => harness.commands.some(c => c.file === 'curl' && c.args.at(-1) === 'https://storage.invalid/transcript'));
   const curl = harness.commands.find(c => c.file === 'curl' && c.args.at(-1) === 'https://storage.invalid/transcript');
   assert.deepEqual(curl.args.slice(-3), ['-T', transcript, 'https://storage.invalid/transcript']);
   assert.equal(harness.pipeSpawns.some(s => s.cmd === 'curl'), false);

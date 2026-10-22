@@ -36,6 +36,13 @@ function sanitize(text) {
  for(const step of JSON.parse(stepsJson)) {
   if(step.wait) await wait(step.wait);
   if(step.keys) child.write(step.keys);
+  if(step.mockCode) {
+   const rows=screen().split('\n');let address='';
+   for(let i=0;i<rows.length;i++) {const match=/https:\/\/\S+/.exec(rows[i]);if(!match)continue;address=match[0];while(i+1<rows.length && /^\S+$/.test(rows[i+1]))address+=rows[++i];}
+   const state=new URL(address).searchParams.get('state');
+   if(!state)throw new Error('No authorization state on the mock-login screen');
+   child.write('\x1b[200~example-code#'+state+'\x1b[201~');await wait(150);child.write('\r');
+  }
   if(step.text) {child.write('\x1b[200~'+step.text+'\x1b[201~');await wait(150);child.write('\r')}
   if(step.dump) {await wait(200);console.log(JSON.stringify({agent:name,stage:step.dump,exit,screen:sanitize(screen())}));}
  }
@@ -44,4 +51,4 @@ function sanitize(text) {
  // CLI diagnostics can contain authorization data, so isolated homes are never archived.
  fs.rmSync(home,{recursive:true,force:true});
  process.exit(0);
-})();
+})().catch(()=>{try{child.kill()}catch{};fs.rmSync(home,{recursive:true,force:true});console.error('Measurement failed; authorization details omitted');process.exit(1)});

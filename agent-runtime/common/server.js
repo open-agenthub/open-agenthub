@@ -11,8 +11,9 @@ const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject')
 const { createNextTurnDelivery, IDLE_QUIET_MS } = require('./next-turn');
 const { createContextClear } = require('./context-clear');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
-const { signatureScript, archiveScript, uploadArgs } = require('./state-archive');
+const { signatureScript, archiveScript, uploadArgs, stateExcludes } = require('./state-archive');
 const { createSecretMask } = require('./secret-mask');
+const { createSignInPrivacy } = require('./sign-in-privacy');
 const gitIdentity = require('./git-identity');
 
 // The scrollback window, in characters. The hub stores and pages exactly this much
@@ -95,6 +96,8 @@ function createCommonServer(options = {}) {
   const secretMask = supplied.secretMask || createSecretMask({ env, fs });
   const installGitIdentity = supplied.installGitIdentity ||
     (payload => gitIdentity.install(payload, { setupCliAuth: require('node:path').join(__dirname, 'setup-cli-auth.sh') }));
+
+  const signInPrivacy = createSignInPrivacy();
 
   const preparation = driver.prepare(env);
   const childEnv = preparation && preparation.childEnv;
@@ -242,6 +245,7 @@ function createCommonServer(options = {}) {
     }) : null;
 
   function remember(chunk) {
+    signInPrivacy.feed(chunk);
     scrollback += chunk;
     if (scrollback.length > MAX_BUFFER) scrollback = scrollback.slice(-MAX_BUFFER);
   }
@@ -301,6 +305,7 @@ function createCommonServer(options = {}) {
   // depend on the change detection being right.
   function persistState(final, done) {
     if (!statePut) return done && done(new Error('state storage unavailable'));
+    if (!signInPrivacy.archiveSafe(require('node:path').join(home, driver.stateDir), fs, stateExcludes(driver))) return done && done(new Error('sign-in state withheld'));
     const archive = signature => execFile('/bin/sh',
       ['-c', archiveScript(driver), 'sh', '/tmp/state.tgz'], { cwd: home }, archiveError => {
         if (archiveError) return done && done(archiveError);
@@ -326,7 +331,7 @@ function createCommonServer(options = {}) {
 
   function persistScrollback(done) {
     if (!scrollPut) return done && done();
-    try { fs.writeFileSync('/tmp/scrollback.log', scrollback); } catch {}
+    try { fs.writeFileSync('/tmp/scrollback.log', secretMask.mask(signInPrivacy.scrollback())); } catch {}
     execFile('curl', uploadArgs('/tmp/scrollback.log', scrollPut, insecureStorage), () => done && done());
   }
 
@@ -404,7 +409,7 @@ function createCommonServer(options = {}) {
       if (file !== transcriptFile) return done && done();
       if (!callback) return done && done();
       let text;
-      try { text = secretMask.mask(boundary + fs.readFileSync(file, 'utf8')); } catch { return done && done(); }
+      try { text = signInPrivacy.mask(secretMask.mask(boundary + fs.readFileSync(file, 'utf8'))); } catch { return done && done(); }
       fetchImpl(callback + '/transcript', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': token },
@@ -412,7 +417,7 @@ function createCommonServer(options = {}) {
       }).catch(() => {}).finally(() => done && done());
     };
     if (!transcriptPut) return toHub();
-    if (secretMask.active() || conversationCleared) return uploadMaskedTranscript(file, toHub, boundary);
+    if (secretMask.active() || signInPrivacy.observed() || conversationCleared) return uploadMaskedTranscript(file, toHub, boundary);
     // No shell here: the file name is whatever the CLI chose for its session file, and a quote
     // or `$(` in it would otherwise become part of the command.
     execFile('curl', uploadArgs(file, transcriptPut, insecureStorage), toHub);
@@ -449,7 +454,7 @@ function createCommonServer(options = {}) {
     let finished = false;
     const finish = () => { if (!finished) { finished = true; done(); } };
     let masked;
-    try { masked = boundary + secretMask.mask(fs.readFileSync(file, 'utf8')); } catch { return finish(); }
+    try { masked = signInPrivacy.mask(boundary + secretMask.mask(fs.readFileSync(file, 'utf8'))); } catch { return finish(); }
     try {
       const child = spawnProcess('curl', uploadArgs('-', transcriptPut, insecureStorage),
         { stdio: ['pipe', 'ignore', 'ignore'] });
@@ -563,7 +568,7 @@ function createCommonServer(options = {}) {
     fetchImpl(callback + '/scrollback', {
       method: 'PUT',
       headers: { 'Content-Type': 'text/plain', 'X-Agent-Token': token },
-      body: scrollback
+      body: secretMask.mask(signInPrivacy.scrollback())
     }).catch(() => {}).finally(() => done && done());
   }
 
@@ -590,7 +595,14 @@ function createCommonServer(options = {}) {
   // and gzip processes piled up by the thousand, all writing the same archive, and starved
   // the pod until hooks timed out. A tick that finds a run in flight is skipped; a caller
   // that needs the final state (exit, SIGTERM) gets one more run after the current one.
-  function persistAll(done, final = false) {
+  function persistAll(done, final = false, signInFlushed = false) {
+    if (!signInFlushed) {
+      const pending = signInPrivacy.flush();
+      if (pending) {
+        void pending.then(() => persistAll(done, final, true));
+        return;
+      }
+    }
     if (persisting) {
       if (final && done) (persistWaiters || (persistWaiters = [])).push(done);
       return;
@@ -1072,6 +1084,7 @@ function createCommonServer(options = {}) {
         return;
       }
       if (message.type === 'input' && typeof message.data === 'string') {
+        signInPrivacy.personInput(message.data);
         if (nextTurn?.state === 'busy' && !activityPermissionPending && driver.isTurnInterrupt?.(message.data)) {
           activityIdleOverride = true;
           publishActivity();
@@ -1092,6 +1105,7 @@ function createCommonServer(options = {}) {
         term.write(message.data);
       } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
         lastSize = { cols: message.cols, rows: message.rows };
+        signInPrivacy.resize(message.cols, message.rows);
         try { term.resize(message.cols, message.rows); } catch {}
       }
     });
@@ -1278,7 +1292,8 @@ function createCommonServer(options = {}) {
   // whole lines: the CLI may be mid-write, and a half line would be parsed as nothing and then
   // skipped for good, since the hub's next read starts after it. X-Transcript-Size lets the hub
   // see a file that got shorter than its cursor and start over.
-  function handleTranscriptRequest(request, response) {
+  async function handleTranscriptRequest(request, response) {
+    await signInPrivacy.flush();
     if (!tokenMatches(request.headers['x-agent-token'])) {
       fileError(response, 401, 'unauthorized');
       return;
@@ -1333,7 +1348,7 @@ function createCommonServer(options = {}) {
       }
     }
     const whole = chunk.lastIndexOf(0x0a, read - 1) + 1;
-    send(from + whole, chunk.subarray(0, whole));
+    send(from + whole, Buffer.from(signInPrivacy.mask(chunk.subarray(0, whole).toString('utf8'))));
   }
 
   async function handleMessageRequest(request, response) {
@@ -1955,6 +1970,7 @@ function createCommonServer(options = {}) {
     else handleAgent(socket);
   });
 
+  httpServer.on?.('close', () => signInPrivacy.dispose());
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
     ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands, /agenthub/attachments' +
