@@ -8,6 +8,7 @@ import ShareSessionDialog from './ShareSessionDialog.vue'
 import ConversationTimeline from './workspace/ConversationTimeline.vue'
 import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
 import CliMenuNotice from './workspace/CliMenuNotice.vue'
+import CliSignInNotice from './workspace/CliSignInNotice.vue'
 import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
 import { CANCEL_KEYS, keysForOption } from '../lib/cli-menu.js'
@@ -435,6 +436,13 @@ function onCliMenu(menu) {
 function answerCliMenu(number) {
   if (cliMenu.value) void agentTerminal.value?.sendKeys(keysForOption(cliMenu.value, number)).catch(() => {})
 }
+async function sendSignInCode(value) {
+  if (cliMenu.value?.kind !== 'signin' || !capabilities.value.canWrite || !isLive.value) throw new Error('Sign-in unavailable')
+  await agentTerminal.value.sendKeys(['\x1b[200~' + value + '\x1b[201~', '\r'])
+}
+function retrySignIn() {
+  void agentTerminal.value?.sendKeys(['\r']).catch(() => {})
+}
 function cancelCliMenu() {
   void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
 }
@@ -450,7 +458,9 @@ function sendWorkspaceMessage(text, options) {
   // A message pasted into one of the CLI's own screens is not a message: its Enter picks the
   // highlighted option, or submits the text as a login code. Refused, so the draft stays.
   if (cliMenu.value) {
-    throw new Error(cliMenu.value.kind === 'choice'
+    throw new Error(cliMenu.value.kind === 'signin'
+      ? 'Finish signing in above or in the terminal first; your draft is still here.'
+      : cliMenu.value.kind === 'choice'
       ? 'The agent is showing a menu. Answer it above or in the terminal first; your draft is still here.'
       : 'The agent is waiting for input in its terminal. Answer it there first; your draft is still here.')
   }
@@ -649,7 +659,9 @@ function interruptWorkspaceAgent() {
           :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
-        <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
+        <CliSignInNotice v-if="modern && !isChat && cliMenu?.kind === 'signin'" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive" :send="sendSignInCode"
+          @retry="retrySignIn" @continue="retrySignIn" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
+        <CliMenuNotice v-else-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>

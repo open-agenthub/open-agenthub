@@ -145,7 +145,7 @@ test('upload urls are refreshed from the hub every six hours and used by the nex
   harness.commands.length = 0;
   harness.intervals[0].callback();
   await tick();
-  const upload = harness.commands.find(c => c.file === 'curl' && c.args.includes('/tmp/scrollback.log'));
+  const upload = harness.commands.find(c => c.file === 'curl' && c.args.includes('/tmp/agenthub-scrollback-proof/scrollback.log'));
   assert.equal(upload.args.at(-1), 'https://storage.invalid/scroll?sig=new');
 });
 
@@ -164,7 +164,7 @@ test('a refreshed value that is not an http(s) url is not taken', async () => {
   harness.commands.length = 0;
   harness.intervals[0].callback();
   await tick();
-  const upload = harness.commands.find(c => c.file === 'curl' && c.args.includes('/tmp/scrollback.log'));
+  const upload = harness.commands.find(c => c.file === 'curl' && c.args.includes('/tmp/agenthub-scrollback-proof/scrollback.log'));
   assert.equal(upload.args.at(-1), 'https://storage.invalid/scroll?sig=old');
 });
 

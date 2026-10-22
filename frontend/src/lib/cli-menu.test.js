@@ -85,8 +85,8 @@ describe('detectMenu', () => {
     expect(detectMenu(['❯ 1. remember to run the tests'])).toBeNull()
   })
 
-  it('sees a login step that waits for a pasted code as input, without choices', () => {
-    expect(detectMenu(oauth)).toEqual({ kind: 'input', title: 'Login', options: [] })
+  it('recognizes the CLI authorization-code screen', () => {
+    expect(detectMenu(oauth)).toMatchObject({ kind: 'signin', mode: 'code', status: 'waiting', url: 'https://example.com/oauth/authorize?code=true&client_id=x&response_type=code' })
   })
 
   it('stays quiet at the normal prompt', () => {
