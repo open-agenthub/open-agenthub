@@ -1,7 +1,7 @@
 'use strict';
 
 // Masks the values of the session's secrets (docs/session-secrets.md) in what the session agent
-// uploads for other people to read: the scrollback and the provider transcript. The same rules as
+// returns for other people to read: scrollback replay, uploads and live provider transcripts. The same rules as
 // the backend's SecretMask, which covers the hook messages the chat relays post.
 //
 // What the live terminal shows is not masked: the person watching it is the owner or someone the
