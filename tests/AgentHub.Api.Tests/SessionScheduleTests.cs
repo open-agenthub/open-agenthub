@@ -9,6 +9,7 @@ public sealed class SessionScheduleTests
     [Theory]
     [InlineData("")]
     [InlineData("60 * * * *")]
+    [InlineData("0 6 * * Monday")]
     [InlineData("* * * *")]
     [InlineData("0 0 0 * * *")]
     [InlineData("TZ=Etc/UTC 0 0 * * *")]
@@ -35,6 +36,22 @@ public sealed class SessionScheduleTests
     [Fact]
     public void InvalidLegacyScheduleDoesNotBreakListing()
         => Assert.Null(SessionSchedule.NextRun("invalid", DateTimeOffset.UtcNow));
+
+    [Fact]
+    public void ScheduleDoesNotBypassScheduledRuntimeGuards()
+    {
+        var record = new AgentHub.Api.Persistence.SessionRecord
+        {
+            Id = "scheduled", Owner = "alice", Title = "Scheduled", Mode = SessionMode.Scheduled,
+            Agent = AgentKind.Claude, AuthMode = AgentAuthMode.Subscription,
+            AgentSessionId = "thread", CallbackToken = "token"
+        };
+        SessionUpdateValidator.Validate(record, new UpdateSessionRequest { Schedule = "0 9 * * *" });
+        Assert.Throws<ArgumentException>(() => SessionUpdateValidator.Validate(record,
+            new UpdateSessionRequest { Schedule = "0 9 * * *", CpuLimit = "4" }));
+        Assert.Throws<ArgumentException>(() => SessionUpdateValidator.Validate(record,
+            new UpdateSessionRequest { MemoryLimit = "8Gi" }));
+    }
 
     [Fact]
     public void RemoteUpdateForwardsSchedule()

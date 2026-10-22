@@ -141,8 +141,8 @@ async function save() {
     const expiry = autoDeletePayload(autoDelete.value, { off: 0 })
     const payload = scheduled.value
       // Auto approve and the auto-delete deadline are not part of the pod spec, so they are
-      // safe to change even for a scheduled session (everything else there is fixed by the
-      // CronJob spec). The description ("" clears it) is plain metadata and applies immediately too.
+      // safe to change for a scheduled session. Its schedule patches the CronJob itself;
+      // the description ("" clears it) is plain metadata and applies immediately too.
       ? { schedule: f.value.schedule, title: f.value.title, description: f.value.description, projectId: f.value.projectId || null, autoApprove: f.value.autoApprove, ...expiry }
       : {
           ...expiry,

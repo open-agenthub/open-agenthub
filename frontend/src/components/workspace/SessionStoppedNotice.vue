@@ -16,6 +16,7 @@ const canResume = computed(() => !props.sharedToken && sessionCapabilities(props
     <div class="stopped-text">
       <strong>{{ title }}</strong>
       <a v-if="session.failureReason" href="#startup-failure-title">View startup failure details</a>
+      <span v-if="session.mode === 'Scheduled' && session.nextRunAt" data-scheduled-next-run>Next planned run (UTC): {{ new Date(session.nextRunAt).toISOString().replace('T', ' ').replace('.000Z', '') }}. A previous Job may delay it.</span>
       <span>The agent is not running. Your conversation stays readable above.</span>
     </div>
     <button v-if="canResume" type="button" class="primary" data-stopped-resume @click="$emit('resume', session.id)"><span aria-hidden="true">▶</span> Resume</button>

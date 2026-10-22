@@ -16,6 +16,18 @@ namespace AgentHub.Api.Tests;
 public class McpSessionHandoffTests
 {
     [Fact]
+    public async Task SessionUpdateUsesAuthenticatedOwnerAndForwardsSchedule()
+    {
+        var svc = new FakeSessions();
+        await Tools(svc).UpdateSession("sess-1", schedule: "0 9 * * *");
+        Assert.Equal("alice", svc.UpdateOwner);
+        Assert.Equal("sess-1", svc.UpdateId);
+        Assert.Equal("0 9 * * *", svc.LastUpdate!.Schedule);
+        Assert.Null(svc.LastUpdate.Image);
+        Assert.Null(svc.LastUpdate.Agent);
+    }
+
+    [Fact]
     public async Task SessionCreate_PassesPromptAndSystemPromptAndReturnsTheUrl()
     {
         var svc = new FakeSessions();
@@ -174,6 +186,9 @@ public class McpSessionHandoffTests
     private sealed class FakeSessions : ISessionService
     {
         public CreateSessionRequest? LastRequest { get; private set; }
+        public UpdateSessionRequest? LastUpdate { get; private set; }
+        public string? UpdateOwner { get; private set; }
+        public string? UpdateId { get; private set; }
         public SessionInfo? Session { get; set; }
         public string? Transcript { get; init; }
         public int TranscriptCalls { get; private set; }
@@ -225,8 +240,11 @@ public class McpSessionHandoffTests
             throw new NotSupportedException();
         public Task<SessionInfo> PauseSessionAsync(string owner, string id, CancellationToken ct = default) =>
             throw new NotSupportedException();
-        public Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default) =>
-            throw new NotSupportedException();
+        public Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default)
+        {
+            UpdateOwner = owner; UpdateId = id; LastUpdate = req;
+            return Task.FromResult(Info("Scheduled"));
+        }
         public Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default) =>
             throw new NotSupportedException();
         public Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default) =>

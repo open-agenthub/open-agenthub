@@ -49,6 +49,11 @@ public static class SessionSchedule
         var fields = expression.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (fields.Length != 5) throw new ArgumentException("Five fields required.");
         for (var i = 0; i < fields.Length; i++) fields[i] = fields[i].Replace('?', '*');
+        // The parser also accepts abbreviated or full names that the controller rejects.
+        // Keep the public syntax to the controller's three-letter month and weekday names.
+        if (System.Text.RegularExpressions.Regex.Matches(string.Join(' ', fields), "[A-Za-z]+")
+            .Any(match => match.Value.Length != 3))
+            throw new ArgumentException("Use three-letter month and weekday names.");
         var parsed = CrontabSchedule.Parse(string.Join(' ', fields));
         // Kubernetes matches either day field when both are restricted; the parser intersects
         // them. Union two schedules so the displayed next run follows the controller's rule.

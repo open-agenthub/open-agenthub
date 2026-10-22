@@ -1,6 +1,5 @@
 // Runs the real HTTP/token/MCP paths against the backend and a rootless API server.
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -26,6 +25,11 @@ const job = kubectl('create','job',`proof-${session.id}`,'--from',`cronjob/${nam
 kubectl('patch','job',job.metadata.name,'--subresource=status','--type=merge','-p',JSON.stringify({status:{active:1,startTime:new Date().toISOString()}}))
 kubectl('patch','cronjob',name,'--subresource=status','--type=merge','-p',JSON.stringify({status:{active:[{apiVersion:'batch/v1',kind:'Job',name:job.metadata.name,namespace:'agenthub-sessions',uid:job.metadata.uid}]}}))
 const activeBefore = kubectl('get','job',job.metadata.name)
+const podName = 'proof-pod-' + session.id
+const pod = {apiVersion:'v1',kind:'Pod',metadata:{name:podName,namespace:'agenthub-sessions',labels:job.spec.template.metadata.labels,ownerReferences:[{apiVersion:'batch/v1',kind:'Job',name:job.metadata.name,uid:job.metadata.uid,controller:true}]},spec:job.spec.template.spec}
+execFileSync(process.env.KUBECTL || 'kubectl',['--kubeconfig',process.env.PROOF_KUBECONFIG,'create','-f','-'],{input:JSON.stringify(pod),stdio:['pipe','pipe','inherit']})
+kubectl('patch','pod',podName,'--subresource=status','--type=merge','-p',JSON.stringify({status:{phase:'Running'}}))
+const podBefore = kubectl('get','pod',podName)
 const token = await api('POST','/api/tokens',{name:'schedule-proof'})
 const updated = await api('PATCH',`/api/remote/sessions/${session.id}`,{schedule:'0 9 * * 1-5'},token.token)
 if (baseline) {
@@ -40,7 +44,8 @@ assert.equal(cron().metadata.uid, original.metadata.uid)
 assert.equal(cron().spec.schedule,updated.schedule)
 assert.deepEqual(cron().spec.jobTemplate,original.spec.jobTemplate)
 assert.deepEqual(kubectl('get','job',job.metadata.name),activeBefore)
-console.log('PASS token update changes existing CronJob; active Job, template and history preserved')
+assert.deepEqual(kubectl('get','pod',podName),podBefore)
+console.log('PASS token update changes existing CronJob; active Job, running Pod, template and history preserved')
 for (const invalid of ['', '60 * * * *', 'bad', '0 0 0 * * *']) {
   await api('PATCH',`/api/remote/sessions/${session.id}`,{title:'must not be saved',schedule:invalid},token.token,400)
   await api('POST','/api/sessions',{...create,schedule:invalid},undefined,400)
@@ -67,4 +72,4 @@ try {
   assert.deepEqual(kubectl('get','job',job.metadata.name),activeBefore)
   console.log('PASS real stdio MCP edits the schedule and returns nextRunAt; active Job unchanged')
 } finally {await mcp.close()}
-if (process.env.PROOF_OUTPUT) fs.writeFileSync(process.env.PROOF_OUTPUT,JSON.stringify({sessionId:session.id,job:job.metadata.name,activeBefore,cronUid:original.metadata.uid},null,2))
+console.log('FIXTURE ' + JSON.stringify({sessionId:session.id,job:job.metadata.name,pod:podName,cronUid:original.metadata.uid}))
