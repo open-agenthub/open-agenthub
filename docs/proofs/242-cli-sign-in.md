@@ -128,3 +128,9 @@ Codex's real device-auth success path was also measured against a local fake ide
 The full browser check requires the local mock proxy first, plus its CA path in `SIGNIN_TLS_CA`
 when starting the hub. External account authorization remains outside this credential-free
 proof.
+
+Cursor's refused local polling identity exits 1 with `Login failed or timed out. Please try
+again.` The final merged frontend suite passes 857 tests. The merged runtime suite passes 755;
+one confirmation run hit the existing timestamp-sensitive state-signature chmod assertion,
+then its isolated 9-test file and the full 755-test rerun both passed without changes to the
+state-signature implementation or test.

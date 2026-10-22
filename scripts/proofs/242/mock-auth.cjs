@@ -29,7 +29,7 @@ const server=https.createServer({SNICallback:(host,done)=>{try{done(null,context
  else if(pathname==='/oauth/token')result={id_token:jwt,access_token:'example-proof-access-token',refresh_token:'example-proof-refresh-token',token_type:'Bearer',expires_in:3600};
  else if(pathname==='/v1/oauth/token'){
   counts.token++;
-  let payload={};try{payload=JSON.parse(body)}catch{payload=Object.fromEntries(new URLSearchParams(body))}
+  let payload={};try{payload=JSON.parse(body);}catch{payload=Object.fromEntries(new URLSearchParams(body));}
   if(payload.grant_type==='refresh_token'){counts.expired++;res.writeHead(400,{'Content-Type':'application/json'});return res.end(JSON.stringify({error:'invalid_grant',error_description:'Example refresh token expired'}));}
   result={token_type:'Bearer',access_token:'example-proof-access-token',refresh_token:'example-proof-refresh-token',expires_in:28800,scope:'user:inference user:profile',account:{uuid:'example-account',email_address:'person@example.com'},organization:{uuid:'example-organization'}};
  } else if(pathname.startsWith('/api/oauth/profile')){
