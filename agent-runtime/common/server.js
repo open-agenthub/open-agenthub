@@ -1040,7 +1040,9 @@ function createCommonServer(options = {}) {
   }
   function handleAgent(socket) {
     clients.add(socket);
-    if (scrollback) safeSend(socket, scrollback);
+    // Replay is a history read too; waiting for persistence leaves a 30-second disclosure window.
+    secretMask.refresh();
+    if (scrollback) safeSend(socket, secretMask.mask(scrollback));
     socket.on('message', raw => {
       let message;
       try { message = JSON.parse(raw.toString()); } catch { return; }
@@ -1332,8 +1334,20 @@ function createCommonServer(options = {}) {
         start += segment.size;
       }
     }
-    const whole = chunk.lastIndexOf(0x0a, read - 1) + 1;
-    send(from + whole, chunk.subarray(0, whole));
+    let whole = read ? chunk.lastIndexOf(0x0a, read - 1) + 1 : 0;
+    // Mask complete records before they leave the pod, including reads before the first upload
+    // and newly projected secrets. Cursors must still count source bytes, not replacement bytes.
+    secretMask.refresh();
+    let body = Buffer.from(secretMask.mask(chunk.subarray(0, whole).toString('utf8')));
+    // A short value can expand to a longer marker. Keep the wire body within the backend's
+    // 8 MiB bound without splitting a record or advancing past a record we did not return.
+    while (body.length > MAX_TRANSCRIPT_CHUNK && whole > 0) {
+      const shorter = chunk.lastIndexOf(0x0a, Math.floor(whole / 2)) + 1;
+      const first = chunk.indexOf(0x0a) + 1;
+      whole = shorter || (first < whole ? first : 0);
+      body = Buffer.from(secretMask.mask(chunk.subarray(0, whole).toString('utf8')));
+    }
+    send(from + whole, body);
   }
 
   async function handleMessageRequest(request, response) {

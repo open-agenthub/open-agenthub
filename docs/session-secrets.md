@@ -129,8 +129,16 @@ the file value, a PEM and an environment value; with the masking none of them di
   from that file, and a replaced value there would be gone from its memory of the conversation.
   The state archive therefore still holds whatever the agent itself printed; it is uploaded to the
   owner's own object storage prefix and read only by a resume.
-- **Between two ticks the replay is not masked yet.** A client that connects within the 30 seconds after
-  a value was printed gets it in the replay; the uploads and every later replay do not.
+- **History is masked before delivery**, including a WebSocket scrollback replay before the first
+  persistence tick and the pod's live transcript endpoint. The endpoint refreshes projected file
+  values on each read. Its size and next-offset headers count the original file's UTF-8 bytes;
+  replacement markers can have different lengths, so counting the response bytes would skip or
+  repeat records. Expanded responses still fit the backend's 8 MiB limit, ending at a whole record.
+- Masking the pod's history outputs once covers the Workspace live follow and conversation API;
+  persisted copies feed share links, remote transcript reads and MCP transcript/log tools. Chat
+  notifications retain the backend's session-secret mask because hooks can bypass this transport.
+  Rejected: masking only the Workspace controller, which leaves the other readers exposed, and
+  rewriting the native file, which changes what the agent resumes from.
 - **The live terminal is not masked.** The person watching it is the owner or someone the owner
   gave terminal input, and either can read `~/.secrets` from that terminal anyway. A collaborator
   with terminal input can read everything the pod holds; the sharing dialog has to say so.
