@@ -4,7 +4,7 @@ const SAFE_KEYS = [
   'resources',
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status', 'failureReason',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
-  'createdAt', 'hasMcp', 'autoApprove',
+  'createdAt', 'hasMcp', 'autoApprove', 'nextRunAt',
   // The self-deletion setting and the deadline it yields (docs/session-expiry.md).
   'autoDeleteAfterSeconds', 'autoDeleteFrom', 'expiresAt', 'lastActivityAt',
   // What session_convert changes and whether it can be called.

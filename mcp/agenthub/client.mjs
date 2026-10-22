@@ -19,6 +19,10 @@ export class AgentHubClient {
     this.fetchImpl = fetchImpl;
   }
 
+  update(id, body = {}) {
+    return this.#request('PATCH', `/api/remote/sessions/${encodeURIComponent(id)}`, body);
+  }
+
   create(body = {}) {
     const payload = {
       ...body,

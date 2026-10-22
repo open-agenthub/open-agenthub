@@ -12,6 +12,9 @@ public static class SessionUpdateValidator
             throw new ArgumentException(
                 "Scheduled sessions run from a fixed CronJob spec — delete and recreate to change runtime settings.");
 
+        if (request.Schedule is not null)
+            SessionSchedule.Normalize(record.Mode, request.Schedule);
+
         AgentConfiguration.ValidateForUpdate(
             record.Agent, record.AuthMode, request.Agent, request.AuthMode,
             record.OpenClawApiKeySource, request.OpenClawApiKeySource);
@@ -50,6 +53,8 @@ public static class SessionUpdateValidator
         request.RunAsRoot is not null ||
         request.Cpu is not null ||
         request.Memory is not null ||
+        request.CpuLimit is not null ||
+        request.MemoryLimit is not null ||
         request.McpConfigJson is not null ||
         request.McpServerIds is not null ||
         request.EphemeralApiSources is not null ||
