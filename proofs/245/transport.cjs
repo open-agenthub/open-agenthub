@@ -52,6 +52,13 @@ async function main() {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     if (req.method === 'PUT') uploaded.set(req.url, Buffer.concat(chunks).toString());
+    if (req.url.includes('/secrets/session')) {
+      const env = req.url.includes('/sessionenv-');
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ apiVersion: 'v1', kind: 'Secret', metadata: { name: env ? 'sessionenv-proof245' : 'sessionsecrets-proof245' },
+        data: { [env ? 'ENV_KEY' : 'FILE_KEY']: Buffer.from(env ? envSecret : fileSecret).toString('base64') } }));
+      return;
+    }
     res.end(req.url === '/captured' ? JSON.stringify(Object.fromEntries(uploaded)) : '{}');
   });
   hub.listen(0, '127.0.0.1');

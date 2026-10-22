@@ -125,7 +125,7 @@ every number and still give the value away by where the gaps are. Verified with 
 `common/server.js`, real curl and a kubelet-style `..data` mount: on main all four uploads carried
 the file value, a PEM and an environment value; with the masking none of them did.
 
-- **The CLI's own transcript is not changed**, only the copy that is uploaded. The agent resumes
+- **The CLI's own transcript is not changed**, only the text returned or uploaded. The agent resumes
   from that file, and a replaced value there would be gone from its memory of the conversation.
   The state archive therefore still holds whatever the agent itself printed; it is uploaded to the
   owner's own object storage prefix and read only by a resume.

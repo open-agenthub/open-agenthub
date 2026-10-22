@@ -7,8 +7,11 @@ using AgentHub.Api.Controllers;
 using AgentHub.Api.Ee.Sharing;
 using AgentHub.Api.Mcp;
 using AgentHub.Api.Models;
+using AgentHub.Api.Notifications;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
+using AgentHub.Api.Storage;
+using k8s;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Configuration;
@@ -19,8 +22,12 @@ using Microsoft.Extensions.Logging.Abstractions;
 var ct = CancellationToken.None;
 var record = new SessionRecord { Id = "proof245", Owner = "owner", CallbackToken = "proof-callback-245", Status = "Running" };
 var info = new SessionInfo { Id = record.Id, Owner = record.Owner, Title = "proof", Phase = "Running", PodIp = "127.0.0.1", Mode = SessionMode.Interactive };
+Dictionary<string, string> captured = [];
 var store = FixtureProxy.Make<ISessionStore>((name, _) => name switch {
-    "GetByIdAsync" => Task.FromResult<SessionRecord?>(record),
+    "GetByIdAsync" or "GetAsync" or "GetByCallbackTokenAsync" => Task.FromResult<SessionRecord?>(record),
+    "GetTranscriptAsync" => Task.FromResult<string?>(captured["/transcript"]),
+    "GetScrollbackAsync" => Task.FromResult<string?>(captured["/scrollback"]),
+    "SetQuestionPendingAsync" => Task.CompletedTask,
     _ => throw new InvalidOperationException(name)
 });
 using var http = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
@@ -32,7 +39,6 @@ var page = await SessionTranscripts.PageAsync(null!, record.Owner, record.Id, "R
 Check(JsonSerializer.Serialize(page));
 Console.WriteLine("PASS real LiveTranscriptReader over HTTP + live conversation paging");
 
-Dictionary<string, string> captured = [];
 for (var attempt = 0; attempt < 450; attempt++) {
     captured = JsonSerializer.Deserialize<Dictionary<string, string>>(await http.GetStringAsync(args[1] + "/captured"))!;
     if (captured.Count >= 4) break;
@@ -41,11 +47,16 @@ for (var attempt = 0; attempt < 450; attempt++) {
 var native = await TranscriptReader.ReadTranscriptAsync(_ => Task.FromResult<string?>(captured["/objects/transcript"]), _ => Task.FromResult<string?>(captured["/transcript"]), ct);
 var scroll = await TranscriptReader.ReadScrollbackAsync(_ => Task.FromResult<string?>(captured["/objects/scrollback"]), _ => Task.FromResult<string?>(captured["/scrollback"]), ct);
 Check(native!); Check(scroll!);
-var entries = NativeTranscript.Parse(native!);
+var artifacts = FixtureProxy.Make<IArtifactStore>((name, values) => name == "GetTextAsync"
+    ? Task.FromResult<string?>(captured[((string)values![0]!).EndsWith("transcript.jsonl") ? "/objects/transcript" : "/objects/scrollback"])
+    : throw new InvalidOperationException(name));
+using var cluster = new Kubernetes(new KubernetesClientConfiguration { Host = args[1] });
+var backend = new KubernetesSessionService(config, store, null!, artifacts, null!, null!, null!, null!, null!, null!, null!, null!,
+    NullLogger<KubernetesSessionService>.Instance, cluster: cluster);
 var service = FixtureProxy.Make<ISessionService>((name, _) => name switch {
     "GetSessionAsync" => Task.FromResult<SessionInfo?>(info),
-    "GetConversationAsync" => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(entries),
-    "GetTranscriptAsync" => Task.FromResult(AgentTerminal.CleanTranscript(scroll)),
+    "GetConversationAsync" => backend.GetConversationAsync(record.Owner, record.Id, ct),
+    "GetTranscriptAsync" => backend.GetTranscriptAsync(record.Owner, record.Id, ct),
     _ => throw new InvalidOperationException(name)
 });
 var context = new DefaultHttpContext { User = new ClaimsPrincipal(new ClaimsIdentity([new Claim("preferred_username", "owner")], "proof")) };
@@ -64,6 +75,14 @@ var tools = new AgentHubMcpTools(new HttpContextAccessor { HttpContext = context
 Check(await tools.GetSessionLogs(record.Id));
 Check((await tools.GetSessionTranscript(record.Id)).Text);
 Console.WriteLine("PASS real stored readers, owner/remote conversation, remote transcript, share transcript/conversation and MCP logs/transcript");
+var notifier = new RecordingNotifier();
+var relay = new InternalController(store, [notifier], backend, null!, [], [], null!, null!) {
+    ControllerContext = new ControllerContext { HttpContext = context }
+};
+relay.Request.Headers["X-Agent-Token"] = record.CallbackToken;
+await relay.Notify(record.Id, new InternalController.NotifyBody("proof-file-value-245 proof-env-value-245", "question"), ct);
+Check(notifier.Message);
+Console.WriteLine("PASS real callback controller + concrete session secret masking over Kubernetes SDK HTTP + notifier boundary");
 
 static void Check(string text) {
     if (text.Contains("proof-file-value-245") || text.Contains("proof-env-value-245") ||
@@ -78,4 +97,10 @@ public class FixtureProxy : DispatchProxy {
 }
 sealed class LoopbackIdentity : IAgentPodIdentityResolver {
     public Task<bool> IsLiveSessionPodAsync(string id, IPAddress ip, CancellationToken ct = default) => Task.FromResult(id == "proof245" && IPAddress.IsLoopback(ip));
+}
+sealed class RecordingNotifier : INotifier {
+    public string Message = "";
+    public Task NotifyAsync(SessionRecord session, string kind, string message, CancellationToken ct = default) {
+        Message = message; return Task.CompletedTask;
+    }
 }
