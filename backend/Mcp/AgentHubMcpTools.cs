@@ -27,6 +27,18 @@ public sealed class AgentHubMcpTools(
     /// <summary>The calling user; see <see cref="McpCallerIdentity"/>.</summary>
     private string Owner => McpCallerIdentity.Owner(http);
 
+    [McpServerTool(Name = "session_update")]
+    [Description("Update an owned session title, description or UTC cron schedule. Schedule changes affect future runs only; active Jobs keep running. nextRunAt is an estimate subject to concurrency and cluster availability.")]
+    public async Task<SessionInfo> UpdateSession(string sessionId, string? title = null, string? description = null,
+        string? schedule = null, CancellationToken ct = default)
+    {
+        try { return await sessions.UpdateSessionAsync(Owner, sessionId, new UpdateSessionRequest
+            { Title = title, Description = description, Schedule = schedule }, ct); }
+        catch (KeyNotFoundException) { throw new McpException("session_not_found"); }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException)
+        { throw new McpException(error.Message); }
+    }
+
     [McpServerTool(Name = "session_create")]
     [Description("Create and start an AgentHub session. Default mode is Interactive: tool requests "
                  + "outside its allow list wait for a person's approval. Use Autonomous only for "

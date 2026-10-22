@@ -517,6 +517,8 @@ public record UpdateSessionRequest
         get => _autoUpdateRuntimeImages;
         init { _autoUpdateRuntimeImages = value; AutoUpdateRuntimeImagesSpecified = true; }
     }
+    /// <summary>Cron expression in UTC; scheduled sessions only. Null leaves it unchanged.</summary>
+    public string? Schedule { get; init; }
     public string? Title { get; init; }
     /// <summary>Agent description; null = unchanged, empty string clears it. Applies immediately.</summary>
     public string? Description { get; init; }
@@ -609,6 +611,7 @@ public record UpdateSessionRequest
 /// </summary>
 public sealed record RemoteUpdateSessionRequest
 {
+    public string? Schedule { get; init; }
     public List<SessionSecretAccess>? SecretGrants { get; init; }
     public string? Title { get; init; }
     public string? Description { get; init; }
@@ -621,6 +624,7 @@ public sealed record RemoteUpdateSessionRequest
     public UpdateSessionRequest ToUpdate() => new()
     {
         Title = Title,
+        Schedule = Schedule,
         Description = Description,
         AutoDeleteAfterSeconds = AutoDeleteAfterSeconds,
         AutoDeleteFrom = AutoDeleteFrom,
@@ -820,6 +824,7 @@ public record SessionInfo
     public IReadOnlyList<SessionSecretProvenance> EffectiveSecrets { get; init; } = [];
     public AgentPolicy Policy { get; init; } = new();
     public string? Schedule { get; init; }
+    public DateTimeOffset? NextRunAt { get; init; }
     public bool QuestionPending { get; init; }
     public bool OutdatedImage { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>

@@ -57,6 +57,7 @@ const automated = computed(() => props.session.mode !== 'Interactive')
 function reset(session) {
   f.value = {
     title: session.title,
+    schedule: session.schedule || '',
     description: session.description || '',
     systemPrompt: session.systemPrompt || '',
     image: session.image || '',
@@ -140,9 +141,9 @@ async function save() {
     const expiry = autoDeletePayload(autoDelete.value, { off: 0 })
     const payload = scheduled.value
       // Auto approve and the auto-delete deadline are not part of the pod spec, so they are
-      // safe to change even for a scheduled session (everything else there is fixed by the
-      // CronJob spec). The description ("" clears it) is plain metadata and applies immediately too.
-      ? { title: f.value.title, description: f.value.description, projectId: f.value.projectId || null, autoApprove: f.value.autoApprove, ...expiry }
+      // safe to change for a scheduled session. Its schedule patches the CronJob itself;
+      // the description ("" clears it) is plain metadata and applies immediately too.
+      ? { schedule: f.value.schedule, title: f.value.title, description: f.value.description, projectId: f.value.projectId || null, autoApprove: f.value.autoApprove, ...expiry }
       : {
           ...expiry,
           title: f.value.title,
@@ -195,9 +196,16 @@ async function save() {
   <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')">
     <div :class="embedded ? 'embed-inner' : 'modal'">
       <h3 class="form-title">Edit session</h3>
-      <p class="note" v-if="scheduled">Scheduled sessions run from a fixed CronJob spec — delete and recreate the session to change its agent, billing, policy, or runtime settings.</p>
+      <p class="note" v-if="scheduled">Schedule changes apply to future runs and leave an active Job running. Delete and recreate the session to change its agent, billing, policy, or runtime settings.</p>
       <p class="note" v-else>The title, auto approve and auto-delete apply immediately. Image, root mode, resources and the system prompt take effect the next time the session is resumed; new resources can also restart a running session at once.</p>
 
+      <div v-if="scheduled" class="card sect">
+        <div class="field">
+          <label>Schedule <span class="dim">— cron, UTC</span></label>
+          <input v-model="f.schedule" data-schedule maxlength="128" placeholder="0 6 * * 1-5" />
+        </div>
+        <p class="note" data-next-run>Next run (UTC): {{ session.nextRunAt ? new Date(session.nextRunAt).toISOString().replace('T', ' ').replace('.000Z', '') : 'No upcoming run' }}. Saved schedule; updates after saving. Runs may wait while a previous Job is active.</p>
+      </div>
       <div class="card sect">
         <div class="field">
           <label>Title</label>
@@ -328,7 +336,7 @@ async function save() {
       <div class="row">
         <button class="primary" data-submit :disabled="busy" @click="save">{{ busy ? (offerRestart && restartNow ? 'Saving and restarting…' : 'Saving…') : (offerRestart && restartNow ? 'Save and restart' : 'Save changes') }}</button>
         <button @click="$emit('close')">Cancel</button>
-        <span v-if="!(offerRestart && restartNow)" class="dim note-inline">Changes apply on next agent turn — the session keeps running.</span>
+        <span v-if="!(offerRestart && restartNow)" class="dim note-inline">{{ scheduled ? 'Schedule changes apply to future runs; active Jobs keep running.' : 'Changes apply on next agent turn — the session keeps running.' }}</span>
       </div>
     </div>
   </div>

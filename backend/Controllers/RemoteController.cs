@@ -140,7 +140,7 @@ public sealed class RemoteController : ControllerBase
     }
 
     /// <summary>
-    /// Changes the title, description or self-deletion deadline of a session
+    /// Changes the title, description, schedule or self-deletion deadline of a session
     /// (docs/session-expiry.md). Only those fields: everything else on the in-app PATCH is
     /// runtime configuration a token should not be able to rewrite.
     /// </summary>

@@ -4,7 +4,7 @@ const SAFE_KEYS = [
   'resources',
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status', 'failureReason',
   'parentSessionId', 'projectId', 'prompt', 'systemPrompt', 'schedule', 'questionPending',
-  'createdAt', 'hasMcp',
+  'createdAt', 'hasMcp', 'nextRunAt',
   // What session_convert changes and whether it can be called: a caller that cannot read uiMode
   // back cannot confirm it got the chat pane it asked for.
   'uiMode', 'canConvertToInteractive', 'convertedFrom',
