@@ -5,9 +5,18 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createHarness, tick } = require('./common-server-harness');
+const { createHarness, FakeSocket, tick } = require('./common-server-harness');
 
 const transcript = '/home/agent/.test-agent/t.jsonl';
+
+test('scrollback replay masks secrets before the first persistence tick', () => {
+  const harness = harnessWithSecrets();
+  harness.terminals[0].emitData('file-secret-45');
+  harness.terminals[0].emitData('67 and env-secret-0123');
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  assert.equal(socket.sent[0], '[secret:API_TOKEN] and [secret:DEPLOY_TOKEN]');
+});
 
 function harnessWithSecrets(extraEnv = {}) {
   return createHarness({

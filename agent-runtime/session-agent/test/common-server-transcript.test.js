@@ -10,10 +10,51 @@ const { createHarness, requestHttp, tick } = require('./common-server-harness');
 const FILE = '/home/agent/.claude/projects/-workspace-repo/s.jsonl';
 const auth = { 'X-Agent-Token': 'correct-token' };
 
+test('live transcript masks file and env secrets before persistence and preserves raw byte cursors', async () => {
+  const first = JSON.stringify({ text: 'file-secret-4567 and env-secret-0123 größer' }) + '\n';
+  const second = JSON.stringify({ text: 'env-secret-0123 again' }) + '\n';
+  const files = { [FILE]: first + second, '/secrets/API_TOKEN': 'file-secret-4567' };
+  const harness = transcriptHarness(files, {
+    AGENTHUB_SECRETS_DIR: '/secrets', AGENTHUB_SECRET_ENV: 'DEPLOY_TOKEN', DEPLOY_TOKEN: 'env-secret-0123'
+  });
+  const response = await requestHttp(harness, 'GET', '/agenthub/transcript', auth);
+  assert.equal(response.body, (first + second).replaceAll('file-secret-4567', '[secret:API_TOKEN]').replaceAll('env-secret-0123', '[secret:DEPLOY_TOKEN]'));
+  assert.equal(response.headers['content-length'], Buffer.byteLength(response.body));
+  assert.equal(response.headers['x-transcript-next'], String(Buffer.byteLength(first + second)));
+  assert.equal(response.headers['x-transcript-size'], String(Buffer.byteLength(first + second)));
+  const page = await requestHttp(harness, 'GET', '/agenthub/transcript?from=' + Buffer.byteLength(first), auth);
+  assert.equal(page.body, second.replaceAll('env-secret-0123', '[secret:DEPLOY_TOKEN]'));
+  files['/secrets/API_TOKEN'] = 'rotated-file-secret';
+  files[FILE] += JSON.stringify({ text: 'rotated-file-secret' }) + '\n';
+  const rotated = await requestHttp(harness, 'GET', '/agenthub/transcript?from=' + response.headers['x-transcript-next'], auth);
+  assert.equal(rotated.body, JSON.stringify({ text: '[secret:API_TOKEN]' }) + '\n');
+  assert.equal(files[FILE].startsWith(first + second), true);
+});
+
 function transcriptHarness(files, environment = {}) {
   return createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token', ...environment },
     { findTranscript: () => (FILE in files ? FILE : null) }, { files });
 }
+
+test('mask expansion stays within the wire limit without skipping records', async () => {
+  const line = JSON.stringify({ text: '12345678'.repeat(240_000) }) + '\n';
+  const raw = line.repeat(4);
+  const harness = transcriptHarness({ [FILE]: raw }, {
+    AGENTHUB_SECRET_ENV: 'LONG_SECRET_NAME', LONG_SECRET_NAME: '12345678'
+  });
+  let from = 0;
+  let lines = 0;
+  while (from < Buffer.byteLength(raw)) {
+    const page = await requestHttp(harness, 'GET', '/agenthub/transcript?from=' + from, auth);
+    assert.ok(Buffer.byteLength(page.body) <= 8 * 1024 * 1024);
+    assert.equal(page.body.includes('12345678'), false);
+    const next = Number(page.headers['x-transcript-next']);
+    assert.ok(next > from);
+    lines += page.body.split('\n').length - 1;
+    from = next;
+  }
+  assert.equal(lines, 4);
+});
 
 test('transcript route refuses a caller without the callback token', async () => {
   const harness = transcriptHarness({ [FILE]: '{"a":1}\n' });
