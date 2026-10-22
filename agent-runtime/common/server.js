@@ -127,6 +127,7 @@ function createCommonServer(options = {}) {
     ? configuredFileMax : 50 * 1024 * 1024;
 
   let scrollback = '';
+  let scrollbackDirectory = null;
   const clients = new Set();
   let exited = false;
   let term;
@@ -305,18 +306,30 @@ function createCommonServer(options = {}) {
   // depend on the change detection being right.
   function persistState(final, done) {
     if (!statePut) return done && done(new Error('state storage unavailable'));
-    if (!signInPrivacy.archiveSafe(require('node:path').join(home, driver.stateDir), fs, stateExcludes(driver))) return done && done(new Error('sign-in state withheld'));
-    const archive = signature => execFile('/bin/sh',
-      ['-c', archiveScript(driver), 'sh', '/tmp/state.tgz'], { cwd: home }, archiveError => {
+    const archive = signature => {
+      const pending = signInPrivacy.flush();
+      if (pending) { void pending.then(() => archive(signature)); return; }
+      if (!signInPrivacy.archiveSafe(require('node:path').join(home, driver.stateDir), fs, stateExcludes(driver))) return done && done(new Error('sign-in state withheld'));
+      const revision = signInPrivacy.revision();
+      execFile('/bin/sh', ['-c', archiveScript(driver), 'sh', '/tmp/state.tgz'], { cwd: home }, archiveError => {
         if (archiveError) return done && done(archiveError);
-        execFile('curl', uploadArgs('/tmp/state.tgz', statePut, insecureStorage), error => {
-          if (!error) {
-            uploadedStateSignature = signature;
-            stateTicksSinceUpload = 0;
+        const upload = () => {
+          const pending = signInPrivacy.flush();
+          if (pending) { void pending.then(upload); return; }
+          // An authorization screen can appear while tar runs. Never upload that snapshot,
+          // even if the person already finished or cancelled the flow before tar exited.
+          if (signInPrivacy.active() || revision !== signInPrivacy.revision()) {
+            try { fs.unlinkSync('/tmp/state.tgz'); } catch {}
+            return done && done(new Error('sign-in state changed'));
           }
-          if (done) done(error);
-        });
+          execFile('curl', uploadArgs('/tmp/state.tgz', statePut, insecureStorage), error => {
+            if (!error) { uploadedStateSignature = signature; stateTicksSinceUpload = 0; }
+            if (done) done(error);
+          });
+        };
+        upload();
       });
+    };
     if (final) return archive(null);
     if (++stateTicksSinceUpload < STATE_ARCHIVE_EVERY_TICKS) return done && done();
     // The signature is taken before the archive, so a file written while tar runs makes the
@@ -331,8 +344,14 @@ function createCommonServer(options = {}) {
 
   function persistScrollback(done) {
     if (!scrollPut) return done && done();
-    try { fs.writeFileSync('/tmp/scrollback.log', secretMask.mask(signInPrivacy.scrollback())); } catch {}
-    execFile('curl', uploadArgs('/tmp/scrollback.log', scrollPut, insecureStorage), () => done && done());
+    let file;
+    try {
+      // A predictable file in shared /tmp can be replaced by a symlink before the upload.
+      scrollbackDirectory ||= fs.mkdtempSync(require('node:path').join(env.TMPDIR || require('node:os').tmpdir(), 'agenthub-scrollback-'));
+      file = require('node:path').join(scrollbackDirectory, 'scrollback.log');
+      fs.writeFileSync(file, secretMask.mask(signInPrivacy.scrollback()), { mode: 0o600 });
+    } catch { return done && done(); }
+    execFile('curl', uploadArgs(file, scrollPut, insecureStorage), () => done && done());
   }
 
   // Rediscover on reads and persistence: /clear and /new replace a conversation without
@@ -396,6 +415,8 @@ function createCommonServer(options = {}) {
   // tail to the hub's Postgres copy. Skipped while the file has not changed — most 30-second
   // ticks of an idle session would otherwise re-upload megabytes for nothing.
   function persistTranscript(done) {
+    const pending = signInPrivacy.flush();
+    if (pending) { void pending.then(() => persistTranscript(done)); return; }
     const file = locateTranscript();
     if (!file || (!transcriptPut && !callback)) return done && done();
     let stat;
@@ -1985,7 +2006,10 @@ function createCommonServer(options = {}) {
     else handleAgent(socket);
   });
 
-  httpServer.on?.('close', () => signInPrivacy.dispose());
+  httpServer.on?.('close', () => {
+    signInPrivacy.dispose();
+    if (scrollbackDirectory) try { fs.rmSync(scrollbackDirectory, { recursive: true, force: true }); } catch {}
+  });
   httpServer.listen(port);
   console.log('[agent] Agent server listening on :' + port +
     ' (paths: /, /shell, /agenthub/files/:id, /agenthub/credentials, /agenthub/git-credentials, /agenthub/messages, /agenthub/transcript, /agenthub/commands, /agenthub/attachments' +

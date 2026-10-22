@@ -11,10 +11,12 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
   const terminal = new Terminal({ cols: 120, rows: 32, allowProposedApi: true, scrollback: 0 });
   const secrets = new Set();
   let exported = '', active = false, observed = false, input = '';
+  let revision = 0;
   let pending = Promise.resolve();
   let queued = 0;
   function remember(value) {
     if (typeof value === 'string' && value.length >= 4) {
+      if (!secrets.has(value)) revision += 1;
       secrets.add(value);
       secrets.add(JSON.stringify(value).slice(1, -1));
     }
@@ -32,6 +34,7 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
       const ready = rows.filter(row => row.trim()).slice(-10).some(row => /^\s*[❯›>]\s*(?:Ask (?:Codex|anything).*|)$/.test(row)) || /local ready/.test(rows.filter(row => row.trim()).slice(-10).join('\n'));
       active = Boolean(signIn || intro || (wasActive && !ready));
       if (active) {
+        if (!wasActive) revision += 1;
         observed = true;
         if (signIn?.url) remember(signIn.url);
         if (signIn?.code) remember(signIn.code);
@@ -90,7 +93,10 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
       if (!stat.isFile()) return true;
       let fd;
       try {
-        fd = fs.openSync(file, 'r');
+        const flags = require('node:fs').constants;
+        fd = fs.openSync(file, flags.O_RDONLY | (flags.O_NOFOLLOW || 0) | (flags.O_NONBLOCK || 0));
+        const opened = fs.fstatSync(fd);
+        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) return false;
         const chunk = Buffer.alloc(64 * 1024);
         let tail = Buffer.alloc(0), count;
         while ((count = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) {
@@ -105,7 +111,7 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
     return visit(root);
   }
   return { feed, personInput, mask, archiveSafe, flush: () => queued ? pending : null,
-    scrollback: () => mask(exported), active: () => active, observed: () => observed,
+    scrollback: () => mask(exported), active: () => active, observed: () => observed, revision: () => revision,
     resize: (cols, rows) => { pending = pending.then(() => terminal.resize(cols, rows)); },
     dispose: () => { void pending.then(() => terminal.dispose()); } };
 }

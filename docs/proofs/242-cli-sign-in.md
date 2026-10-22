@@ -89,3 +89,42 @@ production build, screen-detector parity, real headless-terminal redraw/fragment
 and real Chromium. Run `browser-hub.cjs`, then `browser-check.cjs` with `SIGNIN_UI_HOST` and
 `SIGNIN_CDP` for the isolated browser. CLI paths can be supplied through `SIGNIN_CLI_BIN` and
 `SIGNIN_CURSOR_BIN`. Start `mock-auth.cjs` for the local fake-identity success measurement.
+
+## Final hardening and recovery proof
+
+The expired-credential fixture starts the real CLI with expired example credentials, rejects
+its refresh at a local TLS mock, then completes `/login` with a fake identity through the
+actual Workspace card. Chromium observed the successful outcome and pressed Continue. No
+external account was authorized. Cursor's local fake polling identity prints `Login successful!`
+and `Authentication tokens stored securely.`; OpenClaw accepts a syntactically valid example
+token and prints `Auth profile:` without checking external account access.
+
+The final browser check compares actual addresses, fragments, device codes and submitted
+values retained only in memory. A generic code-shaped regular expression was rejected: native
+transcript identifiers can contain the same character pattern and produce false positives.
+It inspects the real HTTP upload payloads and decompresses the actual tar/gzip state upload in
+memory. Active sign-in produces no state upload; after completion, the state upload resumes
+and contains no authorization data. Scrollback and native transcript checks also pass.
+
+Additional safeguards from scanner review:
+
+- Scrollback export uses a private, unique temporary directory and mode 0600, avoiding a
+  predictable shared temporary file that another process could replace with a symlink.
+- Native archive scans open without following symlinks and compare the opened inode with the
+  inspected inode. A real rename replacement between inspection and open is rejected.
+- An authorization revision taken before tar must still match after tar and before upload.
+  A new flow while the archive is running withholds that snapshot and removes it.
+- Transcript export waits for pending terminal observation before reading the native file.
+
+Final local validation: 755 runtime tests, 856 frontend tests, production frontend build, all
+five real CLIs in Chromium, mobile resize settling, expired fake credential recovery, real
+clipboard copying, and actual tar/gzip upload inspection. Sanitized desktop and mobile cards
+are retained in `docs/proofs/242/`; terminal content and device codes are masked in captures.
+The mock prints a public CA-file path; provide it as `SIGNIN_TLS_CA` to the browser hub for the
+optional fake-identity recovery test. Keep the proxy running on its default local port.
+
+Codex's real device-auth success path was also measured against a local fake identity: it exits
+0 and prints `Successfully logged in`. The fake identity has no external account privileges.
+The full browser check requires the local mock proxy first, plus its CA path in `SIGNIN_TLS_CA`
+when starting the hub. External account authorization remains outside this credential-free
+proof.

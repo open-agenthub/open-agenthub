@@ -458,7 +458,9 @@ function sendWorkspaceMessage(text, options) {
   // A message pasted into one of the CLI's own screens is not a message: its Enter picks the
   // highlighted option, or submits the text as a login code. Refused, so the draft stays.
   if (cliMenu.value) {
-    throw new Error(cliMenu.value.kind === 'choice'
+    throw new Error(cliMenu.value.kind === 'signin'
+      ? 'Finish signing in above or in the terminal first; your draft is still here.'
+      : cliMenu.value.kind === 'choice'
       ? 'The agent is showing a menu. Answer it above or in the terminal first; your draft is still here.'
       : 'The agent is waiting for input in its terminal. Answer it there first; your draft is still here.')
   }

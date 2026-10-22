@@ -9,6 +9,8 @@ const screens = {
  browser: ['Starting login process...', 'Waiting for browser authentication...', 'Open a browser and navigate to this link: https://example.com/login?', 'challenge=example&mode=login', 'Press q to show a QR code to log in from another device.'],
  credential: ['Add credential', 'Create an api key at https://example.com/keys', 'Enter your API key'],
  token: ['Token provider', 'Paste Agent setup-token'],
+ cursorSuccess: ['Starting login process...', 'Authenticating with Cursor...', '✓ Login successful!', 'Authentication tokens stored securely.'],
+ tokenSaved: ['Token provider', 'Paste Agent setup-token', 'Auth profile: example:default (example/token)'],
  success: ['Login', 'Logged in as person@example.com', 'Login successful. Press Enter to continue…'],
  saved: ['Add credential', 'Enter your API key', '└  Done'],
  cancelled: ['Token provider', 'Paste Agent setup-token', 'Setup cancelled.'],
@@ -22,6 +24,8 @@ test('runtime and frontend recognize the measured screens identically', async ()
  assert.equal(detectSignIn(screens.browser).mode, 'browser');
  assert.equal(detectSignIn(screens.failure).status, 'failed');
  assert.equal(detectSignIn(screens.success).confirm, true);
+ assert.equal(detectSignIn(screens.cursorSuccess).status, 'succeeded');
+ assert.equal(detectSignIn(screens.tokenSaved).status, 'saved');
  assert.equal(detectSignIn(screens.saved).status, 'saved');
  assert.equal(detectSignIn(screens.cancelled).status, 'cancelled');
  assert.equal(detectSignIn(['The agent said: Login successful']), null);
@@ -68,5 +72,18 @@ test('archives fail closed while auth is visible and when native diagnostics ret
   assert.equal(privacy.archiveSafe(dir), false);
   fs.writeFileSync(path.join(dir,'native.log'), 'safe native data');
   assert.equal(privacy.archiveSafe(dir), true);
+ } finally {privacy.dispose();fs.rmSync(dir,{recursive:true,force:true});}
+});
+
+test('archive scans refuse a file replaced between metadata and open', async () => {
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'signin-file-race-'));
+ const privacy=createSignInPrivacy();
+ try {
+  privacy.feed(screens.device.join('\r\n')); await privacy.flush();
+  privacy.feed('\x1b[2J\x1b[H❯ '); await privacy.flush();
+  const file=path.join(dir,'native.log');fs.writeFileSync(file,'safe');
+  const racing={...fs,lstatSync(name){const stat=fs.lstatSync(name);if(name===file){fs.writeFileSync(file+'.replacement','replacement');fs.renameSync(file+'.replacement',file);}return stat;}};
+  assert.equal(privacy.archiveSafe(dir,racing),false);
  } finally {privacy.dispose();fs.rmSync(dir,{recursive:true,force:true});}
 });

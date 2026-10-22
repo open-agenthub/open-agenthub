@@ -8,6 +8,9 @@ export function detectSignIn(lines) {
   const outcome = (status, retry = false, confirm = false) => ({ kind: 'signin', mode: 'outcome', status, retry, confirm, options: [] });
   if (/^Login$/m.test(text) && /^OAuth error:/m.test(text)) return outcome('failed', /Press Enter to retry/i.test(text));
   if (/^Login$/m.test(text) && /^Login successful\. Press Enter to continue/m.test(text)) return outcome('succeeded', false, true);
+  if (/Authentication tokens stored securely\./.test(text) && /Authenticating with Cursor/.test(text)) return outcome('succeeded');
+  if (/Token provider/.test(text) && /Auth profile:/.test(text)) return outcome('saved');
+  if (/Starting login process/.test(text) && /Login failed or timed out\.|Login error:/.test(text)) return outcome('failed');
   if (/^Successfully logged in$/m.test(text)) return outcome('succeeded');
   if (/^Error logging in with device code:/m.test(text)) return outcome('failed');
   if (/Add credential/.test(text) && /└\s+Done/.test(text)) return outcome('saved');

@@ -47,9 +47,9 @@ test('common transport masks secret values in the scrollback and transcript it u
   await tick();
 
   // The export observer must finish rendering both terminal chunks before persistence.
-  await waitForExport(() => harness.writes.some(w => w.file === '/tmp/scrollback.log'));
+  await waitForExport(() => harness.writes.some(w => w.file === '/tmp/agenthub-scrollback-proof/scrollback.log'));
   const masked = '[secret:API_TOKEN]\r\n[secret:DEPLOY_TOKEN]\r\n';
-  assert.equal(harness.writes.find(w => w.file === '/tmp/scrollback.log').data, masked);
+  assert.equal(harness.writes.find(w => w.file === '/tmp/agenthub-scrollback-proof/scrollback.log').data, masked);
   const backup = harness.requests.find(r => r.url.endsWith('/scrollback') && r.options.method === 'PUT');
   assert.equal(backup.options.body, masked);
 

@@ -303,11 +303,11 @@ test('common transport archives driver state without its subscription credential
   // Export waits for xterm's write callback before the final persistence run.
   await waitForExport(() => harness.commands.length >= 4);
 
-  assert.deepEqual(harness.writes, [{ file: '/tmp/scrollback.log', data: 'saved output' }]);
+  assert.deepEqual(harness.writes, [{ file: '/tmp/agenthub-scrollback-proof/scrollback.log', data: 'saved output' }]);
   assert.equal(harness.commands.length, 4);
   // Every presigned url goes to curl as an argument, never through a shell.
   assert.deepEqual(harness.commands[0], { file: 'curl',
-    args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/scrollback.log', 'https://storage.invalid/scrollback'] });
+    args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/agenthub-scrollback-proof/scrollback.log', 'https://storage.invalid/scrollback'] });
   assert.match(harness.commands[1].args[1], /find "\.test-agent" \\\( -path "\.test-agent\/auth\.json" \\\) -prune /);
   assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$1\.part" /);
   assert.deepEqual(harness.commands[2].args.slice(2), ['sh', '/tmp/state.tgz']);

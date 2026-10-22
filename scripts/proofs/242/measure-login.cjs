@@ -43,12 +43,12 @@ function sanitize(text) {
    if(!state)throw new Error('No authorization state on the mock-login screen');
    child.write('\x1b[200~example-code#'+state+'\x1b[201~');await wait(150);child.write('\r');
   }
-  if(step.text) {child.write('\x1b[200~'+step.text+'\x1b[201~');await wait(150);child.write('\r')}
+  if(step.text) {child.write('\x1b[200~'+step.text+'\x1b[201~');await wait(150);child.write('\r');}
   if(step.dump) {await wait(200);console.log(JSON.stringify({agent:name,stage:step.dump,exit,screen:sanitize(screen())}));}
  }
- try{child.kill()}catch{}
+ try{child.kill();}catch{}
  await wait(300);
  // CLI diagnostics can contain authorization data, so isolated homes are never archived.
  fs.rmSync(home,{recursive:true,force:true});
  process.exit(0);
-})().catch(()=>{try{child.kill()}catch{};fs.rmSync(home,{recursive:true,force:true});console.error('Measurement failed; authorization details omitted');process.exit(1)});
+})().catch(()=>{try{child.kill();}catch{};fs.rmSync(home,{recursive:true,force:true});console.error('Measurement failed; authorization details omitted');process.exit(1)});
