@@ -93,6 +93,16 @@ register('session_create', {
   inputSchema: createSchema
 }, async (body) => text(sanitizeSession(await client.create(withCredentialSelection(withExpiry(body))))));
 
+register('session_update', {
+  description: 'Update an owned session title, description or UTC cron schedule. Schedule changes affect future runs only; active Jobs keep running. The response includes nextRunAt, an estimate subject to concurrency and cluster availability.',
+  inputSchema: z.object({
+    sessionId: z.string().min(1).max(128),
+    title: z.string().max(256).optional(),
+    description: z.string().max(500).optional(),
+    schedule: z.string().min(1).max(128).optional()
+  })
+}, async ({ sessionId, ...body }) => text(sanitizeSession(await client.update(sessionId, body))));
+
 register('account_status', {
   description: 'Which provider account a session runs on, whether that account is at its usage limit '
     + '(isExhausted, exhaustedUntil), the session\'s accountFailover setting, and the other stored '

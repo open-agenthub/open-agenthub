@@ -12,6 +12,9 @@ public static class SessionUpdateValidator
             throw new ArgumentException(
                 "Scheduled sessions run from a fixed CronJob spec — delete and recreate to change runtime settings.");
 
+        if (request.Schedule is not null)
+            SessionSchedule.Normalize(record.Mode, request.Schedule);
+
         AgentConfiguration.ValidateForUpdate(
             record.Agent, record.AuthMode, request.Agent, request.AuthMode,
             record.OpenClawApiKeySource, request.OpenClawApiKeySource);

@@ -372,10 +372,22 @@ describe('agent-aware session dialogs', () => {
     })
   })
 
+  it('edits a scheduled cron expression and shows the saved next run', async () => {
+    const wrapper = mount(EditSessionDialog, {
+      props: { session: { ...baseSession, mode: 'Scheduled', schedule: '0 6 * * *', nextRunAt: '2026-10-23T06:00:00Z' }, projects: [] }, ...mountOptions
+    })
+    expect(wrapper.get('[data-schedule]').element.value).toBe('0 6 * * *')
+    expect(wrapper.get('[data-next-run]').text()).toContain('2026-10-23 06:00:00')
+    await wrapper.get('[data-schedule]').setValue('0 9 * * 1-5')
+    await wrapper.get('[data-submit]').trigger('click')
+    expect(mocks.api.updateSession).toHaveBeenCalledWith(baseSession.id, expect.objectContaining({ schedule: '0 9 * * 1-5' }))
+    expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('agent')
+  })
+
   it('keeps scheduled edit restrictions honest by hiding ignored runtime controls', () => {
     const wrapper = mount(EditSessionDialog, { props: { session: { ...baseSession, mode: 'Scheduled' }, projects: [] }, ...mountOptions })
     expect(wrapper.find('[data-agent-card]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('delete and recreate')
+    expect(wrapper.text()).toContain('recreate the session')
   })
 
   it('duplicates with explicit agent, auth, and structured policy selections', async () => {

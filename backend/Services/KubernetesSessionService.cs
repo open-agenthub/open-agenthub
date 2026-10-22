@@ -778,6 +778,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     {
         if (req.Mode is SessionMode.Autonomous or SessionMode.Scheduled && string.IsNullOrWhiteSpace(req.Prompt))
             throw new ArgumentException("A prompt is required for Autonomous/Scheduled sessions.");
+        var schedule = SessionSchedule.Normalize(req.Mode, req.Schedule);
         if (allowMigratedClaudeAuto)
             AgentConfiguration.ValidateForDuplicatedSession(req.Agent, req.AuthMode, req.OpenClawApiKeySource);
         else
@@ -829,7 +830,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             Description = SessionDescription.Normalize(req.Description),
             Mode = req.Mode, UiMode = uiMode,
             RepoUrl = repos.FirstOrDefault()?.Url, ReposJson = SerializeRepos(repos),
-            Schedule = req.Schedule, McpConfigJson = mcp,
+            Schedule = schedule, McpConfigJson = mcp,
             McpServerIdsJson = mcpServerIds.Count == 0 ? null : JsonSerializer.Serialize(mcpServerIds),
             ProjectId = req.ProjectId, ParentSessionId = req.ParentSessionId, Prompt = req.Prompt,
             SystemPrompt = SessionSystemPrompt.Normalize(req.SystemPrompt),
@@ -1725,6 +1726,17 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (req.AccountFailover is not null)
             rec.AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover);
 
+        if (req.Schedule is not null)
+        {
+            var schedule = SessionSchedule.Normalize(rec.Mode, req.Schedule)!;
+            // Patch the parent only: replacing a CronJob or its children could stop an active run
+            // and lose its history. Persist only after the API server accepts the new schedule.
+            var patch = new V1Patch(JsonSerializer.Serialize(new { spec = new { schedule, timeZone = "Etc/UTC" } }),
+                V1Patch.PatchType.MergePatch);
+            await _k8s.BatchV1.PatchNamespacedCronJobAsync(patch, $"session-{id}", _opts.Namespace, cancellationToken: ct);
+            rec.Schedule = schedule;
+        }
+
         try
         {
             await _store.UpsertAsync(rec, ct);
@@ -1859,7 +1871,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "cronjob", rec.Title),
                 Spec = new V1CronJobSpec
                 {
-                    Schedule = req.Schedule ?? throw new ArgumentException("Schedule is missing."),
+                    Schedule = rec.Schedule ?? throw new ArgumentException("Schedule is missing."),
+                    TimeZone = "Etc/UTC",
                     ConcurrencyPolicy = "Forbid",
                     SuccessfulJobsHistoryLimit = 3, FailedJobsHistoryLimit = 3,
                     JobTemplate = new V1JobTemplateSpec
@@ -2305,6 +2318,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         McpConfigJson = r.McpConfigJson, McpServerIds = ParseMcpServerIds(r),
         FailureReason = string.IsNullOrEmpty(r.FailureReason) ? null : SessionStartupFailure.Redact(r.FailureReason),
         Phase = phase, PodIp = podIp, CreatedAt = r.CreatedAt, Schedule = r.Schedule,
+        NextRunAt = r.Mode == SessionMode.Scheduled ? SessionSchedule.NextRun(r.Schedule, DateTimeOffset.UtcNow) : null,
         ProjectId = r.ProjectId, ParentSessionId = r.ParentSessionId, Prompt = r.Prompt, AllowedTools = ParsePolicy(r).AllowedTools,
         Agent = r.Agent, AuthMode = r.AuthMode, OpenClawApiKeySource = r.OpenClawApiKeySource,
         ModelEndpointUrl = r.ModelEndpointUrl, ModelName = r.ModelName,
