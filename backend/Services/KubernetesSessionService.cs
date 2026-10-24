@@ -2211,6 +2211,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 GitCloneImage = _opts.GitCloneImage,
                 ImagePullSecret = _opts.ImagePullSecret,
                 RuntimeClassName = _opts.RuntimeClassName,
+                TrustedCaConfigMap = _opts.TrustedCaConfigMap,
                 MaxCpu = _opts.MaxCpu,
                 MaxMemory = _opts.MaxMemory,
                 TelemetryEnabled = _opts.TelemetryEnabled,
@@ -2427,6 +2428,7 @@ public sealed class AgentHubOptions
     public string AgentImagePullPolicy { get; set; } = "IfNotPresent";
     public string ImagePullSecret { get; set; } = "";
     public string RuntimeClassName { get; set; } = "";
+    public string TrustedCaConfigMap { get; set; } = "";
     public string MaxCpu { get; set; } = "2";
     public string MaxMemory { get; set; } = "4Gi";
     /// <summary>Smallest request a session may ask for (docs/session-resources.md): below it the
