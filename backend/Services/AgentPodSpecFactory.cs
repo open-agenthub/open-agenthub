@@ -15,6 +15,7 @@ public sealed record AgentPodRuntimeSettings
     public string GitCloneImage { get; init; } = "alpine/git:2.45.2";
     public string ImagePullSecret { get; init; } = "";
     public string RuntimeClassName { get; init; } = "";
+    public string TrustedCaConfigMap { get; init; } = "";
     public string MaxCpu { get; init; } = "2";
     public string MaxMemory { get; init; } = "4Gi";
     public bool BrowserEnabled { get; init; }
@@ -362,6 +363,23 @@ public static class AgentPodSpecFactory
         {
             volumes.Add(new V1Volume { Name = "codex-system-config", EmptyDir = new V1EmptyDirVolumeSource() });
             mounts.Add(new V1VolumeMount { Name = "codex-system-config", MountPath = "/etc/codex", ReadOnlyProperty = true });
+        }
+
+        // Node downloads attachments directly from storage; the backend's TLS configuration
+        // does not apply to that connection. Add trust without disabling verification.
+        if (!string.IsNullOrWhiteSpace(context.Runtime.TrustedCaConfigMap))
+        {
+            volumes.Add(new V1Volume
+            {
+                Name = "trusted-ca",
+                ConfigMap = new V1ConfigMapVolumeSource
+                {
+                    Name = context.Runtime.TrustedCaConfigMap,
+                    Items = [new V1KeyToPath { Key = "ca.crt", Path = "ca.crt" }]
+                }
+            });
+            mounts.Add(new V1VolumeMount { Name = "trusted-ca", MountPath = "/etc/agenthub/ca", ReadOnlyProperty = true });
+            env.Add(new V1EnvVar { Name = "NODE_EXTRA_CA_CERTS", Value = "/etc/agenthub/ca/ca.crt" });
         }
 
         // OpenCode's managed config (/etc/opencode/opencode.json) outranks every config the agent

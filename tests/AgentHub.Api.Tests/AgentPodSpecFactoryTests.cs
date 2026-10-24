@@ -9,6 +9,35 @@ namespace AgentHub.Api.Tests;
 public class AgentPodSpecFactoryTests
 {
     [Theory]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.Cursor)]
+    [InlineData(AgentKind.OpenClaw)]
+    [InlineData(AgentKind.OpenCode)]
+    public void TrustedCa_IsMountedReadOnlyAndUsedByNode(AgentKind agent)
+    {
+        var runtime = Context().Runtime with { TrustedCaConfigMap = "runtime-ca" };
+        var pod = AgentPodSpecFactory.Build(Record(agent, AgentAuthMode.Subscription, SessionMode.Interactive),
+            new CreateSessionRequest { Agent = agent, AuthMode = AgentAuthMode.Subscription }, Context() with { Runtime = runtime });
+        var volume = Assert.Single(pod.Volumes, v => v.Name == "trusted-ca");
+        Assert.Equal("runtime-ca", volume.ConfigMap.Name);
+        var container = Assert.Single(pod.Containers);
+        var mount = Assert.Single(container.VolumeMounts, m => m.Name == "trusted-ca");
+        Assert.True(mount.ReadOnlyProperty);
+        Assert.Equal("/etc/agenthub/ca", mount.MountPath);
+        Assert.Contains(container.Env, e => e.Name == "NODE_EXTRA_CA_CERTS" && e.Value == "/etc/agenthub/ca/ca.crt");
+        Assert.DoesNotContain(container.Env, e => e.Name == "NODE_TLS_REJECT_UNAUTHORIZED");
+    }
+
+    [Fact]
+    public void TrustedCa_DefaultDoesNotChangeTrust()
+    {
+        var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription);
+        Assert.DoesNotContain(pod.Volumes, v => v.Name == "trusted-ca");
+        Assert.DoesNotContain(Assert.Single(pod.Containers).Env, e => e.Name == "NODE_EXTRA_CA_CERTS");
+    }
+
+    [Theory]
     [InlineData(AgentKind.Claude, AgentAuthMode.Subscription, "subscription", "runtime-claude", "claude", null)]
     [InlineData(AgentKind.Claude, AgentAuthMode.ApiKey, "apikey", "runtime-claude", null, "ANTHROPIC_API_KEY")]
     [InlineData(AgentKind.Codex, AgentAuthMode.Subscription, "subscription", "runtime-codex", "codex", null)]
