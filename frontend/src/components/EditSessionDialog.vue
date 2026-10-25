@@ -11,7 +11,8 @@ import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
-import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
+import SecretConflictNote from './SecretConflictNote.vue'
+import { secretIdsChange, secretOptions, secretSelectionFor, chosenSecrets, secretConflicts } from '../lib/secrets.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
@@ -93,6 +94,9 @@ const secrets = computed(() => secretOptions(storedSecrets.value, selectedProjec
 const selectedGrants = ref([])
 watch(() => props.session.id, () => { selectedGrants.value = (props.session.secretGrants || []).map(g => ({ ...g })) }, { immediate: true })
 const selectedSecrets = ref([])
+// Refused by the hub too; disabling the button keeps the owner from finding out only afterwards (#253).
+const chosen = computed(() => chosenSecrets(storedSecrets.value, selectedSecrets.value, selectedGrants.value))
+const secretClash = computed(() => secretConflicts(chosen.value).length > 0)
 watch([secrets, () => props.session.id], ([options]) => {
   selectedSecrets.value = secretSelectionFor(props.session.secretIds, options, !!selectedProject.value)
 }, { immediate: true })
@@ -221,6 +225,7 @@ async function save() {
         <SecretPicker v-if="!scheduled" v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
           :project-has-none="!!selectedProject && storedSecrets.length > 0" />
         <SecretGrantsPicker v-if="!scheduled" v-model="selectedGrants" :options="storedSecrets" :effective="session.effectiveSecrets || []" />
+        <SecretConflictNote v-if="!scheduled" :secrets="chosen" />
         <div class="field last toggle-field">
           <label>Auto approve <span class="dim">— run tools without asking</span></label>
           <button type="button" class="toggle" role="switch" data-auto-approve
@@ -334,7 +339,7 @@ async function save() {
       </p>
       <p v-if="error" class="err">{{ error }}</p>
       <div class="row">
-        <button class="primary" data-submit :disabled="busy" @click="save">{{ busy ? (offerRestart && restartNow ? 'Saving and restarting…' : 'Saving…') : (offerRestart && restartNow ? 'Save and restart' : 'Save changes') }}</button>
+        <button class="primary" data-submit :disabled="busy || secretClash" @click="save">{{ busy ? (offerRestart && restartNow ? 'Saving and restarting…' : 'Saving…') : (offerRestart && restartNow ? 'Save and restart' : 'Save changes') }}</button>
         <button @click="$emit('close')">Cancel</button>
         <span v-if="!(offerRestart && restartNow)" class="dim note-inline">{{ scheduled ? 'Schedule changes apply to future runs; active Jobs keep running.' : 'Changes apply on next agent turn — the session keeps running.' }}</span>
       </div>

@@ -55,6 +55,11 @@ public interface ISessionService
     /// <summary>Rewrites the secret copies of the owner's sessions from the current store, project
     /// and session selections — after a project's selection changed. Default no-op.</summary>
     Task SyncSessionSecretsAsync(string owner, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>Refuses a project selection under which the project, or one of its sessions, would
+    /// receive two secrets landing in the same place (#253). <paramref name="projectId"/> is null
+    /// for a project being created. Default no-op, for test doubles without secrets.</summary>
+    Task EnsureProjectSecretsFitAsync(string owner, string? projectId, string projectName,
+        IReadOnlyList<string> secretIds, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>The text with the values of the secrets this session holds masked, for messages a
     /// hook sends on to the chat relays. Default unchanged, for test doubles without secrets.</summary>
     Task<string> MaskSessionSecretsAsync(string sessionId, string text, CancellationToken ct = default)

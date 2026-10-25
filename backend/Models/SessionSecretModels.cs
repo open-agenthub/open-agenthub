@@ -18,11 +18,13 @@ public static class SessionSecretDelivery
 public sealed record SessionSecretInfo(string Id, string Name, string Delivery, string? Description, DateTime UpdatedAt);
 
 /// <summary>
-/// Stores a secret, or replaces the value of the one stored under the same name. A null
-/// <see cref="Value"/> on an existing name keeps the stored value, so delivery and description
-/// can be edited without the owner typing the secret again.
+/// Stores a new secret, or, with <see cref="Id"/>, changes the stored one with that id: name,
+/// delivery, description, and the value when <see cref="Value"/> is not null. A null value on an
+/// update keeps the stored one, so the rest can be edited without the owner typing the secret
+/// again. The id identifies a secret, not the name: two may share a name (#253).
 /// </summary>
-public sealed record UpsertSessionSecretRequest(string? Name, string? Delivery, string? Value, string? Description);
+public sealed record UpsertSessionSecretRequest(string? Name, string? Delivery, string? Value, string? Description,
+    string? Id = null);
 
 /// <summary>
 /// What answering a secret request gave the session: the secret, under the name the session sees

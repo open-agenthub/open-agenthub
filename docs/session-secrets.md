@@ -31,10 +31,42 @@ value, and the response type has no field one could end up in.
 ## Names, and which ones are reserved
 
 A secret is delivered either as an **environment variable** (`env`) or as a **file** in
-`~/.secrets` (`file`); its name is the variable's or the file's name. Names are unique per user,
-compared case-insensitively — `API_KEY` and `api_key` side by side would be two secrets nobody
-reading the list can tell apart. Updating a secret under the same name keeps its id, so project and
-session selections keep pointing at it; an update without a value keeps the stored one.
+`~/.secrets` (`file`); its name is the variable's or the file's name. The id identifies a secret,
+not the name: `POST /api/secrets` without an `id` stores a new one, with an `id` it changes that
+one — name, delivery, description, and the value if one is sent. The id survives every change,
+rename included, so project and session selections keep pointing at it.
+
+### Duplicate names, and where they are refused (#253)
+
+Until #253 names were unique per user (case-insensitively), and saving under a stored name updated
+that secret. That made a production and a staging `API_KEY` impossible to keep side by side, though
+no session should ever get both. Names may now repeat. What must not repeat is **where a secret
+lands in one session**: two secrets with the same delivery and the same name would be one key of
+the session's copy, and the later one would silently win. The comparison is exact (`API_KEY` and
+`api_key` are two variables and two files), and a variable and a file of one name do not collide.
+
+`SessionSecretConflicts` refuses a set with such a pair wherever a session's set is decided, with
+a 400 (an `invalid_argument` over MCP) that names the place and the ids:
+
+| Where | Checked |
+|---|---|
+| creating a session (web, API, token, MCP spawn) | its selection, grants and inherited grants together |
+| editing a session | the same, when secrets, grants or the project change |
+| a project's selection (create, edit) | the selection itself — every later session would get both — and every session in it |
+| saving a secret (rename, change of delivery) | every project and every session, inside the store write, so nothing is stored |
+| answering a secret request | the session with the new grant |
+
+The dialogs show the clash before saving and disable the button; the hub's check is what holds.
+Delivery itself withholds both sides of a pair, should two concurrent edits ever produce one, and
+logs the session id: an agent finding a variable missing is better than one working with a value the
+owner did not mean.
+
+- *Rejected: keep names unique and let the owner pick another name.* The name is what the tool
+  reads (`KUBECONFIG`-style conventions); `API_KEY_STAGING` would need a wrapper in every session.
+- *Rejected: let a grant override the selection on a clash.* Which one wins is exactly what the
+  owner did not say; a refusal asks them.
+- A request for a name with two stored namesakes opens a new form instead of one of them; the form
+  lists the namesakes.
 
 - Variables: `[A-Za-z_][A-Za-z0-9_]*`.
 - Files: `[A-Za-z0-9_][A-Za-z0-9._-]*` — no leading dot, so neither `.`, `..` nor the kubelet's own
@@ -234,9 +266,10 @@ the kubelet, copying the session's secret into the directory.
 - **Settings → Secrets** is a tab of its own rather than a card in Credentials. Credentials are
   logins the runtime knows how to use; a secret is something the owner hands the agent, with a name
   and a purpose the agent sees. A value field is never filled from the store, an edit without a value
-  keeps the stored one, and the typed value is dropped from the page once saved. The name of a stored
-  secret cannot be edited: it is the variable or file the sessions see, and renaming would be a new
-  secret under a new id that no project or session selects yet.
+  keeps the stored one, and the typed value is dropped from the page once saved. Since #253 the
+  name can be edited: the edit carries the id, so a renamed secret stays selected wherever it was.
+  Before, the name was the identity, and a rename would have been a new secret that no project or
+  session selected.
 - **The project selection is a dialog on the project in the sidebar** (the key button next to
   rename and color), the same place every other project setting is changed. The session dialogs
   show the picker under the project field, because what they offer depends on it: the project's

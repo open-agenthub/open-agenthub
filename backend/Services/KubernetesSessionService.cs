@@ -163,8 +163,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     public async Task<SessionSecretInfo> UpsertSessionSecretAsync(string owner, UpsertSessionSecretRequest request,
         CancellationToken ct = default)
     {
-        var entry = await ChangeUserSecretsAsync(owner,
-            data => SessionSecretStore.Upsert(data, request, DateTime.UtcNow), ct);
+        var (sessions, projects) = await SecretSelectionsAsync(owner, ct);
+        // Checked inside the write, against the store it is about to replace: a rename that makes
+        // two secrets of one session land in the same place is refused before it is stored.
+        var entry = await ChangeUserSecretsAsync(owner, data =>
+        {
+            var written = SessionSecretStore.Upsert(data, request, DateTime.UtcNow);
+            SessionSecretConflicts.EnsureNone(SessionSecretStore.Read(data), sessions, projects);
+            return written;
+        }, ct);
         // The id and nothing else: the name is the owner's text and the value never goes near a log.
         _log.LogInformation("Stored secret {Id} for {Owner}", entry.Id, owner);
         await TrySyncSessionSecretsAsync(owner, ct);
@@ -186,6 +193,38 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var stored = SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data);
         var selected = requested is null || requested.Contains(SessionSecretSelection.FollowProject) ? null : requested;
         return SessionSecretSelection.Effective(selected, projectId, await ProjectSecretIdsAsync(owner, projectId, ct), stored);
+    }
+
+    private async Task<(Dictionary<string, SessionRecord> Sessions,
+        Dictionary<string, (string Name, IReadOnlyList<string> SecretIds)> Projects)> SecretSelectionsAsync(
+        string owner, CancellationToken ct)
+    {
+        var sessions = (await _store.ListAsync(owner, ct)).ToDictionary(r => r.Id);
+        var projects = (await _projects.ListAsync(owner, ct)).ToDictionary(p => p.Id,
+            p => (p.Name, (IReadOnlyList<string>)(p.SecretIds ?? [])));
+        return (sessions, projects);
+    }
+
+    /// <summary>Refuses a session record, as it is about to be stored, that would receive two
+    /// secrets landing in the same place (#253).</summary>
+    private async Task EnsureNoSecretConflictAsync(string owner, SessionRecord rec, CancellationToken ct)
+    {
+        var (sessions, projects) = await SecretSelectionsAsync(owner, ct);
+        sessions[rec.Id] = rec;
+        SessionSecretConflicts.EnsureNone(SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data),
+            sessions, projects, onlySessions: [rec.Id], onlyProjects: [], selfSessionId: rec.Id);
+    }
+
+    public async Task EnsureProjectSecretsFitAsync(string owner, string? projectId, string projectName,
+        IReadOnlyList<string> secretIds, CancellationToken ct = default)
+    {
+        var (sessions, projects) = await SecretSelectionsAsync(owner, ct);
+        // A project being created has no sessions yet; its selection is checked on its own.
+        var id = projectId ?? "";
+        projects[id] = (projectName, secretIds);
+        SessionSecretConflicts.EnsureNone(SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data),
+            sessions, projects, onlySessions: sessions.Values.Where(s => s.ProjectId == id).Select(s => s.Id).ToList(),
+            onlyProjects: [id]);
     }
 
     private async Task<SessionSecretAccessResolver> SecretAccessResolverAsync(string owner, CancellationToken ct)
@@ -269,6 +308,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var ids = (resolver ?? await SecretAccessResolverAsync(owner, ct)).Effective(rec);
         var delivery = SessionSecretDeliveryFactory.Build(rec.Id, _opts.Namespace,
             new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id }, store, ids);
+        if (delivery.Withheld > 0)
+            _log.LogWarning("Withheld {Count} secrets from session {Id}: they would land in the same place", delivery.Withheld, rec.Id);
         await UpsertSecretAsync(delivery.Files, ct);
         await UpsertSecretAsync(delivery.Env, ct);
         return delivery.EnvNames;
@@ -298,6 +339,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         {
             grants.Add(new(secretId, false, "requested"));
             rec.SecretGrantIdsJson = SessionSecretGrants.Serialize(grants);
+            await EnsureNoSecretConflictAsync(owner, rec, ct);
             await _store.UpsertAsync(rec, ct);
         }
         await RefreshSessionSecretsAsync(owner, rec, ct);
@@ -857,6 +899,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             AutoDeleteAfterSeconds = autoDeleteAfter, AutoDeleteFrom = autoDeleteFrom,
             AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover)
         };
+        await EnsureNoSecretConflictAsync(owner, rec, ct);
         // Persist session row before registering ephemerals so a failed Upsert
         // cannot leave orphaned session-scoped API sources.
         await _store.UpsertAsync(rec, ct);
@@ -1714,6 +1757,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (req.SecretGrants is not null)
             rec.SecretGrantIdsJson = SessionSecretGrants.Serialize(await ValidateSecretGrantsAsync(owner, req.SecretGrants,
                 SessionSecretSelection.Parse(rec.SecretCeilingJson), SessionSecretGrants.Parse(rec.SecretGrantIdsJson), ct));
+        if (req.SecretIds is not null || req.SecretGrants is not null || req.ProjectIdSpecified)
+            await EnsureNoSecretConflictAsync(owner, rec, ct);
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);

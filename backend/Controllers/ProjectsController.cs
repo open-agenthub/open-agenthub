@@ -43,6 +43,8 @@ public sealed class ProjectsController : ControllerBase
         try
         {
             request = request with { SecretIds = await NormalizeSecretIdsAsync(request.SecretIds, ct) };
+            if (request.SecretIds is { Count: > 0 } ids && _sessions is not null)
+                await _sessions.EnsureProjectSecretsFitAsync(Owner, null, request.Name, ids, ct);
             return Ok(await _store.CreateAsync(Owner, request, ct));
         }
         catch (ArgumentException e) { return BadRequest(e.Message); }
@@ -62,6 +64,11 @@ public sealed class ProjectsController : ControllerBase
         try
         {
             request = request with { SecretIds = await NormalizeSecretIdsAsync(request.SecretIds, ct) };
+            if (request.SecretIds is { } ids && _sessions is not null)
+            {
+                if (await _store.GetAsync(Owner, id, ct) is not { } current) return NotFound();
+                await _sessions.EnsureProjectSecretsFitAsync(Owner, id, request.Name ?? current.Name, ids, ct);
+            }
             if (await _store.UpdateAsync(Owner, id, request, ct) is not { } project) return NotFound();
             // A narrowed project takes the secret away from its running sessions too, not only
             // from the ones started after the change.
