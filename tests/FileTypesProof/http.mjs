@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 const base = process.env.PROOF_BASE || 'http://127.0.0.1:8080';
 const token = 'proof-token';
 async function call(path, options = {}) {
@@ -7,7 +6,6 @@ async function call(path, options = {}) {
 }
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" onload="parent.svgExecuted=true;parent.localStorage.setItem(&quot;svg-proof&quot;,&quot;executed&quot;);parent.document.cookie=&quot;svg-proof=executed&quot;;alert(&quot;svg-proof&quot;)"><script>parent.svgExecuted=true;parent.localStorage.setItem('svg-proof','executed');parent.document.cookie='svg-proof=executed';alert('svg-proof')</script><rect width="40" height="40" fill="red"/><image href="http://127.0.0.1:8080/__svg-external"/></svg>`;
 const cases = [ ['probe.svg', 'image/svg+xml', svg], ['probe.html', 'text/html', '<script>parent.htmlExecuted=true</script>'], ['archive.zip', 'application/zip', Buffer.from([0x50,0x4b,0x03,0x04,0,255])], ['LICENSE', 'application/octet-stream', 'arbitrary extensionless text'], ['empty.bin', 'application/octet-stream', ''] ];
-const output = [];
 for (const [name,mimeType,body] of cases) {
   const bytes = Buffer.from(body);
   const reserve = await call('/internal/sessions/s1/files/reserve', {method:'POST',body:JSON.stringify({name,mimeType,size:bytes.length})});
@@ -34,10 +32,9 @@ for (const [name,mimeType,body] of cases) {
   const sibling = await fetch(`${base}/internal/sessions/s2/files/project/s1/${file.id}/content`,{headers:{'X-Agent-Token':'sibling-token'}});
   assert.equal(sibling.status,200);
   assert.deepEqual(Buffer.from(await sibling.arrayBuffer()),bytes);
-  output.push(ready); console.log(`PASS ${name}: upload, complete, headers, byte-identical download and sibling download`);
+  console.log(`PASS ${name}: upload, complete, headers, byte-identical download and sibling download`);
 }
 for(const [name,mimeType,size] of [['large.svg','image/svg+xml',20*1024*1024+1],['large.bin','application/octet-stream',50*1024*1024+1]]) {
   const response = await call('/internal/sessions/s1/files/reserve',{method:'POST',body:JSON.stringify({name,mimeType,size})});
   assert.equal(response.status,413); console.log(`PASS ${name}: size limit retained`);
 }
-await fs.writeFile(new URL('./files.local.json',import.meta.url),JSON.stringify(output));
