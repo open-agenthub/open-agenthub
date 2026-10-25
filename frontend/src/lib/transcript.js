@@ -140,7 +140,7 @@ export function entryLabel(entry) {
 export function conversationState(page) {
   return {
     source: page.source, conversationId: page.conversationId, entries: page.entries || [], text: page.text || '',
-    nextOffset: page.nextOffset, length: page.length
+    offset: page.offset ?? 0, nextOffset: page.nextOffset, length: page.length
   }
 }
 
@@ -154,6 +154,7 @@ export function mergeConversationPage(current, page) {
   if (!current || current.source !== page.source || current.conversationId !== page.conversationId) return null
   if (page.length < current.length || page.offset !== current.nextOffset) return null
   const next = conversationState(page)
+  next.offset = current.offset
   if (page.source === 'native') next.entries = current.entries.concat(next.entries)
   else next.text = current.text + next.text
   return next

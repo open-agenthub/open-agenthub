@@ -360,10 +360,11 @@ watch(() => props.session?.credentialId, id => { if (id && id === switchedTo.val
 
 const repoLabel = computed(() => repoShortName(props.session?.repoUrl || props.session?.repos?.[0]?.url || ''))
 
-async function fetchConversation(offset) {
+async function fetchConversation(offset, max) {
+  const args = max === undefined ? [offset] : [offset, max]
   return props.sharedToken
-    ? getSharedConversation(props.sharedToken, offset)
-    : api.getConversation(props.session.id, offset)
+    ? getSharedConversation(props.sharedToken, ...args)
+    : api.getConversation(props.session.id, ...args)
 }
 
 async function loadTranscript() {
@@ -372,24 +373,38 @@ async function loadTranscript() {
   transcriptBusy.value = true
   transcriptError.value = ''
   try {
-    const page = await fetchConversation()
+    const page = await fetchConversation(-1)
     if (sessionId !== props.session?.id || token !== props.sharedToken) return
     conversation.value = conversationState(page)
-    // Finished conversations can span more than one page too. Drain the saved history
-    // without waiting for the live-session poll, which never runs after completion.
-    while (conversation.value.nextOffset < conversation.value.length) {
-      const current = conversation.value
-      const next = await fetchConversation(current.nextOffset)
-      if (sessionId !== props.session?.id || token !== props.sharedToken || conversation.value !== current) return
-      const merged = mergeConversationPage(current, next)
-      if (!merged || merged.nextOffset <= current.nextOffset) break
-      conversation.value = merged
-    }
+
   } catch {
     if (sessionId !== props.session?.id) return
     transcriptError.value = 'Could not load the conversation.'
   } finally {
     if (sessionId === props.session?.id && token === props.sharedToken) transcriptBusy.value = false
+  }
+}
+
+async function loadEarlier() {
+  const current = conversation.value
+  if (!current || current.offset <= 0 || transcriptBusy.value) return
+  transcriptBusy.value = true
+  transcriptError.value = ''
+  try {
+    const size = current.source === 'native' ? 500 : 100_000
+    const start = Math.max(0, current.offset - size)
+    const page = await fetchConversation(start, current.offset - start)
+    if (conversation.value !== current) return
+    if (page.source !== current.source || page.conversationId !== current.conversationId || page.nextOffset !== current.offset) {
+      transcriptBusy.value = false
+      return loadTranscript()
+    }
+    conversation.value = { ...current, offset: page.offset,
+      entries: (page.entries || []).concat(current.entries), text: (page.text || '') + current.text }
+  } catch {
+    transcriptError.value = 'Could not load earlier messages.'
+  } finally {
+    transcriptBusy.value = false
   }
 }
 
@@ -646,7 +661,7 @@ function interruptWorkspaceAgent() {
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
-          :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
+          :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
