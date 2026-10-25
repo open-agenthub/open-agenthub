@@ -13,7 +13,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.402
       # Without a database the PostgreSQL integration tests skip themselves, which quietly
       # took ~70 tests out of CI — including every store round-trip.
       #
@@ -64,7 +64,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-dotnet@v6
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 10.0.402
       - run: dotnet test tests/ArtifactRenderer.Tests/ArtifactRenderer.Tests.csproj -c Release
       - run: docker build --file artifact-renderer/Dockerfile --tag open-agenthub-dev/artifact-renderer:test .
 
@@ -113,6 +113,15 @@ jobs:
         run: docker build --file agent-runtime/opencode/Dockerfile --tag open-agenthub-dev/agent-runtime-opencode:test agent-runtime
       - name: Smoke OpenCode CLI
         run: docker run --rm --entrypoint opencode open-agenthub-dev/agent-runtime-opencode:test --version
+      - name: Verify Python in every runtime with a read-only root
+        run: |
+          for agent in claude codex cursor openclaw opencode; do
+            image="open-agenthub-dev/agent-runtime-$agent:test"
+            docker image inspect "$image" --format '{{.Size}}'
+            docker run --rm -i --network none --read-only --user 1000:1000 \
+              --tmpfs /tmp:rw,mode=1777 --entrypoint sh "$image" -s < agent-runtime/tests/python-smoke.sh
+          done
+
 
   helm:
     runs-on: ubuntu-latest
