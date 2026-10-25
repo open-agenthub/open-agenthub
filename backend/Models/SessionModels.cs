@@ -849,6 +849,10 @@ public record SessionInfo
     /// <summary>The running pod was started with other resources than <see cref="Resources"/>;
     /// they apply at its next start, or now through apply-resources.</summary>
     public bool ResourcesPendingRestart { get; init; }
+    /// <summary>The running pod started with other secret variables than the session has now
+    /// (a grant, a revoke, a new value or a rename since its start): they reach the agent at its
+    /// next start, or now through apply-resources. Files are not counted; they update live (#255).</summary>
+    public bool SecretsPendingRestart { get; init; }
     public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
     /// <summary>Self-deletion deadline in seconds; null = the session is kept.</summary>
     public int? AutoDeleteAfterSeconds { get; init; }
