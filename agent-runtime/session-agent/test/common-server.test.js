@@ -210,6 +210,28 @@ test('common transport caps scrollback and replays it on WebSocket connect', () 
   assert.deepEqual(harness.terminals[0].resizes, [[90, 20]]);
 });
 
+// #261: "Send now" for a message in the CLI's own queue interrupts with the driver's key, which
+// makes the pinned CLIs submit their queue; Ctrl+C would not.
+test('an interrupt request writes the driver interruption keys, a pause apart', async () => {
+  const delays = [];
+  const harness = createHarness({}, { interruptKeys: ['\x1b', '\x1b'] }, {
+    setTimeout(callback, ms) { delays.push(ms); callback(); return 1; }
+  });
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'interrupt' })));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(harness.terminals[0].writes, ['\x1b', '\x1b']);
+  assert.ok(delays.includes(300));
+
+  const single = createHarness();
+  const other = new FakeSocket();
+  single.runtime.webSocketServer.connect(other, '/');
+  other.emit('message', Buffer.from(JSON.stringify({ type: 'interrupt' })));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(single.terminals[0].writes, ['\x1b']);
+});
+
 test('a resumed session replays the history the hub kept, ahead of its own output', async () => {
   const harness = createHarness(
     {

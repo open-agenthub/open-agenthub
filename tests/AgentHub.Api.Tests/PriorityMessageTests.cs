@@ -245,6 +245,58 @@ public class PriorityMessageTests
         Assert.Single(world.Delivery.Calls);
     }
 
+    // #261: "Send now" for a message still waiting for the agent.
+    [Fact]
+    public async Task OwnerPush_SendsAWaitingMessageAsPriority_KeepingItsIdAndSender()
+    {
+        var world = new ControllerWorld();
+        world.Messages.Recent.Add(new SessionMessageRecord
+        {
+            Id = "m1", FromSessionId = "reviewer", ToSessionId = "coder", Owner = Owner, Body = "please look at MR 42"
+        });
+
+        var ok = Assert.IsType<OkObjectResult>(await world.Sessions(Owner).PushMessage("coder", "m1",
+            new PushAgentMessageRequest(Interrupt: true), CancellationToken.None));
+
+        var sent = Assert.IsType<AgentMessageSendResult>(ok.Value);
+        Assert.Equal(("m1", MessageDeliveryVia.Injected), (sent.Id, sent.DeliveredVia));
+        var call = Assert.Single(world.Delivery.Calls);
+        Assert.Equal(("m1", "please look at MR 42", true, true), (call.Message.Id, call.Message.Body, call.Message.Priority, call.Message.Interrupt));
+        Assert.Equal("Code Reviewer", call.FromTitle);
+        Assert.Empty(world.Messages.Added);
+    }
+
+    [Fact]
+    public async Task OwnerPush_WithoutInterrupt_IsPriorityOnly()
+    {
+        var world = new ControllerWorld();
+        world.Messages.Recent.Add(new SessionMessageRecord { Id = "m1", ToSessionId = "coder", Owner = Owner, Body = "hi" });
+
+        Assert.IsType<OkObjectResult>(await world.Sessions(Owner).PushMessage("coder", "m1", null, CancellationToken.None));
+
+        var call = Assert.Single(world.Delivery.Calls);
+        Assert.Equal((true, false), (call.Message.Priority, call.Message.Interrupt));
+        Assert.Null(call.FromTitle);
+    }
+
+    [Fact]
+    public async Task OwnerPush_DeliveredForeignOrUnknownMessage_IsRefusedWithoutAPush()
+    {
+        var world = new ControllerWorld();
+        world.Messages.Recent.Add(new SessionMessageRecord
+        {
+            Id = "done", ToSessionId = "coder", Owner = Owner, Body = "taken", DeliveredAt = DateTime.UtcNow, DeliveredVia = MessageDeliveryVia.Inbox
+        });
+        world.Messages.Recent.Add(new SessionMessageRecord { Id = "other", ToSessionId = "coder", Owner = "mallory", Body = "x" });
+
+        var conflict = Assert.IsType<ConflictObjectResult>(await world.Sessions(Owner).PushMessage("coder", "done", null, CancellationToken.None));
+        Assert.Equal(MessageDeliveryVia.Inbox, conflict.Value!.GetType().GetProperty("deliveredVia")!.GetValue(conflict.Value));
+        Assert.IsType<NotFoundResult>(await world.Sessions(Owner).PushMessage("coder", "other", null, CancellationToken.None));
+        Assert.IsType<NotFoundResult>(await world.Sessions(Owner).PushMessage("coder", "missing", null, CancellationToken.None));
+        Assert.IsType<NotFoundResult>(await world.Sessions("mallory").PushMessage("coder", "other", null, CancellationToken.None));
+        Assert.Empty(world.Delivery.Calls);
+    }
+
     [Fact]
     public async Task OwnerSend_ForeignSessionOrEmptyBody_FailsWithoutStoring()
     {

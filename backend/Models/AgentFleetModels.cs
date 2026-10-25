@@ -40,6 +40,9 @@ public sealed record SendAgentMessageRequest(string? To, string? Body, bool? Pri
 /// <summary>Body of the remote and owner send endpoints (target session id is in the path).</summary>
 public sealed record RemoteAgentMessageRequest(string? Body, bool? Priority = null, bool? Interrupt = null);
 
+/// <summary>Body of the owner's "Send now" for a message still waiting in the session's inbox.</summary>
+public sealed record PushAgentMessageRequest(bool? Interrupt = null);
+
 /// <summary>What the sender is told about where the message went.</summary>
 public sealed record AgentMessageSendResult(string Id, string To, string DeliveredVia, string? Reason = null);
 

@@ -147,6 +147,8 @@ export const api = {
   listSessionMessages: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/messages`),
   // The owner messages their own session: {body, priority?, interrupt?} → {id, to, deliveredVia, reason?}.
   sendSessionMessage: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/messages`, data),
+  // "Send now" for a message still waiting for the agent (#261): pushed as priority.
+  pushSessionMessage: (id, messageId, data) => req('POST', `/sessions/${encodeURIComponent(id)}/messages/${encodeURIComponent(messageId)}/push`, data),
   // Pending tool-permission requests + in-app approval (mirrors the messenger buttons).
   listPermissions: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/permissions`),
   decidePermission: (id, reqId, decision) => req('POST', `/sessions/${encodeURIComponent(id)}/permissions/${encodeURIComponent(reqId)}`, { decision }),

@@ -7,8 +7,8 @@ import { workspaceDrafts, workspaceSent } from '../../lib/session-drafts.js'
 
 // #153: sent and fleet messages the agent has not taken yet are shown below the conversation.
 const mocks = vi.hoisted(() => ({
-  api: { getConversation: vi.fn(), listPermissions: vi.fn().mockResolvedValue([]), listSessionMessages: vi.fn().mockResolvedValue([]) },
-  send: vi.fn()
+  api: { getConversation: vi.fn(), listPermissions: vi.fn().mockResolvedValue([]), listSessionMessages: vi.fn().mockResolvedValue([]), pushSessionMessage: vi.fn() },
+  send: vi.fn(), interruptQueue: vi.fn()
 }))
 vi.mock('../../api.js', () => ({ api: mocks.api, getSharedConversation: vi.fn() }))
 vi.mock('../../lib/mermaid.js', () => ({ renderMermaidBlocks: vi.fn() }))
@@ -24,7 +24,7 @@ function view() {
       TerminalPane: defineComponent({
         emits: ['status'],
         setup(_props, { emit, expose }) {
-          expose({ submitMessage: mocks.send, interruptAgent: vi.fn() })
+          expose({ submitMessage: mocks.send, interruptAgent: vi.fn(), interruptQueue: mocks.interruptQueue })
           onMounted(() => emit('status', 'connected'))
           return () => null
         }
@@ -114,4 +114,36 @@ describe('pending queue below the conversation', () => {
     expect(received.text()).toContain('Look at MR 42')
     expect(received.get('[data-message-time]').attributes('datetime')).toBe('2026-10-18T10:00:06.000Z')
   }, 10000)
+
+  // #261: "Send now" for a waiting message.
+  it('pushes a waiting fleet message as priority, interrupting only when asked', async () => {
+    const waiting = { id: 'm1', from: 'abc123', fromTitle: 'Code Reviewer', body: 'Look at MR 42', createdAt: '2026-10-18T10:00:00Z', deliveredAt: null, priority: false, interrupt: false, deliveredVia: null }
+    mocks.api.listSessionMessages.mockResolvedValue([waiting])
+    mocks.api.pushSessionMessage.mockResolvedValue({ id: 'm1', to: 's1', deliveredVia: 'injected' })
+    const wrapper = view()
+    await flushPromises()
+    await wrapper.get('[data-pending-message] [data-pending-send-now]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.pushSessionMessage).toHaveBeenCalledWith('s1', 'm1', { interrupt: false })
+    expect(wrapper.get('[data-pending-message]').text()).toContain('Delivered to the agent.')
+
+    mocks.api.pushSessionMessage.mockResolvedValue({ id: 'm1', to: 's1', deliveredVia: 'inbox', reason: 'session_not_running' })
+    await wrapper.get('[data-pending-message] [data-pending-interrupt]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.pushSessionMessage).toHaveBeenLastCalledWith('s1', 'm1', { interrupt: true })
+    expect(wrapper.get('[data-pending-message]').text()).toContain('keeps waiting')
+    expect(mocks.interruptQueue).not.toHaveBeenCalled()
+  })
+
+  it('offers only to interrupt for a sent message, which the CLI already holds', async () => {
+    const wrapper = view()
+    await flushPromises()
+    await send(wrapper, 'Also update the docs')
+    const pending = wrapper.get('[data-pending-message]')
+    expect(pending.find('[data-pending-send-now]').exists()).toBe(false)
+    await pending.get('[data-pending-interrupt]').trigger('click')
+    expect(mocks.interruptQueue).toHaveBeenCalledTimes(1)
+    expect(mocks.api.pushSessionMessage).not.toHaveBeenCalled()
+    expect(mocks.send).toHaveBeenCalledTimes(1)
+  })
 })

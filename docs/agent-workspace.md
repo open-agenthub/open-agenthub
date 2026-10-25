@@ -199,6 +199,27 @@ delivered — typed into the terminal (both CLIs), through the real fleet mod (C
 the inbox (Codex) — with no ✉ badge left behind. Against main's frontend the same run showed no
 pending entries, a badge of 1 after delivery, and the fleet message as the person's turn.
 
+**Send now (#261).** A waiting entry can be delivered at once instead of when the turn ends. What
+that means differs by where the message waits:
+
+- A fleet message is still a row in the hub. *Send now* pushes that row into the running agent as
+  a priority message (`POST /api/sessions/{id}/messages/{messageId}/push`), and *Interrupt and send*
+  stops the turn first, like a priority or interrupting `agent_send`. The row keeps its id, and the
+  pod leaves the ids it typed out of its end-of-turn take, so the message cannot arrive twice.
+  A row the agent has already taken is refused (409), so nothing is delivered a second time.
+- A composer message is already in the CLI's own queue, so it offers only *Interrupt and send*.
+  Pushing its text as well would deliver it twice. The button sends the driver's interruption key
+  (Escape; two for OpenCode), not the composer's Ctrl+C. Measured with the pinned CLIs and a model
+  holding the turn: Claude Code 2.1.287 sent the queued message as the next request right after
+  the interrupt, and Codex 0.160.0, whose queue reads *press esc to interrupt and send
+  immediately*, showed *Model interrupted to submit steer instructions* and sent it. Without an
+  interrupt both take it at the next tool call or at the turn's end, as before.
+
+Rejected: Claude Code's own *ctrl+x ctrl+s to send now*, drawn under a queued message. Sent as
+one write or with a pause between the keys, it delivered nothing while the model held the turn
+(2.1.287). Also rejected: deleting the CLI's queue entry and sending the text as a priority
+message. No CLI offers a way to remove one entry, and the screen does not say which entry is which.
+
 **When a message was written (#147).** Each user and agent message in the conversation shows a
 compact time — the time alone for today, the day for earlier this year, the year beyond that — with
 the full date as its hover title. The time is the one the CLI wrote on that line of its own transcript
