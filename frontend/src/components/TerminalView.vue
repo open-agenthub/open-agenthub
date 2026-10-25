@@ -105,6 +105,15 @@ const shareOpen = ref(false)
 // the heuristics in lib/transcript.js because terminal output has no roles).
 const conversation = ref(null)
 const transcriptItems = computed(() => toTranscriptItems(conversation.value))
+// What a live session with nothing written yet is doing, or '' once there is something to show
+// or the agent is up and waiting for a task. An autonomous run stays "starting" until its first
+// output: it has no idle prompt to invite a task at, so its empty conversation only means early.
+const conversationStarting = computed(() => {
+  if (!isLive.value || transcriptItems.value.length) return ''
+  if (props.session?.phase === 'Pending') return 'Waiting for the session’s pod to start…'
+  if (statuses.agent !== 'connected') return 'Starting the agent…'
+  return String(props.session?.mode).toLowerCase() === 'interactive' ? '' : 'The agent is starting its task…'
+})
 // Composer messages that reached the terminal and that the CLI has not taken yet (#153), kept
 // per session like drafts so switching sessions does not forget them.
 const sentMessages = ref(workspaceSent.get(props.session?.id) || [])
@@ -667,7 +676,7 @@ function interruptWorkspaceAgent() {
     <SecretRequestBanner v-if="capabilities.canManage && !sharedToken" :session-id="session.id" />
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :can-manage="capabilities.canManage" :shared-token="sharedToken" @updated="emit('runtime-updated')">
       <div class="terminal-stack">
-        <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy"
+        <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy" :starting="conversationStarting"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
           :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
