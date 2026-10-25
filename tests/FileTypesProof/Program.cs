@@ -60,7 +60,6 @@ SessionInfo Info() => new() { Id = "s1", Owner = "alice", Title = "video proof",
     Phase = "Running", Agent = AgentKind.Claude, CreatedAt = DateTime.UtcNow };
 
 app.UseAuthentication(); app.UseAuthorization();
-app.MapPost("/__as/{user}", (string user) => { As.User = user; return Results.Ok(new { user }); }).AllowAnonymous();
 app.MapPost("/__share/{role}", async (string role, SessionShareStore shares) =>
     Results.Ok(new { token = (await shares.CreateLinkAsync("alice", "s1",
         Enum.Parse<ShareRole>(role, true), DateTime.UtcNow.AddHours(1))).Token })).AllowAnonymous();
@@ -89,7 +88,8 @@ sealed class Only : IApplicationFeatureProvider<ControllerFeature>
     public void PopulateFeature(IEnumerable<ApplicationPart> parts, ControllerFeature feature)
     {
         var keep = new[] { typeof(SessionFilesController), typeof(InternalSessionFilesController), typeof(SharedSessionFilesController), typeof(SharedSessionsController) };
-        foreach (var c in feature.Controllers.ToArray()) if (!keep.Contains(c.AsType())) feature.Controllers.Remove(c);
+        foreach (var c in feature.Controllers.Where(c => !keep.Contains(c.AsType())).ToArray())
+            feature.Controllers.Remove(c);
     }
 }
 // The pod-backed path asks for the live session to find the pod; it is this machine.
@@ -107,10 +107,9 @@ public class Unused : DispatchProxy
 sealed class As(IOptionsMonitor<AuthenticationSchemeOptions> o, ILoggerFactory l, UrlEncoder e)
     : AuthenticationHandler<AuthenticationSchemeOptions>(o, l, e)
 {
-    public static volatile string User = "alice";
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
         => Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
-            new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("preferred_username", User) }, "t")), "t")));
+            new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("preferred_username", "alice") }, "t")), "t")));
 }
 sealed class Lic : IEnterpriseLicense
 {
