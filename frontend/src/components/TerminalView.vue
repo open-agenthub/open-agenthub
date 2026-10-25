@@ -108,10 +108,14 @@ const transcriptItems = computed(() => toTranscriptItems(conversation.value))
 // What a live session with nothing written yet is doing, or '' once there is something to show
 // or the agent is up and waiting for a task. An autonomous run stays "starting" until its first
 // output: it has no idle prompt to invite a task at, so its empty conversation only means early.
+// "Connected" alone is not "up": the hub accepts the terminal socket before it dials the pod, so
+// while the agent's server is not listening yet the socket opens, closes and reopens every two
+// seconds. The agent answers the activity subscription at once with a known state, and every
+// close resets it to 'unknown', so a known state is what says the agent is there.
 const conversationStarting = computed(() => {
   if (!isLive.value || transcriptItems.value.length) return ''
   if (props.session?.phase === 'Pending') return 'Waiting for the session’s pod to start…'
-  if (statuses.agent !== 'connected') return 'Starting the agent…'
+  if (statuses.agent !== 'connected' || agentActivity.value.state === 'unknown') return 'Starting the agent…'
   return String(props.session?.mode).toLowerCase() === 'interactive' ? '' : 'The agent is starting its task…'
 })
 // Composer messages that reached the terminal and that the CLI has not taken yet (#153), kept
