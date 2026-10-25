@@ -119,19 +119,21 @@ describe('pending queue below the conversation', () => {
   it('pushes a waiting fleet message as priority, interrupting only when asked', async () => {
     const waiting = { id: 'm1', from: 'abc123', fromTitle: 'Code Reviewer', body: 'Look at MR 42', createdAt: '2026-10-18T10:00:00Z', deliveredAt: null, priority: false, interrupt: false, deliveredVia: null }
     mocks.api.listSessionMessages.mockResolvedValue([waiting])
-    mocks.api.pushSessionMessage.mockResolvedValue({ id: 'm1', to: 's1', deliveredVia: 'injected' })
+    mocks.api.pushSessionMessage.mockResolvedValue({ id: 'm1', to: 's1', deliveredVia: 'inbox', reason: 'session_not_running' })
     const wrapper = view()
     await flushPromises()
-    await wrapper.get('[data-pending-message] [data-pending-send-now]').trigger('click')
-    await flushPromises()
-    expect(mocks.api.pushSessionMessage).toHaveBeenCalledWith('s1', 'm1', { interrupt: false })
-    expect(wrapper.get('[data-pending-message]').text()).toContain('Delivered to the agent.')
-
-    mocks.api.pushSessionMessage.mockResolvedValue({ id: 'm1', to: 's1', deliveredVia: 'inbox', reason: 'session_not_running' })
     await wrapper.get('[data-pending-message] [data-pending-interrupt]').trigger('click')
     await flushPromises()
-    expect(mocks.api.pushSessionMessage).toHaveBeenLastCalledWith('s1', 'm1', { interrupt: true })
+    expect(mocks.api.pushSessionMessage).toHaveBeenCalledWith('s1', 'm1', { interrupt: true })
     expect(wrapper.get('[data-pending-message]').text()).toContain('keeps waiting')
+
+    // Delivered, the entry leaves with the refresh that follows the push.
+    mocks.api.pushSessionMessage.mockResolvedValue({ id: 'm1', to: 's1', deliveredVia: 'injected' })
+    mocks.api.listSessionMessages.mockResolvedValue([{ ...waiting, deliveredAt: '2026-10-18T10:00:05Z', deliveredVia: 'injected' }])
+    await wrapper.get('[data-pending-message] [data-pending-send-now]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.pushSessionMessage).toHaveBeenLastCalledWith('s1', 'm1', { interrupt: false })
+    expect(wrapper.find('[data-pending-message]').exists()).toBe(false)
     expect(mocks.interruptQueue).not.toHaveBeenCalled()
   })
 

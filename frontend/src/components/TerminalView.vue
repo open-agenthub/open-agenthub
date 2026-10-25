@@ -134,8 +134,8 @@ async function sendPendingNow(key, { interrupt = false } = {}) {
   pendingBusy.value = { ...pendingBusy.value, [key]: true }
   try {
     const result = await api.pushSessionMessage(props.session.id, key.slice('fleet-'.length), { interrupt })
-    note(result?.deliveredVia === 'injected' || result?.deliveredVia === 'mod' ? 'Delivered to the agent.'
-      : 'Could not be delivered now; it keeps waiting for the agent.')
+    // Delivered, the entry leaves the list with the refresh; only a message that stays says why.
+    if (result?.deliveredVia !== 'injected' && result?.deliveredVia !== 'mod') note('Could not be delivered now; it keeps waiting for the agent.')
     await refreshMessages()
   } catch (e) {
     note(e?.message || 'The message could not be sent.')
