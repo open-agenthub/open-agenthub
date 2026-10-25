@@ -171,3 +171,13 @@ test('unhyphenated eight-letter device codes remain private, including wrapped r
   } finally { privacy.dispose(); }
  }
 });
+
+test('only a true code-mode flag is excluded, never other code values', async () => {
+ for (const value of ['true', 'TRUE', 'false', 'actual-code']) {
+  const privacy = createSignInPrivacy();
+  try {
+   privacy.feed([...screens.code.slice(0, 2), 'https://example.com/oauth/authorize?code=' + value, ...screens.code.slice(-2)].join('\r\n')); await privacy.flush();
+   assert.equal(privacy.mask(value), /^true$/i.test(value) ? value : '[sign-in data removed]');
+  } finally { privacy.dispose(); }
+ }
+});

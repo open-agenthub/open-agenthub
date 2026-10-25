@@ -42,7 +42,7 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
             const address = new URL(signIn.url);
             for (const [key, value] of address.searchParams) {
               // The authorization screen uses code=true as a public mode flag, not a returned code.
-              if (key === 'code' && /^(true|false)$/.test(value) && address.pathname.endsWith('/authorize')) continue;
+              if (key === 'code' && /^true$/i.test(value) && address.pathname.endsWith('/authorize')) continue;
               if (/^(state|code_challenge|code|device_code|user_code|ticket|token|challenge|nonce)$/i.test(key)) remember(value);
             }
           } catch {}
