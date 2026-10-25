@@ -74,15 +74,13 @@ public static class SessionSecretConflicts
 
         // A project selecting both would hand both to every session that follows it, including
         // the ones created later, so it is refused even while no session is in it.
-        foreach (var (id, project) in projects)
-            if (onlyProjects is null || onlyProjects.Contains(id))
-                EnsureNone(Entries(project.SecretIds), $"The project “{project.Name}” would select");
+        foreach (var project in projects.Where(p => onlyProjects is null || onlyProjects.Contains(p.Key)).Select(p => p.Value))
+            EnsureNone(Entries(project.SecretIds), $"The project “{project.Name}” would select");
 
         var resolver = new SessionSecretAccessResolver(sessions,
             projects.ToDictionary(p => p.Key, p => p.Value.SecretIds), byId.Keys.ToList());
-        foreach (var session in sessions.Values)
+        foreach (var session in sessions.Values.Where(s => onlySessions is null || onlySessions.Contains(s.Id)))
         {
-            if (onlySessions is not null && !onlySessions.Contains(session.Id)) continue;
             EnsureNone(Entries(resolver.Effective(session)), session.Id == selfSessionId
                 ? "This session would receive"
                 : $"The session “{(string.IsNullOrWhiteSpace(session.Title) ? session.Id : session.Title)}” ({session.Id}) would receive");
