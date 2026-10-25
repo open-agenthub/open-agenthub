@@ -45,10 +45,11 @@ const firstLine = {
 }
 async function uploadFirstTranscript(agent, env) {
   const file = `${out}/${agent}-transcript.jsonl`
-  fs.writeFileSync(file, JSON.stringify(firstLine[agent]) + '\n')
+  const body = JSON.stringify(firstLine[agent]) + '\n'
+  fs.writeFileSync(file, body)
   if (env.AGENTHUB_TRANSCRIPT_PUT_URL) execFileSync('curl', ['-fsS', '--max-time', '30', '-T', file, env.AGENTHUB_TRANSCRIPT_PUT_URL])
   const res = await fetch(env.AGENTHUB_CALLBACK_URL + '/transcript', { method: 'PUT',
-    headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': env.AGENTHUB_CALLBACK_TOKEN }, body: fs.readFileSync(file, 'utf8') })
+    headers: { 'Content-Type': 'application/x-ndjson', 'X-Agent-Token': env.AGENTHUB_CALLBACK_TOKEN }, body })
   return res.status
 }
 
