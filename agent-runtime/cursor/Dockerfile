@@ -18,7 +18,7 @@ ARG GLAB_VERSION=1.120.0
 # Set by BuildKit per target platform (amd64, arm64); gh and glab use the same names.
 ARG TARGETARCH
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git openssh-client ca-certificates bash curl tar \
+      git openssh-client ca-certificates bash curl tar python3 python3-pip python3-venv \
  && curl https://cursor.com/install -fsS | bash \
  && mkdir -p /usr/local/share/cursor-agent \
  && cp -a /root/.local/share/cursor-agent/versions /usr/local/share/cursor-agent/ \
@@ -35,6 +35,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${TARGETARCH}.tar.gz" | tar xz -C /tmp/glab \
  && install -m0755 "$(find /tmp/glab -type f -name glab | head -1)" /usr/local/bin/glab \
  && rm -rf /tmp/gh /tmp/glab /root/.local /var/lib/apt/lists/* \
+ && python3 --version \
+ && python3 -m pip --version \
+ && python3 -m venv /tmp/python-venv-smoke \
+ && /tmp/python-venv-smoke/bin/python -m pip --version \
+ && rm -rf /tmp/python-venv-smoke \
  && userdel -r node \
  && useradd -m -u 1000 -s /bin/bash agent \
  && test -x /usr/local/bin/node \
