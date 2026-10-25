@@ -5,6 +5,7 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import { DELIVERIES, deliveryLabel, secretPlace } from '../lib/secrets.js'
+import SecretRestartNote from './SecretRestartNote.vue'
 
 const props = defineProps({
   // A form to open on arrival — name, delivery and purpose an agent asked for; the value is
@@ -29,6 +30,16 @@ const answering = ref(null)
 const granted = ref(null)
 const restartArmed = ref(false)
 const restartBusy = ref(false)
+// Sessions whose running process still has variables from before a change made here (#255). Read
+// after every save and removal, not on arrival: before a change on this page there is nothing
+// this page did that needs a restart.
+const pendingRestart = ref([])
+async function loadPendingRestart() {
+  try {
+    pendingRestart.value = ((await api.listSessions()) || []).filter(s => s.secretsPendingRestart
+      && !(granted.value?.restartRequired && granted.value.sessionId === s.id))
+  } catch { pendingRestart.value = [] }
+}
 
 const editing = computed(() => !!draft.value?.existing)
 // Names are not unique (#253): a second secret under a name is fine until one session would
@@ -134,7 +145,7 @@ async function save() {
       restartArmed.value = false
       dropRequestFromUrl()
     }
-    await Promise.all([load(), loadRequests()])
+    await Promise.all([load(), loadRequests(), loadPendingRestart()])
     emit('saved', saved)
   } catch (e) {
     error.value = String(e.message || e)
@@ -146,7 +157,7 @@ async function save() {
 async function remove(secret) {
   if (confirming.value !== secret.id) { confirming.value = secret.id; return }
   confirming.value = ''
-  try { await api.deleteSecret(secret.id); await load() }
+  try { await api.deleteSecret(secret.id); await Promise.all([load(), loadPendingRestart()]) }
   catch (e) { loadError.value = String(e.message || e) }
 }
 
@@ -201,6 +212,9 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
         </li>
       </ul>
     </section>
+
+    <SecretRestartNote v-for="session in pendingRestart" :key="session.id" :session="session" named
+      @restarted="loadPendingRestart" />
 
     <div v-if="granted" class="granted" data-secret-granted>
       <b>{{ granted.name }}</b> is now available to “{{ granted.sessionTitle || granted.sessionId }}”

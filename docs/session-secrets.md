@@ -291,7 +291,48 @@ real Postgres: the store and its concurrent writes, the pod being admitted under
 Pod Security level, both copies, live rewrites on rotate, narrow and delete, the masked relay text,
 no value or name in any log line, and the account purge. What only a kubelet shows — files
 appearing and changing in `~/.secrets` of a running pod, the variables in the agent's environment —
-was not verifiable in a session pod.
+was verified later with a real kubelet (#255, below).
+
+## Changes reaching a running session (#255)
+
+Every change that alters what a session receives rewrites its two copies at once
+(`SyncSessionSecretsAsync`, `RefreshSessionSecretsAsync` for a request answer): a grant or revoke,
+a new value, a rename, a deleted secret, a narrowed project. A copy is replaced as a whole, so a
+renamed or revoked key is gone from it rather than left next to the new one. From there:
+
+- **Files follow by themselves.** The copy is mounted whole, and the kubelet swaps its `..data`
+  link on its next sync. Measured on a real kubelet (k3s 1.34 defaults): 60–85 s for a grant, a new
+  value, a rename (old name gone, new name there), a revoke and a deleted secret.
+- **Variables do not.** A container's environment is fixed when it starts. The pod therefore records
+  the `resourceVersion` the variable copy had when it started, in the annotation
+  `agenthub.dev/secret-env-version`. The API server does not bump a `resourceVersion` for a replace
+  that changes nothing, so a different version now means exactly that a variable was added,
+  removed, renamed or given another value since the start. This was checked on a real API server: a
+  file-only change and re-saving a variable with its value did not mark the session.
+  `SessionInfo.secretsPendingRestart` reports the difference. The owner sees it in the session
+  view, the sessions list, the edit dialog and Settings → Secrets after a save or removal, each with
+  the restart: `apply-resources`, which now restarts for pending variables as it does for pending
+  resources. It goes through the same pause → archive check → resume, so the conversation continues.
+- A request answered with a variable reports `restartRequired` from the same comparison. Before,
+  it asked whether the running container referenced the variable's name, which says nothing about
+  the value: a variable renamed onto that name, or given a new value, was reported as already there.
+
+- *Rejected: a hash of the variables in the annotation.* Anyone allowed to read pods could test
+  guesses of a short value against it.
+- *Rejected: restarting automatically.* A restart interrupts a turn in progress, and an autonomous
+  session resumed from its prompt may repeat work it already did outside; the owner decides.
+- *Rejected: the entrypoint re-reading variables from a file.* Only processes started after the
+  change would see them, and the agent CLI, the one that matters, is not one of them.
+- A pod started before this change has no annotation and reports nothing pending: unknown is not
+  the same as changed, and a note on every older session would teach the owner to ignore it.
+
+Verified with a real kubelet (`tests/SecretLiveSyncProof`, 23 checks). The setup: the branch's
+backend as the chart's service account, k3s in a QEMU guest, real Postgres, and memcached:alpine
+running as uid 1000 on a read-only root filesystem in place of the agent runtime. The process's own
+environment was read from `/proc/1/environ`, the files with `kubectl exec`. Not covered: the
+restart through `apply-resources` itself, because the rig has no object storage for the state
+archive. The proof shows that it attempts the restart for pending variables, and restarts with
+pause and resume.
 
 ## Found on the way
 
