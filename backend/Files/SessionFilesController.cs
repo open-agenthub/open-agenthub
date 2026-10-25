@@ -279,7 +279,7 @@ public static class SessionFileApi
 {
     private static readonly string[] DirectPreviewMimeTypes =
     [
-        "image/png", "image/jpeg", "image/webp", "image/gif",
+        "image/svg+xml", "image/png", "image/jpeg", "image/webp", "image/gif",
         "application/pdf", "text/markdown", "text/plain",
         VideoContainerInspector.Mp4, VideoContainerInspector.WebM,
     ];
@@ -312,7 +312,6 @@ public static class SessionFileApi
             new Dictionary<string, string>
             {
                 ["text/html"] = "download_only",
-                ["image/svg+xml"] = "download_only",
                 ["application/vnd.openxmlformats-officedocument.wordprocessingml.document"] =
                     options.OfficePreview.Enabled ? "office_preview_pending" : "office_preview_disabled",
                 ["application/vnd.openxmlformats-officedocument.presentationml.presentation"] =
@@ -410,6 +409,7 @@ public static class SessionFileApi
     {
         response.Headers.XContentTypeOptions = "nosniff";
         var disposition = new ContentDispositionHeaderValue(
+            mimeType != "image/svg+xml" &&
             DirectPreviewMimeTypes.Contains(mimeType, StringComparer.OrdinalIgnoreCase)
                 ? "inline"
                 : "attachment")
@@ -418,7 +418,9 @@ public static class SessionFileApi
             FileName = name,
         };
         response.Headers.ContentDisposition = disposition.ToString();
-        if (mimeType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase))
+        if (mimeType.Equals("application/pdf", StringComparison.OrdinalIgnoreCase) ||
+            mimeType.Equals("image/svg+xml", StringComparison.OrdinalIgnoreCase) ||
+            mimeType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase))
         {
             response.Headers.ContentSecurityPolicy = "sandbox; default-src 'none'";
         }

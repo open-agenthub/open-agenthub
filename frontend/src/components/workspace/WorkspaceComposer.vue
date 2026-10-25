@@ -304,7 +304,6 @@ onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); ge
       <span v-if="ghost" class="suggestion-hint" role="status">→ or Tab to accept suggestion</span>
       <div class="composer-controls">
         <input v-if="attach" ref="fileInput" class="file-input" type="file" multiple
-          accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.md,.markdown,.txt,.docx,.pptx,.xlsx"
           @change="addFiles($event.target.files); $event.target.value = ''">
         <button v-if="attach" type="button" class="attach" data-composer-attach aria-label="Attach files" title="Attach files — or paste an image"
           :disabled="!canAttach" @click="fileInput?.click()">＋</button>

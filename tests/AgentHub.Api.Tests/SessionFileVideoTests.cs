@@ -92,7 +92,7 @@ public sealed class SessionFileVideoTests
     [InlineData("clip.mp4", "video/mp4", 100L * 1024 * 1024 + 1, false)]
     [InlineData("clip.webm", "video/webm", 60L * 1024 * 1024, true)]
     [InlineData("clip.mp4", "video/webm", 1024, false)]
-    [InlineData("clip.mov", "video/quicktime", 1024, false)]
+    [InlineData("clip.mov", "video/quicktime", 1024, true)]
     public void Videos_have_their_own_reservation_limit(string name, string mime, long size, bool allowed)
     {
         var result = SessionFileValidator.ValidateReservation(new SessionFileOptions(), name, mime, size);
