@@ -40,7 +40,10 @@ function stream(item, id) {
 const CASES = {
   redirect: 'echo smoke > smoke.txt && cat smoke.txt && uname -m',
   plain: 'uname -m',
-  variable: 'echo "$HOME" | wc -c'
+  variable: 'echo "$HOME" | wc -c',
+  git: 'git add -A && git -c user.name=smoke -c user.email=smoke@example.com commit -q --allow-empty -m smoke && git log --oneline -1',
+  // A file edit is Codex's apply_patch tool, not a shell command.
+  edit: { patch: '*** Begin Patch\n*** Add File: edited.txt\n+edited by apply_patch\n*** End Patch\n' }
 };
 
 async function run(label, command) {
@@ -62,10 +65,10 @@ async function run(label, command) {
       const payload = JSON.parse(body);
       modelRequests.push(payload);
       res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-      res.end(stream(modelRequests.length === 1 ? {
+      res.end(stream(modelRequests.length === 1 ? (typeof command === 'string' ? {
         type: 'function_call', call_id: 'smoke', name: 'exec_command',
         arguments: JSON.stringify({ cmd: command, workdir: work })
-      } : { type: 'message', role: 'assistant', id: 'done',
+      } : { type: 'custom_tool_call', call_id: 'smoke', name: 'apply_patch', input: command.patch }) : { type: 'message', role: 'assistant', id: 'done',
         content: [{ type: 'output_text', text: 'smoke complete' }] }, `response-${modelRequests.length}`));
     });
   });
@@ -76,7 +79,7 @@ async function run(label, command) {
   args.splice(5, 0, '--disable', 'enable_request_compression', '-c', 'model_provider="proof"',
     '-c', 'model_providers.proof.name="proof"', '-c', `model_providers.proof.base_url="${base}/v1"`,
     '-c', 'model_providers.proof.wire_api="responses"', '-c', 'model_providers.proof.env_key="CODEX_API_KEY"',
-    '-c', 'model_providers.proof.supports_websockets=false', '-m', 'gpt-5.4');
+    '-c', 'model_providers.proof.supports_websockets=false', '-m', 'gpt-5.5');
   const env = { ...process.env, HOME: home, CODEX_HOME: home, TMPDIR: scratch, CODEX_API_KEY: 'synthetic-key',
     AGENTHUB_MODE: 'autonomous', AGENTHUB_CALLBACK_URL: `${policyUrl}/internal/sessions/proof`,
     AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback', AGENTHUB_SKILL_REMINDER: '0' };
@@ -89,10 +92,11 @@ async function run(label, command) {
   await new Promise(resolve => child.on('close', resolve));
   clearTimeout(timeout);
   server.close();
-  const result = modelRequests[1] ? JSON.stringify(modelRequests[1].input.filter(i => i.type === 'function_call_output')) : '';
-  fs.writeFileSync(path.join(root, `${label}.json`), JSON.stringify({ command, result, output }, null, 2));
+  const result = modelRequests[1] ? JSON.stringify(modelRequests[1].input.filter(i => /_call_output$/.test(i.type))) : '';
+  fs.writeFileSync(path.join(root, `${label}.json`), JSON.stringify({ command, result, output,
+    tools: (modelRequests[0]?.tools || []).map(t => `${t.type}:${t.name}`) }, null, 2));
   const blocked = /blocked by PreToolUse hook|session policy/i.test(result);
-  console.log(`${label}: ${blocked ? 'BLOCKED' : 'ran'} :: ${command}`);
+  console.log(`${label}: ${blocked ? 'BLOCKED' : 'ran'} :: ${typeof command === 'string' ? command : 'apply_patch edited.txt'}`);
   return { blocked, result };
 }
 
@@ -104,5 +108,7 @@ async function run(label, command) {
     assert.ok(!outcome.blocked, `${label} was blocked: ${outcome.result.slice(0, 400)}`);
   assert.match(outcomes.redirect.result, /smoke/);
   assert.ok(fs.existsSync(path.join(root, 'redirect', 'smoke.txt')), 'redirect never wrote smoke.txt');
+  assert.match(outcomes.git.result, /smoke/);
+  assert.equal(fs.readFileSync(path.join(root, 'edit', 'edited.txt'), 'utf8'), 'edited by apply_patch\n');
   console.log('all autonomous commands ran');
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
