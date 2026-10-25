@@ -217,12 +217,12 @@ public sealed class PostgresUsageStore : IUsageStore
     {
         // Resolve the authoritative owner (and the auth-mode snapshot) from the sessions
         // registry; fall back to the telemetry user.id only if the session row is unknown.
-        var (owner, authMode) = await ResolveSessionAsync(delta.SessionId, ct);
+        var (owner, authMode, storedBilling) = await ResolveSessionAsync(delta.SessionId, ct);
         owner ??= delta.UserId;
         if (string.IsNullOrEmpty(owner)) return false;
 
         var estimated = ClaudePricing.EstimateUsd(delta);
-        var billing = UsageBilling.Classify(authMode, delta.Billing);
+        var billing = UsageBilling.Classify(authMode, storedBilling);
         var apiCost = billing == UsageBilling.Api ? delta.CostUsd : 0;
 
         const string sql = """
@@ -396,13 +396,14 @@ public sealed class PostgresUsageStore : IUsageStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    private async Task<(string? Owner, string? AuthMode)> ResolveSessionAsync(string sessionId, CancellationToken ct)
+    private async Task<(string? Owner, string? AuthMode, string? Billing)> ResolveSessionAsync(string sessionId, CancellationToken ct)
     {
-        await using var cmd = _db.CreateCommand("SELECT owner, auth_mode FROM sessions WHERE id = @id");
+        await using var cmd = _db.CreateCommand("SELECT owner, auth_mode, usage_billing FROM sessions WHERE id = @id");
         cmd.Parameters.AddWithValue("id", sessionId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        if (!await r.ReadAsync(ct)) return (null, null);
-        return (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1));
+        if (!await r.ReadAsync(ct)) return (null, null, null);
+        return (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1),
+            r.IsDBNull(2) ? null : r.GetString(2));
     }
 
     private const string SelectBase = """

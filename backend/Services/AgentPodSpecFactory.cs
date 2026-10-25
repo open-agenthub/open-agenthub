@@ -1,6 +1,5 @@
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
-using AgentHub.Api.Usage;
 using k8s;
 using k8s.Models;
 
@@ -407,11 +406,7 @@ public static class AgentPodSpecFactory
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT", Value = $"{otlpBase}/v1/metrics" });
             env.Add(new() { Name = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", Value = "delta" });
             env.Add(new() { Name = "OTEL_METRIC_EXPORT_INTERVAL", Value = "30000" });
-            // agenthub.billing tells the hub which credential an Auto session's CLI will use; the
-            // reported cost is the same for a login and a key, so it cannot tell (UsageBilling).
-            var billing = UsageBilling.ForPod(record.AuthMode, record.Mode,
-                context.HasSelectedApiKey, context.HasSelectedSubscriptionCredential);
-            env.Add(new() { Name = "OTEL_RESOURCE_ATTRIBUTES", Value = $"agenthub.session_id={record.Id},agenthub.owner={context.Owner},agenthub.billing={billing}" });
+            env.Add(new() { Name = "OTEL_RESOURCE_ATTRIBUTES", Value = $"agenthub.session_id={record.Id},agenthub.owner={context.Owner}" });
         }
 
         var initContainers = new List<V1Container>();

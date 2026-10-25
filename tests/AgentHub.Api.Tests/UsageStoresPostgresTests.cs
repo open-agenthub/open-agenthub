@@ -93,19 +93,69 @@ public class UsageStoresPostgresTests
     }
 
     [PostgreSqlFact]
-    public async Task AutoSession_FollowsThePodLabel_AndIsUnknownWithoutOne()
+    public async Task AutoSession_FollowsTheLabelTheHubStored_AndIsUnknownWithoutOne()
     {
         await using var db = await PostgresUsageDatabase.CreateAsync();
         await db.AddSessionAsync("s-auto-api", "alice", AgentAuthMode.Auto);
         await db.AddSessionAsync("s-auto-tui", "alice", AgentAuthMode.Auto);
+        await db.AddSessionAsync("s-auto-old", "alice", AgentAuthMode.Auto);
+        await db.Sessions.SetUsageBillingAsync("s-auto-api", UsageBilling.Api);
+        await db.Sessions.SetUsageBillingAsync("s-auto-tui", UsageBilling.Unknown);
+        // A later upsert of the session (an edit) keeps the label the start stored.
+        await db.AddSessionAsync("s-auto-api", "alice", AgentAuthMode.Auto);
 
-        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-api", CostUsd = 1, Billing = "api" });
-        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-tui", CostUsd = 2, Billing = "unknown" });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-api", CostUsd = 1 });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-tui", CostUsd = 2 });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-old", CostUsd = 4 });
 
         var rows = (await db.Usage.ListByOwnerAsync("alice")).ToDictionary(r => r.SessionId);
         Assert.Equal("api", rows["s-auto-api"].Billing);
         Assert.Equal("unknown", rows["s-auto-tui"].Billing);
+        Assert.Equal("unknown", rows["s-auto-old"].Billing);
         Assert.Equal(1, await db.Usage.MonthToDateApiCostAsync("alice"), 6);
+    }
+
+    [PostgreSqlFact]
+    public async Task OtlpPayload_CannotChangeTheBilling()
+    {
+        // The OTLP endpoint is unauthenticated: a payload claiming a subscription for an ApiKey
+        // session, or naming another owner, changes nothing the hub decides.
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-api", "alice", AgentAuthMode.ApiKey);
+        var payload = new OtlpMetricsParserTests.OtlpBuilder()
+            .Resource(("agenthub.session_id", "s-api"), ("agenthub.owner", "mallory"), ("agenthub.billing", "subscription"))
+            .TokenPoint("input", 100)
+            .CostPoint(0.5)
+            .Build();
+
+        foreach (var delta in OtlpMetricsParser.Parse(payload)) await db.Usage.AddDeltaAsync(delta);
+
+        var row = Assert.Single(await db.Usage.ListByOwnerAsync("alice"));
+        Assert.Equal("api", row.Billing);
+        Assert.Equal(0.5, await db.Usage.MonthToDateApiCostAsync("alice"), 6);
+        Assert.Empty(await db.Usage.ListByOwnerAsync("mallory"));
+    }
+
+    [PostgreSqlFact]
+    public async Task Usage_IsScopedToTheOwner()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-alice", "alice", AgentAuthMode.ApiKey);
+        await db.AddSessionAsync("s-bob", "bob", AgentAuthMode.Subscription);
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-alice", CostUsd = 1, InputTokens = 10 });
+        // A payload naming another owner cannot move a session: the sessions registry decides.
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-bob", UserId = "alice", CostUsd = 1, InputTokens = 20 });
+
+        Assert.Equal("s-alice", Assert.Single(await db.Usage.ListByOwnerAsync("alice")).SessionId);
+        Assert.Equal("s-bob", Assert.Single(await db.Usage.ListByOwnerAsync("bob")).SessionId);
+        Assert.Null(await db.Usage.GetAsync("alice", "s-bob"));
+        Assert.Null(await db.Usage.GetAsync("bob", "s-alice"));
+        var alice = await db.Usage.SummaryAsync("alice", null, null);
+        Assert.Equal(1, alice.SessionCount);
+        Assert.Equal(10, alice.InputTokens);
+        Assert.Equal(1, alice.CostUsd, 6);
+        Assert.Equal(0, (await db.Usage.SummaryAsync("bob", null, null)).CostUsd, 6);
+        Assert.Equal(0, await db.Usage.MonthToDateApiCostAsync("bob"), 6);
     }
 
     [PostgreSqlFact]
@@ -149,28 +199,6 @@ public class UsageStoresPostgresTests
         Assert.Equal(1, alice.SessionCount);
         Assert.Equal(3, alice.SubscriptionTurns);
         Assert.Equal(0, alice.CostUsd);
-    }
-
-    [PostgreSqlFact]
-    public async Task Usage_IsScopedToTheOwner()
-    {
-        await using var db = await PostgresUsageDatabase.CreateAsync();
-        await db.AddSessionAsync("s-alice", "alice", AgentAuthMode.ApiKey);
-        await db.AddSessionAsync("s-bob", "bob", AgentAuthMode.Subscription);
-        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-alice", CostUsd = 1, InputTokens = 10 });
-        // A payload naming another owner cannot move a session: the sessions registry decides.
-        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-bob", UserId = "alice", CostUsd = 1, InputTokens = 20 });
-
-        Assert.Equal("s-alice", Assert.Single(await db.Usage.ListByOwnerAsync("alice")).SessionId);
-        Assert.Equal("s-bob", Assert.Single(await db.Usage.ListByOwnerAsync("bob")).SessionId);
-        Assert.Null(await db.Usage.GetAsync("alice", "s-bob"));
-        Assert.Null(await db.Usage.GetAsync("bob", "s-alice"));
-        var alice = await db.Usage.SummaryAsync("alice", null, null);
-        Assert.Equal(1, alice.SessionCount);
-        Assert.Equal(10, alice.InputTokens);
-        Assert.Equal(1, alice.CostUsd, 6);
-        Assert.Equal(0, (await db.Usage.SummaryAsync("bob", null, null)).CostUsd, 6);
-        Assert.Equal(0, await db.Usage.MonthToDateApiCostAsync("bob"), 6);
     }
 
     [PostgreSqlFact]

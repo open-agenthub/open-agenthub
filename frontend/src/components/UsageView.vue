@@ -29,6 +29,7 @@ async function load() {
 }
 onMounted(load)
 
+const plural = (n, word) => `${n ?? 0} ${word}${n === 1 ? '' : 's'}`
 const summaryTotal = computed(() => totalTokens(summary.value))
 const apiCost = computed(() => summary.value?.apiCostUsd ?? summary.value?.costUsd ?? 0)
 // Spend first, then the biggest token users: a subscription session has no money to sort by.
@@ -80,12 +81,12 @@ async function saveLimit() {
         <div class="card stat" data-api-cost>
           <div class="stat-label">API cost</div>
           <div class="stat-value">{{ formatCost(apiCost) }}</div>
-          <div class="stat-sub">reported by the CLIs for API-key sessions · {{ summary?.apiSessionCount ?? 0 }} sessions</div>
+          <div class="stat-sub">reported by the CLIs for API-key sessions · {{ plural(summary?.apiSessionCount, 'session') }}</div>
         </div>
         <div class="card stat" data-subscription-usage>
           <div class="stat-label">Subscription usage</div>
           <div class="stat-value">{{ formatTokens(summary?.subscriptionTokens) }} <span class="unit">tokens</span></div>
-          <div class="stat-sub">{{ summary?.subscriptionSessionCount ?? 0 }} sessions<template v-if="summary?.subscriptionTurns"> · {{ summary.subscriptionTurns }} turns</template> · counts against plan limits, not money</div>
+          <div class="stat-sub">{{ plural(summary?.subscriptionSessionCount, 'session') }}<template v-if="summary?.subscriptionTurns"> · {{ plural(summary.subscriptionTurns, 'turn') }}</template> · counts against plan limits, not money</div>
         </div>
         <div class="card stat">
           <div class="stat-label">Tokens</div>

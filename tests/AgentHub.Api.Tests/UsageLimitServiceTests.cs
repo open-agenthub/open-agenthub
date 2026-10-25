@@ -76,43 +76,55 @@ public class UsageLimitServiceTests
         Assert.True(status.Blocked);
     }
 
+    // EnsureCanStartAsync takes the classification UsageBilling.ForPod makes for the start, the
+    // same one usage reporting uses; the matrix itself is covered in UsageBillingTests.
+    private static string Billing(AgentAuthMode auth, SessionMode mode, bool key, bool login)
+        => UsageBilling.ForPod(auth, mode, key, login);
+
     [Fact]
     public async Task EnsureCanStart_Throws_ForApiKeySession_OverLimit()
     {
         var svc = Build(10, personal: 10);
         await Assert.ThrowsAsync<UsageLimitExceededException>(() =>
-            svc.EnsureCanStartAsync("u", AgentKind.Claude, AgentAuthMode.ApiKey, hasSubscriptionCredentials: false));
+            svc.EnsureCanStartAsync("u", AgentKind.Claude, Billing(AgentAuthMode.ApiKey, SessionMode.Interactive, true, false)));
     }
 
     [Fact]
     public async Task EnsureCanStart_AllowsSubscriptionSessions_EvenOverLimit()
     {
         var svc = Build(10, personal: 10);
-        await svc.EnsureCanStartAsync("u", AgentKind.Claude, AgentAuthMode.Subscription, hasSubscriptionCredentials: true);
+        await svc.EnsureCanStartAsync("u", AgentKind.Claude, Billing(AgentAuthMode.Subscription, SessionMode.Autonomous, false, true));
     }
 
-    [Fact]
-    public async Task EnsureCanStart_Auto_UsesSubscriptionCredentialPresence()
+    [Theory]
+    // claude -p uses a stored key even with a login next to it: an unattended Auto start bills the
+    // API and is refused over budget (on create, resume and restart alike — they share the gate).
+    [InlineData(SessionMode.Autonomous, true, true, true)]
+    [InlineData(SessionMode.Scheduled, true, false, true)]
+    [InlineData(SessionMode.Autonomous, false, true, false)]
+    // Interactive with both: the TUI asks the person, so it is unknown and never counts.
+    [InlineData(SessionMode.Interactive, true, true, false)]
+    // Interactive with only a key: the key is the one way the session can work.
+    [InlineData(SessionMode.Interactive, true, false, true)]
+    public async Task EnsureCanStart_Auto_FollowsTheReportingClassification(SessionMode mode, bool key, bool login, bool refused)
     {
         var svc = Build(10, personal: 10);
-        // Auto + stored subscription login -> not API-billed -> allowed.
-        await svc.EnsureCanStartAsync("u", AgentKind.Claude, AgentAuthMode.Auto, hasSubscriptionCredentials: true);
-        // Auto without a subscription login falls back to the API key -> blocked.
-        await Assert.ThrowsAsync<UsageLimitExceededException>(() =>
-            svc.EnsureCanStartAsync("u", AgentKind.Claude, AgentAuthMode.Auto, hasSubscriptionCredentials: false));
+        var start = () => svc.EnsureCanStartAsync("u", AgentKind.Claude, Billing(AgentAuthMode.Auto, mode, key, login));
+        if (refused) await Assert.ThrowsAsync<UsageLimitExceededException>(start);
+        else await start();
     }
 
     [Fact]
     public async Task EnsureCanStart_IgnoresNonClaudeAgents()
     {
         var svc = Build(999, personal: 1);
-        await svc.EnsureCanStartAsync("u", AgentKind.Codex, AgentAuthMode.ApiKey, hasSubscriptionCredentials: false);
+        await svc.EnsureCanStartAsync("u", AgentKind.Codex, UsageBilling.Api);
     }
 
     [Fact]
     public async Task EnsureCanStart_AllowsApiSessions_UnderLimit()
     {
         var svc = Build(9.99, personal: 10);
-        await svc.EnsureCanStartAsync("u", AgentKind.Claude, AgentAuthMode.ApiKey, hasSubscriptionCredentials: false);
+        await svc.EnsureCanStartAsync("u", AgentKind.Claude, UsageBilling.Api);
     }
 }

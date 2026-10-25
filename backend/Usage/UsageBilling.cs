@@ -21,24 +21,25 @@ public static class UsageBilling
     public static bool IsValid(string? value) => value is Api or Subscription or Custom or Unknown;
 
     /// <summary>
-    /// The billing of a usage report for a session with the given auth mode. Subscription, ApiKey
-    /// and CustomEndpoint are settled by the session record and a pod's own label cannot change
-    /// them: the label travels in an unauthenticated OTLP payload. Only Auto — where the CLI picks
-    /// between the login and the key at run time — takes the label the pod was started with
-    /// (<see cref="ForPod"/>), and is <see cref="Unknown"/> without one.
+    /// The billing of a usage report, from hub-side state only: the session's auth mode, and for
+    /// Auto — where the CLI picks between the login and the key at run time — the label the hub
+    /// stored when it started the pod (<see cref="ForPod"/>, sessions.usage_billing). Nothing the
+    /// pod sends is consulted: the OTLP endpoint is unauthenticated, and a value from the payload
+    /// could move API-key spend out of the budget. Auto without a stored label is unknown.
     /// </summary>
-    public static string Classify(string? authMode, string? podLabel) => authMode switch
+    public static string Classify(string? authMode, string? storedLabel) => authMode switch
     {
         "Subscription" => Subscription,
         "ApiKey" => Api,
         "CustomEndpoint" => Custom,
-        _ => IsValid(podLabel) ? podLabel! : Unknown
+        _ => IsValid(storedLabel) ? storedLabel! : Unknown
     };
 
     /// <summary>
-    /// The label a new pod carries. An unattended Claude run (<c>claude -p</c>) uses
-    /// ANTHROPIC_API_KEY whenever it is set, even with a login next to it; the interactive TUI
-    /// instead asks the person whether to use the key ("No" preselected), so the hub cannot know.
+    /// Who pays for a pod the hub is about to start. An unattended Claude run (<c>claude -p</c>)
+    /// uses ANTHROPIC_API_KEY whenever it is set, even with a login next to it. The interactive TUI
+    /// asks the person whether to use the key ("No" preselected), so with both stored the hub
+    /// cannot know; with only the key, the key is the one way that session can work.
     /// </summary>
     public static string ForPod(Models.AgentAuthMode authMode, Models.SessionMode mode, bool hasApiKey, bool hasSubscription) =>
         authMode switch
@@ -46,7 +47,7 @@ public static class UsageBilling
             Models.AgentAuthMode.Subscription => Subscription,
             Models.AgentAuthMode.ApiKey => Api,
             Models.AgentAuthMode.CustomEndpoint => Custom,
-            _ when mode is Models.SessionMode.Interactive => Unknown,
+            _ when mode is Models.SessionMode.Interactive => hasApiKey && !hasSubscription ? Api : Unknown,
             _ when hasApiKey => Api,
             _ when hasSubscription => Subscription,
             _ => Unknown
