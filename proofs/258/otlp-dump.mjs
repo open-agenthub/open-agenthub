@@ -16,7 +16,7 @@ function* fields(buf) {
   }
 }
 const str = b => Buffer.from(b).toString('utf8');
-function anyValue(b) { for (const [f, w, v] of fields(b)) { if (f === 1) return str(v); if (f === 2 || f === 3) return String(v); if (f === 4) return Buffer.from(v).readDoubleLE(0); } return null; }
+function anyValue(b) { for (const [f, , v] of fields(b)) { if (f === 1) return str(v); if (f === 2 || f === 3) return String(v); if (f === 4) return Buffer.from(v).readDoubleLE(0); } return null; }
 function kv(b) { let k, v; for (const [f, , x] of fields(b)) { if (f === 1) k = str(x); if (f === 2) v = anyValue(x); } return [k, v]; }
 function point(b) { const attrs = {}; let value; for (const [f, , x] of fields(b)) { if (f === 4) value = Buffer.from(x).readDoubleLE(0); if (f === 6) value = Number(Buffer.from(x).readBigInt64LE(0)); if (f === 7) { const [k, v] = kv(x); attrs[k] = v; } } return { value, attrs }; }
 

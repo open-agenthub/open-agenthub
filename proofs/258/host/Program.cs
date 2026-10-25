@@ -39,7 +39,7 @@ await app.Services.GetRequiredService<PostgresSessionStore>().InitializeAsync();
 await app.Services.GetRequiredService<PostgresUsageStore>().InitializeAsync();
 await app.Services.GetRequiredService<UserDirectory>().InitializeAsync();
 app.UseAuthentication(); app.UseAuthorization();
-app.MapPost("/__as/{user}", (string user) => { As.User = user; return Results.Ok(new { user }); }).AllowAnonymous();
+app.MapPost("/__as/{user}", (string user) => { As.User.Value = user; return Results.Ok(new { user }); }).AllowAnonymous();
 // Sessions as the hub would have created them: id, owner, agent, auth mode, callback token, and
 // the billing a start stores (KubernetesSessionService.BuildPodContextAsync, which needs a cluster).
 app.MapPost("/__seed", async (SeedBody s, ISessionStore store) => {
@@ -60,18 +60,19 @@ sealed class Only(params Type[] types) : IApplicationFeatureProvider<ControllerF
 {
     public void PopulateFeature(IEnumerable<ApplicationPart> parts, ControllerFeature feature)
     {
-        foreach (var c in feature.Controllers.ToList())
-            if (!types.Contains(c.AsType())) feature.Controllers.Remove(c);
+        foreach (var c in feature.Controllers.Where(c => !types.Contains(c.AsType())).ToList())
+            feature.Controllers.Remove(c);
     }
 }
 
 sealed class As(IOptionsMonitor<AuthenticationSchemeOptions> o, ILoggerFactory l, UrlEncoder e)
     : AuthenticationHandler<AuthenticationSchemeOptions>(o, l, e)
 {
-    public static volatile string User = "alice";
+    // A box rather than a mutable static field: the user is switched at run time by POST /__as/{user}.
+    public static readonly System.Runtime.CompilerServices.StrongBox<string> User = new("alice");
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
         => Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
-            new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("preferred_username", User) }, "t")), "t")));
+            new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("preferred_username", User.Value!) }, "t")), "t")));
 }
 
 class Unused : DispatchProxy
