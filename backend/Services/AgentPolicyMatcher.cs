@@ -20,10 +20,13 @@ public static class AgentPolicyMatcher
     /// held to its allow list no matter what its auto-approve flag said, and an empty list meant
     /// the agent was denied its first tool call and finished having done nothing.
     ///
-    /// Malformed input is never softened this way: an unparseable shell command stays a hard
-    /// deny, because "we could not tell what this command does" is not a question anyone can be
-    /// asked. The live MCP sharing policy is enforced before this matcher runs and also stays
-    /// hard.
+    /// Input that is not a command at all (no string, an empty one) stays a hard deny. A real
+    /// shell command the allow-list parser cannot take apart (a redirect, a variable, a glob) is
+    /// only not covered: the parser is deliberately narrow so that an allowed prefix cannot
+    /// smuggle a second command, and under auto-approve there is nothing to smuggle past.
+    /// Denying it outright refused `echo x > f` while `cat f` ran, so an autonomous Codex or
+    /// OpenCode session could run almost nothing (#244). The live MCP sharing policy is enforced
+    /// before this matcher runs and stays hard.
     /// </param>
     public static PolicyDecision Decide(AgentPolicy policy, string tool, JsonElement input,
         bool autoApprove = false)
@@ -44,9 +47,10 @@ public static class AgentPolicyMatcher
         if (input.ValueKind != JsonValueKind.Object
             || !input.TryGetProperty("command", out var element)
             || element.ValueKind != JsonValueKind.String
-            || string.IsNullOrWhiteSpace(element.GetString())
-            || !TryParse(element.GetString()!, out var components))
+            || string.IsNullOrWhiteSpace(element.GetString()))
             return Deny("Invalid shell command.");
+        if (!TryParse(element.GetString()!, out var components))
+            return NotCovered("command policy", autoApprove);
 
         var prefixes = new List<IReadOnlyList<string>>();
         foreach (var configured in allowed ?? [])
