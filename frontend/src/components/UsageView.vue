@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api.js'
-import { formatApproxCost, formatBytes, formatCost, formatCpuSeconds, formatTokens, formatTokensExact, hasResources, percent, sessionCost, totalTokens } from '../lib/usage.js'
+import { formatBytes, formatCost, formatCpuSeconds, formatTokens, formatTokensExact, hasResources, percent, sessionBilling, totalTokens, usageSource } from '../lib/usage.js'
 
 const summary = ref(null)
 const rows = ref([])
@@ -29,11 +29,12 @@ async function load() {
 }
 onMounted(load)
 
+const plural = (n, word) => `${n ?? 0} ${word}${n === 1 ? '' : 's'}`
 const summaryTotal = computed(() => totalTokens(summary.value))
 const apiCost = computed(() => summary.value?.apiCostUsd ?? summary.value?.costUsd ?? 0)
-const subValue = computed(() => summary.value?.subscriptionEstimatedCostUsd ?? 0)
+// Spend first, then the biggest token users: a subscription session has no money to sort by.
 const sorted = computed(() =>
-  [...rows.value].sort((a, b) => sessionCost(b).usd - sessionCost(a).usd))
+  [...rows.value].sort((a, b) => sessionBilling(b).usd - sessionBilling(a).usd || totalTokens(b) - totalTokens(a)))
 
 function segments(row) {
   const total = totalTokens(row)
@@ -71,7 +72,7 @@ async function saveLimit() {
   <div class="usage-page">
     <div>
       <h2>Usage &amp; cost</h2>
-      <div class="sub">Fed live from agent OpenTelemetry metrics.</div>
+      <div class="sub">Tokens as each agent CLI records them. Money only for API-key sessions, as the CLI reported it.</div>
     </div>
     <p v-if="error" class="err">{{ error }}</p>
     <p v-if="loading" class="muted">Loading…</p>
@@ -80,12 +81,12 @@ async function saveLimit() {
         <div class="card stat" data-api-cost>
           <div class="stat-label">API cost</div>
           <div class="stat-value">{{ formatCost(apiCost) }}</div>
-          <div class="stat-sub">billed against API keys · {{ summary?.sessionCount ?? 0 }} sessions with usage</div>
+          <div class="stat-sub">reported by the CLIs for API-key sessions · {{ plural(summary?.apiSessionCount, 'session') }}</div>
         </div>
-        <div class="card stat" data-subscription-value>
-          <div class="stat-label">Covered by subscription</div>
-          <div class="stat-value approx">{{ formatApproxCost(subValue) }}</div>
-          <div class="stat-sub">what these tokens would have cost at API prices</div>
+        <div class="card stat" data-subscription-usage>
+          <div class="stat-label">Subscription usage</div>
+          <div class="stat-value">{{ formatTokens(summary?.subscriptionTokens) }} <span class="unit">tokens</span></div>
+          <div class="stat-sub">{{ plural(summary?.subscriptionSessionCount, 'session') }}<template v-if="summary?.subscriptionTurns"> · {{ plural(summary.subscriptionTurns, 'turn') }}</template> · counts against plan limits, not money</div>
         </div>
         <div class="card stat">
           <div class="stat-label">Tokens</div>
@@ -132,22 +133,21 @@ async function saveLimit() {
       </div>
       <div class="card table">
         <div class="table-head">Cost by session</div>
-        <div class="thead"><span>SESSION</span><span>TOKENS</span><span>MIX</span><span>RESOURCES</span><span class="right">COST</span></div>
+        <div class="thead"><span>SESSION</span><span>TOKENS</span><span>MIX</span><span>RESOURCES</span><span class="right">COST / USAGE</span></div>
         <div v-for="r in sorted" :key="r.sessionId" class="trow">
-          <span class="ttitle">{{ r.title || r.sessionId }}</span>
+          <span class="ttitle">{{ r.title || r.sessionId }}<span v-if="usageSource(r)" class="tsource">{{ usageSource(r) }}</span></span>
           <span class="tnum">{{ formatTokens(totalTokens(r)) }}</span>
           <span class="tbar"><span class="bar small"><span v-for="s in segments(r)" :key="s.key" class="seg" :style="{ width: s.pct + '%', background: s.color }"></span></span></span>
           <span class="tnum tres" :title="hasResources(r) ? `CPU ${formatCpuSeconds(r.cpuSeconds)} · peak memory ${formatBytes(r.peakMemoryBytes)} · received ${formatBytes(r.rxBytes)} · sent ${formatBytes(r.txBytes)}` : ''">
             <template v-if="hasResources(r)">{{ formatCpuSeconds(r.cpuSeconds) }} · {{ formatBytes(r.peakMemoryBytes) }} · ↓{{ formatBytes(r.rxBytes) }} ↑{{ formatBytes(r.txBytes) }}</template>
             <template v-else>—</template>
           </span>
-          <span class="tnum right">
-            <span v-if="sessionCost(r).approx" class="src-pill sub" title="Covered by a Claude subscription — estimated API-equivalent">sub</span>
-            <span v-else class="src-pill api" title="Billed against an API key">api</span>
-            {{ sessionCost(r).approx ? formatApproxCost(sessionCost(r).usd) : formatCost(sessionCost(r).usd) }}
+          <span class="tnum right" :title="sessionBilling(r).title" :data-billing="sessionBilling(r).kind">
+            <span v-if="sessionBilling(r).pill" class="src-pill" :class="sessionBilling(r).kind">{{ sessionBilling(r).pill }}</span>
+            {{ sessionBilling(r).text }}
           </span>
         </div>
-        <p v-if="!sorted.length" class="muted pad">No usage recorded yet. Enable <code>telemetry.enabled</code> on the server for this to populate.</p>
+        <p v-if="!sorted.length" class="muted pad">No usage recorded yet. Claude sessions need <code>telemetry.enabled</code> on the server.</p>
       </div>
     </template>
   </div>
@@ -160,7 +160,7 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .stat { padding: 15px 17px; }
 .stat-label { font-size: 12px; color: var(--muted-2); }
 .stat-value { font-family: var(--display); font-size: 30px; font-weight: 700; margin-top: 5px; color: var(--strong); }
-.stat-value.approx { color: var(--sched); }
+.stat-value .unit { font-size: 14px; font-weight: 500; color: var(--muted-2); }
 .stat-sub { font-size: 12px; color: var(--muted-3); margin-top: 3px; }
 .budget { padding: 15px 17px; display: flex; flex-direction: column; gap: 10px; }
 .budget-head { display: flex; justify-content: space-between; font-weight: 600; font-size: 13px; }
@@ -189,6 +189,7 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .trow { display: grid; grid-template-columns: 1.8fr 0.7fr 1fr 1.6fr 1fr; padding: 11px 18px; border-top: 1px solid var(--border); align-items: center; }
 .trow:hover { background: var(--hover); }
 .ttitle { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
+.tsource { margin-left: 8px; font-size: 11px; font-weight: 500; color: var(--muted-3); }
 .tnum { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 .tbar { display: flex; padding-right: 14px; }
 .tres { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 10px; }
@@ -196,6 +197,7 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .src-pill { display: inline-block; font-size: 10px; font-weight: 700; letter-spacing: 0.06em; padding: 1px 7px; border-radius: 8px; margin-right: 6px; vertical-align: 1px; }
 .src-pill.sub { color: var(--sched); background: rgba(201, 184, 249, 0.12); }
 .src-pill.api { color: var(--ok); background: rgba(95, 214, 139, 0.12); }
+.src-pill.custom, .src-pill.unknown { color: var(--muted-2); background: var(--hover); }
 .muted { color: var(--muted); font-size: 13px; }
 .pad { padding: 14px 18px; }
 .err { color: var(--danger); font: 12px var(--mono); }

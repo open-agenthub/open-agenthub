@@ -157,3 +157,6 @@ jobs:
       - name: Verify model endpoint egress values
         shell: pwsh
         run: ./tests/helm/model-endpoints-values.ps1
+      - name: Verify the agent service account has no permissions
+        shell: pwsh
+        run: ./tests/helm/agent-service-account.ps1

@@ -15,10 +15,25 @@ public sealed class SessionUsage
     public long OutputTokens { get; init; }
     public long CacheReadTokens { get; init; }
     public long CacheCreationTokens { get; init; }
-    /// <summary>Cost as reported by Claude Code — 0 for subscription (OAuth) sessions.</summary>
+    /// <summary>Reasoning tokens — a part of <see cref="OutputTokens"/>, for CLIs that say so.</summary>
+    public long ReasoningTokens { get; init; }
+    /// <summary>Prompts the agent took on, for CLIs whose own record counts them (not Claude's OTLP).</summary>
+    public long Turns { get; init; }
+    /// <summary>
+    /// The cost the CLI computed itself from its own price table — Claude Code, OpenCode and
+    /// OpenClaw do this whatever the login, so it is spend only when <see cref="ApiBilled"/>.
+    /// </summary>
     public double CostUsd { get; init; }
-    /// <summary>What the tokens would have cost on the API, from the static price table.</summary>
+    /// <summary>False when the CLI computes no cost at all (Codex): 0 then means "not reported".</summary>
+    public bool CostReported { get; init; }
+    /// <summary>Reported cost of the API-billed part of the session: real spend.</summary>
+    public double ApiCostUsd { get; init; }
+    /// <summary>What the tokens would have cost on the Anthropic API, from the static price table (Claude only).</summary>
     public double EstimatedCostUsd { get; init; }
+    /// <summary>"api" | "subscription" | "custom" | "unknown" (see <see cref="UsageBilling"/>); null for a row without token usage.</summary>
+    public string? Billing { get; init; }
+    /// <summary>Where the numbers come from: "claude-otel", "codex", "opencode" or "openclaw".</summary>
+    public string? Source { get; init; }
     /// <summary>Session auth mode snapshot ("Subscription" | "ApiKey" | "Auto"); null for old rows.</summary>
     public string? AuthMode { get; init; }
     /// <summary>Total CPU time (seconds) consumed by the session's pods.</summary>
@@ -33,8 +48,8 @@ public sealed class SessionUsage
     public DateTime CreatedAt { get; init; }
     public DateTime UpdatedAt { get; init; }
     public long TotalTokens => InputTokens + OutputTokens + CacheReadTokens + CacheCreationTokens;
-    /// <summary>True when this session actually billed against an API key (real spend).</summary>
-    public bool ApiBilled => AuthMode == "ApiKey" || CostUsd > 0;
+    /// <summary>True when this session billed against an API key (real spend).</summary>
+    public bool ApiBilled => Billing == UsageBilling.Api;
 }
 
 /// <summary>Owner-wide totals over an optional time window (filtered on updated_at).</summary>
@@ -46,8 +61,16 @@ public sealed class UsageSummary
     public long OutputTokens { get; init; }
     public long CacheReadTokens { get; init; }
     public long CacheCreationTokens { get; init; }
-    /// <summary>Real API spend (sum of reported costs; subscription sessions report 0).</summary>
+    public long ReasoningTokens { get; init; }
+    public long Turns { get; init; }
+    /// <summary>Real API spend: reported cost of API-billed usage only (see <see cref="UsageBilling"/>).</summary>
     public double CostUsd { get; init; }
+    public int ApiSessionCount { get; init; }
+    public int SubscriptionSessionCount { get; init; }
+    /// <summary>Tokens billed against API keys / covered by subscriptions.</summary>
+    public long ApiTokens { get; init; }
+    public long SubscriptionTokens { get; init; }
+    public long SubscriptionTurns { get; init; }
     /// <summary>Estimated API-equivalent cost of ALL tokens (api + subscription sessions).</summary>
     public double EstimatedCostUsd { get; init; }
     /// <summary>"Would have cost" — estimated cost of the subscription-covered sessions only.</summary>
@@ -121,7 +144,7 @@ public sealed class PostgresUsageStore : IUsageStore
                 created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
                 updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
             );
-            -- Real-vs-estimated split (subscription sessions report cost 0; see ClaudePricing).
+            -- API-equivalent estimate from the static price table (ClaudePricing).
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS estimated_cost_usd DOUBLE PRECISION NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS auth_mode TEXT;
             -- Pod resource consumption (fed by POST /internal/sessions/{id}/resources).
@@ -135,6 +158,27 @@ public sealed class PostgresUsageStore : IUsageStore
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS last_cpu_seconds  DOUBLE PRECISION NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS last_rx_bytes     BIGINT NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS last_tx_bytes     BIGINT NOT NULL DEFAULT 0;
+            -- Who pays (UsageBilling), decided per report from the session record, and the reported
+            -- cost of the API-billed part. cost_usd stays what the CLI computed: Claude Code reports
+            -- it for a subscription login as well, so it is no evidence of spend on its own.
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS billing          TEXT;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS api_cost_usd     DOUBLE PRECISION NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS cost_reported    BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS usage_source     TEXT;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS turns            BIGINT NOT NULL DEFAULT 0;
+            -- Rows from before the split: only an ApiKey session's cost was spend. Old Auto rows
+            -- cannot be told apart any more and stay "unknown". Runs once per row (billing IS NULL);
+            -- a row the resource snapshot created without tokens gets a classification, nothing else.
+            UPDATE session_usage SET
+                billing       = CASE auth_mode WHEN 'ApiKey' THEN 'api' WHEN 'Subscription' THEN 'subscription'
+                                               WHEN 'CustomEndpoint' THEN 'custom' ELSE 'unknown' END,
+                api_cost_usd  = CASE WHEN auth_mode = 'ApiKey' THEN cost_usd ELSE 0 END,
+                cost_reported = cost_usd > 0,
+                usage_source  = CASE WHEN input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens > 0
+                                     THEN 'claude-otel' END
+            WHERE billing IS NULL
+              AND input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens + cost_usd > 0;
             CREATE INDEX IF NOT EXISTS idx_session_usage_owner ON session_usage(owner);
             CREATE INDEX IF NOT EXISTS idx_session_usage_updated ON session_usage(updated_at);
             -- Monthly rollup: deltas are attributed to the month they arrive in, so limits are
@@ -156,17 +200,19 @@ public sealed class PostgresUsageStore : IUsageStore
     {
         // Resolve the authoritative owner (and the auth-mode snapshot) from the sessions
         // registry; fall back to the telemetry user.id only if the session row is unknown.
-        var (owner, authMode) = await ResolveSessionAsync(delta.SessionId, ct);
+        var (owner, authMode, storedBilling) = await ResolveSessionAsync(delta.SessionId, ct);
         owner ??= delta.UserId;
         if (string.IsNullOrEmpty(owner)) return false;
 
         var estimated = ClaudePricing.EstimateUsd(delta);
+        var billing = UsageBilling.Classify(authMode, storedBilling);
+        var apiCost = billing == UsageBilling.Api ? delta.CostUsd : 0;
 
         const string sql = """
             INSERT INTO session_usage
                 (session_id, owner, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens,
-                 cost_usd, estimated_cost_usd, auth_mode, updated_at)
-            VALUES (@sid, @owner, @in, @out, @cr, @cc, @cost, @est, @auth, now())
+                 cost_usd, estimated_cost_usd, auth_mode, billing, api_cost_usd, cost_reported, usage_source, updated_at)
+            VALUES (@sid, @owner, @in, @out, @cr, @cc, @cost, @est, @auth, @billing, @api, @cost > 0, 'claude-otel', now())
             ON CONFLICT (session_id) DO UPDATE SET
                 owner                 = EXCLUDED.owner,
                 input_tokens          = session_usage.input_tokens          + EXCLUDED.input_tokens,
@@ -176,10 +222,15 @@ public sealed class PostgresUsageStore : IUsageStore
                 cost_usd              = session_usage.cost_usd              + EXCLUDED.cost_usd,
                 estimated_cost_usd    = session_usage.estimated_cost_usd    + EXCLUDED.estimated_cost_usd,
                 auth_mode             = COALESCE(EXCLUDED.auth_mode, session_usage.auth_mode),
+                billing               = EXCLUDED.billing,
+                api_cost_usd          = session_usage.api_cost_usd          + EXCLUDED.api_cost_usd,
+                cost_reported         = session_usage.cost_reported OR EXCLUDED.cost_reported,
+                usage_source          = EXCLUDED.usage_source,
                 updated_at            = now();
 
+            -- Only API-billed cost counts against the monthly budget.
             INSERT INTO usage_monthly (owner, month, cost_usd, estimated_cost_usd, updated_at)
-            VALUES (@owner, date_trunc('month', now())::date, @cost, @est, now())
+            VALUES (@owner, date_trunc('month', now())::date, @api, @est, now())
             ON CONFLICT (owner, month) DO UPDATE SET
                 cost_usd           = usage_monthly.cost_usd           + EXCLUDED.cost_usd,
                 estimated_cost_usd = usage_monthly.estimated_cost_usd + EXCLUDED.estimated_cost_usd,
@@ -195,6 +246,8 @@ public sealed class PostgresUsageStore : IUsageStore
         cmd.Parameters.AddWithValue("cost", delta.CostUsd);
         cmd.Parameters.AddWithValue("est", estimated);
         cmd.Parameters.AddWithValue("auth", (object?)authMode ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("billing", billing);
+        cmd.Parameters.AddWithValue("api", apiCost);
         await cmd.ExecuteNonQueryAsync(ct);
         return true;
     }
@@ -236,20 +289,22 @@ public sealed class PostgresUsageStore : IUsageStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    private async Task<(string? Owner, string? AuthMode)> ResolveSessionAsync(string sessionId, CancellationToken ct)
+    private async Task<(string? Owner, string? AuthMode, string? Billing)> ResolveSessionAsync(string sessionId, CancellationToken ct)
     {
-        await using var cmd = _db.CreateCommand("SELECT owner, auth_mode FROM sessions WHERE id = @id");
+        await using var cmd = _db.CreateCommand("SELECT owner, auth_mode, usage_billing FROM sessions WHERE id = @id");
         cmd.Parameters.AddWithValue("id", sessionId);
         await using var r = await cmd.ExecuteReaderAsync(ct);
-        if (!await r.ReadAsync(ct)) return (null, null);
-        return (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1));
+        if (!await r.ReadAsync(ct)) return (null, null, null);
+        return (r.IsDBNull(0) ? null : r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1),
+            r.IsDBNull(2) ? null : r.GetString(2));
     }
 
     private const string SelectBase = """
         SELECT u.session_id, u.owner, s.title,
                u.input_tokens, u.output_tokens, u.cache_read_tokens, u.cache_creation_tokens,
                u.cost_usd, u.estimated_cost_usd, u.auth_mode, u.created_at, u.updated_at,
-               u.cpu_seconds, u.memory_bytes, u.peak_memory_bytes, u.rx_bytes, u.tx_bytes
+               u.cpu_seconds, u.memory_bytes, u.peak_memory_bytes, u.rx_bytes, u.tx_bytes,
+               u.reasoning_tokens, u.turns, u.api_cost_usd, u.cost_reported, u.billing, u.usage_source
         FROM session_usage u
         LEFT JOIN sessions s ON s.id = u.session_id
         """;
@@ -285,13 +340,19 @@ public sealed class PostgresUsageStore : IUsageStore
                    COALESCE(SUM(output_tokens), 0),
                    COALESCE(SUM(cache_read_tokens), 0),
                    COALESCE(SUM(cache_creation_tokens), 0),
-                   COALESCE(SUM(cost_usd), 0),
+                   COALESCE(SUM(api_cost_usd), 0),
                    COALESCE(SUM(estimated_cost_usd), 0),
-                   COALESCE(SUM(CASE WHEN auth_mode = 'ApiKey' OR cost_usd > 0
-                                     THEN 0 ELSE estimated_cost_usd END), 0),
+                   COALESCE(SUM(estimated_cost_usd) FILTER (WHERE billing = 'subscription'), 0),
                    COALESCE(SUM(cpu_seconds), 0),
                    COALESCE(SUM(rx_bytes), 0),
-                   COALESCE(SUM(tx_bytes), 0)
+                   COALESCE(SUM(tx_bytes), 0),
+                   COALESCE(SUM(reasoning_tokens), 0),
+                   COALESCE(SUM(turns), 0),
+                   COUNT(*) FILTER (WHERE billing = 'api'),
+                   COUNT(*) FILTER (WHERE billing = 'subscription'),
+                   COALESCE(SUM({Tokens}) FILTER (WHERE billing = 'api'), 0),
+                   COALESCE(SUM({Tokens}) FILTER (WHERE billing = 'subscription'), 0),
+                   COALESCE(SUM(turns) FILTER (WHERE billing = 'subscription'), 0)
             FROM session_usage {where}
             """;
         await using var cmd = _db.CreateCommand(sql);
@@ -314,6 +375,13 @@ public sealed class PostgresUsageStore : IUsageStore
             CpuSeconds = r.GetDouble(8),
             RxBytes = r.GetInt64(9),
             TxBytes = r.GetInt64(10),
+            ReasoningTokens = r.GetInt64(11),
+            Turns = r.GetInt64(12),
+            ApiSessionCount = (int)r.GetInt64(13),
+            SubscriptionSessionCount = (int)r.GetInt64(14),
+            ApiTokens = r.GetInt64(15),
+            SubscriptionTokens = r.GetInt64(16),
+            SubscriptionTurns = r.GetInt64(17),
             From = from, To = to
         };
     }
@@ -325,6 +393,8 @@ public sealed class PostgresUsageStore : IUsageStore
         cmd.Parameters.AddWithValue("owner", owner);
         return await cmd.ExecuteScalarAsync(ct) is double d ? d : 0;
     }
+
+    private const string Tokens = "input_tokens + output_tokens + cache_read_tokens + cache_creation_tokens";
 
     private static SessionUsage Map(NpgsqlDataReader r) => new()
     {
@@ -344,6 +414,12 @@ public sealed class PostgresUsageStore : IUsageStore
         MemoryBytes = r.GetInt64(13),
         PeakMemoryBytes = r.GetInt64(14),
         RxBytes = r.GetInt64(15),
-        TxBytes = r.GetInt64(16)
+        TxBytes = r.GetInt64(16),
+        ReasoningTokens = r.GetInt64(17),
+        Turns = r.GetInt64(18),
+        ApiCostUsd = r.GetDouble(19),
+        CostReported = r.GetBoolean(20),
+        Billing = r.IsDBNull(21) ? null : r.GetString(21),
+        Source = r.IsDBNull(22) ? null : r.GetString(22)
     };
 }

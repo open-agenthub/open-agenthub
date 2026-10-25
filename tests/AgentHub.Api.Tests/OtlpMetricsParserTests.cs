@@ -125,7 +125,7 @@ public class OtlpMetricsParserTests
     // ----------------------------------------------------------------- test-only OTLP encoder
 
     /// <summary>Independent protobuf/OTLP encoder for building test payloads.</summary>
-    private sealed class OtlpBuilder
+    internal sealed class OtlpBuilder
     {
         private readonly List<byte[]> _resourceMetrics = new();
         private byte[]? _currentResource;

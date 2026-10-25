@@ -27,11 +27,13 @@ const summary = {
   inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheCreationTokens: 0,
   costUsd: 1.25, apiCostUsd: 1.25,
   estimatedCostUsd: 6.25, subscriptionEstimatedCostUsd: 5,
+  apiSessionCount: 1, subscriptionSessionCount: 1, subscriptionTokens: 900, subscriptionTurns: 4,
   cpuSeconds: 90, rxBytes: 1048576, txBytes: 2048
 }
 const rows = [
-  { sessionId: 'api-1', title: 'API session', inputTokens: 100, costUsd: 1.25, estimatedCostUsd: 1.25, authMode: 'ApiKey', apiBilled: true, cpuSeconds: 90, memoryBytes: 100, peakMemoryBytes: 536870912, rxBytes: 1048576, txBytes: 2048 },
-  { sessionId: 'sub-1', title: 'Sub session', inputTokens: 900, costUsd: 0, estimatedCostUsd: 5, authMode: 'Subscription', apiBilled: false }
+  { sessionId: 'api-1', title: 'API session', inputTokens: 100, costUsd: 1.25, apiCostUsd: 1.25, costReported: true, estimatedCostUsd: 1.25, authMode: 'ApiKey', billing: 'api', apiBilled: true, source: 'claude-otel', cpuSeconds: 90, memoryBytes: 100, peakMemoryBytes: 536870912, rxBytes: 1048576, txBytes: 2048 },
+  // Claude Code reports a price-table cost for subscription logins too; it must not show as money.
+  { sessionId: 'sub-1', title: 'Sub session', inputTokens: 900, costUsd: 0.75, apiCostUsd: 0, costReported: true, estimatedCostUsd: 5, authMode: 'Subscription', billing: 'subscription', apiBilled: false, source: 'codex', turns: 4 }
 ]
 const limitOk = { personalLimitUsd: 10, effectiveLimitUsd: 10, source: 'personal', monthApiCostUsd: 1.25, blocked: false }
 
@@ -43,21 +45,28 @@ describe('UsageView', () => {
     mocks.api.usageLimit.mockResolvedValue(limitOk)
   })
 
-  it('splits real API cost from the subscription-covered estimate', async () => {
+  it('shows API cost as money and subscription use as tokens and turns', async () => {
     const wrapper = mount(UsageView)
     await flushPromises()
     expect(wrapper.get('[data-api-cost]').text()).toContain('$1.25')
-    expect(wrapper.get('[data-subscription-value]').text()).toContain('~$5.00')
+    const sub = wrapper.get('[data-subscription-usage]').text()
+    expect(sub).toContain('900 tokens')
+    expect(sub).toContain('4 turns')
+    expect(sub).not.toContain('$')
   })
 
-  it('marks subscription rows as approximate and API rows as real in the table', async () => {
+  it('shows money only on API rows, with the CLI the numbers come from', async () => {
     const wrapper = mount(UsageView)
     await flushPromises()
     const rowsText = wrapper.findAll('.trow').map(r => r.text())
-    expect(rowsText.find(t => t.includes('Sub session'))).toContain('~$5.00')
-    expect(rowsText.find(t => t.includes('Sub session'))).toContain('sub')
+    const subRow = rowsText.find(t => t.includes('Sub session'))
+    expect(subRow).toContain('sub')
+    expect(subRow).toContain('4 turns')
+    expect(subRow).toContain('Codex')
+    expect(subRow).not.toContain('$')
     expect(rowsText.find(t => t.includes('API session'))).toContain('$1.25')
-    expect(rowsText.find(t => t.includes('API session'))).toContain('api')
+    expect(rowsText.find(t => t.includes('API session'))).toContain('Claude Code')
+    expect(wrapper.get('[data-billing="api"]').attributes('title')).toContain('reported by Claude Code')
   })
 
   it('shows pod resource totals and per-session resources', async () => {

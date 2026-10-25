@@ -24,7 +24,7 @@ public sealed class SessionUsageDelta
     /// <summary>
     /// Token counts grouped by the <c>model</c> data-point attribute. Tokens without a model
     /// attribute are keyed under "". Used to estimate what the tokens WOULD have cost on the
-    /// API (Claude Code reports cost 0 for subscription sessions).
+    /// API (<see cref="Usage.ClaudePricing"/>).
     /// </summary>
     public Dictionary<string, ModelTokenUsage> ModelTokens { get; } = new(StringComparer.Ordinal);
 
