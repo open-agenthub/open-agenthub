@@ -671,7 +671,8 @@ their own (Cursor's TUI does the same, not verified end to end). In the shell, C
 only ([`docs/terminal-clipboard.md`](docs/terminal-clipboard.md)).
 Images, PDF, Markdown, plain text and video (MP4 with H.264/AAC, WebM) can be opened in Files
 beside Workspace or Terminal; a video plays in the browser's own player and can be seeked.
-HTML and SVG are download-only. A managed `files` MCP gives every supported agent the same
+SVG previews use an image element; arbitrary other file types upload and download without a preview.
+See [file type safety](docs/file-type-safety.md) for the serving boundary and size limits. A managed `files` MCP gives every supported agent the same
 provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,
 `upload_file`, `present_file`, and `dismiss_presentation`.
 
@@ -809,3 +810,6 @@ while the code in [`ee/`](ee/) is source-available under the commercial
 [Open AgentHub Enterprise License](ee/LICENSE) and powers the enterprise offering
 (6 €/user/month excl. VAT, 3-month free trial). Contributions require agreeing to our Contributor
 License Agreement — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+All five default agent runtime images include `python3`, pip and venv from distribution packages.
+Create a virtual environment in the workspace for dependencies; see [the decision and size impact](docs/runtime-python.md).

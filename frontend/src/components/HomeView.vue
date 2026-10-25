@@ -2,7 +2,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api.js'
 import { sessionStatus, statusStyle } from '../lib/status.js'
-import { formatCost, formatTokens, totalTokens } from '../lib/usage.js'
+import { formatCost, formatTokens, sessionBilling, totalTokens } from '../lib/usage.js'
 import { repoShortName } from '../lib/text.js'
 
 const props = defineProps({ sessions: { type: Array, default: () => [] } })
@@ -34,15 +34,17 @@ const subline = computed(() => {
   if (paused.value.length) parts.push(`${paused.value.length} paused`)
   if (summary.value) {
     parts.push(`${formatCost(summary.value.apiCostUsd ?? summary.value.costUsd)} API spend so far`)
-    if (summary.value.subscriptionEstimatedCostUsd > 0)
-      parts.push(`~${formatCost(summary.value.subscriptionEstimatedCostUsd)} covered by subscription`)
+    if (summary.value.subscriptionTokens > 0)
+      parts.push(`${formatTokens(summary.value.subscriptionTokens)} subscription tokens`)
   }
   return parts.join(' · ')
 })
 const topSpend = computed(() => {
-  const rows = [...usageRows.value].sort((a, b) => (b.costUsd || 0) - (a.costUsd || 0)).slice(0, 3)
-  const max = rows[0]?.costUsd || 0
-  return rows.map(r => ({ ...r, pct: max ? Math.round(((r.costUsd || 0) / max) * 100) : 0 }))
+  // API spend only: a CLI's price-table figure for a subscription session is nobody's bill.
+  const rows = usageRows.value.map(r => ({ ...r, spend: sessionBilling(r).usd }))
+    .filter(r => r.spend > 0).sort((a, b) => b.spend - a.spend).slice(0, 3)
+  const max = rows[0]?.spend || 0
+  return rows.map(r => ({ ...r, pct: max ? Math.round((r.spend / max) * 100) : 0 }))
 })
 function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '') }
 </script>
@@ -69,17 +71,17 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
       <div class="stats-col">
         <div class="stat-row">
           <div class="stat card"><div class="stat-label">Running now</div><div class="stat-value">{{ running.length }}</div></div>
-          <div class="stat card click" @click="$emit('usage')"><div class="stat-label">API cost</div><div class="stat-value">{{ summary ? formatCost(summary.apiCostUsd ?? summary.costUsd) : '—' }}</div><div v-if="summary && summary.subscriptionEstimatedCostUsd > 0" class="stat-note">+ ~{{ formatCost(summary.subscriptionEstimatedCostUsd) }} subscription value</div></div>
+          <div class="stat card click" @click="$emit('usage')"><div class="stat-label">API cost</div><div class="stat-value">{{ summary ? formatCost(summary.apiCostUsd ?? summary.costUsd) : '—' }}</div><div v-if="summary && summary.subscriptionTokens > 0" class="stat-note">+ {{ formatTokens(summary.subscriptionTokens) }} subscription tokens</div></div>
         </div>
         <div class="card spend click" @click="$emit('usage')">
           <div class="spend-head"><span>Top spend by session</span><span class="more">Usage →</span></div>
           <template v-if="topSpend.length">
             <div v-for="r in topSpend" :key="r.sessionId" class="spend-row">
-              <div class="spend-line"><span class="spend-title">{{ r.title || r.sessionId }}</span><span class="spend-cost">{{ formatCost(r.costUsd) }}</span></div>
+              <div class="spend-line"><span class="spend-title">{{ r.title || r.sessionId }}</span><span class="spend-cost">{{ formatCost(r.spend) }}</span></div>
               <div class="spend-bar"><div class="spend-fill" :style="{ width: r.pct + '%' }"></div></div>
             </div>
           </template>
-          <p v-else class="idle-text">No usage recorded yet — data appears once agents report telemetry.</p>
+          <p v-else class="idle-text">No API spend recorded — subscription usage is on the Usage page.</p>
         </div>
       </div>
     </div>

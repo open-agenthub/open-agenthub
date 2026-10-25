@@ -8,6 +8,7 @@ const { Writable } = require('node:stream');
 
 const { validateDriver } = require('../../common/driver-contract');
 const { MAX_BUFFER } = require('../../common/server');
+const { waitForExport } = require('./sign-in-test-wait');
 const { FakeChildProcess, FakeSocket, tick, createHarness, requestHttp, createChatHarness, commonDir } = require('./common-server-harness');
 
 test('common server attaches WebSockets and file HTTP routes to one listener', () => {
@@ -210,6 +211,28 @@ test('common transport caps scrollback and replays it on WebSocket connect', () 
   assert.deepEqual(harness.terminals[0].resizes, [[90, 20]]);
 });
 
+// #261: "Send now" for a message in the CLI's own queue interrupts with the driver's key, which
+// makes the pinned CLIs submit their queue; Ctrl+C would not.
+test('an interrupt request writes the driver interruption keys, a pause apart', async () => {
+  const delays = [];
+  const harness = createHarness({}, { interruptKeys: ['\x1b', '\x1b'] }, {
+    setTimeout(callback, ms) { delays.push(ms); callback(); return 1; }
+  });
+  const socket = new FakeSocket();
+  harness.runtime.webSocketServer.connect(socket, '/');
+  socket.emit('message', Buffer.from(JSON.stringify({ type: 'interrupt' })));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(harness.terminals[0].writes, ['\x1b', '\x1b']);
+  assert.ok(delays.includes(300));
+
+  const single = createHarness();
+  const other = new FakeSocket();
+  single.runtime.webSocketServer.connect(other, '/');
+  other.emit('message', Buffer.from(JSON.stringify({ type: 'interrupt' })));
+  await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(single.terminals[0].writes, ['\x1b']);
+});
+
 test('a resumed session replays the history the hub kept, ahead of its own output', async () => {
   const harness = createHarness(
     {
@@ -299,11 +322,14 @@ test('common transport archives driver state without its subscription credential
   harness.intervals[0].callback();
   await tick();
 
-  assert.deepEqual(harness.writes, [{ file: '/tmp/scrollback.log', data: 'saved output' }]);
+  // Export waits for xterm's write callback before the final persistence run.
+  await waitForExport(() => harness.commands.length >= 4);
+
+  assert.deepEqual(harness.writes, [{ file: '/tmp/agenthub-scrollback-proof/scrollback.log', data: 'saved output' }]);
   assert.equal(harness.commands.length, 4);
   // Every presigned url goes to curl as an argument, never through a shell.
   assert.deepEqual(harness.commands[0], { file: 'curl',
-    args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/scrollback.log', 'https://storage.invalid/scrollback'] });
+    args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/agenthub-scrollback-proof/scrollback.log', 'https://storage.invalid/scrollback'] });
   assert.match(harness.commands[1].args[1], /find "\.test-agent" \\\( -path "\.test-agent\/auth\.json" \\\) -prune /);
   assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$1\.part" /);
   assert.deepEqual(harness.commands[2].args.slice(2), ['sh', '/tmp/state.tgz']);
@@ -496,7 +522,7 @@ test('common transport always archives on SIGTERM, unchanged state and interval 
   assert.deepEqual(harness.exits, [0]);
 });
 
-test('common transport always archives when the agent exits, unchanged state and interval notwithstanding', () => {
+test('common transport always archives when the agent exits, unchanged state and interval notwithstanding', async () => {
   const state = { signature: SIGNATURE_A };
   const harness = archiveHarness(state);
   harness.intervals[0].callback();
@@ -504,6 +530,9 @@ test('common transport always archives when the agent exits, unchanged state and
   assert.equal(archives(harness).length, 1);
 
   harness.terminals[0].emitExit({ exitCode: 0 });
+  // Export waits for xterm's write callback before the final persistence run.
+  await waitForExport(() => archives(harness).length >= 2);
+
   assert.equal(archives(harness).length, 2);
   assert.equal(signatures(harness).length, 1);
 });
@@ -540,9 +569,12 @@ test('common transport stops waiting for a credential watcher that never exits',
   assert.ok(events.length > 1 && events.length < 100, String(events.length));
 });
 
-test('common transport flushes the credential watcher when the agent itself ends', () => {
+test('common transport flushes the credential watcher when the agent itself ends', async () => {
   const { harness, events } = watcherHarness(1);
   harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+
+  // Export waits for xterm's write callback before the final persistence run.
+  await waitForExport(() => harness.exits.length > 0);
 
   assert.deepEqual(events, [[4242, 'SIGTERM'], [4242, 0]]);
   assert.deepEqual(harness.exits, [0]);
@@ -600,6 +632,7 @@ test('common transport backs up scrollback and posts Running and terminal status
   await tick();
   await tick();
 
+  await waitForExport(() => harness.requests.length >= 3);
   assert.deepEqual(harness.requests.map(request => [request.url, request.options.method]), [
     ['https://backend.invalid/internal/session/status', 'POST'],
     ['https://backend.invalid/internal/session/scrollback', 'PUT'],
@@ -712,7 +745,7 @@ test('Codex device-auth resume retries fresh exactly once without repeating logi
   assert.equal(harness.terminals.length, 2);
 });
 
-test('common transport does not infer resume merely because the first launch allows it', () => {
+test('common transport does not infer resume merely because the first launch allows it', async () => {
   let missingResumeChecks = 0;
   const harness = createHarness({}, {
     isResumeCommand: () => false,
@@ -723,6 +756,9 @@ test('common transport does not infer resume merely because the first launch all
   });
 
   harness.terminals[0].emitExit({ exitCode: 1, signal: 0 });
+
+  // Export waits for xterm's write callback before the final persistence run.
+  await waitForExport(() => harness.exits.length > 0);
 
   assert.equal(harness.terminals.length, 1);
   assert.equal(missingResumeChecks, 0);
@@ -937,6 +973,9 @@ test('chat transport wraps stderr and exit as durable agenthub events', async ()
   child.emitExit(1, null);
   await tick();
   await tick();
+
+  // Export waits for xterm's write callback before the final persistence run.
+  await waitForExport(() => harness.requests.at(-1)?.options.body === JSON.stringify({ status: 'Failed' }));
 
   assert.deepEqual(socket.sent, [
     JSON.stringify({ type: 'agenthub', subtype: 'stderr', text: 'boom' }) + '\n',

@@ -1,5 +1,5 @@
 <script setup>
-import { parseActivityFrame } from '../lib/agent-activity.js'
+import { parseActivityFrame, parsePersistenceFrame } from '../lib/agent-activity.js'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -11,7 +11,7 @@ import { readPromptSuggestion } from '../lib/prompt-suggestion.js'
 import { detectMenu, sameMenu } from '../lib/cli-menu.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, showComposer: { type: Boolean, default: true } })
-const emit = defineEmits(['status', 'menu', 'activity', 'suggestion'])
+const emit = defineEmits(['status', 'menu', 'activity', 'suggestion', 'persistence'])
 const host = ref(null)
 const mobileInput = ref('')
 const pasteNotice = ref('')
@@ -114,7 +114,13 @@ function interruptAgent() {
   cancelSubmission?.()
   ws.send(JSON.stringify({ type: 'input', data: '\x03' }))
 }
-defineExpose({ submitMessage, interruptAgent, sendKeys })
+// The CLI's own interruption key, chosen by the session agent's driver: the CLIs that queue a
+// message sent during a turn submit that queue at once when interrupted with it (#261).
+function interruptQueue() {
+  if (!canSend.value || ws?.readyState !== WebSocket.OPEN) throw new Error('Agent is disconnected')
+  ws.send(JSON.stringify({ type: 'interrupt' }))
+}
+defineExpose({ submitMessage, interruptAgent, interruptQueue, sendKeys })
 
 function showPasteNotice(text) {
   pasteNotice.value = text
@@ -264,6 +270,8 @@ async function connect() {
   }
   socket.onmessage = event => {
     if (disposed || ws !== socket) return
+    const persistence = props.kind === 'agent' && parsePersistenceFrame(event.data)
+    if (persistence) { emit('persistence', persistence); return }
     const activity = props.kind === 'agent' && parseActivityFrame(event.data)
     if (activity) {
       if (activity.state === 'working') reportSuggestion('')

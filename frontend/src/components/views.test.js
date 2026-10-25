@@ -76,8 +76,21 @@ describe('SessionsView', () => {
 describe('HomeView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.api.usageSummary.mockResolvedValue({ costUsd: 12.5, sessionCount: 2 })
-    mocks.api.usageSessions.mockResolvedValue([{ sessionId: 's1', title: 'Fix checkout', costUsd: 9 }])
+    mocks.api.usageSummary.mockResolvedValue({ costUsd: 12.5, sessionCount: 2, subscriptionTokens: 1500 })
+    mocks.api.usageSessions.mockResolvedValue([
+      { sessionId: 's1', title: 'Fix checkout', costUsd: 9, apiCostUsd: 9, billing: 'api' },
+      { sessionId: 's2', title: 'Sub refactor', costUsd: 4, apiCostUsd: 0, billing: 'subscription' }
+    ])
+  })
+
+  it('lists only API spend under top spend and subscription use as tokens', async () => {
+    const wrapper = mount(HomeView, { props: { sessions } })
+    await flushPromises()
+    const spend = wrapper.get('.spend').text()
+    expect(spend).toContain('Fix checkout')
+    expect(spend).toContain('$9.00')
+    expect(spend).not.toContain('Sub refactor')
+    expect(wrapper.text()).toContain('1.5K subscription tokens')
   })
 
   it('lists waiting sessions under NEEDS YOU and emits select on reply', async () => {

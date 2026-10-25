@@ -19,11 +19,14 @@ public static class SessionTranscripts
     }
 
     /// <summary>
-    /// One page for the web app's Workspace. Null when the session is unknown.
+    /// One page for the web app's Workspace. Every caller has resolved the session first, so a
+    /// session that has written nothing yet gets an empty scrollback page here, not null: null
+    /// became a 404 the Workspace could not tell from an unknown session, and a just-created
+    /// session showed "Could not load the conversation" until its first upload (#241).
     /// <paramref name="live"/> reads a running session's transcript from its pod; when it has
     /// nothing, the page comes from the stored copy.
     /// </summary>
-    public static async Task<ConversationPage?> PageAsync(
+    public static async Task<ConversationPage> PageAsync(
         ISessionService sessions, string owner, string id, string phase, int? offset, int? max, CancellationToken ct,
         Func<CancellationToken, Task<IReadOnlyList<TranscriptEntry>?>>? live = null)
     {
@@ -32,6 +35,6 @@ public static class SessionTranscripts
         var entries = await sessions.GetConversationAsync(owner, id, ct);
         if (entries is { Count: > 0 }) return ConversationPage.FromEntries(id, phase, entries, offset, max);
         var text = await sessions.GetTranscriptAsync(owner, id, ct);
-        return text is null ? null : ConversationPage.FromScrollback(id, phase, text, offset, max);
+        return ConversationPage.FromScrollback(id, phase, text ?? "", offset, max);
     }
 }

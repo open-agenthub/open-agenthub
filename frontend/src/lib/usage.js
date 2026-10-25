@@ -38,21 +38,47 @@ export function percent(part, total) {
   return Math.round(((Number(part) || 0) / t) * 100)
 }
 
-/**
- * The cost to show for a usage row. API-billed sessions show the real reported cost;
- * subscription sessions show the estimated API-equivalent, marked approximate.
- * Rows from before the split (no estimate) fall back to the reported cost.
- */
-export function sessionCost(row) {
-  if (!row) return { usd: 0, approx: false }
-  const apiBilled = row.apiBilled ?? ((Number(row.costUsd) || 0) > 0)
-  if (apiBilled) return { usd: Number(row.costUsd) || 0, approx: false }
-  return { usd: Number(row.estimatedCostUsd) || 0, approx: true }
+const SOURCES = { 'claude-otel': 'Claude Code', codex: 'Codex', opencode: 'OpenCode', openclaw: 'OpenClaw' }
+
+/** The CLI a row's numbers come from ("Claude Code", "Codex", …), or '' when unknown. */
+export function usageSource(row) {
+  return SOURCES[row?.source] || ''
 }
 
-/** "~$1.23" — an estimated (subscription-covered) amount. */
-export function formatApproxCost(usd) {
-  return '~' + formatCost(usd)
+/**
+ * What the cost column shows for a usage row (docs/usage-tracking.md). Money appears only for
+ * API-billed usage, and only as the figure the CLI itself reported; a subscription shows its
+ * turns, never a dollar amount, because the CLIs' price-table figure is not what anyone pays.
+ *   { kind: 'api'|'subscription'|'custom'|'unknown'|'none', pill, text, title, usd }
+ * usd is the amount that counts as spend (0 for everything but API-billed usage).
+ */
+export function sessionBilling(row) {
+  const by = usageSource(row) || 'the CLI'
+  const turns = Number(row?.turns) || 0
+  const turnText = turns ? `${turns} turn${turns === 1 ? '' : 's'}` : 'no money'
+  switch (row?.billing ?? (row?.apiBilled ? 'api' : null)) {
+    case 'api': {
+      const usd = Number(row.apiCostUsd ?? row.costUsd) || 0
+      if (row.costReported === false) {
+        return { kind: 'api', pill: 'api', usd: 0, text: 'not reported',
+          title: `Billed against an API key. ${by} reports no cost, only tokens.` }
+      }
+      return { kind: 'api', pill: 'api', usd, text: formatCost(usd),
+        title: `Billed against an API key — cost as reported by ${by}` }
+    }
+    case 'subscription':
+      return { kind: 'subscription', pill: 'sub', usd: 0, text: turnText,
+        title: 'Covered by a subscription — usage counts against its limits, not money' }
+    case 'custom':
+      return { kind: 'custom', pill: 'self-hosted', usd: 0, text: turnText,
+        title: 'A self-hosted model endpoint — no provider bill' }
+    case 'unknown':
+      return { kind: 'unknown', pill: 'auto', usd: 0, text: 'billing unknown',
+        title: `Auto: ${by} chose between the login and the API key itself` +
+          ((Number(row.costUsd) || 0) > 0 ? ` (it reported ${formatCost(row.costUsd)} from its own price table)` : '') }
+    default:
+      return { kind: 'none', pill: '', usd: 0, text: '—', title: '' }
+  }
 }
 
 /** Byte count for memory/network: 1536 -> "1.5 KB", 0 -> "0 B". */

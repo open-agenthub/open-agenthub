@@ -276,3 +276,94 @@ describe('saved conversation in the Workspace', () => {
     expect(texts(wrapper)).toEqual(['ready'])
   })
 })
+
+// A just-created session has no transcript yet; that is the expected state while its pod is
+// pending and its agent starts, not a failure to load (#241).
+describe('a session that is starting', () => {
+  const entry = text => ({ role: 'assistant', text, at: null })
+  const starting = wrapper => wrapper.find('[data-conversation-starting]')
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.useFakeTimers()
+    mocks.api.getConversation.mockResolvedValue({ ...scrollbackPage(''), running: true })
+  })
+  afterEach(() => { vi.useRealTimers() })
+
+  it('shows the starting state while the pod is pending and switches to the conversation on its first entry', async () => {
+    const wrapper = mountView({ session: { ...session, phase: 'Pending' } })
+    await flushPromises()
+
+    expect(starting(wrapper).text()).toContain('Session starting')
+    expect(starting(wrapper).text()).toContain('Waiting for the session’s pod to start…')
+    expect(starting(wrapper).find('.starting-mark').exists()).toBe(true)
+    expect(wrapper.find('[role=alert]').exists()).toBe(false)
+
+    await wrapper.setProps({ session: { ...session, phase: 'Running' } })
+    expect(starting(wrapper).text()).toContain('Starting the agent…')
+
+    mocks.api.getConversation.mockResolvedValue({ ...nativePage([entry('Ready.')]), running: true })
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+
+    expect(starting(wrapper).exists()).toBe(false)
+    expect(texts(wrapper)).toEqual(['Ready.'])
+  })
+
+  it('keeps starting instead of an error while there is nothing to load yet, and recovers on the next poll', async () => {
+    mocks.api.getConversation.mockRejectedValueOnce(new Error('503'))
+    const wrapper = mountView({ session: { ...session, phase: 'Pending' } })
+    await flushPromises()
+
+    expect(starting(wrapper).exists()).toBe(true)
+    expect(wrapper.find('[role=alert]').exists()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(1000)
+    await flushPromises()
+    expect(mocks.api.getConversation).toHaveBeenCalledTimes(2)
+    expect(starting(wrapper).exists()).toBe(true)
+  })
+
+  it('stays starting for an autonomous run until its first output', async () => {
+    const wrapper = mountView({ session: { ...session, phase: 'Running', mode: 'Autonomous' } })
+    await flushPromises()
+    const pane = wrapper.findComponent({ name: 'TerminalPane' })
+    pane.vm.$emit('status', 'connected')
+    pane.vm.$emit('activity', { state: 'idle', source: 'hooks' })
+    await flushPromises()
+
+    expect(starting(wrapper).text()).toContain('The agent is starting its task…')
+  })
+
+  // The hub accepts the terminal socket before it reaches the pod, so an open socket with no
+  // answer from the agent is still the agent starting, not an agent waiting for a task.
+  it('stays starting while the terminal socket is open but the agent has not answered', async () => {
+    const wrapper = mountView({ session: { ...session, phase: 'Running' } })
+    await flushPromises()
+    wrapper.findComponent({ name: 'TerminalPane' }).vm.$emit('status', 'connected')
+    await flushPromises()
+
+    expect(starting(wrapper).text()).toContain('Starting the agent…')
+  })
+
+  it('invites a task once an interactive agent is connected', async () => {
+    const wrapper = mountView({ session: { ...session, phase: 'Running' } })
+    await flushPromises()
+    const pane = wrapper.findComponent({ name: 'TerminalPane' })
+    pane.vm.$emit('status', 'connected')
+    pane.vm.$emit('activity', { state: 'idle', source: 'hooks' })
+    await flushPromises()
+
+    expect(starting(wrapper).exists()).toBe(false)
+    expect(wrapper.text()).toContain('Your agent’s workspace')
+  })
+
+  it('keeps a real load error for a finished session', async () => {
+    mocks.api.getConversation.mockRejectedValue(new Error('503'))
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(starting(wrapper).exists()).toBe(false)
+    expect(wrapper.find('[role=alert]').text()).toContain('Could not load the conversation.')
+  })
+})

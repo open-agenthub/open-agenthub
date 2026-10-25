@@ -8,6 +8,7 @@ import ShareSessionDialog from './ShareSessionDialog.vue'
 import ConversationTimeline from './workspace/ConversationTimeline.vue'
 import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
 import CliMenuNotice from './workspace/CliMenuNotice.vue'
+import CliSignInNotice from './workspace/CliSignInNotice.vue'
 import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
 import { CANCEL_KEYS, keysForAnswer, keysForOption } from '../lib/cli-menu.js'
@@ -76,6 +77,8 @@ const terminalOpened = ref(false)
 const drawerKind = ref('agent')
 // Keep menu detection independent of drawer visibility so answering never requires opening it.
 const cliMenu = ref(null)
+const stateWithheld = ref(false)
+watch(() => props.session.id, () => { stateWithheld.value = false })
 const promptSuggestion = ref('')
 const agentActivity = ref({ state: 'unknown', source: 'hooks' })
 watch(() => agentActivity.value.state, state => { if (state === 'working') promptSuggestion.value = '' })
@@ -105,6 +108,19 @@ const shareOpen = ref(false)
 // the heuristics in lib/transcript.js because terminal output has no roles).
 const conversation = ref(null)
 const transcriptItems = computed(() => toTranscriptItems(conversation.value))
+// What a live session with nothing written yet is doing, or '' once there is something to show
+// or the agent is up and waiting for a task. An autonomous run stays "starting" until its first
+// output: it has no idle prompt to invite a task at, so its empty conversation only means early.
+// "Connected" alone is not "up": the hub accepts the terminal socket before it dials the pod, so
+// while the agent's server is not listening yet the socket opens, closes and reopens every two
+// seconds. The agent answers the activity subscription at once with a known state, and every
+// close resets it to 'unknown', so a known state is what says the agent is there.
+const conversationStarting = computed(() => {
+  if (!isLive.value || transcriptItems.value.length) return ''
+  if (props.session?.phase === 'Pending') return 'Waiting for the session’s pod to start…'
+  if (statuses.agent !== 'connected' || agentActivity.value.state === 'unknown') return 'Starting the agent…'
+  return String(props.session?.mode).toLowerCase() === 'interactive' ? '' : 'The agent is starting its task…'
+})
 // Composer messages that reached the terminal and that the CLI has not taken yet (#153), kept
 // per session like drafts so switching sessions does not forget them.
 const sentMessages = ref(workspaceSent.get(props.session?.id) || [])
@@ -124,14 +140,41 @@ watch(transcriptItems, items => {
   const left = stillPending(sentMessages.value, items)
   if (left.length !== sentMessages.value.length) { sentMessages.value = left; saveSent() }
 })
+// "Send now" for a pending message (#261). A fleet message is pushed by the hub as a priority
+// message, interrupting when asked. A composer message is already in the CLI's own queue — a
+// second copy would be sent twice — so the only faster way is to interrupt the turn, which makes
+// the CLI submit that queue at once; until then it takes the message at its next tool call or at
+// the turn's end.
+const pendingBusy = ref({})
+const pendingNotes = ref({})
+async function sendPendingNow(key, { interrupt = false } = {}) {
+  const note = text => { pendingNotes.value = { ...pendingNotes.value, [key]: text } }
+  if (!key.startsWith('fleet-')) {
+    try { agentTerminal.value?.interruptQueue() } catch (e) { note(e?.message || 'The agent is not connected.') }
+    return
+  }
+  pendingBusy.value = { ...pendingBusy.value, [key]: true }
+  try {
+    const result = await api.pushSessionMessage(props.session.id, key.slice('fleet-'.length), { interrupt })
+    // Delivered, the entry leaves the list with the refresh; only a message that stays says why.
+    if (result?.deliveredVia !== 'injected' && result?.deliveredVia !== 'mod') note('Could not be delivered now; it keeps waiting for the agent.')
+    await refreshMessages()
+  } catch (e) {
+    note(e?.message || 'The message could not be sent.')
+  } finally {
+    pendingBusy.value = { ...pendingBusy.value, [key]: false }
+  }
+}
 function dismissPending(key) {
   if (key.startsWith('fleet-')) return dismissMessage(key.slice('fleet-'.length))
   sentMessages.value = sentMessages.value.filter(entry => entry.id !== key)
   saveSent()
 }
 const pendingItems = computed(() => [
-  ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, at: entry.at, dismissible: true })),
-  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, at: m.createdAt, dismissible: true }))
+  ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, at: entry.at, dismissible: true,
+    interruptSend: canCompose.value, note: pendingNotes.value[entry.id] })),
+  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, at: m.createdAt, dismissible: true,
+    sendNow: showSendMessage.value, interruptSend: showSendMessage.value, busy: pendingBusy.value['fleet-' + m.id], note: pendingNotes.value['fleet-' + m.id] }))
 ])
 const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '' })
@@ -455,6 +498,13 @@ function onCliMenu(menu) {
 function answerCliMenu(number) {
   if (cliMenu.value) void agentTerminal.value?.sendKeys(keysForOption(cliMenu.value, number)).catch(() => {})
 }
+async function sendSignInCode(value) {
+  if (cliMenu.value?.kind !== 'signin' || !capabilities.value.canWrite || !isLive.value) throw new Error('Sign-in unavailable')
+  await agentTerminal.value.sendKeys(['\x1b[200~' + value + '\x1b[201~', '\r'])
+}
+function retrySignIn() {
+  void agentTerminal.value?.sendKeys(['\r']).catch(() => {})
+}
 function answerCliMenuText(number, text) {
   if (cliMenu.value) void agentTerminal.value?.sendKeys(keysForAnswer(cliMenu.value, number, text)).catch(() => {})
 }
@@ -473,7 +523,9 @@ function sendWorkspaceMessage(text, options) {
   // A message pasted into one of the CLI's own screens is not a message: its Enter picks the
   // highlighted option, or submits the text as a login code. Refused, so the draft stays.
   if (cliMenu.value) {
-    throw new Error(cliMenu.value.kind === 'choice'
+    throw new Error(cliMenu.value.kind === 'signin'
+      ? 'Finish signing in above or in the terminal first; your draft is still here.'
+      : cliMenu.value.kind === 'choice'
       ? 'The agent is showing a menu. Answer it above or in the terminal first; your draft is still here.'
       : 'The agent is waiting for input in its terminal. Answer it there first; your draft is still here.')
   }
@@ -667,12 +719,17 @@ function interruptWorkspaceAgent() {
     <SecretRequestBanner v-if="capabilities.canManage && !sharedToken" :session-id="session.id" />
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :can-manage="capabilities.canManage" :shared-token="sharedToken" @updated="emit('runtime-updated')">
       <div class="terminal-stack">
-        <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy"
+        <div v-if="stateWithheld && capabilities.canManage && !sharedToken" role="status" class="session-input-state" data-state-withheld>
+          State not saved: sign-in data is present or its privacy check could not finish. New resume state will be saved when the check passes; restarting now may lose recent progress.
+        </div>
+        <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy" :starting="conversationStarting"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
-          :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
+          :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" @send-pending="sendPendingNow" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
-        <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
+        <CliSignInNotice v-if="modern && !isChat && cliMenu?.kind === 'signin'" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive" :send="sendSignInCode"
+          @retry="retrySignIn" @continue="retrySignIn" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
+        <CliMenuNotice v-else-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @answer="answerCliMenuText" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
@@ -684,7 +741,7 @@ function interruptWorkspaceAgent() {
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
             :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
-            @menu="onCliMenu" @suggestion="promptSuggestion = $event" @activity="agentActivity = $event" />
+            @menu="onCliMenu" @suggestion="promptSuggestion = $event" @activity="agentActivity = $event" @persistence="stateWithheld = $event.withheld" />
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>

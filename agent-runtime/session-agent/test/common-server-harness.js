@@ -163,6 +163,7 @@ function createHarness(environment = {}, driverOverrides = {}, harnessOptions = 
         callback(result.error, result.stdout);
       },
       fs: {
+        mkdtempSync() { return '/tmp/agenthub-scrollback-proof'; },
         existsSync(file) { return exists.has(file); },
         writeFileSync(file, data) { writes.push({ file, data }); },
         appendFileSync(file, data) {

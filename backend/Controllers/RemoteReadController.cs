@@ -82,7 +82,7 @@ public sealed class RemoteReadController : ControllerBase
         {
             var page = await SessionTranscripts.PageAsync(_sessions, caller.Owner, id, session.Phase,
                 offset, max, ct, token => _live.ReadAsync(session, token));
-            return page is null ? NotFound() : Ok(page);
+            return Ok(page);
         }
         // Only the existing user-share resolver can cross ownership. A personal token is not
         // a share-link token, and a revoked grant or lapsed licence must fail as on the web path.
@@ -90,7 +90,7 @@ public sealed class RemoteReadController : ControllerBase
         if (shared is null) return NotFound();
         var sharedPage = await SessionTranscripts.PageAsync(_sessions, shared.Session.Owner, id,
             shared.Session.Status, offset, max, ct);
-        return sharedPage is null ? NotFound() : Ok(sharedPage);
+        return Ok(sharedPage);
     }
 
     [HttpGet("sessions/{id}/messages")]

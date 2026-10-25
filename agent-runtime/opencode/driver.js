@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const usage = require('../common/usage');
 const { writeCredentialFile } = require('../common/credential-install');
 const { validCredential } = require('./auth-watcher');
 
@@ -150,6 +151,11 @@ module.exports = {
     if (!id) return null;
     const file = path.join(home, '.opencode', 'agenthub-transcripts', id + '.jsonl');
     try { return fileSystem.statSync(file).isFile() ? file : null; } catch { return null; }
+  },
+  // The session database is OpenCode's own record of every response (docs/usage-tracking.md).
+  readUsage({ env, home, fs: fileSystem }) {
+    return usage.readOpenCodeUsage(path.join(env.OPENCODE_HOME || path.join(home, '.opencode'), 'opencode.db'),
+      { fs: fileSystem });
   },
   buildCommand, isResumeCommand, isMissingResume, prepare,
   credentialPath, validCredential, installCredential,

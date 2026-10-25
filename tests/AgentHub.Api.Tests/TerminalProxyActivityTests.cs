@@ -72,7 +72,9 @@ public class TerminalProxyActivityTests
             var snapshot = await browser.ReceiveAsync(buffer, timeout.Token);
             Assert.Equal("activity snapshot", Encoding.UTF8.GetString(buffer, 0, snapshot.Count));
         }
-        foreach (var input in new[] { "{\"type\":\"input\",\"data\":\"danger\"}", "{\"type\":\"resize\",\"cols\":1,\"rows\":1}", "{\"type\":\"subscribe\",\"channel\":\"activity\"}" })
+        // "interrupt" (#261) makes the session agent press the CLI's interruption key; like input,
+        // it must never reach the pod from a viewer.
+        foreach (var input in new[] { "{\"type\":\"input\",\"data\":\"danger\"}", "{\"type\":\"resize\",\"cols\":1,\"rows\":1}", "{\"type\":\"subscribe\",\"channel\":\"activity\"}", "{\"type\":\"interrupt\"}" })
             await browser.SendAsync(Encoding.UTF8.GetBytes(input), WebSocketMessageType.Text, true, timeout.Token);
         using var noInput = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(async () => await received.Reader.ReadAsync(noInput.Token));

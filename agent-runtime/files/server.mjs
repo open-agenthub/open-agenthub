@@ -40,7 +40,7 @@ const present = z.object({
 });
 
 const MIME = new Map([
-  ['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'],
+  ['.svg', 'image/svg+xml'], ['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'],
   ['.webp', 'image/webp'], ['.gif', 'image/gif'], ['.pdf', 'application/pdf'],
   ['.md', 'text/markdown'], ['.markdown', 'text/markdown'], ['.txt', 'text/plain'],
   ['.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
@@ -82,8 +82,7 @@ export function createFilesToolHandlers(options = {}) {
     await fs.promises.mkdir(managedRoot, { recursive: true, mode: 0o700 });
     const source = await allowedSource(input.path, { workspace, managedRoot });
     const name = safeDisplayName(input.displayName ?? path.basename(source));
-    const mimeType = MIME.get(path.extname(name).toLowerCase());
-    if (!mimeType) throw new Error('unsupported_file_type');
+    const mimeType = MIME.get(path.extname(name).toLowerCase()) ?? 'application/octet-stream';
     const staging = path.join(managedRoot, '.outgoing');
     await fs.promises.mkdir(staging, { recursive: true, mode: 0o700 });
     const staged = path.join(staging, `${crypto.randomUUID()}-${name}`);
@@ -290,7 +289,7 @@ export function createFilesServer(options = {}) {
     read_file: 'Fetch a session file onto this pod\'s disk and return its path, so you can read, '
       + 'search or copy it. Small images and text files also come back inline.',
     upload_file: 'Upload a file from the workspace or managed output directory: images, PDF, '
-      + 'Markdown/text, Office documents, or video (MP4 with H.264/AAC, WebM).',
+      + 'SVG, documents, video, or any other file type (download-only without a safe preview).',
     present_file: 'Present an existing session file or upload and present a local file.',
     dismiss_presentation: 'Dismiss the shared file presentation.',
     // Two tools of their own instead of a flag on list_files and read_file. A connected client
