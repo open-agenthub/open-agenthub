@@ -80,9 +80,14 @@ function scrubExitText(text) {
     .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s?#]*)[?#]\S*/gi, '$1?[removed]')
     .replace(/\b(?:Bearer|Basic)\s+\S+/gi, '[removed]')
     .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_.-]+)/g, '[removed]')
-    .replace(/\b((?:[a-z_-]*(?:token|secret|password|passwd|api[_-]?key|credential|code|state))\s*[=:]\s*)\S+/gi, '$1[removed]')
-    // Device codes as the CLIs print them: XXXX-XXXX style groups of capitals and digits.
-    .replace(/\b(?=[A-Z0-9-]*\d)(?=[A-Z0-9-]*[A-Z])[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+\b/g, '[removed]');
+    .replace(/\b((?:[a-z_-]*(?:token|secret|password|passwd|api[_-]?key|credential))\s*[=:]\s*)\S+/gi, '$1[removed]')
+    .replace(/\b((?:[a-z_-]*(?:code|state))=)\S+/gi, '$1[removed]')
+    // Device and paste codes. The sign-in filter only removes a code it saw drawn, and a CLI
+    // that exits right after drawing one can beat it (a device token request answered 500,
+    // #287), so these go by shape: XXXX-XXXX groups, 8+ capitals and digits, long opaque tokens.
+    .replace(/\b[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+\b/g, '[removed]')
+    .replace(/\b(?=[A-Z0-9]*[A-Z])[A-Z0-9]{8,}\b/g, '[removed]')
+    .replace(/[A-Za-z0-9_#-]{24,}/g, '[removed]');
 }
 
 /**
@@ -969,15 +974,19 @@ function createCommonServer(options = {}) {
       const report = () => postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
         setTimeoutImpl(() => processLike.exit(exitCode || 0), mode === 'interactive' ? 1500 : 200));
       if (exitCode === 0) return report();
-      // The same text the scrollback upload carries, so whoever can read the session list sees
-      // nothing a scrollback reader could not: sign-in screens omitted, captured authorization
-      // values and the session's secret values masked. The end line is ours, not the CLI's.
+      // Whoever can read the session list must see nothing a scrollback reader could not. The
+      // sign-in filter is flushed first, so a code drawn just before the exit is already known;
+      // every line that held a captured authorization value is dropped, and the session's
+      // secret values are masked. This attempt's own output rather than the filtered scrollback:
+      // that one omits everything from a sign-in screen on, which hid the reason a device login
+      // failed ("device auth failed with status 500").
       Promise.resolve(signInPrivacy.flush()).then(() => {
-        const shown = signInPrivacy.scrollback();
-        const end = shown.lastIndexOf(message);
+        const removed = '[sign-in data removed]';
+        const shown = signInPrivacy.mask(stripAnsi(attemptOutput)).split('\n')
+          .filter(line => !line.includes(removed)).join('\n');
         secretMask.refresh();
-        fs.writeFileSync(env.TERMINATION_MESSAGE_PATH || '/dev/termination-log', exitReason(driver.name,
-          exitCode, signal, end === -1 ? shown : shown.slice(0, end), text => secretMask.mask(text)));
+        fs.writeFileSync(env.TERMINATION_MESSAGE_PATH || '/dev/termination-log',
+          exitReason(driver.name, exitCode, signal, shown, text => secretMask.mask(text)));
       }).catch(() => { /* not in a pod */ }).finally(report);
     });
   }

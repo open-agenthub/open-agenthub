@@ -650,6 +650,34 @@ test('exitReason bounds and masks what it quotes', () => {
   assert.match(reason, /key \*\*\*\*$/);
 });
 
+// #287: real Codex drew its device code and exited 1 in the same breath when the device token
+// request failed, and main put the code into the termination message. The exit arrives while the
+// sign-in filter still has the frame queued; what is written must hold neither the code nor the
+// URL, and must still say why the login failed.
+test('a device-code frame followed at once by a failed exit keeps the code out of the termination message', async () => {
+  const harness = createHarness({ TERMINATION_MESSAGE_PATH: '/run/termination' });
+  harness.terminals[0].emitData('Welcome to Codex\r\n\r\nFollow these steps to sign in with ChatGPT using device code authorization:\r\n\r\n' +
+    '1. Open this link in your browser and sign in to your account\r\n   https://auth.example.com/codex/device\r\n\r\n' +
+    '2. Enter this one-time code (expires in 15 minutes)\r\n   WXYZ-48210\r\n\r\n');
+  harness.terminals[0].emitData('Error logging in with device code: device auth failed with status 500 Internal Server Error\r\n');
+  harness.terminals[0].emitExit({ exitCode: 1, signal: 0 });
+  await settle(harness);
+
+  const [written] = harness.writes.filter(write => write.file === '/run/termination').map(write => write.data);
+  assert.ok(written, 'no termination message');
+  assert.ok(!written.includes('WXYZ-48210'), written);
+  assert.match(written, /device auth failed with status 500/);
+});
+
+test('exitReason removes device and paste codes by shape', () => {
+  const { exitReason } = require('../../common/server');
+  const reason = exitReason('Test', 1, undefined,
+    'code ABCD-EFGH\ncode QWERTYUI\npaste aB3_dE5-fG7hI9jK1lM3nO5pQ7rS9\nError: login failed\n');
+  for (const leaked of ['ABCD-EFGH', 'QWERTYUI', 'aB3_dE5-fG7hI9jK1lM3nO5pQ7rS9'])
+    assert.ok(!reason.includes(leaked), leaked + ' leaked: ' + reason);
+  assert.match(reason, /Error: login failed$/);
+});
+
 test('exitReason drops environment dumps and scrubs credentials by shape', () => {
   const { exitReason } = require('../../common/server');
   const reason = exitReason('Codex', 1, undefined,
