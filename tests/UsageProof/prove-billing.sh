@@ -2,7 +2,7 @@
 # #277 end to end: real Claude Code 2.1.287 turns export OTLP into the REAL OtelController, the
 # REAL PostgresUsageStore classifies them from hub-side state, and the REAL UsageController
 # answers. Needs: proof host (host/) on $HUB with a fresh database, mock-model.mjs on $MODEL.
-# usage: prove-277.sh <scratch-dir> [hub] [model]
+# usage: prove-billing.sh <scratch-dir> [hub] [model]
 set -eu
 S=$1; HUB=${2:-http://127.0.0.1:8080}; MODEL=${3:-http://127.0.0.1:18780}; R=$(dirname "$0")
 seed() { # id title authMode(0 Auto,1 Subscription,2 ApiKey) mode(0 Interactive,1 Autonomous) [usageBilling]

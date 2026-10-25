@@ -11,8 +11,8 @@ Claude Code exports `claude_code.cost.usage` over OpenTelemetry. The hub used to
 as the bill whenever it was above zero (`ApiBilled = AuthMode == "ApiKey" || CostUsd > 0`), on the
 assumption — written into `ClaudePricing` — that a subscription session reports 0.
 
-That assumption is wrong. Against a recording mock model (`proofs/258/mock-model.mjs`, OTLP
-decoded with `proofs/258/otlp-dump.mjs`), Claude Code 2.1.287 exported **$0.003255** for one
+That assumption is wrong. Against a recording mock model (`tests/UsageProof/mock-model.mjs`, OTLP
+decoded with `tests/UsageProof/otlp-dump.mjs`), Claude Code 2.1.287 exported **$0.003255** for one
 identical turn both with `ANTHROPIC_API_KEY` (request carried `x-api-key`) and with a subscription
 login (request carried an OAuth bearer token). The CLI prices tokens from its own table whatever
 the credential. So every subscription session counted as API spend: in the per-session table, in
@@ -34,7 +34,7 @@ The `Auto` rows come from the pinned CLI, not from guesswork:
 
 - `claude -p` (unattended) with both a login and `ANTHROPIC_API_KEY` sent `x-api-key`: the key wins.
 - The interactive TUI with both asks *"Detected a custom API key in your environment. Do you want
-  to use this API key?"* with **No** preselected (`proofs/258/claude-auto-tui.mjs`). The person's
+  to use this API key?"* with **No** preselected (`tests/UsageProof/claude-auto-tui.mjs`). The person's
   answer decides, and the hub never sees it. Such a session is `unknown`: its tokens show, it does
   not count against the API budget, and its row says the CLI chose. With only a key stored, the
   key is the one way the session can work, so it is `api`.

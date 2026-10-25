@@ -115,10 +115,27 @@ public class UsageLimitServiceTests
     }
 
     [Fact]
-    public async Task EnsureCanStart_IgnoresNonClaudeAgents()
+    public async Task EnsureCanStart_IgnoresAgentsThatReportNoCost()
     {
+        // Codex reports tokens only and Cursor nothing: their API use never reaches the budget.
         var svc = Build(999, personal: 1);
         await svc.EnsureCanStartAsync("u", AgentKind.Codex, UsageBilling.Api);
+        await svc.EnsureCanStartAsync("u", AgentKind.Cursor, UsageBilling.Api);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.OpenCode)]
+    [InlineData(AgentKind.OpenClaw)]
+    public async Task EnsureCanStart_GatesAgentsWhoseCliReportsACost(AgentKind agent)
+    {
+        // Since #279 their API-key cost counts in usage_monthly, so over budget they are refused like Claude.
+        var svc = Build(10, personal: 10);
+        var ex = await Assert.ThrowsAsync<UsageLimitExceededException>(() =>
+            svc.EnsureCanStartAsync("u", agent, Billing(AgentAuthMode.ApiKey, SessionMode.Autonomous, true, false)));
+        Assert.Contains("subscription session", ex.Message);
+        await svc.EnsureCanStartAsync("u", agent, Billing(AgentAuthMode.Subscription, SessionMode.Autonomous, false, true));
+        await svc.EnsureCanStartAsync("u", agent, Billing(AgentAuthMode.CustomEndpoint, SessionMode.Autonomous, false, false));
+        await Build(9.99, personal: 10).EnsureCanStartAsync("u", agent, UsageBilling.Api);
     }
 
     [Fact]

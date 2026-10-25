@@ -36,6 +36,14 @@ public static class UsageBilling
     };
 
     /// <summary>
+    /// Agents whose CLI reports a cost the monthly API budget can count (docs/usage-tracking.md):
+    /// Claude Code over OTLP, OpenCode and OpenClaw from their own price tables. Codex reports
+    /// tokens only and Cursor nothing, so their API use never reaches the budget.
+    /// </summary>
+    public static bool ReportsCost(Models.AgentKind agent) =>
+        agent is Models.AgentKind.Claude or Models.AgentKind.OpenCode or Models.AgentKind.OpenClaw;
+
+    /// <summary>
     /// Who pays for a pod the hub is about to start. An unattended Claude run (<c>claude -p</c>)
     /// uses ANTHROPIC_API_KEY whenever it is set, even with a login next to it. The interactive TUI
     /// asks the person whether to use the key ("No" preselected), so with both stored the hub
