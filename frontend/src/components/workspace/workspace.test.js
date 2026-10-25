@@ -126,23 +126,32 @@ describe('integrated workspace', () => {
     mocks.shared.mockResolvedValue(page([entry('assistant', 'Shared history')]))
     const wrapper = view({ session: { ...session, accessRole: 'Viewer' }, sharedToken: 'share-token' })
     await workspace(wrapper)
-    expect(mocks.shared).toHaveBeenCalledWith('share-token', undefined)
+    expect(mocks.shared).toHaveBeenCalledWith('share-token', -1)
     expect(wrapper.text()).toContain('Shared history')
     expect(wrapper.find('[data-workspace-composer]').exists()).toBe(false)
     expect(wrapper.find('[data-drawer-shell]').exists()).toBe(false)
     expect(mocks.send).not.toHaveBeenCalled()
   })
 
-  it('drains saved conversation pages even after a session has finished', async () => {
+  it('opens a recent window and loads earlier pages on demand after completion', async () => {
     mocks.api.getConversation
-      .mockResolvedValueOnce(page([entry('assistant', 'First page')], { length: 2 }))
-      .mockResolvedValueOnce(page([entry('assistant', 'Last page')], { offset: 1, nextOffset: 2, length: 2 }))
+      .mockResolvedValueOnce(page([entry('tool', 'Last page')], { offset: 1000, nextOffset: 1001, length: 1001 }))
+      .mockResolvedValueOnce(page(Array.from({ length: 500 }, (_, i) => entry('assistant', 'Earlier page ' + i)), { offset: 500, nextOffset: 1000, length: 1001 }))
     const wrapper = view({ session: { ...session, phase: 'Succeeded' } })
     await workspace(wrapper)
-    expect(mocks.api.getConversation).toHaveBeenNthCalledWith(2, 's1', 1)
+    expect(mocks.api.getConversation).toHaveBeenCalledExactlyOnceWith('s1', -1)
+    expect(wrapper.text()).toContain('Last page')
+    expect(wrapper.text()).not.toContain('Earlier page')
+    const expanded = wrapper.get('[data-work-log]').element
+    expanded.open = true
+    await wrapper.get('[data-load-earlier]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.getConversation).toHaveBeenNthCalledWith(2, 's1', 500, 500)
+    expect(wrapper.get('[data-work-log]').element).toBe(expanded)
+    expect(wrapper.get('[data-work-log]').element.open).toBe(true)
+    expect(wrapper.text()).toContain('Earlier page')
     expect(wrapper.text()).toContain('Last page')
     expect(wrapper.find('textarea').exists()).toBe(false)
-    expect(wrapper.get('[data-session-input-state]').text()).toContain('Session has finished')
   })
 
   it('replaces input at the bottom while stopped and restores the saved draft on resume', async () => {

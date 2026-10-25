@@ -36,8 +36,9 @@ public sealed record ConversationPage(
         var boundary = entries.FirstOrDefault(entry => entry.Role == "boundary")?.Tool;
         var images = string.Join(',', entries.SelectMany((entry, index) =>
             (entry.Attachments ?? []).Select(file => index + ":" + file.Id)));
-        var start = Math.Clamp(offset ?? 0, 0, length);
         var limit = Math.Clamp(max ?? DefaultMaxEntries, 1, MaxEntries);
+        // Explicit offsets retain full-history paging; -1 requests the recent window.
+        var start = offset == -1 ? Math.Max(0, length - limit) : Math.Clamp(offset ?? 0, 0, length);
         var take = Math.Min(length - start, limit);
         return new ConversationPage(sessionId, phase, TranscriptPage.StillRunning(phase), NativeSource,
             start, start + take, length, take < length - start,
@@ -52,7 +53,9 @@ public sealed record ConversationPage(
 
     public static ConversationPage FromScrollback(string sessionId, string phase, string text, int? offset, int? maxChars)
     {
-        var page = TranscriptPage.From(sessionId, phase, text, offset, maxChars);
+        var limit = Math.Clamp(maxChars ?? TranscriptPage.DefaultMaxChars, 1, TranscriptPage.MaxChars);
+        var start = offset == -1 ? Math.Max(0, text.Length - limit) : offset;
+        var page = TranscriptPage.From(sessionId, phase, text, start, maxChars);
         return new ConversationPage(sessionId, phase, page.Running, ScrollbackSource,
             page.Offset, page.NextOffset, page.Length, page.Truncated, [], page.Text);
     }
