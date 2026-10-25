@@ -168,6 +168,28 @@ public class AgentPolicyMatcherTests
             AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement, autoApprove: true).Decision);
     }
 
+    // Where the owner's policy is the boundary (auto-approve off), a command it does not allow
+    // stays denied however it is wrapped. An allowed prefix ("git status") must not carry it
+    // either, and none of these forms may reach the approval endpoint.
+    [Theory]
+    [InlineData("git push >/dev/null")]
+    [InlineData("$(git push)")]
+    [InlineData("`git push`")]
+    [InlineData("x=1; git push")]
+    [InlineData("sh -c 'git push'")]
+    [InlineData("eval \"git push\"")]
+    [InlineData("env A=1 git push")]
+    [InlineData("g\"\"it push")]
+    [InlineData("git status; git push")]
+    [InlineData("git status && $(git push)")]
+    [InlineData("git status | sh")]
+    public void Decide_KeepsAnUnallowedCommandDeniedInEveryWrappingWithoutAutoApprove(string command)
+    {
+        using var input = JsonDocument.Parse(JsonSerializer.Serialize(new { command }));
+
+        Assert.Equal("deny", AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement).Decision);
+    }
+
     // The consequence of the choice above, written down so it cannot change by accident: under
     // auto-approve a chain whose components are not all covered reaches the approval endpoint,
     // exactly as a human clicking "allow" would have let it through.
