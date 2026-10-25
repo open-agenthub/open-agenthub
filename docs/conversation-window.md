@@ -11,6 +11,8 @@ proportional to its entire history, including markdown rendering and message com
 browser-only slice was also rejected because it still transfers every page. Earlier history
 remains available through an explicit button, including for finished sessions and shared views.
 Prepending preserves the scroll position so the entry being read does not move off screen.
+Native message keys use absolute entry offsets so an expanded tool output retains its component
+and open state when older entries are inserted before it.
 
 The window bounds the initial response and rendered entries, not the hub's transcript cache or
 the number of bytes the runtime must initially supply. Native parsing and image enrichment keep

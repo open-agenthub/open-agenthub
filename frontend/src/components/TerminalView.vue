@@ -376,7 +376,6 @@ async function loadTranscript() {
     const page = await fetchConversation(-1)
     if (sessionId !== props.session?.id || token !== props.sharedToken) return
     conversation.value = conversationState(page)
-
   } catch {
     if (sessionId !== props.session?.id) return
     transcriptError.value = 'Could not load the conversation.'
@@ -397,7 +396,7 @@ async function loadEarlier() {
     if (conversation.value !== current) return
     if (page.source !== current.source || page.conversationId !== current.conversationId || page.nextOffset !== current.offset) {
       transcriptBusy.value = false
-      return loadTranscript()
+      return await loadTranscript()
     }
     conversation.value = { ...current, offset: page.offset,
       entries: (page.entries || []).concat(current.entries), text: (page.text || '') + current.text }
@@ -661,7 +660,7 @@ function interruptWorkspaceAgent() {
       <div class="terminal-stack">
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
-          :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
+          :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"

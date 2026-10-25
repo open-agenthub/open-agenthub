@@ -13,7 +13,7 @@ import ConversationImage from './ConversationImage.vue'
 // pending: sent or fleet messages the agent has not taken yet (#153), { key, label, state, text,
 // dismissible }; shown after the conversation and gone once the conversation holds them.
 const props = defineProps({ sessionId: String, sharedToken: String, items: { type: Array, default: () => [] }, loading: Boolean, error: String, canQuote: Boolean, source: String, inviting: Boolean,
-  hasEarlier: Boolean, pending: { type: Array, default: () => [] } })
+  hasEarlier: Boolean, startIndex: { type: Number, default: 0 }, pending: { type: Array, default: () => [] } })
 defineEmits(['quote', 'retry', 'dismiss-pending', 'load-earlier'])
 const scroller = ref(null)
 const query = ref('')
@@ -27,7 +27,7 @@ function earlier() {
 }
 const visible = computed(() => {
   const search = query.value.trim().toLocaleLowerCase()
-  return props.items.map((item, index) => ({ ...item, index }))
+  return props.items.map((item, index) => ({ ...item, index: props.startIndex + index }))
     .filter(item => !search || `${item.label} ${item.text}`.toLocaleLowerCase().includes(search))
 })
 function onScroll() {

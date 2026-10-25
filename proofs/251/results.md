@@ -4,7 +4,7 @@
 - Backend transcript/context-clear selection: 85 tests passed.
 - Frontend production build passed.
 - Chromium, 20,000 synthetic entries through the real backend paginator: latest 500 rendered
-  in 476 ms, one conversation request; Load earlier fetched exactly 500 more. The visible
+  in 476–513 ms across final runs, one conversation request; Load earlier fetched exactly 500 more. The visible
   message anchor moved 0.625 CSS pixels after prepend.
 - Main runtime/real pinned CLI/actual MCP and backend clear chain: scheduled-result to final
   old answer 4.031 seconds; handover entered fresh context without the old task marker. Three
