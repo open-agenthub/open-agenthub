@@ -272,6 +272,47 @@ public class SessionAccessTests
             .GetConversation("nope", null, null, sessions, CancellationToken.None)).Result);
     }
 
+    // #241: a valid link to a session that has written nothing yet gets an empty page; an invalid
+    // or expired link stays 404 without the session's transcript ever being read.
+    [Fact]
+    public async Task SecretLinkConversationApi_EmptyPageOnlyBehindAValidLink()
+    {
+        var session = Session();
+        session.Status = "Pending";
+        var sessions = new NothingWritten();
+        var valid = new FakeAccessService
+        {
+            TokenResult = new SessionAccessResult(session, SessionAccessLevel.Viewer, session.Owner)
+        };
+
+        var response = await new SharedSessionsController(valid).GetConversation("secret-token", -1, null, sessions, CancellationToken.None);
+
+        var page = Assert.IsType<AgentHub.Api.Services.ConversationPage>(Assert.IsType<OkObjectResult>(response.Result).Value);
+        Assert.Equal(("scrollback", ""), (page.Source, page.Text));
+        Assert.Empty(page.Entries);
+        Assert.Equal(1, sessions.Reads);
+
+        var invalidOrExpired = new FakeAccessService { TokenResult = null };
+        Assert.IsType<NotFoundResult>((await new SharedSessionsController(invalidOrExpired)
+            .GetConversation("expired-token", -1, null, sessions, CancellationToken.None)).Result);
+        Assert.Equal(1, sessions.Reads);
+    }
+
+    private sealed class NothingWritten : RecordingWebhookSessionService
+    {
+        public int Reads { get; private set; }
+
+        public override Task<IReadOnlyList<AgentHub.Api.Services.TranscriptEntry>?> GetConversationAsync(
+            string owner, string id, CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<AgentHub.Api.Services.TranscriptEntry>?>(null);
+
+        public override Task<string?> GetTranscriptAsync(string owner, string id, CancellationToken ct = default)
+        {
+            Reads++;
+            return Task.FromResult<string?>(null);
+        }
+    }
+
     private sealed class ConversationOnly(IReadOnlyList<AgentHub.Api.Services.TranscriptEntry> entries)
         : RecordingWebhookSessionService
     {
