@@ -24,6 +24,7 @@ public static class SessionSecretDeliveryFactory
     public static string FilesSecretName(string sessionId) => $"sessionsecrets-{sessionId}";
     public static string EnvSecretName(string sessionId) => $"sessionenv-{sessionId}";
 
+    /// <summary>The two copies and the variable names the pod spec references.</summary>
     /// <param name="Withheld">How many selected secrets were left out because another selected one
     /// lands in the same place.</param>
     public sealed record Delivery(V1Secret Files, V1Secret Env, IReadOnlyList<string> EnvNames, int Withheld = 0);

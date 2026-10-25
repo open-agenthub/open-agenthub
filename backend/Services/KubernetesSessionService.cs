@@ -201,7 +201,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     {
         var sessions = (await _store.ListAsync(owner, ct)).ToDictionary(r => r.Id);
         var projects = (await _projects.ListAsync(owner, ct)).ToDictionary(p => p.Id,
-            p => (p.Name, (IReadOnlyList<string>)(p.SecretIds ?? [])));
+            p => (p.Name, p.SecretIds ?? []));
         return (sessions, projects);
     }
 
