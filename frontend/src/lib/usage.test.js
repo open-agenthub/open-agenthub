@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatApproxCost, formatBytes, formatCpuSeconds, formatTokens, formatTokensExact, formatCost, hasResources, sessionCost, totalTokens, percent } from './usage.js'
+import { formatBytes, formatCpuSeconds, formatTokens, formatTokensExact, formatCost, hasResources, sessionBilling, totalTokens, percent, usageSource } from './usage.js'
 
 describe('formatTokens', () => {
   it('keeps small numbers exact', () => {
@@ -47,27 +47,42 @@ describe('totalTokens', () => {
   })
 })
 
-describe('sessionCost', () => {
-  it('shows the real reported cost for API-billed rows', () => {
-    expect(sessionCost({ apiBilled: true, costUsd: 1.25, estimatedCostUsd: 2 }))
-      .toEqual({ usd: 1.25, approx: false })
+describe('sessionBilling', () => {
+  it('shows the CLI-reported cost for API-billed rows, and counts it as spend', () => {
+    const b = sessionBilling({ billing: 'api', apiCostUsd: 1.25, costUsd: 1.25, costReported: true, source: 'claude-otel' })
+    expect(b).toMatchObject({ kind: 'api', pill: 'api', usd: 1.25, text: '$1.25' })
+    expect(b.title).toContain('reported by Claude Code')
   })
-  it('shows the estimate, marked approximate, for subscription rows', () => {
-    expect(sessionCost({ apiBilled: false, costUsd: 0, estimatedCostUsd: 3.5 }))
-      .toEqual({ usd: 3.5, approx: true })
+  it('never shows money for a subscription row, even when the CLI reported a cost', () => {
+    // Claude Code reports its price-table cost for a subscription login as well.
+    const b = sessionBilling({ billing: 'subscription', costUsd: 0.003255, estimatedCostUsd: 5, turns: 3 })
+    expect(b).toMatchObject({ kind: 'subscription', pill: 'sub', usd: 0, text: '3 turns' })
+    expect(b.text).not.toContain('$')
+    expect(sessionBilling({ billing: 'subscription' }).text).toBe('no money')
   })
-  it('falls back to costUsd>0 when the apiBilled flag is missing (old rows)', () => {
-    expect(sessionCost({ costUsd: 0.4 })).toEqual({ usd: 0.4, approx: false })
-    expect(sessionCost({ costUsd: 0, estimatedCostUsd: 1 })).toEqual({ usd: 1, approx: true })
+  it('says "not reported" for an API row whose CLI computes no cost (Codex)', () => {
+    expect(sessionBilling({ billing: 'api', costUsd: 0, costReported: false, source: 'codex' }))
+      .toMatchObject({ kind: 'api', usd: 0, text: 'not reported' })
   })
-  it('handles null rows', () => {
-    expect(sessionCost(null)).toEqual({ usd: 0, approx: false })
+  it('keeps an Auto row whose billing the CLI chose out of the spend', () => {
+    const b = sessionBilling({ billing: 'unknown', costUsd: 2 })
+    expect(b).toMatchObject({ kind: 'unknown', usd: 0, text: 'billing unknown' })
+    expect(b.title).toContain('$2.00')
+  })
+  it('shows a self-hosted endpoint without money', () => {
+    expect(sessionBilling({ billing: 'custom', turns: 1 })).toMatchObject({ kind: 'custom', usd: 0, text: '1 turn' })
+  })
+  it('handles rows without token usage', () => {
+    expect(sessionBilling(null)).toMatchObject({ kind: 'none', usd: 0 })
+    expect(sessionBilling({ billing: null })).toMatchObject({ kind: 'none' })
   })
 })
 
-describe('formatApproxCost', () => {
-  it('prefixes the cost with a tilde', () => {
-    expect(formatApproxCost(1.5)).toBe('~$1.50')
+describe('usageSource', () => {
+  it('names the CLI the numbers come from', () => {
+    expect(usageSource({ source: 'codex' })).toBe('Codex')
+    expect(usageSource({ source: 'claude-otel' })).toBe('Claude Code')
+    expect(usageSource({})).toBe('')
   })
 })
 

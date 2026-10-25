@@ -38,6 +38,18 @@ public class OtlpMetricsParserTests
     }
 
     [Fact]
+    public void ReadsThePodsBillingLabel_FromTheResource()
+    {
+        var payload = new OtlpBuilder()
+            .Resource(("agenthub.session_id", "sess-1"), ("agenthub.billing", "api"))
+            .TokenPoint("input", 100)
+            .CostPoint(0.5)
+            .Build();
+
+        Assert.Equal("api", Assert.Single(OtlpMetricsParser.Parse(payload)).Billing);
+    }
+
+    [Fact]
     public void DataPointAttributes_OverrideResourceSession()
     {
         // session.id absent on the resource, present on the data point (as Claude Code sends it).

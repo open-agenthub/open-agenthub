@@ -605,14 +605,14 @@ function createCommonServer(options = {}) {
     // the masked text, a reconnecting client is replayed it, and a value the PTY delivered in two
     // chunks is caught as well, which masking chunk by chunk would miss.
     if (secretMask.refresh()) scrollback = secretMask.mask(scrollback);
-    syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
+    postUsage(() => syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
       persistState(final, error => {
         persisting = false;
         const waiters = persistWaiters;
         persistWaiters = null;
         if (waiters) persistAll(nextError => { for (const waiter of waiters) waiter(nextError); }, true);
         if (done) done(error);
-      })))));
+      }))))));
   }
 
   // The credential watcher runs beside this server, not under it: on pod stop only PID 1 — this
@@ -710,6 +710,29 @@ function createCommonServer(options = {}) {
         txBytes: network ? network.tx : 0
       })
     }).catch(() => {}).finally(() => done && done());
+  }
+
+  // The CLI's own usage record, as cumulative totals (driver.readUsage, docs/usage-tracking.md).
+  // Awaited as part of the persistence run rather than fired beside it like the resource
+  // snapshot: an autonomous session often lives shorter than one tick, so the report on exit is
+  // the only one, and it has to land before the process is gone. Only a changed total is sent,
+  // and only one the hub accepted counts as sent, so a failed post is repeated next tick.
+  let lastUsageReport = '';
+  function postUsage(done) {
+    if (!callback || !token || typeof driver.readUsage !== 'function') return done();
+    let totals = null;
+    try { totals = driver.readUsage({ env, home, fs }); } catch (error) {
+      console.log('[agent] Usage not read: ' + (error && error.message ? error.message : error));
+    }
+    if (!totals) return done();
+    const body = JSON.stringify(totals);
+    if (body === lastUsageReport) return done();
+    fetchImpl(callback + '/usage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Agent-Token': token },
+      body
+    }).then(response => { if (response && response.ok) lastUsageReport = body; })
+      .catch(() => {}).finally(() => done());
   }
 
   function postStatus(status, done) {

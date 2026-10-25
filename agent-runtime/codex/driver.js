@@ -2,6 +2,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const usage = require('../common/usage');
 
 // Since 0.160 the TUI turns its mouse capture off again but stays on the alternate screen with
 // alternate-scroll set, so the web terminal turns the wheel into arrow keys: Codex reads those as
@@ -190,6 +191,17 @@ function findTranscript({ env, fs: fileSystem, launchedAt, cwd, pid }) {
   return null;
 }
 
+// Every rollout under the session's CODEX_HOME belongs to this session: the home is per session
+// and carried across resumes by the state archive, so summing all of them covers /new, a thread
+// started from a shell tab and threads Codex archived itself.
+const codexRolloutReader = usage.readerPerRoot(usage.codexUsageRecord);
+function readUsage({ env, fs: fileSystem = fs }) {
+  const home = codexHome(env);
+  const rollouts = ['sessions', 'archived_sessions'].flatMap(dir =>
+    usage.listFiles(path.join(home, dir), fileSystem, name => /^rollout-.*\.jsonl$/.test(name)));
+  return codexRolloutReader(home)(rollouts, fileSystem);
+}
+
 // CODEX_HOME is where the entrypoint restores the secret to; it defaults to ~/.codex, which is
 // also what stateDir/authFilename name, so the override only matters when the image moved it.
 function credentialPath(env) {
@@ -234,7 +246,7 @@ module.exports = {
   stateExcludes: ['.codex/log', '.codex/tmp', '.codex/.tmp', '.codex/packages', '.codex/app-server-daemon', '.codex/agenthub-active'],
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
-  buildCommand, isResumeCommand, isMissingResume, findTranscript, prepare,
+  buildCommand, isResumeCommand, isMissingResume, findTranscript, prepare, readUsage,
   THREAD_ID_FILE,
   credentialPath,
   validCredential: require('./auth-watcher').validCredential,
