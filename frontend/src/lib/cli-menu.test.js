@@ -50,16 +50,18 @@ const oauth = [
   '   Esc to cancel'
 ]
 
-// AskUserQuestion screens of the same CLI (#250), the question and options as the mock model
+// AskUserQuestion screens of the same CLI (#250), blank rows included, the question and options as the mock model
 // sent them. A long question is framed in a bar and wrapped; "Type something." is the entry that
 // becomes a text field.
 const question = [
   '❯ ask me',
   rule,
   ' ☐ Failures ',
+  '',
   '│ Before I refactor the upload path I need to know how you want failures handled. The current code retries three times ',
   '│ with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane ',
   '│ sometimes shows files that never reached storage. Which behaviour do you want?',
+  '',
   '❯ 1. Retry with backoff',
   '     Retry five times with exponential backoff, then surface the error',
   '  2. Fail fast',
@@ -67,13 +69,16 @@ const question = [
   '  3. Type something.',
   rule,
   '  4. Chat about this',
+  '',
   'Enter to select · ↑/↓ to navigate · Esc to cancel'
 ]
 const statement = [
   rule.slice(0, 90),
   ' ☐ Target ',
+  '',
   '│ Pick the deploy target for tonight. Note the database migration from yesterday must run ',
   '│ first',
+  '',
   '❯ 1. Staging', '     x', '  2. Production', '     y', '  3. Type something.',
   rule.slice(0, 90), '  4. Chat about this', 'Enter to select · ↑/↓ to navigate · Esc to cancel'
 ]
@@ -81,6 +86,7 @@ const multiSelect = [
   rule.slice(0, 90),
   '←  ☐ Checks  ☐ Report  ✔ Submit  →',
   'Which checks should run before every push?',
+  '',
   '❯ 1. [ ] Unit tests', '         The fast suite', '  2. [ ] Lint', '         ESLint and dotnet format',
   '  3. [ ] Type something', '     Next',
   rule.slice(0, 90), '  4. Chat about this', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'

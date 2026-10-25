@@ -78,7 +78,9 @@ export function detectMenu(lines) {
 // of a wrapped question left the person answering half of it.
 function titleAbove(region, index) {
   const quoted = []
-  for (let i = index - 1; i >= 0 && QUOTED.test(region[i]); i--) quoted.unshift(region[i].replace(QUOTED, '').trim())
+  let top = index - 1
+  while (top >= 0 && !region[top].trim()) top--
+  for (let i = top; i >= 0 && QUOTED.test(region[i]); i--) quoted.unshift(region[i].replace(QUOTED, '').trim())
   if (quoted.length) return quoted.filter(Boolean).join(' ')
 
   const width = Math.max(...region.map(line => line.length))
