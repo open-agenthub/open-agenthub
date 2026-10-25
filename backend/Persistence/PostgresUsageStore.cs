@@ -98,6 +98,15 @@ public interface IUsageStore
     Task<bool> AddDeltaAsync(SessionUsageDelta delta, CancellationToken ct = default);
 
     /// <summary>
+    /// Records the cumulative totals a session agent read from its CLI's own files
+    /// (POST /internal/sessions/{id}/usage). Only the difference to the previous report is added,
+    /// so a repeated report adds nothing; totals that went down mean the CLI's record started
+    /// over (state lost) and count in full. The owner and billing come from the session record.
+    /// </summary>
+    Task AddReportedUsageAsync(string sessionId, string owner, string source, string billing,
+        AgentUsageReport report, CancellationToken ct = default);
+
+    /// <summary>
     /// Records a pod resource snapshot (cumulative counters + memory gauge) on the session's
     /// aggregate row. The owner comes from the already-authorized session record, so no lookup
     /// happens here. Counter resets (new pod after a resume) are handled as full deltas.
@@ -167,6 +176,14 @@ public sealed class PostgresUsageStore : IUsageStore
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS usage_source     TEXT;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS reasoning_tokens BIGINT NOT NULL DEFAULT 0;
             ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS turns            BIGINT NOT NULL DEFAULT 0;
+            -- The previous cumulative report of a session agent (AddReportedUsageAsync).
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_input_tokens          BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_output_tokens         BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_cache_read_tokens     BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_cache_creation_tokens BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_reasoning_tokens      BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_turns                 BIGINT NOT NULL DEFAULT 0;
+            ALTER TABLE session_usage ADD COLUMN IF NOT EXISTS rep_cost_usd              DOUBLE PRECISION NOT NULL DEFAULT 0;
             -- Rows from before the split: only an ApiKey session's cost was spend. Old Auto rows
             -- cannot be told apart any more and stay "unknown". Runs once per row (billing IS NULL);
             -- a row the resource snapshot created without tokens gets a classification, nothing else.
@@ -250,6 +267,96 @@ public sealed class PostgresUsageStore : IUsageStore
         cmd.Parameters.AddWithValue("api", apiCost);
         await cmd.ExecuteNonQueryAsync(ct);
         return true;
+    }
+
+    public async Task AddReportedUsageAsync(string sessionId, string owner, string source, string billing,
+        AgentUsageReport report, CancellationToken ct = default)
+    {
+        await using var conn = await _db.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+
+        // Row lock: two reports racing (a tick and the exit report) must not both add the same
+        // difference against the same previous totals.
+        await using (var ensure = new NpgsqlCommand("""
+            INSERT INTO session_usage (session_id, owner) VALUES (@sid, @owner) ON CONFLICT (session_id) DO NOTHING;
+            """, conn, tx))
+        {
+            ensure.Parameters.AddWithValue("sid", sessionId);
+            ensure.Parameters.AddWithValue("owner", owner);
+            await ensure.ExecuteNonQueryAsync(ct);
+        }
+        AgentUsageReport previous;
+        await using (var read = new NpgsqlCommand("""
+            SELECT rep_input_tokens, rep_output_tokens, rep_cache_read_tokens, rep_cache_creation_tokens,
+                   rep_reasoning_tokens, rep_turns, rep_cost_usd
+            FROM session_usage WHERE session_id = @sid FOR UPDATE
+            """, conn, tx))
+        {
+            read.Parameters.AddWithValue("sid", sessionId);
+            await using var r = await read.ExecuteReaderAsync(ct);
+            await r.ReadAsync(ct);
+            previous = new AgentUsageReport(r.GetInt64(0), r.GetInt64(1), r.GetInt64(2), r.GetInt64(3),
+                r.GetInt64(4), r.GetInt64(5), r.GetDouble(6));
+        }
+
+        var d = report.Since(previous);
+        var cost = d.CostUsd ?? 0;
+        var apiCost = billing == UsageBilling.Api ? cost : 0;
+        await using (var write = new NpgsqlCommand("""
+            UPDATE session_usage SET
+                owner                     = @owner,
+                input_tokens              = input_tokens          + @in,
+                output_tokens             = output_tokens         + @out,
+                cache_read_tokens         = cache_read_tokens     + @cr,
+                cache_creation_tokens     = cache_creation_tokens + @cc,
+                reasoning_tokens          = reasoning_tokens      + @rt,
+                turns                     = turns                 + @turns,
+                cost_usd                  = cost_usd              + @cost,
+                api_cost_usd              = api_cost_usd          + @api,
+                cost_reported             = cost_reported OR @reported,
+                billing                   = @billing,
+                usage_source              = @source,
+                rep_input_tokens          = @rin,
+                rep_output_tokens         = @rout,
+                rep_cache_read_tokens     = @rcr,
+                rep_cache_creation_tokens = @rcc,
+                rep_reasoning_tokens      = @rrt,
+                rep_turns                 = @rturns,
+                rep_cost_usd              = @rcost,
+                updated_at                = now()
+            WHERE session_id = @sid;
+
+            INSERT INTO usage_monthly (owner, month, cost_usd, estimated_cost_usd, updated_at)
+            VALUES (@owner, date_trunc('month', now())::date, @api, 0, now())
+            ON CONFLICT (owner, month) DO UPDATE SET
+                cost_usd   = usage_monthly.cost_usd + EXCLUDED.cost_usd,
+                updated_at = now();
+            """, conn, tx))
+        {
+            var p = write.Parameters;
+            p.AddWithValue("sid", sessionId);
+            p.AddWithValue("owner", owner);
+            p.AddWithValue("in", d.InputTokens);
+            p.AddWithValue("out", d.OutputTokens);
+            p.AddWithValue("cr", d.CacheReadTokens);
+            p.AddWithValue("cc", d.CacheCreationTokens);
+            p.AddWithValue("rt", d.ReasoningTokens);
+            p.AddWithValue("turns", d.Turns);
+            p.AddWithValue("cost", cost);
+            p.AddWithValue("api", apiCost);
+            p.AddWithValue("reported", report.CostUsd is not null);
+            p.AddWithValue("billing", billing);
+            p.AddWithValue("source", source);
+            p.AddWithValue("rin", report.InputTokens);
+            p.AddWithValue("rout", report.OutputTokens);
+            p.AddWithValue("rcr", report.CacheReadTokens);
+            p.AddWithValue("rcc", report.CacheCreationTokens);
+            p.AddWithValue("rrt", report.ReasoningTokens);
+            p.AddWithValue("rturns", report.Turns);
+            p.AddWithValue("rcost", report.CostUsd ?? 0);
+            await write.ExecuteNonQueryAsync(ct);
+        }
+        await tx.CommitAsync(ct);
     }
 
     public async Task AddResourceSampleAsync(string sessionId, string owner, SessionResourceSample sample, CancellationToken ct = default)

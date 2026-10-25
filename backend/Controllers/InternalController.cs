@@ -187,6 +187,27 @@ public sealed class InternalController : ControllerBase
     }
 
     /// <summary>
+    /// Cumulative token usage the session agent read from the CLI's own files — Codex's rollouts,
+    /// OpenCode's database, OpenClaw's session files (docs/usage-tracking.md). Who pays is taken
+    /// from the session record, never from the pod, so a report cannot move API spend out of the
+    /// budget. Claude reports through OpenTelemetry instead (<see cref="OtelController"/>).
+    /// </summary>
+    [HttpPost("usage")]
+    public async Task<IActionResult> Usage(string id, [FromBody] AgentUsageReport body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+        if (_usage is null) return NoContent();
+        if (!body.IsValid) return BadRequest();
+        // Claude's tokens already arrive over OTLP; a second source would count them twice.
+        if (rec.Agent == AgentKind.Claude) return NoContent();
+
+        await _usage.AddReportedUsageAsync(id, rec.Owner, rec.Agent.ToString().ToLowerInvariant(),
+            UsageBilling.Classify(rec.AuthMode.ToString(), null), body, ct);
+        return NoContent();
+    }
+
+    /// <summary>
     /// The pod reports that its provider account hit a usage limit — Claude's mod read the
     /// rate-limit windows, or the session agent matched the CLI's own notice. The hub marks the
     /// account and, where it can, moves the session to another one (docs/account-limits.md).

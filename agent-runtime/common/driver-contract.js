@@ -37,6 +37,11 @@ function validateDriver(driver) {
   if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
     throw new Error('Agent driver findTranscript must be a function');
   }
+  // Optional: readUsage({ env, home, fs }) returns the session's cumulative token usage read from
+  // the CLI's own files (common/usage.js), or null. Claude reports through OpenTelemetry instead.
+  if (driver.readUsage !== undefined && typeof driver.readUsage !== 'function') {
+    throw new Error('Agent driver readUsage must be a function');
+  }
   // Optional: terminalAttachmentPath(file, { env, home, fs }) returns the path a materialized
   // attachment is pasted into the CLI as, for a CLI that reads images only from its own
   // directories. Without it the materialized path itself is pasted.

@@ -62,6 +62,64 @@ the session agent must send the hub only numeric usage, never credentials.
 **Alternative considered:** keep `cost > 0` and subtract an estimate for subscription sessions.
 Rejected: it keeps a price table in the decision, and a price table cannot tell who was billed.
 
+## Where the numbers come from, per CLI
+
+Each CLI already records its own usage. The hub reads that record and does not count tokens
+itself. Claude Code exports OTLP metrics, which the hub has ingested since before this change.
+The others write files, which the session agent reads on its 30-second persistence tick
+(`driver.readUsage`, `agent-runtime/common/usage.js`). It posts the session's **cumulative
+totals** to `POST /internal/sessions/{id}/usage`, and again on exit. The exit report matters:
+an autonomous run is often shorter than one tick.
+
+Verified against the pinned versions with a recording mock model that answers every request
+with input 1000 (600 of it cached) and output 50 (20 of it reasoning):
+
+| CLI (pin) | Source | Tokens | Turns | Cost | Recorded |
+|---|---|---|---|---|---|
+| Claude Code 2.1.287 | OTLP `claude_code.token.usage` / `.cost.usage` | input (uncached), output, cacheRead, cacheCreation, per model | not exported | its price table, **for a subscription too** | yes, needs `telemetry.enabled` |
+| Codex 0.160.0 | `$CODEX_HOME/sessions/**/rollout-*.jsonl`: one `token_usage_record` per response (`response_id`), `event_msg` `task_started` per turn | `input_tokens` **includes** cached, `cached_input_tokens`, `cache_write_input_tokens`, `output_tokens` incl. `reasoning_output_tokens` | yes | none | yes |
+| OpenCode 1.18.35 | `~/.opencode/opencode.db` (SQLite), `message.data` of assistant messages | `tokens.input` (uncached), `tokens.output` **excl.** `tokens.reasoning`, `tokens.cache.read/write` | user messages of top-level sessions | `cost` from its model price table | yes |
+| OpenClaw 2026.7.1-2 | `~/.openclaw/agents/*/sessions/<id>.jsonl`, `message.usage` of assistant entries | `input` (uncached), `output` incl. `reasoningTokens`, `cacheRead`, `cacheWrite` | user messages | `usage.cost.total` from its price table | yes |
+| Cursor (unpinned) | — | — | — | — | no |
+
+All three file readers produced the same totals from that run: 400 uncached input, 600 cache
+reads, 50 output (20 of it reasoning), 1 turn. The CLIs disagree on what "input" and "output"
+contain, and each reader maps its CLI onto the hub's buckets. Input excludes the cache, and output
+includes reasoning, as providers bill it.
+
+- **Codex** de-duplicates by `thread_id` + `response_id`, and reads every rollout under the
+  session's `CODEX_HOME` plus `archived_sessions/`. The home is per session and travels in the
+  state archive, so a `/new` thread or a `codex` started in the shell tab counts too. Codex
+  computes no price. An API-key Codex session therefore shows "not reported" and does not count
+  against the budget. A Codex price table in the hub was rejected: it would turn tokens into a
+  number nobody billed, which is the mistake this file is about.
+- **OpenCode** is one aggregate query per tick over its database, through `node:sqlite` read-only.
+  The database is the only place OpenCode keeps usage. Its policy plugin sees `message.updated`
+  too, but a plugin restarts with every process and would have to rebuild the history from the
+  same database anyway.
+- **OpenClaw** skips the `.trajectory.jsonl` beside each session file. It repeats the same
+  responses and would double every count.
+- **Cursor** is not recorded. The CLI cannot be run without a real API key ("The provided API key
+  is invalid"), so no file or event could be verified, and nothing is read on a guess.
+
+The readers are incremental. They keep each JSONL file's offset and parse only appended lines.
+A rollout of a long session is many megabytes, and re-reading it every 30 seconds would cost CPU
+in every pod. A file that got shorter was rewritten and is read again from the start.
+
+**Totals, not deltas.** The hub stores the previous report (`rep_*` columns) and adds only the
+difference, so a lost or repeated report neither drops nor double-counts usage. If any total
+goes down, the CLI's record started over (a fresh pod without the archived state), and the whole
+report counts as new, the same rule as the pod resource counters. Owner and billing come from the
+session record. A report for a Claude session is ignored, because its tokens already arrive over
+OTLP and would be counted twice.
+
+**What leaves the pod.** Only the seven numbers: `inputTokens`, `outputTokens`,
+`cacheReadTokens`, `cacheCreationTokens`, `reasoningTokens`, `turns` and `costUsd`. The
+files these come from hold the whole conversation. `common/server.js` therefore rebuilds the
+body from that fixed list whatever a driver returns, and `usage.test.js` /
+`common-server-usage.test.js` feed prompts, answers and session titles through every reader and
+assert that none of it reaches the request.
+
 ## What is stored
 
 `session_usage.cost_usd` stays what the CLI reported, kept for reference. `api_cost_usd` holds the
@@ -78,7 +136,7 @@ month rolls over.
 ## What the UI shows
 
 - **API cost**: money, labelled as reported by the CLI (`Claude Code`, …), for `api` rows only.
-- **Subscription usage**: tokens and, where the CLI records them, turns. **No dollar amount.** The
+- **Subscription usage**: tokens and, where the CLI records them (not Claude's OTLP), turns. **No dollar amount.** The
   previous "Covered by subscription ~$X" card showed a price-table estimate as if it were a value
   received. Nobody pays it, and next to real spend it read as a bill. `estimatedCostUsd` and
   `subscriptionEstimatedCostUsd` stay in the API, documented as estimates, but the UI no longer

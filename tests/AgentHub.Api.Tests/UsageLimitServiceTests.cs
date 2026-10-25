@@ -15,6 +15,8 @@ public class UsageLimitServiceTests
         public Task<bool> AddDeltaAsync(SessionUsageDelta delta, CancellationToken ct = default) => Task.FromResult(true);
         public Task AddResourceSampleAsync(string sessionId, string owner, SessionResourceSample sample,
             CancellationToken ct = default) => Task.CompletedTask;
+        public Task AddReportedUsageAsync(string sessionId, string owner, string source, string billing,
+            AgentUsageReport report, CancellationToken ct = default) => Task.CompletedTask;
         public Task<IReadOnlyList<SessionUsage>> ListByOwnerAsync(string owner, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<SessionUsage>>(Array.Empty<SessionUsage>());
         public Task<SessionUsage?> GetAsync(string owner, string sessionId, CancellationToken ct = default)
