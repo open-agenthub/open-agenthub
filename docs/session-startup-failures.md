@@ -23,8 +23,22 @@ The agent container writes its own termination message as well (#244). Without o
 has only the container's reason, and an autonomous run whose CLI exited 1 on an expired login was
 listed as "agent start: Error". The person reading that cannot tell a login problem from a crash.
 `common/server.js` writes the driver name, the exit code and the CLI's last three output lines when
-the agent exits non-zero. Those lines are masked like the scrollback and bounded to 600 characters,
-and they are what a person in the terminal would have read. `entrypoint-common.sh` traps ERR for a
+the agent exits non-zero. They are bounded to 600 characters, and they are what a person in the
+terminal would have read.
+
+The session list is readable by more people than the terminal, so those lines go through three
+filters:
+
+- The session's secret values are masked.
+- Every line that held a sign-in value the filter captured is dropped.
+- A scrub by shape removes URL queries, tokens, device and paste codes, and `NAME=value`
+  environment lines.
+
+The shape scrub is not optional. A real Codex device login that failed on its token request drew
+the code and exited before the sign-in filter could capture it, and the first version of this
+message showed that code (#287). Quoting the filtered scrollback instead was rejected: it omits
+everything from a sign-in screen on, which hid the reason the login failed.
+`entrypoint-common.sh` traps ERR for a
 step that fails before the session agent exists, and names the failed command as written, before
 expansion, so no secret value is in it. Fetching pod logs instead was rejected for the reasons
 above.

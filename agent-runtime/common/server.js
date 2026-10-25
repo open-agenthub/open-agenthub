@@ -70,15 +70,38 @@ const EXIT_REASON_LINES = 3;
 const EXIT_REASON_CHARS = 600;
 
 /**
+ * A second, value-independent pass over what exitReason quotes. The masks before it only know the
+ * values they have seen; a sign-in URL the detector missed or a token the CLI echoed is caught
+ * here by shape. It errs towards removing too much: the reason only has to say what failed.
+ */
+function scrubExitText(text) {
+  return text
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, '$1[removed]@')
+    .replace(/\b([a-z][a-z0-9+.-]*:\/\/[^\s?#]*)[?#]\S*/gi, '$1?[removed]')
+    .replace(/\b(?:Bearer|Basic)\s+\S+/gi, '[removed]')
+    .replace(/\b(?:sk-[A-Za-z0-9_-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,}|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_-]+|eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_.-]+)/g, '[removed]')
+    .replace(/\b((?:[a-z_-]*(?:token|secret|password|passwd|api[_-]?key|credential))\s*[=:]\s*)\S+/gi, '$1[removed]')
+    .replace(/\b((?:[a-z_-]*(?:code|state))=)\S+/gi, '$1[removed]')
+    // Device and paste codes. The sign-in filter only removes a code it saw drawn, and a CLI
+    // that exits right after drawing one can beat it (a device token request answered 500,
+    // #287), so these go by shape: XXXX-XXXX groups, 8+ capitals and digits, long opaque tokens.
+    .replace(/\b[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+\b/g, '[removed]')
+    .replace(/\b(?=[A-Z0-9]*[A-Z])[A-Z0-9]{8,}\b/g, '[removed]')
+    .replace(/[A-Za-z0-9_#-]{24,}/g, '[removed]');
+}
+
+/**
  * The termination message of an agent that exited non-zero (docs/session-startup-failures.md).
  * Without one Kubernetes has only the container's reason, so a run that failed on its login read
  * "agent start: Error" in the session list (#244). The CLI's last lines are what a person would
  * have read in the terminal: masked like the scrollback, control sequences removed, bounded.
  */
 function exitReason(name, code, signal, output, mask = text => text) {
-  const lines = mask(stripAnsi(String(output || '').slice(-EXIT_TAIL_CHARS)))
+  const lines = scrubExitText(mask(stripAnsi(String(output || '').slice(-EXIT_TAIL_CHARS))))
     .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '\n')
-    .split('\n').map(line => line.trim()).filter(Boolean);
+    .split('\n').map(line => line.trim()).filter(Boolean)
+    // A line shaped like NAME=value is an environment dump, never the reason a CLI gives.
+    .filter(line => !/^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=/.test(line));
   const tail = lines.slice(-EXIT_REASON_LINES).join(' | ').slice(-EXIT_REASON_CHARS);
   return `${name} exited with code ${code}${signal ? `, signal ${signal}` : ''}` +
     (tail ? `: ${tail}` : ' without output.');
@@ -941,12 +964,6 @@ function createCommonServer(options = {}) {
     }
 
     exited = true;
-    if (exitCode !== 0) {
-      try {
-        fs.writeFileSync(env.TERMINATION_MESSAGE_PATH || '/dev/termination-log',
-          exitReason(driver.name, exitCode, signal, attemptOutput, text => secretMask.mask(text)));
-      } catch { /* not in a pod */ }
-    }
     const message = endMessage(exitCode, signal);
     remember(message);
     for (const socket of clients) {
@@ -954,8 +971,23 @@ function createCommonServer(options = {}) {
       try { socket.close(1000); } catch {}
     }
     beforeExit(() => {
-      postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
+      const report = () => postStatus(exitCode === 0 ? 'Succeeded' : 'Failed', () =>
         setTimeoutImpl(() => processLike.exit(exitCode || 0), mode === 'interactive' ? 1500 : 200));
+      if (exitCode === 0) return report();
+      // Whoever can read the session list must see nothing a scrollback reader could not. The
+      // sign-in filter is flushed first, so a code drawn just before the exit is already known;
+      // every line that held a captured authorization value is dropped, and the session's
+      // secret values are masked. This attempt's own output rather than the filtered scrollback:
+      // that one omits everything from a sign-in screen on, which hid the reason a device login
+      // failed ("device auth failed with status 500").
+      Promise.resolve(signInPrivacy.flush()).then(() => {
+        const removed = '[sign-in data removed]';
+        const shown = signInPrivacy.mask(stripAnsi(attemptOutput)).split('\n')
+          .filter(line => !line.includes(removed)).join('\n');
+        secretMask.refresh();
+        fs.writeFileSync(env.TERMINATION_MESSAGE_PATH || '/dev/termination-log',
+          exitReason(driver.name, exitCode, signal, shown, text => secretMask.mask(text)));
+      }).catch(() => { /* not in a pod */ }).finally(report);
     });
   }
 
