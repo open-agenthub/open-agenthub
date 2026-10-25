@@ -185,6 +185,19 @@ public class ApiRouteTableTests
         }
     }
 
+    /// <summary>#261: pushing a waiting message is the signed-in owner's action only. Neither the
+    /// agent's callback surface (X-Agent-Token) nor the token surface has a route for it.</summary>
+    [Fact]
+    public void MessagePush_ExistsOnlyOnTheSignedInSurface()
+    {
+        var pushes = Routes().Where(route => route.Template.EndsWith("/push")).ToList();
+        var push = Assert.Single(pushes);
+        Assert.Equal("api/sessions/{id}/messages/{messageId}/push", push.Template);
+        Assert.Equal(new[] { "POST" }, push.Methods.ToArray());
+        var action = Actions().OfType<ControllerActionDescriptor>().Single(a => a.AttributeRouteInfo?.Template == push.Template);
+        Assert.Equal(typeof(SessionsController), action.ControllerTypeInfo.AsType());
+    }
+
     [Fact]
     public void BothStateUploads_RaiseTheRequestSizeLimit()
     {

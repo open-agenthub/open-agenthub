@@ -230,6 +230,10 @@ that means differs by where the message waits:
   stops the turn first, like a priority or interrupting `agent_send`. The row keeps its id, and the
   pod leaves the ids it typed out of its end-of-turn take, so the message cannot arrive twice.
   A row the agent has already taken is refused (409), so nothing is delivered a second time.
+  *Send now* types the message into the running prompt, and the CLI then treats it like
+  anything typed there: Codex 0.160.0 (with its managed hooks) queued it behind a text-only turn
+  and sent it when the turn ended, while *Interrupt and send* reached the model 0.8 s after the
+  push. Only the interrupt is immediate whatever the turn is doing.
 - A composer message is already in the CLI's own queue, so it offers only *Interrupt and send*.
   Pushing its text as well would deliver it twice. The button sends the driver's interruption key
   (Escape; two for OpenCode), not the composer's Ctrl+C. Measured with the pinned CLIs and a model

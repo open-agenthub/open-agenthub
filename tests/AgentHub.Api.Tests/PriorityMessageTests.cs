@@ -298,6 +298,18 @@ public class PriorityMessageTests
     }
 
     [Fact]
+    public async Task OwnerPush_AMessageOfAnotherSessionIsNotFound_EvenForTheSameOwner()
+    {
+        var world = new ControllerWorld();
+        world.Messages.Recent.Add(new SessionMessageRecord { Id = "m-rev", ToSessionId = "reviewer", Owner = Owner, Body = "for the reviewer" });
+
+        Assert.IsType<NotFoundResult>(await world.Sessions(Owner).PushMessage("coder", "m-rev", null, CancellationToken.None));
+        Assert.Empty(world.Delivery.Calls);
+        Assert.IsType<OkObjectResult>(await world.Sessions(Owner).PushMessage("reviewer", "m-rev", null, CancellationToken.None));
+        Assert.Equal("reviewer", Assert.Single(world.Delivery.Calls).Target.Id);
+    }
+
+    [Fact]
     public async Task OwnerSend_ForeignSessionOrEmptyBody_FailsWithoutStoring()
     {
         var world = new ControllerWorld();
