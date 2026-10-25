@@ -44,6 +44,6 @@ describe('uploadAttachmentFiles', () => {
     }
     const file = new File(['x'], 'a.png', { type: 'image/png' })
     expect(await uploadAttachmentFiles({ sessionId: 's1', api, files: [file] })).toEqual(['f1'])
-    await expect(uploadAttachmentFiles({ sessionId: 's1', api, files: [new File(['x'], 'a.exe', { type: '' })] })).rejects.toThrow('not supported')
+    expect(await uploadAttachmentFiles({ sessionId: 's1', api, files: [new File(['x'], 'a.exe', { type: '' })] })).toEqual(['f1'])
   })
 })

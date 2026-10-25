@@ -120,6 +120,30 @@ public class SessionTranscriptsTests
         Assert.IsType<NotFoundResult>((await controller.Conversation("s1", null, null, CancellationToken.None)).Result);
     }
 
+    // A just-created session has written nothing yet. It is a session all the same, so its
+    // conversation is an empty page; a 404 here read as "Could not load the conversation" (#241).
+    [Fact]
+    public async Task WebApp_ConversationEndpoint_GivesAnEmptyPageForASessionThatHasWrittenNothingYet()
+    {
+        var svc = new TranscriptService { Phase = "Pending" };
+        var controller = new SessionsController(svc, null!, [])
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { User = Alice() } }
+        };
+
+        var page = Assert.IsType<ConversationPage>(
+            Assert.IsType<OkObjectResult>((await controller.Conversation("s1", -1, null, CancellationToken.None)).Result).Value);
+        Assert.Equal(("scrollback", "Pending", true), (page.Source, page.Phase, page.Running));
+        Assert.Empty(page.Entries);
+        Assert.Equal("", page.Text);
+        Assert.Equal((0, 0, 0), (page.Offset, page.NextOffset, page.Length));
+
+        svc.Phase = null;
+        var reads = svc.ScrollbackReads;
+        Assert.IsType<NotFoundResult>((await controller.Conversation("s1", -1, null, CancellationToken.None)).Result);
+        Assert.Equal(reads, svc.ScrollbackReads);
+    }
+
     [Fact]
     public async Task Upload_StoresTheCappedTailOfTheNativeTranscript()
     {

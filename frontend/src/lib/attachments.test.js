@@ -5,9 +5,8 @@ const png = (name = 'shot.png', size = 12, lastModified = 1) =>
   new File([new Uint8Array(size)], name, { type: 'image/png', lastModified })
 
 describe('chat attachments', () => {
-  it('rejects unsupported, duplicate, and oversized batches before reserving', () => {
-    expect(validateAttachmentBatch([new File(['x'], 'x.svg', { type: 'image/svg+xml' })]).errors[0].code)
-      .toBe('unsupported_file_type')
+  it('accepts SVG and rejects duplicate and oversized batches before reserving', () => {
+    expect(validateAttachmentBatch([new File(['x'], 'x.svg', { type: 'image/svg+xml' })]).accepted).toHaveLength(1)
     expect(validateAttachmentBatch([png(), png()]).accepted).toHaveLength(1)
     expect(validateAttachmentBatch(Array.from({ length: 6 }, (_, i) => png(`${i}.png`))).errors[0].code)
       .toBe('too_many_files')
@@ -19,7 +18,7 @@ describe('chat attachments', () => {
     const video = (name, type, size = 12) => new File([new Uint8Array(size)], name, { type })
     expect(validateAttachmentBatch([video('demo.mp4', 'video/mp4'), video('demo.webm', 'video/webm')]).accepted)
       .toHaveLength(2)
-    expect(validateAttachmentBatch([video('demo.mov', 'video/quicktime')]).errors[0].code).toBe('unsupported_file_type')
+    expect(validateAttachmentBatch([video('demo.mov', 'video/quicktime')]).accepted).toHaveLength(1)
     expect(validateAttachmentBatch([video('demo.mp4', 'video/webm')]).errors[0].code).toBe('content_type_mismatch')
     // Above the document limit is fine for a video; above the message limit is not.
     const big = { name: 'demo.mp4', type: 'video/mp4', size: 50 * 1024 * 1024 + 1, lastModified: 1 }

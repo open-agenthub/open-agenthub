@@ -671,7 +671,8 @@ their own (Cursor's TUI does the same, not verified end to end). In the shell, C
 only ([`docs/terminal-clipboard.md`](docs/terminal-clipboard.md)).
 Images, PDF, Markdown, plain text and video (MP4 with H.264/AAC, WebM) can be opened in Files
 beside Workspace or Terminal; a video plays in the browser's own player and can be seeked.
-HTML and SVG are download-only. A managed `files` MCP gives every supported agent the same
+SVG previews use an image element; arbitrary other file types upload and download without a preview.
+See [file type safety](docs/file-type-safety.md) for the serving boundary and size limits. A managed `files` MCP gives every supported agent the same
 provider-neutral tools: `list_display_capabilities`, `list_files`, `read_file`,
 `upload_file`, `present_file`, and `dismiss_presentation`.
 

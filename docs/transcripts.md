@@ -501,3 +501,32 @@ The check runs once per connection, not per keystroke. A terminal socket outlive
 keystrokes, but not its pod: when the pod is replaced, the TCP connection to it ends. The next
 connection, the browser's reconnect, is checked again. Checking every frame would put an API
 server call on every keypress and would protect nothing the closed connection does not.
+
+## A session that has written nothing yet (#241)
+
+A just-created session showed *Could not load the conversation · Retry* until its agent wrote
+something. `SessionTranscripts.PageAsync` returned null when there was neither a native
+transcript nor scrollback, and the three conversation endpoints (web app, remote API, shared
+link) turned that null into 404, the same answer as for an unknown session. The Workspace treats
+any failed load as an error.
+
+Now a session the caller may see always gets a page: with nothing written yet, an empty scrollback
+page. 404 again means one thing only: no such session for this caller. Each endpoint resolves the
+session first (by owner, by user grant, or by share token), so an unknown session, another
+owner's session and an invalid or expired link still get 404, and the transcript is never read
+for them. The empty page does not tell a caller that a session exists.
+
+The Workspace shows *Session starting* while a live session has nothing to show, with the
+turning ring of the *Working…* indicator, and names the stage: the pod is pending, the agent is
+starting, or an autonomous run has no output yet. The conversation replaces it at the first
+entry, through the same one-second poll. "The agent is up" means more than an open terminal
+socket. The hub accepts that socket before it dials the pod, so an agent that is not listening
+yet looks connected for a moment every two seconds. The agent answers the activity subscription
+at once with a known state, and that answer is the signal. A finished or paused session never
+shows this state; a load that fails there is still an error with Retry.
+
+Rejected:
+- **Treating a 404 as "starting" in the Workspace.** It would also hide a session that really is
+  gone, and the shared link and the remote API would keep answering 404 for an existing session.
+- **A separate "has a transcript" flag on the session.** It is one more value to keep in step
+  with the upload, and the page already tells the Workspace whether there is anything to show.

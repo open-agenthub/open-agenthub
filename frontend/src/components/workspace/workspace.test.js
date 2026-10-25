@@ -33,7 +33,11 @@ function view(props = {}) {
           onMounted(() => {
             mocks.mounted(props.kind)
             if (props.kind === 'agent') mocks.status = value => emit('status', value)
-            if (!mocks.holdConnection) emit('status', 'connected')
+            if (mocks.holdConnection) return
+            emit('status', 'connected')
+            // The real agent answers the activity subscription at once; until it has, the
+            // Workspace counts the agent as still starting (#241).
+            if (props.kind === 'agent') emit('activity', { state: 'idle', source: 'hooks' })
           })
           return () => null
         }

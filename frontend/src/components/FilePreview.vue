@@ -31,7 +31,7 @@ const officePreviewDisabled = computed(() =>
   props.capabilities?.unavailableReasons?.[props.file?.mimeType] === 'office_preview_disabled')
 
 function releaseUrl() {
-  if (objectUrl.value) URL.revokeObjectURL(objectUrl.value)
+  if (objectUrl.value.startsWith('blob:')) URL.revokeObjectURL(objectUrl.value)
   objectUrl.value = ''
 }
 
@@ -70,8 +70,19 @@ async function load() {
       // instead of running as a document on our origin. Passing the response blob through
       // unchanged would make that depend on a response header we no longer control at this point.
       objectUrl.value = URL.createObjectURL(blob.slice(0, blob.size, 'application/pdf'))
+    } else if (props.file.mimeType === 'image/svg+xml' && kind.value === 'image') {
+      // An SVG blob URL inherits the app's origin if opened as a document. A data URL keeps
+      // that navigation opaque; the img element itself disables scripts and external resources.
+      const source = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = reject
+        reader.readAsDataURL(blob.slice(0, blob.size, 'image/svg+xml'))
+      })
+      if (current === generation) objectUrl.value = source
     } else {
-      objectUrl.value = URL.createObjectURL(blob)
+      objectUrl.value = URL.createObjectURL(kind.value === 'download'
+        ? blob.slice(0, blob.size, 'application/octet-stream') : blob)
     }
   } catch {
     if (current === generation) error.value = 'This file could not be loaded.'

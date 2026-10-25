@@ -13,7 +13,7 @@ describe('file preview routing', () => {
     ['video/webm', 'video'],
     ['video/quicktime', 'download'],
     ['text/html', 'download'],
-    ['image/svg+xml', 'download']
+    ['image/svg+xml', 'image']
   ])('routes %s to %s', (mimeType, expected) => {
     expect(previewKind(ready(mimeType), {})).toBe(expected)
   })
