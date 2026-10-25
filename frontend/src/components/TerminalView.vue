@@ -10,7 +10,7 @@ import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
 import CliMenuNotice from './workspace/CliMenuNotice.vue'
 import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
-import { CANCEL_KEYS, keysForOption } from '../lib/cli-menu.js'
+import { CANCEL_KEYS, keysForAnswer, keysForOption } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, isSessionStopped, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
@@ -435,6 +435,9 @@ function onCliMenu(menu) {
 function answerCliMenu(number) {
   if (cliMenu.value) void agentTerminal.value?.sendKeys(keysForOption(cliMenu.value, number)).catch(() => {})
 }
+function answerCliMenuText(number, text) {
+  if (cliMenu.value) void agentTerminal.value?.sendKeys(keysForAnswer(cliMenu.value, number, text)).catch(() => {})
+}
 function cancelCliMenu() {
   void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
 }
@@ -650,7 +653,7 @@ function interruptWorkspaceAgent() {
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
         <CliMenuNotice v-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
-          @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
+          @choose="answerCliMenu" @answer="answerCliMenuText" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
           <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>

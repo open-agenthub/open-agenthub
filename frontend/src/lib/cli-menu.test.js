@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectMenu, keysForOption, sameMenu } from './cli-menu.js'
+import { detectMenu, keysForAnswer, keysForOption, sameMenu } from './cli-menu.js'
 
 // Screens as Claude Code 2.1.287 drew them at 120x40, rendered by xterm 5.5 (the frontend's
 // version) from the real CLI's output. Option texts are shortened to neutral labels; layout,
@@ -50,7 +50,74 @@ const oauth = [
   '   Esc to cancel'
 ]
 
+// AskUserQuestion screens of the same CLI (#250), the question and options as the mock model
+// sent them. A long question is framed in a bar and wrapped; "Type something." is the entry that
+// becomes a text field.
+const question = [
+  '❯ ask me',
+  rule,
+  ' ☐ Failures ',
+  '│ Before I refactor the upload path I need to know how you want failures handled. The current code retries three times ',
+  '│ with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane ',
+  '│ sometimes shows files that never reached storage. Which behaviour do you want?',
+  '❯ 1. Retry with backoff',
+  '     Retry five times with exponential backoff, then surface the error',
+  '  2. Fail fast',
+  '     Report the first error to the user immediately',
+  '  3. Type something.',
+  rule,
+  '  4. Chat about this',
+  'Enter to select · ↑/↓ to navigate · Esc to cancel'
+]
+const statement = [
+  rule.slice(0, 90),
+  ' ☐ Target ',
+  '│ Pick the deploy target for tonight. Note the database migration from yesterday must run ',
+  '│ first',
+  '❯ 1. Staging', '     x', '  2. Production', '     y', '  3. Type something.',
+  rule.slice(0, 90), '  4. Chat about this', 'Enter to select · ↑/↓ to navigate · Esc to cancel'
+]
+const multiSelect = [
+  rule.slice(0, 90),
+  '←  ☐ Checks  ☐ Report  ✔ Submit  →',
+  'Which checks should run before every push?',
+  '❯ 1. [ ] Unit tests', '         The fast suite', '  2. [ ] Lint', '         ESLint and dotnet format',
+  '  3. [ ] Type something', '     Next',
+  rule.slice(0, 90), '  4. Chat about this', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
+]
+
 describe('detectMenu', () => {
+  it('takes the whole of a long question the CLI framed and wrapped, and marks the free-text entry', () => {
+    expect(detectMenu(question)).toEqual({
+      kind: 'choice', partial: false,
+      title: 'Before I refactor the upload path I need to know how you want failures handled. The current code retries three times '
+        + 'with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane '
+        + 'sometimes shows files that never reached storage. Which behaviour do you want?',
+      options: [
+        { number: 1, label: 'Retry with backoff', selected: true },
+        { number: 2, label: 'Fail fast', selected: false },
+        { number: 3, label: 'Type something.', selected: false, freeText: true },
+        { number: 4, label: 'Chat about this', selected: false }
+      ]
+    })
+    // Without a question mark the framed text is still the question, not the header above it.
+    expect(detectMenu(statement).title).toBe('Pick the deploy target for tonight. Note the database migration from yesterday must run first')
+    const multi = detectMenu(multiSelect)
+    expect(multi.title).toBe('Which checks should run before every push?')
+    expect(multi.options[2]).toEqual({ number: 3, label: '[ ] Type something', selected: false, freeText: true })
+  })
+
+  it('joins a question the CLI wrapped without a frame, but not the heading or explanation above it', () => {
+    const wrapped = [rule,
+      '   Deploy',
+      '   The deploy pipeline currently runs every image build on each push, which takes about forty minutes and blocks',
+      '   the merge queue for everyone else. Should I split it so that only the images whose sources changed are built?',
+      '   ❯ 1. Split it', '     2. Keep it', '   Esc to cancel']
+    expect(detectMenu(wrapped).title).toBe('The deploy pipeline currently runs every image build on each push, which takes about forty minutes and blocks '
+      + 'the merge queue for everyone else. Should I split it so that only the images whose sources changed are built?')
+  })
+
+
   it('finds the login menu with its title, options and the highlighted one', () => {
     expect(detectMenu(login)).toEqual({
       kind: 'choice', title: 'Select login method:', partial: false,
@@ -122,6 +189,17 @@ describe('keysForOption', () => {
     expect(keysForOption(menu, 4)).toEqual(['\r'])
     expect(keysForOption(menu, 5)).toEqual(['\x1b[B', '\r'])
     expect(keysForOption(menu, 1)).toEqual(['\x1b[A', '\x1b[A', '\x1b[A', '\r'])
+  })
+})
+
+describe('keysForAnswer', () => {
+  it('moves to the free-text entry, pastes the answer and submits it', () => {
+    expect(keysForAnswer(detectMenu(question), 3, 'Retry 3 times\nthen \x1bstop')).toEqual(
+      ['\x1b[B', '\x1b[B', '\x1b[200~Retry 3 times\nthen stop\x1b[201~', '\r'])
+  })
+
+  it('leaves a multi-select answer ticked rather than pressing Enter, which would untick it', () => {
+    expect(keysForAnswer(detectMenu(multiSelect), 3, 'e2e')).toEqual(['\x1b[B', '\x1b[B', '\x1b[200~e2e\x1b[201~'])
   })
 })
 
