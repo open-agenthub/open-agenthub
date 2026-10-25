@@ -7,6 +7,11 @@ const modelEndpoint = require('../common/model-endpoint');
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function prepare(env) {
+  // The Workspace reads the TUI's native prediction; enabling its generator avoids a separate
+  // model request with different context. An explicit operator setting still takes precedence.
+  if ((env.AGENTHUB_MODE || 'interactive').toLowerCase() === 'interactive') {
+    env.CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION ??= '1';
+  }
   const apiKey = env.ANTHROPIC_API_KEY;
   delete env.ANTHROPIC_API_KEY;
   if (env.AGENTHUB_STATE_RESTORED === undefined) {

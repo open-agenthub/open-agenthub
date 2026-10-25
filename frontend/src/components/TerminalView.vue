@@ -76,14 +76,16 @@ const terminalOpened = ref(false)
 const drawerKind = ref('agent')
 // Keep menu detection independent of drawer visibility so answering never requires opening it.
 const cliMenu = ref(null)
+const promptSuggestion = ref('')
 const agentActivity = ref({ state: 'unknown', source: 'hooks' })
+watch(() => agentActivity.value.state, state => { if (state === 'working') promptSuggestion.value = '' })
 const workspaceActivity = computed(() => {
   if (!isLive.value) return { state: 'idle' }
   if (pendingPermissions.value.length || agentActivity.value.state === 'waiting') return { state: 'waiting', reason: 'approval' }
   if (cliMenu.value || props.session.questionPending) return { state: 'waiting', reason: 'answer' }
   return statuses.agent === 'connected' ? agentActivity.value : { state: 'unknown' }
 })
-watch(() => props.session.id, () => { agentActivity.value = { state: 'unknown', source: 'hooks' } })
+watch(() => props.session.id, () => { promptSuggestion.value = ''; agentActivity.value = { state: 'unknown', source: 'hooks' } })
 const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
@@ -675,13 +677,13 @@ function interruptWorkspaceAgent() {
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
             :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
-            @menu="onCliMenu" @activity="agentActivity = $event" />
+            @menu="onCliMenu" @suggestion="promptSuggestion = $event" @activity="agentActivity = $event" />
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && !isStopped && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
           ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
-          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
+          :suggestion="canCompose && !cliMenu && agentActivity.state !== 'working' ? promptSuggestion : ''" :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
           :attach="sharedToken ? undefined : attachWorkspaceFiles" />
         <div v-if="isStopped" class="session-input-state" data-session-input-state>
           <SessionStoppedNotice :session="session" :shared-token="sharedToken" @resume="$emit('resume', $event)" />
