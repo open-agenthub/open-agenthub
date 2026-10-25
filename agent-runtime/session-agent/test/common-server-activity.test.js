@@ -85,3 +85,14 @@ test('a prompt clears the previous hub question before the native hook returns',
   await turn(h, 'stop');
   assert.deepEqual(callbacks, [{ url: 'https://example.com/internal/sessions/s1/turn-started', token: 'activity-token' }]);
 });
+
+test('persistence control status is replayed only to subscribed viewers', () => {
+  const h = createHarness();
+  const legacy = new FakeSocket(), viewer = new FakeSocket();
+  h.runtime.webSocketServer.connect(legacy, '/');
+  h.runtime.webSocketServer.connect(viewer, '/');
+  subscribe(viewer);
+  const status = socket => socket.sent.map(data => { try { return JSON.parse(data); } catch { return null; } }).filter(frame => frame?.subtype === 'persistence');
+  assert.deepEqual(status(legacy), []);
+  assert.deepEqual(status(viewer), [{ type: 'agenthub', subtype: 'persistence', withheld: false }]);
+});

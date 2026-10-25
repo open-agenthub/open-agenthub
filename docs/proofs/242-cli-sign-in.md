@@ -134,3 +134,7 @@ again.` The final merged frontend suite passes 857 tests. The merged runtime sui
 one confirmation run hit the existing timestamp-sensitive state-signature chmod assertion,
 then its isolated 9-test file and the full 755-test rerun both passed without changes to the
 state-signature implementation or test.
+
+## Archive withholding visibility
+
+A withheld archive sets a separate persistence control status for subscribed terminal viewers. The owner sees a warning above the Workspace, including after reconnect; older viewers still receive only terminal output. A fixed log message appears on the transition, without authorization data or paths. Only a successful state upload clears the warning and logs recovery. Merely leaving sign-in or passing a scan is insufficient: the subsequent upload may still fail. Silent retry was rejected because a pod restart could otherwise lose newer resume state without the owner knowing.

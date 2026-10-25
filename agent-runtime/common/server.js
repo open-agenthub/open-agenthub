@@ -266,6 +266,16 @@ function createCommonServer(options = {}) {
   let activityPromptAt = now();
   let activityLastOutput = 0;
   let activityLastFrame = '';
+  let stateWithheld = false;
+  function persistenceFrame() {
+    return JSON.stringify({ type: 'agenthub', subtype: 'persistence', withheld: stateWithheld });
+  }
+  function setStateWithheld(value) {
+    if (stateWithheld === value) return;
+    stateWithheld = value;
+    console.warn(value ? '[agent] State not saved: sign-in data present or privacy scan incomplete.' : '[agent] State saving resumed.');
+    for (const socket of activityClients) safeSend(socket, persistenceFrame());
+  }
   function activityFrame() {
     let state = 'idle';
     const source = nextTurn ? 'hooks' : 'output';
@@ -309,7 +319,10 @@ function createCommonServer(options = {}) {
     const archive = signature => {
       const pending = signInPrivacy.flush();
       if (pending) { void pending.then(() => archive(signature)); return; }
-      if (!signInPrivacy.archiveSafe(require('node:path').join(home, driver.stateDir), fs, stateExcludes(driver))) return done && done(new Error('sign-in state withheld'));
+      if (!signInPrivacy.archiveSafe(require('node:path').join(home, driver.stateDir), fs, stateExcludes(driver))) {
+        setStateWithheld(true);
+        return done && done(new Error('sign-in state withheld'));
+      }
       const revision = signInPrivacy.revision();
       execFile('/bin/sh', ['-c', archiveScript(driver), 'sh', '/tmp/state.tgz'], { cwd: home }, archiveError => {
         if (archiveError) return done && done(archiveError);
@@ -320,10 +333,11 @@ function createCommonServer(options = {}) {
           // even if the person already finished or cancelled the flow before tar exited.
           if (signInPrivacy.active() || revision !== signInPrivacy.revision()) {
             try { fs.unlinkSync('/tmp/state.tgz'); } catch {}
+            setStateWithheld(true);
             return done && done(new Error('sign-in state changed'));
           }
           execFile('curl', uploadArgs('/tmp/state.tgz', statePut, insecureStorage), error => {
-            if (!error) { uploadedStateSignature = signature; stateTicksSinceUpload = 0; }
+            if (!error) { uploadedStateSignature = signature; stateTicksSinceUpload = 0; setStateWithheld(false); }
             if (done) done(error);
           });
         };
@@ -1086,6 +1100,7 @@ function createCommonServer(options = {}) {
           activityTimer?.unref?.();
         }
         safeSend(socket, activityFrame());
+        safeSend(socket, persistenceFrame());
         return;
       }
       if (exited) return;

@@ -1,5 +1,5 @@
 <script setup>
-import { parseActivityFrame } from '../lib/agent-activity.js'
+import { parseActivityFrame, parsePersistenceFrame } from '../lib/agent-activity.js'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -10,7 +10,7 @@ import { terminalAttachmentPaths, terminalSafeFile, uploadAttachmentFiles } from
 import { detectMenu, sameMenu } from '../lib/cli-menu.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, showComposer: { type: Boolean, default: true } })
-const emit = defineEmits(['status', 'menu', 'activity'])
+const emit = defineEmits(['status', 'menu', 'activity', 'persistence'])
 const host = ref(null)
 const mobileInput = ref('')
 const pasteNotice = ref('')
@@ -254,6 +254,8 @@ async function connect() {
   }
   socket.onmessage = event => {
     if (disposed || ws !== socket) return
+    const persistence = props.kind === 'agent' && parsePersistenceFrame(event.data)
+    if (persistence) { emit('persistence', persistence); return }
     const activity = props.kind === 'agent' && parseActivityFrame(event.data)
     if (activity) { emit('activity', activity); return }
     if (term) term.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data), scheduleMenuCheck)

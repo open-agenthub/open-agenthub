@@ -77,6 +77,8 @@ const terminalOpened = ref(false)
 const drawerKind = ref('agent')
 // Keep menu detection independent of drawer visibility so answering never requires opening it.
 const cliMenu = ref(null)
+const stateWithheld = ref(false)
+watch(() => props.session.id, () => { stateWithheld.value = false })
 const agentActivity = ref({ state: 'unknown', source: 'hooks' })
 const workspaceActivity = computed(() => {
   if (!isLive.value) return { state: 'idle' }
@@ -654,6 +656,9 @@ function interruptWorkspaceAgent() {
     <SecretRequestBanner v-if="capabilities.canManage && !sharedToken" :session-id="session.id" />
     <SessionWorkspace ref="workspace" :session="session" :can-write="capabilities.canWrite" :can-manage="capabilities.canManage" :shared-token="sharedToken" @updated="emit('runtime-updated')">
       <div class="terminal-stack">
+        <div v-if="stateWithheld && capabilities.canManage && !sharedToken" role="status" class="session-input-state" data-state-withheld>
+          State not saved: sign-in data is present or its privacy check could not finish. New resume state will be saved when the check passes; restarting now may lose recent progress.
+        </div>
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
           :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
@@ -673,7 +678,7 @@ function interruptWorkspaceAgent() {
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
             :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
-            @menu="onCliMenu" @activity="agentActivity = $event" />
+            @menu="onCliMenu" @activity="agentActivity = $event" @persistence="stateWithheld = $event.withheld" />
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
