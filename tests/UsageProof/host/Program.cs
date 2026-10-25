@@ -1,4 +1,4 @@
-// #258 proof host: the REAL UsageController, OtelController and InternalController with the REAL
+// Usage proof host (#258, #282): the REAL UsageController, OtelController and InternalController with the REAL
 // Postgres session and usage stores, behind an auth handler whose user is switched by
 // POST /__as/{user}. Real CLIs report into it: Claude Code over OTLP (/internal/otel/v1/metrics),
 // the session agent's common/server.js over /internal/sessions/{id}/usage. The frontend's Vite
@@ -47,6 +47,16 @@ app.MapPost("/__seed", async (SeedBody s, ISessionStore store) => {
         AuthMode = s.AuthMode, Mode = s.Mode, CallbackToken = s.Token });
     if (s.UsageBilling is not null) await store.SetUsageBillingAsync(s.Id, s.UsageBilling);
     return Results.Ok(); }).AllowAnonymous();
+// The start gate as KubernetesSessionService calls it (minus the cluster): the real
+// UsageLimitService against the spend the real stores recorded. 409 = refused over budget.
+app.MapPost("/__can-start", async (CanStartBody c, UsageLimitService limits) => {
+    try
+    {
+        await limits.EnsureCanStartAsync(c.Owner, c.Agent, UsageBilling.ForPod(c.AuthMode, c.Mode, c.HasApiKey, c.HasSubscription));
+        return Results.Ok(new { allowed = true });
+    }
+    catch (UsageLimitExceededException e) { return Results.Json(new { allowed = false, e.Message }, statusCode: 409); }
+}).AllowAnonymous();
 app.MapGet("/api/config", () => Results.Json(new { authority = "" })).AllowAnonymous();
 app.MapGet("/api/sessions", () => Results.Json(Array.Empty<object>())).AllowAnonymous();
 app.MapGet("/api/credentials", () => Results.Json(Array.Empty<object>())).AllowAnonymous();
@@ -54,6 +64,7 @@ app.MapGet("/api/agents/allowed", () => Results.Json(new { agents = Array.Empty<
 app.MapControllers();
 app.Run(Environment.GetEnvironmentVariable("HOST_URL") ?? "http://127.0.0.1:8080");
 
+record CanStartBody(string Owner, AgentKind Agent, AgentAuthMode AuthMode, SessionMode Mode, bool HasApiKey = false, bool HasSubscription = false);
 record SeedBody(string Id, string Owner, string Title, AgentKind Agent, AgentAuthMode AuthMode, SessionMode Mode, string Token, string? UsageBilling = null);
 
 sealed class Only(params Type[] types) : IApplicationFeatureProvider<ControllerFeature>

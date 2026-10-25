@@ -18,7 +18,7 @@ export const USAGE = { input: 1000, cached: 600, output: 50, reasoning: 20, cach
 http.createServer((req, res) => {
   const chunks = [];
   req.on('data', c => chunks.push(c));
-  req.on('end', () => {
+  req.on('end', async () => {
     const raw = Buffer.concat(chunks);
     const url = new URL(req.url, 'http://x');
     if (url.pathname.endsWith('/v1/metrics')) {
@@ -56,10 +56,20 @@ http.createServer((req, res) => {
     if (url.pathname.endsWith('/responses') && req.method === 'POST') {
       const id = 'r' + (++n);
       const sse = events => events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
+      const input = Array.isArray(body.input) ? body.input : [];
+      // A prompt containing TICK keeps the turn open past one 30-second persistence tick: the first
+      // response is a trivial tool call (its usage is recorded at once), the answer after the tool
+      // result comes 40 seconds later. Shows usage reported while a session runs, not only at exit.
+      const tick = JSON.stringify(input).includes('TICK');
+      const toolDone = input.some(item => item && item.type === 'function_call_output');
+      if (tick && toolDone) await new Promise(resolve => setTimeout(resolve, 40_000));
+      const item = tick && !toolDone
+        ? { type: 'function_call', id: 'fc' + id, call_id: 'call' + id, name: 'exec_command', arguments: JSON.stringify({ cmd: 'true' }) }
+        : { type: 'message', role: 'assistant', id: 'm' + id, content: [{ type: 'output_text', text: 'usage rig ok' }] };
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.end(sse([
         { type: 'response.created', response: { id } },
-        { type: 'response.output_item.done', item: { type: 'message', role: 'assistant', id: 'm' + id, content: [{ type: 'output_text', text: 'usage rig ok' }] } },
+        { type: 'response.output_item.done', item },
         { type: 'response.completed', response: { id, usage: {
           input_tokens: USAGE.input, input_tokens_details: { cached_tokens: USAGE.cached },
           output_tokens: USAGE.output, output_tokens_details: { reasoning_tokens: USAGE.reasoning },

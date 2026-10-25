@@ -2,7 +2,7 @@
 # #279 end to end: real autonomous Codex sessions (the branch's common/server.js + codex driver +
 # pinned `codex exec`) and a real Claude Code turn report into the REAL controllers and stores on
 # real Postgres. Needs: proof host (host/) on $HUB with a fresh database, mock-model.mjs on $MODEL.
-# usage: prove-279.sh <worktree> <scratch-dir> <codex-bin-dir> [hub] [model]
+# usage: prove-codex.sh <worktree> <scratch-dir> <codex-bin-dir> [hub] [model]
 set -eu
 WT=$1; S=$2; BIN=$3; HUB=${4:-http://127.0.0.1:8080}; MODEL=${5:-http://127.0.0.1:18780}; R=$(dirname "$0")
 seed() { # id owner title agent(0 Claude,1 Codex) authMode(1 Subscription,2 ApiKey)
@@ -14,10 +14,10 @@ seed codex-sub  alice "Codex on a subscription"  1 1
 seed codex-api  alice "Codex on an API key"      1 2
 seed codex-bob  bob   "Bob's Codex"              1 1
 "$R/run-claude.sh" "$S/c-sub" claude-sub alice - subscription "$HUB" "$MODEL" >/dev/null
-for sid in codex-sub codex-api codex-bob; do "$R/run-codex-agent.sh" "$WT" "$S/h-$sid" "$sid" "$HUB" "$MODEL" "$BIN" >/dev/null 2>&1; done
+for sid in codex-sub codex-api codex-bob; do "$R/run-agent.sh" codex "$WT" "$S/h-$sid" "$sid" "$HUB" "$MODEL" "$BIN" >/dev/null 2>&1; done
 # The same session started again on its kept CODEX_HOME (what a resume restores): the agent reports
 # the new cumulative totals over both rollouts, and the hub adds only the difference.
-"$R/run-codex-agent.sh" "$WT" "$S/h-codex-sub" codex-sub "$HUB" "$MODEL" "$BIN" >/dev/null 2>&1
+"$R/run-agent.sh" codex "$WT" "$S/h-codex-sub" codex-sub "$HUB" "$MODEL" "$BIN" >/dev/null 2>&1
 show() {
   curl -fsS -X POST "$HUB/__as/$1" >/dev/null
   echo "== $1 rows"

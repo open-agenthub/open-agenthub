@@ -1203,7 +1203,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     private async Task EnforceUsageLimitAsync(string owner, AgentKind agent, AgentAuthMode authMode,
         SessionMode mode, CancellationToken ct)
     {
-        if (agent != AgentKind.Claude) return;
+        if (!UsageBilling.ReportsCost(agent)) return;
+        // Auto exists for Claude only; every other mode is settled by the auth mode alone.
         var hasSubscription = authMode == AgentAuthMode.Auto &&
             await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Claude), ct) is not null;
         var hasApiKey = authMode == AgentAuthMode.Auto &&

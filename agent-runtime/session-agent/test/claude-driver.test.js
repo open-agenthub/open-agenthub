@@ -2,11 +2,18 @@
 
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
 const runtimeDir = path.join(__dirname, '..', '..');
 const driver = require('../../claude/driver');
+
+// A HOME without a saved session id. Without HOME the driver falls back to /home/agent, which in a
+// session pod is the pod's own home: its ~/.claude/agenthub-session-id then replaced the fixture's
+// id and four resume tests failed there while passing in CI.
+const emptyHome = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-driver-home-'));
+process.on('exit', () => fs.rmSync(emptyHome, { recursive: true, force: true }));
 
 function environment(overrides = {}) {
   return {
@@ -17,6 +24,7 @@ function environment(overrides = {}) {
     AGENTHUB_RESUME: '0',
     AGENTHUB_CLAUDE_SESSION_ID: '',
     AGENTHUB_STATE_RESTORED: '0',
+    HOME: emptyHome,
     ...overrides
   };
 }

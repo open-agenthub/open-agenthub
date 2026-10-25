@@ -11,8 +11,8 @@ Claude Code exports `claude_code.cost.usage` over OpenTelemetry. The hub used to
 as the bill whenever it was above zero (`ApiBilled = AuthMode == "ApiKey" || CostUsd > 0`), on the
 assumption — written into `ClaudePricing` — that a subscription session reports 0.
 
-That assumption is wrong. Against a recording mock model (`proofs/258/mock-model.mjs`, OTLP
-decoded with `proofs/258/otlp-dump.mjs`), Claude Code 2.1.287 exported **$0.003255** for one
+That assumption is wrong. Against a recording mock model (`tests/UsageProof/mock-model.mjs`, OTLP
+decoded with `tests/UsageProof/otlp-dump.mjs`), Claude Code 2.1.287 exported **$0.003255** for one
 identical turn both with `ANTHROPIC_API_KEY` (request carried `x-api-key`) and with a subscription
 login (request carried an OAuth bearer token). The CLI prices tokens from its own table whatever
 the credential. So every subscription session counted as API spend: in the per-session table, in
@@ -34,7 +34,7 @@ The `Auto` rows come from the pinned CLI, not from guesswork:
 
 - `claude -p` (unattended) with both a login and `ANTHROPIC_API_KEY` sent `x-api-key`: the key wins.
 - The interactive TUI with both asks *"Detected a custom API key in your environment. Do you want
-  to use this API key?"* with **No** preselected (`proofs/258/claude-auto-tui.mjs`). The person's
+  to use this API key?"* with **No** preselected (`tests/UsageProof/claude-auto-tui.mjs`). The person's
   answer decides, and the hub never sees it. Such a session is `unknown`: its tokens show, it does
   not count against the API budget, and its row says the CLI chose. With only a key stored, the
   key is the one way the session can work, so it is `api`.
@@ -54,6 +54,15 @@ RBAC-adding feature switched on.
 the billing `ForPod` computes for the start, on create, resume, runtime update and restart alike.
 So an unattended Auto run with a stored key is refused over budget, even with a login stored.
 Before, a stored login let it through, while the CLI then billed the key.
+
+The gate covers every agent whose CLI reports a cost (`UsageBilling.ReportsCost`): Claude Code,
+OpenCode and OpenClaw (#282). After #279 the API-key cost of OpenCode and OpenClaw counted in the
+budget, but only Claude starts were refused, so an OpenCode session could keep spending past the
+limit its own usage had reached (`tests/UsageProof/check-gate.sh` against `origin/main`). Codex
+and Cursor stay ungated. Codex reports tokens only and Cursor nothing, so their API use never adds
+to the budget. Gating them would refuse a session for spend it is not part of.
+**Alternative considered:** gate every API-key start whatever the agent. Rejected, because it turns
+a limit on recorded spend into a blanket switch for agents whose spend is invisible to it.
 
 **Alternative considered:** read the credential the CLI actually used from its own state (Claude
 keeps approved and rejected key suffixes in `~/.claude.json`). Rejected: that is key material, and
@@ -96,7 +105,12 @@ includes reasoning, as providers bill it.
 - **OpenCode** is one aggregate query per tick over its database, through `node:sqlite` read-only.
   The database is the only place OpenCode keeps usage. Its policy plugin sees `message.updated`
   too, but a plugin restarts with every process and would have to rebuild the history from the
-  same database anyway.
+  same database anyway. Two things verified end to end (`tests/UsageProof/prove-opencode-openclaw.sh`):
+  - OpenCode prices a subscription session from its table just as Claude Code does, so its cost
+    counts only for `api`.
+  - OpenCode's database does not record its title-generation request. One `opencode run` made two
+    model requests and recorded one, so OpenCode usage is what OpenCode itself counts, slightly
+    below what the provider sees.
 - **OpenClaw** skips the `.trajectory.jsonl` beside each session file. It repeats the same
   responses and would double every count.
 - **Cursor** is not recorded. The CLI cannot be run without a real API key ("The provided API key
