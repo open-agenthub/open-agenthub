@@ -4,24 +4,18 @@ function claudeSuggestion(buffer, cols, rows) {
   const y = buffer.cursorY
   const line = offset => buffer.getLine(buffer.baseY + offset)
   const text = offset => line(offset)?.translateToString(true) || ''
-  if (buffer.cursorX !== 2 || !/^❯\s/.test(text(y)) || !/^─{3}/.test(text(y - 1))) return ''
-  const parts = []
-  for (let row = y; row < rows; row++) {
-    if (row > y && /^─{3}/.test(text(row))) {
-      const suggestion = parts.join('').trimEnd()
-      // The welcome screen's rotating examples share the prediction's dim styling.
-      return suggestion && suggestion.length < 100 && !/^Try\s+["“]/.test(suggestion) ? suggestion : ''
-    }
-    const current = line(row)
-    if (!current || (row > y && !/^\s{2}/.test(text(row)))) return ''
-    const part = current.translateToString(true, 2, cols)
-    for (let x = 2; x < 2 + part.length; x++) {
-      const cell = current.getCell(x)
-      if (cell?.getChars().trim() && !cell.isDim()) return ''
-    }
-    parts.push(part)
+  if (y < 1 || y + 1 >= rows || buffer.cursorX !== 2 || !/^❯\s/.test(text(y)) ||
+      !/^─{3}/.test(text(y - 1)) || !/^─{3}/.test(text(y + 1))) return ''
+  const current = line(y)
+  const suggestion = current.translateToString(true, 2, cols)
+  // The welcome examples share prediction styling. A narrow TUI truncates predictions with
+  // an ellipsis: accepting that visible prefix would silently change the model's suggestion.
+  if (!suggestion || suggestion.length >= 100 || /^Try\s+["“]/.test(suggestion) || /…$/.test(suggestion)) return ''
+  for (let x = 2; x < cols; x++) {
+    const cell = current.getCell(x)
+    if (cell?.getChars().trim() && !cell.isDim()) return ''
   }
-  return ''
+  return suggestion
 }
 
 const readers = { claude: claudeSuggestion }

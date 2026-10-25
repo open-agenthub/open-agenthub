@@ -28,7 +28,10 @@ http.createServer((req, res) => {
   let body = ''
   req.on('data', c => body += c)
   req.on('end', () => {
-    fs.appendFileSync(log, req.method + ' ' + req.url + ' ' + body + '\n\n')
+    const kind = req.url.includes('/messages') ? 'messages' : req.url.includes('/responses') ? 'responses' : req.url.includes('/chat/completions') ? 'chat' : 'other'
+    const method = req.method === 'POST' ? 'POST' : 'OTHER'
+    // Request bodies are synthetic but can contain terminal controls; record only known labels.
+    fs.appendFileSync(log, method + ' ' + kind + '\n')
     let json = {}; try { json = JSON.parse(body) } catch {}
     if (req.url.includes('/models')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ object: 'list', data: [{ id: 'mock-model', object: 'model' }], models: [] })) }
     if (req.url.startsWith('/v1/messages')) {
@@ -37,7 +40,7 @@ http.createServer((req, res) => {
       const ev = (type, data) => res.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...data }) + '\n\n')
       ev('message_start', { message: { id: 'msg_' + crypto.randomUUID(), type: 'message', role: 'assistant', model: 'm', content: [], stop_reason: null, usage: { input_tokens: 1, output_tokens: 1 } } })
       ev('content_block_start', { index: 0, content_block: { type: 'text', text: '' } })
-      ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: body.includes('[SUGGESTION MODE:') ? 'run the tests' : 'MOCK-REPLY' } })
+      ev('content_block_delta', { index: 0, delta: { type: 'text_delta', text: body.includes('[SUGGESTION MODE:') ? (process.env.PROOF_SUGGESTION || 'run the tests') : 'MOCK-REPLY' } })
       ev('content_block_stop', { index: 0 })
       ev('message_delta', { delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } })
       ev('message_stop', {}); return res.end()
@@ -123,11 +126,12 @@ const dump = name => {
   console.log('==== ' + name + (exited ? ' (exited ' + JSON.stringify(exited) + ')' : '') + '\n' + screen().split('\n').filter(l => l.trim()).join('\n'))
 }
 for (const step of steps) {
-  if (step.ready) { const end = Date.now() + (step.ms || 90000); while (!new RegExp(step.ready).test(screen()) && Date.now() < end && !exited) await wait(250); await wait(1500) }
+  if (step.ready) { const end = Date.now() + (step.ms || 90000); while (!screen().includes(step.ready) && Date.now() < end && !exited) await wait(250); await wait(1500) }
   else if (step.paste !== undefined) { p.write('\x1b[200~' + step.paste + '\x1b[201~'); await wait(150); p.write('\r') }
   else if (step.pasteOnly !== undefined) { p.write('\x1b[200~' + step.pasteOnly + '\x1b[201~') }
   else if (step.type !== undefined) { for (const ch of step.type) { p.write(ch); await wait(40) } }
   else if (step.keys !== undefined) p.write(step.keys)
+  else if (step.resize) { term.resize(step.resize.cols, step.resize.rows); p.resize(step.resize.cols, step.resize.rows) }
   else if (step.wait) await wait(step.wait)
   else if (step.scan) { const seen = new Set(); const all = []; for (let i = 0; i < step.scan; i++) { for (const l of screen().split('\n')) if (l.trim() && !seen.has(l.trim())) { seen.add(l.trim()); all.push(l) } p.write(step.key || '\x1b[B'); await wait(step.gap || 120) } fs.writeFileSync(path.join(out, 'scan.txt'), all.join('\n')); console.log('==== scan ' + all.length) }
   else if (step.assertSuggestion !== undefined) { assert.equal(readPromptSuggestion(agent, term), step.assertSuggestion); console.log('PASS native suggestion:', JSON.stringify(step.assertSuggestion)) }

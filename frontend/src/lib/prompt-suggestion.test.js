@@ -16,6 +16,7 @@ it('requires the dim live Claude prompt with the cursor at its beginning', () =>
   expect(readPromptSuggestion('Claude', screen({ prefix: '● ' }))).toBe('')
 })
 it('rejects welcome examples and agents without a confirmed prediction source', () => {
+  expect(readPromptSuggestion('Claude', screen({ prompt: 'run the tests and check that greeting hand…' }))).toBe('')
   expect(readPromptSuggestion('Claude', screen({ prompt: 'Try "edit a file"' }))).toBe('')
   expect(readPromptSuggestion('Codex', screen({ prefix: '› ' }))).toBe('')
   expect(readPromptSuggestion('OpenCode', screen())).toBe('')

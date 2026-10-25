@@ -8,7 +8,7 @@ it; it cannot overwrite an existing draft. Disconnect, menus and a new working t
 The provider reader is deliberately small (`frontend/src/lib/prompt-suggestion.js`). Only
 Claude has a confirmed source in the current runtime pins. Its interactive driver enables the
 native generator unless the operator explicitly configured that switch already. This retains
-the CLI's eligibility checks, including its user setting, focus and conversation history.
+the CLI's eligibility checks, including focus and conversation history.
 
 ## Why read the live screen
 
@@ -18,7 +18,9 @@ which does not emit that event into the terminal or ordinary transcript (the gen
 terminal session. Instead the reader checks the active xterm buffer, cursor column 2, the
 Claude prompt between its horizontal rules, and dim attributes on every text cell. Native
 Right Arrow removes dim styling and moves the cursor to the end. Ordinary text at Home is
-not dim. Welcome examples beginning with `Try "` are excluded. If those invariants change, the
+not dim. Welcome examples beginning with `Try "` are excluded. Narrow terminals truncate longer
+predictions with an ellipsis; those are omitted because the screen no longer holds the exact
+text. Widening the terminal makes the full native prediction eligible again. If those invariants change, the
 reader offers nothing rather than interpreting earlier assistant prose as a prediction.
 
 We rejected generating a second Workspace prediction: it would need another model request,
@@ -47,7 +49,7 @@ that exact text and returns empty after native Right Arrow accepts it.
 `proofs/257/pty-rig.mjs` uses the installed pinned Codex, the pinned Claude/OpenCode executables
 under `PROOF_CLIS` (default `/tmp/proof257-clis/node_modules/.bin`), real node-pty and headless
 xterm from `/opt/session-agent/node_modules`. It accepts a JSON array of steps and records
-screens, cursor/cell attributes and local model requests. Generated homes and results are
+screens, cursor/cell attributes and local model request classifications. Generated homes and results are
 ignored. The `assertSuggestion` step runs the production reader against the real terminal.
 
 `proofs/257/browser.mjs` copies this branch's runtime into an isolated temporary directory and
@@ -58,3 +60,10 @@ an empty Workspace composer, both acceptance keys with zero PTY input, Enter on 
 prediction with zero PTY input, explicit edited sending reaching the model, and dismissal on
 typing. The hub only supplies session metadata and an empty conversation; this is not a backend
 controller, cluster, deployed account or transcript-parser proof.
+
+Validation on this branch: 860 frontend tests and 750 session-agent tests pass; the production
+frontend builds. The real PTY width proof rejects a truncated 45-column prediction, extracts
+its complete text at 120 columns, then returns empty after native acceptance. The Chromium
+proof passes both acceptance keys with zero PTY input and confirms the edited send at the
+recording model. The initial local full-runtime run needed physical dependency links at both
+runtime levels for ESM imports; `NODE_PATH` alone does not reproduce the runtime image layout.
