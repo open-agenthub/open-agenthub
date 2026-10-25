@@ -80,6 +80,10 @@ agent:
   # the image tag moves (e.g. :latest) so nodes don't serve a stale cache.
   pullPolicy: IfNotPresent
   runtimeClassName: ""
+  # Existing ConfigMap in sessionsNamespace with a PEM CA bundle under ca.crt.
+  # Mounted read-only for all providers; Node uses it in addition to public roots.
+  # Takes effect when a session pod starts. Empty preserves the default trust store.
+  trustedCaConfigMap: ""
   maxCpu: "2"
   maxMemory: 4Gi
   # Smallest CPU/memory request a session may ask for. Below it the pod reserves next to nothing

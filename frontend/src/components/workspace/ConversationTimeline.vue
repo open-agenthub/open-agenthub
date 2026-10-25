@@ -13,14 +13,21 @@ import ConversationImage from './ConversationImage.vue'
 // pending: sent or fleet messages the agent has not taken yet (#153), { key, label, state, text,
 // dismissible }; shown after the conversation and gone once the conversation holds them.
 const props = defineProps({ sessionId: String, sharedToken: String, items: { type: Array, default: () => [] }, loading: Boolean, error: String, canQuote: Boolean, source: String, inviting: Boolean,
-  pending: { type: Array, default: () => [] } })
-defineEmits(['quote', 'retry', 'dismiss-pending'])
+  hasEarlier: Boolean, startIndex: { type: Number, default: 0 }, pending: { type: Array, default: () => [] } })
+defineEmits(['quote', 'retry', 'dismiss-pending', 'load-earlier'])
 const scroller = ref(null)
 const query = ref('')
 const following = ref(true)
+let earlierHeight = null
+let earlierTop = 0
+function earlier() {
+  earlierHeight = scroller.value?.scrollHeight ?? null
+  earlierTop = scroller.value?.scrollTop ?? 0
+  following.value = false
+}
 const visible = computed(() => {
   const search = query.value.trim().toLocaleLowerCase()
-  return props.items.map((item, index) => ({ ...item, index }))
+  return props.items.map((item, index) => ({ ...item, index: props.startIndex + index }))
     .filter(item => !search || `${item.label} ${item.text}`.toLocaleLowerCase().includes(search))
 })
 function onScroll() {
@@ -34,6 +41,11 @@ function latest() {
 }
 watch([() => props.items, () => props.pending, query], async () => {
   await nextTick()
+  if (earlierHeight !== null && scroller.value) {
+    // Native scroll anchoring may already have moved scrollTop; adding to it moves twice.
+    scroller.value.scrollTop = earlierTop + scroller.value.scrollHeight - earlierHeight
+    earlierHeight = null
+  }
   if (following.value && !query.value && scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight
   if (scroller.value) void renderMermaidBlocks(scroller.value)
 }, { immediate: true })
@@ -47,6 +59,7 @@ watch([() => props.items, () => props.pending, query], async () => {
     </div>
     <div ref="scroller" class="conversation-scroll" @scroll.passive="onScroll">
       <div class="timeline">
+        <button v-if="hasEarlier" type="button" :disabled="loading" data-load-earlier @click="earlier(); $emit('load-earlier')">Load earlier messages</button>
         <p v-if="loading && !items.length" class="empty" role="status">Loading conversation…</p>
         <div v-else-if="error" class="empty" role="alert">{{ error }} <button type="button" @click="$emit('retry')">Retry</button></div>
         <p v-else-if="!items.length && !inviting" class="empty" data-conversation-empty>No saved conversation.</p>

@@ -76,7 +76,7 @@ describe('saved conversation in the Workspace', () => {
 
     await openTranscript(wrapper)
 
-    expect(mocks.api.getConversation).toHaveBeenCalledWith('terminal-1', undefined)
+    expect(mocks.api.getConversation).toHaveBeenCalledWith('terminal-1', -1)
     expect(wrapper.get('.conversation-toolbar').text()).toContain('Conversation')
     expect(turns(wrapper).map(item => item.find('.message-label, .work-label').text()))
       .toEqual(['User', 'Agent', 'Tool · Bash', 'Result', 'Agent'])
@@ -125,7 +125,7 @@ describe('saved conversation in the Workspace', () => {
 
     await openTranscript(wrapper)
 
-    expect(mocks.getSharedConversation).toHaveBeenCalledWith('shared-token', undefined)
+    expect(mocks.getSharedConversation).toHaveBeenCalledWith('shared-token', -1)
     expect(mocks.api.getConversation).not.toHaveBeenCalled()
     expect(texts(wrapper)).toEqual(['shared hello'])
   })
@@ -206,7 +206,7 @@ describe('saved conversation in the Workspace', () => {
       await vi.advanceTimersByTimeAsync(1000)
       await flushPromises()
 
-      expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', undefined)
+      expect(mocks.api.getConversation).toHaveBeenLastCalledWith('terminal-1', -1)
       expect(texts(wrapper)).toEqual(['only'])
     })
 

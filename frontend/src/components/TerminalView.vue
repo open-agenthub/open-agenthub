@@ -11,7 +11,7 @@ import CliMenuNotice from './workspace/CliMenuNotice.vue'
 import CliSignInNotice from './workspace/CliSignInNotice.vue'
 import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
-import { CANCEL_KEYS, keysForOption } from '../lib/cli-menu.js'
+import { CANCEL_KEYS, keysForAnswer, keysForOption } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, isSessionStopped, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
@@ -79,14 +79,20 @@ const drawerKind = ref('agent')
 const cliMenu = ref(null)
 const stateWithheld = ref(false)
 watch(() => props.session.id, () => { stateWithheld.value = false })
+const promptSuggestion = ref('')
 const agentActivity = ref({ state: 'unknown', source: 'hooks' })
+watch(() => agentActivity.value.state, state => { if (state === 'working') promptSuggestion.value = '' })
 const workspaceActivity = computed(() => {
   if (!isLive.value) return { state: 'idle' }
-  if (pendingPermissions.value.length || agentActivity.value.state === 'waiting') return { state: 'waiting', reason: 'approval' }
-  if (cliMenu.value || props.session.questionPending) return { state: 'waiting', reason: 'answer' }
+  // Approval only for a real permission request (#252): a hub approval record, or the runtime
+  // saying its turn waits in a permission dialog. A question, a CLI menu or a waiting turn the
+  // runtime did not label is an answer the person owes.
+  if (pendingPermissions.value.length || (agentActivity.value.state === 'waiting' && agentActivity.value.reason === 'approval'))
+    return { state: 'waiting', reason: 'approval' }
+  if (agentActivity.value.state === 'waiting' || cliMenu.value || props.session.questionPending) return { state: 'waiting', reason: 'answer' }
   return statuses.agent === 'connected' ? agentActivity.value : { state: 'unknown' }
 })
-watch(() => props.session.id, () => { agentActivity.value = { state: 'unknown', source: 'hooks' } })
+watch(() => props.session.id, () => { promptSuggestion.value = ''; agentActivity.value = { state: 'unknown', source: 'hooks' } })
 const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
@@ -363,10 +369,11 @@ watch(() => props.session?.credentialId, id => { if (id && id === switchedTo.val
 
 const repoLabel = computed(() => repoShortName(props.session?.repoUrl || props.session?.repos?.[0]?.url || ''))
 
-async function fetchConversation(offset) {
+async function fetchConversation(offset, max) {
+  const args = max === undefined ? [offset] : [offset, max]
   return props.sharedToken
-    ? getSharedConversation(props.sharedToken, offset)
-    : api.getConversation(props.session.id, offset)
+    ? getSharedConversation(props.sharedToken, ...args)
+    : api.getConversation(props.session.id, ...args)
 }
 
 async function loadTranscript() {
@@ -375,24 +382,37 @@ async function loadTranscript() {
   transcriptBusy.value = true
   transcriptError.value = ''
   try {
-    const page = await fetchConversation()
+    const page = await fetchConversation(-1)
     if (sessionId !== props.session?.id || token !== props.sharedToken) return
     conversation.value = conversationState(page)
-    // Finished conversations can span more than one page too. Drain the saved history
-    // without waiting for the live-session poll, which never runs after completion.
-    while (conversation.value.nextOffset < conversation.value.length) {
-      const current = conversation.value
-      const next = await fetchConversation(current.nextOffset)
-      if (sessionId !== props.session?.id || token !== props.sharedToken || conversation.value !== current) return
-      const merged = mergeConversationPage(current, next)
-      if (!merged || merged.nextOffset <= current.nextOffset) break
-      conversation.value = merged
-    }
   } catch {
     if (sessionId !== props.session?.id) return
     transcriptError.value = 'Could not load the conversation.'
   } finally {
     if (sessionId === props.session?.id && token === props.sharedToken) transcriptBusy.value = false
+  }
+}
+
+async function loadEarlier() {
+  const current = conversation.value
+  if (!current || current.offset <= 0 || transcriptBusy.value) return
+  transcriptBusy.value = true
+  transcriptError.value = ''
+  try {
+    const size = current.source === 'native' ? 500 : 100_000
+    const start = Math.max(0, current.offset - size)
+    const page = await fetchConversation(start, current.offset - start)
+    if (conversation.value !== current) return
+    if (page.source !== current.source || page.conversationId !== current.conversationId || page.nextOffset !== current.offset) {
+      transcriptBusy.value = false
+      return await loadTranscript()
+    }
+    conversation.value = { ...current, offset: page.offset,
+      entries: (page.entries || []).concat(current.entries), text: (page.text || '') + current.text }
+  } catch {
+    transcriptError.value = 'Could not load earlier messages.'
+  } finally {
+    transcriptBusy.value = false
   }
 }
 
@@ -444,6 +464,9 @@ async function sendSignInCode(value) {
 }
 function retrySignIn() {
   void agentTerminal.value?.sendKeys(['\r']).catch(() => {})
+}
+function answerCliMenuText(number, text) {
+  if (cliMenu.value) void agentTerminal.value?.sendKeys(keysForAnswer(cliMenu.value, number, text)).catch(() => {})
 }
 function cancelCliMenu() {
   void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
@@ -661,13 +684,13 @@ function interruptWorkspaceAgent() {
         </div>
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
-          :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
+          :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
         <CliSignInNotice v-if="modern && !isChat && cliMenu?.kind === 'signin'" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive" :send="sendSignInCode"
           @retry="retrySignIn" @continue="retrySignIn" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <CliMenuNotice v-else-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
-          @choose="answerCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
+          @choose="answerCliMenu" @answer="answerCliMenuText" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
           <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>
@@ -678,13 +701,13 @@ function interruptWorkspaceAgent() {
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
             :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
-            @menu="onCliMenu" @activity="agentActivity = $event" @persistence="stateWithheld = $event.withheld" />
+            @menu="onCliMenu" @suggestion="promptSuggestion = $event" @activity="agentActivity = $event" @persistence="stateWithheld = $event.withheld" />
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && !isStopped && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
           ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
-          :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
+          :suggestion="canCompose && !cliMenu && agentActivity.state !== 'working' ? promptSuggestion : ''" :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
           :attach="sharedToken ? undefined : attachWorkspaceFiles" />
         <div v-if="isStopped" class="session-input-state" data-session-input-state>
           <SessionStoppedNotice :session="session" :shared-token="sharedToken" @resume="$emit('resume', $event)" />

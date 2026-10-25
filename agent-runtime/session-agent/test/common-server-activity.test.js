@@ -58,7 +58,7 @@ test('interrupts and failed plugin turns clear presentation without enabling a f
   assert.equal(takes, 0);
 });
 
-test('verified provider interruption keys clear presentation only, and do not cancel approvals', async () => {
+test('verified provider interruption keys clear presentation only, also in a permission or question dialog', async () => {
   const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token' }, {
     turnHooks: true, isTurnInterrupt: data => data === '\x1b'
   });
@@ -68,9 +68,27 @@ test('verified provider interruption keys clear presentation only, and do not ca
   assert.equal(frames(socket).at(-1).state, 'idle');
   await turn(h, 'prompt');
   assert.equal(frames(socket).at(-1).state, 'working');
+  // Claude Code 2.1.287 ends the turn on Escape in either dialog without running a hook (#252);
+  // kept waiting, the Workspace asked for an approval at an idle prompt.
   await turn(h, 'permission');
+  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', reason: 'approval' });
   socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
-  assert.equal(frames(socket).at(-1).state, 'waiting');
+  assert.equal(frames(socket).at(-1).state, 'idle');
+  await turn(h, 'prompt');
+  await turn(h, 'question');
+  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', reason: 'answer' });
+  socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
+  assert.equal(frames(socket).at(-1).state, 'idle');
+});
+
+test('a question waits for an answer, and the answer resumes the turn', async () => {
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token' }, { turnHooks: true });
+  const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/'); subscribe(socket);
+  await turn(h, 'prompt');
+  await turn(h, 'question');
+  assert.equal(frames(socket).at(-1).reason, 'answer');
+  socket.emit('message', JSON.stringify({ type: 'input', data: '\r' }));
+  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'working', source: 'hooks' });
 });
 
 test('a prompt clears the previous hub question before the native hook returns', async () => {

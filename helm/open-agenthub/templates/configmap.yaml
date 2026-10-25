@@ -23,6 +23,7 @@ data:
   AgentHub__AgentImagePullPolicy: {{ .Values.agent.pullPolicy | default "IfNotPresent" | quote }}
   AgentHub__ImagePullSecret: {{ .Values.image.pullSecret | quote }}
   AgentHub__RuntimeClassName: {{ .Values.agent.runtimeClassName | quote }}
+  AgentHub__TrustedCaConfigMap: {{ .Values.agent.trustedCaConfigMap | quote }}
   AgentHub__MaxCpu: {{ .Values.agent.maxCpu | quote }}
   AgentHub__MaxMemory: {{ .Values.agent.maxMemory | quote }}
   AgentHub__MinCpu: {{ .Values.agent.minCpu | quote }}

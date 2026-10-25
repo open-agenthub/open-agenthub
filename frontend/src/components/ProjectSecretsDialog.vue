@@ -2,9 +2,10 @@
 // Which stored secrets a project's sessions receive (docs/session-secrets.md). A session in the
 // project gets this selection unless its own dialog narrows it; narrowing the project here takes a
 // secret away from its running sessions as well.
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { api } from '../api.js'
-import { deliveryLabel } from '../lib/secrets.js'
+import { deliveryLabel, hasNamesake, secretConflicts } from '../lib/secrets.js'
+import SecretConflictNote from './SecretConflictNote.vue'
 
 const props = defineProps({ project: { type: Object, required: true } })
 const emit = defineEmits(['close', 'saved'])
@@ -14,6 +15,10 @@ const selected = ref([...(props.project.secretIds || [])])
 const loaded = ref(false)
 const busy = ref(false)
 const error = ref('')
+// A project selecting two secrets that land in the same place would hand both to every session in
+// it; the hub refuses that, and the dialog says so before Save (#253).
+const ticked = computed(() => secrets.value.filter(s => selected.value.includes(s.id)))
+const clash = computed(() => secretConflicts(ticked.value).length > 0)
 
 onMounted(async () => {
   try { secrets.value = (await api.listSecrets()) || [] }
@@ -50,11 +55,12 @@ async function save() {
         add them under Settings → Secrets.</p>
       <label v-for="secret in secrets" :key="secret.id" class="check">
         <input type="checkbox" :checked="selected.includes(secret.id)" :data-project-secret="secret.id" @change="toggle(secret.id)" />
-        <span><code>{{ secret.name }}</code> <span class="kind">{{ deliveryLabel(secret.delivery) }}</span><span v-if="secret.description" class="dim desc">{{ secret.description }}</span></span>
+        <span><code>{{ secret.name }}</code> <small v-if="hasNamesake(secrets, secret)" class="dim" :data-secret-id="secret.id">{{ secret.id }}</small> <span class="kind">{{ deliveryLabel(secret.delivery) }}</span><span v-if="secret.description" class="dim desc">{{ secret.description }}</span></span>
       </label>
+      <SecretConflictNote :secrets="ticked" subject="Every session in this project" />
       <p v-if="error" class="err" data-project-secrets-error>{{ error }}</p>
       <div class="row">
-        <button class="primary" data-project-secrets-save :disabled="busy || !loaded" @click="save">{{ busy ? 'Saving…' : 'Save' }}</button>
+        <button class="primary" data-project-secrets-save :disabled="busy || !loaded || clash" @click="save">{{ busy ? 'Saving…' : 'Save' }}</button>
         <button @click="$emit('close')">Cancel</button>
       </div>
     </div>

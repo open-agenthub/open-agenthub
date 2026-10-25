@@ -119,6 +119,28 @@ describe('agent CLI menus in the Workspace', () => {
     expect(mocks.submit).toHaveBeenCalledWith('Fix the tests', undefined)
   })
 
+  it('answers a free-text entry from a text field and shows the whole question (#250)', async () => {
+    const question = 'Before I refactor the upload path I need to know how you want failures handled. '.repeat(3) + 'Which behaviour do you want?'
+    const wrapper = view()
+    await flushPromises()
+    mocks.menu({ kind: 'choice', title: question, partial: false, options: [
+      { number: 1, label: 'Retry with backoff', selected: true },
+      { number: 2, label: 'Type something.', selected: false, freeText: true },
+      { number: 3, label: 'Chat about this', selected: false }
+    ] })
+    await flushPromises()
+    expect(wrapper.get('[data-cli-title]').text()).toBe(question)
+    expect(wrapper.find('[data-cli-option="2"]').exists()).toBe(false)
+    const field = wrapper.get('[data-cli-free-text="2"] textarea')
+    expect(field.attributes('placeholder')).toBe('Type something.')
+    expect(wrapper.get('[data-cli-free-text="2"] button').attributes('disabled')).toBeDefined()
+
+    await field.setValue('Retry, but tell me\nwhen it gives up')
+    await field.trigger('keydown', { key: 'Enter' })
+    expect(mocks.sendKeys).toHaveBeenCalledWith(['\x1b[B', '\x1b[200~Retry, but tell me\nwhen it gives up\x1b[201~', '\r'])
+    expect(field.element.value).toBe('')
+  })
+
   it('points at the terminal for a prompt that wants typed input, without buttons', async () => {
     const wrapper = view()
     await flushPromises()

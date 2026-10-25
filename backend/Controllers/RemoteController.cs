@@ -102,6 +102,7 @@ public sealed class RemoteController : ControllerBase
         }
         catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (AgentNotAllowedException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Message); }
+        catch (SessionSecretConflictException e) { return BadRequest(e.Body); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         catch (SessionLimitExceededException e) { return StatusCode(StatusCodes.Status429TooManyRequests, e.Message); }
     }
@@ -155,6 +156,7 @@ public sealed class RemoteController : ControllerBase
         catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (InvalidOperationException e) { return Conflict(e.Message); }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionSecretConflictException e) { return BadRequest(e.Body); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
     }
 

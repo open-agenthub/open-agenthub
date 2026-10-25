@@ -15,13 +15,21 @@ const OPTION = /^\s*([❯›>▶➤→])?\s*(\d{1,2})[.)]\s+(\S.*?)\s*$/
 const FOOTER = /\b(?:esc to (?:cancel|go back|close|exit)|enter to (?:confirm|select|continue|set)|press enter to (?:confirm|continue|select)|↑\/↓ to (?:select|navigate|move)|use arrow keys)\b|\((?:y\/n|Y\/n|y\/N)\)|\[(?:y\/n|Y\/n|y\/N)\]/i
 // A prompt for typed input inside such a screen, such as the code a login asks to be pasted.
 const INPUT = /\b(?:paste (?:the )?code|enter (?:the )?code|paste .* here)\b.*[>:]\s*$/i
+// The entry Claude Code adds to every AskUserQuestion list (#250): picking it turns the row into a
+// text field whose content becomes the answer, so it is not a choice like the others. A
+// multi-select question draws it with its checkbox, "[ ] Type something".
+const FREE_TEXT = /^(?:\[[ ✔]\]\s*)?type something\.?$/i
+// Claude Code frames a long question in a bar ("│ …") and wraps it; every line of it is the question.
+const QUOTED = /^\s*│\s?/
+// The frame a CLI draws above and below its dialog.
+const RULE = /^[─━▔▁═_-]{3,}/
 // How far up from the bottom a menu is looked for. A TUI draws its dialog at the bottom; a
 // numbered list higher up is the agent's earlier answer scrolling by.
 const WINDOW = 24
 
 /**
  * @param {string[]} lines the visible terminal rows, top to bottom
- * @returns {null | { kind: 'choice' | 'input', title: string, options: { number: number, label: string, selected: boolean }[] }}
+ * @returns {null | { kind: 'choice' | 'input', title: string, options: { number: number, label: string, selected: boolean, freeText?: true }[] }}
  */
 function detectMenu(lines) {
   const signIn = detectSignIn(lines)
@@ -47,7 +55,8 @@ function detectMenu(lines) {
     }
     if (!options.length) first = index
     // Columns ("Opus      Opus 5.5 · …") are padded with spaces; one separator reads the same.
-    options.push({ number, label: match[3].replace(/\s{2,}/g, ' · '), selected: Boolean(match[1]) })
+    const label = match[3].replace(/\s{2,}/g, ' · ')
+    options.push({ number, label, selected: Boolean(match[1]), ...(FREE_TEXT.test(label) ? { freeText: true } : {}) })
   })
 
   const hasCursor = options.some(option => option.selected)
@@ -65,21 +74,44 @@ function detectMenu(lines) {
   return null
 }
 
-// The heading of the dialog. A line ending in a colon or question mark right above the choices
-// asks the question ("Select login method:", "How do you want to sign in?"); otherwise the topmost short line inside the dialog's frame names it
-// ("Select model", "Login") — the lines between are its explanation.
+// The heading of the dialog. A question Claude Code framed in its bar is taken whole, however many
+// lines it wraps to. Otherwise a line ending in a colon or question mark right above the choices
+// asks the question ("Select login method:", "How do you want to sign in?"), together with the
+// lines it wrapped from; failing that, the topmost short line inside the dialog's frame names it
+// ("Select model", "Login") — the lines between are its explanation. Reading only the last line
+// of a wrapped question left the person answering half of it.
 function titleAbove(region, index) {
+  const quoted = []
+  let top = index - 1
+  while (top >= 0 && !region[top].trim()) top--
+  for (let i = top; i >= 0 && QUOTED.test(region[i]); i--) quoted.unshift(region[i].replace(QUOTED, '').trim())
+  if (quoted.length) return quoted.filter(Boolean).join(' ')
+
+  const width = Math.max(...region.map(line => line.length))
   let nearest = ''
   let heading = ''
   for (let i = index - 1; i >= 0 && i >= index - 8; i--) {
     const text = region[i].trim().replace(/\s{2,}/g, ' ')
-    if (/^[─━▔▁═_-]{3,}/.test(text)) break
+    if (RULE.test(text)) break
     if (!text || !/[A-Za-z]/.test(text) || /^https?:\/\//.test(text)) continue
-    if (/[:?]$/.test(text)) return text
+    if (/[:?]$/.test(text)) return [...wrappedAbove(region, i, width), text].join(' ')
     nearest ||= text
     if (text.length <= 40) heading = text
   }
   return heading || nearest
+}
+
+// The lines a question at `index` continues: each one reaches nearly across the screen, as a
+// line the CLI broke for width does, and does not end a sentence. A short line above is a
+// heading of its own ("Console account"), a full one ending in a full stop the explanation.
+function wrappedAbove(region, index, width) {
+  const lines = []
+  for (let i = index - 1; i >= 0; i--) {
+    const text = region[i].trim()
+    if (!text || RULE.test(text) || region[i].length < width * 0.75 || /[.!?:]$/.test(text) || OPTION.test(region[i]) || FOOTER.test(region[i])) break
+    lines.unshift(text.replace(/\s{2,}/g, ' '))
+  }
+  return lines
 }
 
 module.exports = { detectMenu };
