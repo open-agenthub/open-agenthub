@@ -11,10 +11,15 @@ import ChatAttachments from '../ChatAttachments.vue'
 // (an older runtime, a shared link), the composer offers no completion and still sends.
 // attach: resolves uploaded file ids to the paths the session agent materialized them at, which
 // send then pastes ahead of the text (#148); absent (a shared link), files cannot be attached.
-const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, disabledHint: String, status: String, agent: String, send: Function, interrupt: Function, loadCommands: Function, attach: Function })
+const props = defineProps({ sessionId: String, enabled: Boolean, queueable: Boolean, disabledHint: String, status: String, agent: String, suggestion: String, send: Function, interrupt: Function, loadCommands: Function, attach: Function })
 // sent: a message reached the agent's terminal; the view follows it until the agent takes it (#153).
 const emit = defineEmits(['sent'])
 const text = ref(drafts.get(props.sessionId) || '')
+const dismissedSuggestion = ref('')
+const ghost = computed(() => props.enabled && !pending.value && !text.value && !attachmentItems.value.length &&
+  props.suggestion && props.suggestion !== dismissedSuggestion.value ? props.suggestion : '')
+watch(() => props.suggestion, value => { dismissedSuggestion.value = text.value ? value : '' })
+watch(text, value => { if (value && props.suggestion) dismissedSuggestion.value = props.suggestion })
 const input = ref(null)
 const pending = ref(false)
 const error = ref('')
@@ -44,6 +49,7 @@ function saveQueue(id = props.sessionId) {
 watch(() => props.sessionId, (id, previous) => {
   if (previous) { drafts.set(previous, text.value); saveQueue(previous) }
   generation += 1
+  dismissedSuggestion.value = ''
   commands.value = []
   commandsLoadedAt = 0
   text.value = drafts.get(id) || ''
@@ -242,6 +248,15 @@ function menuKey(event) {
   return true
 }
 function keydown(event) {
+  if (ghost.value && !event.isComposing && !event.shiftKey && !event.ctrlKey && !event.altKey && !event.metaKey &&
+      (event.key === 'ArrowRight' || event.key === 'Tab')) {
+    event.preventDefault()
+    text.value = ghost.value
+    trackCaret()
+    void nextTick(() => input.value?.setSelectionRange(text.value.length, text.value.length))
+    return
+  }
+  if (!event.isComposing && event.key === 'Escape' && ghost.value) dismissedSuggestion.value = props.suggestion
   if (menuOpen.value && !event.isComposing && menuKey(event)) return
   if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault()
@@ -278,11 +293,15 @@ onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); ge
     <div class="composer-card" @dragover.prevent @drop.prevent="addFiles($event.dataTransfer?.files)">
       <ChatAttachments v-if="attachmentItems.length" class="composer-attachments" :items="attachmentItems"
         :retry="attachments.retry" :remove="attachments.remove" />
+      <div class="composer-input">
+      <span v-if="ghost" class="composer-ghost" aria-hidden="true" data-composer-suggestion>{{ ghost }}</span>
       <textarea ref="input" v-model="text" :disabled="!accepting || pending" rows="3" aria-label="Message the agent"
-        placeholder="Give your agent a task… Type / for commands" aria-autocomplete="list" :aria-expanded="menuOpen"
+        :placeholder="ghost ? '' : 'Give your agent a task… Type / for commands'" aria-autocomplete="list" :aria-expanded="menuOpen"
         :aria-controls="menuOpen ? `slash-menu-${sessionId}` : undefined"
         :aria-activedescendant="menuOpen ? `slash-${sessionId}-${menuIndex}` : undefined"
         @keydown="keydown" @input="trackCaret" @click="trackCaret" @keyup="trackCaret" @paste="pasteFiles"></textarea>
+      </div>
+      <span v-if="ghost" class="suggestion-hint" role="status">→ or Tab to accept suggestion</span>
       <div class="composer-controls">
         <input v-if="attach" ref="fileInput" class="file-input" type="file" multiple
           accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.md,.markdown,.txt,.docx,.pptx,.xlsx"
@@ -308,7 +327,10 @@ onBeforeUnmount(() => { drafts.set(props.sessionId, text.value); saveQueue(); ge
 <style scoped>
 .workspace-composer { width: 100%; max-width: 904px; margin: 0 auto; padding: 8px 32px 12px; box-sizing: border-box; }
 .composer-card { padding: 14px; border: 1px solid var(--border-2); border-radius: 18px; background: var(--panel); box-shadow: 0 6px 24px #0002; }
-textarea { width: 100%; min-height: 72px; max-height: 240px; resize: vertical; border: 0; background: transparent; padding: 0; font: 14px/1.6 var(--ui); box-shadow: none; }
+.composer-input { position: relative; }
+.composer-ghost { position: absolute; inset: 0; pointer-events: none; color: var(--muted-3); white-space: pre-wrap; overflow-wrap: break-word; font: 14px/1.6 var(--ui); }
+.suggestion-hint { color: var(--muted-3); font-size: 10px; }
+textarea { position: relative; width: 100%; min-height: 72px; max-height: 240px; resize: vertical; border: 0; background: transparent; padding: 0; font: 14px/1.6 var(--ui); box-shadow: none; }
 textarea:focus { outline: none; }
 .composer-card:focus-within { border-color: var(--accent); }
 .composer-controls { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--muted); font-size: 11px; }

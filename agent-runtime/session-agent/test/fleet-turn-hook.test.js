@@ -46,6 +46,17 @@ test('each Codex event is reported to the session agent under its own name', asy
   assert.equal(calls[0].token, 'tok');
 });
 
+// Claude Code 2.1.287 raises PermissionRequest to show an AskUserQuestion screen (#252).
+test('a PermissionRequest for a question is reported as a question, not as a permission', async () => {
+  const { run } = await import('../../common/fleet-turn-hook.mjs');
+  const { calls, fetchImpl } = recorder();
+
+  await run({ ...thread, hook_event_name: 'PermissionRequest', tool_name: 'AskUserQuestion' }, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'PermissionRequest', tool_name: 'Bash' }, env, fetchImpl);
+
+  assert.deepEqual(calls.map(call => call.body.event), ['question', 'permission']);
+});
+
 test('a Stop with messages blocks with them as the reason; other events and empty answers print nothing', async () => {
   const { run } = await import('../../common/fleet-turn-hook.mjs');
   const text = '[AgentHub message from agent "Code Reviewer" (rev-1)]\nPlease fix MR 42';
