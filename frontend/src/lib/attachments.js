@@ -10,6 +10,7 @@ export const ATTACHMENT_LIMITS = Object.freeze({
 })
 
 const MIME_BY_EXTENSION = Object.freeze({
+  '.svg': 'image/svg+xml',
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
@@ -78,10 +79,9 @@ export function validateAttachmentBatch(files, existing = []) {
     const expectedMime = MIME_BY_EXTENSION[extension(file.name)]
     const fingerprint = attachmentFingerprint(file)
     let code = null
-    if (!expectedMime) code = 'unsupported_file_type'
-    else if (file.type !== expectedMime) code = 'content_type_mismatch'
+    if (expectedMime && file.type && file.type !== expectedMime) code = 'content_type_mismatch'
     else if (seen.has(fingerprint)) code = 'duplicate_file'
-    else if (file.size > maxBytes(expectedMime)) code = 'file_too_large'
+    else if (file.size > maxBytes(expectedMime || 'application/octet-stream')) code = 'file_too_large'
     else if (total + file.size > ATTACHMENT_LIMITS.maxMessageBytes) code = 'message_too_large'
     if (code) errors.push({ file, code, message: COPY[code] })
     else {
@@ -117,7 +117,7 @@ export function createAttachmentQueue({ sessionId, api, onChange = () => {} }) {
       if (!item.upload) {
         const reserved = await api.reserveSessionFile(sessionId, {
           name: item.file.name,
-          mimeType: item.file.type,
+          mimeType: MIME_BY_EXTENSION[extension(item.file.name)] || 'application/octet-stream',
           size: item.file.size,
           batchId: item.batchId
         })

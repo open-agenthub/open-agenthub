@@ -1,3 +1,4 @@
+import { detectSignIn } from './cli-sign-in.js'
 // Recognises an agent CLI waiting in one of its own interactive screens — a selection menu, a
 // login step, a prompt for a code — from what its terminal shows, so the Workspace can say so
 // and offer the choices without the person switching to the terminal (#112, docs/agent-workspace.md).
@@ -30,6 +31,8 @@ const WINDOW = 24
  * @returns {null | { kind: 'choice' | 'input', title: string, options: { number: number, label: string, selected: boolean, freeText?: true }[] }}
  */
 export function detectMenu(lines) {
+  const signIn = detectSignIn(lines)
+  if (signIn) return signIn
   const rows = (lines || []).map(line => String(line ?? '').replace(/\s+$/, ''))
   let end = rows.length
   while (end > 0 && !rows[end - 1].trim()) end -= 1

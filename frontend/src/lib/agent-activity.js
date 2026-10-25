@@ -11,3 +11,12 @@ export function parseActivityFrame(data) {
       : null
   } catch { return null }
 }
+
+export function parsePersistenceFrame(data) {
+  if (typeof data !== 'string' || !data.startsWith('{')) return null
+  try {
+    const frame = JSON.parse(data)
+    return frame?.type === 'agenthub' && frame.subtype === 'persistence' &&
+      typeof frame.withheld === 'boolean' ? { withheld: frame.withheld } : null
+  } catch { return null }
+}

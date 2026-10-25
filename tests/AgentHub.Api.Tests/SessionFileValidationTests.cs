@@ -10,16 +10,41 @@ public sealed class SessionFileValidationTests
     [Theory]
     [InlineData("shot.png", "image/png", 20 * 1024 * 1024, true)]
     [InlineData("shot.png", "image/png", 20 * 1024 * 1024 + 1L, false)]
-    [InlineData("payload.svg", "image/svg+xml", 128, false)]
+    [InlineData("payload.svg", "image/svg+xml", 128, true)]
+    [InlineData("archive.zip", "application/zip", 128, true)]
+    [InlineData("LICENSE", "text/plain", 128, true)]
     [InlineData("report.pdf", "application/pdf", 50 * 1024 * 1024, true)]
     [InlineData("report.pdf", "application/pdf", 50 * 1024 * 1024 + 1L, false)]
-    public void Reservation_enforces_the_allowlist_and_size_limit(
+    public void Reservation_enforces_safe_names_and_size_limits(
         string name, string mime, long size, bool allowed)
     {
         var result = SessionFileValidator.ValidateReservation(
             new SessionFileOptions(), name, mime, size);
 
         Assert.Equal(allowed, result.Allowed);
+    }
+
+    [Theory]
+    [InlineData("payload.html", "<script>throw 1</script>", "application/octet-stream")]
+    [InlineData("LICENSE", "plain text", "application/octet-stream")]
+    [InlineData("empty.bin", "", "application/octet-stream")]
+    [InlineData("diagram.svg", "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>throw 1</script></svg>", "image/svg+xml")]
+    public async Task Opaque_files_never_gain_a_preview_type(string name, string body, string mime)
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(body));
+        var result = await SessionFileValidator.DetectAsync(name, stream);
+        Assert.True(result.Allowed);
+        Assert.Equal(mime, result.DetectedMimeType);
+    }
+
+    [Theory]
+    [InlineData("<!DOCTYPE svg [<!ENTITY x SYSTEM 'file:///etc/passwd'>]><svg xmlns=\"http://www.w3.org/2000/svg\">&x;</svg>")]
+    [InlineData("<html xmlns=\"http://www.w3.org/1999/xhtml\"/>")]
+    [InlineData("<svg")]
+    public async Task Svg_detection_refuses_entities_non_svg_roots_and_malformed_xml(string body)
+    {
+        using var stream = new MemoryStream(Encoding.UTF8.GetBytes(body));
+        Assert.False((await SessionFileValidator.DetectAsync("diagram.svg", stream)).Allowed);
     }
 
     [Fact]
@@ -31,6 +56,8 @@ public sealed class SessionFileValidationTests
         Assert.Equal("content_type_mismatch", result.Code);
     }
     [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
     [InlineData("shot?.png")]
     [InlineData("folder/shot.png")]
     [InlineData("folder\\shot.png")]

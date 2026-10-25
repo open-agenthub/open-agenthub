@@ -130,10 +130,10 @@ describe('FilePreview', () => {
     expect(URL.createObjectURL.mock.calls[0][0].type).toBe('image/png')
   })
 
-  it('renders HTML and SVG as download-only, never as an iframe', async () => {
-    mocks.content.mockResolvedValue(new Blob(['<svg></svg>'], { type: 'image/svg+xml' }))
+  it('renders HTML as an opaque download, never as an iframe', async () => {
+    mocks.content.mockResolvedValue(new Blob(['<script></script>'], { type: 'text/html' }))
     const wrapper = mount(FilePreview, { props: {
-      sessionId: 's1', file: { id: 'f1', name: 'x.svg', mimeType: 'image/svg+xml', size: 12, state: 'Ready' }, capabilities: {}
+      sessionId: 's1', file: { id: 'f1', name: 'x.html', mimeType: 'text/html', size: 12, state: 'Ready' }, capabilities: {}
     } })
     await flushPromises()
     expect(wrapper.find('iframe').exists()).toBe(false)
