@@ -6,6 +6,7 @@ const { execFileSync } = require('node:child_process');
 const { createRequire } = require('node:module');
 const assert = require('node:assert/strict');
 const root = path.resolve(__dirname, '../..');
+const runtime = process.env.PROOF_RUNTIME || root + '/agent-runtime';
 const deps = createRequire(process.env.PROOF_DEPS + '/package.json');
 const runtimeDeps = createRequire('/opt/session-agent/package.json');
 const { Terminal } = deps('@xterm/headless');
@@ -45,7 +46,7 @@ const hub = http.createServer(async (req, res) => {
  if (req.url.startsWith('/v1/')) return json({ input_tokens: 10, content: [{ type: 'text', text: 'Title' }], role: 'assistant', stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 } });
  if (req.url.endsWith('/context-clear')) {
   const response = await fetch('http://127.0.0.1:19252/internal/sessions/s251/context-clear', { method: 'POST', headers: { 'X-Agent-Token': 'proof251', 'Content-Type': 'application/json' }, body: raw });
-  scheduledAt = Date.now(); return json(await response.json());
+  scheduledAt = Date.now(); res.statusCode = response.status; return json(await response.json());
  }
  if (req.url.includes('/permission')) return json({ decision: 'allow', id: 'p251' });
  if (req.url.includes('/messages')) return json({ messages: [] });
@@ -54,13 +55,13 @@ const hub = http.createServer(async (req, res) => {
 (async () => {
  await new Promise(r => hub.listen(19250, '127.0.0.1', r));
  const env = { PATH: process.env.PROOF_DEPS + '/node_modules/.bin:/usr/local/bin:/usr/bin:/bin', HOME: home, TMPDIR: run, TERM: 'xterm-256color', LANG: 'C.UTF-8', ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: 'http://127.0.0.1:19250', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', AGENTHUB_SESSION_ID: 's251', AGENTHUB_PORT: '19251', AGENTHUB_CALLBACK_URL: 'http://127.0.0.1:19250/internal/sessions/s251', AGENTHUB_CALLBACK_TOKEN: 'proof251', AGENTHUB_WORKDIR: cwd, AGENTHUB_MODE: 'interactive', AGENTHUB_SKILLS_SYNC_SECONDS: '0', AGENTHUB_CLAUDE_SESSION_ID: require('node:crypto').randomUUID() };
- const settings = JSON.parse(execFileSync('bash', [root + '/agent-runtime/claude/hooks/mcp-policy-hook.sh', '--settings'], { env: { ...env, AGENTHUB_RUNTIME: root + '/agent-runtime/claude/hooks', RUNTIME: root + '/agent-runtime' }, encoding: 'utf8' }));
+ const settings = JSON.parse(execFileSync('bash', [runtime + '/claude/hooks/mcp-policy-hook.sh', '--settings'], { env: { ...env, AGENTHUB_RUNTIME: runtime + '/claude/hooks', RUNTIME: runtime }, encoding: 'utf8' }));
  settings.permissions = { allow: ['mcp__agenthub_sessions__context_clear'] };
  fs.writeFileSync(home + '/.claude/settings.json', JSON.stringify(settings));
  const mcp = run + '/mcp.json';
- fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { agenthub_sessions: { command: 'node', args: [root + '/agent-runtime/sessions/server.mjs'] } } })); env.AGENTHUB_MCP_CONFIG = mcp;
- const driver = require(root + '/agent-runtime/claude/driver');
- server = require(root + '/agent-runtime/common/server').createCommonServer({ env, driver, dependencies: { pty: runtimeDeps('node-pty'), WebSocketServer: WebSocket.WebSocketServer } });
+ fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { agenthub_sessions: { command: 'node', args: [runtime + '/sessions/server.mjs'] } } })); env.AGENTHUB_MCP_CONFIG = mcp;
+ const driver = require(runtime + '/claude/driver');
+ server = require(runtime + '/common/server').createCommonServer({ env, driver, dependencies: { pty: runtimeDeps('node-pty'), WebSocketServer: WebSocket.WebSocketServer } });
  const term = new Terminal({ cols: 120, rows: 36, allowProposedApi: true });
  ws = new WebSocket('ws://127.0.0.1:19251/'); await new Promise(r => ws.on('open', r));
  const input = data => ws.send(JSON.stringify({ type: 'input', data }));
@@ -70,17 +71,17 @@ const hub = http.createServer(async (req, res) => {
  async function paste(text) { input('\x1b[200~' + text + '\x1b[201~'); await sleep(200); input('\r'); }
  const read = async from => { const r = await fetch('http://127.0.0.1:19251/agenthub/transcript?from=' + from, { headers: { 'X-Agent-Token': 'proof251' } }); return { text: await r.text(), next: Number(r.headers.get('X-Transcript-Next')), id: r.headers.get('X-Transcript-Id') }; };
  const samples = [];
- const poll = setInterval(async () => { try { const page = await (await fetch('http://127.0.0.1:19252/conversation')).json(); samples.push(page); fs.writeFileSync(run + '/pages.json', JSON.stringify(samples)); } catch {} }, 300);
+ const poll = setInterval(async () => { try { const page = await (await fetch('http://127.0.0.1:19252/conversation')).json(); samples.push(page); } catch {} }, 300);
  await paste('OLD-MARKER-251: clear your context with the tool, then continue.');
  await until(() => requests.some(r => JSON.stringify(r.messages).includes('[AgentHub context handover]')), 'handover');
  await sleep(2000);
- const initial = await read(0); fs.writeFileSync(run + '/initial.jsonl', initial.text);
+ const initial = await read(0);
  assert(initial.text.includes('HANDOVER-251')); assert(scheduledAt && finalAt >= scheduledAt + 3900);
  const fresh = requests.find(r => JSON.stringify(r.messages).includes('[AgentHub context handover]') && !JSON.stringify(r.messages).includes('clear251'));
  assert(fresh && !JSON.stringify(fresh.messages).includes('OLD-MARKER-251'));
  await paste('LATER-TURN-251');
  await until(() => requests.some(r => JSON.stringify(r.messages).includes('LATER-TURN-251')), 'later model request'); await sleep(3000);
- const later = await read(initial.next); fs.writeFileSync(run + '/later.jsonl', later.text);
+ const later = await read(initial.next);
  assert(later.text.includes('LATER-TURN-251')); assert(later.text.includes('ANSWER-251-later'));
  for (let i = 2; i <= 3; i++) { await paste('LATER-TURN-251-' + i); await sleep(3500); }
  await until(() => samples.some(p => p.entries?.some(e => e.text.includes('LATER-TURN-251-3'))), 'backend later turn');
@@ -88,5 +89,6 @@ const hub = http.createServer(async (req, res) => {
  assert(stored.entries.some(e => e.text.includes('LATER-TURN-251-3')));
  clearInterval(poll);
  console.log(JSON.stringify({ run, scheduledAt, finalAt, first: initial.next, later: later.next, liveFollow: true }));
+ await sleep(Number(process.env.PROOF_HOLD_MS || 0));
  process.exit(0);
 })().catch(e => { console.error(run, e); process.exit(1); });

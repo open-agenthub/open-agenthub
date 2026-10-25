@@ -38,3 +38,9 @@ fixtures for unrelated panels. Its conversation responses come from the real pag
 20,000 synthetic entries. System libraries and fonts must be available to Chromium. The script
 reports initial rendering time, verifies 500 initial messages and exactly one conversation
 request, then verifies that Load earlier prepends 500 entries without discarding the latest.
+
+The local baseline proof also passed the rc.5 runtime's context-clear sequence and three later
+turns in Chromium, using the current backend reader; reloading retained those turns. The reader's
+release-to-main change centralizes pod verification and HTTP timeouts, while its identity and byte
+cursor algorithm is unchanged. These runs have not reproduced the reported freeze. They do not
+establish that an affected deployed session is healthy, or verify a cluster rollout.

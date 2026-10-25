@@ -19,8 +19,10 @@ const scroller = ref(null)
 const query = ref('')
 const following = ref(true)
 let earlierHeight = null
+let earlierTop = 0
 function earlier() {
   earlierHeight = scroller.value?.scrollHeight ?? null
+  earlierTop = scroller.value?.scrollTop ?? 0
   following.value = false
 }
 const visible = computed(() => {
@@ -40,7 +42,8 @@ function latest() {
 watch([() => props.items, () => props.pending, query], async () => {
   await nextTick()
   if (earlierHeight !== null && scroller.value) {
-    scroller.value.scrollTop += scroller.value.scrollHeight - earlierHeight
+    // Native scroll anchoring may already have moved scrollTop; adding to it moves twice.
+    scroller.value.scrollTop = earlierTop + scroller.value.scrollHeight - earlierHeight
     earlierHeight = null
   }
   if (following.value && !query.value && scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight

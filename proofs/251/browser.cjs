@@ -7,7 +7,7 @@ const deps = createRequire(process.env.PROOF_DEPS + '/package.json');
 (async () => {
  const { createServer } = await import(root + '/frontend/node_modules/vite/dist/node/index.js');
  const html = root + '/frontend/proof251.html', entry = root + '/frontend/proof251-entry.js';
- fs.writeFileSync(html, '<html><body><div id="app"></div><script type="module" src="/proof251-entry.js"></script></body></html>');
+ fs.writeFileSync(html, '<html><style>html,body{margin:0;height:100%;overflow:hidden}#app{height:100vh;display:flex;overflow:hidden}</style><body><div id="app"></div><script type="module" src="/proof251-entry.js"></script></body></html>');
  fs.writeFileSync(entry, `import { createApp } from 'vue';
  import TerminalView from './src/components/TerminalView.vue'; import './src/style.css';
  createApp(TerminalView, { initialUi: 'workspace', session: { id: 's251', title: 'Long conversation proof', phase: 'Running', mode: 'Interactive', agent: 'Claude', uiMode: 'terminal', accessRole: 'Owner', createdAt: new Date().toISOString() } }).mount('#app');`);
@@ -39,9 +39,14 @@ const deps = createRequire(process.env.PROOF_DEPS + '/package.json');
   assert.equal(await page.getByText('History message 00000:', { exact: false }).count(), 0);
   const scroller = page.locator('.conversation-scroll');
   await scroller.evaluate(el => { el.scrollTop = 0; });
+  const anchor = page.getByText('History message 19500:', { exact: false });
+  const beforeTop = (await anchor.boundingBox()).y;
   await page.locator('[data-load-earlier]').click();
   await page.getByText('History message 19000:', { exact: false }).waitFor();
   assert.equal(await page.locator('[data-workspace-role]').count(), 1000);
+  await page.evaluate(() => new Promise(requestAnimationFrame));
+  console.log('anchor', { beforeTop, afterTop: (await anchor.boundingBox()).y, scroll: await scroller.evaluate(el => ({ top:el.scrollTop, height:el.scrollHeight, client:el.clientHeight })) });
+  assert(Math.abs((await anchor.boundingBox()).y - beforeTop) < 2, 'prepend preserves the visible anchor');
   assert(queries.includes('?offset=19000&max=500'));
   console.log(JSON.stringify({ initialMs, initialMessages: 500, afterEarlier: 1000, queries, errors }));
  } else {
