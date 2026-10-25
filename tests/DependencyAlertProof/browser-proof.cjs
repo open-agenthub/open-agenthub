@@ -1,4 +1,4 @@
-const { chromium } = require('../../../agent-runtime/session-agent/node_modules/playwright-core');
+const { chromium } = require('../../agent-runtime/session-agent/node_modules/playwright-core');
 const assert = require('node:assert/strict');
 (async () => {
   const browser = await chromium.connectOverCDP(process.env.AGENTHUB_CDP_URL);
@@ -17,7 +17,8 @@ const assert = require('node:assert/strict');
   assert(diagrams[0].text.includes('Request'));
   assert(diagrams[1].text.includes('Client') && diagrams[1].text.includes('Server'));
   assert.deepEqual(errors, []);
-  await page.screenshot({ path: process.env.AGENTHUB_SCREENSHOT || '/tmp/225-diagrams.png', fullPage: true });
+  if (process.env.AGENTHUB_SCREENSHOT)
+    await page.screenshot({ path: process.env.AGENTHUB_SCREENSHOT, fullPage: true });
   console.log(JSON.stringify({ diagrams: diagrams.map(d => ({ width: d.width, height: d.height })), errors }));
   await context.close();
   await browser.close();

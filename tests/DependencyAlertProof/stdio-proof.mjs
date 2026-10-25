@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import assert from 'node:assert/strict';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const scratch = await fs.mkdtemp(path.join(os.tmpdir(), 'dependency-stdio-'));
 const calls = [];
 const fixture = http.createServer((req, res) => {

@@ -1,6 +1,0 @@
-{"alert":86,"manifest":"mcp/agenthub/package-lock.json","package":"body-parser","versions":["2.3.0"],"vulnerable":["2.3.0"]}
-{"alert":85,"manifest":"mcp/agenthub/package-lock.json","package":"zod","versions":["4.6.5"],"vulnerable":["4.6.5"]}
-{"alert":84,"manifest":"frontend/package-lock.json","package":"happy-dom","versions":["20.14.6"],"vulnerable":["20.14.6"]}
-{"alert":83,"manifest":"agent-runtime/session-agent/package-lock.json","package":"body-parser","versions":["2.3.0"],"vulnerable":["2.3.0"]}
-{"alert":82,"manifest":"agent-runtime/session-agent/package-lock.json","package":"zod","versions":["4.6.5"],"vulnerable":["4.6.5"]}
-{"openAlerts":5,"remainingVulnerableResolutions":5}

@@ -3,8 +3,8 @@
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { WebSocketServer } = require('../../../agent-runtime/session-agent/node_modules/ws');
-const root = path.resolve(__dirname, '../../../frontend/dist');
+const { WebSocketServer } = require('../../agent-runtime/session-agent/node_modules/ws');
+const root = path.resolve(__dirname, '../../frontend/dist');
 const session = { id: 'diagram-proof', title: 'Diagram compatibility proof', phase: 'Succeeded', agent: 'Codex', mode: 'Autonomous', uiMode: 'terminal', accessRole: 'Owner', createdAt: new Date().toISOString(), browser: { phase: 'Stopped' } };
 const text = '```mermaid\nflowchart TD\n A[Request] --> B[Response]\n```\n\n```mermaid\nsequenceDiagram\n participant A as Client\n participant B as Server\n A->>B: Request\n B-->>A: Response\n```';
 const entries = [{ role: 'assistant', text }];

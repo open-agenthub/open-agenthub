@@ -3,7 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const root = path.resolve(__dirname, '../../..');
+const root = path.resolve(__dirname, '../..');
 const semver = require(path.join(root, 'frontend/node_modules/semver'));
 const alerts = JSON.parse(execFileSync('gh', ['api', 'repos/open-agenthub/open-agenthub/dependabot/alerts', '--paginate'], { encoding: 'utf8' })).filter(a => a.state === 'open');
 let remaining = 0;
