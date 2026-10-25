@@ -92,3 +92,32 @@ export function chosenSecrets(stored, selectedIds, grants) {
 export function hasNamesake(list, secret) {
   return (Array.isArray(list) ? list : []).some(other => other.id !== secret.id && other.name === secret.name && other.delivery === secret.delivery)
 }
+
+/**
+ * Where a stored secret is used (#254): the projects whose selection holds it, and the owner's
+ * sessions that receive it, each with how — from the hub's own `effectiveSecrets`, so this shows
+ * what the sessions actually get rather than a second reading of the selection rules.
+ */
+export function secretUsage(secretId, sessions, projects) {
+  return {
+    projects: (Array.isArray(projects) ? projects : []).filter(p => (p.secretIds || []).includes(secretId)),
+    sessions: (Array.isArray(sessions) ? sessions : []).flatMap(session => {
+      const held = (session.effectiveSecrets || []).find(s => s.id === secretId)
+      return held ? [{ session, provenance: held.provenance, inheritToChildren: !!held.inheritToChildren }] : []
+    })
+  }
+}
+
+/** How a session got a secret, in the words the session view uses. `project` covers an explicit
+ * selection too; with a project it is that project's selection. */
+export function provenanceLabel(use, projects) {
+  if (use.provenance === 'granted') return 'granted directly'
+  if (use.provenance === 'inherited') return 'inherited from its parent'
+  if (use.provenance === 'requested') return 'requested by the agent'
+  const project = (projects || []).find(p => p.id === use.session.projectId)
+  return project ? `via project ${project.name}` : 'selected for it'
+}
+
+export function sessionHref(id) {
+  return `/s/${encodeURIComponent(id)}`
+}
