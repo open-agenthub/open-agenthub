@@ -24,7 +24,7 @@ ENV OPENCODE_VERSION=${OPENCODE_VERSION}
 # everywhere — and the platform packages are dropped afterwards: each is a second ~180 MB copy,
 # and the custom-image init container copies the whole global node_modules into every pod.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git openssh-client ca-certificates bash curl tar \
+      git openssh-client ca-certificates bash curl tar python3 python3-pip python3-venv \
  && npm install -g opencode-ai@${OPENCODE_VERSION} \
  && pkg=/usr/local/lib/node_modules/opencode-ai \
  && case "$TARGETARCH" in \
@@ -43,6 +43,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && curl -fsSL "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_${TARGETARCH}.tar.gz" | tar xz -C /tmp/glab \
  && install -m0755 "$(find /tmp/glab -type f -name glab | head -1)" /usr/local/bin/glab \
  && rm -rf /tmp/gh /tmp/glab /root/.cache /root/.local /root/.config /var/lib/apt/lists/* \
+ && python3 --version \
+ && python3 -m pip --version \
+ && python3 -m venv /tmp/python-venv-smoke \
+ && /tmp/python-venv-smoke/bin/python -m pip --version \
+ && rm -rf /tmp/python-venv-smoke \
  && userdel -r node \
  && useradd -m -u 1000 -s /bin/bash agent \
  && test -x /usr/local/bin/node \
