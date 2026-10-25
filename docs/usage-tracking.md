@@ -55,6 +55,15 @@ the billing `ForPod` computes for the start, on create, resume, runtime update a
 So an unattended Auto run with a stored key is refused over budget, even with a login stored.
 Before, a stored login let it through, while the CLI then billed the key.
 
+The gate covers every agent whose CLI reports a cost (`UsageBilling.ReportsCost`): Claude Code,
+OpenCode and OpenClaw (#282). After #279 the API-key cost of OpenCode and OpenClaw counted in the
+budget, but only Claude starts were refused, so an OpenCode session could keep spending past the
+limit its own usage had reached (`tests/UsageProof/check-gate.sh` against `origin/main`). Codex
+and Cursor stay ungated. Codex reports tokens only and Cursor nothing, so their API use never adds
+to the budget. Gating them would refuse a session for spend it is not part of.
+**Alternative considered:** gate every API-key start whatever the agent. Rejected, because it turns
+a limit on recorded spend into a blanket switch for agents whose spend is invisible to it.
+
 **Alternative considered:** read the credential the CLI actually used from its own state (Claude
 keeps approved and rejected key suffixes in `~/.claude.json`). Rejected: that is key material, and
 the session agent must send the hub only numeric usage, never credentials.
@@ -96,7 +105,12 @@ includes reasoning, as providers bill it.
 - **OpenCode** is one aggregate query per tick over its database, through `node:sqlite` read-only.
   The database is the only place OpenCode keeps usage. Its policy plugin sees `message.updated`
   too, but a plugin restarts with every process and would have to rebuild the history from the
-  same database anyway.
+  same database anyway. Two things verified end to end (`tests/UsageProof/prove-opencode-openclaw.sh`):
+  - OpenCode prices a subscription session from its table just as Claude Code does, so its cost
+    counts only for `api`.
+  - OpenCode's database does not record its title-generation request. One `opencode run` made two
+    model requests and recorded one, so OpenCode usage is what OpenCode itself counts, slightly
+    below what the provider sees.
 - **OpenClaw** skips the `.trajectory.jsonl` beside each session file. It repeats the same
   responses and would double every count.
 - **Cursor** is not recorded. The CLI cannot be run without a real API key ("The provided API key

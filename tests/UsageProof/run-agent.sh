@@ -8,7 +8,9 @@
 # (/etc/codex, /etc/opencode, the OpenClaw exec policy) are not part of this path and are left out.
 # Everything a session pod keeps under /tmp or on port 7681 is moved, so the rig cannot touch the
 # pod it runs in (its own server, watcher and files).
-# usage: run-agent.sh <codex|opencode|openclaw> <wt> <home> <session-id> <hub> <model-url> <cli-bin-dir> [prompt]
+# usage: [MODE=interactive] [TIMEOUT=s] run-agent.sh <codex|opencode|openclaw> <wt> <home> <session-id> <hub> <model-url> <cli-bin-dir> [prompt]
+# MODE=interactive runs the TUI with the prompt auto-submitted; it reports on the 30-second
+# persistence tick while running, and TIMEOUT ends it.
 set -eu
 AGENT=$1; WT=$2; H=$3; SID=$4; HUB=$5; MODEL=$6; BIN=$7; PROMPT=${8:-say hi}
 mkdir -p "$H/work" "$H/files"
@@ -57,8 +59,8 @@ cd "$H/work"
 env -i PATH="$BIN:/usr/bin:/bin:/usr/local/bin" HOME="$H" "${EXTRA[@]}" \
   NODE_PATH="$WT/agent-runtime/session-agent/node_modules" \
   AGENTHUB_DRIVER="$WT/agent-runtime/$AGENT/driver.js" AGENTHUB_SESSION_ID="$SID" \
-  AGENTHUB_MODE=autonomous AGENTHUB_PROMPT="$PROMPT" AGENTHUB_WORKDIR="$H/work" \
+  AGENTHUB_MODE="${MODE:-autonomous}" AGENTHUB_PROMPT="$PROMPT" AGENTHUB_WORKDIR="$H/work" \
   AGENTHUB_CALLBACK_URL="$HUB/internal/sessions/$SID" AGENTHUB_CALLBACK_TOKEN="tok-$SID" \
   AGENTHUB_PORT=17681 AGENTHUB_FILE_ROOT="$H/files" AGENTHUB_AUTH_WATCHER_PIDFILE="$H/no-watcher.pid" \
   AGENTHUB_MCP_CONFIG= AGENTHUB_STATE_RESTORED=0 \
-  timeout 240 node "$WT/agent-runtime/common/server.js"
+  timeout "${TIMEOUT:-240}" node "$WT/agent-runtime/common/server.js"
