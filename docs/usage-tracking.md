@@ -27,7 +27,8 @@ Now `UsageBilling` classifies each report:
 | `Subscription` | `subscription` | no |
 | `CustomEndpoint` | `custom` | no (self-hosted, no provider bill) |
 | `Auto`, unattended (`autonomous`/`scheduled`) | `api` if an API key is stored, else `subscription` | if `api` |
-| `Auto`, interactive | `unknown` | no |
+| `Auto`, interactive, key and login stored | `unknown` | no |
+| `Auto`, interactive, only a key stored | `api` | yes |
 
 The `Auto` rows come from the pinned CLI, not from guesswork:
 
@@ -35,12 +36,24 @@ The `Auto` rows come from the pinned CLI, not from guesswork:
 - The interactive TUI with both asks *"Detected a custom API key in your environment. Do you want
   to use this API key?"* with **No** preselected (`proofs/258/claude-auto-tui.mjs`). The person's
   answer decides, and the hub never sees it. Such a session is `unknown`: its tokens show, it does
-  not count against the API budget, and its row says the CLI chose.
+  not count against the API budget, and its row says the CLI chose. With only a key stored, the
+  key is the one way the session can work, so it is `api`.
 
-The pod-spec factory computes the label from what it mounted (`UsageBilling.ForPod`) and passes it
-as the OTLP resource attribute `agenthub.billing`. The hub uses that label **only for Auto**. For
-the other modes the session record decides, because the OTLP endpoint is unauthenticated and a
-label in the payload must not be able to move API-key spend out of the budget.
+**The decision is hub-side state only.** Each start computes the classification from what the
+hub mounts (`UsageBilling.ForPod`) and stores it on the session row (`sessions.usage_billing`).
+Ingest reads the auth mode and that column, nothing else. The first version of this change sent
+the label to the pod as an OTLP resource attribute and read it back from the metrics. That was
+rejected in review: the OTLP endpoint is unauthenticated, and anything in its payload — a
+`billing` attribute, a `user.id` — is whatever the sender wrote. A test posts a payload that
+claims a subscription and a different owner for an API-key session; neither changes the result.
+The pod cannot change the column either. Its service account has no bindings and no mounted
+token, which `tests/helm/agent-service-account.ps1` checks against the rendered chart with every
+RBAC-adding feature switched on.
+
+**The start gate uses the same classification.** `UsageLimitService.EnsureCanStartAsync` takes
+the billing `ForPod` computes for the start, on create, resume, runtime update and restart alike.
+So an unattended Auto run with a stored key is refused over budget, even with a login stored.
+Before, a stored login let it through, while the CLI then billed the key.
 
 **Alternative considered:** read the credential the CLI actually used from its own state (Claude
 keeps approved and rejected key suffixes in `~/.claude.json`). Rejected: that is key material, and
@@ -72,9 +85,3 @@ month rolls over.
   shows them.
 - Rows that are `custom` or `unknown` show a pill and no money. An `unknown` row's tooltip names
   the cost the CLI reported, so it can still be found.
-
-## Not changed here
-
-The start-time budget gate (`UsageLimitService.EnsureCanStartAsync`) still lets an `Auto` session
-start when a login is stored. An unattended Auto run with a key stored bills the API (see above),
-so over budget such a run is not blocked. Its usage is now recorded as `api` and does count.

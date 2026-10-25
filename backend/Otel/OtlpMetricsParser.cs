@@ -15,8 +15,6 @@ public sealed class SessionUsageDelta
     public required string SessionId { get; init; }
     /// <summary>Owner from the telemetry (resource/metric attribute <c>user.id</c>); may be null.</summary>
     public string? UserId { get; set; }
-    /// <summary>The pod's <c>agenthub.billing</c> label; only consulted for Auto sessions (UsageBilling).</summary>
-    public string? Billing { get; set; }
     public long InputTokens { get; set; }
     public long OutputTokens { get; set; }
     public long CacheReadTokens { get; set; }
@@ -64,7 +62,6 @@ public static class OtlpMetricsParser
     // "agenthub.*" keys and read those first, falling back to the standard keys.
     private static readonly string[] SessionIdKeys = { "agenthub.session_id", "session.id" };
     private static readonly string[] UserIdKeys = { "agenthub.owner", "user.id" };
-    private const string BillingKey = "agenthub.billing";
     private const string TypeKey = "type";
     private const string ModelKey = "model";
 
@@ -91,7 +88,7 @@ public static class OtlpMetricsParser
 
     private static void ParseResourceMetrics(ReadOnlySpan<byte> data, Dictionary<string, SessionUsageDelta> acc)
     {
-        string? resSession = null, resUser = null, resBilling = null;
+        string? resSession = null, resUser = null;
         // First pass collects the scope_metrics slices; the resource attributes may come before
         // or after, so we buffer the metric payloads and resolve them once the resource is known.
         var scopeSlices = new List<byte[]>();
@@ -103,7 +100,6 @@ public static class OtlpMetricsParser
                 var attrs = ParseResourceAttributes(reader.ReadLengthDelimited());
                 resSession = Pick(attrs, SessionIdKeys);
                 resUser = Pick(attrs, UserIdKeys);
-                resBilling = attrs.GetValueOrDefault(BillingKey);
             }
             else if (field == 2 && wire == ProtobufReader.WireLen) // scope_metrics
             {
@@ -117,8 +113,6 @@ public static class OtlpMetricsParser
 
         foreach (var slice in scopeSlices)
             ParseScopeMetrics(slice, resSession, resUser, acc);
-        if (resSession is not null && resBilling is not null && acc.TryGetValue(resSession, out var forSession))
-            forSession.Billing = resBilling;
     }
 
     private static void ParseScopeMetrics(ReadOnlySpan<byte> data, string? resSession, string? resUser,

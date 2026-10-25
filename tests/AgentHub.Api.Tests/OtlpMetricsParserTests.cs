@@ -38,18 +38,6 @@ public class OtlpMetricsParserTests
     }
 
     [Fact]
-    public void ReadsThePodsBillingLabel_FromTheResource()
-    {
-        var payload = new OtlpBuilder()
-            .Resource(("agenthub.session_id", "sess-1"), ("agenthub.billing", "api"))
-            .TokenPoint("input", 100)
-            .CostPoint(0.5)
-            .Build();
-
-        Assert.Equal("api", Assert.Single(OtlpMetricsParser.Parse(payload)).Billing);
-    }
-
-    [Fact]
     public void DataPointAttributes_OverrideResourceSession()
     {
         // session.id absent on the resource, present on the data point (as Claude Code sends it).
@@ -137,7 +125,7 @@ public class OtlpMetricsParserTests
     // ----------------------------------------------------------------- test-only OTLP encoder
 
     /// <summary>Independent protobuf/OTLP encoder for building test payloads.</summary>
-    private sealed class OtlpBuilder
+    internal sealed class OtlpBuilder
     {
         private readonly List<byte[]> _resourceMetrics = new();
         private byte[]? _currentResource;

@@ -85,7 +85,7 @@ async function saveLimit() {
         <div class="card stat" data-subscription-usage>
           <div class="stat-label">Subscription usage</div>
           <div class="stat-value">{{ formatTokens(summary?.subscriptionTokens) }} <span class="unit">tokens</span></div>
-          <div class="stat-sub">{{ summary?.subscriptionSessionCount ?? 0 }} sessions<template v-if="summary?.subscriptionTurns"> · {{ summary.subscriptionTurns }} turns</template> · counts against plan limits, not money</div>
+          <div class="stat-sub">{{ summary?.subscriptionSessionCount ?? 0 }} sessions<template v-if="summary?.subscriptionTurns"> · {{ summary.subscriptionTurns }} turn{{ summary.subscriptionTurns === 1 ? '' : 's' }}</template> · counts against plan limits, not money</div>
         </div>
         <div class="card stat">
           <div class="stat-label">Tokens</div>
