@@ -278,6 +278,20 @@ the kubelet, copying the session's secret into the directory.
   without a `secrets` part, exactly like a token restricted before secrets existed.
 - **The share dialog says** that anyone with terminal input can read the session's secrets: the
   masking covers what is stored and relayed, not a live terminal.
+- **Each stored secret shows where it is used (#254)**: the projects whose selection holds it, and
+  the owner's sessions that receive it, each marked with how it got there: via a project, selected
+  for it, granted directly, inherited from its parent, or requested by the agent. "Passed to child
+  sessions" is added for a grant marked for inheritance. A session name opens the session; a project
+  name opens that project's secret selection, since a project has no page of its own. The armed
+  Remove button says how many sessions lose the secret. The list comes from what the hub already
+  reports: `effectiveSecrets` of each session (with provenance) and `secretIds` of each project.
+  - *Rejected: a usage endpoint of its own.* It would be a second reading of the selection,
+    ceiling and inheritance rules, and the one place it could disagree with what the session view
+    shows. Sessions shared with the owner by someone else are left out; they hold their own
+    owner's secrets.
+  - Verified in real Chromium against the real backend (`tests/SecretUsageProof`). Every kind of
+    use was produced through the real endpoints, the child through the agent's own spawn endpoint
+    and the request through `secret-requests`.
 
 Verified in real Chromium against the real backend (auth-off development mode, real Postgres, the
 API server rig): a file secret typed in Settings reached the `sessionsecrets` copy of a session

@@ -4,8 +4,9 @@
 // delivery and description, and a stored value is never sent back to fill a field.
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { api } from '../api.js'
-import { DELIVERIES, deliveryLabel, secretPlace } from '../lib/secrets.js'
+import { DELIVERIES, deliveryLabel, provenanceLabel, secretPlace, secretUsage, sessionHref } from '../lib/secrets.js'
 import SecretRestartNote from './SecretRestartNote.vue'
+import ProjectSecretsDialog from './ProjectSecretsDialog.vue'
 
 const props = defineProps({
   // A form to open on arrival — name, delivery and purpose an agent asked for; the value is
@@ -30,15 +31,46 @@ const answering = ref(null)
 const granted = ref(null)
 const restartArmed = ref(false)
 const restartBusy = ref(false)
-// Sessions whose running process still has variables from before a change made here (#255). Read
-// after every save and removal, not on arrival: before a change on this page there is nothing
-// this page did that needs a restart.
-const pendingRestart = ref([])
-async function loadPendingRestart() {
-  try {
-    pendingRestart.value = ((await api.listSessions()) || []).filter(s => s.secretsPendingRestart
-      && !(granted.value?.restartRequired && granted.value.sessionId === s.id))
-  } catch { pendingRestart.value = [] }
+// The owner's sessions and projects: where each secret is used (#254), and which running sessions
+// still have variables from before a change made here (#255). Re-read after every save and
+// removal, since both answers change with it.
+const sessions = ref([])
+const projects = ref([])
+const changedHere = ref(false)
+async function loadReach() {
+  // Each on its own: a failed project list must not also hide which sessions need a restart.
+  // Either failing leaves the list shown without that part of its reach.
+  const quietly = (read, use) => Promise.resolve().then(read).then(use, () => {})
+  await Promise.all([
+    // A session someone shared with the owner holds its own owner's secrets, not these.
+    quietly(() => api.listSessions(), listed => { sessions.value = (listed || []).filter(s => !s.sharedBy) }),
+    quietly(() => api.listProjects(), list => { projects.value = list || [] })
+  ])
+}
+// Only after a change on this page: before one, nothing this page did needs a restart.
+const pendingRestart = computed(() => !changedHere.value ? [] : sessions.value.filter(s => s.secretsPendingRestart
+  && !(granted.value?.restartRequired && granted.value.sessionId === s.id)))
+const usage = computed(() => Object.fromEntries(secrets.value.map(secret =>
+  [secret.id, secretUsage(secret.id, sessions.value, projects.value)])))
+async function afterChange() {
+  changedHere.value = true
+  await loadReach()
+}
+// Session links stay inside the app: App.vue reads the address on popstate.
+function openSession(id) {
+  window.history.pushState({}, '', sessionHref(id))
+  window.dispatchEvent(new PopStateEvent('popstate'))
+}
+// A project has no page of its own; its secret selection is what a link from here is for.
+const projectDialog = ref(null)
+// The second click removes it from everything listed under it; the button says how much that is.
+function removeLabel(secret) {
+  const n = usage.value[secret.id]?.sessions.length || 0
+  return n ? `Really remove? ${n} session${n === 1 ? '' : 's'} lose${n === 1 ? 's' : ''} it` : 'Really remove?'
+}
+async function projectSaved() {
+  projectDialog.value = null
+  await afterChange()
 }
 
 const editing = computed(() => !!draft.value?.existing)
@@ -145,7 +177,7 @@ async function save() {
       restartArmed.value = false
       dropRequestFromUrl()
     }
-    await Promise.all([load(), loadRequests(), loadPendingRestart()])
+    await Promise.all([load(), loadRequests(), afterChange()])
     emit('saved', saved)
   } catch (e) {
     error.value = String(e.message || e)
@@ -157,7 +189,7 @@ async function save() {
 async function remove(secret) {
   if (confirming.value !== secret.id) { confirming.value = secret.id; return }
   confirming.value = ''
-  try { await api.deleteSecret(secret.id); await Promise.all([load(), loadPendingRestart()]) }
+  try { await api.deleteSecret(secret.id); await Promise.all([load(), afterChange()]) }
   catch (e) { loadError.value = String(e.message || e) }
 }
 
@@ -176,7 +208,7 @@ function dropRequestFromUrl() {
 }
 
 onMounted(async () => {
-  await Promise.all([load(), loadRequests()])
+  await Promise.all([load(), loadRequests(), loadReach()])
   const requested = requestFromUrl()
   if (requested) {
     let request = requests.value.find(r => r.id === requested)
@@ -214,7 +246,7 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
     </section>
 
     <SecretRestartNote v-for="session in pendingRestart" :key="session.id" :session="session" named
-      @restarted="loadPendingRestart" />
+      @restarted="loadReach" />
 
     <div v-if="granted" class="granted" data-secret-granted>
       <b>{{ granted.name }}</b> is now available to “{{ granted.sessionTitle || granted.sessionId }}”
@@ -239,10 +271,27 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
             <button type="button" data-secret-edit @click="open(secret)">Change</button>
             <button v-if="confirming === secret.id" type="button" class="ghost" data-secret-keep @click="confirming = ''">Keep</button>
             <button type="button" class="del" :class="{ armed: confirming === secret.id }" data-secret-remove
-              :aria-label="`Remove the secret ${secret.name}`" @click="remove(secret)">{{ confirming === secret.id ? 'Really remove?' : 'Remove' }}</button>
+              :aria-label="`Remove the secret ${secret.name}`" @click="remove(secret)">{{ confirming === secret.id ? removeLabel(secret) : 'Remove' }}</button>
           </span>
+          <div class="reach" :data-secret-usage="secret.id">
+            <template v-if="usage[secret.id]?.projects.length || usage[secret.id]?.sessions.length">
+              <span v-if="usage[secret.id].projects.length" class="group">Projects:
+                <template v-for="(project, i) in usage[secret.id].projects" :key="project.id"><template v-if="i">, </template><button
+                  type="button" class="link" :data-usage-project="project.id" :title="`Change which secrets “${project.name}” selects`"
+                  @click="projectDialog = project">{{ project.name }}</button></template>
+              </span>
+              <span v-if="usage[secret.id].sessions.length" class="group">Sessions:
+                <template v-for="(use, i) in usage[secret.id].sessions" :key="use.session.id"><template v-if="i">, </template><a
+                  :href="sessionHref(use.session.id)" :data-usage-session="use.session.id" :data-usage-provenance="use.provenance"
+                  @click.prevent="openSession(use.session.id)">{{ use.session.title || use.session.id }}</a> <span
+                  class="how">({{ provenanceLabel(use, projects) }}<template v-if="use.inheritToChildren && use.provenance !== 'project'">, passed to child sessions</template>)</span></template>
+              </span>
+            </template>
+            <span v-else class="unused" data-secret-unused>Not used by any project or session.</span>
+          </div>
         </li>
       </ul>
+      <ProjectSecretsDialog v-if="projectDialog" :project="projectDialog" @close="projectDialog = null" @saved="projectSaved" />
       <p v-if="loadError" class="err" data-secret-load-error>{{ loadError }}</p>
 
       <div v-if="draft" class="form" data-secret-form>
@@ -303,6 +352,13 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
 .pill { padding: 1px 6px; border: 1px solid var(--border-2); border-radius: 4px; color: var(--muted-3); font-size: 11px; font-weight: 700; }
 .desc { color: var(--muted-2); font-size: 12px; min-width: 0; overflow-wrap: anywhere; }
 .id { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.reach { flex-basis: 100%; color: var(--muted-3); font-size: 12px; line-height: 1.6; }
+.reach .group + .group { margin-left: 12px; }
+.reach a, .reach .link { color: var(--accent); text-decoration: none; }
+.reach a:hover, .reach .link:hover { text-decoration: underline; }
+.reach .link { width: auto; padding: 0; border: 0; background: none; font: inherit; cursor: pointer; }
+.reach .how { color: var(--faint); }
+.unused { color: var(--faint); }
 .namesake { margin: 0 0 10px; color: var(--warn); font-size: 12px; line-height: 1.5; }
 .namesake code { font-family: var(--mono); font-size: 11px; }
 .actions { margin-left: auto; display: flex; gap: 6px; }
