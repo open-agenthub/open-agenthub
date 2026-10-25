@@ -3,6 +3,7 @@
 // Read the live CLI screen, including soft-wrapped addresses. Prose containing a URL alone
 // must never become an actionable sign-in card (docs/proofs/242-cli-sign-in.md).
 function detectSignIn(lines) {
+  if (signInFinished(lines)) return null;
   const rows = (lines || []).map(line => String(line ?? '').trim());
   const text = rows.join('\n');
   const outcome = (status, retry = false, confirm = false) => ({ kind: 'signin', mode: 'outcome', status, retry, confirm, options: [] });
@@ -41,4 +42,19 @@ function detectSignIn(lines) {
   return { kind: 'signin', mode, status: 'waiting', url, code, invalid: mode === 'credential' && /Expected token starting|└\s+Required/.test(text), options: [] };
 }
 
-module.exports = { detectSignIn };
+// Login wrappers can leave their output above the new TUI. A composer below every auth
+// prompt proves that the CLI moved on; a composer above a newly opened login dialog does not.
+function signInFinished(lines) {
+  const rows = (lines || []).map(line => String(line ?? '').trim());
+  const lastAuth = rows.findLastIndex(row => /Select login method|Starting login process|Follow these steps to sign in|Paste code here|Enter this one-time code|Enter code:|Waiting for (?:browser authentication|authorization)|Complete authorization|Enter your API key|Paste .*setup-token|Token provider|Token method|OAuth error:|Press Enter to retry|Login successful\. Press Enter|^Successfully logged in$/.test(row));
+  const lastPrompt = rows.findLastIndex(row => /^❯\s*$/.test(row));
+  if (lastPrompt > lastAuth) return true;
+  const header = rows.findLastIndex(row => />_ .*\bCodex\b/.test(row));
+  const composer = rows.findLastIndex(row => /^›(?:\s|$)/.test(row) && !/^›\s*\d+[.)]/.test(row));
+  if (header >= 0 && composer > header && composer > lastAuth) return true;
+  const input = rows.findLastIndex(row => /^┃\s+Ask anything(?:…)?(?:\s|$)/.test(row));
+  const footer = rows.findLastIndex(row => /\btab\s+agents\s+ctrl\+p\s+commands\b/.test(row));
+  return input > lastAuth && footer > input;
+}
+
+module.exports = { detectSignIn, signInFinished };

@@ -1,5 +1,5 @@
 'use strict';
-const { detectSignIn } = require('./cli-sign-in');
+const { detectSignIn, signInFinished } = require('./cli-sign-in');
 
 // Export a separate buffer: whole auth screens are omitted so wrapped URLs, partial codes,
 // and redraws cannot slip into an upload between terminal writes.
@@ -31,7 +31,7 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
       const wasActive = active;
       // TUIs clear and redraw a dialog in separate writes, especially after a resize. A blank
       // intermediate frame is not the end of sign-in: release only at a real CLI prompt.
-      const ready = rows.filter(row => row.trim()).slice(-10).some(row => /^\s*[❯›>]\s*(?:Ask (?:Codex|anything).*|)$/.test(row)) || /local ready/.test(rows.filter(row => row.trim()).slice(-10).join('\n'));
+      const ready = signInFinished(rows);
       active = Boolean(signIn || (!ready && (intro || wasActive)));
       if (active) {
         if (!wasActive) revision += 1;

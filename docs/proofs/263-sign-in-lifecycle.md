@@ -19,7 +19,23 @@ Initial unchanged-main Codex result: the device screen appeared and the ordinary
 ready, but persistence was still withheld and no state archive was uploaded. None of the observed
 values appeared in non-excluded native state or text exports. This proves an end-of-sign-in
 recognition problem, not authorization data entering chat. File scrubbing is not the remedy for
-this result. OpenCode and the precise screen condition are still being measured.
+this result. OpenCode reproduced the same withholding with its native ready screen. Its entered
+credential appeared only in the deliberately excluded auth file, not exported native state.
+
+Codex retained "Successfully logged in" above its new TUI, so the old success outcome overrode
+the native composer. OpenCode's framed "Ask anything" composer was not recognized by the old
+privacy prompt heuristic. The runtime and frontend now share a structural completion check:
+a native composer must follow the visible authentication prompts. A newer login dialog below
+an old composer stays active; blank redraws do not end login.
+
+| Actual wrapper | Before: archives / withheld | After: archives / withheld | Auth in native export files or uploaded archive/text |
+| --- | --- | --- | --- |
+| Codex, local fake device identity | 0 / true | 1 / false | none observed |
+| OpenCode, synthetic credential accepted by CLI | 0 / true | 1 / false | none observed; credential exists only in excluded auth.json |
+
+The actual common server, actual drivers and actual login scripts are used in both runs.
+This probe establishes post-login persistence, not a real model response or deployed pod resume.
+The latter are explicit owner checks below.
 
 ## Owner checks requiring real accounts
 
