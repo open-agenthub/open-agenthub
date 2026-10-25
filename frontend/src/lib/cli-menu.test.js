@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { detectMenu, keysForAnswer, keysForOption, sameMenu } from './cli-menu.js'
+import { detectMenu, keysForAnswer, keysForOption, keysForStep, sameMenu } from './cli-menu.js'
 
 // Screens as Claude Code 2.1.287 drew them at 120x40, rendered by xterm 5.5 (the frontend's
 // version) from the real CLI's output. Option texts are shortened to neutral labels; layout,
@@ -91,6 +91,116 @@ const multiSelect = [
   '  3. [ ] Type something', '     Next',
   rule.slice(0, 90), '  4. Chat about this', 'Enter to select · Tab/Arrow keys to navigate · Esc to cancel'
 ]
+
+// #284: the question screens of the other pinned CLIs and Claude Code's multi-select step, as
+// rendered by xterm 5.5 from the real CLIs (Codex 0.160.0 in Plan mode answering request_user_input,
+// OpenCode 1.18.35 answering its question tool), rows and blank rows as the screen had them.
+const codexQuestion = [
+  "  Question 1/1 (1 unanswered)",
+  "  Before I refactor the upload path I need to know how you want failures handled. The current code retries three",
+  "  times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane",
+  "  sometimes shows files that never reached storage. Which behaviour do you want?",
+  "",
+  "  › 1. Retry with backoff (Recommended)  Retry five times with exponential backoff, then surface the error",
+  "    2. Fail fast                         Report the first error to the user immediately",
+  "    3. None of the above                 Optionally, add details in notes (tab)",
+  "",
+  "  tab to add notes | enter to submit answer | esc to interrupt"
+]
+const openCodeQuestion = [
+  "  ┃  Before I refactor the upload path I need to know how you want failures handled. The current code retries",
+  "  ┃  three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why",
+  "  ┃  the Files pane sometimes shows files that never reached storage. Which behaviour do you want?",
+  "  ┃",
+  "  ┃  1. Retry with backoff",
+  "  ┃     Retry five times with exponential backoff, then surface the error",
+  "  ┃  2. Fail fast",
+  "  ┃     Report the first error to the user immediately",
+  "  ┃  3. Type your own answer",
+  "  ┃",
+  "  ┃  ↑↓ select  enter submit  esc dismiss"
+]
+const openCodeMulti = [
+  "  ┃  Which checks should run before every push? (select all that apply)",
+  "  ┃",
+  "  ┃  1. [✓] Unit tests",
+  "  ┃     The fast suite",
+  "  ┃  2. [ ] Lint",
+  "  ┃     ESLint and dotnet format",
+  "  ┃  3. [ ] Type your own answer",
+  "  ┃",
+  "  ┃  ⇆ tab  ↑↓ select  enter toggle  esc dismiss"
+]
+const openCodeReview = [
+  "  ┃   Checks   Confirm",
+  "  ┃",
+  "  ┃  Review",
+  "  ┃",
+  "  ┃  Checks: Unit tests, Lint",
+  "  ┃",
+  "  ┃  ⇆ tab  enter submit  esc dismiss"
+]
+const claudeMultiOnSubmit = [
+  "←  ☒ Checks  ✔ Submit  →",
+  "",
+  "Which checks should run before every push?",
+  "",
+  "  1. [✔] Unit tests",
+  "         The fast suite",
+  "  2. [ ] Lint",
+  "         ESLint and dotnet format",
+  "  3. [ ] Type something",
+  "❯    Submit",
+  "────────────────────────────────────────────────────────────────────────────────────────────────────",
+  "  4. Chat about this",
+  "",
+  "Enter to select · ↑/↓ to navigate · Esc to cancel"
+]
+const longQuestion = 'Before I refactor the upload path I need to know how you want failures handled. The current code retries three '
+  + 'times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane '
+  + 'sometimes shows files that never reached storage. Which behaviour do you want?'
+
+describe('question screens of Codex, OpenCode and Claude multi-select (#284)', () => {
+  it('reads Codex\'s question whole, and its "None of the above" as a note opened with Tab', () => {
+    const menu = detectMenu(codexQuestion)
+    expect(menu.title).toBe(longQuestion)
+    expect(menu.options.map(option => [option.number, option.selected, option.freeText ?? false])).toEqual([[1, true, false], [2, false, false], [3, false, true]])
+    expect(menu.options[2].opensWith).toBe('\t')
+    expect(keysForAnswer(menu, 3, 'Retry 3 times\nthen tell me')).toEqual(['\x1b[B', '\x1b[B', '\t', '\x1b[200~Retry 3 times\nthen tell me\x1b[201~', '\r'])
+  })
+
+  it('reads OpenCode\'s framed question, which shows no cursor, and answers it by digit', () => {
+    const menu = detectMenu(openCodeQuestion)
+    expect(menu.kind).toBe('choice')
+    expect(menu.title.replace(/ +/g, ' ')).toBe(longQuestion.replace(/ +/g, ' '))
+    expect(menu.options.map(option => option.label)).toEqual(['Retry with backoff', 'Fail fast', 'Type your own answer'])
+    expect(menu.options.some(option => option.selected)).toBe(false)
+    expect(keysForOption(menu, 2)).toEqual(['2'])
+    expect(keysForAnswer(menu, 3, 'my own words')).toEqual(['3', '\x1b[200~my own words\x1b[201~', '\r'])
+  })
+
+  it('offers OpenCode\'s multi-select Tab step and then its review to submit', () => {
+    const menu = detectMenu(openCodeMulti)
+    expect(menu.title).toBe('Which checks should run before every push? (select all that apply)')
+    expect(menu.step).toEqual({ label: 'Next', via: 'tab' })
+    expect(keysForOption(menu, 2)).toEqual(['2'])
+    expect(keysForAnswer(menu, 3, 'e2e too')).toEqual(['3', '\x1b[200~e2e too\x1b[201~', '\r'])
+    expect(keysForStep(menu)).toEqual(['\t'])
+    expect(detectMenu(openCodeReview)).toEqual({ kind: 'confirm', title: 'Review your answers', options: [], details: ['Checks: Unit tests, Lint'] })
+  })
+
+  it('counts Claude Code\'s Submit row when moving, wherever the cursor is', () => {
+    const menu = detectMenu(claudeMultiOnSubmit)
+    expect(menu.step).toEqual({ label: 'Submit', selected: true, after: 3 })
+    expect(keysForStep(menu)).toEqual(['\r'])
+    expect(keysForOption(menu, 1)).toEqual(['\x1b[A', '\x1b[A', '\x1b[A', '\r'])
+    expect(keysForOption(menu, 4)).toEqual(['\x1b[B', '\r'])
+    const onFirst = { ...menu, step: { ...menu.step, selected: false }, options: menu.options.map(option => ({ ...option, selected: option.number === 1 })) }
+    expect(keysForStep(onFirst)).toEqual(['\x1b[B', '\x1b[B', '\x1b[B', '\r'])
+    // Before #284 this was three arrows, which stopped on Submit instead of "4. Chat about this".
+    expect(keysForOption(onFirst, 4)).toEqual(['\x1b[B', '\x1b[B', '\x1b[B', '\x1b[B', '\r'])
+  })
+})
 
 describe('detectMenu', () => {
   it('takes the whole of a long question the CLI framed and wrapped, and marks the free-text entry', () => {

@@ -143,6 +143,35 @@ AskUserQuestion, and in Chromium through the real session agent: the notice show
 three-line question, and the text typed into its field arrived in the CLI as the answer (the
 tool result the model received), line break included.
 
+**The other CLIs' questions and multi-select lists (#284).** Measured with the pinned CLIs, each
+asking its own question tool:
+
+- Codex 0.160.0 offers `request_user_input` in Plan mode only. In Default mode it answers the
+  model "request_user_input is unavailable in Default mode". Its screen ends in *None of the
+  above · Optionally, add details in notes (tab)*: the free text is a note, so the notice moves
+  there, presses Tab, pastes and presses Enter. The model receives the option and `user_note: …`.
+- OpenCode 1.18.35's `question` tool draws its dialog inside a `┃` frame, marks the highlighted
+  row by colour only and ends in *↑↓ select  enter submit  esc dismiss*. None of that was
+  recognised, so no notice appeared. The frame is now read past and the footer counts. Without a
+  visible cursor the notice cannot know where the highlight is, so it answers with the option's
+  digit, which OpenCode takes as picking it (or ticking it, or opening *Type your own answer*'s
+  field). Arrows would have counted from a guessed row.
+- Claude Code ends a multi-select list with an unnumbered *Submit* row (*Next* while more
+  questions follow), on which the cursor can rest. The notice offers it as a button and counts it
+  when moving. Before, the arrows to *4. Chat about this* stopped on that row instead. OpenCode
+  moves on from a multi-select question with Tab and asks for Enter on a review of the answers,
+  which the notice shows with *Submit answers*.
+
+Neither CLI shows a question as an approval. Codex runs PreToolUse and no PermissionRequest for
+`request_user_input`, and its policy hook files nothing in an interactive session. OpenCode's gate
+leaves `question` out. Both were checked by logging the hook payloads of the real CLIs. The
+Workspace shows these questions as *Waiting for your answer* because the notice is up.
+
+Verified in Chromium through this repository's session agent with each real CLI: a long question
+shown whole, a free-text answer with a line break, multi-select ticks with the step and review, all
+arriving at the model as the tool's result. Against main's frontend the OpenCode question showed
+no notice, and the Claude multi-select list had no way to submit.
+
 While the CLI shows one of these screens, the composer refuses to send and keeps the draft:
 its Enter would pick whatever option is highlighted, or submit the text as a login code. That
 happened in testing: a `/login` sent into an open login menu chose the first option.
@@ -233,7 +262,11 @@ that means differs by where the message waits:
   *Send now* types the message into the running prompt, and the CLI then treats it like
   anything typed there: Codex 0.160.0 (with its managed hooks) queued it behind a text-only turn
   and sent it when the turn ended, while *Interrupt and send* reached the model 0.8 s after the
-  push. Only the interrupt is immediate whatever the turn is doing.
+  push. Only the interrupt is immediate whatever the turn is doing. The same held a click away
+  in Chromium, with the session agent under this repository's `/etc/codex` requirements (#284).
+  *Interrupt and send* reached the model 0.76 s after the click, and both pushes were confirmed
+  `pty`. Without the managed hooks the pod cannot see the typed message submitted and answers
+  `not_submitted`; the message then stays in the list although the model has it.
 - A composer message is already in the CLI's own queue, so it offers only *Interrupt and send*.
   Pushing its text as well would deliver it twice. The button sends the driver's interruption key
   (Escape; two for OpenCode), not the composer's Ctrl+C. Measured with the pinned CLIs and a model

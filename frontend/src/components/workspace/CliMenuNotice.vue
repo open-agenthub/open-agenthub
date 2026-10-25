@@ -5,8 +5,10 @@ import { ref } from 'vue'
 // the keys a person would press in the terminal; a prompt for typed input points at the
 // terminal drawer, which the viewer can open when needed. An entry that takes typed text instead
 // of being picked ("Type something.", #250) is a text field whose content is sent as the answer.
+// A multi-select list ticks its options one by one and moves on with its own step button
+// ("Submit", "Next"); OpenCode then shows a review of the answers to submit (#284).
 defineProps({ menu: Object, canAnswer: Boolean })
-const emit = defineEmits(['choose', 'answer', 'cancel', 'open-terminal'])
+const emit = defineEmits(['choose', 'answer', 'step', 'confirm', 'cancel', 'open-terminal'])
 const drafts = ref({})
 
 function submit(number) {
@@ -26,7 +28,7 @@ function onKeydown(event, number) {
   <section class="cli-menu" role="status" aria-live="polite" data-cli-menu>
     <p class="cli-menu-head">
       <span class="dot" aria-hidden="true"></span>
-      <strong>{{ menu.kind === 'choice' ? 'The agent is showing a menu' : 'The agent is waiting for input' }}</strong>
+      <strong>{{ menu.kind === 'choice' ? 'The agent is showing a menu' : menu.kind === 'confirm' ? 'The agent is waiting for you to submit' : 'The agent is waiting for input' }}</strong>
     </p>
     <p v-if="menu.title" class="cli-menu-title" data-cli-title>{{ menu.title }}</p>
     <div v-if="menu.kind === 'choice' && canAnswer" class="cli-menu-options">
@@ -34,7 +36,7 @@ function onKeydown(event, number) {
         <form v-if="option.freeText" class="free-text" :class="{ current: option.selected }" :data-cli-free-text="option.number"
           @submit.prevent="submit(option.number)">
           <span class="number">{{ option.number }}</span>
-          <textarea v-model="drafts[option.number]" rows="1" :placeholder="option.label.replace(/^\[[ ✔]\]\s*/, '')"
+          <textarea v-model="drafts[option.number]" rows="1" :placeholder="option.label.replace(/^\[[ ✔✓]\]\s*/, '').replace(/ · .*$/, '')"
             :aria-label="`Answer in your own words (option ${option.number})`" @keydown="onKeydown($event, option.number)"></textarea>
           <button type="submit" class="primary" :disabled="!drafts[option.number]?.trim()">Send</button>
         </form>
@@ -43,11 +45,18 @@ function onKeydown(event, number) {
           <span class="number">{{ option.number }}</span>{{ option.label }}
         </button>
       </template>
+      <button v-if="menu.step" type="button" class="step primary" :class="{ current: menu.step.selected }" data-cli-step
+        @click="$emit('step')">{{ menu.step.label }} →</button>
+    </div>
+    <div v-if="menu.kind === 'confirm'" class="cli-menu-options" data-cli-confirm>
+      <p v-for="(line, index) in menu.details || []" :key="index" class="detail">{{ line }}</p>
+      <button v-if="canAnswer" type="button" class="step primary" data-cli-submit @click="$emit('confirm')">Submit answers</button>
     </div>
     <p class="cli-menu-hint">
-      {{ menu.kind !== 'choice' ? 'Type the answer in the agent terminal.'
-        : menu.partial ? 'The terminal shows only part of the list; the rest is in the agent terminal.'
-          : 'Choose here or in the agent terminal.' }}
+      {{ menu.kind === 'confirm' ? 'Submit here or in the agent terminal.'
+        : menu.kind !== 'choice' ? 'Type the answer in the agent terminal.'
+          : menu.partial ? 'The terminal shows only part of the list; the rest is in the agent terminal.'
+            : menu.step ? `Tick what applies, then ${menu.step.label}.` : 'Choose here or in the agent terminal.' }}
       <button type="button" class="link" data-cli-open-terminal @click="$emit('open-terminal')">Open terminal</button>
       <button v-if="canAnswer" type="button" class="link" data-cli-cancel @click="$emit('cancel')">Cancel (Esc)</button>
     </p>
@@ -64,6 +73,8 @@ function onKeydown(event, number) {
 .cli-menu-options button.current, .free-text.current { border-color: var(--accent); }
 .free-text { display: flex; align-items: flex-start; gap: 8px; padding: 4px 4px 4px 10px; border: 1px solid var(--border); border-radius: 9px; }
 .free-text .number { padding-top: 5px; }
+.cli-menu-options button.step { align-self: flex-start; justify-content: center; }
+.detail { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .free-text textarea { flex: 1; min-width: 0; min-height: 26px; resize: vertical; font: inherit; font-size: 12px; padding: 4px 6px; box-sizing: border-box; }
 .free-text button { flex: none; justify-content: center; }
 .number { color: var(--muted-3); font-variant-numeric: tabular-nums; }
