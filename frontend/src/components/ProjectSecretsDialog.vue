@@ -4,7 +4,7 @@
 // secret away from its running sessions as well.
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api.js'
-import { deliveryLabel, secretConflicts } from '../lib/secrets.js'
+import { deliveryLabel, hasNamesake, secretConflicts } from '../lib/secrets.js'
 import SecretConflictNote from './SecretConflictNote.vue'
 
 const props = defineProps({ project: { type: Object, required: true } })
@@ -55,7 +55,7 @@ async function save() {
         add them under Settings → Secrets.</p>
       <label v-for="secret in secrets" :key="secret.id" class="check">
         <input type="checkbox" :checked="selected.includes(secret.id)" :data-project-secret="secret.id" @change="toggle(secret.id)" />
-        <span><code>{{ secret.name }}</code> <span class="kind">{{ deliveryLabel(secret.delivery) }}</span><span v-if="secret.description" class="dim desc">{{ secret.description }}</span></span>
+        <span><code>{{ secret.name }}</code> <small v-if="hasNamesake(secrets, secret)" class="dim" :data-secret-id="secret.id">{{ secret.id }}</small> <span class="kind">{{ deliveryLabel(secret.delivery) }}</span><span v-if="secret.description" class="dim desc">{{ secret.description }}</span></span>
       </label>
       <SecretConflictNote :secrets="ticked" subject="Every session in this project" />
       <p v-if="error" class="err" data-project-secrets-error>{{ error }}</p>

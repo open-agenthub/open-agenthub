@@ -87,3 +87,8 @@ export function chosenSecrets(stored, selectedIds, grants) {
   const ids = new Set([...(selectedIds || []), ...(grants || []).map(g => g.secretId)])
   return (Array.isArray(stored) ? stored : []).filter(secret => ids.has(secret.id))
 }
+
+/** Whether another secret in `list` lands in the same place; the pickers then show the id, the one thing telling the two rows apart. */
+export function hasNamesake(list, secret) {
+  return (Array.isArray(list) ? list : []).some(other => other.id !== secret.id && other.name === secret.name && other.delivery === secret.delivery)
+}

@@ -8,7 +8,14 @@ namespace AgentHub.Api.Services;
 /// <see cref="ArgumentException"/>, so every edge that already turns a validation error into a
 /// 400 or an MCP <c>invalid_argument</c> passes the message on unchanged.
 /// </summary>
-public sealed class SessionSecretConflictException(string message) : ArgumentException(message);
+public sealed class SessionSecretConflictException(string message) : ArgumentException(message)
+{
+    /// <summary>The code token-authenticated callers get next to the sentence: the stdio MCP server
+    /// answers with backend codes only, never with a message text.</summary>
+    public const string Code = "secret_conflict";
+
+    public object Body => new { code = Code, error = Message };
+}
 
 /// <summary>
 /// Secret names are not unique in the store (#253); what has to be unique is where a secret lands
