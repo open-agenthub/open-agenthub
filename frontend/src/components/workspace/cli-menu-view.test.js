@@ -141,6 +141,28 @@ describe('agent CLI menus in the Workspace', () => {
     expect(field.element.value).toBe('')
   })
 
+  it('moves a multi-select list on with its step button and submits a review (#284)', async () => {
+    const wrapper = view()
+    await flushPromises()
+    mocks.menu({ kind: 'choice', title: 'Which checks?', partial: false, step: { label: 'Submit', selected: false, after: 2 }, options: [
+      { number: 1, label: '[✔] Unit tests', selected: true },
+      { number: 2, label: '[ ] Lint', selected: false },
+      { number: 3, label: 'Chat about this', selected: false }
+    ] })
+    await flushPromises()
+    expect(wrapper.get('[data-cli-menu]').text()).toContain('Tick what applies, then Submit.')
+    await wrapper.get('[data-cli-step]').trigger('click')
+    expect(mocks.sendKeys).toHaveBeenLastCalledWith(['\x1b[B', '\x1b[B', '\r'])
+    await wrapper.get('[data-cli-option="3"]').trigger('click')
+    expect(mocks.sendKeys).toHaveBeenLastCalledWith(['\x1b[B', '\x1b[B', '\x1b[B', '\r'])
+
+    mocks.menu({ kind: 'confirm', title: 'Review your answers', options: [], details: ['Checks: Unit tests, Lint'] })
+    await flushPromises()
+    expect(wrapper.get('[data-cli-confirm]').text()).toContain('Checks: Unit tests, Lint')
+    await wrapper.get('[data-cli-submit]').trigger('click')
+    expect(mocks.sendKeys).toHaveBeenLastCalledWith(['\r'])
+  })
+
   it('points at the terminal for a prompt that wants typed input, without buttons', async () => {
     const wrapper = view()
     await flushPromises()
