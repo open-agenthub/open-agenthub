@@ -4,8 +4,8 @@ namespace AgentHub.Api.Usage;
 
 /// <summary>
 /// Static Anthropic API price table used to estimate what a session's tokens WOULD have cost
-/// on the API. Needed because Claude Code reports <c>claude_code.cost.usage = 0</c> when the
-/// session runs on a Claude subscription (OAuth login) — tokens flow, cost does not.
+/// on the API — an estimate, never spend. Who pays is decided by <see cref="UsageBilling"/>; the
+/// cost Claude Code reports is its own price-table figure for a subscription login as well.
 ///
 /// Prices are USD per million tokens (input / output). Cache reads bill at 0.1x the input
 /// rate, cache writes at 1.25x (5-minute TTL default). Matching is by substring on the model

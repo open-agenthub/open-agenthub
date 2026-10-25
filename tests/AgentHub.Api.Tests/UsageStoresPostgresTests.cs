@@ -64,6 +64,93 @@ public class UsageStoresPostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task SubscriptionSession_ReportingACost_IsNotApiSpend()
+    {
+        // Claude Code 2.1.287 reports claude_code.cost.usage from its own price table for a
+        // subscription login just as for an API key. That figure must not become API spend.
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-sub", "alice", AgentAuthMode.Subscription);
+        await db.AddSessionAsync("s-api", "alice", AgentAuthMode.ApiKey);
+
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-sub", CostUsd = 0.003255, InputTokens = 400, OutputTokens = 50 });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-api", CostUsd = 0.003255, InputTokens = 400, OutputTokens = 50 });
+
+        var rows = (await db.Usage.ListByOwnerAsync("alice")).ToDictionary(r => r.SessionId);
+        Assert.False(rows["s-sub"].ApiBilled);
+        Assert.Equal("subscription", rows["s-sub"].Billing);
+        Assert.Equal(0.003255, rows["s-sub"].CostUsd, 9); // what the CLI said, kept for reference
+        Assert.Equal(0, rows["s-sub"].ApiCostUsd);
+        Assert.True(rows["s-api"].ApiBilled);
+        Assert.Equal(0.003255, rows["s-api"].ApiCostUsd, 9);
+
+        var summary = await db.Usage.SummaryAsync("alice", null, null);
+        Assert.Equal(0.003255, summary.CostUsd, 9);
+        Assert.Equal(1, summary.ApiSessionCount);
+        Assert.Equal(1, summary.SubscriptionSessionCount);
+        Assert.Equal(450, summary.SubscriptionTokens);
+        Assert.Equal(450, summary.ApiTokens);
+        Assert.Equal(0.003255, await db.Usage.MonthToDateApiCostAsync("alice"), 9);
+    }
+
+    [PostgreSqlFact]
+    public async Task AutoSession_FollowsThePodLabel_AndIsUnknownWithoutOne()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-auto-api", "alice", AgentAuthMode.Auto);
+        await db.AddSessionAsync("s-auto-tui", "alice", AgentAuthMode.Auto);
+
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-api", CostUsd = 1, Billing = "api" });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-tui", CostUsd = 2, Billing = "unknown" });
+
+        var rows = (await db.Usage.ListByOwnerAsync("alice")).ToDictionary(r => r.SessionId);
+        Assert.Equal("api", rows["s-auto-api"].Billing);
+        Assert.Equal("unknown", rows["s-auto-tui"].Billing);
+        Assert.Equal(1, await db.Usage.MonthToDateApiCostAsync("alice"), 6);
+    }
+
+    [PostgreSqlFact]
+    public async Task Usage_IsScopedToTheOwner()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-alice", "alice", AgentAuthMode.ApiKey);
+        await db.AddSessionAsync("s-bob", "bob", AgentAuthMode.Subscription);
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-alice", CostUsd = 1, InputTokens = 10 });
+        // A payload naming another owner cannot move a session: the sessions registry decides.
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-bob", UserId = "alice", CostUsd = 1, InputTokens = 20 });
+
+        Assert.Equal("s-alice", Assert.Single(await db.Usage.ListByOwnerAsync("alice")).SessionId);
+        Assert.Equal("s-bob", Assert.Single(await db.Usage.ListByOwnerAsync("bob")).SessionId);
+        Assert.Null(await db.Usage.GetAsync("alice", "s-bob"));
+        Assert.Null(await db.Usage.GetAsync("bob", "s-alice"));
+        var alice = await db.Usage.SummaryAsync("alice", null, null);
+        Assert.Equal(1, alice.SessionCount);
+        Assert.Equal(10, alice.InputTokens);
+        Assert.Equal(1, alice.CostUsd, 6);
+        Assert.Equal(0, (await db.Usage.SummaryAsync("bob", null, null)).CostUsd, 6);
+        Assert.Equal(0, await db.Usage.MonthToDateApiCostAsync("bob"), 6);
+    }
+
+    [PostgreSqlFact]
+    public async Task Initialize_ClassifiesRowsFromBeforeTheSplit()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("old-sub", "alice", AgentAuthMode.Subscription);
+        await db.AddSessionAsync("old-api", "alice", AgentAuthMode.ApiKey);
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "old-sub", CostUsd = 3, InputTokens = 10 });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "old-api", CostUsd = 2, InputTokens = 10 });
+        await db.ExecuteAsync("UPDATE session_usage SET billing = NULL, api_cost_usd = 0, usage_source = NULL");
+
+        await db.Usage.InitializeAsync();
+
+        var rows = (await db.Usage.ListByOwnerAsync("alice")).ToDictionary(r => r.SessionId);
+        Assert.Equal("subscription", rows["old-sub"].Billing);
+        Assert.Equal(0, rows["old-sub"].ApiCostUsd);
+        Assert.Equal("api", rows["old-api"].Billing);
+        Assert.Equal(2, rows["old-api"].ApiCostUsd);
+        Assert.Equal("claude-otel", rows["old-api"].Source);
+    }
+
+    [PostgreSqlFact]
     public async Task MonthToDateApiCost_ComesFromTheMonthlyRollup()
     {
         await using var db = await PostgresUsageDatabase.CreateAsync();
@@ -283,6 +370,15 @@ internal sealed class PostgresUsageDatabase : IAsyncDisposable
             AuthMode = authMode,
             CallbackToken = $"token-{id}"
         });
+
+    public async Task ExecuteAsync(string sql)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString) { SearchPath = _schema };
+        await using var connection = new NpgsqlConnection(builder.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
+    }
 
     public ValueTask DisposeAsync()
         => new(DropSchemaAsync(_baseConnectionString, _schema));
