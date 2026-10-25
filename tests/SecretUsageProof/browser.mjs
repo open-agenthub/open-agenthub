@@ -57,6 +57,8 @@ const apiLine = await line(apiKey.id)
 check(apiLine.includes('Projects: Deploys') && apiLine.includes('deploy-bot (via project Deploys)') && apiLine.includes('picked (selected for it)')
   && !apiLine.includes('passed to child sessions'),
   'API_KEY: the project, a session following it and a session selecting it', apiLine)
+const apiIds = await page.$$eval(`[data-secret-usage="${apiKey.id}"] [data-usage-session]`, els => els.map(e => e.dataset.usageSession).sort())
+check(JSON.stringify(apiIds) === JSON.stringify([inProject.id, selected.id].sort()), 'its session links point at exactly those two sessions', apiIds.join(', '))
 const kubeLine = await line(kube.id)
 check(kubeLine.includes('parent (granted directly, passed to child sessions)') && kubeLine.includes('child (inherited from its parent')
   && kubeLine.includes('asker (requested by the agent)') && !kubeLine.includes('Projects:'),
