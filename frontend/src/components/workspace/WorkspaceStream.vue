@@ -314,7 +314,6 @@ onBeforeUnmount(() => {
         :retry="attachmentQueue.retry" :remove="attachmentQueue.remove" />
       <div class="composer-row">
         <input v-if="canAttach" ref="fileInput" class="file-input" type="file" multiple
-          accept=".png,.jpg,.jpeg,.webp,.gif,.pdf,.md,.markdown,.txt,.docx,.pptx,.xlsx"
           @change="addFiles($event.target.files); $event.target.value = ''">
         <button v-if="canAttach" type="button" class="attach" data-chat-attach aria-label="Attach files" title="Attach files"
           @click="fileInput?.click()">＋</button>

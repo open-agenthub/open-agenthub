@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using System.Text;
+using System.Xml;
+using System.Xml.Linq;
 
 namespace AgentHub.Api.Files;
 
@@ -15,6 +17,7 @@ public static class SessionFileValidator
     private static readonly IReadOnlyDictionary<string, string> MimeByExtension =
         new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
+            [".svg"] = "image/svg+xml",
             [".png"] = "image/png",
             [".jpg"] = "image/jpeg",
             [".jpeg"] = "image/jpeg",
@@ -33,6 +36,7 @@ public static class SessionFileValidator
 
     private static readonly HashSet<string> ImageMimeTypes = new(StringComparer.OrdinalIgnoreCase)
     {
+        "image/svg+xml",
         "image/png",
         "image/jpeg",
         "image/webp",
@@ -56,10 +60,11 @@ public static class SessionFileValidator
         var extension = Path.GetExtension(name);
         if (!MimeByExtension.TryGetValue(extension, out var expectedMime))
         {
-            return SessionFileValidationResult.Reject("unsupported_file_type");
+            expectedMime = "application/octet-stream";
         }
 
-        if (!string.Equals(expectedMime, mimeType?.Trim(), StringComparison.OrdinalIgnoreCase))
+        if (expectedMime != "application/octet-stream" &&
+            !string.Equals(expectedMime, mimeType?.Trim(), StringComparison.OrdinalIgnoreCase))
         {
             return SessionFileValidationResult.Reject("content_type_mismatch");
         }
@@ -98,6 +103,9 @@ public static class SessionFileValidator
     /// <summary>The largest single upload any type may reserve; the upload routes' body limit.</summary>
     public static long MaxUploadBytes(SessionFileOptions options) =>
         Math.Max(options.MaxVideoBytes, Math.Max(options.MaxImageBytes, options.MaxDocumentBytes));
+
+    public static string MimeForName(string name) =>
+        MimeByExtension.GetValueOrDefault(Path.GetExtension(name), "application/octet-stream");
 
     public static bool IsVideo(string name) =>
         MimeByExtension.TryGetValue(Path.GetExtension(name ?? ""), out var mime) &&
@@ -138,12 +146,12 @@ public static class SessionFileValidator
         ArgumentNullException.ThrowIfNull(content);
         options ??= new SessionFileOptions();
 
-        if (!IsSafeFileName(name) ||
-            !MimeByExtension.TryGetValue(Path.GetExtension(name), out var expectedMime))
+        if (!IsSafeFileName(name))
         {
             return SessionFileValidationResult.Reject("unsupported_file_type");
         }
 
+        var expectedMime = MimeForName(name);
         if (VideoContainerInspector.IsVideoMime(expectedMime))
         {
             var video = await VideoContainerInspector.InspectAsync(
@@ -159,7 +167,10 @@ public static class SessionFileValidator
             return SessionFileValidationResult.Reject("file_too_large");
         }
 
-        var detectedMime = DetectMime(bytes, Path.GetExtension(name));
+        // Unknown formats stay opaque even when their bytes resemble a previewable document.
+        var detectedMime = expectedMime == "application/octet-stream" ? expectedMime
+            : expectedMime == "image/svg+xml" ? DetectSvg(bytes)
+            : DetectMime(bytes, Path.GetExtension(name));
         if (detectedMime is null)
         {
             return SessionFileValidationResult.Reject("unsupported_file_type");
@@ -173,9 +184,27 @@ public static class SessionFileValidator
         return SessionFileValidationResult.Accept(detectedMime);
     }
 
+    private static string? DetectSvg(byte[] bytes)
+    {
+        try
+        {
+            using var input = new MemoryStream(bytes, writable: false);
+            using var reader = XmlReader.Create(input, new XmlReaderSettings
+            {
+                DtdProcessing = DtdProcessing.Prohibit,
+                XmlResolver = null,
+                MaxCharactersInDocument = bytes.Length,
+            });
+            var document = XDocument.Load(reader);
+            return document.Root?.Name == XName.Get("svg", "http://www.w3.org/2000/svg")
+                ? "image/svg+xml" : null;
+        }
+        catch (XmlException) { return null; }
+    }
+
     private static bool IsSafeFileName(string? name)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Length > 255 ||
+        if (string.IsNullOrWhiteSpace(name) || name is "." or ".." || name.Length > 255 ||
             !string.Equals(name, Path.GetFileName(name), StringComparison.Ordinal))
         {
             return false;
