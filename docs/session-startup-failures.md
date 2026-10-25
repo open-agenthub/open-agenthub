@@ -19,6 +19,16 @@ fetching logs on every dashboard poll: log access needs a kubelet, costs extra r
 copying unrelated output. Older pods without the new structured clone message still show their
 sanitized Kubernetes diagnostic, but cannot identify a particular clone without that evidence.
 
+The agent container writes its own termination message as well (#244). Without one, Kubernetes
+has only the container's reason, and an autonomous run whose CLI exited 1 on an expired login was
+listed as "agent start: Error". The person reading that cannot tell a login problem from a crash.
+`common/server.js` writes the driver name, the exit code and the CLI's last three output lines when
+the agent exits non-zero. Those lines are masked like the scrollback and bounded to 600 characters,
+and they are what a person in the terminal would have read. `entrypoint-common.sh` traps ERR for a
+step that fails before the session agent exists, and names the failed command as written, before
+expansion, so no secret value is in it. Fetching pod logs instead was rejected for the reasons
+above.
+
 Redaction precedes truncation at both the script output and backend persistence/display boundaries.
 URL userinfo, authentication headers, cookies, named secrets and common token formats are removed.
 Unknown failures remain bounded plain text. Tests cover secret-bearing inputs separately from

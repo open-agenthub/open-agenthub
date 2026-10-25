@@ -64,6 +64,26 @@ const MAX_SWITCH_REASON_CHARS = 300;
 // skill another session just saved, and with the ETag an unchanged library is one 304.
 const DEFAULT_SKILLS_SYNC_SECONDS = 60;
 
+// How much of the agent's last output a failed exit's termination message quotes.
+const EXIT_TAIL_CHARS = 4096;
+const EXIT_REASON_LINES = 3;
+const EXIT_REASON_CHARS = 600;
+
+/**
+ * The termination message of an agent that exited non-zero (docs/session-startup-failures.md).
+ * Without one Kubernetes has only the container's reason, so a run that failed on its login read
+ * "agent start: Error" in the session list (#244). The CLI's last lines are what a person would
+ * have read in the terminal: masked like the scrollback, control sequences removed, bounded.
+ */
+function exitReason(name, code, signal, output, mask = text => text) {
+  const lines = mask(stripAnsi(String(output || '').slice(-EXIT_TAIL_CHARS)))
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '\n')
+    .split('\n').map(line => line.trim()).filter(Boolean);
+  const tail = lines.slice(-EXIT_REASON_LINES).join(' | ').slice(-EXIT_REASON_CHARS);
+  return `${name} exited with code ${code}${signal ? `, signal ${signal}` : ''}` +
+    (tail ? `: ${tail}` : ' without output.');
+}
+
 /** AGENTHUB_SKILLS_SYNC_SECONDS; 0 turns the live pull off and leaves only the one at start. */
 function skillsSyncIntervalMs(env) {
   const raw = env.AGENTHUB_SKILLS_SYNC_SECONDS;
@@ -921,6 +941,12 @@ function createCommonServer(options = {}) {
     }
 
     exited = true;
+    if (exitCode !== 0) {
+      try {
+        fs.writeFileSync(env.TERMINATION_MESSAGE_PATH || '/dev/termination-log',
+          exitReason(driver.name, exitCode, signal, attemptOutput, text => secretMask.mask(text)));
+      } catch { /* not in a pod */ }
+    }
     const message = endMessage(exitCode, signal);
     remember(message);
     for (const socket of clients) {
@@ -2122,4 +2148,4 @@ function startFromEnvironment(options = {}) {
 
 if (require.main === module) startFromEnvironment();
 
-module.exports = { createCommonServer, startFromEnvironment, MAX_BUFFER };
+module.exports = { createCommonServer, startFromEnvironment, exitReason, MAX_BUFFER };

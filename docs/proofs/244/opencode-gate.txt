@@ -1,0 +1,8 @@
+--- main matcher
+BLOCKED :: echo smoke > smoke.txt && cat smoke.txt && uname -m :: Blocked by the session policy.
+ran     :: uname -m
+BLOCKED :: echo "$HOME" | wc -c :: Blocked by the session policy.
+--- fixed matcher
+ran     :: echo smoke > smoke.txt && cat smoke.txt && uname -m
+ran     :: uname -m
+ran     :: echo "$HOME" | wc -c
