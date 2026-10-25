@@ -18,6 +18,10 @@ import { pathToFileURL } from 'node:url';
 
 const CALL_TIMEOUT_MS = 8000;
 const EVENTS = { UserPromptSubmit: 'prompt', PermissionRequest: 'permission', Stop: 'stop', Interrupt: 'idle', StopFailure: 'idle' };
+// Tools whose PermissionRequest is a question to the person, not a request for permission (#252):
+// Claude Code 2.1.287 raises PermissionRequest for AskUserQuestion to show its question screen.
+// Reported as "permission", the Workspace said "Waiting for your approval" while it asked.
+const QUESTION_TOOLS = new Set(['AskUserQuestion']);
 
 async function readStdin() {
   const chunks = [];
@@ -45,6 +49,7 @@ export function eventOf(payload) {
   if (!event) return null;
   if (typeof payload.turn_id === 'string' && payload.transcript_path == null) return null;
   if (payload.agent_id != null) return null;
+  if (event === 'permission' && QUESTION_TOOLS.has(payload.tool_name)) return 'question';
   return event;
 }
 

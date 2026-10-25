@@ -81,8 +81,12 @@ const agentActivity = ref({ state: 'unknown', source: 'hooks' })
 watch(() => agentActivity.value.state, state => { if (state === 'working') promptSuggestion.value = '' })
 const workspaceActivity = computed(() => {
   if (!isLive.value) return { state: 'idle' }
-  if (pendingPermissions.value.length || agentActivity.value.state === 'waiting') return { state: 'waiting', reason: 'approval' }
-  if (cliMenu.value || props.session.questionPending) return { state: 'waiting', reason: 'answer' }
+  // Approval only for a real permission request (#252): a hub approval record, or the runtime
+  // saying its turn waits in a permission dialog. A question, a CLI menu or a waiting turn the
+  // runtime did not label is an answer the person owes.
+  if (pendingPermissions.value.length || (agentActivity.value.state === 'waiting' && agentActivity.value.reason === 'approval'))
+    return { state: 'waiting', reason: 'approval' }
+  if (agentActivity.value.state === 'waiting' || cliMenu.value || props.session.questionPending) return { state: 'waiting', reason: 'answer' }
   return statuses.agent === 'connected' ? agentActivity.value : { state: 'unknown' }
 })
 watch(() => props.session.id, () => { promptSuggestion.value = ''; agentActivity.value = { state: 'unknown', source: 'hooks' } })
