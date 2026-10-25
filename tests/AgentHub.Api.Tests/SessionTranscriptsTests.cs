@@ -22,6 +22,25 @@ public class SessionTranscriptsTests
     ];
 
     [Fact]
+    public void RecentWindowUsesAbsoluteOffsetsAndEarlierPagesMeetItsBeginning()
+    {
+        var entries = Enumerable.Range(0, 20_000)
+            .Select(i => new TranscriptEntry("user", "message " + i, null)).ToArray();
+        var recent = ConversationPage.FromEntries("s1", "Running", entries, -1, null);
+        Assert.Equal(500, recent.Entries.Count);
+        Assert.Equal(19_500, recent.Offset);
+        Assert.Equal(20_000, recent.NextOffset);
+        Assert.Equal("message 19999", recent.Entries[^1].Text);
+        var earlier = ConversationPage.FromEntries("s1", "Running", entries, 19_000, 500);
+        Assert.Equal(recent.Offset, earlier.NextOffset);
+        Assert.Equal(0, ConversationPage.FromEntries("s1", "Running", entries, null, null).Offset);
+        var terminal = ConversationPage.FromScrollback("s1", "Succeeded", "abcdef", -1, 3);
+        Assert.Equal("def", terminal.Text);
+        Assert.Equal(3, terminal.Offset);
+        Assert.Equal(6, terminal.NextOffset);
+    }
+
+    [Fact]
     public async Task Readable_PrefersTheNativeConversationOverTheScrollback()
     {
         var svc = new TranscriptService { Entries = Conversation, Scrollback = "raw terminal noise" };

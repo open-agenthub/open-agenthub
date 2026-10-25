@@ -14,6 +14,7 @@ import FilesPane from './FilesPane.vue'
 import WorkspaceDiffPane from './workspace/WorkspaceDiffPane.vue'
 import SessionStartupFailure from './SessionStartupFailure.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
+import SecretRestartNote from './SecretRestartNote.vue'
 
 const props = defineProps({
   session: { type: Object, required: true },
@@ -275,6 +276,7 @@ onBeforeUnmount(() => {
     </template>
     <div v-for="secret in session.effectiveSecrets" v-else :key="secret.id">{{ secret.name }} · {{ secret.delivery }} · {{ secret.provenance }} · {{ secret.inheritToChildren ? 'inherits to children' : 'this session only' }}</div>
   </details>
+  <SecretRestartNote v-if="grantsEditable" :session="session" @restarted="emit('updated')" />
   <SessionStartupFailure v-if="session?.failureReason" :reason="session.failureReason" />
   <div v-if="companionVisible" class="workspace-shell">
     <nav class="workspace-tabs" aria-label="Session view">

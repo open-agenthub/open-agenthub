@@ -89,6 +89,7 @@ function repoLine(s) {
               <div class="row-title">{{ s.title }}</div>
               <div v-if="s.description" class="row-desc" data-session-description>{{ s.description }}</div>
               <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at>{{ repoLine(s) || s.sharedBy ? ' · ' : '' }}<SessionIcon name="expiry" /> expires in {{ formatRemaining(s.expiresAt) }}</span></div>
+              <div v-if="s.secretsPendingRestart" class="row-resources" data-secrets-pending><span class="pending">secret variables change at the next restart</span></div>
               <div v-if="s.resources" class="row-resources" data-session-resources title="Request / limit">{{ resourceSummary(s.resources) }}<span v-if="s.resourcesPendingRestart" class="pending" data-resources-pending> · applies at the next restart</span></div>
             </div>
             <div v-if="sessionCapabilities(s).canManage" class="row-actions">

@@ -293,14 +293,17 @@ export const api = {
   },
   // The Workspace conversation's page: role-tagged entries from the provider's own transcript, or the
   // cleaned scrollback as text when there is none. `offset` is the previous page's nextOffset.
-  getConversation: (id, offset) =>
-    req('GET', `/sessions/${encodeURIComponent(id)}/conversation${conversationQuery(offset)}`)
+  getConversation: (id, offset, max) =>
+    req('GET', `/sessions/${encodeURIComponent(id)}/conversation${conversationQuery(offset, max)}`)
 }
-function conversationQuery(offset) {
-  return offset ? `?offset=${encodeURIComponent(offset)}` : ''
+function conversationQuery(offset, max) {
+  const query = new URLSearchParams()
+  if (offset !== undefined) query.set('offset', offset)
+  if (max !== undefined) query.set('max', max)
+  return query.size ? `?${query}` : ''
 }
-export const getSharedConversation = (token, offset) =>
-  sharedReq(`/shared/${encodeURIComponent(token)}/conversation${conversationQuery(offset)}`)
+export const getSharedConversation = (token, offset, max) =>
+  sharedReq(`/shared/${encodeURIComponent(token)}/conversation${conversationQuery(offset, max)}`)
 export const getSharedFileCapabilities = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/capabilities`)
 export const listSharedSessionFiles = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files`)
 export const getSharedFilePresentation = (token) => sharedReq(`/shared/${encodeURIComponent(token)}/files/presentation`)

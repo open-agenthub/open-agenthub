@@ -339,6 +339,49 @@ test('an unattended built-in call is auto-approved through the real approval hoo
   }
 });
 
+// #252: a question needs no one's permission. Asking the hub made it an approval request the
+// person had to grant before the question itself appeared.
+test('AskUserQuestion is allowed without filing an approval request', async () => {
+  const server = await startPolicyServer({
+    body: JSON.stringify({ restricted: false, decision: 'allow' }),
+    permission: JSON.stringify({ id: 'req-1' })
+  });
+
+  try {
+    const result = await runHook(
+      { tool_name: 'AskUserQuestion', tool_input: { questions: [{ question: 'Which target?', options: [] }] } },
+      { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_CALLBACK_TOKEN: 'callback-token', AGENTHUB_MODE: 'interactive' }
+    );
+
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'allow');
+    assert.deepEqual(server.requests, []);
+  } finally {
+    await server.close();
+  }
+});
+
+// Only the call's own tool name counts. A text match on the payload let any tool whose input
+// carries "tool_name":"AskUserQuestion" skip the approval it needs.
+test('a tool whose input names AskUserQuestion still asks for approval', async () => {
+  const server = await startPolicyServer({
+    body: JSON.stringify({ restricted: false, decision: 'allow' }),
+    permission: JSON.stringify({ decision: 'deny' })
+  });
+
+  try {
+    const env = { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_CALLBACK_TOKEN: 'callback-token', AGENTHUB_MODE: 'interactive' };
+    const mcp = await runHook({ tool_name: 'mcp__server__tool', tool_input: { tool_name: 'AskUserQuestion', target: 'x' } }, env);
+    const bash = await runHook({ tool_name: 'Bash', tool_input: { command: 'echo \'{"tool_name":"AskUserQuestion"}\' > /dev/null' } }, env);
+
+    assert.equal(mcp.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.equal(bash.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.deepEqual(server.requests.map(request => [request.path, request.body.tool]).filter(([p]) => p === '/permission'),
+      [['/permission', 'mcp__server__tool'], ['/permission', 'Bash']]);
+  } finally {
+    await server.close();
+  }
+});
+
 test('an unattended MCP call is auto-approved after the sharing policy allows it', async () => {
   const server = await startPolicyServer({
     body: JSON.stringify({ restricted: true, decision: 'allow' }),

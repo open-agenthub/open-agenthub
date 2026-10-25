@@ -11,7 +11,8 @@ import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
-import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
+import SecretConflictNote from './SecretConflictNote.vue'
+import { secretIdsChange, secretOptions, secretSelectionFor, chosenSecrets, secretConflicts } from '../lib/secrets.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import SystemPromptField from './SystemPromptField.vue'
@@ -27,7 +28,18 @@ const resources = ref(resourceForm(null))
 // between now (pause and resume, conversation kept) and its next start.
 const restartNow = ref(true)
 const resourcesDirty = computed(() => resourcesChanged(resources.value, props.session))
-const offerRestart = computed(() => !scheduled.value && canApplyNow(props.session) && (resourcesDirty.value || props.session.resourcesPendingRestart))
+// Variables the dialog's choices give the session against what it has now. A difference is a change
+// the running process only sees after a restart, so the same restart is offered for it (#255).
+const envSecretsDirty = computed(() => {
+  // Until the store is loaded there is nothing to compare with; it would read as "all removed".
+  if (!storedSecrets.value.length) return false
+  const ids = list => list.filter(s => s.delivery === 'env').map(s => s.id).sort().join()
+  return ids(props.session.effectiveSecrets || []) !== ids(chosen.value)
+})
+const resourcesPending = computed(() => resourcesDirty.value || props.session.resourcesPendingRestart)
+const secretsPending = computed(() => envSecretsDirty.value || props.session.secretsPendingRestart)
+const offerRestart = computed(() => !scheduled.value && canApplyNow(props.session) && (resourcesPending.value || secretsPending.value))
+const restartWhat = computed(() => [resourcesPending.value && 'resources', secretsPending.value && 'secret variables'].filter(Boolean).join(' and '))
 const autoDelete = ref(autoDeleteForm(null))
 const repos = ref([])
 const advOpen = ref(false)
@@ -93,6 +105,9 @@ const secrets = computed(() => secretOptions(storedSecrets.value, selectedProjec
 const selectedGrants = ref([])
 watch(() => props.session.id, () => { selectedGrants.value = (props.session.secretGrants || []).map(g => ({ ...g })) }, { immediate: true })
 const selectedSecrets = ref([])
+// Refused by the hub too; disabling the button keeps the owner from finding out only afterwards (#253).
+const chosen = computed(() => chosenSecrets(storedSecrets.value, selectedSecrets.value, selectedGrants.value))
+const secretClash = computed(() => secretConflicts(chosen.value).length > 0)
 watch([secrets, () => props.session.id], ([options]) => {
   selectedSecrets.value = secretSelectionFor(props.session.secretIds, options, !!selectedProject.value)
 }, { immediate: true })
@@ -182,7 +197,7 @@ async function save() {
       // Saved first, so a refused restart loses nothing: the values then apply at the next start.
       try { updated = await api.applySessionResources(props.session.id) }
       catch (e) {
-        error.value = `Saved, but the session was not restarted: ${e.message || e} The new resources apply the next time it starts.`
+        error.value = `Saved, but the session was not restarted: ${e.message || e} The new ${restartWhat.value} apply the next time it starts.`
         return
       }
     }
@@ -221,6 +236,7 @@ async function save() {
         <SecretPicker v-if="!scheduled" v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
           :project-has-none="!!selectedProject && storedSecrets.length > 0" />
         <SecretGrantsPicker v-if="!scheduled" v-model="selectedGrants" :options="storedSecrets" :effective="session.effectiveSecrets || []" />
+        <SecretConflictNote v-if="!scheduled" :secrets="chosen" />
         <div class="field last toggle-field">
           <label>Auto approve <span class="dim">— run tools without asking</span></label>
           <button type="button" class="toggle" role="switch" data-auto-approve
@@ -323,18 +339,18 @@ async function save() {
       <div v-if="offerRestart" class="card sect restart-note" data-resources-restart>
         <label class="check">
           <input type="checkbox" v-model="restartNow" data-resources-restart-now />
-          <span><b>Restart now to apply the new resources.</b> The session is paused and resumed: its state is saved,
+          <span><b>Restart now to apply the new {{ restartWhat }}.</b> The session is paused and resumed: its state is saved,
             the pod is replaced and the conversation continues. A turn in progress is interrupted, and the terminal
             reconnects after the restart.</span>
         </label>
-        <p v-if="!restartNow" class="note restart-later">The new resources apply the next time the session is paused and resumed.</p>
+        <p v-if="!restartNow" class="note restart-later">The new {{ restartWhat }} apply the next time the session is paused and resumed.</p>
       </div>
       <p v-else-if="resourcesDirty && !scheduled && session.phase === 'Running'" class="note" data-resources-next-start>
         New resources apply at the session's next start; a running {{ session.mode.toLowerCase() }} session is not restarted for them.
       </p>
       <p v-if="error" class="err">{{ error }}</p>
       <div class="row">
-        <button class="primary" data-submit :disabled="busy" @click="save">{{ busy ? (offerRestart && restartNow ? 'Saving and restarting…' : 'Saving…') : (offerRestart && restartNow ? 'Save and restart' : 'Save changes') }}</button>
+        <button class="primary" data-submit :disabled="busy || secretClash" @click="save">{{ busy ? (offerRestart && restartNow ? 'Saving and restarting…' : 'Saving…') : (offerRestart && restartNow ? 'Save and restart' : 'Save changes') }}</button>
         <button @click="$emit('close')">Cancel</button>
         <span v-if="!(offerRestart && restartNow)" class="dim note-inline">{{ scheduled ? 'Schedule changes apply to future runs; active Jobs keep running.' : 'Changes apply on next agent turn — the session keeps running.' }}</span>
       </div>

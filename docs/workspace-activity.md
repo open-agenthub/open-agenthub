@@ -14,6 +14,23 @@ a replay must not resurrect an old spinner. The short presentation timer exists 
 viewer subscribes and is released with the last subscriber.
 
 Prompt hooks mean working; a successful Stop means idle unless it continues with a fleet message.
+
+**A question is not an approval (#252).** Waiting carries a reason: `approval` for a permission
+dialog, `answer` for a question, and the Workspace says *Waiting for your approval* only for the
+first or for a pending hub approval record. Claude Code 2.1.287 raises PermissionRequest to show
+an AskUserQuestion screen, so the hook reports a PermissionRequest for that tool as a question.
+Its PreToolUse hook also no longer files AskUserQuestion with the hub as an approval request; that made the
+person grant "AskUserQuestion" before the question even appeared. A waiting frame without a
+reason, from a runtime older than the frontend, reads as an answer: of the two labels, a wrong
+"answer" asks for nothing that is not there, while a wrong "approval" did.
+
+The waiting state also went stale: Escape in either dialog cancels the whole turn, and no hook
+reports it (verified with the pinned CLI, for a Bash permission dialog and a question alike).
+The driver's interruption key therefore clears a wait as it clears work. Earlier it was ignored
+in a wait, on the assumption that Escape only declined the tool; the turn then showed waiting at
+an idle prompt until the next one. Rejected: clearing the wait when the CLI menu leaves the
+screen, because the notice and the runtime would then disagree whenever the drawer's terminal
+lags, and the runtime is what knows a turn ended.
 Permission hooks mean waiting. A terminal approval submission clears that waiting presentation;
 the visible CLI menu and the hub's pending approvals/questions always take precedence in the UI.
 A prompt hook clears the previous hub question via its authenticated turn-started callback before

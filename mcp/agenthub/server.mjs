@@ -87,7 +87,8 @@ register('session_create', {
     + 'response\'s expiresAt says when. '
     + 'credentialId picks the stored provider login and gitPatIds (comma-separated, one per host, "none" for no '
     + 'token) the git tokens the session gets; credentials_list shows what is available to this token. '
-    + 'secretIds (comma-separated, "none" for none) the stored secrets it gets as variables or files. '
+    + 'secretIds (comma-separated, "none" for none) the stored secrets it gets as variables or files; '
+    + 'secret_conflict means two of them share a name and delivery, and one session can hold only one. '
     + 'accountFailover "off" keeps the session on its account when that hits a usage limit; the '
     + 'default "auto" moves it to another available one.',
   inputSchema: createSchema

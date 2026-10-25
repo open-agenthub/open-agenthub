@@ -31,10 +31,42 @@ value, and the response type has no field one could end up in.
 ## Names, and which ones are reserved
 
 A secret is delivered either as an **environment variable** (`env`) or as a **file** in
-`~/.secrets` (`file`); its name is the variable's or the file's name. Names are unique per user,
-compared case-insensitively — `API_KEY` and `api_key` side by side would be two secrets nobody
-reading the list can tell apart. Updating a secret under the same name keeps its id, so project and
-session selections keep pointing at it; an update without a value keeps the stored one.
+`~/.secrets` (`file`); its name is the variable's or the file's name. The id identifies a secret,
+not the name: `POST /api/secrets` without an `id` stores a new one, with an `id` it changes that
+one — name, delivery, description, and the value if one is sent. The id survives every change,
+rename included, so project and session selections keep pointing at it.
+
+### Duplicate names, and where they are refused (#253)
+
+Until #253 names were unique per user (case-insensitively), and saving under a stored name updated
+that secret. That made a production and a staging `API_KEY` impossible to keep side by side, though
+no session should ever get both. Names may now repeat. What must not repeat is **where a secret
+lands in one session**: two secrets with the same delivery and the same name would be one key of
+the session's copy, and the later one would silently win. The comparison is exact (`API_KEY` and
+`api_key` are two variables and two files), and a variable and a file of one name do not collide.
+
+`SessionSecretConflicts` refuses a set with such a pair wherever a session's set is decided, with
+a 400 (an `invalid_argument` over MCP) that names the place and the ids:
+
+| Where | Checked |
+|---|---|
+| creating a session (web, API, token, MCP spawn) | its selection, grants and inherited grants together |
+| editing a session | the same, when secrets, grants or the project change |
+| a project's selection (create, edit) | the selection itself — every later session would get both — and every session in it |
+| saving a secret (rename, change of delivery) | every project and every session, inside the store write, so nothing is stored |
+| answering a secret request | the session with the new grant |
+
+The dialogs show the clash before saving and disable the button; the hub's check is what holds.
+Delivery itself withholds both sides of a pair, should two concurrent edits ever produce one, and
+logs the session id: an agent finding a variable missing is better than one working with a value the
+owner did not mean.
+
+- *Rejected: keep names unique and let the owner pick another name.* The name is what the tool
+  reads (`KUBECONFIG`-style conventions); `API_KEY_STAGING` would need a wrapper in every session.
+- *Rejected: let a grant override the selection on a clash.* Which one wins is exactly what the
+  owner did not say; a refusal asks them.
+- A request for a name with two stored namesakes opens a new form instead of one of them; the form
+  lists the namesakes.
 
 - Variables: `[A-Za-z_][A-Za-z0-9_]*`.
 - Files: `[A-Za-z0-9_][A-Za-z0-9._-]*` — no leading dot, so neither `.`, `..` nor the kubelet's own
@@ -234,9 +266,10 @@ the kubelet, copying the session's secret into the directory.
 - **Settings → Secrets** is a tab of its own rather than a card in Credentials. Credentials are
   logins the runtime knows how to use; a secret is something the owner hands the agent, with a name
   and a purpose the agent sees. A value field is never filled from the store, an edit without a value
-  keeps the stored one, and the typed value is dropped from the page once saved. The name of a stored
-  secret cannot be edited: it is the variable or file the sessions see, and renaming would be a new
-  secret under a new id that no project or session selects yet.
+  keeps the stored one, and the typed value is dropped from the page once saved. Since #253 the
+  name can be edited: the edit carries the id, so a renamed secret stays selected wherever it was.
+  Before, the name was the identity, and a rename would have been a new secret that no project or
+  session selected.
 - **The project selection is a dialog on the project in the sidebar** (the key button next to
   rename and color), the same place every other project setting is changed. The session dialogs
   show the picker under the project field, because what they offer depends on it: the project's
@@ -245,6 +278,20 @@ the kubelet, copying the session's secret into the directory.
   without a `secrets` part, exactly like a token restricted before secrets existed.
 - **The share dialog says** that anyone with terminal input can read the session's secrets: the
   masking covers what is stored and relayed, not a live terminal.
+- **Each stored secret shows where it is used (#254)**: the projects whose selection holds it, and
+  the owner's sessions that receive it, each marked with how it got there: via a project, selected
+  for it, granted directly, inherited from its parent, or requested by the agent. "Passed to child
+  sessions" is added for a grant marked for inheritance. A session name opens the session; a project
+  name opens that project's secret selection, since a project has no page of its own. The armed
+  Remove button says how many sessions lose the secret. The list comes from what the hub already
+  reports: `effectiveSecrets` of each session (with provenance) and `secretIds` of each project.
+  - *Rejected: a usage endpoint of its own.* It would be a second reading of the selection,
+    ceiling and inheritance rules, and the one place it could disagree with what the session view
+    shows. Sessions shared with the owner by someone else are left out; they hold their own
+    owner's secrets.
+  - Verified in real Chromium against the real backend (`tests/SecretUsageProof`). Every kind of
+    use was produced through the real endpoints, the child through the agent's own spawn endpoint
+    and the request through `secret-requests`.
 
 Verified in real Chromium against the real backend (auth-off development mode, real Postgres, the
 API server rig): a file secret typed in Settings reached the `sessionsecrets` copy of a session
@@ -258,7 +305,48 @@ real Postgres: the store and its concurrent writes, the pod being admitted under
 Pod Security level, both copies, live rewrites on rotate, narrow and delete, the masked relay text,
 no value or name in any log line, and the account purge. What only a kubelet shows — files
 appearing and changing in `~/.secrets` of a running pod, the variables in the agent's environment —
-was not verifiable in a session pod.
+was verified later with a real kubelet (#255, below).
+
+## Changes reaching a running session (#255)
+
+Every change that alters what a session receives rewrites its two copies at once
+(`SyncSessionSecretsAsync`, `RefreshSessionSecretsAsync` for a request answer): a grant or revoke,
+a new value, a rename, a deleted secret, a narrowed project. A copy is replaced as a whole, so a
+renamed or revoked key is gone from it rather than left next to the new one. From there:
+
+- **Files follow by themselves.** The copy is mounted whole, and the kubelet swaps its `..data`
+  link on its next sync. Measured on a real kubelet (k3s 1.34 defaults): 60–85 s for a grant, a new
+  value, a rename (old name gone, new name there), a revoke and a deleted secret.
+- **Variables do not.** A container's environment is fixed when it starts. The pod therefore records
+  the `resourceVersion` the variable copy had when it started, in the annotation
+  `agenthub.dev/secret-env-version`. The API server does not bump a `resourceVersion` for a replace
+  that changes nothing, so a different version now means exactly that a variable was added,
+  removed, renamed or given another value since the start. This was checked on a real API server: a
+  file-only change and re-saving a variable with its value did not mark the session.
+  `SessionInfo.secretsPendingRestart` reports the difference. The owner sees it in the session
+  view, the sessions list, the edit dialog and Settings → Secrets after a save or removal, each with
+  the restart: `apply-resources`, which now restarts for pending variables as it does for pending
+  resources. It goes through the same pause → archive check → resume, so the conversation continues.
+- A request answered with a variable reports `restartRequired` from the same comparison. Before,
+  it asked whether the running container referenced the variable's name, which says nothing about
+  the value: a variable renamed onto that name, or given a new value, was reported as already there.
+
+- *Rejected: a hash of the variables in the annotation.* Anyone allowed to read pods could test
+  guesses of a short value against it.
+- *Rejected: restarting automatically.* A restart interrupts a turn in progress, and an autonomous
+  session resumed from its prompt may repeat work it already did outside; the owner decides.
+- *Rejected: the entrypoint re-reading variables from a file.* Only processes started after the
+  change would see them, and the agent CLI, the one that matters, is not one of them.
+- A pod started before this change has no annotation and reports nothing pending: unknown is not
+  the same as changed, and a note on every older session would teach the owner to ignore it.
+
+Verified with a real kubelet (`tests/SecretLiveSyncProof`, 23 checks). The setup: the branch's
+backend as the chart's service account, k3s in a QEMU guest, real Postgres, and memcached:alpine
+running as uid 1000 on a read-only root filesystem in place of the agent runtime. The process's own
+environment was read from `/proc/1/environ`, the files with `kubectl exec`. Not covered: the
+restart through `apply-resources` itself, because the rig has no object storage for the state
+archive. The proof shows that it attempts the restart for pending variables, and restarts with
+pause and resume.
 
 ## Found on the way
 

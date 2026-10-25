@@ -7,10 +7,11 @@ import { api, getSharedTranscript, sharedTerminalUrl, shellUrl, terminalUrl } fr
 import { SUBMIT_ENTER_DELAY_MS, submitToAgent } from '../lib/terminal-input.js'
 import { FILE_PASTE_NOTICE, attachTerminalClipboard } from '../lib/terminal-clipboard.js'
 import { terminalAttachmentPaths, terminalSafeFile, uploadAttachmentFiles } from '../lib/attachments.js'
+import { readPromptSuggestion } from '../lib/prompt-suggestion.js'
 import { detectMenu, sameMenu } from '../lib/cli-menu.js'
 
 const props = defineProps({ session: Object, kind: { type: String, default: 'agent' }, active: { type: Boolean, default: true }, readonly: { type: Boolean, default: false }, sharedToken: { type: String, default: null }, showComposer: { type: Boolean, default: true } })
-const emit = defineEmits(['status', 'menu', 'activity'])
+const emit = defineEmits(['status', 'menu', 'activity', 'suggestion'])
 const host = ref(null)
 const mobileInput = ref('')
 const pasteNotice = ref('')
@@ -172,6 +173,12 @@ function clearReconnect() {
 const MENU_SETTLE_MS = 150
 let menuTimer
 let lastMenu = null
+let lastSuggestion = ''
+function reportSuggestion(value) {
+  if (value === lastSuggestion) return
+  lastSuggestion = value
+  emit('suggestion', value)
+}
 function scheduleMenuCheck() {
   if (props.kind !== 'agent') return
   if (menuTimer) return
@@ -186,7 +193,9 @@ function checkMenu() {
   const lines = []
   // baseY is the top of the live screen; viewportY would follow a person scrolling back.
   for (let y = 0; y < term.rows; y++) lines.push(buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '')
-  reportMenu(isLive.value && ws ? detectMenu(lines) : null)
+  const menu = isLive.value && ws ? detectMenu(lines) : null
+  reportMenu(menu)
+  reportSuggestion(isLive.value && ws && !menu ? readPromptSuggestion(props.session.agent, term) : '')
 }
 function reportMenu(menu) {
   if (sameMenu(menu, lastMenu)) return
@@ -214,6 +223,7 @@ function sendKeys(keys) {
 function closeSocket() {
   cancelSubmission?.()
   reportMenu(null)
+  reportSuggestion('')
   connectionGeneration += 1
   clearReconnect()
   const socket = ws
@@ -261,7 +271,11 @@ async function connect() {
   socket.onmessage = event => {
     if (disposed || ws !== socket) return
     const activity = props.kind === 'agent' && parseActivityFrame(event.data)
-    if (activity) { emit('activity', activity); return }
+    if (activity) {
+      if (activity.state === 'working') reportSuggestion('')
+      emit('activity', activity)
+      return
+    }
     if (term) term.write(typeof event.data === 'string' ? event.data : new Uint8Array(event.data), scheduleMenuCheck)
   }
   socket.onclose = () => {
@@ -269,6 +283,7 @@ async function connect() {
     cancelSubmission?.()
     ws = undefined
     reportMenu(null)
+    reportSuggestion('')
     emit('activity', { state: 'unknown', source: 'hooks' })
     emit('status', 'disconnected')
     if (isLive.value) reconnectTimer = setTimeout(connect, 2000)
