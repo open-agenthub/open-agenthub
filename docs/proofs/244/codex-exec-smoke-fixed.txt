@@ -1,7 +1,0 @@
-Pinned CLI 0.160.0; evidence: /home/agent/tmp/codex-autonomous-policy-ynOorE
-redirect: ran :: echo smoke > smoke.txt && cat smoke.txt && uname -m
-plain: ran :: uname -m
-variable: ran :: echo "$HOME" | wc -c
-git: ran :: git add -A && git -c user.name=smoke -c user.email=smoke@example.com commit -q --allow-empty -m smoke && git log --oneline -1
-edit: ran :: apply_patch edited.txt
-all autonomous commands ran

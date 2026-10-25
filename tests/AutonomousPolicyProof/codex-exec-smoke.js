@@ -4,21 +4,21 @@
 // decision. The callback is tests/AutonomousPolicyProof (the real AgentPolicyMatcher), not a
 // canned answer, because a canned "allow" is what hid the deny in the #160 proof. Runs the pinned
 // CLI in exec mode with the driver's real arguments and the managed requirements bound via proot.
-//   CODEX_BIN=… PROOT_BIN=… POLICY_URL=http://127.0.0.1:<port> node codex-autonomous-policy-smoke.js
+//   CODEX_BIN=… PROOT_BIN=… POLICY_URL=http://127.0.0.1:<port> node codex-exec-smoke.js
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, execFileSync } = require('node:child_process');
 const { createServer } = require('node:http');
-const driver = require('../../codex/driver');
+const driver = require('../../agent-runtime/codex/driver');
 const proot = process.env.PROOT_BIN;
 const codex = process.env.CODEX_BIN;
 const policyUrl = process.env.POLICY_URL;
 assert.ok(path.isAbsolute(proot || ''), 'PROOT_BIN must be absolute');
 assert.ok(path.isAbsolute(codex || ''), 'CODEX_BIN must be absolute');
 assert.ok(policyUrl, 'POLICY_URL must point at tests/AutonomousPolicyProof');
-const runtime = path.resolve(__dirname, '../../codex');
+const runtime = path.resolve(__dirname, '../../agent-runtime/codex');
 const pin = /ARG CODEX_VERSION=(\S+)/.exec(fs.readFileSync(path.join(runtime, 'Dockerfile'), 'utf8'))[1];
 assert.equal(execFileSync(codex, ['--version'], { encoding: 'utf8' }).trim(), `codex-cli ${pin}`);
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-autonomous-policy-'));

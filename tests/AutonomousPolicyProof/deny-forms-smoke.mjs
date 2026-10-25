@@ -2,12 +2,12 @@
 // auto-approve is off, through both unattended hook paths: Codex's real policy-hook.js (fed the
 // PreToolUse payload the CLI sends) and OpenCode's real policy gate. The callback is
 // tests/AutonomousPolicyProof started with autoApprove=false, i.e. the backend's real matcher.
-//   POLICY_URL=http://127.0.0.1:<port> node autonomous-deny-forms-smoke.mjs
+//   POLICY_URL=http://127.0.0.1:<port> node deny-forms-smoke.mjs
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createGate } from '../../opencode/policy-gate.mjs';
+import { createGate } from '../../agent-runtime/opencode/policy-gate.mjs';
 
-const hook = fileURLToPath(new URL('../../codex/policy-hook.js', import.meta.url));
+const hook = fileURLToPath(new URL('../../agent-runtime/codex/policy-hook.js', import.meta.url));
 const env = { AGENTHUB_MODE: 'autonomous', AGENTHUB_CALLBACK_URL: `${process.env.POLICY_URL}/internal/sessions/proof`,
   AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback' };
 const FORMS = ['git push >/dev/null', '$(git push)', '`git push`', 'x=1; git push', "sh -c 'git push'",
