@@ -290,6 +290,9 @@ public sealed class SessionsController : ControllerBase
         catch (InvalidOperationException e) { return Conflict(e.Message); }
     }
 
+    // How many of a session's messages the web app lists, and therefore can offer to push.
+    private const int RecentMessages = 20;
+
     /// <summary>Recent agent messages sent to this session — a read-only view for the web
     /// app; it never marks messages delivered (that flag belongs to the agent's inbox).</summary>
     [HttpGet("{id}/messages")]
@@ -298,7 +301,7 @@ public sealed class SessionsController : ControllerBase
         if (await _svc.GetSessionAsync(Owner, id, ct) is null) return NotFound();
         if (_messages is null) return Ok(Array.Empty<AgentMessageInfo>());
 
-        var recent = (await _messages.ListRecentAsync(id, 20, ct)).Where(m => m.Owner == Owner).ToList();
+        var recent = (await _messages.ListRecentAsync(id, RecentMessages, ct)).Where(m => m.Owner == Owner).ToList();
         var titles = recent.Any(m => m.FromSessionId is not null)
             ? (await _svc.ListSessionsAsync(Owner, ct)).ToDictionary(s => s.Id, s => s.Title)
             : new Dictionary<string, string>();
@@ -338,6 +341,38 @@ public sealed class SessionsController : ControllerBase
         };
         await _messages.AddAsync(message, ct);
         var delivery = await AgentMessageDispatch.PushAsync(_delivery, target, message, null, ct);
+        return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));
+    }
+
+    /// <summary>
+    /// "Send now" for a message still waiting for the agent (#261): pushes the stored row into
+    /// the running agent as a priority message, interrupting its turn when asked. Without it a
+    /// waiting message could only wait for the turn to end or for the agent's next inbox poll.
+    /// The row is pushed as it is stored — same id, so the pod, which leaves the ids it typed
+    /// out of its end-of-turn take, cannot hand it over a second time.
+    /// </summary>
+    [HttpPost("{id}/messages/{messageId}/push")]
+    public async Task<IActionResult> PushMessage(string id, string messageId, [FromBody] PushAgentMessageRequest? req,
+        CancellationToken ct)
+    {
+        var target = await _svc.GetSessionAsync(Owner, id, ct);
+        if (target is null || _messages is null) return NotFound();
+        // Only what the Messages list offers can be pushed: the session's recent messages.
+        var stored = (await _messages.ListRecentAsync(id, RecentMessages, ct))
+            .FirstOrDefault(m => m.Id == messageId && m.Owner == Owner);
+        if (stored is null) return NotFound();
+        if (stored.DeliveredAt is not null) return Conflict(new { deliveredVia = stored.DeliveredVia });
+
+        var message = new SessionMessageRecord
+        {
+            Id = stored.Id, ProjectId = stored.ProjectId, FromSessionId = stored.FromSessionId,
+            ToSessionId = stored.ToSessionId, Owner = stored.Owner, Body = stored.Body, CreatedAt = stored.CreatedAt,
+            Priority = true,
+            Interrupt = req?.Interrupt == true
+        };
+        var fromTitle = stored.FromSessionId is null ? null
+            : (await _svc.GetSessionAsync(Owner, stored.FromSessionId, ct))?.Title;
+        var delivery = await AgentMessageDispatch.PushAsync(_delivery, target, message, fromTitle, ct);
         return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));
     }
 

@@ -114,7 +114,13 @@ function interruptAgent() {
   cancelSubmission?.()
   ws.send(JSON.stringify({ type: 'input', data: '\x03' }))
 }
-defineExpose({ submitMessage, interruptAgent, sendKeys })
+// The CLI's own interruption key, chosen by the session agent's driver: the CLIs that queue a
+// message sent during a turn submit that queue at once when interrupted with it (#261).
+function interruptQueue() {
+  if (!canSend.value || ws?.readyState !== WebSocket.OPEN) throw new Error('Agent is disconnected')
+  ws.send(JSON.stringify({ type: 'interrupt' }))
+}
+defineExpose({ submitMessage, interruptAgent, interruptQueue, sendKeys })
 
 function showPasteNotice(text) {
   pasteNotice.value = text

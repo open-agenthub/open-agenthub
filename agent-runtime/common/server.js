@@ -7,7 +7,7 @@ const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
-const { injectTerminalInput, formatFleetMessage } = require('./terminal-inject');
+const { injectTerminalInput, formatFleetMessage, INTERRUPT_PAUSE_MS, ESCAPE } = require('./terminal-inject');
 const { createNextTurnDelivery, IDLE_QUIET_MS } = require('./next-turn');
 const { createContextClear } = require('./context-clear');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
@@ -1200,6 +1200,18 @@ function createCommonServer(options = {}) {
           }
         }
         term.write(message.data);
+      } else if (message.type === 'interrupt') {
+        // "Send now" for messages the CLI holds in its own queue (#261): the driver's interruption
+        // key, not Ctrl+C. The pinned CLIs with such a queue submit it at once when interrupted
+        // with that key (verified per CLI, docs/agent-workspace.md). Each key goes through the
+        // input path above, as if pressed in the terminal, so the activity and typing rules see
+        // it the same way.
+        void (async () => {
+          for (const [index, key] of (driver.interruptKeys || [ESCAPE]).entries()) {
+            if (index) await new Promise(resolve => setTimeoutImpl(resolve, INTERRUPT_PAUSE_MS));
+            socket.emit('message', JSON.stringify({ type: 'input', data: key }));
+          }
+        })();
       } else if (message.type === 'resize' && message.cols > 0 && message.rows > 0) {
         lastSize = { cols: message.cols, rows: message.rows };
         signInPrivacy.resize(message.cols, message.rows);

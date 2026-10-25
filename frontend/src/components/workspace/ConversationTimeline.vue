@@ -11,13 +11,14 @@ import ConversationImage from './ConversationImage.vue'
 // share, an autonomous session — an empty conversation is a record with nothing saved in it,
 // and "Give your agent a task" would point at a composer that is not there.
 // pending: sent or fleet messages the agent has not taken yet (#153), { key, label, state, text,
-// dismissible }; shown after the conversation and gone once the conversation holds them.
+// dismissible, sendNow, interruptSend }; shown after the conversation and gone once the
+// conversation holds them. sendNow / interruptSend offer to deliver one at once (#261).
 // starting: the session is live but its agent has written nothing yet — the pod is pending or the
 // agent is still coming up. An empty conversation is then expected, not a failure, so this wins over
 // a load error (#241); polling keeps going and the first entry replaces it.
 const props = defineProps({ sessionId: String, sharedToken: String, items: { type: Array, default: () => [] }, loading: Boolean, error: String, starting: String, canQuote: Boolean, source: String, inviting: Boolean,
   hasEarlier: Boolean, startIndex: { type: Number, default: 0 }, pending: { type: Array, default: () => [] } })
-defineEmits(['quote', 'retry', 'dismiss-pending', 'load-earlier'])
+defineEmits(['quote', 'retry', 'dismiss-pending', 'send-pending', 'load-earlier'])
 const scroller = ref(null)
 const query = ref('')
 const following = ref(true)
@@ -98,6 +99,15 @@ watch([() => props.items, () => props.pending, query], async () => {
             <span class="message-label">{{ entry.label }} <span class="pending-state">· {{ entry.state }}</span><time v-if="entry.at" class="message-time"
               :datetime="isoMessageTime(entry.at)" :title="fullMessageTime(entry.at)" data-message-time>{{ shortMessageTime(entry.at) }}</time></span>
             <pre>{{ entry.text }}</pre>
+            <p v-if="entry.sendNow || entry.interruptSend || entry.note" class="pending-actions">
+              <button v-if="entry.sendNow" type="button" :disabled="entry.busy" data-pending-send-now
+                title="Deliver it into the agent's running prompt now, as a priority message"
+                @click="$emit('send-pending', entry.key, { interrupt: false })">Send now</button>
+              <button v-if="entry.interruptSend" type="button" :disabled="entry.busy" data-pending-interrupt
+                :title="entry.kind === 'sent' ? 'Stop the agent\'s turn; it then takes this message at once' : 'Stop the agent\'s turn and deliver this message now'"
+                @click="$emit('send-pending', entry.key, { interrupt: true })">Interrupt and send</button>
+              <span v-if="entry.note" class="pending-note" role="status">{{ entry.note }}</span>
+            </p>
             <button v-if="entry.dismissible" type="button" class="pending-dismiss" aria-label="Stop showing as pending" title="Stop showing as pending"
               data-pending-dismiss @click="$emit('dismiss-pending', entry.key)">✕</button>
           </li>
@@ -129,6 +139,9 @@ watch([() => props.items, () => props.pending, query], async () => {
 .message-pending pre { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
 .pending-dismiss { position: absolute; top: 6px; right: 6px; padding: 2px 6px; border: 0; background: transparent; color: var(--muted-3); font-size: 11px; }
 .pending-dismiss:hover { color: var(--text); }
+.pending-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 8px 0 0; }
+.pending-actions button { padding: 3px 9px; border-radius: 8px; font-size: 11px; }
+.pending-note { color: var(--muted-3); font-size: 11px; }
 .message-time { margin-left: 8px; font-weight: 400; color: var(--muted-3); cursor: default; }
 .message pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .message-terminal pre { font: 12px/1.6 var(--mono); }

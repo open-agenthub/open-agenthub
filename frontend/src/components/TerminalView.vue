@@ -140,14 +140,41 @@ watch(transcriptItems, items => {
   const left = stillPending(sentMessages.value, items)
   if (left.length !== sentMessages.value.length) { sentMessages.value = left; saveSent() }
 })
+// "Send now" for a pending message (#261). A fleet message is pushed by the hub as a priority
+// message, interrupting when asked. A composer message is already in the CLI's own queue — a
+// second copy would be sent twice — so the only faster way is to interrupt the turn, which makes
+// the CLI submit that queue at once; until then it takes the message at its next tool call or at
+// the turn's end.
+const pendingBusy = ref({})
+const pendingNotes = ref({})
+async function sendPendingNow(key, { interrupt = false } = {}) {
+  const note = text => { pendingNotes.value = { ...pendingNotes.value, [key]: text } }
+  if (!key.startsWith('fleet-')) {
+    try { agentTerminal.value?.interruptQueue() } catch (e) { note(e?.message || 'The agent is not connected.') }
+    return
+  }
+  pendingBusy.value = { ...pendingBusy.value, [key]: true }
+  try {
+    const result = await api.pushSessionMessage(props.session.id, key.slice('fleet-'.length), { interrupt })
+    // Delivered, the entry leaves the list with the refresh; only a message that stays says why.
+    if (result?.deliveredVia !== 'injected' && result?.deliveredVia !== 'mod') note('Could not be delivered now; it keeps waiting for the agent.')
+    await refreshMessages()
+  } catch (e) {
+    note(e?.message || 'The message could not be sent.')
+  } finally {
+    pendingBusy.value = { ...pendingBusy.value, [key]: false }
+  }
+}
 function dismissPending(key) {
   if (key.startsWith('fleet-')) return dismissMessage(key.slice('fleet-'.length))
   sentMessages.value = sentMessages.value.filter(entry => entry.id !== key)
   saveSent()
 }
 const pendingItems = computed(() => [
-  ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, at: entry.at, dismissible: true })),
-  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, at: m.createdAt, dismissible: true }))
+  ...sentMessages.value.map(entry => ({ key: entry.id, kind: 'sent', label: 'You', state: 'sent, waiting for the agent to take it', text: entry.text, at: entry.at, dismissible: true,
+    interruptSend: canCompose.value, note: pendingNotes.value[entry.id] })),
+  ...visibleMessages.value.map(m => ({ key: 'fleet-' + m.id, kind: 'fleet', label: fleetLabel(m), state: FLEET_WAITING, text: m.body, at: m.createdAt, dismissible: true,
+    sendNow: showSendMessage.value, interruptSend: showSendMessage.value, busy: pendingBusy.value['fleet-' + m.id], note: pendingNotes.value['fleet-' + m.id] }))
 ])
 const workspace = ref(null)
 const statuses = reactive({ agent: 'connecting…', shell: '' })
@@ -697,7 +724,7 @@ function interruptWorkspaceAgent() {
         </div>
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy" :starting="conversationStarting"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
-          :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" />
+          :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" @send-pending="sendPendingNow" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
         <CliSignInNotice v-if="modern && !isChat && cliMenu?.kind === 'signin'" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive" :send="sendSignInCode"
