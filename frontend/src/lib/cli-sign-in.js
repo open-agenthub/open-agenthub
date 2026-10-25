@@ -34,7 +34,10 @@ export function detectSignIn(lines) {
     } catch {}
   }
   const deviceIndex = rows.findIndex(row => /Enter this one-time code/i.test(row));
-  const code = mode === 'device' ? (deviceIndex >= 0 ? rows.slice(deviceIndex + 1).find(row => /^[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+$/.test(row)) : /Enter code:\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)/.exec(text)?.[1]) || '' : '';
+  const codeRows = deviceIndex >= 0 ? rows.slice(deviceIndex + 1) : [];
+  const isDeviceCode = row => /^(?:[A-Z0-9]{8,}|[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)$/.test(row);
+  const wrappedCode = codeRows.map((row, i) => row + (codeRows[i + 1] || '')).find(isDeviceCode);
+  const code = mode === 'device' ? (deviceIndex >= 0 ? codeRows.find(row => /^[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+$/.test(row)) || wrappedCode : /Enter code:\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+|[A-Z0-9]{8,})/.exec(text)?.[1]) || '' : '';
   return { kind: 'signin', mode, status: 'waiting', url, code, invalid: mode === 'credential' && /Expected token starting|└\s+Required/.test(text), options: [] };
 }
 

@@ -133,3 +133,41 @@ test('public wrapped route words do not quarantine ordinary command metadata', a
   assert.equal(privacy.mask('https://example.com/login'), '[sign-in data removed]');
  } finally { privacy.dispose(); }
 });
+
+test('query values and wrapped device codes survive the public-fragment filter', async () => {
+ const privacy = createSignInPrivacy();
+ try {
+  const url = 'https://example.com/login?state=short&code=abcde&code_challenge=opaque123456';
+  privacy.feed([...screens.code.slice(0, 2), url, ...screens.code.slice(-2)].join('\r\n')); await privacy.flush();
+  for (const value of [url, 'short', 'abcde', 'opaque123456']) assert.equal(privacy.mask(value), '[sign-in data removed]');
+  const rows = [...screens.device.slice(0, -1), 'ABCD-', '12345'];
+  assert.equal(detectSignIn(rows).code, 'ABCD-12345');
+  const frontend = await import('../../../frontend/src/lib/cli-sign-in.js');
+  assert.deepEqual(frontend.detectSignIn(rows), detectSignIn(rows));
+  privacy.feed('\x1b[2J\x1b[H' + rows.join('\r\n')); await privacy.flush();
+  for (const value of ['ABCD-12345', 'ABCD-', '12345']) assert.equal(privacy.mask(value), '[sign-in data removed]');
+ } finally { privacy.dispose(); }
+});
+
+test('authorization code-mode boolean does not quarantine native JSON booleans', async () => {
+ const privacy = createSignInPrivacy();
+ try {
+  privacy.feed([...screens.code.slice(0, 2), 'https://example.com/oauth/authorize?code=true&state=private-state-value', ...screens.code.slice(-2)].join('\r\n')); await privacy.flush();
+  assert.equal(privacy.mask('true'), 'true');
+  assert.equal(privacy.mask('private-state-value'), '[sign-in data removed]');
+ } finally { privacy.dispose(); }
+});
+
+test('unhyphenated eight-letter device codes remain private, including wrapped rows', async () => {
+ const frontend = await import('../../../frontend/src/lib/cli-sign-in.js');
+ for (const codeRows of [['ABCDEFGH'], ['ABCD', 'EFGH']]) {
+  const privacy = createSignInPrivacy();
+  try {
+   const rows = [...screens.device.slice(0, -1), ...codeRows];
+   assert.equal(detectSignIn(rows).code, 'ABCDEFGH');
+   assert.deepEqual(frontend.detectSignIn(rows), detectSignIn(rows));
+   privacy.feed(rows.join('\r\n')); await privacy.flush();
+   assert.equal(privacy.mask('ABCDEFGH'), '[sign-in data removed]');
+  } finally { privacy.dispose(); }
+ }
+});

@@ -36,7 +36,10 @@ if (process.argv[2] === '--runtime') {
  process.send?.({ready:true});
  return;
 }
-fs.cpSync(path.join(repo,'agent-runtime'),path.join(root,'agent-runtime'),{recursive:true,filter:source=>!source.includes('/node_modules')});
+if(process.env.SIGNIN_SOURCE_REF){
+ const archive=require('node:child_process').execFileSync('git',['archive',process.env.SIGNIN_SOURCE_REF,'agent-runtime'],{cwd:repo,maxBuffer:32*1024*1024});
+ require('node:child_process').execFileSync('tar',['-xf','-','-C',root],{input:archive});
+}else fs.cpSync(path.join(repo,'agent-runtime'),path.join(root,'agent-runtime'),{recursive:true,filter:source=>!source.includes('/node_modules')});
 fs.symlinkSync('/opt/session-agent/node_modules',path.join(root,'agent-runtime/node_modules'));
 const serverPath=path.join(root,'agent-runtime/common/server.js');
 let source=fs.readFileSync(serverPath,'utf8');
@@ -103,7 +106,7 @@ wss.on('connection',(socket,req)=>{
    const rows=Array.from({length:watchTerminal.rows},(_,y)=>buffer.getLine(buffer.baseY+y)?.translateToString(true).trim()||'');
    const signIn=require(path.join(repo,'agent-runtime/common/cli-sign-in')).detectSignIn(rows);authMode=signIn?.mode;
    if(signIn?.code)rememberAuth(signIn.code);if(signIn?.url)rememberAuth(signIn.url);
-   if(signIn){let continuation=false;for(const row of rows){const match=/https?:\/\/\S+/.exec(row);if(match){rememberAuth(match[0]);continuation=true;}else if(continuation && /^\S+$/.test(row)){const publicRoute=/^(login|authorize|oauth|device|auth)$/i.test(row);if(!publicRoute)rememberAuth(row);}else continuation=false;}}
+   if(signIn){let continuation=false;for(const row of rows){const match=/https?:\/\/\S+/.exec(row);if(match){rememberAuth(match[0]);continuation=true;}else if(continuation && /^\S+$/.test(row)){const publicRoute=row.length<=6&&/^[A-Za-z]+$/.test(row);if(!publicRoute)rememberAuth(row);}else continuation=false;}}
   });
   if(socket.readyState===WebSocket.OPEN)socket.send(data.toString());});
  upstream.on('close',()=>socket.close());upstream.on('error',()=>socket.close());socket.on('close',()=>upstream.close());

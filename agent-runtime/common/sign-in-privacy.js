@@ -36,17 +36,33 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
       if (active) {
         if (!wasActive) revision += 1;
         observed = true;
-        if (signIn?.url) remember(signIn.url);
-        if (signIn?.code) remember(signIn.code);
+        if (signIn?.url) {
+          remember(signIn.url);
+          try {
+            const address = new URL(signIn.url);
+            for (const [key, value] of address.searchParams) {
+              // The authorization screen uses code=true as a public mode flag, not a returned code.
+              if (key === 'code' && /^(true|false)$/.test(value) && address.pathname.endsWith('/authorize')) continue;
+              if (/^(state|code_challenge|code|device_code|user_code|ticket|token|challenge|nonce)$/i.test(key)) remember(value);
+            }
+          } catch {}
+        }
+        if (signIn?.code) {
+          remember(signIn.code);
+          for (const row of rows) {
+            const fragment = row.trim();
+            if (/^[A-Z0-9-]+$/.test(fragment) && signIn.code.includes(fragment)) remember(fragment);
+          }
+        }
         let continuation = false;
         for (const row of rows) {
           const match = /https?:\/\/\S+/.exec(row);
           if (match) { remember(match[0]); continuation = true; }
           else if (continuation && /^\S+$/.test(row.trim())) {
-            // Public route words can wrap onto their own row. Remembering "login" as a
-            // secret also matches ordinary /login command metadata and blocks every archive.
+            // Short alphabetic path fragments are not standalone authorization values. Actual
+            // query values and device codes are captured above without this fragment filter.
             const fragment = row.trim();
-            const publicRoute = /^(login|authorize|oauth|device|auth)$/i.test(fragment);
+            const publicRoute = fragment.length <= 6 && /^[A-Za-z]+$/.test(fragment);
             if (!publicRoute) remember(fragment);
           }
           else continuation = false;
@@ -93,7 +109,11 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
       try { stat = fs.lstatSync(file); } catch (error) { return optional && file === root && error.code === 'ENOENT'; }
       if (stat.isSymbolicLink()) return file !== root;
       if (stat.isDirectory()) {
-        try { return fs.readdirSync(file).every(name => visit(require('node:path').join(file, name))); } catch { return false; }
+        try {
+          if (!fs.readdirSync(file).every(name => visit(require('node:path').join(file, name)))) return false;
+          const after = fs.lstatSync(file);
+          return after.dev === stat.dev && after.ino === stat.ino && after.mtimeMs === stat.mtimeMs && after.ctimeMs === stat.ctimeMs;
+        } catch { return false; }
       }
       if (!stat.isFile()) return true;
       let fd;

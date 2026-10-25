@@ -35,6 +35,16 @@ const hub='http://127.0.0.1:8080';
  }
  const composer=page.locator('[data-workspace-composer] textarea');
  const card=page.locator('[data-cli-signin]');
+ if (process.env.SIGNIN_CREDENTIAL_ONLY) {
+  await open('opencode');
+  await page.locator('[data-drawer-agent]').click();
+  await page.waitForFunction(()=>document.querySelector('.xterm-rows')?.textContent.includes('Select provider'),null,{timeout:15000});
+  await page.locator('.xterm-helper-textarea').first().press('Enter');
+  await card.locator('[data-cli-signin-code]').waitFor({timeout:15000});
+  console.log('PASS real credential selector -> credential screen through selected runtime source');
+  assert.deepEqual(errors,[]);
+  await context.close();await browser.close();return;
+ }
  if (!process.env.SIGNIN_RECOVERY_ONLY) {
  await open('claude');
  console.log('STEP Claude page loaded');
@@ -92,6 +102,7 @@ const hub='http://127.0.0.1:8080';
  await open('opencode');
  // Navigate the real provider selector in its terminal, then verify native credential entry.
  await page.locator('[data-drawer-agent]').click();
+ await page.waitForFunction(()=>document.querySelector('.xterm-rows')?.textContent.includes('Select provider'),null,{timeout:15000});
  await page.locator('.xterm-helper-textarea').first().press('Enter');
  await card.locator('[data-cli-signin-code]').waitFor({timeout:15000});
  console.log('PASS OpenCode default credential flow');
