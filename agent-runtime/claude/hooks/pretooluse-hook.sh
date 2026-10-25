@@ -16,6 +16,11 @@ field() { # extract a top-level string field from JSON on stdin
 
 [ -z "${AGENTHUB_CALLBACK_URL:-}" ] && emit ask
 
+# AskUserQuestion asks the person something; it needs no one's permission (#252). Sent to the
+# hub, it became an approval request ("Allow AskUserQuestion?") the person had to grant before
+# the question itself appeared. "allow" still shows the CLI's question screen (2.1.287).
+case "$payload" in *'"tool_name":"AskUserQuestion"'*|*'"tool_name": "AskUserQuestion"'*) emit allow ;; esac
+
 req="$(printf '%s' "$payload" | node -e '
   let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
     let p={}; try{p=JSON.parse(d)}catch{}

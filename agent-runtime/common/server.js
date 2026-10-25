@@ -256,7 +256,9 @@ function createCommonServer(options = {}) {
   // are never remembered: replaying an old working state would leave a finished turn spinning.
   const activityClients = new Set();
   let activityTimer = null;
-  let activityPermissionPending = false;
+  // What a waiting turn waits for: 'approval' (a permission dialog) or 'answer' (a question), or
+  // null while it works.
+  let activityWaitingFor = null;
   let activityIdleOverride = false;
   let activityPromptAt = now();
   let activityLastOutput = 0;
@@ -264,15 +266,17 @@ function createCommonServer(options = {}) {
   function activityFrame() {
     let state = 'idle';
     const source = nextTurn ? 'hooks' : 'output';
-    if (!activityIdleOverride && nextTurn?.state === 'busy' && !activityPermissionPending && driver.failedTurnEnded) {
+    if (!activityIdleOverride && nextTurn?.state === 'busy' && !activityWaitingFor && driver.failedTurnEnded) {
       try { activityIdleOverride = driver.failedTurnEnded({ file: transcriptFile, after: activityPromptAt, fs }); } catch {}
     }
+    let reason;
     if (!exited && restartReason === null && !runtimeDraining && !activityIdleOverride) {
       if (nextTurn) state = nextTurn.state === 'busy'
-        ? (activityPermissionPending ? 'waiting' : 'working') : nextTurn.state;
+        ? (activityWaitingFor ? 'waiting' : 'working') : nextTurn.state;
       else state = activityLastOutput > 0 && now() - activityLastOutput < IDLE_QUIET_MS ? 'working' : 'idle';
     }
-    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source });
+    if (state === 'waiting') reason = activityWaitingFor;
+    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ...(reason ? { reason } : {}) });
   }
   function removeActivityClient(socket) {
     activityClients.delete(socket);
@@ -1074,14 +1078,19 @@ function createCommonServer(options = {}) {
         return;
       }
       if (message.type === 'input' && typeof message.data === 'string') {
-        if (nextTurn?.state === 'busy' && !activityPermissionPending && driver.isTurnInterrupt?.(message.data)) {
+        // The driver's interruption key cancels the whole turn inside a permission or question
+        // dialog too, as it does while the turn works, and no hook follows (verified with the
+        // pinned CLI, #252). Kept waiting, the Workspace asked for an approval at an idle prompt
+        // until the next one.
+        if (nextTurn?.state === 'busy' && driver.isTurnInterrupt?.(message.data)) {
           activityIdleOverride = true;
+          activityWaitingFor = null;
           publishActivity();
         }
         // An approval selected in the terminal resumes the same turn, so there is no new prompt
         // hook. The client still gives a visible menu precedence until its screen clears.
-        if (activityPermissionPending && /[\r\n]|^[yYnN]$/.test(message.data)) {
-          activityPermissionPending = false;
+        if (activityWaitingFor && /[\r\n]|^[yYnN]$/.test(message.data)) {
+          activityWaitingFor = null;
           publishActivity();
         }
         if (nextTurn) {
@@ -1473,7 +1482,7 @@ function createCommonServer(options = {}) {
     const raw = await readBoundedBody(request, MAX_LIMIT_REPORT_BYTES);
     let event = null;
     try { event = raw && JSON.parse(raw.toString('utf8')).event; } catch {}
-    if (!['prompt', 'permission', 'stop', 'idle'].includes(event)) return fileError(response, 400, 'invalid_event');
+    if (!['prompt', 'permission', 'question', 'stop', 'idle'].includes(event)) return fileError(response, 400, 'invalid_event');
     // A Stop during an update or restart is answered with nothing: the agent is about to go.
     // An interrupted/failed plugin turn is idle to viewers but is not a safe point for fleet
     // continuation. Keep that distinction instead of turning its idle report into a Stop.
@@ -1489,7 +1498,7 @@ function createCommonServer(options = {}) {
       }
     }
     activityIdleOverride = event === 'idle';
-    activityPermissionPending = event === 'permission';
+    activityWaitingFor = event === 'permission' ? 'approval' : event === 'question' ? 'answer' : null;
     const text = event === 'idle' || runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
     publishActivity();
     sendJson(response, 200, text ? { text } : {});
