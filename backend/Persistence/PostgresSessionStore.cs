@@ -128,6 +128,11 @@ public interface ISessionStore
     /// <see cref="SetCredentialIdAsync"/>: the spawn runs while the row may be edited elsewhere.
     /// </summary>
     Task SetResolvedCredentialIdAsync(string id, string? accountId, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>
+    /// Records who pays for the tokens of the pod a start creates (UsageBilling.ForPod). Hub-side
+    /// state on purpose: usage ingest reads it from here, never from anything the pod sends.
+    /// </summary>
+    Task SetUsageBillingAsync(string id, string billing, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>Stores the terminal scrollback so transcripts work without S3.</summary>
     Task SetScrollbackAsync(string id, string text, CancellationToken ct = default);
     Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default);
@@ -220,6 +225,7 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS converted_from TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS git_pat_ids TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS resolved_credential_id TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS usage_billing TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_failover TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS failure_reason TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS secret_ids TEXT;
@@ -344,6 +350,14 @@ public sealed class PostgresSessionStore : ISessionStore
     {
         await using var cmd = _db.CreateCommand("UPDATE sessions SET credential_id=@c, updated_at=now() WHERE id=@id");
         cmd.Parameters.AddWithValue("c", (object?)credentialId ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task SetUsageBillingAsync(string id, string billing, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET usage_billing=@b WHERE id=@id");
+        cmd.Parameters.AddWithValue("b", billing);
         cmd.Parameters.AddWithValue("id", id);
         await cmd.ExecuteNonQueryAsync(ct);
     }

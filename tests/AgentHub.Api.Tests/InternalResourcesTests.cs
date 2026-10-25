@@ -74,9 +74,61 @@ public class InternalResourcesTests
         Assert.IsType<NoContentResult>(result);
     }
 
+    // ------------------------------------------------- POST /internal/sessions/{id}/usage
+
+    private static readonly AgentUsageReport Report = new(400, 50, 600, 0, 20, 1, null);
+
+    [Theory]
+    [InlineData(AgentAuthMode.Subscription, "subscription")]
+    [InlineData(AgentAuthMode.ApiKey, "api")]
+    [InlineData(AgentAuthMode.CustomEndpoint, "custom")]
+    public async Task Usage_TakesOwnerAndBillingFromTheSessionRecord(AgentAuthMode authMode, string billing)
+    {
+        var usage = new RecordingUsageStore();
+        var controller = Controller(usage, agent: AgentKind.Codex, authMode: authMode);
+
+        var result = await controller.Usage(SessionId, Report, CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        var reported = Assert.Single(usage.Reports);
+        Assert.Equal((SessionId, Owner, "codex", billing, Report), reported);
+    }
+
+    [Fact]
+    public async Task Usage_WithWrongToken_ReturnsUnauthorized()
+    {
+        var usage = new RecordingUsageStore();
+        var controller = Controller(usage, token: "wrong", agent: AgentKind.Codex);
+
+        Assert.IsType<UnauthorizedResult>(await controller.Usage(SessionId, Report, CancellationToken.None));
+        Assert.Empty(usage.Reports);
+    }
+
+    [Fact]
+    public async Task Usage_ForClaude_IsIgnoredBecauseItsTokensArriveOverOtlp()
+    {
+        var usage = new RecordingUsageStore();
+        var controller = Controller(usage, agent: AgentKind.Claude, authMode: AgentAuthMode.Subscription);
+
+        Assert.IsType<NoContentResult>(await controller.Usage(SessionId, Report, CancellationToken.None));
+        Assert.Empty(usage.Reports);
+    }
+
+    [Fact]
+    public async Task Usage_WithNegativeOrNonFiniteValues_ReturnsBadRequest()
+    {
+        var usage = new RecordingUsageStore();
+        var controller = Controller(usage, agent: AgentKind.OpenCode);
+
+        Assert.IsType<BadRequestResult>(await controller.Usage(SessionId, Report with { OutputTokens = -1 }, CancellationToken.None));
+        Assert.IsType<BadRequestResult>(await controller.Usage(SessionId, Report with { CostUsd = double.NaN }, CancellationToken.None));
+        Assert.Empty(usage.Reports);
+    }
+
     // ------------------------------------------------------------------ fixtures
 
-    private static InternalController Controller(RecordingUsageStore? usage, string token = Token)
+    private static InternalController Controller(RecordingUsageStore? usage, string token = Token,
+        AgentKind agent = AgentKind.Claude, AgentAuthMode authMode = AgentAuthMode.Auto)
     {
         var session = new SessionRecord
         {
@@ -84,6 +136,8 @@ public class InternalResourcesTests
             Owner = Owner,
             CallbackToken = Token,
             Mode = SessionMode.Autonomous,
+            Agent = agent,
+            AuthMode = authMode,
             Title = "session"
         };
         var controller = new InternalController(
@@ -99,9 +153,16 @@ public class InternalResourcesTests
     private sealed class RecordingUsageStore : IUsageStore
     {
         public List<(string SessionId, string Owner, SessionResourceSample Sample)> Samples { get; } = [];
+        public List<(string SessionId, string Owner, string Source, string Billing, AgentUsageReport Report)> Reports { get; } = [];
 
         public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task<bool> AddDeltaAsync(SessionUsageDelta delta, CancellationToken ct = default) => Task.FromResult(true);
+        public Task AddReportedUsageAsync(string sessionId, string owner, string source, string billing,
+            AgentUsageReport report, CancellationToken ct = default)
+        {
+            Reports.Add((sessionId, owner, source, billing, report));
+            return Task.CompletedTask;
+        }
         public Task AddResourceSampleAsync(string sessionId, string owner, SessionResourceSample sample, CancellationToken ct = default)
         {
             Samples.Add((sessionId, owner, sample));

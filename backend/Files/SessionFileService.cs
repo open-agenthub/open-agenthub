@@ -138,6 +138,8 @@ public sealed class SessionFileService : ISessionFileService
             throw new SessionFileException(validation.Code!);
         }
 
+        // Opaque formats must never inherit an active content type supplied by the uploader.
+        request = request with { MimeType = SessionFileValidator.MimeForName(request.Name) };
         SessionInfo? liveSession = null;
         if (storageKind == SessionFileStorageKind.Pod)
         {
@@ -405,7 +407,9 @@ public sealed class SessionFileService : ISessionFileService
             // presigned url it points at is browser-facing. A session pod is neither: it may have
             // no route to that host at all, and its fetch would follow the redirect carrying
             // X-Agent-Token, handing the session's callback token to the storage endpoint.
-            if (allowRedirect && _artifacts.CanServeBrowsersDirectly)
+            // SVG and opaque downloads require our response headers, which storage cannot enforce.
+            if (allowRedirect && _artifacts.CanServeBrowsersDirectly &&
+                mimeType is not ("image/svg+xml" or "application/octet-stream"))
             {
                 return new FileContentResult(
                     null,

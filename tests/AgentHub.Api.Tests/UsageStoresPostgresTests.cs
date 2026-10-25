@@ -64,6 +64,164 @@ public class UsageStoresPostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task SubscriptionSession_ReportingACost_IsNotApiSpend()
+    {
+        // Claude Code 2.1.287 reports claude_code.cost.usage from its own price table for a
+        // subscription login just as for an API key. That figure must not become API spend.
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-sub", "alice", AgentAuthMode.Subscription);
+        await db.AddSessionAsync("s-api", "alice", AgentAuthMode.ApiKey);
+
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-sub", CostUsd = 0.003255, InputTokens = 400, OutputTokens = 50 });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-api", CostUsd = 0.003255, InputTokens = 400, OutputTokens = 50 });
+
+        var rows = (await db.Usage.ListByOwnerAsync("alice")).ToDictionary(r => r.SessionId);
+        Assert.False(rows["s-sub"].ApiBilled);
+        Assert.Equal("subscription", rows["s-sub"].Billing);
+        Assert.Equal(0.003255, rows["s-sub"].CostUsd, 9); // what the CLI said, kept for reference
+        Assert.Equal(0, rows["s-sub"].ApiCostUsd);
+        Assert.True(rows["s-api"].ApiBilled);
+        Assert.Equal(0.003255, rows["s-api"].ApiCostUsd, 9);
+
+        var summary = await db.Usage.SummaryAsync("alice", null, null);
+        Assert.Equal(0.003255, summary.CostUsd, 9);
+        Assert.Equal(1, summary.ApiSessionCount);
+        Assert.Equal(1, summary.SubscriptionSessionCount);
+        Assert.Equal(450, summary.SubscriptionTokens);
+        Assert.Equal(450, summary.ApiTokens);
+        Assert.Equal(0.003255, await db.Usage.MonthToDateApiCostAsync("alice"), 9);
+    }
+
+    [PostgreSqlFact]
+    public async Task AutoSession_FollowsTheLabelTheHubStored_AndIsUnknownWithoutOne()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-auto-api", "alice", AgentAuthMode.Auto);
+        await db.AddSessionAsync("s-auto-tui", "alice", AgentAuthMode.Auto);
+        await db.AddSessionAsync("s-auto-old", "alice", AgentAuthMode.Auto);
+        await db.Sessions.SetUsageBillingAsync("s-auto-api", UsageBilling.Api);
+        await db.Sessions.SetUsageBillingAsync("s-auto-tui", UsageBilling.Unknown);
+        // A later upsert of the session (an edit) keeps the label the start stored.
+        await db.AddSessionAsync("s-auto-api", "alice", AgentAuthMode.Auto);
+
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-api", CostUsd = 1 });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-tui", CostUsd = 2 });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-auto-old", CostUsd = 4 });
+
+        var rows = (await db.Usage.ListByOwnerAsync("alice")).ToDictionary(r => r.SessionId);
+        Assert.Equal("api", rows["s-auto-api"].Billing);
+        Assert.Equal("unknown", rows["s-auto-tui"].Billing);
+        Assert.Equal("unknown", rows["s-auto-old"].Billing);
+        Assert.Equal(1, await db.Usage.MonthToDateApiCostAsync("alice"), 6);
+    }
+
+    [PostgreSqlFact]
+    public async Task OtlpPayload_CannotChangeTheBilling()
+    {
+        // The OTLP endpoint is unauthenticated: a payload claiming a subscription for an ApiKey
+        // session, or naming another owner, changes nothing the hub decides.
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-api", "alice", AgentAuthMode.ApiKey);
+        var payload = new OtlpMetricsParserTests.OtlpBuilder()
+            .Resource(("agenthub.session_id", "s-api"), ("agenthub.owner", "mallory"), ("agenthub.billing", "subscription"))
+            .TokenPoint("input", 100)
+            .CostPoint(0.5)
+            .Build();
+
+        foreach (var delta in OtlpMetricsParser.Parse(payload)) await db.Usage.AddDeltaAsync(delta);
+
+        var row = Assert.Single(await db.Usage.ListByOwnerAsync("alice"));
+        Assert.Equal("api", row.Billing);
+        Assert.Equal(0.5, await db.Usage.MonthToDateApiCostAsync("alice"), 6);
+        Assert.Empty(await db.Usage.ListByOwnerAsync("mallory"));
+    }
+
+    [PostgreSqlFact]
+    public async Task Usage_IsScopedToTheOwner()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-alice", "alice", AgentAuthMode.ApiKey);
+        await db.AddSessionAsync("s-bob", "bob", AgentAuthMode.Subscription);
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-alice", CostUsd = 1, InputTokens = 10 });
+        // A payload naming another owner cannot move a session: the sessions registry decides.
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-bob", UserId = "alice", CostUsd = 1, InputTokens = 20 });
+
+        Assert.Equal("s-alice", Assert.Single(await db.Usage.ListByOwnerAsync("alice")).SessionId);
+        Assert.Equal("s-bob", Assert.Single(await db.Usage.ListByOwnerAsync("bob")).SessionId);
+        Assert.Null(await db.Usage.GetAsync("alice", "s-bob"));
+        Assert.Null(await db.Usage.GetAsync("bob", "s-alice"));
+        var alice = await db.Usage.SummaryAsync("alice", null, null);
+        Assert.Equal(1, alice.SessionCount);
+        Assert.Equal(10, alice.InputTokens);
+        Assert.Equal(1, alice.CostUsd, 6);
+        Assert.Equal(0, (await db.Usage.SummaryAsync("bob", null, null)).CostUsd, 6);
+        Assert.Equal(0, await db.Usage.MonthToDateApiCostAsync("bob"), 6);
+    }
+
+    [PostgreSqlFact]
+    public async Task ReportedUsage_AddsOnlyTheDifference_AndStaysWithItsOwner()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-codex", "alice", AgentAuthMode.Subscription);
+        await db.AddSessionAsync("s-oc", "bob", AgentAuthMode.ApiKey);
+
+        var first = new AgentUsageReport(400, 50, 600, 0, 20, 1, null);
+        await db.Usage.AddReportedUsageAsync("s-codex", "alice", "codex", "subscription", first);
+        await db.Usage.AddReportedUsageAsync("s-codex", "alice", "codex", "subscription", first); // repeated: adds nothing
+        await db.Usage.AddReportedUsageAsync("s-codex", "alice", "codex", "subscription", first with { InputTokens = 800, Turns = 2 });
+        // A fresh pod without the archived rollouts reports from zero again: counted in full.
+        await db.Usage.AddReportedUsageAsync("s-codex", "alice", "codex", "subscription", new AgentUsageReport(10, 1, 0, 0, 0, 1, null));
+
+        await db.Usage.AddReportedUsageAsync("s-oc", "bob", "opencode", "api", new AgentUsageReport(400, 50, 600, 0, 20, 1, 0.002));
+        await db.Usage.AddReportedUsageAsync("s-oc", "bob", "opencode", "api", new AgentUsageReport(800, 100, 1200, 0, 40, 2, 0.005));
+
+        var codex = Assert.Single(await db.Usage.ListByOwnerAsync("alice"));
+        Assert.Equal(810, codex.InputTokens);
+        Assert.Equal(51, codex.OutputTokens);
+        Assert.Equal(600, codex.CacheReadTokens);
+        Assert.Equal(20, codex.ReasoningTokens);
+        Assert.Equal(3, codex.Turns);
+        Assert.Equal("codex", codex.Source);
+        Assert.Equal("subscription", codex.Billing);
+        Assert.False(codex.CostReported);
+        Assert.Equal(0, codex.EstimatedCostUsd); // the Claude price table says nothing about these tokens
+
+        var opencode = Assert.Single(await db.Usage.ListByOwnerAsync("bob"));
+        Assert.True(opencode.CostReported);
+        Assert.Equal(0.005, opencode.ApiCostUsd, 9);
+        Assert.Equal(0.005, await db.Usage.MonthToDateApiCostAsync("bob"), 9);
+        Assert.Equal(0, await db.Usage.MonthToDateApiCostAsync("alice"), 9);
+
+        // Owner scoping: neither owner sees the other's session.
+        Assert.Null(await db.Usage.GetAsync("bob", "s-codex"));
+        Assert.Null(await db.Usage.GetAsync("alice", "s-oc"));
+        var alice = await db.Usage.SummaryAsync("alice", null, null);
+        Assert.Equal(1, alice.SessionCount);
+        Assert.Equal(3, alice.SubscriptionTurns);
+        Assert.Equal(0, alice.CostUsd);
+    }
+
+    [PostgreSqlFact]
+    public async Task Initialize_ClassifiesRowsFromBeforeTheSplit()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("old-sub", "alice", AgentAuthMode.Subscription);
+        await db.AddSessionAsync("old-api", "alice", AgentAuthMode.ApiKey);
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "old-sub", CostUsd = 3, InputTokens = 10 });
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "old-api", CostUsd = 2, InputTokens = 10 });
+        await db.ExecuteAsync("UPDATE session_usage SET billing = NULL, api_cost_usd = 0, usage_source = NULL");
+
+        await db.Usage.InitializeAsync();
+
+        var rows = (await db.Usage.ListByOwnerAsync("alice")).ToDictionary(r => r.SessionId);
+        Assert.Equal("subscription", rows["old-sub"].Billing);
+        Assert.Equal(0, rows["old-sub"].ApiCostUsd);
+        Assert.Equal("api", rows["old-api"].Billing);
+        Assert.Equal(2, rows["old-api"].ApiCostUsd);
+        Assert.Equal("claude-otel", rows["old-api"].Source);
+    }
+
+    [PostgreSqlFact]
     public async Task MonthToDateApiCost_ComesFromTheMonthlyRollup()
     {
         await using var db = await PostgresUsageDatabase.CreateAsync();
@@ -283,6 +441,15 @@ internal sealed class PostgresUsageDatabase : IAsyncDisposable
             AuthMode = authMode,
             CallbackToken = $"token-{id}"
         });
+
+    public async Task ExecuteAsync(string sql)
+    {
+        var builder = new NpgsqlConnectionStringBuilder(_baseConnectionString) { SearchPath = _schema };
+        await using var connection = new NpgsqlConnection(builder.ConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        await command.ExecuteNonQueryAsync();
+    }
 
     public ValueTask DisposeAsync()
         => new(DropSchemaAsync(_baseConnectionString, _schema));

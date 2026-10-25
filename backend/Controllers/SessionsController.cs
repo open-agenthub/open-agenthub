@@ -252,7 +252,7 @@ public sealed class SessionsController : ControllerBase
         var live = _liveTranscripts is null ? null
             : (Func<CancellationToken, Task<IReadOnlyList<TranscriptEntry>?>>)(token => _liveTranscripts.ReadAsync(session, token));
         var page = await SessionTranscripts.PageAsync(_svc, Owner, id, session.Phase, offset, max, ct, live);
-        return page is null ? NotFound() : Ok(page);
+        return Ok(page);
     }
 
     /// <summary>

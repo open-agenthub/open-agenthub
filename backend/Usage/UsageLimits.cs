@@ -84,22 +84,20 @@ public sealed class UsageLimitService
 
     /// <summary>
     /// Throws <see cref="UsageLimitExceededException"/> when the owner is over budget and the
-    /// session would bill the Anthropic API. Subscription sessions pass; Auto passes when a
-    /// Claude subscription login is stored (the key is only the fallback then). Non-Claude
-    /// agents are not metered by the usage pipeline and therefore not gated.
+    /// start would bill a provider API — <paramref name="billing"/> as
+    /// <see cref="UsageBilling.ForPod"/> decides it, the same classification usage reporting uses.
+    /// Subscription, self-hosted and unknown (interactive Auto with both credentials) pass. Only
+    /// agents whose CLI reports a cost are gated (<see cref="UsageBilling.ReportsCost"/>): the
+    /// budget counts reported cost, so an agent that never adds to it cannot be held to it.
     /// </summary>
-    public async Task EnsureCanStartAsync(string owner, AgentKind agent, AgentAuthMode authMode,
-        bool hasSubscriptionCredentials, CancellationToken ct = default)
+    public async Task EnsureCanStartAsync(string owner, AgentKind agent, string billing, CancellationToken ct = default)
     {
-        if (agent != AgentKind.Claude) return;
-        var apiBilled = authMode == AgentAuthMode.ApiKey ||
-                        (authMode == AgentAuthMode.Auto && !hasSubscriptionCredentials);
-        if (!apiBilled) return;
+        if (!UsageBilling.ReportsCost(agent) || billing != UsageBilling.Api) return;
 
         var status = await GetStatusAsync(owner, ct);
         if (status.Blocked)
             throw new UsageLimitExceededException(
                 $"Monthly API budget reached (${status.MonthApiCostUsd:0.00} of ${status.EffectiveLimitUsd:0.00}, " +
-                $"{status.Source} limit). Use a Claude subscription session or raise the limit.");
+                $"{status.Source} limit). Use a subscription session or raise the limit.");
     }
 }

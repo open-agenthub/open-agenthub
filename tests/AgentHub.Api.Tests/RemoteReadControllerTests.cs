@@ -160,6 +160,43 @@ public sealed class RemoteReadControllerTests
         else Assert.IsType<NotFoundResult>(result);
     }
 
+    // #241: an owned session with nothing written yet is an empty page, while a session the caller
+    // neither owns nor was granted — unknown, or another owner's — stays 404 and its transcript is
+    // never read, so the empty page does not tell a caller that a session exists.
+    [Fact]
+    public async Task OwnedSessionWithNothingWrittenIsAnEmptyPage()
+    {
+        var c = Controller(sessions: (method, _) => method.Name switch
+        {
+            "GetSessionAsync" => Task.FromResult<SessionInfo?>(new()
+            {
+                Id = "s", Title = "Session", Owner = "alice", Mode = SessionMode.Interactive, Phase = "Pending"
+            }),
+            "GetConversationAsync" => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null),
+            "GetTranscriptAsync" => Task.FromResult<string?>(null),
+            _ => throw new InvalidOperationException(method.Name)
+        }, live: (_, _) => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null));
+        var page = Assert.IsType<ConversationPage>(
+            Assert.IsType<OkObjectResult>((await c.Conversation("s", -1, null, default)).Result).Value);
+        Assert.Equal(("scrollback", "", 0), (page.Source, page.Text, page.Length));
+        Assert.Empty(page.Entries);
+    }
+
+    [Theory]
+    [InlineData("unknown")]
+    [InlineData("bobs-session")]
+    public async Task UnknownOrForeignSessionStaysNotFoundWithoutReadingATranscript(string id)
+    {
+        var c = Controller(sessions: (method, args) =>
+        {
+            // Only the owner-scoped lookup may run; any transcript read would be a leak.
+            Assert.Equal("GetSessionAsync", method.Name);
+            Assert.Equal("alice", args![0]);
+            return Task.FromResult<SessionInfo?>(null);
+        }, access: (_, _) => Task.FromResult<SessionAccessResult?>(null));
+        Assert.IsType<NotFoundResult>((await c.Conversation(id, -1, null, default)).Result);
+    }
+
     [Fact]
     public async Task ConversationFallsBackToWorkspaceScrollbackPaging()
     {

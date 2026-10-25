@@ -4,7 +4,7 @@ const OFFICE_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ])
 
-const IMAGE_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
+const IMAGE_MIME_TYPES = new Set(['image/svg+xml', 'image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 const VIDEO_MIME_TYPES = new Set(['video/mp4', 'video/webm'])
 
 export function previewKind(file, capabilities = {}) {

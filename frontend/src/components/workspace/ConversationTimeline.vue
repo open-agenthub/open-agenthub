@@ -13,7 +13,10 @@ import ConversationImage from './ConversationImage.vue'
 // pending: sent or fleet messages the agent has not taken yet (#153), { key, label, state, text,
 // dismissible, sendNow, interruptSend }; shown after the conversation and gone once the
 // conversation holds them. sendNow / interruptSend offer to deliver one at once (#261).
-const props = defineProps({ sessionId: String, sharedToken: String, items: { type: Array, default: () => [] }, loading: Boolean, error: String, canQuote: Boolean, source: String, inviting: Boolean,
+// starting: the session is live but its agent has written nothing yet — the pod is pending or the
+// agent is still coming up. An empty conversation is then expected, not a failure, so this wins over
+// a load error (#241); polling keeps going and the first entry replaces it.
+const props = defineProps({ sessionId: String, sharedToken: String, items: { type: Array, default: () => [] }, loading: Boolean, error: String, starting: String, canQuote: Boolean, source: String, inviting: Boolean,
   hasEarlier: Boolean, startIndex: { type: Number, default: 0 }, pending: { type: Array, default: () => [] } })
 defineEmits(['quote', 'retry', 'dismiss-pending', 'send-pending', 'load-earlier'])
 const scroller = ref(null)
@@ -61,7 +64,12 @@ watch([() => props.items, () => props.pending, query], async () => {
     <div ref="scroller" class="conversation-scroll" @scroll.passive="onScroll">
       <div class="timeline">
         <button v-if="hasEarlier" type="button" :disabled="loading" data-load-earlier @click="earlier(); $emit('load-earlier')">Load earlier messages</button>
-        <p v-if="loading && !items.length" class="empty" role="status">Loading conversation…</p>
+        <div v-if="starting && !items.length" class="empty starting" role="status" aria-live="polite" data-conversation-starting>
+          <span class="starting-mark" aria-hidden="true"></span>
+          <h2>Session starting</h2>
+          <p>{{ starting }}</p>
+        </div>
+        <p v-else-if="loading && !items.length" class="empty" role="status">Loading conversation…</p>
         <div v-else-if="error" class="empty" role="alert">{{ error }} <button type="button" @click="$emit('retry')">Retry</button></div>
         <p v-else-if="!items.length && !inviting" class="empty" data-conversation-empty>No saved conversation.</p>
         <div v-else-if="!items.length && !pending.length" class="empty">
@@ -141,6 +149,10 @@ watch([() => props.items, () => props.pending, query], async () => {
 .empty-symbol { display: block; color: var(--accent); font-size: 36px; margin: 24px 0 16px; }
 .empty h2 { color: var(--strong); font-size: 24px; font-weight: 500; }
 .empty p { max-width: 380px; margin: auto; line-height: 1.7; }
+/* The same turning ring as the "Working…" indicator (#185), larger, so starting reads as activity. */
+.starting-mark { display: block; width: 28px; height: 28px; box-sizing: border-box; margin: 24px auto 16px; border: 3px solid var(--border-2); border-top-color: var(--accent); border-radius: 50%; animation: starting-turn 1s linear infinite; }
+@keyframes starting-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .starting-mark { animation: none; border-color: var(--accent); } }
 .jump-latest { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); border-radius: 20px; padding: 7px 14px; font-size: 12px; box-shadow: 0 4px 16px #0003; }
 @media(max-width: 640px) { .timeline { padding-inline: 16px; } .conversation-toolbar { padding-inline: 12px; } }
 </style>

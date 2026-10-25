@@ -1,3 +1,4 @@
+const { detectSignIn } = require('./cli-sign-in');
 'use strict';
 
 // The Workspace's CLI menu detector (frontend/src/lib/cli-menu.js, #112/#166), for the session
@@ -31,6 +32,8 @@ const WINDOW = 24
  * @returns {null | { kind: 'choice' | 'input', title: string, options: { number: number, label: string, selected: boolean, freeText?: true }[] }}
  */
 function detectMenu(lines) {
+  const signIn = detectSignIn(lines)
+  if (signIn) return signIn
   const rows = (lines || []).map(line => String(line ?? '').replace(/\s+$/, ''))
   let end = rows.length
   while (end > 0 && !rows[end - 1].trim()) end -= 1

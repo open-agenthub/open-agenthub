@@ -9,6 +9,7 @@ using AgentHub.Api.Models;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Storage;
+using AgentHub.Api.Usage;
 using k8s;
 using k8s.Models;
 
@@ -871,7 +872,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var memoryLimit = SessionResources.ForCreate(req.Memory, req.MemoryLimit, ResourceBounds.Memory(_opts));
         await ValidateProjectAsync(owner, req.ProjectId, ct);
         await EnsureAgentAllowedAsync(req.Agent, ct);
-        await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, ct);
+        await EnforceUsageLimitAsync(owner, req.Agent, req.AuthMode, req.Mode, ct);
         await SessionSoftLimit.EnsureCanCreateAsync(_store, owner, _maxRunningSessionsPerOwner, ct);
         var credentialId = await ValidateCredentialIdAsync(owner, req.Agent, req.AuthMode, req.CredentialId, ct);
         var gitPatIds = await ValidateGitPatIdsAsync(owner, req.GitPatIds, ct);
@@ -1197,13 +1198,19 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     private Task EnsureAgentAllowedAsync(AgentKind agent, CancellationToken ct)
         => AllowedAgentsGuard.EnsureAgentAllowedAsync(_allowedAgents, agent, ct);
 
-    // Monthly API-budget gate. Auto-mode sessions only bill the API when no Claude
-    // subscription login is stored, so the stored-login check decides whether Auto counts.
-    private async Task EnforceUsageLimitAsync(string owner, AgentKind agent, AgentAuthMode authMode, CancellationToken ct)
+    // Monthly API-budget gate, with the classification usage reporting uses (UsageBilling.ForPod):
+    // an unattended Auto run uses a stored API key even when a login is stored, so it is gated.
+    private async Task EnforceUsageLimitAsync(string owner, AgentKind agent, AgentAuthMode authMode,
+        SessionMode mode, CancellationToken ct)
     {
-        var hasSubscription = agent == AgentKind.Claude &&
+        if (!UsageBilling.ReportsCost(agent)) return;
+        // Auto exists for Claude only; every other mode is settled by the auth mode alone.
+        var hasSubscription = authMode == AgentAuthMode.Auto &&
             await ReadSecretOrNullAsync(ProviderSecretName(owner, AgentKind.Claude), ct) is not null;
-        await _usageLimits.EnsureCanStartAsync(owner, agent, authMode, hasSubscription, ct);
+        var hasApiKey = authMode == AgentAuthMode.Auto &&
+            await HasSecretKeyAsync(CredsSecretName(owner), "anthropic_api_key", ct);
+        await _usageLimits.EnsureCanStartAsync(owner, agent,
+            UsageBilling.ForPod(authMode, mode, hasApiKey, hasSubscription), ct);
     }
 
     // Assigns each repo a workspace subdirectory. A single repo keeps the legacy
@@ -1319,7 +1326,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                     ? "The hub cannot confirm whether a terminal session is idle."
                     : "This session cannot confirm that it is idle and ready for an automatic update.");
         await EnsureAgentAllowedAsync(record.Agent, ct);
-        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
+        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, record.Mode, ct);
         if (_podRequests is null) throw new InvalidOperationException("Runtime updates are not available on this instance.");
         var drainUrl = new Uri($"http://{pod.Status.PodIP}:{_opts.AgentPort}/agenthub/runtime-drain");
         HttpRequestMessage Drain(HttpMethod method)
@@ -1376,7 +1383,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             throw new InvalidOperationException("State storage is unavailable. The conversation cannot be saved for resume.");
         if (!RuntimeImageOutdated(record, pod)) return (await GetSessionAsync(owner, id, ct))!;
         await EnsureAgentAllowedAsync(record.Agent, ct);
-        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
+        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, record.Mode, ct);
         return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
     }
 
@@ -1404,7 +1411,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (!_artifacts.IsConfigured)
             throw new InvalidOperationException("State storage is unavailable. The conversation cannot be saved for resume.");
         await EnsureAgentAllowedAsync(record.Agent, ct);
-        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
+        await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, record.Mode, ct);
         await AdmitResourcesAsync(record, pod, ct);
         _log.LogInformation("Restarting session {Id} to apply new resources or secret variables", record.Id);
         return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
@@ -1506,7 +1513,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Scheduled sessions are not resumed; they run on their schedule.");
         await EnsureAgentAllowedAsync(rec.Agent, ct);
-        await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, ct);
+        await EnforceUsageLimitAsync(owner, rec.Agent, rec.AuthMode, rec.Mode, ct);
 
         await _browsers.StopAsync(id, ct);
         await TryDeletePodAsync($"session-{id}", ct);
@@ -2284,6 +2291,13 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             };
             hasApiKey = apiKey is not null && await HasSecretKeyAsync(CredsSecretName(owner), apiKey, ct);
         }
+
+        // Who pays for this pod's tokens, kept on the session row for usage ingest. An interactive
+        // Auto start does not resolve the key for the pod (ResolvesApiKey), so it is looked up here.
+        var keyStored = hasApiKey || (record.Agent == AgentKind.Claude && record.AuthMode == AgentAuthMode.Auto &&
+            await HasSecretKeyAsync(CredsSecretName(owner), "anthropic_api_key", ct));
+        await _store.SetUsageBillingAsync(record.Id,
+            UsageBilling.ForPod(record.AuthMode, record.Mode, keyStored, hasSubscription), ct);
 
         var ownerKey = Sanitize(owner);
         var claudeImage = string.IsNullOrWhiteSpace(_opts.ClaudeAgentImage) ? _opts.AgentImage : _opts.ClaudeAgentImage;

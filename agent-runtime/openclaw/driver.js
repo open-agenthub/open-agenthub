@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const usage = require('../common/usage');
 const { writeCredentialFile } = require('../common/credential-install');
 const { importToSqlite, validStore } = require('./sync-auth-profiles');
 
@@ -139,8 +140,20 @@ function terminalAttachmentPath(file, { env, home, fs: files = fs }) {
   return target;
 }
 
+// Each agent's conversations, `<id>.jsonl`; the `.trajectory.jsonl` beside each repeats the same
+// responses for replay and would double every count.
+const openClawSessionReader = usage.readerPerRoot(usage.openClawUsageRecord);
+function readUsage({ env, home, fs: files = fs }) {
+  const stateDir = env.OPENCLAW_STATE_DIR || path.join(home, '.openclaw');
+  const sessions = usage.listFiles(path.join(stateDir, 'agents'), files, (name, full) =>
+    name.endsWith('.jsonl') && !name.endsWith('.trajectory.jsonl') &&
+    path.basename(path.dirname(full)) === 'sessions');
+  return openClawSessionReader(stateDir)(sessions, files);
+}
+
 module.exports = {
   slashCommands: require('./slash-commands'),
+  readUsage,
   limitPatterns,
   // authFilename: AgentHub Secret key + root state-tar exclusion under ~/.openclaw/.
   // stateExcludes: nested agent-store credentials (JSON + SQLite) for every agent id.
