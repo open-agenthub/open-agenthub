@@ -2,7 +2,7 @@
 // Which stored secrets a session receives (docs/session-secrets.md). Inside a project the options
 // are what the project selects and everything ticked means "follow the project"; outside a
 // project the options are every stored secret and nothing is ticked until the owner ticks it.
-import { deliveryLabel } from '../lib/secrets.js'
+import { deliveryLabel, hasNamesake } from '../lib/secrets.js'
 
 const props = defineProps({
   // {id, name, delivery, description} as the secret listing returns them — never a value.
@@ -27,7 +27,7 @@ function toggle(id) {
     <label>Secrets <span class="dim">— delivered as environment variables or files in ~/.secrets</span></label>
     <label v-for="secret in options" :key="secret.id" class="check">
       <input type="checkbox" :checked="modelValue.includes(secret.id)" :data-secret-option="secret.id" @change="toggle(secret.id)" />
-      <span><code>{{ secret.name }}</code> <span class="kind">{{ deliveryLabel(secret.delivery) }}</span><span v-if="secret.description" class="dim desc">{{ secret.description }}</span></span>
+      <span><code>{{ secret.name }}</code> <small v-if="hasNamesake(options, secret)" class="dim" :data-secret-id="secret.id">{{ secret.id }}</small> <span class="kind">{{ deliveryLabel(secret.delivery) }}</span><span v-if="secret.description" class="dim desc">{{ secret.description }}</span></span>
     </label>
     <small class="hint" data-secret-hint>
       <template v-if="inProject">With every secret ticked the session follows the project's selection, including later changes; untick one to keep it out of this session.</template>

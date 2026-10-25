@@ -32,21 +32,42 @@ public class SessionSecretStoreTests
     }
 
     [Fact]
-    public void Upsert_SameNameUpdatesInPlace_KeepingIdAndValueWhenNoneIsSent()
+    public void Upsert_ById_UpdatesInPlace_KeepingIdAndValueWhenNoneIsSent_AndCanRename()
     {
         var data = new Dictionary<string, byte[]>();
         var first = SessionSecretStore.Upsert(data, Env("API_KEY", "first-value-1"), Now);
 
-        // Case-insensitive: API_KEY and api_key side by side would be two secrets nobody can tell apart.
-        var edited = SessionSecretStore.Upsert(data, new("api_key", "file", null, "now a file"), Now.AddHours(1));
+        var edited = SessionSecretStore.Upsert(data, new("api_key", "file", null, "now a file", first.Id), Now.AddHours(1));
 
         Assert.Equal(first.Id, edited.Id);
-        Assert.Equal("file", edited.Delivery);
+        Assert.Equal(("api_key", "file"), (edited.Name, edited.Delivery));
         Assert.Equal("first-value-1", Encoding.UTF8.GetString(SessionSecretStore.Value(data, first.Id)!));
-        var rotated = SessionSecretStore.Upsert(data, File("api_key", "second-value-2"), Now.AddHours(2));
+        var rotated = SessionSecretStore.Upsert(data, File("renamed.json", "second-value-2") with { Id = first.Id }, Now.AddHours(2));
         Assert.Equal(first.Id, rotated.Id);
+        Assert.Equal("renamed.json", rotated.Name);
         Assert.Equal("second-value-2", Encoding.UTF8.GetString(SessionSecretStore.Value(data, first.Id)!));
         Assert.Single(SessionSecretStore.Read(data));
+    }
+
+    [Fact]
+    public void Upsert_WithoutId_StoresASecondSecretUnderTheSameName()
+    {
+        var data = new Dictionary<string, byte[]>();
+        var prod = SessionSecretStore.Upsert(data, new("API_KEY", "env", "prod-value-1", "production"), Now);
+        var staging = SessionSecretStore.Upsert(data, new("API_KEY", "env", "staging-value-2", "staging"), Now);
+
+        Assert.NotEqual(prod.Id, staging.Id);
+        Assert.Equal(2, SessionSecretStore.Read(data).Count(e => e.Name == "API_KEY"));
+        Assert.Equal("prod-value-1", Encoding.UTF8.GetString(SessionSecretStore.Value(data, prod.Id)!));
+        Assert.Equal("staging-value-2", Encoding.UTF8.GetString(SessionSecretStore.Value(data, staging.Id)!));
+    }
+
+    [Fact]
+    public void Upsert_WithAnUnknownId_IsRefused_RatherThanStoredAsNew()
+    {
+        var data = new Dictionary<string, byte[]>();
+        Assert.Throws<ArgumentException>(() => SessionSecretStore.Upsert(data, Env("API_KEY") with { Id = "nope" }, Now));
+        Assert.Empty(SessionSecretStore.Read(data));
     }
 
     [Theory]

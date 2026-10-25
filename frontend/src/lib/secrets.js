@@ -58,3 +58,37 @@ export function secretIdsChange(selected, options, inProject, current) {
   const same = chosen.length === kept.length && chosen.every(id => kept.includes(id))
   return same ? {} : { secretIds: chosen }
 }
+
+/**
+ * Pairs of secrets that would land in the same place in one session (#253): the same delivery and
+ * the same name, compared exactly as the pod sees it (API_KEY and api_key are two variables).
+ * Returns [{ delivery, name, secrets: [...] }], empty when nothing collides. Stored names are not
+ * unique, so this is where a duplicate becomes a problem — only once one session would get both.
+ */
+export function secretConflicts(secrets) {
+  const groups = new Map()
+  for (const secret of Array.isArray(secrets) ? secrets : []) {
+    if (!secret) continue
+    const key = `${secret.delivery}\u0000${secret.name}`
+    const group = groups.get(key) || { delivery: secret.delivery, name: secret.name, secrets: [] }
+    if (!group.secrets.some(s => s.id === secret.id)) group.secrets.push(secret)
+    groups.set(key, group)
+  }
+  return [...groups.values()].filter(group => group.secrets.length > 1)
+}
+
+/** Where a secret lands, as the agent would look for it. */
+export function secretPlace(secret) {
+  return secret.delivery === 'file' ? `~/.secrets/${secret.name}` : `$${secret.name}`
+}
+
+/** The stored secrets a dialog's choices would give a session: its ticked selection and its grants. */
+export function chosenSecrets(stored, selectedIds, grants) {
+  const ids = new Set([...(selectedIds || []), ...(grants || []).map(g => g.secretId)])
+  return (Array.isArray(stored) ? stored : []).filter(secret => ids.has(secret.id))
+}
+
+/** Whether another secret in `list` lands in the same place; the pickers then show the id, the one thing telling the two rows apart. */
+export function hasNamesake(list, secret) {
+  return (Array.isArray(list) ? list : []).some(other => other.id !== secret.id && other.name === secret.name && other.delivery === secret.delivery)
+}

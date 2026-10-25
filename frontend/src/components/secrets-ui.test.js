@@ -61,17 +61,31 @@ describe('Settings → Secrets', () => {
     expect(wrapper.html()).not.toContain('tok-123456789')
   })
 
-  it('edits without a value keep the stored one, and the name cannot be changed', async () => {
+  it('edits by id: without a value the stored one is kept, and a rename keeps the id', async () => {
     const wrapper = mount(SecretsPane)
     await flushPromises()
     await wrapper.get('[data-secret="sa.json"] [data-secret-edit]').trigger('click')
-    expect(wrapper.get('[data-secret-name]').attributes('readonly')).toBeDefined()
+    expect(wrapper.get('[data-secret-name]').attributes('readonly')).toBeUndefined()
     expect(wrapper.get('[data-secret-value]').element.tagName).toBe('TEXTAREA')
     expect(wrapper.get('[data-secret-value]').element.value).toBe('')
+    await wrapper.get('[data-secret-name]').setValue('gcp.json')
     await wrapper.get('[data-secret-description]').setValue('GCP key')
     await wrapper.get('[data-secret-save]').trigger('click')
     await flushPromises()
-    expect(mocks.api.upsertSecret).toHaveBeenCalledWith({ name: 'sa.json', delivery: 'file', value: null, description: 'GCP key' })
+    expect(mocks.api.upsertSecret).toHaveBeenCalledWith({ id: 's2', name: 'gcp.json', delivery: 'file', value: null, description: 'GCP key' })
+  })
+
+  it('a second secret under a stored name is allowed, and says where the namesake is', async () => {
+    const wrapper = mount(SecretsPane)
+    await flushPromises()
+    await wrapper.get('[data-secret-add]').trigger('click')
+    await wrapper.get('[data-secret-name]').setValue('DEPLOY_TOKEN')
+    expect(wrapper.get('[data-secret-namesake]').text()).toContain('$DEPLOY_TOKEN')
+    expect(wrapper.get('[data-secret-namesake]').text()).toContain('CI deploy (s1)')
+    await wrapper.get('[data-secret-value]').setValue('tok-staging-1')
+    await wrapper.get('[data-secret-save]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.upsertSecret).toHaveBeenCalledWith({ name: 'DEPLOY_TOKEN', delivery: 'env', value: 'tok-staging-1', description: null })
   })
 
   it('shows the 400 the backend gives for a reserved name', async () => {
@@ -103,10 +117,19 @@ describe('Settings → Secrets', () => {
     expect(fresh.get('[data-secret-description]').element.value).toBe('error reporting')
     expect(fresh.get('[data-secret-value]').element.value).toBe('')
 
-    const known = mount(SecretsPane, { props: { prefill: { name: 'deploy_token', delivery: 'env', description: 'for the release' } } })
+    const known = mount(SecretsPane, { props: { prefill: { name: 'DEPLOY_TOKEN', delivery: 'env', description: 'for the release' } } })
     await flushPromises()
-    expect(known.get('[data-secret-name]').element.value).toBe('DEPLOY_TOKEN')
-    expect(known.get('[data-secret-name]').attributes('readonly')).toBeDefined()
+    await known.get('[data-secret-save]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.upsertSecret).toHaveBeenCalledWith(expect.objectContaining({ id: 's1', name: 'DEPLOY_TOKEN', value: null }))
+  })
+
+  it('a request matching two namesakes opens a new form rather than guessing which one', async () => {
+    mocks.api.listSecrets.mockResolvedValue([...stored, { id: 's9', name: 'DEPLOY_TOKEN', delivery: 'env', description: 'staging' }])
+    const wrapper = mount(SecretsPane, { props: { prefill: { name: 'DEPLOY_TOKEN', delivery: 'env' } } })
+    await flushPromises()
+    expect(wrapper.get('[data-secret-save]').attributes('disabled')).toBeDefined()
+    expect(wrapper.get('[data-secret-namesake]').text()).toContain('CI deploy (s1), staging (s9)')
   })
 })
 
@@ -121,6 +144,21 @@ describe('secret selection in the session dialogs', () => {
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
     expect(mocks.api.createSession.mock.calls[0][0].secretIds).toBeNull()
+  })
+
+  it('two ticked secrets landing in the same place are shown and block Start (#253)', async () => {
+    mocks.api.listSecrets.mockResolvedValue([...stored, { id: 's9', name: 'DEPLOY_TOKEN', delivery: 'env', description: 'staging' }])
+    const wrapper = mount(NewSessionDialog, { props: { projects }, ...mountOptions })
+    await flushPromises()
+    await wrapper.get('[data-secret-option="s1"]').setValue(true)
+    expect(wrapper.find('[data-secret-conflict]').exists()).toBe(false)
+    // A grant counts like a ticked selection: the session would hold both.
+    await wrapper.get('[data-secret-grant="s9"] [data-grant-level="session"]').trigger('click')
+    expect(wrapper.get('[data-secret-conflict]').text()).toContain('2 secrets as $DEPLOY_TOKEN: CI deploy (s1), staging (s9)')
+    expect(wrapper.get('[data-submit]').attributes('disabled')).toBeDefined()
+    await wrapper.get('[data-secret-option="s1"]').setValue(false)
+    expect(wrapper.find('[data-secret-conflict]').exists()).toBe(false)
+    expect(wrapper.get('[data-submit]').attributes('disabled')).toBeUndefined()
   })
 
   it('in a project the project selection is ticked and followed; unticking narrows', async () => {
@@ -173,6 +211,15 @@ describe('a project selects secrets', () => {
     await flushPromises()
     expect(mocks.api.updateProject).toHaveBeenCalledWith('p1', { secretIds: ['s1', 's2'] })
     expect(wrapper.emitted('saved')).toHaveLength(1)
+  })
+
+  it('refuses to save a selection with two files of the same name, before asking the hub', async () => {
+    mocks.api.listSecrets.mockResolvedValue([...stored, { id: 's8', name: 'sa.json', delivery: 'file', description: 'old key' }])
+    const wrapper = mount(ProjectSecretsDialog, { props: { project: { id: 'p1', name: 'Ops', secretIds: ['s2'] } } })
+    await flushPromises()
+    await wrapper.get('[data-project-secret="s8"]').setValue(true)
+    expect(wrapper.get('[data-secret-conflict]').text()).toContain('Every session in this project would receive 2 secrets as ~/.secrets/sa.json')
+    expect(wrapper.get('[data-project-secrets-save]').attributes('disabled')).toBeDefined()
   })
 })
 
