@@ -120,6 +120,29 @@ through the real session-agent server for both pinned CLIs. Claude Code 2.1.287 
 notice after selection and terminal Esc; the drawer stayed closed until explicitly opened,
 and remained open after Esc when the viewer had opened it.
 
+**Questions are shown whole, and "Type something" is a text field (#250).** Claude Code's
+AskUserQuestion screen frames a long question in a bar (`│ …`) and wraps it to the terminal's
+width. The detector took only the line right above the options, so the notice showed the last
+line of the question, or the question's short header when it did not end in a question mark.
+It now takes every line of the frame; a question drawn without one is joined with the lines it
+wrapped from (each nearly as wide as the screen and not ending a sentence), so a heading or a
+finished explanation above it stays out. The notice prints the question on its own, wrapped.
+
+Every AskUserQuestion list ends in *Type something.*: on that row the CLI turns the label into a
+text field, and Enter submits what was typed. Offered as a button it moved the cursor there and
+pressed Enter on an empty field. The notice now shows a text field for it and sends arrows to
+the row, the text as one bracketed paste and Enter. A paste rather than keys because Claude Code
+2.1.287 keeps a pasted newline in the answer, and because a digit typed on the list would pick
+that option. In a multi-select question the paste already ticks the row and Enter would untick
+it, so there no Enter is sent. Rejected: sending the text through the composer, which the
+composer refuses while a menu is open for exactly the reason that its Enter would pick the
+highlighted option.
+
+Verified with the pinned Claude Code in a real PTY against a mock model that asks an
+AskUserQuestion, and in Chromium through the real session agent: the notice showed the full
+three-line question, and the text typed into its field arrived in the CLI as the answer (the
+tool result the model received), line break included.
+
 While the CLI shows one of these screens, the composer refuses to send and keeps the draft:
 its Enter would pick whatever option is highlighted, or submit the text as a login code. That
 happened in testing: a `/login` sent into an open login menu chose the first option.
