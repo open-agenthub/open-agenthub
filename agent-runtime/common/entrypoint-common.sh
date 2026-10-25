@@ -1,5 +1,12 @@
 #!/usr/bin/env bash
-set -euo pipefail
+set -Eeuo pipefail
+
+# A step that fails here ends the container before the session agent exists to say why, and
+# without a termination message the session list shows only Kubernetes' "Error" (#244).
+# BASH_COMMAND is the command as written, before expansion, so no secret value reaches it. -E
+# carries the trap into functions such as sync_skill_library.
+trap 'rc=$?; printf "entrypoint: %s failed (exit %s)" "${BASH_COMMAND:0:300}" "$rc" \
+  > "${TERMINATION_MESSAGE_PATH:-/dev/termination-log}" 2>/dev/null || true' ERR
 
 RUNTIME=/opt/session-agent
 if [ -d /opt/agenthub/session-agent ]; then

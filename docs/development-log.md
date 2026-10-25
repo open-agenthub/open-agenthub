@@ -122,7 +122,16 @@ They cannot both hold. The owner chose auto-approve as the boundary, so an uncov
 returns `ask` *when the session auto-approves* and the approval endpoint answers it. With
 auto-approve off, every runtime keeps exactly today's strict allow list — the flag is the switch
 between the two, so nothing widens for anyone who turned it off. Malformed input is never softened:
-a shell string the parser cannot take apart stays a hard deny, as does the MCP sharing policy.
+input that is not a command at all stays a hard deny, as does the MCP sharing policy.
+
+This first read "a shell string the parser cannot take apart stays a hard deny", and that was wrong
+(#244). The parser is deliberately narrow (no redirects, variables, globs, substitutions) because
+its job is to stop an allowed prefix from carrying a second command. Under auto-approve there is
+no prefix to smuggle past, so the hard deny protected nothing. It refused
+`echo x > f && cat f` while `cat f` ran, and an autonomous Codex or OpenCode session could run
+almost nothing. Such a command is now "not covered": `ask` under auto-approve, `deny` without it.
+The #160 proof missed this because its fake callback answered `allow` for every input.
+`tests/AutonomousPolicyProof` runs the real matcher instead.
 
 **Codex** needed the `ask` verdict to stop being a local `deny`, and every no-decision path to fail
 closed instead — an unanswered `PermissionRequest` in an unattended session is Codex's own approval

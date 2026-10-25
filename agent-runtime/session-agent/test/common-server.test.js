@@ -548,6 +548,42 @@ test('common transport flushes the credential watcher when the agent itself ends
   assert.deepEqual(harness.exits, [0]);
 });
 
+// #244: an autonomous Claude run that failed on its login was listed as "agent start: Error",
+// because nothing wrote a termination message and Kubernetes had only the container's reason.
+test('a failed agent exit leaves the CLI\'s last words as the termination message', async () => {
+  const harness = createHarness({
+    AGENTHUB_MODE: 'autonomous',
+    TERMINATION_MESSAGE_PATH: '/run/termination'
+  });
+  harness.terminals[0].emitData('\x1b[?25lStarting\r\n\x1b[31mFailed to authenticate: ' +
+    'OAuth session expired and could not be refreshed\x1b[0m\r\n\x1b[?25h');
+  harness.terminals[0].emitExit({ exitCode: 1, signal: 0 });
+  await tick();
+
+  const written = harness.writes.filter(write => write.file === '/run/termination');
+  assert.deepEqual(written.map(write => write.data), [
+    'Test exited with code 1: Starting | Failed to authenticate: OAuth session expired and could not be refreshed'
+  ]);
+});
+
+test('a successful agent exit writes no termination message', async () => {
+  const harness = createHarness({ TERMINATION_MESSAGE_PATH: '/run/termination' });
+  harness.terminals[0].emitData('done\r\n');
+  harness.terminals[0].emitExit({ exitCode: 0, signal: 0 });
+  await tick();
+
+  assert.equal(harness.writes.some(write => write.file === '/run/termination'), false);
+});
+
+test('exitReason bounds and masks what it quotes', () => {
+  const { exitReason } = require('../../common/server');
+  assert.equal(exitReason('Codex', 2, 'SIGKILL', ''), 'Codex exited with code 2, signal SIGKILL without output.');
+  const reason = exitReason('Codex', 1, undefined, 'x'.repeat(10_000) + '\nkey sk-synthetic\n',
+    text => text.replaceAll('sk-synthetic', '****'));
+  assert.ok(reason.length < 700, reason.length);
+  assert.match(reason, /key \*\*\*\*$/);
+});
+
 test('common transport exits normally when no credential watcher was started', () => {
   const harness = createHarness({}, {}, { kill() { throw new Error('must not signal'); } });
   harness.signals.SIGTERM();

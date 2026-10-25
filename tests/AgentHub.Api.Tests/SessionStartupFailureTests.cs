@@ -76,6 +76,22 @@ public class SessionStartupFailureTests
         Assert.Null(SessionStartupFailure.FromPod(null, []));
     }
 
+    // #244: the agent container's own termination message, as common/server.js now writes it for
+    // a CLI that exited non-zero, is what the list shows instead of Kubernetes' bare "Error".
+    [Fact]
+    public void AgentExitShowsTheTerminationMessageTheSessionAgentWrote()
+    {
+        var container = new V1ContainerStatus { Name = "agent", State = new V1ContainerState { Terminated =
+            new V1ContainerStateTerminated { ExitCode = 1, Reason = "Error",
+                Message = "Claude exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed" } } };
+        var pod = new V1Pod { Status = new V1PodStatus { Phase = "Failed", ContainerStatuses = [container] } };
+
+        Assert.Equal("agent start: Claude exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed",
+            SessionStartupFailure.FromPod(pod, [])!.Message);
+        container.State.Terminated.Message = null;
+        Assert.Equal("agent start: Error", SessionStartupFailure.FromPod(pod, [])!.Message);
+    }
+
     [Fact]
     public void AdmissionUsesThePlainKubernetesStatusMessage()
     {
