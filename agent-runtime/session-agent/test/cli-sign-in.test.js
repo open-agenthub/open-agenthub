@@ -87,3 +87,49 @@ test('archive scans refuse a file replaced between metadata and open', async () 
   assert.equal(privacy.archiveSafe(dir,racing),false);
  } finally {privacy.dispose();fs.rmSync(dir,{recursive:true,force:true});}
 });
+
+test('values are released independently only after every export source is clean', async () => {
+ const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'signin-release-'));
+ const privacy = createSignInPrivacy();
+ try {
+  const state = path.join(dir, 'state'), external = path.join(dir, 'native.jsonl');
+  fs.mkdirSync(state);
+  privacy.feed(screens.device.join('\r\n')); await privacy.flush();
+  privacy.feed('\x1b[2J\x1b[H❯ '); await privacy.flush();
+  fs.writeFileSync(external, 'ABCD-12345');
+  privacy.releaseAbsent([{ root: state }, { root: external }]);
+  assert.equal(privacy.mask('ABCD-12345'), '[sign-in data removed]');
+  assert.equal(privacy.mask('https://example.com/device'), 'https://example.com/device');
+  fs.writeFileSync(external, 'clean history');
+  const unreadable = { ...fs, openSync() { throw new Error('unreadable'); } };
+  assert.equal(privacy.releaseAbsent([{ root: state }, { root: external }], [], unreadable), 0);
+  assert.equal(privacy.mask('ABCD-12345'), '[sign-in data removed]');
+  privacy.releaseAbsent([{ root: state }, { root: external }], ['ABCD-12345']);
+  assert.equal(privacy.retained(), 1);
+  privacy.releaseAbsent([{ root: state }, { root: external }]);
+  assert.equal(privacy.retained(), 0);
+ } finally { privacy.dispose(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a real prompt ends stale login introductions without releasing blank redraws', async () => {
+ const privacy = createSignInPrivacy();
+ try {
+  privacy.feed('Select login method:'); await privacy.flush();
+  assert.equal(privacy.active(), true);
+  privacy.feed('\x1b[2J\x1b[H'); await privacy.flush();
+  assert.equal(privacy.active(), true);
+  privacy.feed('Select login method:\r\n❯ '); await privacy.flush();
+  assert.equal(privacy.active(), false);
+ } finally { privacy.dispose(); }
+});
+
+test('public wrapped route words do not quarantine ordinary command metadata', async () => {
+ const privacy = createSignInPrivacy();
+ try {
+  const rows = [...screens.code.slice(0, 2), 'https://example.com/', 'login', ...screens.code.slice(-2)];
+  privacy.feed(rows.join('\r\n')); await privacy.flush();
+  assert.equal(privacy.mask('login'), 'login');
+  assert.equal(privacy.mask('https://example.com/login'), '[sign-in data removed]');
+ } finally { privacy.dispose(); }
+});

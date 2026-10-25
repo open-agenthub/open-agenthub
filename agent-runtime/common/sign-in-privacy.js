@@ -32,7 +32,7 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
       // TUIs clear and redraw a dialog in separate writes, especially after a resize. A blank
       // intermediate frame is not the end of sign-in: release only at a real CLI prompt.
       const ready = rows.filter(row => row.trim()).slice(-10).some(row => /^\s*[❯›>]\s*(?:Ask (?:Codex|anything).*|)$/.test(row)) || /local ready/.test(rows.filter(row => row.trim()).slice(-10).join('\n'));
-      active = Boolean(signIn || intro || (wasActive && !ready));
+      active = Boolean(signIn || (!ready && (intro || wasActive)));
       if (active) {
         if (!wasActive) revision += 1;
         observed = true;
@@ -42,10 +42,17 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
         for (const row of rows) {
           const match = /https?:\/\/\S+/.exec(row);
           if (match) { remember(match[0]); continuation = true; }
-          else if (continuation && /^\S+$/.test(row.trim())) remember(row.trim());
+          else if (continuation && /^\S+$/.test(row.trim())) {
+            // Public route words can wrap onto their own row. Remembering "login" as a
+            // secret also matches ordinary /login command metadata and blocks every archive.
+            const fragment = row.trim();
+            const publicRoute = /^(login|authorize|oauth|device|auth)$/i.test(fragment);
+            if (!publicRoute) remember(fragment);
+          }
           else continuation = false;
         }
       }
+      if (wasActive && !active) input = '';
       if (active || wasActive) {
         if (!wasActive) exported += '\r\n[Sign-in terminal output omitted]\r\n';
       } else exported += data;
@@ -72,9 +79,7 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
   }
   // Native diagnostics can contain authorization data too. Withhold an archive that contains
   // it rather than modifying the CLI's originals and corrupting its resume state.
-  function archiveSafe(root, fs = require('node:fs'), excludes = []) {
-    if (active) return false;
-    if (!observed) return true;
+  function scan(root, fs, excludes, found, optional = false) {
     const needles = [...secrets].map(value => Buffer.from(value));
     const overlap = Math.max(1, ...needles.map(value => value.length));
     function visit(file) {
@@ -85,8 +90,8 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
       });
       if (excluded) return true;
       let stat;
-      try { stat = fs.lstatSync(file); } catch { return false; }
-      if (stat.isSymbolicLink()) return true;
+      try { stat = fs.lstatSync(file); } catch (error) { return optional && file === root && error.code === 'ENOENT'; }
+      if (stat.isSymbolicLink()) return file !== root;
       if (stat.isDirectory()) {
         try { return fs.readdirSync(file).every(name => visit(require('node:path').join(file, name))); } catch { return false; }
       }
@@ -101,16 +106,40 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
         let tail = Buffer.alloc(0), count;
         while ((count = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) {
           const data = Buffer.concat([tail, chunk.subarray(0, count)]);
-          if (needles.some(needle => data.includes(needle))) return false;
+          for (const needle of needles) if (data.includes(needle)) found.add(needle.toString());
           tail = data.subarray(Math.max(0, data.length - overlap));
         }
-        return true;
+        const after = fs.fstatSync(fd);
+        return after.size === opened.size && after.mtimeMs === opened.mtimeMs && after.ctimeMs === opened.ctimeMs;
       } catch { return false; }
       finally { if (fd !== undefined) fs.closeSync(fd); }
     }
     return visit(root);
   }
-  return { feed, personInput, mask, archiveSafe, flush: () => queued ? pending : null,
+  function archiveSafe(root, fs = require('node:fs'), excludes = []) {
+    if (active) return false;
+    if (!secrets.size) return true;
+    const found = new Set();
+    return scan(root, fs, excludes, found) && found.size === 0;
+  }
+  // Time alone cannot establish that an authorization value is safe to forget. Native history
+  // can outlive its login screen; keep each value until every possible export source is clean.
+  function releaseAbsent(sources, texts = [], fs = require('node:fs')) {
+    if (active || !secrets.size) return 0;
+    const found = new Set();
+    const buffer = terminal.buffer.active;
+    const screen = Array.from({ length: terminal.rows }, (_, y) => buffer.getLine(buffer.baseY + y)?.translateToString(true) || '').join('\n');
+    for (const text of [exported, input, screen, ...texts]) {
+      for (const value of secrets) if (String(text || '').includes(value)) found.add(value);
+    }
+    for (const { root, excludes = [] } of sources) {
+      if (!scan(root, fs, excludes, found, true)) return 0;
+    }
+    let released = 0;
+    for (const value of secrets) if (!found.has(value)) { secrets.delete(value); released += 1; }
+    return released;
+  }
+  return { feed, personInput, mask, archiveSafe, releaseAbsent, retained: () => secrets.size, flush: () => queued ? pending : null,
     scrollback: () => mask(exported), active: () => active, observed: () => observed, revision: () => revision,
     resize: (cols, rows) => { pending = pending.then(() => terminal.resize(cols, rows)); },
     dispose: () => { void pending.then(() => terminal.dispose()); } };

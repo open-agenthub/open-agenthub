@@ -41,16 +41,18 @@ fs.symlinkSync('/opt/session-agent/node_modules',path.join(root,'agent-runtime/n
 const serverPath=path.join(root,'agent-runtime/common/server.js');
 let source=fs.readFileSync(serverPath,'utf8');
 for(const file of ['state.tgz','scrollback.log','agenthub-auth-watcher.pid']) source=source.split('/tmp/'+file).join(path.join(root,file));
+source=source.replace('signInPrivacy.releaseAbsent(sources, [], fs);', 'const released = signInPrivacy.releaseAbsent(sources, [], fs); process.send?.({privacy:{released,retained:signInPrivacy.retained()}});');
 fs.writeFileSync(serverPath,source);
-let agent='claude', child, uploads=[], watchTerminal, authTokens=new Set(), authMode=null;
+let agent='claude', child, uploads=[], watchTerminal, authTokens=new Set(), authMode=null, privacy=null;
 function rememberAuth(value){if(value && value.length>=4)authTokens.add(value)}
 const session=()=>({id:'signin-proof',title:'CLI sign-in proof',phase:'Running',agent:({claude:'Claude',codex:'Codex',cursor:'Cursor',openclaw:'OpenClaw',opencode:'OpenCode'})[agent],mode:'Interactive',uiMode:'terminal',accessRole:'Owner',authMode:'Subscription',createdAt:new Date().toISOString(),browser:{phase:'Stopped'}});
 async function start(name, mock = false) {
  if(child) {child.kill('SIGTERM');await new Promise(resolve=>child.once('exit',resolve));}
- agent=name;uploads=[];authTokens=new Set();authMode=null;
+ agent=name;uploads=[];authTokens=new Set();authMode=null;privacy=null;
  watchTerminal?.dispose();
  watchTerminal=new (require('/opt/session-agent/node_modules/@xterm/headless').Terminal)({cols:120,rows:32,allowProposedApi:true,scrollback:0});
  child=spawn(process.execPath,[__filename,'--runtime',name],{env:{...process.env,SIGNIN_PROOF_ROOT:root,SIGNIN_MOCK_AUTH:mock?'1':'0'},stdio:['ignore','ignore','ignore','ipc']});
+ child.on('message',message=>{if(message.privacy)privacy=message.privacy;});
  await new Promise((resolve,reject)=>{child.once('message',resolve);child.once('exit',code=>reject(new Error('Runtime exited '+code)));});
  await new Promise(resolve=>setTimeout(resolve,500));
 }
@@ -68,7 +70,7 @@ const server=http.createServer(async(req,res)=>{
   const transcript=await fetch('http://127.0.0.1:7685/agenthub/transcript',{headers:{'X-Agent-Token':'example-proof-token'}}).then(r=>r.text());
   const payloads=uploads.map(x=>x.path.endsWith('/state')?require('node:zlib').gunzipSync(x.body).toString('utf8'):x.body.toString('utf8'));
   const sensitive=text=>/oauth\/authorize|code_challenge=|Enter this one-time code|example-authorization-code/.test(text)||[...authTokens].some(value=>text.includes(value));
-  data={uploads:uploads.length,stateUploads:uploads.filter(x=>x.path.endsWith('/state')).length,authTextInUploads:payloads.some(sensitive),authTextInTranscript:sensitive(transcript)};
+  data={privacy,uploads:uploads.length,stateUploads:uploads.filter(x=>x.path.endsWith('/state')).length,authTextInUploads:payloads.some(sensitive),authTextInTranscript:sensitive(transcript)};
  }
  else if(pathname==='/api/config')data={authority:'',version:'proof'};
  else if(pathname==='/api/sessions')data=[session()];
@@ -101,7 +103,7 @@ wss.on('connection',(socket,req)=>{
    const rows=Array.from({length:watchTerminal.rows},(_,y)=>buffer.getLine(buffer.baseY+y)?.translateToString(true).trim()||'');
    const signIn=require(path.join(repo,'agent-runtime/common/cli-sign-in')).detectSignIn(rows);authMode=signIn?.mode;
    if(signIn?.code)rememberAuth(signIn.code);if(signIn?.url)rememberAuth(signIn.url);
-   if(signIn){let continuation=false;for(const row of rows){const match=/https?:\/\/\S+/.exec(row);if(match){rememberAuth(match[0]);continuation=true;}else if(continuation && /^\S+$/.test(row))rememberAuth(row);else continuation=false;}}
+   if(signIn){let continuation=false;for(const row of rows){const match=/https?:\/\/\S+/.exec(row);if(match){rememberAuth(match[0]);continuation=true;}else if(continuation && /^\S+$/.test(row)){const publicRoute=/^(login|authorize|oauth|device|auth)$/i.test(row);if(!publicRoute)rememberAuth(row);}else continuation=false;}}
   });
   if(socket.readyState===WebSocket.OPEN)socket.send(data.toString());});
  upstream.on('close',()=>socket.close());upstream.on('error',()=>socket.close());socket.on('close',()=>upstream.close());

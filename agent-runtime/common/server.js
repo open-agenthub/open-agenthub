@@ -652,6 +652,18 @@ function createCommonServer(options = {}) {
     // the masked text, a reconnecting client is replayed it, and a value the PTY delivered in two
     // chunks is caught as well, which masking chunk by chunk would miss.
     if (secretMask.refresh()) scrollback = secretMask.mask(scrollback);
+    if (transcriptCaughtUp && signInPrivacy.observed() && !signInPrivacy.active()) {
+      const file = locateTranscript();
+      const root = require('node:path').join(home, driver.stateDir);
+      const sources = [{ root, excludes: stateExcludes(driver) }];
+      // A configured native transcript directory can sit outside the archived state tree.
+      const nativeHome = env[driver.name.toUpperCase() + '_HOME'];
+      if (nativeHome && nativeHome !== root) sources.push({ root: require('node:path').join(nativeHome, 'sessions') });
+      for (const source of [file, env.AGENTHUB_PREVIOUS_TRANSCRIPT, conversationHistoryFile]) {
+        if (source) sources.push({ root: source });
+      }
+      signInPrivacy.releaseAbsent(sources, [], fs);
+    }
     syncSkillsUp(() => backupScrollback(() => persistScrollback(() => persistTranscript(() =>
       persistState(final, error => {
         persisting = false;

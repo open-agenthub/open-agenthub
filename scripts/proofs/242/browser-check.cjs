@@ -33,14 +33,16 @@ const hub='http://127.0.0.1:8080';
   await page.goto('http://localhost:5173/s/signin-proof');
   await page.locator('[data-workspace-composer]').waitFor({timeout:30000});
  }
+ const composer=page.locator('[data-workspace-composer] textarea');
+ const card=page.locator('[data-cli-signin]');
+ if (!process.env.SIGNIN_RECOVERY_ONLY) {
  await open('claude');
  console.log('STEP Claude page loaded');
- const composer=page.locator('[data-workspace-composer] textarea');
  await composer.fill('/login');await composer.press('Enter');
  console.log('STEP /login submitted');
  await page.locator('[data-cli-option="1"]').click({timeout:15000});
  console.log('STEP login method selected');
- const card=page.locator('[data-cli-signin]');await card.waitFor({timeout:15000});
+ await card.waitFor({timeout:15000});
  const link=card.locator('[data-cli-signin-open]');
  await page.mouse.move(0,0);
  await page.screenshot({path:'/tmp/signin-242-desktop.png',mask:[page.locator('.xterm'),page.locator('[data-cli-device-code]')]});
@@ -103,6 +105,7 @@ const hub='http://127.0.0.1:8080';
  await card.locator('[data-cli-signin-code]').waitFor({timeout:15000});
  console.log('PASS OpenClaw setup-token flow');
  }
+ }
  await open('claude',true);
  console.log('STEP expired-login proof started');
  await page.waitForTimeout(2500);
@@ -124,6 +127,7 @@ const hub='http://127.0.0.1:8080';
  await page.waitForTimeout(32000);
  const completed=await fetch(hub+'/__proof/check').then(r=>r.json());
  await page.locator('[data-state-withheld]').waitFor({state:'detached'});
+ assert.ok(completed.privacy && completed.privacy.released > 0);
  assert.ok(completed.stateUploads>0);assert.equal(completed.authTextInUploads,false);assert.equal(completed.authTextInTranscript,false);
  console.log('PASS real tar/gzip state upload after sign-in contains no authorization data');
  assert.deepEqual(errors,[]);
