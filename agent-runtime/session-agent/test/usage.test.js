@@ -118,3 +118,50 @@ test('OpenCode usage against a real SQLite database in the CLI schema', { skip: 
 function hasSqlite() {
   try { require('node:sqlite'); return true; } catch { return false; }
 }
+
+test('no reader passes conversation text on: prompts, answers and tool output stay in the files', t => {
+  const SECRET = 'PROMPT-hunter2-do-not-leak';
+  const home = scratch();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+
+  const rollouts = path.join(home, 'codex', 'sessions', '2026', '10', '25');
+  fs.mkdirSync(rollouts, { recursive: true });
+  fs.writeFileSync(path.join(rollouts, 'rollout-x-th1.jsonl'), [
+    JSON.stringify({ type: 'session_meta', payload: { id: 'th1', base_instructions: { text: SECRET } } }),
+    JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: SECRET }] } }),
+    JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: SECRET } }),
+    codexRecord('r1')
+  ].join('\n') + '\n');
+
+  const sessions = path.join(home, '.openclaw', 'agents', 'main', 'sessions');
+  fs.mkdirSync(sessions, { recursive: true });
+  fs.writeFileSync(path.join(sessions, 's1.jsonl'), [
+    JSON.stringify({ type: 'message', id: 'u1', message: { role: 'user', content: SECRET } }),
+    JSON.stringify({ type: 'message', id: 'a1', message: { role: 'assistant', content: [{ type: 'text', text: SECRET }],
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.1 } } } })
+  ].join('\n') + '\n');
+
+  const results = [
+    codex.readUsage({ env: { CODEX_HOME: path.join(home, 'codex') }, fs }),
+    openclaw.readUsage({ env: {}, home, fs })
+  ];
+  if (hasSqlite()) {
+    const { DatabaseSync } = require('node:sqlite');
+    const db = new DatabaseSync(path.join(home, 'opencode.db'));
+    db.exec('CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, title TEXT); CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, data TEXT);');
+    db.prepare('INSERT INTO session VALUES (?, NULL, ?)').run('top', SECRET);
+    db.prepare('INSERT INTO message VALUES (?, ?, ?)').run('m1', 'top', JSON.stringify({ role: 'user', summary: { title: SECRET } }));
+    db.prepare('INSERT INTO message VALUES (?, ?, ?)').run('m2', 'top', JSON.stringify({ role: 'assistant', cost: 0.1, system: [SECRET],
+      tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } } }));
+    db.close();
+    results.push(opencode.readUsage({ env: { OPENCODE_HOME: home }, home, fs }));
+  }
+
+  const fields = ['cacheCreationTokens', 'cacheReadTokens', 'costUsd', 'inputTokens', 'outputTokens', 'reasoningTokens', 'turns'];
+  for (const result of results) {
+    assert.ok(result, 'every reader found its usage');
+    assert.deepEqual(Object.keys(result).sort(), fields);
+    for (const value of Object.values(result)) assert.ok(value === null || typeof value === 'number');
+    assert.doesNotMatch(JSON.stringify(result), /hunter2/);
+  }
+});

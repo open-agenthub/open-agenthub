@@ -71,6 +71,19 @@ function skillsSyncIntervalMs(env) {
   return Math.max(10, seconds) * 1000;
 }
 
+const USAGE_COUNTS = ['inputTokens', 'outputTokens', 'cacheReadTokens', 'cacheCreationTokens', 'reasoningTokens', 'turns'];
+
+function usageReportBody(totals) {
+  const body = {};
+  for (const key of USAGE_COUNTS) {
+    const value = Number(totals[key]);
+    body[key] = Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+  }
+  const cost = totals.costUsd === null || totals.costUsd === undefined ? null : Number(totals.costUsd);
+  body.costUsd = cost === null ? null : (Number.isFinite(cost) && cost > 0 ? cost : 0);
+  return body;
+}
+
 function createCommonServer(options = {}) {
   const env = options.env || process.env;
   const driver = validateDriver(options.driver);
@@ -717,6 +730,8 @@ function createCommonServer(options = {}) {
   // snapshot: an autonomous session often lives shorter than one tick, so the report on exit is
   // the only one, and it has to land before the process is gone. Only a changed total is sent,
   // and only one the hub accepted counts as sent, so a failed post is repeated next tick.
+  // The body is rebuilt here from a fixed list of numeric fields, whatever the driver returned:
+  // the files it reads hold the whole conversation, and none of it may reach the hub this way.
   let lastUsageReport = '';
   function postUsage(done) {
     if (!callback || !token || typeof driver.readUsage !== 'function') return done();
@@ -724,8 +739,8 @@ function createCommonServer(options = {}) {
     try { totals = driver.readUsage({ env, home, fs }); } catch (error) {
       console.log('[agent] Usage not read: ' + (error && error.message ? error.message : error));
     }
-    if (!totals) return done();
-    const body = JSON.stringify(totals);
+    if (!totals || typeof totals !== 'object') return done();
+    const body = JSON.stringify(usageReportBody(totals));
     if (body === lastUsageReport) return done();
     fetchImpl(callback + '/usage', {
       method: 'POST',

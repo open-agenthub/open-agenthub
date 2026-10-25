@@ -60,3 +60,19 @@ test('no usage report without a readUsage driver, without totals, or when readin
     assert.equal(usagePosts(harness).length, 0);
   }
 });
+
+test('the usage report carries only numeric usage fields, whatever the driver returns', async () => {
+  const harness = createHarness(ENV, { readUsage: () => ({
+    ...TOTALS, costUsd: 0.25,
+    prompt: 'deploy with password hunter2', model: 'm1', lastMessage: { text: 'secret' }, turns: '3'
+  }) });
+
+  harness.intervals[0].callback();
+  await tick();
+  const body = JSON.parse(usagePosts(harness)[0].options.body);
+  assert.deepEqual(Object.keys(body).sort(),
+    ['cacheCreationTokens', 'cacheReadTokens', 'costUsd', 'inputTokens', 'outputTokens', 'reasoningTokens', 'turns']);
+  for (const value of Object.values(body)) assert.equal(typeof value, 'number');
+  assert.equal(body.turns, 3);
+  assert.doesNotMatch(usagePosts(harness)[0].options.body, /hunter2|secret|m1/);
+});

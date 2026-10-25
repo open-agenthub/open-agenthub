@@ -152,6 +152,28 @@ public class UsageStoresPostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task Usage_IsScopedToTheOwner()
+    {
+        await using var db = await PostgresUsageDatabase.CreateAsync();
+        await db.AddSessionAsync("s-alice", "alice", AgentAuthMode.ApiKey);
+        await db.AddSessionAsync("s-bob", "bob", AgentAuthMode.Subscription);
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-alice", CostUsd = 1, InputTokens = 10 });
+        // A payload naming another owner cannot move a session: the sessions registry decides.
+        await db.Usage.AddDeltaAsync(new SessionUsageDelta { SessionId = "s-bob", UserId = "alice", CostUsd = 1, InputTokens = 20 });
+
+        Assert.Equal("s-alice", Assert.Single(await db.Usage.ListByOwnerAsync("alice")).SessionId);
+        Assert.Equal("s-bob", Assert.Single(await db.Usage.ListByOwnerAsync("bob")).SessionId);
+        Assert.Null(await db.Usage.GetAsync("alice", "s-bob"));
+        Assert.Null(await db.Usage.GetAsync("bob", "s-alice"));
+        var alice = await db.Usage.SummaryAsync("alice", null, null);
+        Assert.Equal(1, alice.SessionCount);
+        Assert.Equal(10, alice.InputTokens);
+        Assert.Equal(1, alice.CostUsd, 6);
+        Assert.Equal(0, (await db.Usage.SummaryAsync("bob", null, null)).CostUsd, 6);
+        Assert.Equal(0, await db.Usage.MonthToDateApiCostAsync("bob"), 6);
+    }
+
+    [PostgreSqlFact]
     public async Task Initialize_ClassifiesRowsFromBeforeTheSplit()
     {
         await using var db = await PostgresUsageDatabase.CreateAsync();
