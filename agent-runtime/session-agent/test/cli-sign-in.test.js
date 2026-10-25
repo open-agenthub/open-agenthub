@@ -75,7 +75,7 @@ test('archives fail closed while auth is visible and when native diagnostics ret
  } finally {privacy.dispose();fs.rmSync(dir,{recursive:true,force:true});}
 });
 
-test('archive scans refuse a file replaced between metadata and open', async () => {
+test('archive scans refuse a pathname replaced while its descriptor is read', async () => {
  const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'signin-file-race-'));
  const privacy=createSignInPrivacy();
@@ -83,7 +83,8 @@ test('archive scans refuse a file replaced between metadata and open', async () 
   privacy.feed(screens.device.join('\r\n')); await privacy.flush();
   privacy.feed('\x1b[2J\x1b[H❯ '); await privacy.flush();
   const file=path.join(dir,'native.log');fs.writeFileSync(file,'safe');
-  const racing={...fs,lstatSync(name){const stat=fs.lstatSync(name);if(name===file){fs.writeFileSync(file+'.replacement','replacement');fs.renameSync(file+'.replacement',file);}return stat;}};
+  let replaced=false;
+  const racing={...fs,readSync(...args){const count=fs.readSync(...args);if(count&&!replaced){replaced=true;fs.writeFileSync(file+'.replacement','replacement');fs.renameSync(file+'.replacement',file);}return count;}};
   assert.equal(privacy.archiveSafe(dir,racing),false);
  } finally {privacy.dispose();fs.rmSync(dir,{recursive:true,force:true});}
 });
@@ -180,4 +181,29 @@ test('only a true code-mode flag is excluded, never other code values', async ()
    assert.equal(privacy.mask(value), /^true$/i.test(value) ? value : '[sign-in data removed]');
   } finally { privacy.dispose(); }
  }
+});
+
+test('a symlink swap before open cannot redirect a native transcript scan', async () => {
+ const fs = require('node:fs'), os = require('node:os'), path = require('node:path');
+ const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'signin-symlink-swap-'));
+ const privacy = createSignInPrivacy();
+ try {
+  privacy.feed(screens.device.join('\r\n')); await privacy.flush();
+  privacy.feed('\x1b[2J\x1b[H❯ '); await privacy.flush();
+  const file = path.join(dir, 'native.jsonl'), target = path.join(dir, 'outside.jsonl');
+  fs.writeFileSync(file, 'safe'); fs.writeFileSync(target, 'ABCD-12345');
+  let swapped = false, reads = 0;
+  const racing = { ...fs,
+   openSync(name, flags) {
+    assert.ok(flags & fs.constants.O_NOFOLLOW);
+    if (name === file && !swapped) { swapped = true; fs.unlinkSync(file); fs.symlinkSync(target, file); }
+    return fs.openSync(name, flags);
+   },
+   readSync(...args) { reads += 1; return fs.readSync(...args); }
+  };
+  assert.equal(privacy.archiveSafe(file, racing), false);
+  assert.equal(reads, 0);
+  assert.equal(privacy.releaseAbsent([{ root: file }]), 0);
+  assert.equal(privacy.mask('ABCD-12345'), '[sign-in data removed]');
+ } finally { privacy.dispose(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

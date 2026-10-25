@@ -105,34 +105,30 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
         return new RegExp('^' + expression + '(?:/|$)').test(relative);
       });
       if (excluded) return true;
-      let stat;
-      try { stat = fs.lstatSync(file); } catch (error) { return optional && file === root && error.code === 'ENOENT'; }
-      if (stat.isSymbolicLink()) return file !== root;
-      if (stat.isDirectory()) {
-        try {
-          if (!fs.readdirSync(file).every(name => visit(require('node:path').join(file, name)))) return false;
-          const after = fs.lstatSync(file);
-          return after.dev === stat.dev && after.ino === stat.ino && after.mtimeMs === stat.mtimeMs && after.ctimeMs === stat.ctimeMs;
-        } catch { return false; }
-      }
-      if (!stat.isFile()) return true;
       let fd;
       try {
+        // Open first: validating a pathname before opening leaves a replacement window.
+        // No-follow and nonblocking also keep symlinks and FIFOs from redirecting or stalling a scan.
         const flags = require('node:fs').constants;
         fd = fs.openSync(file, flags.O_RDONLY | (flags.O_NOFOLLOW || 0) | (flags.O_NONBLOCK || 0));
         const opened = fs.fstatSync(fd);
-        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) return false;
-        const chunk = Buffer.alloc(64 * 1024);
-        let tail = Buffer.alloc(0), count;
-        while ((count = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) {
-          const data = Buffer.concat([tail, chunk.subarray(0, count)]);
-          for (const needle of needles) if (data.includes(needle)) found.add(needle.toString());
-          tail = data.subarray(Math.max(0, data.length - overlap));
-        }
-        const after = fs.fstatSync(fd);
-        return after.size === opened.size && after.mtimeMs === opened.mtimeMs && after.ctimeMs === opened.ctimeMs;
-      } catch { return false; }
-      finally { if (fd !== undefined) fs.closeSync(fd); }
+        if (opened.isDirectory()) {
+          if (!fs.readdirSync(file).every(name => visit(require('node:path').join(file, name)))) return false;
+        } else if (opened.isFile()) {
+          const chunk = Buffer.alloc(64 * 1024);
+          let tail = Buffer.alloc(0), count;
+          while ((count = fs.readSync(fd, chunk, 0, chunk.length, null)) > 0) {
+            const data = Buffer.concat([tail, chunk.subarray(0, count)]);
+            for (const needle of needles) if (data.includes(needle)) found.add(needle.toString());
+            tail = data.subarray(Math.max(0, data.length - overlap));
+          }
+        } else return true;
+        const after = fs.fstatSync(fd), named = fs.lstatSync(file);
+        return named.dev === opened.dev && named.ino === opened.ino &&
+          after.size === opened.size && after.mtimeMs === opened.mtimeMs && after.ctimeMs === opened.ctimeMs;
+      } catch (error) {
+        return (error.code === 'ELOOP' && file !== root) || (optional && file === root && error.code === 'ENOENT');
+      } finally { if (fd !== undefined) fs.closeSync(fd); }
     }
     return visit(root);
   }
