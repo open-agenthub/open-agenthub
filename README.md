@@ -810,3 +810,6 @@ while the code in [`ee/`](ee/) is source-available under the commercial
 [Open AgentHub Enterprise License](ee/LICENSE) and powers the enterprise offering
 (6 €/user/month excl. VAT, 3-month free trial). Contributions require agreeing to our Contributor
 License Agreement — see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+All five default agent runtime images include `python3`, pip and venv from distribution packages.
+Create a virtual environment in the workspace for dependencies; see [the decision and size impact](docs/runtime-python.md).

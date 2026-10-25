@@ -11,7 +11,8 @@ import AutoDeleteCard from './AutoDeleteCard.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
-import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
+import SecretConflictNote from './SecretConflictNote.vue'
+import { secretIdsChange, secretOptions, secretSelectionFor, chosenSecrets, secretConflicts } from '../lib/secrets.js'
 import SystemPromptField from './SystemPromptField.vue'
 import SessionResourceFields from './SessionResourceFields.vue'
 import { resourceForm, resourcePayload } from '../lib/resources.js'
@@ -66,6 +67,9 @@ const secrets = computed(() => secretOptions(storedSecrets.value, selectedProjec
 const copiedSecretIds = computed(() => (projectId.value || '') === (props.session.projectId || '') ? props.session.secretIds : null)
 const selectedGrants = ref([])
 const selectedSecrets = ref([])
+// Refused by the hub too; disabling the button keeps the owner from finding out only afterwards (#253).
+const chosen = computed(() => chosenSecrets(storedSecrets.value, selectedSecrets.value, selectedGrants.value))
+const secretClash = computed(() => secretConflicts(chosen.value).length > 0)
 watch([secrets, copiedSecretIds], ([options, copied]) => {
   selectedSecrets.value = secretSelectionFor(copied, options, !!selectedProject.value)
 }, { immediate: true })
@@ -117,6 +121,7 @@ async function submit() {
       <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
         :project-has-none="!!selectedProject && storedSecrets.length > 0" />
         <SecretGrantsPicker v-model="selectedGrants" :options="storedSecrets" />
+        <SecretConflictNote :secrets="chosen" />
       <SystemPromptField v-model="systemPrompt" />
       <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration <span class="dim">— inline JSON config</span></span></label>
       <div v-if="savedMcpServers.length" class="field mcp-field" data-mcp-picker>
@@ -154,7 +159,7 @@ async function submit() {
       </div>
     </div>
     <p v-if="error" class="err">{{ error }}</p>
-    <div class="row"><button class="primary" data-submit :disabled="busy" @click="submit">{{ busy ? 'Duplicating…' : 'Duplicate' }}</button><button @click="$emit('close')">Cancel</button></div>
+    <div class="row"><button class="primary" data-submit :disabled="busy || secretClash" @click="submit">{{ busy ? 'Duplicating…' : 'Duplicate' }}</button><button @click="$emit('close')">Cancel</button></div>
   </div></div>
 </template>
 <style scoped>

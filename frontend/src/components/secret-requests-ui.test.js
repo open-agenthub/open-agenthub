@@ -80,10 +80,10 @@ describe('answering in Settings → Secrets', () => {
     const wrapper = mount(SecretsPane)
     await flushPromises()
     await wrapper.get('[data-secret-request-answer]').trigger('click')
-    expect(wrapper.get('[data-secret-name]').attributes('readonly')).toBeDefined()
+    expect(wrapper.get('[data-secret-name]').element.value).toBe('SENTRY_DSN')
     await wrapper.get('[data-secret-save]').trigger('click')
     await flushPromises()
-    expect(mocks.api.upsertSecret).toHaveBeenCalledWith(expect.objectContaining({ name: 'SENTRY_DSN', value: null }))
+    expect(mocks.api.upsertSecret).toHaveBeenCalledWith(expect.objectContaining({ id: 'old', name: 'SENTRY_DSN', value: null }))
     expect(mocks.api.provideSecretRequest).toHaveBeenCalledWith('r1', 'old')
   })
 

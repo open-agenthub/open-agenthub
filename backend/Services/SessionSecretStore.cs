@@ -95,9 +95,11 @@ public static class SessionSecretStore
         data is not null && data.TryGetValue(ValueKey(id), out var value) ? value : null;
 
     /// <summary>
-    /// Adds a secret, or updates the one stored under the same name (case-insensitively — FOO and
-    /// foo side by side would be two secrets the person reading the list cannot tell apart). The id
-    /// stays the same across an update, so project and session selections keep pointing at it.
+    /// Adds a secret, or changes the one whose id the request names. The id stays the same across
+    /// an update, a rename included, so project and session selections keep pointing at it. Names
+    /// are not unique: two secrets may share one as long as no session receives both, which
+    /// <see cref="SessionSecretConflicts"/> checks wherever a session's set is decided. Updating
+    /// by name instead would have made the second "API_KEY" impossible to store at all.
     /// Validation is here, at the edge the owner is looking at: a session failing at start over a
     /// name Kubernetes refuses would give nobody anything to act on.
     /// </summary>
@@ -125,10 +127,12 @@ public static class SessionSecretStore
         }
 
         var entries = Read(data).ToList();
-        var index = entries.FindIndex(e => string.Equals(e.Name, name, StringComparison.OrdinalIgnoreCase));
+        var id = string.IsNullOrWhiteSpace(request.Id) ? null : request.Id.Trim();
         Entry entry;
-        if (index >= 0)
+        if (id is not null)
         {
+            var index = entries.FindIndex(e => e.Id == id);
+            if (index < 0) throw new ArgumentException($"No stored secret with id '{id}'.");
             entry = entries[index] with { Name = name, Delivery = delivery!, Description = description, UpdatedAt = now };
             entries[index] = entry;
         }

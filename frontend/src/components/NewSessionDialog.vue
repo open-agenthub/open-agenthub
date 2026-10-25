@@ -11,7 +11,8 @@ import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
 import SecretPicker from './SecretPicker.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
-import { secretIdsPayload, secretOptions, secretSelectionFor } from '../lib/secrets.js'
+import SecretConflictNote from './SecretConflictNote.vue'
+import { secretIdsPayload, secretOptions, secretSelectionFor, chosenSecrets, secretConflicts } from '../lib/secrets.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import { preferredUi, UI_OPTIONS } from '../lib/ui-preference.js'
 import AutoDeleteCard from './AutoDeleteCard.vue'
@@ -67,6 +68,9 @@ const selectedProject = computed(() => props.projects.find(project => project.id
 const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
 const selectedGrants = ref([])
 const selectedSecrets = ref([])
+// Refused by the hub too; disabling the button keeps the owner from finding out only afterwards (#253).
+const chosen = computed(() => chosenSecrets(storedSecrets.value, selectedSecrets.value, selectedGrants.value))
+const secretClash = computed(() => secretConflicts(chosen.value).length > 0)
 watch(secrets, options => { selectedSecrets.value = secretSelectionFor(null, options, !!selectedProject.value) })
 const busy = ref(false)
 const error = ref('')
@@ -211,6 +215,7 @@ async function submit() {
         <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
           :project-has-none="!!selectedProject && storedSecrets.length > 0" />
         <SecretGrantsPicker v-model="selectedGrants" :options="storedSecrets" />
+        <SecretConflictNote :secrets="chosen" />
       </div>
 
       <div class="card sect">
@@ -287,7 +292,7 @@ async function submit() {
       <p v-if="error" class="err">{{ error }}</p>
 
       <div class="row">
-        <button class="primary" data-submit :disabled="busy" @click="submit">{{ busy ? 'Starting…' : 'Start session' }}</button>
+        <button class="primary" data-submit :disabled="busy || secretClash" @click="submit">{{ busy ? 'Starting…' : 'Start session' }}</button>
         <button @click="$emit('close')">Cancel</button>
         <span class="dim note-inline">The selected agent and terminal tools are set up automatically.</span>
       </div>

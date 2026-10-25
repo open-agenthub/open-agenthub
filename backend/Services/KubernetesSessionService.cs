@@ -163,8 +163,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     public async Task<SessionSecretInfo> UpsertSessionSecretAsync(string owner, UpsertSessionSecretRequest request,
         CancellationToken ct = default)
     {
-        var entry = await ChangeUserSecretsAsync(owner,
-            data => SessionSecretStore.Upsert(data, request, DateTime.UtcNow), ct);
+        var (sessions, projects) = await SecretSelectionsAsync(owner, ct);
+        // Checked inside the write, against the store it is about to replace: a rename that makes
+        // two secrets of one session land in the same place is refused before it is stored.
+        var entry = await ChangeUserSecretsAsync(owner, data =>
+        {
+            var written = SessionSecretStore.Upsert(data, request, DateTime.UtcNow);
+            SessionSecretConflicts.EnsureNone(SessionSecretStore.Read(data), sessions, projects);
+            return written;
+        }, ct);
         // The id and nothing else: the name is the owner's text and the value never goes near a log.
         _log.LogInformation("Stored secret {Id} for {Owner}", entry.Id, owner);
         await TrySyncSessionSecretsAsync(owner, ct);
@@ -186,6 +193,38 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var stored = SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data);
         var selected = requested is null || requested.Contains(SessionSecretSelection.FollowProject) ? null : requested;
         return SessionSecretSelection.Effective(selected, projectId, await ProjectSecretIdsAsync(owner, projectId, ct), stored);
+    }
+
+    private async Task<(Dictionary<string, SessionRecord> Sessions,
+        Dictionary<string, (string Name, IReadOnlyList<string> SecretIds)> Projects)> SecretSelectionsAsync(
+        string owner, CancellationToken ct)
+    {
+        var sessions = (await _store.ListAsync(owner, ct)).ToDictionary(r => r.Id);
+        var projects = (await _projects.ListAsync(owner, ct)).ToDictionary(p => p.Id,
+            p => (p.Name, p.SecretIds ?? []));
+        return (sessions, projects);
+    }
+
+    /// <summary>Refuses a session record, as it is about to be stored, that would receive two
+    /// secrets landing in the same place (#253).</summary>
+    private async Task EnsureNoSecretConflictAsync(string owner, SessionRecord rec, CancellationToken ct)
+    {
+        var (sessions, projects) = await SecretSelectionsAsync(owner, ct);
+        sessions[rec.Id] = rec;
+        SessionSecretConflicts.EnsureNone(SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data),
+            sessions, projects, onlySessions: [rec.Id], onlyProjects: [], selfSessionId: rec.Id);
+    }
+
+    public async Task EnsureProjectSecretsFitAsync(string owner, string? projectId, string projectName,
+        IReadOnlyList<string> secretIds, CancellationToken ct = default)
+    {
+        var (sessions, projects) = await SecretSelectionsAsync(owner, ct);
+        // A project being created has no sessions yet; its selection is checked on its own.
+        var id = projectId ?? "";
+        projects[id] = (projectName, secretIds);
+        SessionSecretConflicts.EnsureNone(SessionSecretStore.Read((await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data),
+            sessions, projects, onlySessions: sessions.Values.Where(s => s.ProjectId == id).Select(s => s.Id).ToList(),
+            onlyProjects: [id]);
     }
 
     private async Task<SessionSecretAccessResolver> SecretAccessResolverAsync(string owner, CancellationToken ct)
@@ -260,19 +299,46 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
 
     /// <summary>
     /// Writes the session's two secret copies from the current store and selections and returns
-    /// the names of the variables, which the pod spec references. Called at every spawn and on
-    /// every change: the kubelet then carries a file change into the running pod by itself.
+    /// the names of the variables, which the pod spec references, with the resourceVersion the
+    /// variable copy has now. Called at every spawn and on every change: the kubelet then carries a
+    /// file change into the running pod by itself.
     /// </summary>
-    private async Task<IReadOnlyList<string>> WriteSessionSecretsAsync(string owner, SessionRecord rec,
-        IDictionary<string, byte[]>? store, CancellationToken ct, SessionSecretAccessResolver? resolver = null)
+    private async Task<(IReadOnlyList<string> EnvNames, string? EnvVersion)> WriteSessionSecretsAsync(string owner,
+        SessionRecord rec, IDictionary<string, byte[]>? store, CancellationToken ct, SessionSecretAccessResolver? resolver = null)
     {
         var ids = (resolver ?? await SecretAccessResolverAsync(owner, ct)).Effective(rec);
         var delivery = SessionSecretDeliveryFactory.Build(rec.Id, _opts.Namespace,
             new Dictionary<string, string> { [OwnerLabel] = Sanitize(owner), [SessionLabel] = rec.Id }, store, ids);
+        if (delivery.Withheld > 0)
+            _log.LogWarning("Withheld {Count} secrets from session {Id}: they would land in the same place", delivery.Withheld, rec.Id);
         await UpsertSecretAsync(delivery.Files, ct);
-        await UpsertSecretAsync(delivery.Env, ct);
-        return delivery.EnvNames;
+        var env = await UpsertSecretAsync(delivery.Env, ct);
+        return (delivery.EnvNames, env.Metadata?.ResourceVersion);
     }
+
+    /// <summary>
+    /// The pod annotation holding the resourceVersion of the variable copy the agent container
+    /// started with. The API server leaves resourceVersion alone when a replace changes nothing,
+    /// so it moves exactly when a variable was added, removed, renamed or given another value —
+    /// the changes a running container cannot see (#255).
+    /// Rejected: a hash of the variables in the annotation. Anyone who may read pods could test
+    /// guesses of a short value against it.
+    /// </summary>
+    public const string SecretEnvVersionAnnotation = "agenthub.dev/secret-env-version";
+
+    /// <summary>Whether the live pod's variables differ from its variable copy: they reach the agent
+    /// at its next start. False without a live pod (the next start reads the copy anyway) and for a
+    /// pod started before the annotation existed, whose version is unknown.</summary>
+    public static bool SecretsPendingRestart(V1Pod? pod, string? envVersion)
+    {
+        if (pod?.Metadata?.DeletionTimestamp is not null || pod?.Status?.Phase is not ("Pending" or "Running")) return false;
+        return pod.Metadata.Annotations?.TryGetValue(SecretEnvVersionAnnotation, out var started) == true
+            && envVersion is not null && started != envVersion;
+    }
+
+    private async Task<bool> SecretsPendingRestartAsync(string id, V1Pod? pod, CancellationToken ct) =>
+        pod is not null && SecretsPendingRestart(pod,
+            (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct))?.Metadata?.ResourceVersion);
 
     public async Task<IReadOnlyList<string>> SessionSecretIdsAsync(string owner, SessionRecord session,
         CancellationToken ct = default)
@@ -298,16 +364,20 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         {
             grants.Add(new(secretId, false, "requested"));
             rec.SecretGrantIdsJson = SessionSecretGrants.Serialize(grants);
+            await EnsureNoSecretConflictAsync(owner, rec, ct);
             await _store.UpsertAsync(rec, ct);
         }
         await RefreshSessionSecretsAsync(owner, rec, ct);
         // The stored id, not the one from the request body, which a caller could fill with log lines.
         _log.LogInformation("Granted secret {SecretId} to session {Id}", entry.Id, rec.Id);
         // A file arrives in the running pod on its own; a variable only with a container that
-        // starts after this, unless the running one already references it.
+        // starts after this. Whether the running one already has it is the copy's version, not
+        // whether the container references the name: it may reference it with another value.
         var restart = false;
         if (entry.Delivery == Models.SessionSecretDelivery.Env && await TryReadPodAsync($"session-{rec.Id}", ct) is { } pod)
-            restart = pod.Spec?.Containers?.FirstOrDefault()?.Env?.Any(e => e.Name == entry.Name) != true;
+            restart = pod.Metadata?.Annotations?.ContainsKey(SecretEnvVersionAnnotation) == true
+                ? await SecretsPendingRestartAsync(rec.Id, pod, ct)
+                : pod.Spec?.Containers?.FirstOrDefault()?.Env?.Any(e => e.Name == entry.Name) != true;
         return new SessionSecretGrant(entry.Id, entry.Name, entry.Delivery, restart);
     }
 
@@ -857,6 +927,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             AutoDeleteAfterSeconds = autoDeleteAfter, AutoDeleteFrom = autoDeleteFrom,
             AccountFailover = AccountFailoverMode.Normalize(req.AccountFailover)
         };
+        await EnsureNoSecretConflictAsync(owner, rec, ct);
         // Persist session row before registering ephemerals so a failed Upsert
         // cannot leave orphaned session-scoped API sources.
         await _store.UpsertAsync(rec, ct);
@@ -1314,6 +1385,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     /// (#215, docs/session-resources.md), through the same pause → wait for the old pod → check
     /// the archive → resume as the confirmed runtime update, so the conversation continues. A
     /// session whose pod already has them is left alone, so a repeated click restarts nothing.
+    /// Changed secret variables (#255) are applied the same way: they too only reach a container
+    /// that starts after the change, and a second restart path would be a second set of checks.
     /// </summary>
     public async Task<SessionInfo> ApplyResourcesAsync(string owner, string id, CancellationToken ct = default)
     {
@@ -1322,17 +1395,18 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
         var pod = await TryReadPodAsync($"session-{id}", ct);
-        if (!ResourcesPendingRestart(record, pod)) return (await GetSessionAsync(owner, id, ct))!;
+        if (!ResourcesPendingRestart(record, pod) && !await SecretsPendingRestartAsync(id, pod, ct))
+            return (await GetSessionAsync(owner, id, ct))!;
         // An autonomous task resumed from its prompt may repeat what it already did outside, as
         // docs/session-runtime-image-updates.md explains; it gets the values at its next start.
         if (record.Mode != SessionMode.Interactive || pod!.Status?.Phase != SessionStatus.Running)
-            throw new InvalidOperationException("Only a running interactive session can be restarted to apply new resources; this one gets them at its next start.");
+            throw new InvalidOperationException("Only a running interactive session can be restarted to apply new resources or variables; this one gets them at its next start.");
         if (!_artifacts.IsConfigured)
             throw new InvalidOperationException("State storage is unavailable. The conversation cannot be saved for resume.");
         await EnsureAgentAllowedAsync(record.Agent, ct);
         await EnforceUsageLimitAsync(owner, record.Agent, record.AuthMode, ct);
         await AdmitResourcesAsync(record, pod, ct);
-        _log.LogInformation("Restarting session {Id} to apply new resources", record.Id);
+        _log.LogInformation("Restarting session {Id} to apply new resources or secret variables", record.Id);
         return await PauseAndResumeRuntimeCoreAsync(owner, id, ct);
     }
 
@@ -1714,6 +1788,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (req.SecretGrants is not null)
             rec.SecretGrantIdsJson = SessionSecretGrants.Serialize(await ValidateSecretGrantsAsync(owner, req.SecretGrants,
                 SessionSecretSelection.Parse(rec.SecretCeilingJson), SessionSecretGrants.Parse(rec.SecretGrantIdsJson), ct));
+        if (req.SecretIds is not null || req.SecretGrants is not null || req.ProjectIdSpecified)
+            await EnsureNoSecretConflictAsync(owner, rec, ct);
         if (req.Policy is { } policy)
         {
             rec.AgentPolicyJson = SerializePolicy(policy);
@@ -1755,7 +1831,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var pod = await TryReadPodAsync($"session-{id}", ct);
         await ObserveFailureAsync(rec, pod, ct);
         return await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
-            await _browsers.GetSummaryAsync(id, ct), ct) with { ResourcesPendingRestart = ResourcesPendingRestart(rec, pod) };
+            await _browsers.GetSummaryAsync(id, ct), ct) with { ResourcesPendingRestart = ResourcesPendingRestart(rec, pod),
+                SecretsPendingRestart = await SecretsPendingRestartAsync(id, pod, ct) };
     }
 
     /// <summary>
@@ -1857,11 +1934,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             ct);
         if (!preparation.ShouldSpawn) return;
 
+        var (envNames, envVersion) = await WriteSessionSecretsAsync(owner, rec,
+            (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data, ct);
         context = context with { HasGitCredentials = preparation.HasGitCredentials,
-            HasSessionSecrets = true,
-            SecretEnvNames = await WriteSessionSecretsAsync(owner, rec,
-                (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data, ct)
-        };
+            HasSessionSecrets = true, SecretEnvNames = envNames };
         var podSpec = AgentPodSpecFactory.Build(rec, req, context);
 
         if (rec.Mode == SessionMode.Scheduled)
@@ -1894,11 +1970,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         {
             try
             {
-                await _k8s.CoreV1.CreateNamespacedPodAsync(new V1Pod
-                {
-                    Metadata = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title),
-                    Spec = podSpec
-                }, _opts.Namespace, cancellationToken: ct);
+                var meta = Meta($"session-{rec.Id}", owner, rec.Id, "agent", rec.Title);
+                if (envVersion is not null)
+                    (meta.Annotations ??= new Dictionary<string, string>())[SecretEnvVersionAnnotation] = envVersion;
+                await _k8s.CoreV1.CreateNamespacedPodAsync(new V1Pod { Metadata = meta, Spec = podSpec },
+                    _opts.Namespace, cancellationToken: ct);
             }
             catch (k8s.Autorest.HttpOperationException ex) when ((int)ex.Response.StatusCode is 400 or 403 or 422)
             {
@@ -1944,6 +2020,13 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var storedSecrets = await ListSessionSecretsAsync(owner, ct);
         var secretResolver = await SecretAccessResolverAsync(owner, ct);
         var projectSecrets = (await _projects.ListAsync(owner, ct)).ToDictionary(p => p.Id, p => p.SecretIds);
+        // One list for every session's variable copy rather than a read per row; from the watch
+        // cache like the pods above, for the same reason.
+        var envVersions = (await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
+                labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}={SessionSecretDeliveryFactory.EnvComponent}",
+                resourceVersion: "0", cancellationToken: ct)).Items
+            .Where(s => s.Metadata.Labels?.ContainsKey(SessionLabel) == true)
+            .ToDictionary(s => s.Metadata.Labels[SessionLabel], s => s.Metadata.ResourceVersion);
         var result = new List<SessionInfo>();
         foreach (var r in records)
         {
@@ -1954,6 +2037,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                     r.ProjectId is not null && projectSecrets.TryGetValue(r.ProjectId, out var selection) ? selection ?? [] : [])
                     .Where(s => secretResolver.Effective(r).Contains(s.Id)).ToList(),
                 ResourcesPendingRestart = ResourcesPendingRestart(r, pod),
+                SecretsPendingRestart = SecretsPendingRestart(pod, envVersions.GetValueOrDefault(r.Id)),
                 OutdatedImage = RuntimeImageOutdated(r,
                     pod ?? (scheduledTemplates.TryGetValue(r.Id, out var template) ? new V1Pod { Spec = template } : null)) });
         }
@@ -1980,7 +2064,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 // A storage failure can retain the row after its schedule was removed.
             }
         }
-        return info with { OutdatedImage = RuntimeImageOutdated(rec, pod), ResourcesPendingRestart = ResourcesPendingRestart(rec, pod) };
+        return info with { OutdatedImage = RuntimeImageOutdated(rec, pod), ResourcesPendingRestart = ResourcesPendingRestart(rec, pod),
+            SecretsPendingRestart = await SecretsPendingRestartAsync(id, pod, ct) };
     }
 
     public async Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default)
@@ -2404,12 +2489,12 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { return null; }
     }
 
-    private async Task UpsertSecretAsync(V1Secret secret, CancellationToken ct)
+    private async Task<V1Secret> UpsertSecretAsync(V1Secret secret, CancellationToken ct)
     {
-        try { await _k8s.CoreV1.CreateNamespacedSecretAsync(secret, _opts.Namespace, cancellationToken: ct); }
+        try { return await _k8s.CoreV1.CreateNamespacedSecretAsync(secret, _opts.Namespace, cancellationToken: ct); }
         catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.Conflict)
         {
-            await _k8s.CoreV1.ReplaceNamespacedSecretAsync(secret, secret.Metadata.Name, _opts.Namespace, cancellationToken: ct);
+            return await _k8s.CoreV1.ReplaceNamespacedSecretAsync(secret, secret.Metadata.Name, _opts.Namespace, cancellationToken: ct);
         }
     }
 

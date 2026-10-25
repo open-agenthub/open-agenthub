@@ -3,6 +3,10 @@ import { parseActivityFrame } from './agent-activity.js'
 describe('activity control frame', () => {
   it('accepts only a complete known control frame and leaves PTY content alone', () => {
     expect(parseActivityFrame(JSON.stringify({ type: 'agenthub', subtype: 'activity', state: 'working', source: 'hooks' }))).toEqual({ state: 'working', source: 'hooks' })
+    expect(parseActivityFrame(JSON.stringify({ type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', reason: 'answer' })))
+      .toEqual({ state: 'waiting', source: 'hooks', reason: 'answer' })
+    expect(parseActivityFrame(JSON.stringify({ type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', reason: 'other' })))
+      .toEqual({ state: 'waiting', source: 'hooks' })
     for (const data of ['ordinary terminal text', '{"type":"tool"}', '{"type":"agenthub","subtype":"activity","state":"bogus"}', new Uint8Array([1])]) expect(parseActivityFrame(data)).toBeNull()
   })
 })

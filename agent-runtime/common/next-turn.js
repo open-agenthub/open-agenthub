@@ -148,10 +148,10 @@ function createNextTurnDelivery(options) {
     return messages;
   }
 
-  /** The agent's turn hooks: "prompt" and "permission" mean it works; "stop" ends a turn and is
+  /** The agent's turn hooks: "prompt", "permission" and "question" mean it works; "stop" ends a turn and is
    * answered with the next one's text when there is something to deliver. */
   async function turnEvent(event) {
-    if (event === 'prompt' || event === 'permission') {
+    if (event === 'prompt' || event === 'permission' || event === 'question') {
       if (event === 'prompt') {
         lastPrompt = now();
         if (typing) typedSubmitted = true;

@@ -1,5 +1,6 @@
 <script setup>
 import { computed } from 'vue'
+import { hasNamesake } from '../lib/secrets.js'
 
 const props = defineProps({
   options: { type: Array, default: () => [] },
@@ -62,6 +63,7 @@ function onKey(event, id) {
     <div v-for="secret in options" :key="secret.id" class="row" :data-secret-row="secret.id">
       <span :id="`grant-${secret.id}`" class="name">
         {{ secret.name }}
+        <small v-if="hasNamesake(options, secret)" class="id" :data-secret-id="secret.id">{{ secret.id }}</small>
         <small v-if="provenanceOf(secret.id)" class="provenance" :data-secret-provenance="secret.id">{{ provenanceOf(secret.id) }}</small>
       </span>
       <div class="segmented" role="radiogroup" :aria-labelledby="`grant-${secret.id}`" :aria-disabled="disabled || null" :data-secret-grant="secret.id">
@@ -85,6 +87,7 @@ p, small { display: block; color: var(--muted-3); font-size: 12px; }
 .row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 8px 0; font-size: 13px; }
 .name { flex: 1 1 140px; min-width: 0; overflow-wrap: anywhere; }
 .provenance { display: inline; margin-left: 6px; }
+.id { display: inline; margin-left: 6px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
 /* The look of the session bar's Workspace | Terminal | Shell switch (TerminalView .tabs). */
 .segmented { display: flex; flex-wrap: wrap; gap: 2px; max-width: 100%; background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius); padding: 3px; }
 .segmented button { width: auto; font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 8px; border: none; background: none; color: var(--muted-3); white-space: nowrap; }
