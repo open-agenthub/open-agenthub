@@ -8,28 +8,6 @@ const require = createRequire(import.meta.url);
 const { chromium } = require(process.argv[2]);
 const cdp = 'http://127.0.0.1:9223';
 
-async function rawCdp() {
-  const { webSocketDebuggerUrl } = await (await fetch(`${cdp}/json/version`)).json();
-  const socket = new WebSocket(webSocketDebuggerUrl);
-  await new Promise(resolve => socket.addEventListener('open', resolve, { once: true }));
-  let id = 0;
-  const pending = new Map();
-  socket.addEventListener('message', event => {
-    const message = JSON.parse(event.data);
-    pending.get(message.id)?.(message);
-    pending.delete(message.id);
-  });
-  return {
-    send(method, params = {}) {
-      return new Promise((resolve, reject) => {
-        pending.set(++id, m => m.error ? reject(new Error(m.error.message)) : resolve(m.result));
-        socket.send(JSON.stringify({ id, method, params }));
-      });
-    },
-    close() { socket.close(); }
-  };
-}
-
 async function windows(raw) {
   const { targetInfos } = await raw.send('Target.getTargets');
   const byWindow = new Map();
@@ -41,8 +19,8 @@ async function windows(raw) {
 }
 
 const fixtures = await startFixtures();
-const raw = await rawCdp();
 const browser = await chromium.connectOverCDP(cdp, { noDefaults: true });
+const raw = await browser.newBrowserCDPSession();
 const context = browser.contexts()[0];
 const page = context.pages()[0];
 await page.goto(`${fixtures.base}/`);
@@ -81,6 +59,6 @@ await record('after oauth popup');
 
 const failures = results.filter(result => result.windows !== 1).map(result => result.step);
 console.log(JSON.stringify({ verdict: failures.length ? 'FAIL' : 'PASS', extraWindowAfter: failures }));
-raw.close();
+await raw.detach();
 await browser.close();
 fixtures.server.close();
