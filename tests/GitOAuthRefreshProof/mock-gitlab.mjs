@@ -35,8 +35,9 @@ const failures = new Map() // ip -> [timestamps]
 const banned = new Map()   // ip -> until
 
 // Events go to stdout (run.sh keeps them in events.log): a test server has no business writing
-// request-derived text into files of its own.
-const log = m => console.log(`${new Date().toISOString()} ${m}`)
+// request-derived text into files of its own. Line breaks and control characters are replaced, so
+// a request path cannot forge an event line the proof later reads.
+const log = m => console.log(`${new Date().toISOString()} ${String(m).replace(/[\r\n\u0000-\u001f\u007f]/g, ' ')}`)
 const now = () => Date.now() / 1000
 
 function issue(reason) {
