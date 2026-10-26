@@ -37,7 +37,19 @@ const banned = new Map()   // ip -> until
 // Events go to stdout (run.sh keeps them in events.log): a test server has no business writing
 // request-derived text into files of its own. Line breaks and control characters are replaced, so
 // a request path cannot forge an event line the proof later reads.
-const log = m => console.log(`${new Date().toISOString()} ${String(m).replace(/[\r\n\u0000-\u001f\u007f]/g, ' ')}`)
+const log = m => console.log(`${new Date().toISOString()} ${m}`)
+
+// Requests are logged by a fixed label, never by their own path or method, so nothing a client
+// sends can shape an event line the proof later reads.
+function route(req, url) {
+  const service = url.searchParams.get('service')
+  if (url.pathname.endsWith('/info/refs')) return service === 'git-receive-pack' ? 'GET info/refs (push)' : 'GET info/refs (fetch)'
+  if (url.pathname.endsWith('/git-upload-pack')) return 'POST git-upload-pack'
+  if (url.pathname.endsWith('/git-receive-pack')) return 'POST git-receive-pack'
+  if (url.pathname === '/api/v4/user') return 'GET /api/v4/user'
+  if (url.pathname === '/api/v4/projects') return 'GET /api/v4/projects'
+  return 'other request'
+}
 const now = () => Date.now() / 1000
 
 function issue(reason) {
@@ -66,7 +78,7 @@ function gitFailure(ip) {
   const list = (failures.get(ip) || []).filter(t => t > now() - BAN_FIND)
   list.push(now())
   failures.set(ip, list)
-  if (list.length >= BAN_RETRY) { banned.set(ip, now() + BAN_TIME); log(`ban ${ip} for ${BAN_TIME}s after ${list.length} failed git logins`) }
+  if (list.length >= BAN_RETRY) { banned.set(ip, now() + BAN_TIME); log(`ban the client address for ${BAN_TIME}s after ${list.length} failed git logins`) }
 }
 
 async function handle(req, res) {
@@ -124,7 +136,7 @@ async function handle(req, res) {
     const c = check(bearer)
     if (!c.ok) {
       stats.api[401]++
-      log(`api ${url.pathname} -> 401 (${c.why})`)
+      log(`api ${route(req, url)} -> 401 (${c.why})`)
       return json(res, 401, { error: 'invalid_token', error_description: 'Token is expired. You can either do re-authorization or token refresh.' },
         { 'WWW-Authenticate': 'Bearer realm="Protected by OAuth 2.0", error="invalid_token"' })
     }
@@ -138,7 +150,7 @@ async function handle(req, res) {
   if (url.pathname.startsWith('/group/project.git/')) {
     if ((banned.get(ip) || 0) > now()) {
       stats.git[403]++
-      log(`git ${req.method} ${url.pathname} from ${ip} -> 403 (banned)`)
+      log(`git ${route(req, url)} -> 403 (banned)`)
       res.writeHead(403, { 'Content-Type': 'text/plain' })
       return res.end('Forbidden\n')
     }
@@ -148,12 +160,12 @@ async function handle(req, res) {
     if (!auth || user !== 'oauth2' || !c.ok) {
       stats.git[401]++
       if (auth) gitFailure(ip)
-      log(`git ${req.method} ${url.pathname}${url.search} -> 401 (${auth ? c.why : 'no credentials'})`)
+      log(`git ${route(req, url)} -> 401 (${auth ? c.why : 'no credentials'})`)
       res.writeHead(401, { 'Content-Type': 'text/plain', 'WWW-Authenticate': 'Basic realm="GitLab"' })
       return res.end("HTTP Basic: Access denied. If a password was provided for Git authentication, the password was incorrect or you're required to use a token instead of a password. If a token was provided, it was either incorrect, expired, or improperly scoped.\n")
     }
     stats.git.ok++
-    log(`git ${req.method} ${url.pathname}${url.search} -> ok with ${c.label}`)
+    log(`git ${route(req, url)} -> ok with ${c.label}`)
     return cgi(req, res, url)
   }
   res.writeHead(404); res.end()
@@ -188,5 +200,5 @@ function cgi(req, res, url) {
 }
 
 https.createServer({ key: fs.readFileSync(path.join(dir, 'certs/server.key')), cert: fs.readFileSync(path.join(dir, 'certs/server.crt')) },
-  (req, res) => handle(req, res).catch(e => { log('error ' + e.message); res.writeHead(500); res.end() }))
+  (req, res) => handle(req, res).catch(e => { log('error handling a request'); res.writeHead(500); res.end() }))
   .listen(PORT, HOST, () => log(`mock GitLab on https://${HOST}:${PORT}, access tokens live ${ACCESS_TTL}s`))
