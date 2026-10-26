@@ -45,7 +45,7 @@ app.MapGet("/api/secrets", () => Array.Empty<object>());
 app.Run("http://127.0.0.1:8080");
 sealed class Only : IApplicationFeatureProvider<ControllerFeature> {
     public void PopulateFeature(IEnumerable<ApplicationPart> parts, ControllerFeature feature) {
-        foreach (var c in feature.Controllers.ToArray()) if (c.AsType() != typeof(ProjectsController) && c.AsType() != typeof(SessionsController)) feature.Controllers.Remove(c);
+        foreach (var c in feature.Controllers.Where(c => c.AsType() != typeof(ProjectsController) && c.AsType() != typeof(SessionsController)).ToArray()) feature.Controllers.Remove(c);
     }
 }
 sealed class Identity(IOptionsMonitor<AuthenticationSchemeOptions> o, ILoggerFactory l, UrlEncoder e) : AuthenticationHandler<AuthenticationSchemeOptions>(o,l,e) {
