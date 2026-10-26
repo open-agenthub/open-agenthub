@@ -68,7 +68,22 @@ const wait = ms => new Promise(resolve=>setTimeout(resolve,ms));
   let credentialHits=0,nativeExportHits=0;
   const driver=require(path.join(repo,'agent-runtime',name,'driver'));
   const excludes=require(path.join(repo,'agent-runtime/common/state-archive')).stateExcludes(driver);
-  function visit(file){const st=fs.lstatSync(file);if(st.isSymbolicLink())return;if(st.isDirectory())return fs.readdirSync(file).forEach(n=>visit(path.join(file,n)));if(!st.isFile())return;const relative=path.relative(home,file);const excluded=excludes.some(pattern=>new RegExp('^'+pattern.split('*').map(p=>p.replaceAll('.','[.]')).join('.*')+'(?:/|$)').test(relative));if(hits(fs.readFileSync(file).toString('utf8'))){if(excluded)credentialHits++;else nativeExportHits++;}}
+  function visit(file) {
+   let fd;
+   try {
+    // Inspect the opened inode so a replaced path cannot redirect the private audit.
+    fd=fs.openSync(file,fs.constants.O_RDONLY|fs.constants.O_NOFOLLOW|fs.constants.O_NONBLOCK);
+    const before=fs.fstatSync(fd);
+    if(before.isDirectory()){fs.closeSync(fd);fd=undefined;for(const n of fs.readdirSync(file))visit(path.join(file,n));return;}
+    if(!before.isFile())return;
+    const content=fs.readFileSync(fd).toString('utf8'),after=fs.fstatSync(fd),named=fs.lstatSync(file);
+    if(named.dev!==before.dev||named.ino!==before.ino||after.size!==before.size||after.mtimeMs!==before.mtimeMs)throw Error('Native state changed during private audit');
+    const relative=path.relative(home,file);
+    const excluded=excludes.some(pattern=>new RegExp('^'+pattern.split('*').map(p=>p.replaceAll('.','[.]')).join('.*')+'(?:/|$)').test(relative));
+    if(hits(content)){if(excluded)credentialHits++;else nativeExportHits++;}
+   } catch(error){if(error.code!=='ELOOP')throw error;}
+   finally{if(fd!==undefined)fs.closeSync(fd);}
+  }
   visit(path.join(home,driver.stateDir));
   console.log(JSON.stringify({agent:name,sawAuth,sawReady,withheld,screenFacts,observedValues:values.size,stateUploads:archives.length,authInArchive:archives.some(u=>hits(require('node:zlib').gunzipSync(u.body).toString('utf8'))),authInTextExports:uploads.filter(u=>u.route!=='/state').some(u=>hits(u.body.toString('utf8'))),credentialFileHits:credentialHits,nativeExportFileHits:nativeExportHits}));
  } finally {
