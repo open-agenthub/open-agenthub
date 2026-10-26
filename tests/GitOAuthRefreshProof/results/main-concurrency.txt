@@ -1,0 +1,14 @@
+t+  0s connect: http://127.0.0.1:8080/account?git=connected
+t+  1s waiting 40s until the stored token is due
+t+ 41s answers: 200 200 200 200 200 200 200 200 200
+t+ 41s mock during the burst: refreshes 1, invalid_grant 8
+PASS every concurrent call succeeded
+PASS the grant was renewed exactly once (1)
+FAIL no caller redeemed a spent refresh token
+FAIL every project search got the project (0,0,0,0,0,1)
+FAIL all three sessions got the same token, the renewed one (not the one the renewal revoked)
+FAIL ls-remote from 2db0591ef1c5 — fatal: Authentication failed for 'https://127.0.0.10/group/project.git/'
+FAIL ls-remote from 16eefff36b50 — fatal: Authentication failed for 'https://127.0.0.10/group/project.git/'
+FAIL ls-remote from 28f33e31d5cf — fatal: Authentication failed for 'https://127.0.0.10/group/project.git/'
+PASS none of the 4 tokens appears in 9 logs (backend.log, k8s/apiserver.log, k8s/cm.log, k8s/etcd.log, kubelet.log, mock/events.log, pods/16eefff36b50/agent.log, pods/28f33e31d5cf/agent.log, pods/2db0591ef1c5/agent.log)
+3/9 checks passed

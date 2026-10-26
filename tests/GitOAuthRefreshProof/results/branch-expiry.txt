@@ -1,0 +1,19 @@
+t+  0s connect: http://127.0.0.1:8080/account?git=connected
+t+  3s session c4bd0c603117 running; store has a line for the mock: true
+PASS clone through the pod's credential store 
+t+ 54s 6 ok / 0 failed so far; mock: {"authorizationCodes":1,"refreshes":1,"invalidGrants":0,"git":{"401":13,"403":0,"ok":27},"api":{"401":0,"ok":1}}
+t+116s 12 ok / 0 failed so far; mock: {"authorizationCodes":1,"refreshes":3,"invalidGrants":0,"git":{"401":25,"403":0,"ok":51},"api":{"401":0,"ok":1}}
+t+177s 18 ok / 0 failed so far; mock: {"authorizationCodes":1,"refreshes":4,"invalidGrants":0,"git":{"401":37,"403":0,"ok":75},"api":{"401":0,"ok":1}}
+t+207s after 200s: 20 fetch+push rounds ok, 0 failed (first failure never); mock: {"authorizationCodes":1,"refreshes":5,"invalidGrants":0,"git":{"401":41,"403":0,"ok":83},"api":{"401":0,"ok":1}}
+PASS git fetch+push kept working for 200s across 5 renewals (0 single in-flight failures, never two in a row)
+PASS no refresh token was spent twice (invalid_grant: 0)
+t+207s revoked the application at the mock
+PASS GET /api/git/providers says needsSignIn: {"id":"gitlab","type":"gitlab","displayName":"GitLab","connected":true,"needsSignIn":true,"username":"proof-owner"}
+PASS the refused token was taken out of the running pod's store
+t+218s fetch after the refusal: fatal: could not read Username for 'https://127.0.0.10': terminal prompts disabled
+PASS a fetch now fails (no token), instead of retrying a dead one against the provider
+t+218s sign in again: http://127.0.0.1:8080/account?git=connected
+PASS after signing in again the SAME pod pushes without a restart 
+PASS needsSignIn is cleared
+PASS none of the 14 tokens appears in 7 logs (backend.log, k8s/apiserver.log, k8s/cm.log, k8s/etcd.log, kubelet.log, mock/events.log, pods/c4bd0c603117/agent.log)
+9/9 checks passed
