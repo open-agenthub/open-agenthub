@@ -162,6 +162,84 @@ public sealed class KubernetesBrowserServiceTests
         Assert.Equal(BrowserPhase.Running, leases.Items["session-1"].Phase);
     }
 
+    [Theory]
+    [InlineData("ended")]
+    [InlineData("missing")]
+    [InlineData("foreign")]
+    public async Task Ensure_RunningLeaseWhosePodIsGone_ReplacesThePod(string state)
+    {
+        var leases = new MemoryLeaseStore();
+        await leases.TryCreateAsync(RunningLease("10.0.0.5"));
+        var gets = 0;
+        RecordingBrowserCluster cluster = null!;
+        cluster = new RecordingBrowserCluster
+        {
+            Get = _ => Task.FromResult<BrowserPodSnapshot?>(Interlocked.Increment(ref gets) == 1
+                ? state switch
+                {
+                    "ended" => new("10.0.0.5", false, null, "lease-1", Gone: true),
+                    "foreign" => new("10.0.0.5", true, null, "someone-else"),
+                    _ => null
+                }
+                : new("10.0.0.9", true, null, cluster.CreatedLeaseId))
+        };
+        var service = Service(leases, cluster, new RecordingArtifacts());
+
+        var connection = await service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8"));
+
+        Assert.Equal(1, cluster.DeleteCalls);
+        Assert.Equal(1, cluster.CreateCalls);
+        Assert.Equal("http://10.0.0.9:9222", connection.CdpEndpoint);
+        Assert.NotEqual("lease-1", leases.Items["session-1"].LeaseId);
+        Assert.Equal(BrowserPhase.Running, leases.Items["session-1"].Phase);
+    }
+
+    [Fact]
+    public async Task Ensure_RunningLeaseWithLivePod_ReturnsItWithoutCreating()
+    {
+        var leases = new MemoryLeaseStore();
+        await leases.TryCreateAsync(RunningLease("10.0.0.5"));
+        var cluster = new RecordingBrowserCluster
+        { Get = _ => Task.FromResult<BrowserPodSnapshot?>(new("10.0.0.5", true, null, "lease-1")) };
+        var service = Service(leases, cluster, new RecordingArtifacts());
+
+        var connection = await service.EnsureAsync(Session(), IPAddress.Parse("10.0.0.8"));
+
+        Assert.Equal(0, cluster.CreateCalls);
+        Assert.Equal(0, cluster.DeleteCalls);
+        Assert.Equal("http://10.0.0.5:9222", connection.CdpEndpoint);
+    }
+
+    [Fact]
+    public async Task Status_RunningLeaseWhosePodEnded_ReportsPodGone()
+    {
+        var leases = new MemoryLeaseStore();
+        await leases.TryCreateAsync(RunningLease("10.0.0.5"));
+        var cluster = new RecordingBrowserCluster
+        { Get = _ => Task.FromResult<BrowserPodSnapshot?>(new("10.0.0.5", false, null, "lease-1", Gone: true)) };
+        var service = Service(leases, cluster, new RecordingArtifacts());
+
+        var summary = await service.GetSummaryAsync("session-1");
+
+        Assert.Equal(BrowserPhase.Failed, summary.Phase);
+        Assert.Equal(KubernetesBrowserService.PodGone, summary.FailureCode);
+        Assert.Equal(BrowserPhase.Failed, leases.Items["session-1"].Phase);
+    }
+
+    [Fact]
+    public async Task Status_KeepsTheRecordedLeaseWhenTheApiServerDoesNotAnswer()
+    {
+        var leases = new MemoryLeaseStore();
+        await leases.TryCreateAsync(RunningLease("10.0.0.5"));
+        var cluster = new RecordingBrowserCluster { Get = _ => throw new HttpRequestException("down") };
+        var service = Service(leases, cluster, new RecordingArtifacts());
+
+        Assert.Equal(BrowserPhase.Running, (await service.GetSummaryAsync("session-1")).Phase);
+    }
+
+    private static BrowserLease RunningLease(string podIp) =>
+        BrowserLease.Pending("session-1", "lease-1", [1]) with { Phase = BrowserPhase.Running, PodIp = podIp };
+
     [Fact]
     public async Task Stop_RemovesClusterResourcesAndLease()
     {

@@ -49,6 +49,25 @@ export function readFrameSelection() {
   return { focused, visible: document.visibilityState === 'visible', text };
 }
 
+// Runs in every frame before the page's own scripts. Chromium gives window.open a window of its
+// own as soon as the features name a size, a position or "popup", and the viewer's VNC picture
+// then shows that window drawn over the first, with no way to tell which one the agent drives
+// (#236). Without those features the same call opens a tab, and window.opener still works, so a
+// sign-in popup still posts its result back. noopener and noreferrer change what the call
+// returns and stay.
+export function openPopupsAsTabs() {
+  const open = window.open;
+  window.open = new Proxy(open, {
+    apply(target, self, args) {
+      if (args.length > 2 && args[2] != null) {
+        args[2] = String(args[2]).split(/[\s,]+/)
+          .filter(feature => /^(noopener|noreferrer)(=|$)/i.test(feature)).join(',');
+      }
+      return Reflect.apply(target, self, args);
+    },
+  });
+}
+
 export function decodeCookieState(input, maxBytes = DEFAULT_MAX_BYTES) {
   try {
     const bytes = Buffer.isBuffer(input) ? input : Buffer.from(input);
@@ -103,6 +122,7 @@ export class BrowserSupervisor {
     this.execFile = options.execFile ?? execFile;
     this.sleep = options.sleep ?? (milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds)));
     this.resizeTail = Promise.resolve();
+    this.windowTail = Promise.resolve();
     this.context = options.context;
     this.browser = options.browser;
     this.timer = null;
@@ -150,6 +170,43 @@ export class BrowserSupervisor {
         await session?.detach().catch(() => undefined);
       }
       await this.sleep(VIEWPORT_WINDOW_RETRY_DELAY_MS);
+    }
+  }
+
+  // What still opens a window after openPopupsAsTabs — a CDP client asking for newWindow, or a
+  // page that reached a window.open the script never saw — is reopened as a tab of the first
+  // window and its own window closed. The tab loads the URL a second time, as a GET, so a form
+  // POST's result and the opener are lost; leaving the window would put it over the first, and
+  // every later tab, the agent's included, would open in whichever of the two had focus.
+  keepInFirstWindow(page) {
+    const operation = this.windowTail.then(() => this.moveToFirstWindow(page));
+    this.windowTail = operation.catch(error => diagnostic('second window not folded', error));
+    return operation;
+  }
+
+  async moveToFirstWindow(page) {
+    const first = this.context.pages().find(candidate => !candidate.isClosed());
+    if (!first || first === page || page.isClosed()) return false;
+    const [home, own] = await Promise.all([this.windowOf(first), this.windowOf(page)]);
+    if (home === own) return false;
+    // A target created with a url reports about:blank until its navigation commits.
+    await page.waitForURL(url => url.href !== 'about:blank', { waitUntil: 'commit', timeout: 5_000 })
+      .catch(() => undefined);
+    const url = page.url();
+    await page.close();
+    // With its own window gone, the first window is the last active one, where Chromium puts a
+    // new target.
+    const tab = await this.context.newPage();
+    if (url !== 'about:blank') await tab.goto(url, { waitUntil: 'commit' });
+    return true;
+  }
+
+  async windowOf(page) {
+    const session = await this.context.newCDPSession(page);
+    try {
+      return (await session.send('Browser.getWindowForTarget')).windowId;
+    } finally {
+      await session.detach().catch(() => undefined);
     }
   }
 
@@ -259,6 +316,8 @@ export class BrowserSupervisor {
     this.browser = await this.connect(this.cdpUrl);
     this.context = this.browser.contexts()[0];
     if (!this.context) throw new Error('Chromium did not expose a default context');
+    await this.context.addInitScript(openPopupsAsTabs);
+    this.context.on('page', page => void this.keepInFirstWindow(page).catch(() => undefined));
     await this.restore();
     this.timer = this.setInterval(() => void this.checkpoint(), this.checkpointSeconds * 1000);
     this.timer.unref?.();
