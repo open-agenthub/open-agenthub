@@ -33,8 +33,9 @@ test('an error nobody awaited fails the call in flight and leaves the browser MC
   `);
 
   let delay = 1_500;
+  let triggered = false;
   const backend = http.createServer((request, response) => {
-    if (!fs.existsSync(trigger)) fs.writeFileSync(trigger, '');
+    if (!triggered) { triggered = true; fs.writeFileSync(trigger, ''); }
     setTimeout(() => {
     response.writeHead(200, { 'Content-Type': 'application/json' });
     response.end(JSON.stringify({ phase: 'Running' }));
