@@ -2,6 +2,8 @@
 // agent CLI does, against a real Chromium, and checks after every failed or odd click that the
 // next call still gets an answer instead of "Transport closed".
 // usage: node mcp-click.mjs <session-agent dir with node_modules> <browser dir> [cdp endpoint]
+// PROOF_SCENARIOS picks scenarios; with kill or freeze, PROOF_REPLACEMENT_CDP is the endpoint of a
+// second, already running browser that stands in for the replacement pod.
 import { cpSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,15 +52,18 @@ const refFor = async id => {
   return snapshot.elements?.find(element => element.name === labels[id])?.ref;
 };
 
-// The browser's main process, found by executable rather than by command line: a pattern match
-// on /proc/N/cmdline from here could hit this script's own shell.
-function killBrowser() {
+// The browser's main process on the first endpoint's port, found by executable first: a pattern
+// match on every /proc/N/cmdline from here could hit this script's own shell.
+// SIGKILL closes its sockets; SIGSTOP leaves them open with nobody answering, as a browser pod
+// that vanished with its node does.
+function signalBrowser(signal) {
   for (const pid of readdirSync('/proc').filter(name => /^\d+$/.test(name))) {
     try {
       if (!readlinkSync(`/proc/${pid}/exe`).endsWith('/chromium')) continue;
-      if (readFileSync(`/proc/${pid}/cmdline`, 'utf8').includes('--type=')) continue;
-      process.kill(Number(pid), 'SIGKILL');
-      console.log('killed browser pid', pid);
+      const cmdline = readFileSync(`/proc/${pid}/cmdline`, 'utf8');
+      if (cmdline.includes('--type=') || !cmdline.includes(`--remote-debugging-port=${new URL(cdp).port}`)) continue;
+      process.kill(Number(pid), signal);
+      console.log(signal, 'browser pid', pid);
     } catch {}
   }
 }
@@ -69,24 +74,21 @@ const scenarios = (process.env.PROOF_SCENARIOS ??
   'nav,busy,close-self,replace,popup,download,file,alert,confirm-nav').split(',');
 for (const id of scenarios) {
   console.log('navigate', JSON.stringify(await call('browser_navigate', { url: `${fixtures.base}/` })));
-  const ref = await refFor(id === 'kill' ? 'busy' : id);
-  if (id === 'kill') setTimeout(killBrowser, 2_000);
+  const lost = { kill: 'SIGKILL', freeze: 'SIGSTOP' }[id];
+  const ref = await refFor(lost ? 'busy' : id);
+  if (lost) setTimeout(() => signalBrowser(lost), 2_000);
   const click = await call('browser_click', { ref });
+  let restart;
+  // The backend has replaced the pod by now: browser_start hands out the new endpoint.
+  if (lost && process.env.PROOF_REPLACEMENT_CDP) {
+    fixtures.setCdp(process.env.PROOF_REPLACEMENT_CDP);
+    restart = await call('browser_start');
+  }
   const next = await call('browser_navigate', { url: `${fixtures.base}/target` });
-  const row = { scenario: id, click, next, transportClosed: closed };
+  const row = { scenario: id, click, restart, next, transportClosed: closed };
   results.push(row);
   console.log(JSON.stringify(row));
   if (closed) break;
-}
-
-if (process.env.PROOF_CDP_SWAP) {
-  // The browser goes away and comes back on another endpoint, as a replaced pod does.
-  console.log('swap: restart the browser now, endpoint', process.env.PROOF_CDP_SWAP);
-  fixtures.setCdp(process.env.PROOF_CDP_SWAP);
-  await new Promise(resolve => process.stdin.once('data', resolve));
-  const after = await call('browser_navigate', { url: `${fixtures.base}/target` });
-  results.push({ scenario: 'cdp-swap', next: after, transportClosed: closed });
-  console.log(JSON.stringify(results.at(-1)));
 }
 
 const broken = results.filter(r => r.transportClosed || !r.next.ok);
