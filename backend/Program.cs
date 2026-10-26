@@ -141,7 +141,18 @@ builder.Services.AddHttpClient<AgentHub.Api.Files.IOfficePreviewClient, AgentHub
 builder.Services.AddHostedService<AgentHub.Api.Files.SessionFilePreviewWorker>();
 builder.Services.AddHttpClient<AgentHub.Api.Notifications.INotifier, AgentHub.Api.Notifications.N8nNotifier>();
 builder.Services.AddHttpClient();
-builder.Services.AddSingleton<IGitAuthService, GitAuthService>();
+// Connected-provider tokens: renewed before they expire, one renewal per owner and provider across
+// replicas, and handed to running sessions as they change (docs/git-credentials.md, issue #289).
+var gitOAuthRefresh = builder.Configuration.GetSection("AgentHub:GitOAuthRefresh")
+    .Get<GitOAuthRefreshOptions>() ?? new GitOAuthRefreshOptions();
+builder.Services.AddSingleton(gitOAuthRefresh);
+builder.Services.AddSingleton<IGitTokenStore, KubernetesGitTokenStore>();
+builder.Services.AddSingleton<GitAuthService>();
+builder.Services.AddSingleton<IGitAuthService>(sp => sp.GetRequiredService<GitAuthService>());
+builder.Services.AddSingleton<IGitTokenChanges>(sp => sp.GetRequiredService<GitAuthService>());
+builder.Services.AddSingleton<IGitSessionCredentials>(sp => (KubernetesSessionService)sp.GetRequiredService<ISessionService>());
+builder.Services.AddSingleton<GitOAuthRefresher>();
+builder.Services.AddHostedService<GitOAuthRefreshService>();
 
 // Git webhook triggers: inbound GitLab/GitHub MR/PR webhooks start autonomous sessions.
 builder.Services.AddSingleton<AgentHub.Api.Webhooks.IWebhookSecretProtector, AgentHub.Api.Webhooks.WebhookSecretProtector>();

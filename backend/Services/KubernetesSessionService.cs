@@ -23,7 +23,7 @@ namespace AgentHub.Api.Services;
 /// Security: no root, no capabilities, read-only rootfs, dedicated namespace,
 /// the agent pod gets no S3 creds (only presigned URLs) and no K8s token.
 /// </summary>
-public sealed class KubernetesSessionService : ISessionService, IProviderLoginRepository
+public sealed class KubernetesSessionService : ISessionService, IProviderLoginRepository, IGitSessionCredentials
 {
     private readonly Kubernetes _k8s;
     private readonly ISessionExpiryLock? _runtimeUpdateLock;
@@ -761,23 +761,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
 
         var pod = await TryReadPodAsync($"session-{id}", ct);
         var appliedNow = false;
-        if (pod?.Status?.Phase == "Running" && pod.Status.PodIP is { Length: > 0 } podIp && _credentialPusher is not null)
+        try
         {
-            var git = await BuildGitCredentialsAsync(owner, rec, ParseRepos(rec), ct)
-                ?? new SessionGitCredentials("", Array.Empty<GitAuthor>());
-            // The mounted copy follows too: a container restart in the same pod copies the store
-            // from the secret again and must not bring the previous token back.
-            await UpsertSecretAsync(GitCredentialsSecret(owner, rec.Id, git), ct);
-            try
-            {
-                appliedNow = await _credentialPusher.PushGitCredentialsAsync(rec.Id, podIp, rec.CallbackToken, git.PodPayload(), ct);
-            }
-            catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
-            {
-                // The selection is stored and the next start uses it; failing the request would
-                // tell the owner nothing changed when it did.
-                _log.LogWarning(error, "Session {Id} did not take the new git credentials", rec.Id);
-            }
+            appliedNow = await InstallGitCredentialsAsync(rec, pod, ct);
+        }
+        catch (Exception error) when (error is HttpRequestException or TaskCanceledException)
+        {
+            // The selection is stored and the next start uses it; failing the request would
+            // tell the owner nothing changed when it did.
+            _log.LogWarning(error, "Session {Id} did not take the new git credentials", rec.Id);
         }
         // A count rather than the ids: they arrive in the request body, and the record holds them anyway.
         _log.LogInformation("Session {Id} git tokens set ({Count}; applied now: {Now})",
@@ -785,6 +777,58 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var info = await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
             await _browsers.GetSummaryAsync(id, ct), ct);
         return new GitPatSwitchResult(info, appliedNow);
+    }
+
+    /// <summary>
+    /// Rebuilds the store of a running session from what is stored now and hands it to the pod.
+    /// False when the pod is not running or predates the route; throws when it cannot be reached.
+    /// </summary>
+    private async Task<bool> InstallGitCredentialsAsync(SessionRecord rec, V1Pod? pod, CancellationToken ct)
+    {
+        if (pod?.Status?.Phase != "Running" || pod.Status.PodIP is not { Length: > 0 } podIp || _credentialPusher is null)
+            return false;
+        // The record's owner, never a caller's: the store is built from that owner's grants and
+        // PATs, and a session must not get anyone else's.
+        var git = await BuildGitCredentialsAsync(rec.Owner, rec, ParseRepos(rec), ct)
+            ?? new SessionGitCredentials("", Array.Empty<GitAuthor>());
+        // The mounted copy follows too: a container restart in the same pod copies the store
+        // from the secret again and must not bring the previous token back.
+        await UpsertSecretAsync(GitCredentialsSecret(rec.Owner, rec.Id, git), ct);
+        return await _credentialPusher.PushGitCredentialsAsync(rec.Id, podIp, rec.CallbackToken, git.PodPayload(), ct);
+    }
+
+    public async Task<IReadOnlyList<GitSessionTarget>> ListRunningAsync(string? owner, CancellationToken ct)
+    {
+        var selector = owner is null
+            ? $"{ComponentLabel}=agent"
+            : $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}=agent";
+        var pods = await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace, labelSelector: selector,
+            resourceVersion: "0", cancellationToken: ct);
+        var targets = new List<GitSessionTarget>();
+        var running = pods.Items
+            .Where(pod => pod.Status?.Phase == "Running" && !string.IsNullOrEmpty(pod.Status.PodIP)
+                && pod.Metadata?.Labels?.ContainsKey(SessionLabel) == true)
+            .Select(pod => pod.Metadata.Labels[SessionLabel]);
+        foreach (var sessionId in running)
+        {
+            var record = await _store.GetByIdAsync(sessionId, ct);
+            if (record is null || (owner is not null && record.Owner != owner)) continue;
+            var providers = ParseRepos(record)
+                .Select(r => r.ProviderId?.Trim())
+                .OfType<string>()
+                .Where(p => p.Length > 0 && _gitAuth.IsConfigured(p))
+                .Distinct()
+                .ToList();
+            if (providers.Count > 0) targets.Add(new GitSessionTarget(record.Id, record.Owner, providers));
+        }
+        return targets;
+    }
+
+    public async Task<bool> ReinstallAsync(string sessionId, CancellationToken ct)
+    {
+        var rec = await _store.GetByIdAsync(sessionId, ct);
+        if (rec is null) return false;
+        return await InstallGitCredentialsAsync(rec, await TryReadPodAsync($"session-{sessionId}", ct), ct);
     }
 
     public async Task<SessionInfo> SwitchSessionCredentialAsync(string owner, string id, string credentialId,
@@ -980,8 +1024,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 throw new ArgumentException($"Unknown Git provider '{providerId}'.");
             if (!await _gitAuth.IsConnectedAsync(owner, providerId, ct))
                 throw new ArgumentException(
-                    $"Git provider '{providerId}' is not connected for this account. Connect it "
-                    + "first, or omit providerId to clone without credentials.");
+                    $"Git provider '{providerId}' is not connected for this account, or it refused the "
+                    + "stored sign-in. Connect it (again) under Settings → Account first, or omit "
+                    + "providerId to clone without credentials.");
         }
 
         if (!repos.Any(r => IsSshRemote(r.Url))) return;
