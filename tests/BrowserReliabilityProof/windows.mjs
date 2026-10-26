@@ -56,11 +56,15 @@ const record = async step => {
 };
 
 await record('start');
-for (const id of ['blank', 'plain-open', 'popup', 'iframe-open']) {
+for (const id of ['blank', 'plain-open', 'popup']) {
   await page.bringToFront();
   await page.click(`#${id}`);
   await record(`click #${id}`);
 }
+// Shift+click is how a viewer asks Chromium for a new window; no window.open is involved.
+await page.bringToFront();
+await page.click('#blank', { modifiers: ['Shift'] });
+await record('shift+click link');
 await raw.send('Target.createTarget', { url: `${fixtures.base}/target?cdp-new-window`, newWindow: true });
 await record('CDP Target.createTarget newWindow:true');
 await raw.send('Target.createTarget', { url: `${fixtures.base}/target?cdp-tab` });

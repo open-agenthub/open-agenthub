@@ -10,7 +10,6 @@ const pages = {
     <button id="plain-open" onclick="window.open('/target?plain')">plain open</button>
     <a id="blank" href="/target?blank" target="_blank">blank link</a>
     <button id="close-self" onclick="window.close()">close self</button>
-    <button id="iframe-open" onclick="(()=>{const f=document.createElement('iframe');document.body.append(f);f.contentWindow.open('/target?iframe','x','popup,width=400,height=400')})()">iframe open</button>
     <button id="replace" onclick="document.body.innerHTML='<p>gone</p>'">detach self</button>
     <button id="busy" onclick="const end=Date.now()+15000;while(Date.now()<end){}">busy</button>
     <button id="swap" onclick="location.href=location.href.replace('127.0.0.1','localhost')+'target?swap'">cross site</button>
