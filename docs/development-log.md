@@ -122,7 +122,28 @@ They cannot both hold. The owner chose auto-approve as the boundary, so an uncov
 returns `ask` *when the session auto-approves* and the approval endpoint answers it. With
 auto-approve off, every runtime keeps exactly today's strict allow list — the flag is the switch
 between the two, so nothing widens for anyone who turned it off. Malformed input is never softened:
-a shell string the parser cannot take apart stays a hard deny, as does the MCP sharing policy.
+input that is not a command at all stays a hard deny, as does the MCP sharing policy.
+
+This first read "a shell string the parser cannot take apart stays a hard deny", and that was wrong
+(#244). The parser is deliberately narrow (no redirects, variables, globs, substitutions) because
+its job is to stop an allowed prefix from carrying a second command. Under auto-approve there is
+no prefix to smuggle past, so the hard deny protected nothing. It refused
+`echo x > f && cat f` while `cat f` ran, and an autonomous Codex or OpenCode session could run
+almost nothing. Such a command is now "not covered": `ask` under auto-approve, `deny` without it.
+The #160 proof missed this because its fake callback answered `allow` for every input.
+`tests/AutonomousPolicyProof` runs the real matcher instead.
+
+The rule, stated precisely: a session policy is an allow list. No deny list exists, and the only
+hard deny is the MCP sharing policy, which is enforced before the matcher and is keyed on the tool
+name, so the shape of a shell command cannot route around it. With auto-approve off, a command
+runs only if every component parses and starts with an allowed prefix. Any wrapping the parser
+cannot read (`git push >/dev/null`, `$(git push)`, `` `git push` ``, `x=1; git push`,
+`sh -c 'git push'`, `eval "git push"`, `env A=1 git push`, `g""it push`) is denied, because the
+result is `deny` either way. With auto-approve on, the owner has already accepted every uncovered
+command: plain `git push --force origin main` reached `ask` and was approved before #244 too, so
+wrapping a command gains nothing it did not already have. A per-command deny list that holds even
+under auto-approve would be a new feature with its own matching problem (deny rules must match
+conservatively, allow rules strictly). Softening "unreadable" to "not covered" is not that feature.
 
 **Codex** needed the `ask` verdict to stop being a local `deny`, and every no-decision path to fail
 closed instead — an unanswered `PermissionRequest` in an unattended session is Codex's own approval

@@ -132,23 +132,62 @@ public class AgentPolicyMatcherTests
             .Decide(new AgentPolicy(), "Bash", input.RootElement, autoApprove: true).Decision);
     }
 
-    // Auto-approve answers questions; it does not make an unreadable command safe. A shell string
-    // the parser cannot take apart is not something anyone could be asked to approve, and the same
-    // holds for a missing tool name. Note what is *not* in this list: a chained command parses
-    // fine, so it is asked rather than denied — one of its components simply is not covered.
+    // #244: the parser only exists to stop an allowed prefix from carrying a second command, so a
+    // command it cannot take apart is not covered rather than malformed. Denying it stopped an
+    // autonomous Codex smoke session at its first command; the redirect case is that command
+    // verbatim. Without auto-approve the verdict stays deny.
     [Theory]
-    [InlineData("{\"command\":\"echo $(id)\"}")]
-    [InlineData("{\"command\":\"echo `id`\"}")]
-    [InlineData("{\"command\":\"git status \\\"unterminated\"}")]
-    [InlineData("{\"command\":\"HOME=/tmp git status\"}")]
+    [InlineData("echo smoke > smoke.txt && cat smoke.txt && uname -m")]
+    [InlineData("echo \"$HOME\" | wc -c")]
+    [InlineData("ls *.md")]
+    [InlineData("echo $(id)")]
+    [InlineData("echo `id`")]
+    [InlineData("git status \"unterminated")]
+    [InlineData("HOME=/tmp git status")]
+    [InlineData("printf ok > a.txt\ncat a.txt")]
+    public void Decide_LeavesCommandsTheParserCannotReadToApprovalUnderAutoApprove(string command)
+    {
+        using var input = JsonDocument.Parse(JsonSerializer.Serialize(new { command }));
+
+        Assert.Equal("ask",
+            AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement, autoApprove: true).Decision);
+        Assert.Equal("deny", AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement).Decision);
+    }
+
+    // Input that is not a shell command at all is not a question anyone can be asked to approve.
+    [Theory]
     [InlineData("{\"command\":17}")]
+    [InlineData("{\"command\":\"  \"}")]
+    [InlineData("{}")]
     [InlineData("[]")]
-    public void Decide_NeverSoftensMalformedInputForAnAutoApprovingSession(string json)
+    public void Decide_NeverSoftensInputThatIsNotACommand(string json)
     {
         using var input = JsonDocument.Parse(json);
 
         Assert.Equal("deny",
             AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement, autoApprove: true).Decision);
+    }
+
+    // Where the owner's policy is the boundary (auto-approve off), a command it does not allow
+    // stays denied however it is wrapped. An allowed prefix ("git status") must not carry it
+    // either, and none of these forms may reach the approval endpoint.
+    [Theory]
+    [InlineData("git push >/dev/null")]
+    [InlineData("$(git push)")]
+    [InlineData("`git push`")]
+    [InlineData("x=1; git push")]
+    [InlineData("sh -c 'git push'")]
+    [InlineData("eval \"git push\"")]
+    [InlineData("env A=1 git push")]
+    [InlineData("g\"\"it push")]
+    [InlineData("git status; git push")]
+    [InlineData("git status && $(git push)")]
+    [InlineData("git status | sh")]
+    public void Decide_KeepsAnUnallowedCommandDeniedInEveryWrappingWithoutAutoApprove(string command)
+    {
+        using var input = JsonDocument.Parse(JsonSerializer.Serialize(new { command }));
+
+        Assert.Equal("deny", AgentPolicyMatcher.Decide(Policy, "Bash", input.RootElement).Decision);
     }
 
     // The consequence of the choice above, written down so it cannot change by accident: under

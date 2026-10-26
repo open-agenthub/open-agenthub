@@ -73,6 +73,26 @@ public class InternalAgentPolicyTests
             "session-1", Body("Bash", new { command = "git push" }), CancellationToken.None)));
     }
 
+    // #244: the smoke command an autonomous Codex session was refused. Interactive stays "ask" (a
+    // person decides), an unattended session without auto-approve stays "deny", and only an
+    // auto-approving one reaches the approval endpoint.
+    [Theory]
+    [InlineData(SessionMode.Interactive, false, "ask")]
+    [InlineData(SessionMode.Interactive, true, "ask")]
+    [InlineData(SessionMode.Autonomous, false, "deny")]
+    [InlineData(SessionMode.Scheduled, false, "deny")]
+    [InlineData(SessionMode.Autonomous, true, "ask")]
+    [InlineData(SessionMode.Scheduled, true, "ask")]
+    public async Task AgentPolicy_ARedirectedCommandFollowsTheSessionsApprovalMode(
+        SessionMode mode, bool autoApprove, string expected)
+    {
+        var controller = Controller(Session(mode, autoApprove), new FakeMcpPolicyReader(null));
+
+        Assert.Equal(expected, Decision(await controller.AgentPolicy("session-1",
+            Body("Bash", new { command = "echo smoke > smoke.txt && cat smoke.txt && uname -m" }),
+            CancellationToken.None)));
+    }
+
     [Fact]
     public async Task AgentPolicy_AutoApproveDoesNotOverrideTheSharingDeny()
     {

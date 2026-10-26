@@ -23,6 +23,7 @@ const server=https.createServer({SNICallback:(host,done)=>{try{done(null,context
  let result={};
  const jwt=Buffer.from(JSON.stringify({alg:'RS256',typ:'JWT'})).toString('base64url')+'.'+Buffer.from(JSON.stringify({sub:'example-account',email:'person@example.com',exp:Math.floor(Date.now()/1000)+3600})).toString('base64url')+'.'+Buffer.from('example-signature').toString('base64url');
  if(pathname.endsWith('/deviceauth/usercode'))result={device_auth_id:'example-device',user_code:'ABCD-12345',interval:'1'};
+ else if(pathname.endsWith('/deviceauth/token') && process.env.SIGNIN_DEVICE_TOKEN_STATUS){res.writeHead(Number(process.env.SIGNIN_DEVICE_TOKEN_STATUS),{'Content-Type':'application/json'});return res.end('{"error":"proof failure"}');}
  else if(pathname.endsWith('/deviceauth/token'))result={authorization_code:'example-code',code_verifier:'example-verifier',code_challenge:'example-challenge'};
  else if(pathname==='/auth/poll' && (process.env.SIGNIN_AUTH_FAIL==='1'||failAuth)){res.writeHead(403,{'Content-Type':'application/json'});return res.end('{}');}
  else if(pathname==='/auth/poll')result={accessToken:jwt,refreshToken:'example-proof-refresh-token'};

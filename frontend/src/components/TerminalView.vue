@@ -11,7 +11,7 @@ import CliMenuNotice from './workspace/CliMenuNotice.vue'
 import CliSignInNotice from './workspace/CliSignInNotice.vue'
 import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
-import { CANCEL_KEYS, keysForAnswer, keysForOption } from '../lib/cli-menu.js'
+import { CANCEL_KEYS, CONFIRM_KEYS, keysForAnswer, keysForOption, keysForStep } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, isSessionStopped, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
@@ -508,6 +508,12 @@ function retrySignIn() {
 function answerCliMenuText(number, text) {
   if (cliMenu.value) void agentTerminal.value?.sendKeys(keysForAnswer(cliMenu.value, number, text)).catch(() => {})
 }
+function stepCliMenu() {
+  if (cliMenu.value?.step) void agentTerminal.value?.sendKeys(keysForStep(cliMenu.value)).catch(() => {})
+}
+function confirmCliMenu() {
+  void agentTerminal.value?.sendKeys([CONFIRM_KEYS]).catch(() => {})
+}
 function cancelCliMenu() {
   void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
 }
@@ -730,7 +736,7 @@ function interruptWorkspaceAgent() {
         <CliSignInNotice v-if="modern && !isChat && cliMenu?.kind === 'signin'" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive" :send="sendSignInCode"
           @retry="retrySignIn" @continue="retrySignIn" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <CliMenuNotice v-else-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
-          @choose="answerCliMenu" @answer="answerCliMenuText" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
+          @choose="answerCliMenu" @answer="answerCliMenuText" @step="stepCliMenu" @confirm="confirmCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
           <button v-if="!isChat" type="button" :aria-expanded="terminalOpened && drawerKind === 'agent'" data-drawer-agent @click="toggleDrawer('agent')">⌘ Agent terminal</button>
