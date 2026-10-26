@@ -209,6 +209,86 @@ Rolling the backend back to a version from before this keeps working with one ca
 reader ignores `label` and `default` and puts every token of a host into the store, so the first one
 stored wins for that host until the extra tokens are removed.
 
+## Renewing a connected provider's token
+
+A session used to get its connected-provider token once, when it started, and the pod kept it for
+as long as it ran. GitLab's OAuth access tokens live two hours, so any longer session ended up
+pushing with a dead one (issue #289). Reproduced against a stand-in GitLab with 60-second tokens
+and real git over HTTPS through the pod's store (`tests/GitOAuthRefreshProof/`): the first command
+after expiry fails with `Authentication failed`, git's store helper then **erases** the line it
+just saw rejected, and every command after that fails with `could not read Username` — for the
+rest of the session, a new sign-in included, because nothing ever wrote the store again.
+
+Three more faults sat on the same path:
+
+- **The renewal raced.** The only renewal was on demand (a session start, a project search) and
+  took no lock. GitLab rotates the refresh token and accepts each one once, so when several callers
+  found the token due at the same time, one renewed it and the rest were answered `invalid_grant`
+  and handed out the old access token, which that renewal had just made worthless. Measured: three
+  session starts and six searches at once gave 8 `invalid_grant`, five empty searches and three
+  sessions holding a revoked token.
+- **A write could drop the only live refresh token.** The secret was replaced with the resource
+  version of an earlier read, so a concurrent write made the replace fail with 409 after the
+  provider had already rotated the token. The new refresh token was then lost, and the stored one
+  was dead.
+- **A refused grant was silent.** A revoked application kept showing "connected", and sessions
+  kept getting the dead token.
+
+What it does now:
+
+- **The hub renews ahead of expiry, under one lock per owner and provider.** `GitOAuthRefreshService`
+  renews every grant a running session uses once it expires within `AgentHub:GitOAuthRefresh:Margin`
+  (15 minutes; a pass every `Interval`, 1 minute). The lock is the Postgres advisory lock the Claude
+  refresher uses (`git-oauth/<owner>/<provider>`), so two replicas, a pass and a session start all
+  take turns; whoever gets it second re-reads and finds the token fresh. A session start that finds
+  the lock held waits for it (`LockWait`) rather than spending the token a second time. The same
+  burst as above: one renewal, no `invalid_grant`, every caller got the new token.
+- **The secret is written by compare-and-swap.** A conflicting write is re-read and retried, and a
+  renewal is stored only while the secret still holds the refresh token it spent. A sign-in in the
+  meantime is the owner's newer choice and wins.
+- **Every change reaches the running sessions without a restart.** Renewed, refused, signed in
+  again or disconnected: each raises a change that rebuilds the store of every running session of
+  that owner whose repositories name the provider, and installs it through the same
+  `PUT /agenthub/git-credentials` the token switch uses (above), plus the `gitcreds` secret for a
+  container restart. A pod that could not be reached is retried on every pass. Measured: 200
+  seconds of fetch and push across five renewals without a failure, and after a revocation and a
+  new sign-in the same pod pushed again.
+- **A refused grant is a state, not a silent failure.** Only `invalid_grant` on renewal marks the
+  grant `.rejected`. `invalid_client` or a 5xx points at the app's configuration or a provider
+  outage, which a new sign-in would not fix, so those are retried. A refused grant gives the session
+  no line for that host rather than the dead token, `GET /api/git/providers` reports `needsSignIn`,
+  the account page and the session workspace say "sign in to GitLab again", and the sign-in clears it.
+
+Grants no running session uses are not renewed in the background: a session start renews on demand,
+and GitLab's refresh tokens do not lapse from disuse. The Claude refresher renews every login
+because Claude's refresh tokens do lapse (`docs/provider-accounts.md`); doing the same here would
+spend a provider request on every connected owner every two hours for nothing.
+
+Rejected: a credential helper in the pod that asks the hub for the token on every git command. It
+would make expiry impossible by construction, but it brings back exactly what the first section
+removed — a helper that hands out a token on request — and puts the hub on the path of every git
+command, so a hub restart would fail clones. Pushing the store on change keeps git reading a plain
+file.
+
+### 401, 403, and what the owner sees
+
+Against gitlab.com, an invalid OAuth token is `401` on git over HTTPS (`HTTP Basic: Access denied
+… either incorrect, expired, or improperly scoped`) and `401 invalid_token` on the API. Expiry is
+therefore a 401, not a 403. A 403 has two other sources: a token whose scope does not allow the
+call (`read_repository` without `write_repository` cannot push; the default `api` scope can), and
+GitLab's failed-authentication ban for git over HTTP (`rack_attack.git_basic_auth` in `gitlab.yml`,
+or the rate limit on GitLab.com), which answers 403 to *every* request from an address after
+repeated failed logins. Session pods usually leave the cluster through one address, so sessions
+retrying a dead token can get the whole cluster banned, sessions with a valid token included. That
+is why a refused grant takes the line out of the store instead of leaving it there. The stand-in
+models the ban from the documented behaviour; it was not measured against a real instance.
+
+What remains: the stand-in revokes the previous access token the moment it renews, the strictest
+reading. A git command whose requests straddle that moment fails once (seen once in five renewals
+in one run); the next command already has the new token. Renewing a quarter of an hour early does
+not change that window, which is the time between the provider's answer and the pod's install —
+milliseconds on the measured path.
+
 ## Validation, and why it is at the edges
 
 Two things used to fail silently, both ending as a dead session with the reason buried in an
