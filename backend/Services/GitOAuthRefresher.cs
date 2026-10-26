@@ -140,7 +140,7 @@ public sealed class GitOAuthRefreshService(GitOAuthRefresher refresher, GitOAuth
             {
                 return;
             }
-            catch (Exception error)
+            catch (Exception error) when (error is not OperationCanceledException)
             {
                 logger.LogWarning(error, "Renewing git provider tokens failed; retrying next pass");
             }
@@ -149,23 +149,27 @@ public sealed class GitOAuthRefreshService(GitOAuthRefresher refresher, GitOAuth
 
     private async Task HandOnChangesAsync(CancellationToken stoppingToken)
     {
-        try
+        // WaitToReadAsync answers false when stopping rather than throwing, so shutdown ends the loop.
+        while (await WaitToReadAsync(stoppingToken))
         {
-            await foreach (var (owner, providerId) in refresher.Changes.ReadAllAsync(stoppingToken))
+            while (refresher.Changes.TryRead(out var change))
             {
                 try
                 {
-                    await refresher.DistributeAsync(owner, providerId, stoppingToken);
+                    await refresher.DistributeAsync(change.Owner, change.ProviderId, stoppingToken);
                 }
                 catch (Exception error) when (!stoppingToken.IsCancellationRequested)
                 {
-                    logger.LogWarning(error, "Handing a {Provider} token change to running sessions failed", providerId);
+                    logger.LogWarning(error, "Handing a {Provider} token change to running sessions failed", change.ProviderId);
                 }
             }
         }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-        {
-        }
+    }
+
+    private async Task<bool> WaitToReadAsync(CancellationToken ct)
+    {
+        try { return await refresher.Changes.WaitToReadAsync(ct); }
+        catch (OperationCanceledException) { return false; }
     }
 
     private static async Task<bool> WaitAsync(PeriodicTimer timer, CancellationToken ct)

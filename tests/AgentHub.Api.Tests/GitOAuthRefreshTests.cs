@@ -121,7 +121,7 @@ public sealed class GitOAuthRefreshTests
         public TimeSpan Delay = TimeSpan.Zero;
         public HttpStatusCode? FailWith;
         public string FailBody = "{\"error\":\"server_error\"}";
-        public int ExpiresIn = 7200;
+        public readonly int ExpiresIn = 7200;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {

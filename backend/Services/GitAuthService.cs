@@ -201,8 +201,9 @@ public sealed class GitAuthService : IGitAuthService, IGitTokenChanges
             foreach (var k in keys) data.Remove(k);
             return keys.Count > 0;
         }, ct);
-        // Running sessions lose the token now rather than keep it until they end.
-        if (removed) Raise(owner, providerId);
+        // Running sessions lose the token now rather than keep it until they end. Only a configured
+        // provider has sessions to tell; the keys of one removed from the configuration still go.
+        if (removed && Provider(providerId) is { } p) Raise(owner, p.Id);
     }
 
     public async Task<IReadOnlyList<GitProject>> SearchProjectsAsync(string owner, string providerId, string? query, CancellationToken ct = default)
@@ -360,11 +361,7 @@ public sealed class GitAuthService : IGitAuthService, IGitTokenChanges
         }
     }
 
-    private void Raise(string owner, string providerId)
-    {
-        try { TokensChanged?.Invoke(owner, providerId); }
-        catch (Exception error) { _log.LogWarning(error, "Handing on a {Provider} token change failed", providerId); }
-    }
+    private void Raise(string owner, string providerId) => TokensChanged?.Invoke(owner, providerId);
 
     private Task<GitTokenSnapshot> ReadAsync(string owner, CancellationToken ct) => _tokens.ReadAsync(OwnerKey(owner), ct);
 
@@ -394,7 +391,8 @@ public sealed class GitAuthService : IGitAuthService, IGitTokenChanges
             var client = _http.CreateClient();
             client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
             client.DefaultRequestHeaders.UserAgent.ParseAdd("open-agenthub");
-            using var resp = await client.PostAsync(p.TokenUrl, new FormUrlEncodedContent(form), ct);
+            using var content = new FormUrlEncodedContent(form);
+            using var resp = await client.PostAsync(p.TokenUrl, content, ct);
             var body = await resp.Content.ReadAsStringAsync(ct);
             // Only the status and the OAuth error code are logged: the body of a success is the token.
             if (!resp.IsSuccessStatusCode)

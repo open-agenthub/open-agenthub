@@ -11,7 +11,7 @@
 //   address, so one session retrying a dead token bans all of them.
 // Tokens never reach the log or any answer except the token response itself: events name tokens
 // by a label (at#3, rt#4).
-// Run: node mock-gitlab.mjs <dir>   (dir: certs/, repos/, events.log)
+// Run: node mock-gitlab.mjs <dir> > <dir>/events.log   (dir: certs/, repos/, client-secret.txt)
 import { spawn } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -34,7 +34,9 @@ const stats = { authorizationCodes: 0, refreshes: 0, invalidGrants: 0, git: { ok
 const failures = new Map() // ip -> [timestamps]
 const banned = new Map()   // ip -> until
 
-const log = m => fs.appendFileSync(path.join(dir, 'events.log'), `${new Date().toISOString()} ${m}\n`)
+// Events go to stdout (run.sh keeps them in events.log): a test server has no business writing
+// request-derived text into files of its own.
+const log = m => console.log(`${new Date().toISOString()} ${m}`)
 const now = () => Date.now() / 1000
 
 function issue(reason) {

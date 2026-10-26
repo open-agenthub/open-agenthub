@@ -17,7 +17,7 @@ $K get secrets -o name | grep -E 'gitauth-|gitcreds-' | xargs -r $K delete >/dev
 rm -rf $RIG/pods $RIG/*.log $RIG/mock/events.log
 "$PG_BIN/createdb" -h 127.0.0.1 -p 54329 -U postgres "$DB" 2>/dev/null || true
 
-env "$@" node $HERE/mock-gitlab.mjs $RIG/mock & PIDS+=($!)
+env "$@" node $HERE/mock-gitlab.mjs $RIG/mock > $RIG/mock/events.log & PIDS+=($!)
 node $HERE/kubelet.mjs $RIG $REPO $KC & PIDS+=($!)
 node $HERE/backend.mjs "$DLL" $RIG "$DB" "$EXTRA" > $RIG/backend.log 2>&1 & PIDS+=($!)
 until curl -fs -o /dev/null http://127.0.0.1:8080/api/config; do sleep 1; done

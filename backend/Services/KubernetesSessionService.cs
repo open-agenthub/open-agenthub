@@ -805,11 +805,12 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var pods = await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace, labelSelector: selector,
             resourceVersion: "0", cancellationToken: ct);
         var targets = new List<GitSessionTarget>();
-        foreach (var pod in pods.Items)
+        var running = pods.Items
+            .Where(pod => pod.Status?.Phase == "Running" && !string.IsNullOrEmpty(pod.Status.PodIP)
+                && pod.Metadata?.Labels?.ContainsKey(SessionLabel) == true)
+            .Select(pod => pod.Metadata.Labels[SessionLabel]);
+        foreach (var sessionId in running)
         {
-            if (pod.Status?.Phase != "Running" || string.IsNullOrEmpty(pod.Status.PodIP)
-                || pod.Metadata?.Labels is not { } labels || !labels.TryGetValue(SessionLabel, out var sessionId))
-                continue;
             var record = await _store.GetByIdAsync(sessionId, ct);
             if (record is null || (owner is not null && record.Owner != owner)) continue;
             var providers = ParseRepos(record)
