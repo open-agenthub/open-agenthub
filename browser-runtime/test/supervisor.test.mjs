@@ -417,3 +417,44 @@ function clipboardContext(pages) {
     },
   };
 }
+
+test('window.open keeps only noopener and noreferrer, so a popup opens as a tab', () => {
+  const calls = [];
+  const previous = globalThis.window;
+  globalThis.window = { open: (...args) => { calls.push(args); return 'handle'; } };
+  try {
+    supervisorModule.openPopupsAsTabs();
+    assert.equal(window.open('/a', 'oauth', 'popup,width=500,height=600'), 'handle');
+    window.open('/b', '_blank', 'noopener, noreferrer width=10');
+    window.open('/c');
+    window.open('/d', 'x', null);
+    assert.deepEqual(calls, [['/a', 'oauth', ''], ['/b', '_blank', 'noopener,noreferrer'], ['/c'], ['/d', 'x', null]]);
+  } finally {
+    globalThis.window = previous;
+  }
+});
+
+test('a page in a second window is reopened as a tab of the first and its window closed', async () => {
+  const events = [];
+  const page = (url, windowId) => ({
+    url: () => url, windowId, closed: false,
+    isClosed() { return this.closed; },
+    async close() { this.closed = true; events.push(['close', url]); },
+    async waitForURL() {},
+    async goto(target) { events.push(['goto', target]); },
+  });
+  const first = page('https://example.com/', 1);
+  const stray = page('https://example.com/popup', 2);
+  const context = {
+    pages: () => [first, stray].filter(candidate => !candidate.closed),
+    async newCDPSession(target) {
+      return { async send() { return { windowId: target.windowId }; }, async detach() {} };
+    },
+    async newPage() { events.push(['newPage']); return page('about:blank', 1); },
+  };
+  const supervisor = makeSupervisor({ context });
+
+  assert.equal(await supervisor.keepInFirstWindow(first), false);
+  assert.equal(await supervisor.keepInFirstWindow(stray), true);
+  assert.deepEqual(events, [['close', 'https://example.com/popup'], ['newPage'], ['goto', 'https://example.com/popup']]);
+});
