@@ -22,4 +22,5 @@ A failed move after a successful pause leaves the session paused and reports rec
 
 Scheduled sessions currently use immutable workload templates and cannot pause. The dialog
 explains that they must be recreated in the destination project rather than silently moving
-only the registry and leaving the old template and its secrets active.
+only the registry and leaving the old template and its secrets active. Scheduled template
+replacement is tracked separately in issue #295.

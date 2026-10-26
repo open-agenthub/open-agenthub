@@ -22,6 +22,7 @@ b.Services.AddControllers().AddJsonOptions(o => o.JsonSerializerOptions.Converte
 b.Services.AddAuthentication("proof").AddScheme<AuthenticationSchemeOptions, Identity>("proof", _ => {});
 b.Services.AddAuthorization();
 b.Services.AddSingleton<PostgresSessionOrderStore>();
+b.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
 b.Services.AddSingleton<IProjectStore, PostgresProjectStore>();
 b.Services.AddSingleton<ISessionStore, PostgresSessionStore>();
 b.Services.AddSingleton<AgentHub.Api.Permissions.PermissionStore>();
@@ -32,6 +33,7 @@ b.Services.AddSingleton<ISessionService>(sp => new KubernetesSessionService(b.Co
     new AllAgents(), Empty.Of<AgentHub.Api.Library.ILibraryAccess>(), Empty.Of<AgentHub.Api.Library.IMcpServerStore>(),
     Empty.Of<AgentHub.Api.Library.IEphemeralApiMcpStore>(), Empty.Of<AgentHub.Api.Library.IMcpGatewayTokenService>(),
     sp.GetRequiredService<ILogger<KubernetesSessionService>>(),
+    runtimeUpdateLock: sp.GetRequiredService<ISessionExpiryLock>(),
     cluster: new Kubernetes(KubernetesClientConfiguration.BuildConfigFromConfigFile(Environment.GetEnvironmentVariable("PROOF_KUBECONFIG")))));
 var app = b.Build();
 await app.Services.GetRequiredService<IProjectStore>().InitializeAsync();
@@ -51,13 +53,13 @@ app.MapGet("/api/credentials", () => new {});
 app.MapGet("/api/credentials/accounts", () => new {});
 app.MapGet("/api/agents/allowed", () => new { agents = new[] { "Claude" } });
 app.MapGet("/api/mcp-servers", () => Array.Empty<object>());
-app.MapGet("/api/secrets", () => Array.Empty<object>());
+
 app.Run("http://127.0.0.1:8080");
 sealed class Only : IApplicationFeatureProvider<ControllerFeature> {
     public void PopulateFeature(IEnumerable<ApplicationPart> parts, ControllerFeature feature) {
-        foreach (var c in feature.Controllers.ToArray()) if (c.AsType() != typeof(ProjectsController) && c.AsType() != typeof(SessionsController) && c.AsType() != typeof(SessionOrganizationController)) feature.Controllers.Remove(c);
+        foreach (var c in feature.Controllers.Where(c => c.AsType() != typeof(ProjectsController) && c.AsType() != typeof(SessionsController) && c.AsType() != typeof(SessionOrganizationController) && c.AsType() != typeof(SecretsController)).ToArray()) feature.Controllers.Remove(c);
     }
 }
 sealed class Identity(IOptionsMonitor<AuthenticationSchemeOptions> o, ILoggerFactory l, UrlEncoder e) : AuthenticationHandler<AuthenticationSchemeOptions>(o,l,e) {
-    protected override Task<AuthenticateResult> HandleAuthenticateAsync() => Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity([new Claim("preferred_username", "proof-owner")], "proof")), "proof")));
+    protected override Task<AuthenticateResult> HandleAuthenticateAsync() => Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(new ClaimsPrincipal(new ClaimsIdentity([new Claim("preferred_username", Request.Headers["X-Proof-Owner"].FirstOrDefault() ?? "proof-owner")], "proof")), "proof")));
 }
