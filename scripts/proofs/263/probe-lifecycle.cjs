@@ -85,6 +85,8 @@ const wait = ms => new Promise(resolve=>setTimeout(resolve,ms));
    finally{if(fd!==undefined)fs.closeSync(fd);}
   }
   visit(path.join(home,driver.stateDir));
+  if(!sawAuth||!sawReady||withheld||archives.length===0||nativeExportHits!==0)throw Error('Login did not reach a clean persisted native session');
+  if(archives.some(u=>hits(require('node:zlib').gunzipSync(u.body).toString('utf8')))||uploads.filter(u=>u.route!=='/state').some(u=>hits(u.body.toString('utf8'))))throw Error('Authorization material reached an export');
   console.log(JSON.stringify({agent:name,sawAuth,sawReady,withheld,screenFacts,observedValues:values.size,stateUploads:archives.length,authInArchive:archives.some(u=>hits(require('node:zlib').gunzipSync(u.body).toString('utf8'))),authInTextExports:uploads.filter(u=>u.route!=='/state').some(u=>hits(u.body.toString('utf8'))),credentialFileHits:credentialHits,nativeExportFileHits:nativeExportHits}));
  } finally {
   socket?.close();

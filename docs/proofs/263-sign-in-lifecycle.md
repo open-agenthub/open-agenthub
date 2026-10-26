@@ -65,3 +65,22 @@ For each real-account run, also verify:
    deployed backend/credential-watcher/storage proof that a local fake service cannot establish.
 4. Repeat the appropriate expired/revoked-login recovery above. Confirm the next archive saves
    and another pause/resume works. Preserve only sanitized outcomes, version and timestamps.
+
+## Recovered integrated verification
+
+After the runtime restart, the remote completion fix was recovered and current main merged,
+including the separate termination-diagnostic privacy fix from #287. This branch adds no competing
+termination writer. Fresh pinned Codex and OpenCode wrapper runs again reached their native
+composer, cleared withholding, uploaded an actual state archive, and found zero observed auth
+values in archives or text exports. OpenCode retained its synthetic key only in excluded auth.json.
+
+The private native-file audit now opens without following links, reads the opened descriptor,
+and checks inode and file metadata before accepting its result. This replaces the rejected
+path-check-then-read approach, where a replacement could redirect the audit between operations.
+Runtime tests: 789 passed. Frontend tests: 898 passed; production build passed.
+
+For the interactive Chromium check, start browser-hub.cjs with SIGNIN_LIFECYCLE=1 and
+SIGNIN_TLS_CA, then run scripts/proofs/263/browser-lifecycle.cjs against the branch frontend.
+This selects the actual login-to-TUI wrappers, rather than the standalone login commands.
+The assertions cover the native ready screen, disappeared sign-in card, empty conversation
+composer, mobile resize, clean actual archive upload and cleared withholding notice.
