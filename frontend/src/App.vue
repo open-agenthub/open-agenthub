@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue'
+import { orderedSessions } from './lib/session-order.js'
 import { api, auth, config } from './api.js'
 import ProjectSidebar from './components/ProjectSidebar.vue'
 import TerminalView from './components/TerminalView.vue'
@@ -87,7 +88,9 @@ function sessionIdFromLocation() {
 async function refresh() {
   try {
     const prevSessions = sessions.value // empty on the first refresh — no alerts on page load
-    ;[sessions.value, projects.value] = await Promise.all([api.listSessions(), api.listProjects()])
+    const [listed, projectList, order] = await Promise.all([api.listSessions(), api.listProjects(), api.listSessionOrder?.().catch(() => []) || []])
+    sessions.value = orderedSessions(listed, order)
+    projects.value = projectList
     for (const alert of detectAlerts(prevSessions, sessions.value)) showAlert(alert, selectSession)
   } catch (e) {
     error.value = String(e.message || e)

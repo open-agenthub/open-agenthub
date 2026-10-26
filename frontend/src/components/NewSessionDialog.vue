@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
 import { api } from '../api.js'
 import {
   agentPayload, buildEphemeralApiSources, defaultAgentForm, defaultPolicy, ephemeralNameFromUrl,
@@ -60,11 +60,16 @@ const form = ref({
   runAsRoot: false,
   autoApprove: false
 })
+const newProjectName = ref('')
+const createdProjects = ref([])
+const projectNotice = ref('')
+const allProjects = computed(() => [...props.projects, ...createdProjects.value.filter(p => !props.projects.some(existing => existing.id === p.id))])
+const creatingProject = computed(() => form.value.projectId === '__new__')
 const resources = ref(resourceForm(null))
 const autoDelete = ref(autoDeleteForm(null))
 // Stored secrets; the options follow the chosen project (docs/session-secrets.md).
 const storedSecrets = ref([])
-const selectedProject = computed(() => props.projects.find(project => project.id === form.value.projectId) || null)
+const selectedProject = computed(() => allProjects.value.find(project => project.id === form.value.projectId) || (creatingProject.value ? { secretIds: [] } : null))
 const secrets = computed(() => secretOptions(storedSecrets.value, selectedProject.value))
 const selectedGrants = ref([])
 const selectedSecrets = ref([])
@@ -120,8 +125,19 @@ async function submit() {
     try { JSON.parse(form.value.mcpConfigJson) }
     catch { error.value = 'MCP config is not valid JSON.'; return }
   }
+  if (creatingProject.value && (!newProjectName.value.trim() || newProjectName.value.trim().length > 80)) {
+    error.value = 'Invalid project name or color.'
+    return
+  }
   busy.value = true
   try {
+    if (creatingProject.value) {
+      const project = await api.createProject({ name: newProjectName.value.trim(), color: null })
+      createdProjects.value.push(project)
+      await nextTick()
+      form.value.projectId = project.id
+      projectNotice.value = 'Project “' + project.name + '” was created. It stays saved if the session cannot start; retry using this selected project.'
+    }
     const session = await api.createSession({
       title: form.value.title || 'Session',
       description: form.value.description.trim() || null,
@@ -210,7 +226,12 @@ async function submit() {
         <SystemPromptField v-model="form.systemPrompt" />
         <div class="field last">
           <label>Project</label>
-          <select v-model="form.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select>
+          <select v-model="form.projectId" aria-label="Project" :disabled="busy"><option value="">No project</option><option v-for="project in allProjects" :key="project.id" :value="project.id">{{ project.name }}</option><option value="__new__">New project…</option></select>
+        </div>
+        <div v-if="creatingProject" class="field">
+          <label for="new-project-name">Project name</label>
+          <input id="new-project-name" v-model="newProjectName" maxlength="80" :disabled="busy" />
+          <small class="hint">No project secrets are selected initially. You can configure them in Projects.</small>
         </div>
         <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
           :project-has-none="!!selectedProject && storedSecrets.length > 0" />
@@ -289,7 +310,8 @@ async function submit() {
         </div>
       </div>
 
-      <p v-if="error" class="err">{{ error }}</p>
+      <p v-if="projectNotice" role="status" data-project-notice>{{ projectNotice }}</p>
+      <p v-if="error" class="err" role="alert">{{ error }}</p>
 
       <div class="row">
         <button class="primary" data-submit :disabled="busy || secretClash" @click="submit">{{ busy ? 'Starting…' : 'Start session' }}</button>

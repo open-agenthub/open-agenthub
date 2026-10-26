@@ -43,6 +43,7 @@ builder.Services.AddSingleton<AgentHub.Api.Events.ISessionEventBus>(
 builder.Services.AddHostedService(
     sp => sp.GetRequiredService<AgentHub.Api.Events.PostgresSessionEventBus>());
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IProjectStore, AgentHub.Api.Persistence.PostgresProjectStore>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.PostgresSessionOrderStore>();
 // Library: MCP catalog (raw/api + org) + skills (community: personal, enterprise: shareable).
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpSecretProtector, AgentHub.Api.Library.McpSecretProtector>();
 builder.Services.AddSingleton<AgentHub.Api.Library.IMcpServerStore, AgentHub.Api.Library.McpServerStore>();
@@ -478,6 +479,7 @@ using (var scope = app.Services.CreateScope())
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Files.ISessionFileRegistry>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.PostgresSessionOrderStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IEphemeralApiMcpStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillStore>().InitializeAsync();
