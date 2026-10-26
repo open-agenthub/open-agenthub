@@ -14,23 +14,41 @@ if (process.argv[2] === '--runtime') {
  const name = process.argv[3];
  const home = fs.mkdtempSync(path.join(root, name + '-'));
  fs.mkdirSync(home+'/tmp',{mode:0o700});
- const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|AGENTHUB|ANTHROPIC|OPENAI|CODEX|OPENCODE|CURSOR|OPENCLAW|XDG_|.*TOKEN|.*KEY|.*SECRET)/.test(key)));
- Object.assign(env, {HOME:home,TMPDIR:home+'/tmp', XDG_CONFIG_HOME:home+'/.config', XDG_DATA_HOME:home+'/.local/share', XDG_STATE_HOME:home+'/.local/state', PATH:bins+':'+process.env.PATH,
-  AGENTHUB_PORT:'7685', AGENTHUB_WORKDIR:home, AGENTHUB_SESSION_ID:'signin-proof', AGENTHUB_CALLBACK_URL:'http://127.0.0.1:8080/internal', AGENTHUB_CALLBACK_TOKEN:'example-proof-token', AGENTHUB_SKILLS_SYNC_SECONDS:'0', AGENTHUB_WATCHER_PIDFILE:path.join(root,'absent-watcher.pid'),
+ const env = process.env.SIGNIN_LIFECYCLE==='1'?{}:Object.fromEntries(Object.entries(process.env).filter(([key]) => !/^(CLAUDE|AGENTHUB|ANTHROPIC|OPENAI|CODEX|OPENCODE|CURSOR|OPENCLAW|XDG_|.*TOKEN|.*KEY|.*SECRET)/.test(key)));
+ Object.assign(env, {HOME:home,TMPDIR:home+'/tmp',TERM:'xterm-256color',OPENCODE_DISABLE_AUTOUPDATE:'1',OPENCODE_DISABLE_SHARE:'1', XDG_CONFIG_HOME:home+'/.config', XDG_DATA_HOME:home+'/.local/share', XDG_STATE_HOME:home+'/.local/state', PATH:bins+':'+process.env.PATH,
+  AGENTHUB_STATE_RESTORED:'0', AGENTHUB_FILE_ROOT:home+'/files', AGENTHUB_PORT:'7685', AGENTHUB_WORKDIR:home, AGENTHUB_SESSION_ID:'signin-proof', AGENTHUB_CALLBACK_URL:'http://127.0.0.1:8080/internal', AGENTHUB_CALLBACK_TOKEN:'example-proof-token', AGENTHUB_SKILLS_SYNC_SECONDS:'0', AGENTHUB_WATCHER_PIDFILE:path.join(root,'absent-watcher.pid'),
   AGENTHUB_STATE_PUT_URL:'http://127.0.0.1:8080/upload/state', AGENTHUB_SCROLLBACK_PUT_URL:'http://127.0.0.1:8080/upload/scrollback', AGENTHUB_TRANSCRIPT_PUT_URL:'http://127.0.0.1:8080/upload/transcript', DISABLE_AUTOUPDATER:'1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1', AGENT_CLI_CREDENTIAL_STORE:'file' });
  fs.writeFileSync(home+'/.claude.json', JSON.stringify({hasCompletedOnboarding:true,theme:'dark',projects:{[home]:{hasTrustDialogAccepted:true,hasCompletedProjectOnboarding:true}}}));
- if(process.env.SIGNIN_MOCK_AUTH==='1') {
+ if(process.env.SIGNIN_MOCK_AUTH==='1'&&['claude','codex'].includes(name)) {
   env.HTTPS_PROXY='http://127.0.0.1:18443';
   env.NODE_EXTRA_CA_CERTS=process.env.SIGNIN_TLS_CA;
+  env.SSL_CERT_FILE=process.env.SIGNIN_TLS_CA;
   if(!env.NODE_EXTRA_CA_CERTS)throw new Error('SIGNIN_TLS_CA is required for the fake identity proof');
+  if(name==='claude') {
   fs.mkdirSync(home+'/.claude',{recursive:true});
   fs.writeFileSync(home+'/.claude/.credentials.json',JSON.stringify({claudeAiOauth:{accessToken:'example-expired-access',refreshToken:'example-expired-refresh',expiresAt:Date.now()-1000,scopes:['user:inference','user:profile','user:sessions:claude_code'],subscriptionType:'max',rateLimitTier:'default_claude_max_20x'}}));
   const config=JSON.parse(fs.readFileSync(home+'/.claude.json','utf8'));
   config.oauthAccount={accountUuid:'example-account',emailAddress:'person@example.com',organizationUuid:'example-organization',organizationName:'Example'};
   fs.writeFileSync(home+'/.claude.json',JSON.stringify(config));
+  }
  }
  const commands={claude:[path.join(bins,'claude'),[]],codex:[path.join(bins,'codex'),['login','--device-auth']],cursor:[cursor,['login']],openclaw:[path.join(bins,'openclaw'),['models','auth','add']],opencode:[path.join(bins,'opencode'),['auth','login']]};
  const driver=require(path.join(root,'agent-runtime',name,'driver.js'));
+ if(process.env.SIGNIN_LIFECYCLE==='1'&&['codex','opencode'].includes(name)) {
+  // Exercise the interactive wrapper after login instead of stopping at its login subprocess.
+  env.TERMINATION_MESSAGE_PATH=home+'/termination.txt';
+  if(name==='codex') {
+   env.CODEX_HOME=home+'/.codex';env.AGENTHUB_CODEX_DEVICE_AUTH='1';
+   fs.mkdirSync(env.CODEX_HOME,{recursive:true});
+   fs.writeFileSync(env.CODEX_HOME+'/config.toml','check_for_update_on_startup = false\n[projects.'+JSON.stringify(home)+']\ntrust_level = "trusted"\n');
+  } else {
+   fs.mkdirSync(home+'/.opencode');fs.mkdirSync(home+'/.local/share',{recursive:true});
+   fs.symlinkSync(home+'/.opencode',home+'/.local/share/opencode');
+   env.OPENCODE_AUTH_FILE=home+'/.opencode/auth.json';env.AGENTHUB_OPENCODE_LOGIN='1';
+  }
+  const runtime=require(path.join(root,'agent-runtime/common/server.js')).createCommonServer({env,driver});
+  runtime.httpServer.on('listening',()=>process.send?.({ready:true}));return;
+ }
  const [cmd,args]=commands[name];
  require(path.join(root,'agent-runtime/common/server.js')).createCommonServer({env,driver:{...driver,buildCommand:()=>({cmd,args}),isResumeCommand:()=>false}});
  process.send?.({ready:true});
@@ -46,18 +64,35 @@ let source=fs.readFileSync(serverPath,'utf8');
 for(const file of ['state.tgz','scrollback.log','agenthub-auth-watcher.pid']) source=source.split('/tmp/'+file).join(path.join(root,file));
 source=source.replace('signInPrivacy.releaseAbsent(sources, [], fs);', 'const released = signInPrivacy.releaseAbsent(sources, [], fs); process.send?.({privacy:{released,retained:signInPrivacy.retained()}});');
 fs.writeFileSync(serverPath,source);
-let agent='claude', child, uploads=[], watchTerminal, authTokens=new Set(), authMode=null, privacy=null;
+let agent=process.env.SIGNIN_LIFECYCLE==='1'?'codex':'claude', child, uploads=[], watchTerminal, authTokens=new Set(), authMode=null, privacy=null, providerSelected=false, methodSelected=false, lifecycleSocket;
 function rememberAuth(value){if(value && value.length>=4)authTokens.add(value)}
 const session=()=>({id:'signin-proof',title:'CLI sign-in proof',phase:'Running',agent:({claude:'Claude',codex:'Codex',cursor:'Cursor',openclaw:'OpenClaw',opencode:'OpenCode'})[agent],mode:'Interactive',uiMode:'terminal',accessRole:'Owner',authMode:'Subscription',createdAt:new Date().toISOString(),browser:{phase:'Stopped'}});
 async function start(name, mock = false) {
- if(child) {child.kill('SIGTERM');await new Promise(resolve=>child.once('exit',resolve));}
- agent=name;uploads=[];authTokens=new Set();authMode=null;privacy=null;
+ if(child&&child.exitCode===null) {const ended=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGTERM');await ended;}
+ agent=name;uploads=[];authTokens=new Set();authMode=null;privacy=null;providerSelected=false;methodSelected=false;
  watchTerminal?.dispose();
  watchTerminal=new (require('/opt/session-agent/node_modules/@xterm/headless').Terminal)({cols:120,rows:32,allowProposedApi:true,scrollback:0});
- child=spawn(process.execPath,[__filename,'--runtime',name],{env:{...process.env,SIGNIN_PROOF_ROOT:root,SIGNIN_MOCK_AUTH:mock?'1':'0'},stdio:['ignore','ignore','ignore','ipc']});
+ child=spawn(process.execPath,[__filename,'--runtime',name],{env:{...process.env,SIGNIN_PROOF_ROOT:root,SIGNIN_MOCK_AUTH:mock?'1':'0'},stdio:['ignore','ignore','pipe','ipc']});
+ child.stderr.on('data',bytes=>{const error=bytes.toString().split('\n').find(line=>/^Error:/.test(line));if(error)console.error(error.replace(/https?:\/\/\S+/g,'[URL omitted]'));});
+ child.on('exit',code=>console.log('Isolated runtime exit code:',code));
  child.on('message',message=>{if(message.privacy)privacy=message.privacy;});
  await new Promise((resolve,reject)=>{child.once('message',resolve);child.once('exit',code=>reject(new Error('Runtime exited '+code)));});
  await new Promise(resolve=>setTimeout(resolve,500));
+ if(process.env.SIGNIN_LIFECYCLE==='1'&&name==='opencode') {
+  // A separate terminal observer avoids interleaving duplicate browser subscriptions.
+  const terminal=new (require('/opt/session-agent/node_modules/@xterm/headless').Terminal)({cols:120,rows:40,allowProposedApi:true,scrollback:0});
+  lifecycleSocket=new WebSocket('ws://127.0.0.1:7685/','tty');
+  const send=data=>lifecycleSocket.send(JSON.stringify({type:'input',data}));
+  terminal.onData(send);
+  lifecycleSocket.on('message',data=>{let control;try{control=JSON.parse(data.toString());}catch{}if(control?.type==='agenthub')return;
+   terminal.write(data.toString(),()=>{const b=terminal.buffer.active;const rows=Array.from({length:terminal.rows},(_,i)=>b.getLine(b.baseY+i)?.translateToString(true)||'');
+    if(!methodSelected&&rows.some(row=>row.includes('Login method'))&&rows.some(row=>row.includes('Manually enter API Key'))){methodSelected=true;setTimeout(()=>{if(lifecycleSocket.readyState===WebSocket.OPEN){send('\x1b[B');setTimeout(()=>{if(lifecycleSocket.readyState===WebSocket.OPEN)send('\r')},150)}},500);}
+    if(!providerSelected&&rows.some(row=>row.includes('Select provider'))){providerSelected=true;setTimeout(()=>{if(lifecycleSocket.readyState===WebSocket.OPEN)send('\r')},750);}
+   });
+  });
+  lifecycleSocket.on('close',()=>terminal.dispose());
+ }
+
 }
 const server=http.createServer(async(req,res)=>{
  const pathname=new URL(req.url,'http://example.com').pathname;
@@ -92,6 +127,8 @@ const wss=new WebSocketServer({server});
 wss.on('connection',(socket,req)=>{
  if(req.url.endsWith('/events'))return;
  const upstream=new WebSocket('ws://127.0.0.1:7685/','tty');
+ const terminalReplies=process.env.SIGNIN_LIFECYCLE==='1'?watchTerminal.onData(data=>{if(upstream.readyState===WebSocket.OPEN)upstream.send(JSON.stringify({type:'input',data}))}):null;
+ socket.on('close',()=>terminalReplies?.dispose());
  const pending=[];
  socket.on('message',data=>{
   try{const message=JSON.parse(data.toString());if(message.type==='resize')watchTerminal.resize(message.cols,message.rows);
@@ -111,8 +148,9 @@ wss.on('connection',(socket,req)=>{
   if(socket.readyState===WebSocket.OPEN)socket.send(data.toString());});
  upstream.on('close',()=>socket.close());upstream.on('error',()=>socket.close());socket.on('close',()=>upstream.close());
 });
-server.listen(8080,'0.0.0.0',async()=>{await start(agent);console.log('Real CLI proof hub ready on 8080');});
+server.listen(8080,'0.0.0.0',async()=>{await start(agent,process.env.SIGNIN_LIFECYCLE==='1');console.log('Real CLI proof hub ready on 8080');});
 process.on('SIGTERM',()=>{
- if(child){child.once('exit',()=>{fs.rmSync(root,{recursive:true,force:true});server.close();});child.kill('SIGTERM');}
+ lifecycleSocket?.close();
+ if(child&&child.exitCode===null){child.once('exit',()=>{fs.rmSync(root,{recursive:true,force:true});server.close();});child.kill('SIGTERM');}
  else {fs.rmSync(root,{recursive:true,force:true});server.close();}
 });
