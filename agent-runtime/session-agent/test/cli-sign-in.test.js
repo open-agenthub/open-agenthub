@@ -207,3 +207,42 @@ test('a symlink swap before open cannot redirect a native transcript scan', asyn
   assert.equal(privacy.mask('ABCD-12345'), '[sign-in data removed]');
  } finally { privacy.dispose(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('native composers end stale sign-in rows but never a newer sign-in dialog', async () => {
+ const fs=require('node:fs'),os=require('node:os'),path=require('node:path');
+ const frontend=await import('../../../frontend/src/lib/cli-sign-in.js');
+ const { signInFinished }=require('../../common/cli-sign-in');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'signin-native-ready-'));
+ const cases=[
+  { auth:screens.device, ready:['Successfully logged in','>_ Codex (v0.160.0)','› Ask Codex to do anything'] },
+  { auth:screens.credential, ready:['└  Done','┃  Ask anything…','tab agents  ctrl+p commands'] },
+  { auth:screens.code, ready:[...screens.success,'❯ '] }
+ ];
+ try {
+  for(const {auth,ready} of cases){
+   const privacy=createSignInPrivacy();
+   try {
+    privacy.feed(auth.join('\r\n'));await privacy.flush();
+    assert.equal(privacy.archiveSafe(dir),false);
+    privacy.feed('\x1b[2J\x1b[H');await privacy.flush();
+    assert.equal(privacy.active(),true);
+    const completed=[...auth,...ready];
+    assert.equal(signInFinished(completed),true);
+    assert.equal(frontend.signInFinished(completed),true);
+    assert.equal(detectSignIn(completed),null);
+    assert.equal(frontend.detectSignIn(completed),null);
+    privacy.feed(completed.join('\r\n'));await privacy.flush();
+    assert.equal(privacy.active(),false);
+    assert.equal(privacy.archiveSafe(dir),true);
+    assert.doesNotMatch(privacy.scrollback(),/example.com|ABCD-12345/);
+    const reopened=[...ready,...auth];
+    assert.equal(signInFinished(reopened),false);
+    assert.deepEqual(frontend.detectSignIn(reopened),detectSignIn(reopened));
+    assert.ok(detectSignIn(reopened));
+    privacy.feed('\x1b[2J\x1b[H'+reopened.join('\r\n'));await privacy.flush();
+    assert.equal(privacy.active(),true);
+    assert.equal(privacy.archiveSafe(dir),false);
+   } finally {privacy.dispose();}
+  }
+ } finally {fs.rmSync(dir,{recursive:true,force:true});}
+});
