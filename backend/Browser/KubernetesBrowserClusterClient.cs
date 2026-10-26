@@ -4,7 +4,11 @@ using k8s.Models;
 
 namespace AgentHub.Api.Browser;
 
-public sealed record BrowserPodSnapshot(string? PodIp, bool Ready, string? FailureCode, string? LeaseId = null);
+// Gone: the pod has ended or is being deleted. With RestartPolicy Never a pod whose browser
+// exited, or that was evicted, stays behind in phase Failed or Succeeded with no failure code, so
+// readiness alone cannot tell a browser that is still starting from one that will never answer.
+public sealed record BrowserPodSnapshot(string? PodIp, bool Ready, string? FailureCode, string? LeaseId = null,
+    bool Gone = false);
 
 public interface IBrowserClusterClient
 {
@@ -95,7 +99,9 @@ public sealed class KubernetesBrowserClusterClient : IBrowserClusterClient
     {
         string? leaseId = null;
         pod.Metadata?.Labels?.TryGetValue(BrowserPodSpecFactory.LeaseLabel, out leaseId);
-        return new BrowserPodSnapshot(pod.Status?.PodIP, ready, failureCode, leaseId);
+        var gone = pod.Metadata?.DeletionTimestamp is not null ||
+            pod.Status?.Phase is "Failed" or "Succeeded";
+        return new BrowserPodSnapshot(pod.Status?.PodIP, ready && !gone, failureCode, leaseId, gone);
     }
     public async Task DeleteAsync(string namespaceName, string sessionId, CancellationToken ct = default)
     {

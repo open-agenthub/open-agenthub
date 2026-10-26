@@ -56,7 +56,24 @@ public sealed class KubernetesBrowserService : IBrowserService
             await using var distributedLock = await _sessionLock.AcquireAsync(session.Id, ct);
             var existing = await _leases.GetBySessionAsync(session.Id, ct);
             if (existing is { Phase: BrowserPhase.Running, PodIp: not null })
-                return Connection(existing);
+            {
+                // The lease says Running whatever has happened to the pod since. Handing out its
+                // recorded address after the pod was evicted or its browser exited gave the agent
+                // an endpoint nobody answers, on every start, until someone stopped the browser
+                // by hand (#240).
+                var pod = await _cluster.GetAsync(_namespace, session.Id, ct);
+                if (PodServes(pod, existing) && pod!.Ready)
+                {
+                    if (pod.PodIp != existing.PodIp)
+                        await _leases.SetRunningAsync(existing.LeaseId, pod.PodIp!, ct);
+                    return Connection(existing with { PodIp = pod.PodIp });
+                }
+                if (!PodServes(pod, existing))
+                {
+                    _log.LogWarning("Browser pod for session {SessionId} is gone; replacing it", session.Id);
+                    existing = existing with { Phase = BrowserPhase.Failed };
+                }
+            }
             if (existing?.Phase is BrowserPhase.Failed or BrowserPhase.Stopping)
             {
                 await _cluster.DeleteAsync(_namespace, session.Id, ct);
@@ -150,8 +167,35 @@ public sealed class KubernetesBrowserService : IBrowserService
         string sessionId, CancellationToken ct = default)
     {
         var lease = await _leases.GetBySessionAsync(sessionId, ct);
+        if (lease is { Phase: BrowserPhase.Running } && !await PodServesAsync(lease, ct))
+        {
+            await _leases.SetFailedAsync(lease.LeaseId, PodGone, ct);
+            lease = lease with { Phase = BrowserPhase.Failed, FailureCode = PodGone };
+        }
         return lease?.ToSummary(_options.ScreenWidth, _options.ScreenHeight)
             ?? new BrowserSummary(BrowserPhase.Stopped, _options.ScreenWidth, _options.ScreenHeight);
+    }
+
+    // Reported once a Running browser's pod has ended, is being deleted, is missing or belongs to
+    // another lease generation. browser_start replaces such a pod.
+    public const string PodGone = "pod_gone";
+
+    // Whether the pod can still be this lease's browser. Alive but not ready (a readiness blip)
+    // still is; ended, deleted, missing or relabelled never will be again.
+    internal static bool PodServes(BrowserPodSnapshot? pod, BrowserLease lease) =>
+        pod is { Gone: false, FailureCode: null } &&
+        string.Equals(pod.LeaseId, lease.LeaseId, StringComparison.Ordinal);
+
+    // Status is also read for every session view and browser proxy request; an API server that
+    // does not answer leaves the lease as recorded rather than failing those.
+    private async Task<bool> PodServesAsync(BrowserLease lease, CancellationToken ct)
+    {
+        try { return PodServes(await _cluster.GetAsync(_namespace, lease.SessionId, ct), lease); }
+        catch (Exception error) when (error is not OperationCanceledException)
+        {
+            _log.LogWarning(error, "Browser pod check for session {SessionId} failed", lease.SessionId);
+            return true;
+        }
     }
 
     public async Task<IReadOnlyDictionary<string, BrowserSummary>> GetSummariesAsync(

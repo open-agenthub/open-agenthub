@@ -54,10 +54,13 @@ public sealed class BrowserReconcileService(
             {
                 await cluster.DeleteAsync(_namespace, lease.SessionId, ct);
             }
-            else if (pod is null)
+            else if (pod is null || pod.Gone)
             {
+                // A Running lease's pod that ended or vanished is not a startup that timed out:
+                // the session list shows pod_gone, and browser_start replaces it.
                 await cluster.DeleteAsync(_namespace, lease.SessionId, ct);
-                await leases.SetFailedAsync(lease.LeaseId, "startup_timeout", ct);
+                await leases.SetFailedAsync(lease.LeaseId,
+                    lease.Phase == BrowserPhase.Running ? KubernetesBrowserService.PodGone : "startup_timeout", ct);
             }
             else if (pod.FailureCode is { } failure)
             {

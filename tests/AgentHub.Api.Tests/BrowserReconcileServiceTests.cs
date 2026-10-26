@@ -53,6 +53,38 @@ public sealed class BrowserReconcileServiceTests
     }
 
     [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RunningLeaseWhosePodEnded_IsMarkedPodGone(bool podObjectRemains)
+    {
+        var running = BrowserLease.Pending("s1", "l1", [1]) with { Phase = BrowserPhase.Running, PodIp = "10.0.0.9" };
+        var leases = new ReconcileLeaseStore(running);
+        var cluster = new ReconcileCluster
+        { Snapshot = podObjectRemains ? new("10.0.0.9", false, null, "l1", Gone: true) : null };
+        var service = Service(leases, cluster, Session(SessionStatus.Running));
+
+        await service.ReconcileAsync(CancellationToken.None);
+
+        Assert.Equal(1, cluster.DeleteCalls);
+        Assert.Equal(BrowserPhase.Failed, leases.Item?.Phase);
+        Assert.Equal(KubernetesBrowserService.PodGone, leases.Item?.FailureCode);
+    }
+
+    [Fact]
+    public async Task RunningLeaseWithLivePod_IsLeftAlone()
+    {
+        var running = BrowserLease.Pending("s1", "l1", [1]) with { Phase = BrowserPhase.Running, PodIp = "10.0.0.9" };
+        var leases = new ReconcileLeaseStore(running);
+        var cluster = new ReconcileCluster { Snapshot = new("10.0.0.9", true, null, "l1") };
+        var service = Service(leases, cluster, Session(SessionStatus.Running));
+
+        await service.ReconcileAsync(CancellationToken.None);
+
+        Assert.Equal(0, cluster.DeleteCalls);
+        Assert.Equal(BrowserPhase.Running, leases.Item?.Phase);
+    }
+
+    [Theory]
     [InlineData(BrowserPhase.Stopping, SessionStatus.Running)]
     [InlineData(BrowserPhase.Running, SessionStatus.Paused)]
     public async Task NonLiveLease_RetriesFullStop(BrowserPhase phase, string sessionStatus)
