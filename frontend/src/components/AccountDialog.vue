@@ -54,10 +54,14 @@ onMounted(() => {
       <div v-for="p in providers" :key="p.id" class="prov">
         <div class="info">
           <div class="name">{{ p.displayName }} <span class="type">{{ p.type }}</span></div>
-          <div class="status" :class="{ on: p.connected }">
+          <div v-if="p.needsSignIn" class="status expired" :data-git-needs-sign-in="p.id">
+            sign-in no longer accepted by {{ p.displayName }} — sessions get no token until you sign in again
+          </div>
+          <div v-else class="status" :class="{ on: p.connected }">
             {{ p.connected ? (p.username ? `connected as ${p.username}` : 'connected') : 'not connected' }}
           </div>
         </div>
+        <button v-if="p.needsSignIn" class="primary" @click="connect(p)">Sign in again</button>
         <button v-if="p.connected" class="danger" @click="disconnect(p)">Disconnect</button>
         <button v-else class="primary" @click="connect(p)">Connect</button>
       </div>
@@ -80,6 +84,7 @@ onMounted(() => {
 .type { font-family: var(--mono); font-size: 10px; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 7px; margin-left: 6px; }
 .status { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .status.on { color: var(--ok); }
+.status.expired { color: var(--danger); }
 .row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
 .err { color: var(--danger); font-family: var(--mono); font-size: 12px; }
 </style>
