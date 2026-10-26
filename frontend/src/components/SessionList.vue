@@ -6,10 +6,10 @@ import { authLabel } from '../lib/agent.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 
 defineProps({ sessions: Array, active: String })
-defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'])
+defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share', 'organize', 'drag-session', 'drop-session'])
 </script>
 <template>
-  <ul class="list"><li v-for="s in sessions" :key="s.id" :class="{ active: s.id === active }" @click="$emit('select', s.id)">
+  <ul class="list"><li v-for="s in sessions" :key="s.id" :class="{ active: s.id === active }" :data-session-row="s.id" :draggable="sessionCapabilities(s).canManage" @dragstart="$emit('drag-session', $event, s.id)" @dragover.prevent @drop.stop.prevent="$emit('drop-session', $event, s)" @click="$emit('select', s.id)">
     <span class="dot" :class="{ ask: s.questionPending }" :style="{ background: statusStyle(s).color }"></span>
     <div class="info">
       <div class="title">{{ s.title }}</div>
@@ -20,6 +20,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
       <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · <SessionIcon name="expiry" /> {{ formatRemaining(s.expiresAt) }}</span></div>
     </div>
     <span v-if="sessionCapabilities(s).canManage" class="acts">
+      <button class="act" title="Organize session" aria-label="Organize session" @click.stop="$emit('organize', s.id)">⋮</button>
       <button v-if="canPause(s)" class="act" title="Pause session" @click.stop="$emit('pause', s.id)">❚❚</button>
       <span v-if="s.outdatedImage" class="status">outdated image</span>
       <button v-if="s.canResume" class="act" title="Resume session" @click.stop="$emit('resume', s.id)">▶</button>

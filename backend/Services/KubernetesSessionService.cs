@@ -1633,6 +1633,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
+        if (req.ProjectIdSpecified && req.ProjectId != rec.ProjectId) {
+            var projectPod = await TryReadPodAsync($"session-{id}", ct);
+            if (rec.Status is "Running" or "Pending" or "Scheduled" || projectPod?.Status?.Phase is "Running" or "Pending")
+                throw new InvalidOperationException("Pause the session before moving it to another project. Resume afterwards to apply the new project secrets and settings.");
+        }
         SessionUpdateValidator.Validate(rec, req);
         if (req.AutoUpdateRuntimeImagesSpecified) rec.AutoUpdateRuntimeImages = req.AutoUpdateRuntimeImages;
         if (req.Agent is { } requestedAgent)
