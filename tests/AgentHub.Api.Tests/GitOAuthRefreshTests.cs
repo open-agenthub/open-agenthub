@@ -242,20 +242,23 @@ public sealed class GitOAuthRefreshTests
     }
 
     [Fact]
-    public async Task WithoutTheLock_TheLosersAreAnsweredInvalidGrant_ButDoNotMarkTheGrantRefused()
+    public async Task WithoutTheLock_TheLosersAreAnsweredInvalidGrant_AndOnlyTheStoredStateConverges()
     {
         // The control for the test above: the endpoint really does refuse a spent refresh token, so
-        // the lock is what keeps it to one request. The compare-and-swap still keeps a loser from
-        // calling a grant refused that the winner just renewed.
+        // the lock is what keeps it to one request. Without it a loser can be refused before the
+        // winner has stored the rotated token, and then cannot tell that from a revoked grant: it
+        // hands out nothing and briefly marks the grant refused (seen on a loaded CI runner). The
+        // compare-and-swap only makes the stored state end right — the winner's write clears the
+        // mark, and a later loser's mark no longer matches the refresh token it spent.
         var endpoint = new RotatingTokenEndpoint { Delay = TimeSpan.FromMilliseconds(300) };
         var rig = Make(locks: new NoLock(), endpoint: endpoint);
         rig.Store.Seed("at-0", "rt-0", Now.AddMinutes(1));
 
-        var stores = await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => rig.Git.BuildCredentialStoreAsync(Owner, Repos))));
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => rig.Git.BuildCredentialStoreAsync(Owner, Repos))));
 
         Assert.True(endpoint.InvalidGrants > 0);
+        Assert.Equal(endpoint.Live, rig.Store.Get("gitlab.refresh"));
         Assert.Null(rig.Store.Get("gitlab.rejected"));
-        Assert.All(stores, s => Assert.Equal(Line("at-1"), s));
     }
 
     [Fact]
