@@ -43,6 +43,9 @@ public sealed record GitProviderInfo
     public required string Type { get; init; }
     public required string DisplayName { get; init; }
     public required bool Connected { get; init; }
+    /// <summary>The provider refused to renew the stored grant (revoked, or the app was removed);
+    /// sessions get no token for it until the owner signs in again.</summary>
+    public bool NeedsSignIn { get; init; }
     public string? Username { get; init; }
 }
 
