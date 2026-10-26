@@ -175,9 +175,9 @@ export class BrowserSupervisor {
 
   // What still opens a window after openPopupsAsTabs — a CDP client asking for newWindow, or a
   // page that reached a window.open the script never saw — is reopened as a tab of the first
-  // window and its own window closed. Its opener is lost; leaving it would put a second window
-  // over the first, and every later tab, the agent's included, would open in whichever of the
-  // two had focus.
+  // window and its own window closed. The tab loads the URL a second time, as a GET, so a form
+  // POST's result and the opener are lost; leaving the window would put it over the first, and
+  // every later tab, the agent's included, would open in whichever of the two had focus.
   keepInFirstWindow(page) {
     const operation = this.windowTail.then(() => this.moveToFirstWindow(page));
     this.windowTail = operation.catch(error => diagnostic('second window not folded', error));

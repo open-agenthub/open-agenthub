@@ -7,10 +7,10 @@ import { connectBrowser } from '../../agent-runtime/browser/connection.mjs';
 import { launchBrowser } from './launch-browser.mjs';
 
 const pages = {
-  '/': `<button id="popup" onclick="window.open('/oauth','oauth','popup,width=500,height=600')">sign in</button>
+  '/': `<button id="popup" onclick="window.popup = window.open('/oauth','oauth','popup,width=500,height=600')">sign in</button>
     <a id="link" href="/target" target="_blank">link</a>
     <script>addEventListener('message', event => { document.title = event.data; });</script>`,
-  '/oauth': `<script>window.opener.postMessage('signed-in', '*');</script>`,
+  '/oauth': `<script>window.opener.postMessage('signed-in', '*'); setTimeout(() => window.close(), 100);</script>`,
   '/target': 'target',
 };
 
@@ -64,6 +64,8 @@ test('popups, new-window targets and shift-clicks all open as tabs of the one wi
   await page.click('#popup');
   await page.waitForFunction(() => document.title === 'signed-in');
   assert.equal(await windows(), 1, 'popup with window features');
+  // The returned reference stays the popup's, as a sign-in flow polling popup.closed expects.
+  await page.waitForFunction(() => window.popup?.closed === true);
 
   await page.bringToFront();
   await page.click('#link', { modifiers: ['Shift'] });
