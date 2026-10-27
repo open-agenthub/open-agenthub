@@ -83,9 +83,11 @@ What happens now:
 - The tool result says that the handover is saved and arrives as the first message after the
   turn ends.
 
-The rig in `proofs/336` runs the real pinned CLIs in the real session agent with a PTY fault
-wrapper (dropped first input, 20 s of output after the clear, the pod killed one second after
-the clear) and compares main with the branch; `proofs/336/results.md` has the numbers.
+The rig in `tests/ContextClearProof` runs the real pinned CLIs in the real session agent with a
+PTY fault wrapper (dropped first input, 20 s of output after the clear, the pod killed one second
+after the clear) and compares main with the branch. Main lost the handover in each fault case and
+in Codex's default case. The fix delivered it as the first user turn of a fresh transcript, exactly
+once, for Claude Code 2.1.287 and Codex 0.160.0 alike (PR #337 has the table).
 
 ## Verification
 
