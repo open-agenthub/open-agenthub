@@ -414,21 +414,31 @@ function createCommonServer(options = {}) {
         return done && done(new Error('sign-in state withheld'));
       }
       const revision = signInPrivacy.revision();
-      execFile('/bin/sh', ['-c', archiveScript(driver), 'sh', '/tmp/state.tgz'], { cwd: home }, archiveError => {
-        if (archiveError) return done && done(archiveError);
+      let directory;
+      try {
+        // Other processes share /tmp; neither the archive nor its .part file may use a predictable path.
+        directory = fs.mkdtempSync(require('node:path').join(env.TMPDIR || require('node:os').tmpdir(), 'agenthub-state-'));
+      } catch (error) { return done && done(error); }
+      const file = require('node:path').join(directory, 'state.tgz');
+      const finish = error => {
+        try { fs.rmSync(directory, { recursive: true, force: true }); }
+        catch { console.warn('[agent] Archive scratch cleanup failed.'); }
+        if (done) done(error);
+      };
+      execFile('/bin/sh', ['-c', archiveScript(driver), 'sh', file], { cwd: home }, archiveError => {
+        if (archiveError) return finish(archiveError);
         const upload = () => {
           const pending = signInPrivacy.flush();
           if (pending) { void pending.then(upload); return; }
           // An authorization screen can appear while tar runs. Never upload that snapshot,
           // even if the person already finished or cancelled the flow before tar exited.
           if (signInPrivacy.active() || revision !== signInPrivacy.revision()) {
-            try { fs.unlinkSync('/tmp/state.tgz'); } catch {}
             setStateWithheld(true);
-            return done && done(new Error('sign-in state changed'));
+            return finish(new Error('sign-in state changed'));
           }
-          execFile('curl', uploadArgs('/tmp/state.tgz', statePut, insecureStorage), error => {
+          execFile('curl', uploadArgs(file, statePut, insecureStorage), error => {
             if (!error) { uploadedStateSignature = signature; stateTicksSinceUpload = 0; setStateWithheld(false); }
-            if (done) done(error);
+            finish(error);
           });
         };
         upload();

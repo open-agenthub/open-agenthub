@@ -1,4 +1,5 @@
 using System.Formats.Tar;
+using System.Text.Json;
 using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Json;
@@ -15,7 +16,7 @@ public static class HistoricalLogins
 {
     public static async Task RunAsync(string root, HttpClient http, S3ArtifactStore storage,
         PostgresSessionStore registry, PostgresSessionExpiryLock locks, Kubernetes cluster,
-        string ns, string owner, string prefix)
+        string ns, string owner, string prefix, bool temporary = false)
     {
         var paths = new Dictionary<AgentKind, string[]> {
             [AgentKind.Claude] = [".claude/.credentials.json"],
@@ -24,13 +25,19 @@ public static class HistoricalLogins
             [AgentKind.OpenCode] = [".opencode/auth.json", ".opencode/mcp-auth.json"],
             [AgentKind.OpenClaw] = [".openclaw/auth-profiles.json", ".openclaw/agents/main/agent/auth-profiles.json", ".openclaw/agents/other/agent/openclaw-agent.sqlite", ".openclaw/agents/other/agent/openclaw-agent.sqlite-wal", ".openclaw/agents/other/agent/openclaw-agent.sqlite-shm"]
         };
+        if (temporary)
+        {
+            var fixtures = JsonSerializer.Deserialize<TemporaryFixture[]>(await File.ReadAllTextAsync(Path.Join(root, "results.json")))!;
+            paths = fixtures.ToDictionary(f => Enum.Parse<AgentKind>(f.agent, true), f => new[] { f.temporary });
+            Check(paths.Count == 5, "five temporary credential fixtures");
+        }
         var originals = new Dictionary<AgentKind, byte[]>();
         string Key(AgentKind agent) => IArtifactStore.StateKey(KubernetesSessionService.OwnerKey(owner), "proof-316", agent);
         async Task<byte[]> Read(AgentKind agent) { await using var input = await storage.OpenReadAsync(Key(agent)) ?? throw new Exception("Missing archive"); using var output = new MemoryStream(); await input.CopyToAsync(output); return output.ToArray(); }
         async Task Put(AgentKind agent, byte[] bytes) => Check(await storage.TryPutStreamAsync(Key(agent), new MemoryStream(bytes), "application/gzip"), "storage configured");
         foreach (var agent in paths.Keys)
         {
-            var input = agent == AgentKind.Claude ? Path.Join(root, "old.tgz") : Path.Join(root, agent.ToString().ToLowerInvariant(), "old.tgz");
+            var input = temporary ? Path.Join(root, agent.ToString().ToLowerInvariant() + "-legacy.tgz") : agent == AgentKind.Claude ? Path.Join(root, "old.tgz") : Path.Join(root, agent.ToString().ToLowerInvariant(), "old.tgz");
             originals[agent] = await File.ReadAllBytesAsync(input);
             await Put(agent, originals[agent]);
             await File.WriteAllBytesAsync(Path.Join(root, agent + "-before.tgz"), originals[agent]);
@@ -82,6 +89,8 @@ public static class HistoricalLogins
         Check(await storage.GetTextAsync(prefix + "unrelated.txt") == "unrelated-kept", "unrelated object preserved");
         Console.WriteLine("PASS provider-login endpoint authorization/preview/guards/rewrites/idempotence/malformed preservation");
     }
+
+    private record TemporaryFixture(string agent, string temporary);
 
     private static bool Same(byte[] a, byte[] b) => a.AsSpan().SequenceEqual(b);
     private static void Check(bool value, string message) { if (!value) throw new Exception(message); }

@@ -143,6 +143,12 @@ try
         await HistoricalLogins.RunAsync(root, http, storage, registry, locks, cluster, ns, owner, prefix);
         Check(Same(original, await Read(foreignKey)) && Same(original, await Read(rawOwnerKey)), "provider cleanup owner isolation");
     }
+    var temporaryIndex = Array.IndexOf(args, "--credential-temps");
+    if (temporaryIndex >= 0)
+    {
+        await HistoricalLogins.RunAsync(args[temporaryIndex + 1], http, storage, registry, locks, cluster, ns, owner, prefix, temporary: true);
+        Check(Same(original, await Read(foreignKey)) && Same(original, await Read(rawOwnerKey)), "temporary cleanup owner isolation");
+    }
     Console.WriteLine("PASS real S3 + real admin HTTP: authorization, preview, rewrite, owner isolation, idempotence, malformed archive and real producer/lock guards");
     foreach (var item in after) Console.WriteLine($"SHA256 {item.Key} {item.Value}");
 }

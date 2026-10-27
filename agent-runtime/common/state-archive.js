@@ -16,7 +16,14 @@ function stateExcludes(driver) {
   if (Array.isArray(driver.stateExcludes)) {
     for (const entry of driver.stateExcludes) excludes.push(entry);
   }
-  return excludes;
+  // Atomic credential updates stage a sibling file before rename. Copies of excluded
+  // files must stay excluded too, including wildcard paths for nested agent stores.
+  const temporary = excludes.map(entry => {
+    const file = entry.replace(/\/+$/, '');
+    const slash = file.lastIndexOf('/');
+    return file.slice(0, slash + 1) + '.' + file.slice(slash + 1) + '.*.tmp';
+  });
+  return [...new Set([...excludes, ...temporary])];
 }
 
 // A digest over the name, type, size, mtime and ctime of everything the archive would contain,

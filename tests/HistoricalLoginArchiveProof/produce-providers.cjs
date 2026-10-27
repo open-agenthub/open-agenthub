@@ -31,7 +31,7 @@ server.listen(0, '127.0.0.1', () => {
   // Released non-Claude drivers exclude these files. Disable exclusions only to test defensive cleanup of foreign/legacy uploads.
   const source = `const {createCommonServer}=require(${JSON.stringify(path.join(repo, 'agent-runtime/common/server.js'))});
 const driver={...require(${JSON.stringify(path.join(repo, 'agent-runtime/claude/driver.js'))}),name:'Fixture',stateDir:${JSON.stringify(stateDir)},authFilename:'unused-fixture-auth',stateExcludes:[],prepare(){},findTranscript(){return null},buildCommand(){return {cmd:'bash',args:['-c','sleep 600']}}};
-createCommonServer({driver});console.log('PROOF_READY');`;
+createCommonServer({driver,dependencies:require(${JSON.stringify(path.join(repo, 'tests/ClaudeStateCleanupProof/isolated-archive.cjs'))}).dependencies(${JSON.stringify(root)})});console.log('PROOF_READY');`;
   const child = spawn(process.execPath, ['-e', source], { env: { ...baseEnv, HOME: home,
     NODE_PATH: process.env.NODE_PATH || '/opt/session-agent/node_modules', AGENTHUB_PORT: '0', AGENTHUB_WORKDIR: home,
     AGENTHUB_WORKSPACE_ROOT: home, AGENTHUB_FILE_ROOT: path.join(root, 'files'), AGENTHUB_SKILLS_SYNC_SECONDS: '0',

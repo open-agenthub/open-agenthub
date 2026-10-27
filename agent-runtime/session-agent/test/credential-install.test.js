@@ -84,3 +84,29 @@ test('looksLikeJsonObject accepts only a bounded JSON object', () => {
   assert.equal(install.looksLikeJsonObject(Buffer.alloc(0)), false);
   assert.equal(install.looksLikeJsonObject(Buffer.alloc(install.MAX_CREDENTIAL_BYTES + 1, 0x20)), false);
 });
+
+for (const nested of [false, true]) {
+  test('held atomic credential temporary file stays out of real tar and signature (nested=' + nested + ')', t => {
+    const { execFileSync } = require('node:child_process');
+    const zlib = require('node:zlib');
+    const { archiveScript, signatureScript } = require('../../common/state-archive');
+    const home = tempDir(); t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+    const relative = nested ? '.provider/agents/main/agent/auth.json' : '.provider/auth.json';
+    const target = path.join(home, relative);
+    const archive = path.join(home, 'state.tgz');
+    const driver = { stateDir: '.provider', authFilename: 'auth.json', stateExcludes: nested ? [relative] : [] };
+    const body = Buffer.from('{"token":"synthetic-held-credential-only"}');
+    const paused = Object.create(fs);
+    paused.renameSync = (from, to) => {
+      assert.equal(fs.readFileSync(from).toString(), body.toString());
+      execFileSync('/bin/sh', ['-c', archiveScript(driver), 'sh', archive], { cwd: home });
+      const raw = zlib.gunzipSync(fs.readFileSync(archive));
+      assert.equal(raw.includes(body), false);
+      const signature = () => execFileSync('/bin/sh', ['-c', signatureScript(driver)], { cwd: home, encoding: 'utf8' });
+      const before = signature(); fs.writeFileSync(from, body); assert.equal(signature(), before);
+      fs.renameSync(from, to);
+    };
+    install.writeCredentialFile(target, body, paused);
+    assert.equal(fs.readFileSync(target).toString(), body.toString());
+  });
+}
