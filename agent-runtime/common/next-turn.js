@@ -191,7 +191,10 @@ function createNextTurnDelivery(options) {
 
   function idleReason(term, screenSize) {
     if (!term) return 'no_terminal';
-    if (state !== 'idle') return 'turn_' + state;
+    // A handover saved by an earlier run waits for the restarted CLI, which reports no turn until
+    // someone types: 'unknown' with quiet output is a CLI waiting at its prompt (#336).
+    const startAction = state === 'unknown' && actions.length > 0 && actions[0].atStart;
+    if (state !== 'idle' && !startAction) return 'turn_' + state;
     // Keys since the last submitted prompt may be a draft in the prompt box — typed during the
     // turn as well as after it — and a message typed now would be appended to it and sent.
     if (lastPersonInput > 0 && lastPersonInput >= lastPrompt) return 'person_typed';
@@ -253,7 +256,7 @@ function createNextTurnDelivery(options) {
     busyTaking = new Promise(resolve => { release = resolve; });
     try {
       if (actions.length) {
-        const action = actions.shift();
+        const { action } = actions.shift();
         state = 'busy';
         typing = Promise.resolve().then(action).then(result => { if (result === false) state = 'idle'; });
         await typing;
@@ -321,11 +324,31 @@ function createNextTurnDelivery(options) {
     }
   }
 
+  /**
+   * Types a context handover into the fresh conversation (#336). A retry after an attempt whose
+   * text is still on the screen only presses Enter: pasting again would put it into the prompt
+   * box twice. Resolves true once the CLI reported the prompt as submitted.
+   */
+  async function typeHandover(term, text, scrollback, screenSize, { retry = false } = {}) {
+    const tail = shownTail(text);
+    if (retry) {
+      const screen = (await renderScreen(scrollback(), screenSize, Terminal())).join('\n');
+      if ((tail && screen.includes(tail)) || PASTE_PLACEHOLDER.test(screen)) {
+        typedSubmitted = false;
+        term.write('\r');
+        for (let poll = 0; poll < SUBMIT_CONFIRM_MS / POLL_MS && !typedSubmitted; poll++) await wait(POLL_MS);
+        return typedSubmitted;
+      }
+    }
+    typedSubmitted = false;
+    return typeAndSubmit(term, text, scrollback, screenSize);
+  }
+
   return {
     /** A plain message the hub will hear "next-turn" for. */
     accept() { pending = true; },
     turnEvent,
-    scheduleAtSafePoint(action) { actions.push(action); },
+    scheduleAtSafePoint(action, { atStart = false } = {}) { actions.push({ action, atStart }); },
     async waitForInputReady(term, scrollback, screenSize, isReady = () => true) {
       const deadline = now() + 15_000;
       while (now() < deadline) {
@@ -339,6 +362,7 @@ function createNextTurnDelivery(options) {
     },
     deliverIfIdle,
     typeMessage,
+    typeHandover,
     agentStarted() {
       state = 'unknown';
       chained = 0;
