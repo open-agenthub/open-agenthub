@@ -113,12 +113,15 @@ const transcriptItems = computed(() => toTranscriptItems(conversation.value))
 // output: it has no idle prompt to invite a task at, so its empty conversation only means early.
 // "Connected" alone is not "up": the hub accepts the terminal socket before it dials the pod, so
 // while the agent's server is not listening yet the socket opens, closes and reopens every two
-// seconds. The agent answers the activity subscription at once with a known state, and every
-// close resets it to 'unknown', so a known state is what says the agent is there.
+// seconds. The agent answers the activity subscription at once, and every close resets the state
+// to 'unknown'. Its `ready` says the CLI runs and takes input; a hook-driven state stays
+// 'unknown' until the CLI's first hook, which an idle Claude never fires before someone types
+// (#306). A runtime without `ready` is up once its state is known.
 const conversationStarting = computed(() => {
   if (!isLive.value || transcriptItems.value.length) return ''
   if (props.session?.phase === 'Pending') return 'Waiting for the session’s pod to start…'
-  if (statuses.agent !== 'connected' || agentActivity.value.state === 'unknown') return 'Starting the agent…'
+  const agentUp = agentActivity.value.ready ?? agentActivity.value.state !== 'unknown'
+  if (statuses.agent !== 'connected' || !agentUp) return 'Starting the agent…'
   return String(props.session?.mode).toLowerCase() === 'interactive' ? '' : 'The agent is starting its task…'
 })
 // Composer messages that reached the terminal and that the CLI has not taken yet (#153), kept

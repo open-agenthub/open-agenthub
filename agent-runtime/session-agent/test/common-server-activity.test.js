@@ -71,12 +71,12 @@ test('verified provider interruption keys clear presentation only, also in a per
   // Claude Code 2.1.287 ends the turn on Escape in either dialog without running a hook (#252);
   // kept waiting, the Workspace asked for an approval at an idle prompt.
   await turn(h, 'permission');
-  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', reason: 'approval' });
+  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', ready: true, reason: 'approval' });
   socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
   assert.equal(frames(socket).at(-1).state, 'idle');
   await turn(h, 'prompt');
   await turn(h, 'question');
-  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', reason: 'answer' });
+  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', ready: true, reason: 'answer' });
   socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
   assert.equal(frames(socket).at(-1).state, 'idle');
 });
@@ -88,7 +88,7 @@ test('a question waits for an answer, and the answer resumes the turn', async ()
   await turn(h, 'question');
   assert.equal(frames(socket).at(-1).reason, 'answer');
   socket.emit('message', JSON.stringify({ type: 'input', data: '\r' }));
-  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'working', source: 'hooks' });
+  assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'working', source: 'hooks', ready: true });
 });
 
 test('a prompt clears the previous hub question before the native hook returns', async () => {
@@ -113,4 +113,15 @@ test('persistence control status is replayed only to subscribed viewers', () => 
   const status = socket => socket.sent.map(data => { try { return JSON.parse(data); } catch { return null; } }).filter(frame => frame?.subtype === 'persistence');
   assert.deepEqual(status(legacy), []);
   assert.deepEqual(status(viewer), [{ type: 'agenthub', subtype: 'persistence', withheld: false }]);
+});
+
+// An idle Claude fires no hook before someone types, so its state stays 'unknown' while the CLI
+// already reads input; `ready` is what the Workspace ends its starting state on (#306).
+test('the activity answer says the CLI is running before its first hook, and not once it is gone', () => {
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token' }, { turnHooks: true });
+  const viewer = new FakeSocket(); h.runtime.webSocketServer.connect(viewer, '/'); subscribe(viewer);
+  assert.deepEqual(frames(viewer).at(-1), { type: 'agenthub', subtype: 'activity', state: 'unknown', source: 'hooks', ready: true });
+  h.terminals[0].emitExit({ exitCode: 0 });
+  h.intervals.find(i => i.ms === 500).callback();
+  assert.equal(frames(viewer).at(-1).ready, false);
 });

@@ -347,7 +347,14 @@ function createCommonServer(options = {}) {
       else state = activityLastOutput > 0 && now() - activityLastOutput < IDLE_QUIET_MS ? 'working' : 'idle';
     }
     if (state === 'waiting') reason = activityWaitingFor;
-    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ...(reason ? { reason } : {}) });
+    // Whether the CLI runs and takes input, apart from what its turn is doing. A hook-driven
+    // state stays 'unknown' until the CLI's first hook, which an idle TUI never fires before a
+    // person types; the Workspace waited for that and showed "Session starting" over a CLI that
+    // was already reading keys (#306). Input sent the moment the PTY exists reaches the CLI's
+    // prompt even before it has drawn anything (docs/session-starting.md), so a spawned, not yet
+    // exited process is ready.
+    const ready = Boolean(term) && !exited && restartReason === null && !runtimeDraining;
+    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ready, ...(reason ? { reason } : {}) });
   }
   function removeActivityClient(socket) {
     activityClients.delete(socket);
@@ -1124,6 +1131,8 @@ function createCommonServer(options = {}) {
     });
 
     term.onExit(({ exitCode, signal }) => handleAgentExit(exitCode, signal));
+    // Subscribers otherwise learn of the new process on the next 500 ms tick.
+    publishActivity();
   }
 
   function attachmentDelivery() {

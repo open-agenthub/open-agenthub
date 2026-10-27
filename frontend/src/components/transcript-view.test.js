@@ -358,6 +358,28 @@ describe('a session that is starting', () => {
     expect(wrapper.text()).toContain('Your agent’s workspace')
   })
 
+  // Claude's state stays 'unknown' until its first hook, which an idle TUI never fires before
+  // someone types; the agent's `ready` is what says it takes input (#306).
+  it('invites a task once a hook-driven agent says it is ready, before any hook', async () => {
+    const wrapper = mountView({ session: { ...session, phase: 'Running' } })
+    await flushPromises()
+    const pane = wrapper.findComponent({ name: 'TerminalPane' })
+    pane.vm.$emit('status', 'connected')
+    pane.vm.$emit('activity', { state: 'unknown', source: 'hooks', ready: false })
+    await flushPromises()
+    expect(starting(wrapper).text()).toContain('Starting the agent…')
+
+    pane.vm.$emit('activity', { state: 'unknown', source: 'hooks', ready: true })
+    await flushPromises()
+    expect(starting(wrapper).exists()).toBe(false)
+    expect(wrapper.text()).toContain('Your agent’s workspace')
+
+    // A closed socket resets the activity without `ready`: starting again until the agent answers.
+    pane.vm.$emit('activity', { state: 'unknown', source: 'hooks' })
+    await flushPromises()
+    expect(starting(wrapper).text()).toContain('Starting the agent…')
+  })
+
   it('keeps a real load error for a finished session', async () => {
     mocks.api.getConversation.mockRejectedValue(new Error('503'))
     const wrapper = mountView()
