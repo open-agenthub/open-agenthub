@@ -164,6 +164,8 @@ function sanitize(rows) {
     try { process.kill(-agent.pid, 'SIGTERM'); } catch {}
     await new Promise(r => setTimeout(r, 1500));
     try { process.kill(-agent.pid, 'SIGKILL'); } catch {}
+    // The entrypoint starts the auth watcher in the background; it was seen to outlive the group.
+    try { process.kill(Number(fs.readFileSync(path.join(ROOT, 'tmp/agenthub-auth-watcher.pid'), 'utf8')), 'SIGKILL'); } catch {}
     hub.close(); model.close();
     fs.rmSync(ROOT, { recursive: true, force: true });
   };
