@@ -9,7 +9,6 @@ import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import AgentDecisionCard from './AgentDecisionCard.vue'
 import AutoDeleteCard from './AutoDeleteCard.vue'
 import GitPatPicker from './GitPatPicker.vue'
-import SecretPicker from './SecretPicker.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
 import SecretConflictNote from './SecretConflictNote.vue'
 import { secretIdsChange, secretOptions, secretSelectionFor, chosenSecrets, secretConflicts } from '../lib/secrets.js'
@@ -118,10 +117,9 @@ async function submit() {
     <div class="card sect">
       <div class="field"><label>Title</label><input v-model="title" /></div>
       <div class="field"><label>Project</label><select v-model="projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
-      <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
-        :project-has-none="!!selectedProject && storedSecrets.length > 0" />
-        <SecretGrantsPicker v-model="selectedGrants" :options="storedSecrets" />
-        <SecretConflictNote :secrets="chosen" />
+      <SecretGrantsPicker v-model="selectedGrants" v-model:selected="selectedSecrets" :selectable="secrets.map(s => s.id)"
+        :in-project="!!selectedProject" :options="storedSecrets" />
+      <SecretConflictNote :secrets="chosen" />
       <SystemPromptField v-model="systemPrompt" />
       <label class="check"><input v-model="includeMcp" type="checkbox" /> <span>Include MCP configuration <span class="dim">— inline JSON config</span></span></label>
       <div v-if="savedMcpServers.length" class="field mcp-field" data-mcp-picker>

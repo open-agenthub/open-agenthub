@@ -150,53 +150,101 @@ describe('Settings → Secrets', () => {
 
 describe('secret selection in the session dialogs', () => {
   const projects = [{ id: 'p1', name: 'Ops', secretIds: ['s1'] }, { id: 'p2', name: 'Empty', secretIds: [] }]
+  // One control per secret since #329: the selection and the grants used to have one each.
+  const pick = (wrapper, id, level) => wrapper.get(`[data-secret-grant="${id}"] [data-grant-level="${level}"]`).trigger('click')
+  const level = (wrapper, id) => wrapper.get(`[data-secret-grant="${id}"] [aria-checked="true"]`).attributes('data-grant-level')
 
-  it('outside a project nothing is ticked and nothing is sent', async () => {
+  it('outside a project nothing is allowed and nothing is sent', async () => {
     const wrapper = mount(NewSessionDialog, { props: { projects }, ...mountOptions })
     await flushPromises()
-    expect(wrapper.findAll('[data-secret-option]')).toHaveLength(2)
-    expect(wrapper.findAll('[data-secret-option]').some(box => box.element.checked)).toBe(false)
+    expect(wrapper.findAll('[data-secret-grant]')).toHaveLength(2)
+    expect(wrapper.find('[data-secret-option]').exists()).toBe(false)
+    expect([level(wrapper, 's1'), level(wrapper, 's2')]).toEqual(['none', 'none'])
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
     expect(mocks.api.createSession.mock.calls[0][0].secretIds).toBeNull()
+    expect(mocks.api.createSession.mock.calls[0][0].secretGrants).toEqual([])
   })
 
-  it('two ticked secrets landing in the same place are shown and block Start (#253)', async () => {
+  it('outside a project "Also child sessions" selects, "This session" grants', async () => {
+    const wrapper = mount(NewSessionDialog, { props: { projects }, ...mountOptions })
+    await flushPromises()
+    await pick(wrapper, 's1', 'children')
+    await pick(wrapper, 's2', 'session')
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.createSession.mock.calls[0][0].secretIds).toEqual(['s1'])
+    expect(mocks.api.createSession.mock.calls[0][0].secretGrants).toEqual([{ secretId: 's2', inheritToChildren: false }])
+  })
+
+  it('two secrets landing in the same place are shown and block Start (#253)', async () => {
     mocks.api.listSecrets.mockResolvedValue([...stored, { id: 's9', name: 'DEPLOY_TOKEN', delivery: 'env', description: 'staging' }])
     const wrapper = mount(NewSessionDialog, { props: { projects }, ...mountOptions })
     await flushPromises()
-    await wrapper.get('[data-secret-option="s1"]').setValue(true)
+    await pick(wrapper, 's1', 'children')
     expect(wrapper.find('[data-secret-conflict]').exists()).toBe(false)
-    // A grant counts like a ticked selection: the session would hold both.
-    await wrapper.get('[data-secret-grant="s9"] [data-grant-level="session"]').trigger('click')
+    await pick(wrapper, 's9', 'session')
     expect(wrapper.get('[data-secret-conflict]').text()).toContain('2 secrets as $DEPLOY_TOKEN: CI deploy (s1), staging (s9)')
     expect(wrapper.get('[data-submit]').attributes('disabled')).toBeDefined()
-    await wrapper.get('[data-secret-option="s1"]').setValue(false)
+    await pick(wrapper, 's1', 'none')
     expect(wrapper.find('[data-secret-conflict]').exists()).toBe(false)
     expect(wrapper.get('[data-submit]').attributes('disabled')).toBeUndefined()
   })
 
-  it('in a project the project selection is ticked and followed; unticking narrows', async () => {
+  it('in a project its selection starts at child sessions and is followed; lowering one narrows', async () => {
     const wrapper = mount(NewSessionDialog, { props: { projects }, ...mountOptions })
     await flushPromises()
-    await wrapper.find('select[class]').exists()
     const projectSelect = wrapper.findAll('select').find(select => select.html().includes('No project'))
     await projectSelect.setValue('p1')
     await flushPromises()
-    expect(wrapper.findAll('[data-secret-option]').map(box => box.attributes('data-secret-option'))).toEqual(['s1'])
-    expect(wrapper.get('[data-secret-option="s1"]').element.checked).toBe(true)
+    expect([level(wrapper, 's1'), level(wrapper, 's2')]).toEqual(['children', 'none'])
+    expect(wrapper.get('[data-secret-provenance="s1"]').text()).toBe('project')
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
     expect(mocks.api.createSession.mock.calls[0][0].secretIds).toBeNull()
 
-    await wrapper.get('[data-secret-option="s1"]').setValue(false)
+    // "This session": out of the selection, which would pass it on, and granted instead.
+    await pick(wrapper, 's1', 'session')
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
     expect(mocks.api.createSession.mock.calls[1][0].secretIds).toEqual([])
+    expect(mocks.api.createSession.mock.calls[1][0].secretGrants).toEqual([{ secretId: 's1', inheritToChildren: false }])
+
+    // Back to child sessions: the grant inherits; the selection stays as it is.
+    await pick(wrapper, 's1', 'children')
+    await pick(wrapper, 's1', 'none')
+    await pick(wrapper, 's1', 'children')
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.createSession.mock.calls[2][0].secretIds).toBeNull()
+    expect(mocks.api.createSession.mock.calls[2][0].secretGrants).toEqual([])
 
     await projectSelect.setValue('p2')
     await flushPromises()
-    expect(wrapper.find('[data-secret-none]').exists()).toBe(true)
+    expect(wrapper.get('[data-secret-hint]').text()).toContain('the session follows the project')
+  })
+
+  // A per-secret exception to "follow the project" has no stored form, so the switch to an explicit
+  // list is said where it happens, and undone the same way.
+  it('says when a session stops following its project, and follows it again when set back', async () => {
+    const twoProjects = [{ id: 'p3', name: 'Both', secretIds: ['s1', 's2'] }]
+    const session = { id: 'x', title: 'X', mode: 'Interactive', agent: 'Claude', authMode: 'Subscription',
+      policy: { allowedTools: [], allowedMcpTools: [], allowedCommands: [] }, repos: [], projectId: 'p3', secretIds: null }
+    const wrapper = mount(EditSessionDialog, { props: { session, projects: twoProjects }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.find('[data-secret-follow-note]').exists()).toBe(false)
+    await pick(wrapper, 's2', 'session')
+    expect(wrapper.get('[data-secret-follow-note]').text()).toContain('secrets the project selects later do not reach it')
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.updateSession.mock.calls[0][1].secretIds).toEqual(['s1'])
+
+    await pick(wrapper, 's2', 'none')
+    await pick(wrapper, 's2', 'children')
+    expect(wrapper.find('[data-secret-follow-note]').exists()).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.updateSession.mock.calls[1][1]).not.toHaveProperty('secretIds')
   })
 
   it('an edit sends the wildcard to follow the project again, and nothing when untouched', async () => {
@@ -204,24 +252,27 @@ describe('secret selection in the session dialogs', () => {
       policy: { allowedTools: [], allowedMcpTools: [], allowedCommands: [] }, repos: [], projectId: 'p1', secretIds: [] }
     const wrapper = mount(EditSessionDialog, { props: { session, projects }, ...mountOptions })
     await flushPromises()
-    expect(wrapper.get('[data-secret-option="s1"]').element.checked).toBe(false)
+    expect(level(wrapper, 's1')).toBe('none')
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
     expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('secretIds')
+    expect(mocks.api.updateSession.mock.calls[0][1]).not.toHaveProperty('secretGrants')
 
-    await wrapper.get('[data-secret-option="s1"]').setValue(true)
+    await pick(wrapper, 's1', 'children')
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
     expect(mocks.api.updateSession.mock.calls[1][1].secretIds).toEqual(['*'])
+    expect(mocks.api.updateSession.mock.calls[1][1]).not.toHaveProperty('secretGrants')
   })
 })
 
 describe('a project selects secrets', () => {
-  it('saves the ticked ids, leaving out one removed in the meantime', async () => {
+  it('saves the allowed ids with the session control, leaving out one removed in the meantime', async () => {
     const wrapper = mount(ProjectSecretsDialog, { props: { project: { id: 'p1', name: 'Ops', secretIds: ['s1', 'gone'] } } })
     await flushPromises()
-    expect(wrapper.get('[data-project-secret="s1"]').element.checked).toBe(true)
-    await wrapper.get('[data-project-secret="s2"]').setValue(true)
+    expect(wrapper.get('[data-project-secret="s1"] [aria-checked="true"]').attributes('data-grant-level')).toBe('project')
+    expect(wrapper.find('input[type="checkbox"]').exists()).toBe(false)
+    await wrapper.get('[data-project-secret="s2"] [data-grant-level="project"]').trigger('click')
     await wrapper.get('[data-project-secrets-save]').trigger('click')
     await flushPromises()
     expect(mocks.api.updateProject).toHaveBeenCalledWith('p1', { secretIds: ['s1', 's2'] })
@@ -232,7 +283,7 @@ describe('a project selects secrets', () => {
     mocks.api.listSecrets.mockResolvedValue([...stored, { id: 's8', name: 'sa.json', delivery: 'file', description: 'old key' }])
     const wrapper = mount(ProjectSecretsDialog, { props: { project: { id: 'p1', name: 'Ops', secretIds: ['s2'] } } })
     await flushPromises()
-    await wrapper.get('[data-project-secret="s8"]').setValue(true)
+    await wrapper.get('[data-project-secret="s8"] [data-grant-level="project"]').trigger('click')
     expect(wrapper.get('[data-secret-conflict]').text()).toContain('Every session in this project would receive 2 secrets as ~/.secrets/sa.json')
     expect(wrapper.get('[data-project-secrets-save]').attributes('disabled')).toBeDefined()
   })

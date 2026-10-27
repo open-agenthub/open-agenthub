@@ -14,6 +14,7 @@ import FilesPane from './FilesPane.vue'
 import WorkspaceDiffPane from './workspace/WorkspaceDiffPane.vue'
 import SessionStartupFailure from './SessionStartupFailure.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
+import { secretIdsChange, secretOptions, secretSelectionFor } from '../lib/secrets.js'
 import SecretRestartNote from './SecretRestartNote.vue'
 import GitSignInNote from './GitSignInNote.vue'
 
@@ -25,31 +26,56 @@ const props = defineProps({
 })
 const emit = defineEmits(['updated'])
 
-// The owner changes grants here as in the edit dialog, and each choice is saved at once: a grant
-// reaches the running pod (files live), so a separate Save step would only be a second chance to
-// forget it. Scheduled sessions refuse grant changes, so they stay read-only.
+// The owner changes what the session gets here as in the edit dialog, and each choice is saved at
+// once: a grant reaches the running pod (files live), so a separate Save step would only be a
+// second chance to forget it. The selection needs the project's, so the control waits for it.
 const storedSecrets = ref([])
+const projects = ref(null)
 const grants = ref([])
+const selected = ref([])
 const grantError = ref('')
 const grantsEditable = computed(() => props.canManage && !props.sharedToken)
+const inProject = computed(() => !!props.session.projectId)
+const selectable = computed(() => secretOptions(storedSecrets.value,
+  inProject.value ? (projects.value || []).find(p => p.id === props.session.projectId) || { secretIds: [] } : null))
+const accessReady = computed(() => projects.value !== null)
 watch(() => JSON.stringify(props.session.secretGrants || []), () => {
   grants.value = (props.session.secretGrants || []).map(g => ({ ...g }))
 }, { immediate: true })
-async function saveGrants(next) {
-  const previous = grants.value
-  grants.value = next
+watch([selectable, () => JSON.stringify(props.session.secretIds ?? null)], () => {
+  selected.value = secretSelectionFor(props.session.secretIds, selectable.value, inProject.value)
+}, { immediate: true })
+// What the hub has, as of the last save here: the session prop catches up only with the next
+// refresh, and a second choice compared against it would leave out what the first one changed.
+const saved = ref({ secretIds: null, grants: [] })
+watch(() => JSON.stringify([props.session.secretIds ?? null, props.session.secretGrants || []]), () => {
+  saved.value = { secretIds: props.session.secretIds ?? null, grants: props.session.secretGrants || [] }
+}, { immediate: true })
+async function saveAccess(next) {
+  const previous = { grants: grants.value, selected: selected.value }
+  const payload = secretIdsChange(next.selected, selectable.value, inProject.value, saved.value.secretIds)
+  if (JSON.stringify(next.grants) !== JSON.stringify(saved.value.grants)) payload.secretGrants = next.grants
+  grants.value = next.grants
+  selected.value = next.selected
   grantError.value = ''
+  if (!Object.keys(payload).length) return
   try {
-    await api.updateSession(props.session.id, { secretGrants: next })
+    await api.updateSession(props.session.id, payload)
+    saved.value = {
+      secretIds: !payload.secretIds ? saved.value.secretIds : payload.secretIds[0] === '*' ? null : payload.secretIds,
+      grants: next.grants
+    }
     emit('updated')
   } catch (e) {
-    grants.value = previous
+    grants.value = previous.grants
+    selected.value = previous.selected
     grantError.value = String(e.message || e)
   }
 }
 onMounted(async () => {
   if (!grantsEditable.value) return
   try { storedSecrets.value = (await api.listSecrets()) || [] } catch { /* older backend: no secrets */ }
+  try { projects.value = (await api.listProjects()) || [] } catch { projects.value = [] }
 })
 const splitPercent = ref(50)
 const mobilePane = ref((props.session?.browser?.phase || 'Stopped') !== 'Stopped' ? 'browser' : 'agent')
@@ -270,8 +296,8 @@ onBeforeUnmount(() => {
   <details v-if="!sharedToken && (session.effectiveSecrets?.length || (grantsEditable && storedSecrets.length))" class="session-secret-access" data-session-secrets>
     <summary>Secrets ({{ session.effectiveSecrets?.length || 0 }})</summary>
     <template v-if="grantsEditable">
-      <SecretGrantsPicker :model-value="grants" :options="storedSecrets" :effective="session.effectiveSecrets || []"
-        @update:model-value="saveGrants" />
+      <SecretGrantsPicker v-if="accessReady" :model-value="grants" :selected="selected" :selectable="selectable.map(s => s.id)"
+        :in-project="inProject" :options="storedSecrets" :effective="session.effectiveSecrets || []" @change="saveAccess" />
       <small v-if="session.mode === 'Scheduled'" data-scheduled-grants-note>Grant changes apply from the next scheduled run; a run in progress keeps its variables.</small>
       <small v-if="grantError" class="grant-error" role="alert" data-grant-error>{{ grantError }}</small>
     </template>

@@ -9,7 +9,6 @@ import {
 import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
-import SecretPicker from './SecretPicker.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
 import SecretConflictNote from './SecretConflictNote.vue'
 import { secretIdsPayload, secretOptions, secretSelectionFor, chosenSecrets, secretConflicts } from '../lib/secrets.js'
@@ -233,9 +232,8 @@ async function submit() {
           <input id="new-project-name" v-model="newProjectName" maxlength="80" :disabled="busy" />
           <small class="hint">No project secrets are selected initially. You can configure them in Projects.</small>
         </div>
-        <SecretPicker v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
-          :project-has-none="!!selectedProject && storedSecrets.length > 0" />
-        <SecretGrantsPicker v-model="selectedGrants" :options="storedSecrets" />
+        <SecretGrantsPicker v-model="selectedGrants" v-model:selected="selectedSecrets" :selectable="secrets.map(s => s.id)"
+          :in-project="!!selectedProject" :options="storedSecrets" />
         <SecretConflictNote :secrets="chosen" />
       </div>
 

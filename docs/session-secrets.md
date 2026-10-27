@@ -309,8 +309,9 @@ the kubelet, copying the session's secret into the directory.
   session selected.
 - **The project selection is a dialog on the project in the sidebar** (the key button next to
   rename and color), the same place every other project setting is changed. The session dialogs
-  show the picker under the project field, because what they offer depends on it: the project's
-  selection inside a project, every stored secret outside one, and the hint says which applies.
+  show their secret control under the project field, because what it starts from depends on it:
+  the project's selection inside a project, nothing outside one, and the hint says which applies.
+  Both use the one control described in "One control for a secret" below.
 - **The token scope editor** lists secrets like git tokens. A token that ticks none is stored
   without a `secrets` part, exactly like a token restricted before secrets existed.
 - **The share dialog says** that anyone with terminal input can read the session's secrets: the
@@ -427,12 +428,62 @@ inherited grants computed by the service. A client cannot supply provenance or a
 
 `secrets_list` reports `provenance` (`project`, `granted`, `inherited`, `requested`) and
 `inheritToChildren` without values. The session view shows the same origin for effective secrets;
-the owner dialogs separately edit project selection and session grants. `project` labels the
+one control edits both (#329, below). `project` labels the
 ordinary selection path, including explicitly selected secrets outside a project. When a secret
 is both selected and granted, the grant origin is shown; removing that grant leaves the ordinary
 selection in effect. Grant changes refresh the session's copies through the existing delivery
 path. Files update live; environment variables require the next start. For a scheduled session
 the next start is the next run, and grants and the selection change like any other session's.
+
+### One control for a secret (#329)
+
+Until #329 every session dialog had two controls for one question: ticks for the selection
+(`secretIds`) and, below them, the three buttons of #233 for the grants. A secret could be ticked
+in one and "Not allowed" in the other, and the project dialog had ticks only. Now each secret
+has one segmented control, in the new, edit and duplicate dialogs, in the session view, and in
+the project dialog.
+
+In a session it has three levels and edits both stored fields. The mapping follows what the hub
+already does: a spawn passes the parent's selection on, and `secrets_list` reports
+`inheritToChildren` for a selected secret. A selected secret is therefore one that also reaches
+child sessions.
+
+| Shown | Stored |
+|---|---|
+| Not allowed | neither selected nor granted |
+| This session | a grant without inheritance, not selected |
+| Also child sessions | selected, or a grant with inheritance (or both) |
+
+| Chosen | Written |
+|---|---|
+| Not allowed | out of the selection, grant removed |
+| This session | out of the selection, a grant without inheritance (an existing grant keeps its origin) |
+| Also child sessions | an existing grant inherits; otherwise back into the selection where the selection can hold it (all of a project's secrets back in = follow the project again); otherwise a grant with inheritance |
+
+Every stored combination shows exactly one level. Choosing the level already shown changes
+nothing, so a dialog nobody touched sends neither field, as before (`lib/secrets.test.js`
+covers every combination). Nothing in the API or the database changed. The session view saves a
+choice as one request carrying whichever of the two fields changed.
+
+A session that follows its project and gets one of the project's secrets lowered stops following
+it. Its selection becomes an explicit list, and a secret the project adds later no longer reaches
+it. The control says so under the list while the selection is narrowed. Setting every project
+secret back to "Also child sessions" restores following. *Rejected: a per-secret exception that
+keeps following the project.* There is no stored form for it, and adding one would change what
+`secretIds` means for every client.
+
+In the project dialog the control has two levels, "Not allowed" and "Sessions in this project".
+A project's selection is all or nothing per secret, and it already passes to the child sessions
+started in the project. A "this session" level has no meaning there, so it is left out rather
+than shown disabled.
+
+- *Rejected: keep only the grant buttons and drop the selection from the dialogs.* A session in a
+  project would then have no way to narrow the project's selection.
+- *Rejected: "Also child sessions" always as an inheriting grant.* Raising a project secret back
+  from "Not allowed" would then turn a session that followed its project into an explicit list
+  plus a grant. It would stop following later project changes for a choice that looks like
+  undoing a click.
+- Verified in real Chromium against the real backend (`tests/SecretGrantControlProof`).
 
 ### Removing a secret fails closed (#303)
 

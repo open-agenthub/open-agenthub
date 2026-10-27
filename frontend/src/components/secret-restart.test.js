@@ -133,7 +133,7 @@ describe('the edit dialog', () => {
     expect(wrapper.find('[data-resources-restart]').exists()).toBe(false)
     await wrapper.get('[data-secret-grant="f1"] [data-grant-level="session"]').trigger('click')
     expect(wrapper.find('[data-resources-restart]').exists()).toBe(false)
-    await wrapper.get('[data-secret-option="e1"]').setValue(false)
+    await wrapper.get('[data-secret-grant="e1"] [data-grant-level="none"]').trigger('click')
     expect(wrapper.get('[data-resources-restart]').text()).toContain('apply the new secret variables')
     await wrapper.get('[data-submit]').trigger('click')
     await flushPromises()
