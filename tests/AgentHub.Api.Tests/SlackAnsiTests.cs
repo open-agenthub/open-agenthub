@@ -26,7 +26,7 @@ public class SlackAnsiTests
     public void RealClaudeStartup_PreservesRenderedCellGaps()
     {
         var fixture = System.Text.Json.JsonDocument.Parse(File.ReadAllText(
-            Path.Combine(AppContext.BaseDirectory, "Fixtures", "claude-startup.json"))).RootElement;
+            Path.Join(AppContext.BaseDirectory, "Fixtures", "claude-startup.json"))).RootElement;
         var text = AgentTerminal.CleanTranscript(fixture.GetProperty("output").GetString())!;
         var screen = fixture.GetProperty("screen").GetString()!;
         Assert.Contains("Claude Code v2.1.287", screen);
