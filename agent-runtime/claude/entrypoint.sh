@@ -33,6 +33,15 @@ process.stdout.write(crypto.createHash("sha256").update(fs.readFileSync(process.
   AUTH_EXPECT_CREATE=0
   echo "[entrypoint] Claude login restored from secret."
 fi
+# Nothing to authenticate with: no mounted login, no API key, no custom endpoint. The TUI would
+# start to "Not logged in · Run /login" and wait for someone to type it; Codex in the same state
+# opens its login by itself (codex/device-login.sh), and so does this. Decided here, from what
+# the pod was given, and never from the screen, so a session with any credential is never sent
+# into a login. Interactive only: an autonomous run has nobody to sign in.
+if [ "$CUSTOM_ENDPOINT" = "0" ] && [ "$AUTH_EXPECT_CREATE" = "1" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] \
+   && [ "${AGENTHUB_MODE:-interactive}" = "interactive" ]; then
+  export AGENTHUB_CLAUDE_SIGN_IN=1
+fi
 CLAUDE_WORKDIR="${AGENTHUB_WORKDIR:-/workspace}"
 [ -d "$CLAUDE_WORKDIR" ] || CLAUDE_WORKDIR="/workspace"
 node "$RUNTIME/claude/workspace-trust.mjs" "$HOME/.claude.json" "$CLAUDE_WORKDIR"

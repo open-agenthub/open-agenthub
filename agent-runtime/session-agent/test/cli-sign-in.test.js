@@ -14,7 +14,12 @@ const screens = {
  success: ['Login', 'Logged in as person@example.com', 'Login successful. Press Enter to continue…'],
  saved: ['Add credential', 'Enter your API key', '└  Done'],
  cancelled: ['Token provider', 'Paste Agent setup-token', 'Setup cancelled.'],
- failure: ['Login', 'OAuth error: Invalid code. Please make sure the full code was copied', 'Press Enter to retry.', 'Esc to cancel']
+ failure: ['Login', 'OAuth error: Invalid code. Please make sure the full code was copied', 'Press Enter to retry.', 'Esc to cancel'],
+ // `claude auth login` as claude/sign-in.sh runs it, measured with 2.1.287.
+ authLogin: ['Opening browser to sign in…', "If the browser didn't open, visit: https://example.com/oauth/author", 'ize?code=true&state=example', 'Paste code here if prompted >'],
+ authLoginInvalid: ['Opening browser to sign in…', "If the browser didn't open, visit: https://example.com/oauth?state=example", 'Paste code here if prompted > Invalid code. Please make sure the full code was copied.'],
+ authLoginRetried: ['Opening browser to sign in…', "If the browser didn't open, visit: https://example.com/oauth?state=example", 'Paste code here if prompted > Invalid code. Please make sure the full code was copied.', 'Login successful.'],
+ authLoginSuccess: ['Opening browser to sign in…', "If the browser didn't open, visit: https://example.com/oauth?state=example", 'Paste code here if prompted > Login successful.']
 };
 test('runtime and frontend recognize the measured screens identically', async () => {
  const frontend = await import('../../../frontend/src/lib/cli-sign-in.js');
@@ -28,7 +33,18 @@ test('runtime and frontend recognize the measured screens identically', async ()
  assert.equal(detectSignIn(screens.tokenSaved).status, 'saved');
  assert.equal(detectSignIn(screens.saved).status, 'saved');
  assert.equal(detectSignIn(screens.cancelled).status, 'cancelled');
+ assert.equal(detectSignIn(screens.authLogin).mode, 'code');
+ assert.equal(detectSignIn(screens.authLogin).url, 'https://example.com/oauth/authorize?code=true&state=example');
+ assert.equal(detectSignIn(screens.authLogin).cancel, 'interrupt');
+ assert.equal(detectSignIn(screens.authLogin).invalid, false);
+ assert.equal(detectSignIn(screens.code).cancel, undefined);
+ assert.equal(detectSignIn(screens.authLoginInvalid).invalid, true);
+ assert.equal(detectSignIn(screens.authLoginRetried).status, 'succeeded');
+ assert.equal(detectSignIn(screens.authLoginSuccess).status, 'succeeded');
+ // The TUI that sign-in.sh execs afterwards draws its prompt below the finished login.
+ assert.equal(detectSignIn([...screens.authLoginSuccess, '❯ ']), null);
  assert.equal(detectSignIn(['The agent said: Login successful']), null);
+ assert.equal(detectSignIn(['Login successful.']), null);
  assert.equal(detectSignIn(['Visit https://example.com to read the documentation']), null);
  assert.equal(detectSignIn(['Paste code here if prompted >']), null);
  assert.equal(detectSignIn([...screens.code.slice(0, 2), 'https://user:password@example.com/login', ...screens.code.slice(-2)]).url, '');

@@ -147,6 +147,11 @@ function buildCommand(env, allowResume) {
   // a resumed session start its work from the top.
   if (prompt && !resuming) args.push(prompt);
 
+  // Set by the entrypoint when the pod has no credential at all; sign-in.sh signs in first and
+  // then execs the same command, so the pid server.js tracks is the TUI's.
+  if (env.AGENTHUB_CLAUDE_SIGN_IN === '1') {
+    return { cmd: 'bash', args: [path.join(__dirname, 'sign-in.sh'), ...args] };
+  }
   return { cmd: 'claude', args };
 }
 
