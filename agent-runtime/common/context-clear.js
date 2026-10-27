@@ -60,8 +60,8 @@ function createContextClear({
         log('context handover attempt ' + attempt + ': ' + error.message);
         continue;
       }
-      await deliver(text, { attempt });
-      const seen = await verify(text, previous);
+      const submitted = await deliver(text, { attempt });
+      const seen = await verify(text, previous, { submitted: submitted !== false });
       if (seen) {
         store.remove();
         onDelivered({ fresh: seen.fresh !== false, attempt, round });

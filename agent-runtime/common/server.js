@@ -323,14 +323,16 @@ function createCommonServer(options = {}) {
         assertClearTarget();
       },
       deliver: async (text, { attempt }) => {
-        await nextTurn.typeHandover(clearTarget, text, () => scrollback, lastSize || { cols: 120, rows: 32 }, { retry: attempt > 1 });
+        return nextTurn.typeHandover(clearTarget, text, () => scrollback, lastSize || { cols: 120, rows: 32 }, { retry: attempt > 1 });
       },
-      verify: async (text, previous) => {
-        // The CLI's transcript is the record of what the model gets: a prompt event alone was
-        // seen for input the CLI then discarded. Its first line is enough to tell, written as
-        // both CLIs store text in JSON.
+      verify: async (text, previous, { submitted }) => {
+        // The transcript is the record of what the model gets. A prompt event only says that
+        // something was submitted, and an owner message the CLI had queued during the clearing
+        // turn is submitted too (#336). The first lines are enough to tell, JSON-escaped the way
+        // the transcript stores them.
         const needle = JSON.stringify(text.split('\n').slice(0, 2).join('\n').slice(0, 160)).slice(1, -1);
-        const deadline = now() + HANDOVER_VERIFY_MS;
+        // Without a prompt event the CLI most likely never took it: one look, then the next attempt.
+        const deadline = now() + (submitted ? HANDOVER_VERIFY_MS : 0);
         for (;;) {
           const file = locateTranscript();
           let found = false;

@@ -39,10 +39,53 @@ current pod identity before sending its callback token and does not follow redir
 The Workspace retains previous conversations above a visible **Conversation cleared**
 boundary, while native CLI context and resume target the fresh conversation. Memory,
 skills, repository files and the CLI process remain in place. A second request while one
-is scheduled returns a conflict. A failed clear or readiness check never sends the
-handover into the old context and shows a terminal notice. Unsupported providers,
+is scheduled returns a conflict. A clear that could not even be typed (the agent was
+restarting or the runtime updating) never sends the handover into the old context. Unsupported providers,
 autonomous sessions and streaming chat mode reject the operation; their CLI control
 paths have not been proved equivalent to an interactive clear.
+
+## The handover is never dropped (#336)
+
+On hub 1.4.0 a session "knew nothing" after a clear. The handover lived only in the session
+agent's memory and was typed once, without a check: a readiness wait that timed out after the
+clear, an input the CLI dropped while redrawing, or a restart between clear and handover each
+left a fresh conversation without it, and only one terminal line said so. Codex added a second
+way: in a git checkout its `/new` asks "Where should the new conversation run?" (current
+checkout or a new managed worktree). The menu blocked the readiness check, the handover was
+dropped, and the owner's next message, which Codex had queued during the clearing turn,
+became the first message of the fresh conversation.
+
+What happens now:
+
+- The handover is written to `agenthub-context-handover.json` in the agent's state directory
+  before the request is acknowledged, and the next archive tick uploads it. It is removed only
+  once the CLI's own transcript holds it. An agent start that finds it (an in-pod restart or a
+  new pod resuming the archive) clears again and sends it: the restarted CLI resumes the
+  conversation it last saved, which is the old one when the fresh one was never written to.
+- Delivery is verified against the transcript, not the prompt hook. The hook says that
+  something was submitted, and a queued owner message is submitted too. The first lines of the
+  handover must appear in the transcript; one that differs from the pre-clear transcript is a
+  fresh conversation.
+- Up to three attempts, each after the input looks ready again (quiet output, no CLI menu). A
+  retry whose earlier paste is still on the screen presses Enter alone; pasting again would
+  put the handover into the prompt box twice. After that it is typed at the next safe point,
+  the same queue fleet messages use, for up to three more rounds, and then waits for the next
+  agent start. A handover is never typed into an open menu: the menu check is part of every
+  readiness wait.
+- A clear that is not confirmed (Claude's conversation id did not change, or Codex's welcome
+  screen did not appear) still gets the handover. Holding it back loses it when the clear did
+  happen; sending it into a conversation that was not cleared repeats known state.
+- Each failed round is logged and shown in the Workspace (a `handover` control frame, replayed
+  to reconnecting viewers, drives a banner) until the handover is delivered.
+- Codex's managed requirements set `[features] worktrees = false`, so `/new` no longer asks.
+  Answering the menu with keys was rejected: it depends on the option order of one CLI version.
+  The session's workspace is the checkout either way, and agents can still run `git worktree`.
+- The tool result says that the handover is saved and arrives as the first message after the
+  turn ends.
+
+The rig in `proofs/336` runs the real pinned CLIs in the real session agent with a PTY fault
+wrapper (dropped first input, 20 s of output after the clear, the pod killed one second after
+the clear) and compares main with the branch; `proofs/336/results.md` has the numbers.
 
 ## Verification
 

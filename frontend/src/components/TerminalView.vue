@@ -78,7 +78,8 @@ const drawerKind = ref('agent')
 // Keep menu detection independent of drawer visibility so answering never requires opening it.
 const cliMenu = ref(null)
 const stateWithheld = ref(false)
-watch(() => props.session.id, () => { stateWithheld.value = false })
+const handoverProblem = ref(null)
+watch(() => props.session.id, () => { stateWithheld.value = false; handoverProblem.value = null })
 const promptSuggestion = ref('')
 const agentActivity = ref({ state: 'unknown', source: 'hooks' })
 watch(() => agentActivity.value.state, state => { if (state === 'working') promptSuggestion.value = '' })
@@ -733,6 +734,9 @@ function interruptWorkspaceAgent() {
         <div v-if="stateWithheld && capabilities.canManage && !sharedToken" role="status" class="session-input-state" data-state-withheld>
           State not saved: sign-in data is present or its privacy check could not finish. New resume state will be saved when the check passes; restarting now may lose recent progress.
         </div>
+        <div v-if="handoverProblem" role="alert" class="session-input-state" data-handover-failed>
+          Context handover not delivered: the cleared conversation has not received the agent's handover yet ({{ handoverProblem.reason }}); {{ handoverProblem.next }}. Check the agent terminal.
+        </div>
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy" :starting="conversationStarting"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
           :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" @send-pending="sendPendingNow" />
@@ -752,7 +756,7 @@ function interruptWorkspaceAgent() {
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
             :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
-            @menu="onCliMenu" @suggestion="promptSuggestion = $event" @activity="agentActivity = $event" @persistence="stateWithheld = $event.withheld" />
+            @menu="onCliMenu" @suggestion="promptSuggestion = $event" @activity="agentActivity = $event" @persistence="stateWithheld = $event.withheld" @handover="handoverProblem = $event.failed ? $event : null" />
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>
