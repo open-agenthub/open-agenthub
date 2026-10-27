@@ -23,3 +23,6 @@ and control tests fail, including the real startup fixture. With the fix, the
 full backend suite passes: 2302 passed, 159 database-dependent tests skipped.
 A separate expansion-bound test covers oversized and overflowing cursor counts.
 Total additional whitespace is bounded as well as each individual move.
+
+The final suite also ran against a real rootless Postgres 15 instance using
+AGENTHUB_TEST_POSTGRES_CONNECTION_STRING: 2461 passed, 0 failed, 0 skipped.
