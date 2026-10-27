@@ -47,6 +47,8 @@ public static class SessionUpdateValidator
 
     // The system prompt counts as a runtime field because a CronJob bakes it into its pod
     // template; the stored record would change while every scheduled run kept the old text.
+    // The secret selection and grants are not: the template's variable block follows the
+    // session's variable copy at every secret sync (#301), so later runs receive the change.
     private static bool HasRuntimeField(UpdateSessionRequest request) =>
         request.SystemPrompt is not null ||
         request.Image is not null ||
@@ -66,8 +68,5 @@ public static class SessionUpdateValidator
         request.ModelName is not null ||
         request.CredentialId is not null ||
         request.GitPatIds is not null ||
-        request.SecretIds is not null ||
-        request.SecretGrantIds is not null ||
-        request.SecretGrants is not null ||
         request.Policy is not null;
 }

@@ -52,6 +52,31 @@ describe('the restart note', () => {
   })
 })
 
+// #301: a schedule whose template could not follow a change says so and updates in one click,
+// because updating it restarts nothing.
+describe('the schedule note', () => {
+  const schedule = { id: 's1', title: 'nightly', mode: 'Scheduled', phase: 'Scheduled', scheduleSecretsOutdated: true }
+
+  it('explains the next run would use the previous variables and updates the schedule at once', async () => {
+    mocks.api.applySessionResources.mockResolvedValue({ ...schedule, scheduleSecretsOutdated: false })
+    const wrapper = mount(SecretRestartNote, { props: { session: schedule } })
+    expect(wrapper.text()).toContain('next scheduled run would still start with the previous secret variables')
+    expect(wrapper.find('[data-secret-restart]').exists()).toBe(false)
+    await wrapper.get('[data-schedule-secrets-update]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.applySessionResources).toHaveBeenCalledWith('s1')
+    expect(wrapper.emitted('restarted')[0][0].scheduleSecretsOutdated).toBe(false)
+  })
+
+  it('shows why an update was refused', async () => {
+    mocks.api.applySessionResources.mockRejectedValue(new Error('409 Finish its project move'))
+    const wrapper = mount(SecretRestartNote, { props: { session: schedule } })
+    await wrapper.get('[data-schedule-secrets-update]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('Finish its project move')
+  })
+})
+
 describe('Settings → Secrets after a change', () => {
   it('lists the running sessions whose variables are now stale', async () => {
     const wrapper = mount(SecretsPane)

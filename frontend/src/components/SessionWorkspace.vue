@@ -271,13 +271,13 @@ onBeforeUnmount(() => {
     <summary>Secrets ({{ session.effectiveSecrets?.length || 0 }})</summary>
     <template v-if="grantsEditable">
       <SecretGrantsPicker :model-value="grants" :options="storedSecrets" :effective="session.effectiveSecrets || []"
-        :disabled="session.mode === 'Scheduled'" @update:model-value="saveGrants" />
-      <small v-if="session.mode === 'Scheduled'">A scheduled session's grants are fixed; delete and recreate it to change them.</small>
+        @update:model-value="saveGrants" />
+      <small v-if="session.mode === 'Scheduled'" data-scheduled-grants-note>Grant changes apply from the next scheduled run; a run in progress keeps its variables.</small>
       <small v-if="grantError" class="grant-error" role="alert" data-grant-error>{{ grantError }}</small>
     </template>
     <div v-for="secret in session.effectiveSecrets" v-else :key="secret.id">{{ secret.name }} · {{ secret.delivery }} · {{ secret.provenance }} · {{ secret.inheritToChildren ? 'inherits to children' : 'this session only' }}</div>
   </details>
-  <SecretRestartNote v-if="grantsEditable" :session="session" @restarted="emit('updated')" />
+  <SecretRestartNote v-if="grantsEditable || session.scheduleSecretsOutdated" :session="session" @restarted="emit('updated')" />
   <GitSignInNote v-if="grantsEditable" :session="session" />
   <SessionStartupFailure v-if="session?.failureReason" :reason="session.failureReason" />
   <div v-if="companionVisible" class="workspace-shell">

@@ -48,7 +48,7 @@ async function loadReach() {
   ])
 }
 // Only after a change on this page: before one, nothing this page did needs a restart.
-const pendingRestart = computed(() => !changedHere.value ? [] : sessions.value.filter(s => s.secretsPendingRestart
+const pendingRestart = computed(() => !changedHere.value ? [] : sessions.value.filter(s => s.scheduleSecretsOutdated || s.secretsPendingRestart
   && !(granted.value?.restartRequired && granted.value.sessionId === s.id)))
 const usage = computed(() => Object.fromEntries(secrets.value.map(secret =>
   [secret.id, secretUsage(secret.id, sessions.value, projects.value)])))
