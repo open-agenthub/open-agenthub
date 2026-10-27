@@ -428,6 +428,13 @@ nothing, so a dialog nobody touched sends neither field, as before (`lib/secrets
 covers every combination). Nothing in the API or the database changed. The session view saves a
 choice as one request carrying whichever of the two fields changed.
 
+A session that follows its project and gets one of the project's secrets lowered stops following
+it. Its selection becomes an explicit list, and a secret the project adds later no longer reaches
+it. The control says so under the list while the selection is narrowed. Setting every project
+secret back to "Also child sessions" restores following. *Rejected: a per-secret exception that
+keeps following the project.* There is no stored form for it, and adding one would change what
+`secretIds` means for every client.
+
 In the project dialog the control has two levels, "Not allowed" and "Sessions in this project".
 A project's selection is all or nothing per secret, and it already passes to the child sessions
 started in the project. A "this session" level has no meaning there, so it is left out rather

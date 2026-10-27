@@ -95,7 +95,14 @@ for (const session of [s1, s2, s3]) {
 
 // ---- 2a. the edit dialog: F of s1 to "This session"
 await openEdit(s1)
+check(await page.locator('[data-secret-follow-note]').count() === 0, 'edit dialog: a session following its project shows no note')
 await page.click(`[data-secret-grant="${F.id}"] [data-grant-level="session"]`)
+check(await page.locator('[data-secret-follow-note]').count() === 1, 'edit dialog: lowering a project secret says the session stops following the project')
+check(await level(F.id) === 'session', 'edit dialog: the row shows the level just chosen')
+await page.locator('[data-secret-grants]').scrollIntoViewIfNeeded()
+await page.mouse.move(0, 0)
+await sleep(400)
+await page.screenshot({ path: path.join(out, '1b-edit-dialog-follow-note.png') })
 patches.length = 0
 await page.click('[data-submit]')
 await sleep(1500)

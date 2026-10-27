@@ -46,7 +46,7 @@ function onKey(event) {
 /* The look of the session bar's Workspace | Terminal | Shell switch (TerminalView .tabs). */
 .segmented { display: flex; flex-wrap: wrap; gap: 2px; max-width: 100%; background: var(--panel); border: 1px solid var(--border-2); border-radius: var(--radius); padding: 3px; }
 .segmented button { width: auto; font-size: 12px; font-weight: 700; padding: 5px 12px; border-radius: 8px; border: none; background: none; color: var(--muted-3); white-space: nowrap; }
-.segmented button:hover:not(:disabled) { color: var(--text); background: none; }
+.segmented button:hover:not(:disabled):not(.on) { color: var(--text); background: none; }
 .segmented button.on { background: var(--border-2); color: var(--strong); }
 .segmented button:disabled { cursor: default; }
 </style>

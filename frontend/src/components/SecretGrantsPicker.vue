@@ -30,6 +30,10 @@ const provenanceOf = id => grantOf(id) ? grantOf(id).source || 'granted'
   : props.selected.includes(id) ? (props.inProject ? 'project' : 'selected')
   : props.effective.find(s => s.id === id)?.provenance
 const hasInherited = computed(() => props.modelValue.some(g => g.source === 'inherited'))
+// A session follows its project only while every secret the project selects is in its selection;
+// lowering one makes the selection an explicit list, and a secret the project adds later then no
+// longer reaches it. Said where it happens rather than discovered when an agent misses a variable.
+const narrowed = computed(() => props.inProject && props.selectable.some(id => !props.selected.includes(id)))
 
 function choose(id, level) {
   const next = withSecretLevel(id, level, { selected: props.selected, grants: props.modelValue, selectable: props.selectable })
@@ -57,6 +61,7 @@ function makeDirect(id) {
         :disabled="disabled" :data-secret-grant="secret.id" @update:model-value="choose(secret.id, $event)" />
       <button v-if="!disabled && grantOf(secret.id)?.source === 'inherited'" type="button" class="direct" @click="makeDirect(secret.id)">Make direct grant</button>
     </div>
+    <small v-if="narrowed" class="follow-note" data-secret-follow-note>This session no longer follows the project: secrets the project selects later do not reach it. Set every project secret back to “Also child sessions” to follow it again.</small>
     <small v-if="hasInherited">Saving a changed grant list approves its inherited entries as direct owner grants, independent of the parent.</small>
     <small data-secret-hint>
       <template v-if="inProject">The project's secrets start at “Also child sessions”; with all of them there the session follows the project, including later changes.</template>
@@ -77,4 +82,5 @@ code { font-family: var(--mono); font-size: 12px; }
 .provenance { display: inline; margin-left: 6px; }
 .id { display: inline; margin-left: 6px; font-family: var(--mono); font-size: 11px; color: var(--faint); }
 .direct { width: auto; font-size: 12px; }
+.follow-note { color: var(--warn); }
 </style>

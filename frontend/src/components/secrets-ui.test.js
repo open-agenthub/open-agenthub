@@ -224,6 +224,29 @@ describe('secret selection in the session dialogs', () => {
     expect(wrapper.get('[data-secret-hint]').text()).toContain('the session follows the project')
   })
 
+  // A per-secret exception to "follow the project" has no stored form, so the switch to an explicit
+  // list is said where it happens, and undone the same way.
+  it('says when a session stops following its project, and follows it again when set back', async () => {
+    const twoProjects = [{ id: 'p3', name: 'Both', secretIds: ['s1', 's2'] }]
+    const session = { id: 'x', title: 'X', mode: 'Interactive', agent: 'Claude', authMode: 'Subscription',
+      policy: { allowedTools: [], allowedMcpTools: [], allowedCommands: [] }, repos: [], projectId: 'p3', secretIds: null }
+    const wrapper = mount(EditSessionDialog, { props: { session, projects: twoProjects }, ...mountOptions })
+    await flushPromises()
+    expect(wrapper.find('[data-secret-follow-note]').exists()).toBe(false)
+    await pick(wrapper, 's2', 'session')
+    expect(wrapper.get('[data-secret-follow-note]').text()).toContain('secrets the project selects later do not reach it')
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.updateSession.mock.calls[0][1].secretIds).toEqual(['s1'])
+
+    await pick(wrapper, 's2', 'none')
+    await pick(wrapper, 's2', 'children')
+    expect(wrapper.find('[data-secret-follow-note]').exists()).toBe(false)
+    await wrapper.get('[data-submit]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.updateSession.mock.calls[1][1]).not.toHaveProperty('secretIds')
+  })
+
   it('an edit sends the wildcard to follow the project again, and nothing when untouched', async () => {
     const session = { id: 'x', title: 'X', mode: 'Interactive', agent: 'Claude', authMode: 'Subscription',
       policy: { allowedTools: [], allowedMcpTools: [], allowedCommands: [] }, repos: [], projectId: 'p1', secretIds: [] }
