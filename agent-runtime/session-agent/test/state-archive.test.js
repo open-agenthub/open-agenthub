@@ -99,7 +99,7 @@ function storage(t, status = 200) {
 function restore(archive, home) {
   const entrypoint = fs.readFileSync(
     path.join(__dirname, '..', '..', 'common', 'entrypoint-common.sh'), 'utf8');
-  const command = 'tar xzf /tmp/state.tgz -C "$HOME" 2>/dev/null';
+  const command = 'tar xzf /tmp/state.tgz --exclude=".claude/backups" --exclude="./.claude/backups" -C "$HOME" 2>/dev/null';
   assert.ok(entrypoint.includes(command), 'the entrypoint restores with: ' + command);
   return shell(command.replace('/tmp/state.tgz', '"$1"').replace('$HOME', '$2'), archive, home);
 }

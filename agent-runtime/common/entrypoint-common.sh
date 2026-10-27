@@ -64,7 +64,8 @@ if [ "${AGENTHUB_RESUME:-0}" = "1" ] && [ -n "${AGENTHUB_STATE_GET_URL:-}" ]; th
   echo "[entrypoint] Downloading session state from S3 …"
   [ "${AGENTHUB_S3_INSECURE:-0}" = "1" ] && CURL_K="-k" || CURL_K=""
   if curl -fsS $CURL_K -o /tmp/state.tgz "$AGENTHUB_STATE_GET_URL" &&
-     tar xzf /tmp/state.tgz -C "$HOME" 2>/dev/null; then
+     # Older state contains configuration backups with MCP credentials; never restore those copies.
+     tar xzf /tmp/state.tgz --exclude=".claude/backups" --exclude="./.claude/backups" -C "$HOME" 2>/dev/null; then
     touch /tmp/.state-restored
     export AGENTHUB_STATE_RESTORED=1
     echo "[entrypoint] State restored."
