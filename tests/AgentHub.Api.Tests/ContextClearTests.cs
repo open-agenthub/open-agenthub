@@ -119,13 +119,16 @@ public class ContextClearTests
             Assert.Equal("child-token", context.Request.Headers["X-Agent-Token"]);
             using var body = new StreamReader(context.Request.InputStream);
             Assert.Contains("handover", await body.ReadToEndAsync());
-            var bytes = Encoding.UTF8.GetBytes("{\"scheduled\":true}");
+            var bytes = Encoding.UTF8.GetBytes("{\"scheduled\":true,\"handover\":\"sent as the first message\"}");
             context.Response.ContentType = "application/json";
             context.Response.ContentLength64 = bytes.Length;
             await context.Response.OutputStream.WriteAsync(bytes);
             context.Response.Close();
         });
-        Assert.True((await service.ScheduleAsync(Session(), new ContextClearRequest("handover"), default)).Scheduled);
+        var outcome = await service.ScheduleAsync(Session(), new ContextClearRequest("handover"), default);
+        Assert.True(outcome.Scheduled);
+        // The pod's note on when the handover arrives reaches the calling agent's tool result.
+        Assert.Equal("sent as the first message", outcome.Handover);
         await receive.WaitAsync(TimeSpan.FromSeconds(10));
     }
 }
