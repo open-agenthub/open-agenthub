@@ -34,7 +34,7 @@ test('Claude driver exposes its state and subscription-auth contract', () => {
   assert.equal(driver.stateDir, '.claude');
   assert.equal(driver.authFilename, '.credentials.json');
   // Only what the CLI fetches again by itself; installed plugins and skills stay in the archive.
-  assert.deepEqual(driver.stateExcludes, ['.claude/plugins/marketplaces']);
+  assert.deepEqual(driver.stateExcludes, ['.claude/plugins/marketplaces', '.claude/backups']);
   assert.deepEqual(driver.attachmentCapabilities, {
     nativeImages: false,
     localImagePaths: true,
