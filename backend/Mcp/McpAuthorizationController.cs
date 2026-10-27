@@ -19,23 +19,27 @@ namespace AgentHub.Api.Mcp;
 /// the instance's own OIDC provider and, once signed in, issues an OpenIddict authorization
 /// code whose access token identifies the user to <c>/mcp</c>.
 ///
-/// On an instance without an OIDC authority the backend already treats every caller as the
-/// single "dev" user (see DevAuthHandler), so there is nobody to federate to and the login
-/// step is skipped — the same behaviour the rest of the API has in that mode.
+/// On an instance with an API key instead of OIDC, the consent form also asks for that key and
+/// the token is issued to the key's owner. Only the insecure development mode skips the login
+/// step, the same behaviour the rest of the API has in that mode.
 /// </summary>
 [AllowAnonymous]
 public sealed class McpAuthorizationController(
     McpOAuthOptions options,
     McpClientStore clients,
     IAntiforgery antiforgery,
-    ILogger<McpAuthorizationController> logger) : Controller
+    ILogger<McpAuthorizationController> logger,
+    AgentHub.Api.Auth.HubAuthOptions hubAuth) : Controller
 {
     /// <summary>Scheme names for the browser login used only by this controller.</summary>
     public const string CookieScheme = "McpCookie";
     public const string OidcScheme = "McpOidc";
 
-    /// <summary>The user an instance without an OIDC authority attributes everything to.</summary>
-    public const string AnonymousUser = "dev";
+    /// <summary>The user the insecure development mode attributes everything to.</summary>
+    public const string AnonymousUser = AgentHub.Api.Auth.HubAuthOptions.InsecureDevUser;
+
+    /// <summary>Consent form field carrying the API key in API-key mode.</summary>
+    public const string ApiKeyField = "api_key";
 
     /// <summary>
     /// Registration is anonymous — a client has to exist before anybody signs in — so it is
@@ -140,6 +144,9 @@ public sealed class McpAuthorizationController(
         var request = HttpContext.GetOpenIddictServerRequest()
                       ?? throw new InvalidOperationException("The OpenID Connect request cannot be retrieved.");
 
+        if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
+            return await AuthorizeWithApiKeyAsync(request, ct);
+
         var userName = await ResolveUserAsync();
         if (userName is null)
         {
@@ -208,6 +215,57 @@ public sealed class McpAuthorizationController(
             logger.LogInformation("User {User} approved MCP client {ClientId}", userName, request.ClientId);
         }
 
+        return IssueCode(request, userName);
+    }
+
+    /// <summary>
+    /// API-key mode: there is no browser session to recognise the user by, so every authorize
+    /// asks for the key. A stored approval cannot stand in for it the way it does under OIDC —
+    /// with nothing to sign in to, it would hand the owner's token to any registered client that
+    /// asks. Reconnects stay silent anyway, because they use the refresh token.
+    /// </summary>
+    private async Task<IActionResult> AuthorizeWithApiKeyAsync(OpenIddictRequest request, CancellationToken ct)
+    {
+        var owner = hubAuth.ApiKeyOwner;
+        if (request.HasPromptValue(PromptValues.None))
+            return ForbidOAuth(Errors.LoginRequired, "The API key has to be entered on the consent screen.");
+
+        var decision = Request.HasFormContentType
+            ? Request.Form.ContainsKey("submit.Deny") ? ConsentDecision.Deny
+            : Request.Form.ContainsKey("submit.Accept") ? ConsentDecision.Accept
+            : ConsentDecision.None
+            : ConsentDecision.None;
+        if (decision == ConsentDecision.None) return ConsentPage(request, owner, askForKey: true);
+
+        try
+        {
+            await antiforgery.ValidateRequestAsync(HttpContext);
+        }
+        catch (AntiforgeryValidationException)
+        {
+            logger.LogWarning("Rejected an MCP consent post with an invalid antiforgery token");
+            return ForbidOAuth(Errors.AccessDenied, "The consent request could not be verified.");
+        }
+
+        if (decision == ConsentDecision.Deny)
+            return ForbidOAuth(Errors.AccessDenied, "The user denied the request.");
+
+        if (!hubAuth.ApiKeyMatches(Request.Form[ApiKeyField].ToString()))
+        {
+            logger.LogWarning("Rejected an MCP consent post for client {ClientId}: wrong API key", request.ClientId);
+            return ConsentPage(request, owner, askForKey: true, error: "That API key is not valid.",
+                statusCode: StatusCodes.Status401Unauthorized);
+        }
+
+        if (!await clients.ApproveAsync(request.ClientId!, owner, ct))
+            return ForbidOAuth(Errors.InvalidClient, "The application is not registered.");
+
+        logger.LogInformation("API key holder {User} approved MCP client {ClientId}", owner, request.ClientId);
+        return IssueCode(request, owner);
+    }
+
+    private IActionResult IssueCode(OpenIddictRequest request, string userName)
+    {
         var identity = new ClaimsIdentity(
             authenticationType: TokenValidationParameters.DefaultAuthenticationType,
             nameType: Claims.Name,
@@ -259,7 +317,8 @@ public sealed class McpAuthorizationController(
 
     /// <summary>
     /// Resolves the signed-in user, or null when a browser login is still needed. Without an
-    /// OIDC authority there is nothing to log in to, so the caller is the single local user.
+    /// OIDC authority (insecure development mode) there is nothing to log in to, so the caller is
+    /// the single local user. API-key mode does not come here: see AuthorizeWithApiKeyAsync.
     /// </summary>
     private async Task<string?> ResolveUserAsync()
     {
@@ -286,7 +345,8 @@ public sealed class McpAuthorizationController(
     /// The consent screen. Rendered inline rather than through a view because this project
     /// serves an API plus a separate SPA and has no Razor pipeline.
     /// </summary>
-    private IActionResult ConsentPage(OpenIddictRequest request, string userName)
+    private IActionResult ConsentPage(OpenIddictRequest request, string userName,
+        bool askForKey = false, string? error = null, int statusCode = StatusCodes.Status200OK)
     {
         var tokens = antiforgery.GetAndStoreTokens(HttpContext);
         var clientName = WebUtility.HtmlEncode(request.ClientId ?? "An application");
@@ -298,8 +358,20 @@ public sealed class McpAuthorizationController(
         // form posts to the bare path for that reason: it keeps the body the single source and
         // avoids the same parameter arriving twice.
         var action = WebUtility.HtmlEncode(Request.PathBase + Request.Path);
-        var hidden = string.Join("\n      ", Request.Query.SelectMany(p => p.Value.Select(v =>
+        // A re-rendered form (wrong key) arrives as a post, whose parameters are in the body. The
+        // key itself and the previous decision are never echoed back into the page.
+        var parameters = Request.HasFormContentType
+            ? Request.Form.Where(p => p.Key != ApiKeyField && p.Key != tokens.FormFieldName && !p.Key.StartsWith("submit.")).ToList()
+            : Request.Query.ToList();
+        var hidden = string.Join("\n      ", parameters.SelectMany(p => p.Value.Select(v =>
             $"""<input type="hidden" name="{WebUtility.HtmlEncode(p.Key)}" value="{WebUtility.HtmlEncode(v)}">""")));
+        var keyInput = askForKey
+            ? $"""
+              <label for="api-key">API key of this instance</label>
+              <input id="api-key" type="password" name="{ApiKeyField}" autocomplete="current-password" required autofocus>
+              """
+            : "";
+        var errorLine = error is null ? "" : $"""<p class="error" role="alert">{WebUtility.HtmlEncode(error)}</p>""";
 
         // $$ so the CSS braces stay literal; interpolations are {{ }}.
         var html = $$"""
@@ -318,6 +390,10 @@ public sealed class McpAuthorizationController(
               button { font: inherit; padding: .6rem 1.2rem; border-radius: .4rem;
                        border: 1px solid rgba(127,127,127,.5); cursor: pointer; }
               button[value="accept"] { background: #2563eb; color: #fff; border-color: #2563eb; }
+              label { display: block; margin-top: 1rem; font-weight: 600; }
+              input[type=password] { font: inherit; width: 100%; box-sizing: border-box; padding: .5rem;
+                       margin-top: .35rem; border-radius: .4rem; border: 1px solid rgba(127,127,127,.5); }
+              .error { color: #dc2626; font-weight: 600; }
             </style></head><body><main>
             <h1>Authorise this client?</h1>
             <p>The MCP client <code>{{clientName}}</code> is asking to act as <strong>{{user}}</strong>
@@ -328,17 +404,19 @@ public sealed class McpAuthorizationController(
               <li>send messages to your agents</li>
             </ul>
             <p>Approve only if you just started this connection yourself.</p>
+            {{errorLine}}
             <form method="post" action="{{action}}">
               {{hidden}}
               <input type="hidden" name="{{field}}" value="{{token}}">
+              {{keyInput}}
               <div class="row">
                 <button type="submit" name="submit.Accept" value="accept">Approve</button>
-                <button type="submit" name="submit.Deny" value="deny">Cancel</button>
+                <button type="submit" name="submit.Deny" value="deny" formnovalidate>Cancel</button>
               </div>
             </form>
             </main></body></html>
             """;
-        return Content(html, "text/html; charset=utf-8");
+        return new ContentResult { Content = html, ContentType = "text/html; charset=utf-8", StatusCode = statusCode };
     }
 
     /// <summary>Claims go into the access token; the identity token stays minimal.</summary>

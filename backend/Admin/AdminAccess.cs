@@ -68,13 +68,19 @@ public sealed class AdminAccess
     public IReadOnlyCollection<string> ValuesAdmins => _admins;
 
     public AdminAccess(IConfiguration cfg, ILogger<AdminAccess> log,
-        IEnumerable<IAdminRoleProvider> roleProviders, IUserRoleStore? userRoles = null)
+        IEnumerable<IAdminRoleProvider> roleProviders, IUserRoleStore? userRoles = null,
+        AgentHub.Api.Auth.HubAuthOptions? hubAuth = null)
     {
         _roleProviders = roleProviders;
         _userRoles = userRoles;
         var raw = cfg["Ee:Admins"] ?? "";
         _admins = raw.Split(new[] { ',', ';', ' ', '\n', '\t' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
                      .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        // The key holder is the install's only interactive user. Left to Ee:Admins, an install
+        // that lists someone else there would lock its own owner out of the admin area, and one
+        // that lists nobody would rely on bootstrap mode, which the first role set in the UI ends.
+        if (hubAuth?.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
+            _admins.Add(hubAuth.ApiKeyOwner);
         Bootstrap = _admins.Count == 0;
         if (Bootstrap)
             log.LogWarning("Ee:Admins is empty — every signed-in user is an admin until someone is made an admin in the admin area or a group is mapped to the admin role. Set Ee:Admins or designate an admin to lock the admin area down.");
