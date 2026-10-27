@@ -49,7 +49,7 @@ async function copy() {
       <button v-if="canAnswer && menu.confirm" type="button" @click="$emit('continue')">Continue</button>
       <button v-if="canAnswer && menu.retry" type="button" @click="$emit('retry')">Retry sign-in</button>
       <button type="button" @click="$emit('open-terminal')">Open terminal</button>
-      <button v-if="canAnswer && menu.mode === 'code'" type="button" @click="$emit('cancel')">Cancel (Esc)</button>
+      <button v-if="canAnswer && menu.mode === 'code'" type="button" @click="$emit('cancel')">{{ menu.cancel === 'interrupt' ? 'Cancel (Ctrl+C)' : 'Cancel (Esc)' }}</button>
     </p>
   </section>
 </template>

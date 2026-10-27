@@ -27,7 +27,7 @@ function createSignInPrivacy({ Terminal, maxBuffer = 1_000_000 } = {}) {
       const buffer = terminal.buffer.active;
       const rows = Array.from({ length: terminal.rows }, (_, y) => buffer.getLine(buffer.baseY + y)?.translateToString(true) || '');
       const signIn = detectSignIn(rows);
-      const intro = /Select login method:|Starting login process|Follow these steps to sign in|Add credential|Token provider/.test(rows.join('\n'));
+      const intro = /Select login method:|Opening browser to sign in|Starting login process|Follow these steps to sign in|Add credential|Token provider/.test(rows.join('\n'));
       const wasActive = active;
       // TUIs clear and redraw a dialog in separate writes, especially after a resize. A blank
       // intermediate frame is not the end of sign-in: release only at a real CLI prompt.

@@ -13,6 +13,10 @@ unchanged. Shell sockets never receive this subscription. Activity is never writ
 a replay must not resurrect an old spinner. The short presentation timer exists only while a
 viewer subscribes and is released with the last subscriber.
 
+Each frame also carries `ready`: whether the CLI runs and takes input, independent of the turn
+state, which stays `unknown` until the first hook. The Workspace's starting state ends on it
+(`docs/session-starting.md`).
+
 Prompt hooks mean working; a successful Stop means idle unless it continues with a fleet message.
 
 **A question is not an approval (#252).** Waiting carries a reason: `approval` for a permission

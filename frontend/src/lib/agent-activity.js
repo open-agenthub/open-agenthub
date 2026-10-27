@@ -7,7 +7,9 @@ export function parseActivityFrame(data) {
     return frame?.type === 'agenthub' && frame.subtype === 'activity' &&
       ['working', 'waiting', 'idle', 'unknown'].includes(frame.state) &&
       ['hooks', 'output'].includes(frame.source)
-      ? { state: frame.state, source: frame.source, ...(['approval', 'answer'].includes(frame.reason) ? { reason: frame.reason } : {}) }
+      ? { state: frame.state, source: frame.source,
+          ...(typeof frame.ready === 'boolean' ? { ready: frame.ready } : {}),
+          ...(['approval', 'answer'].includes(frame.reason) ? { reason: frame.reason } : {}) }
       : null
   } catch { return null }
 }

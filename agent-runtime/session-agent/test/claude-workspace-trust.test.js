@@ -60,3 +60,36 @@ test('the claude image ships the workspace-trust helper', () => {
     path.join(__dirname, '..', '..', 'claude', 'Dockerfile'), 'utf8');
   assert.match(dockerfile, /COPY claude\s+\/opt\/session-agent\/claude/);
 });
+
+test('the session API key is approved by its suffix, and only that key', async () => {
+  const { approveApiKey } = await import('../../claude/workspace-trust.mjs');
+  const key = 'sk-ant-api03-' + 'a'.repeat(60) + 'EXAMPLE-SUFFIX-12345';
+  const config = { theme: 'dark', customApiKeyResponses: { approved: ['other-approved-key01'], rejected: ['EXAMPLE-SUFFIX-12345', 'other-rejected-key01'] } };
+  assert.deepEqual(approveApiKey(config, key).customApiKeyResponses, {
+    approved: ['other-approved-key01', 'EXAMPLE-SUFFIX-12345'],
+    rejected: ['other-rejected-key01']
+  });
+  assert.equal(approveApiKey(config, key).theme, 'dark');
+  assert.doesNotMatch(JSON.stringify(approveApiKey({}, key)), /sk-ant-api03/);
+  // Twice is the same as once: a restarted entrypoint does not grow the list.
+  assert.deepEqual(approveApiKey(approveApiKey({}, key), key).customApiKeyResponses.approved, ['EXAMPLE-SUFFIX-12345']);
+  for (const absent of [undefined, '', 'short']) assert.deepEqual(approveApiKey({ theme: 'dark' }, absent), { theme: 'dark' });
+});
+
+test('the entrypoint step reads the key from the environment, not from its arguments', () => {
+  const file = tempConfig();
+  const key = 'sk-ant-api03-' + 'b'.repeat(60) + 'EXAMPLE-SUFFIX-67890';
+  require('node:child_process').execFileSync(process.execPath,
+    [path.join(__dirname, '../../claude/workspace-trust.mjs'), file, '/workspace'],
+    { env: { PATH: process.env.PATH, ANTHROPIC_API_KEY: key } });
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual(written.customApiKeyResponses.approved, ['EXAMPLE-SUFFIX-67890']);
+  assert.ok(!fs.readFileSync(file, 'utf8').includes(key));
+  const entrypoint = fs.readFileSync(path.join(__dirname, '../../claude/entrypoint.sh'), 'utf8');
+  assert.match(entrypoint, /node "\$RUNTIME\/claude\/workspace-trust\.mjs" "\$HOME\/\.claude\.json" "\$CLAUDE_WORKDIR"\n/);
+  // Without an API key nothing is approved.
+  const plain = tempConfig();
+  require('node:child_process').execFileSync(process.execPath,
+    [path.join(__dirname, '../../claude/workspace-trust.mjs'), plain, '/workspace'], { env: { PATH: process.env.PATH } });
+  assert.equal(JSON.parse(fs.readFileSync(plain, 'utf8')).customApiKeyResponses, undefined);
+});
