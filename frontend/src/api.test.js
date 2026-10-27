@@ -157,3 +157,17 @@ describe('error mapping', () => {
     expect(err.code).toBe('license_required')
   })
 })
+
+describe('shared session listing', () => {
+  it('includes sanitized named grants and deduplicates owned sessions', async () => {
+    globalThis.fetch = vi.fn(async url => ({ ok: true, status: 200, json: async () =>
+      url === '/api/sessions' ? [{ id: 'owned' }] : [{ id: 'shared', accessRole: 'Viewer' }, { id: 'owned' }] }))
+    expect(await api.listSessions()).toEqual([{ id: 'owned' }, { id: 'shared', accessRole: 'Viewer' }])
+  })
+  it('keeps owned sessions usable without an enterprise license', async () => {
+    globalThis.fetch = vi.fn(async url => url === '/api/sessions'
+      ? { ok: true, status: 200, json: async () => [{ id: 'owned' }] }
+      : { ok: false, status: 402, text: async () => '{"error":"license required"}' })
+    expect(await api.listSessions()).toEqual([{ id: 'owned' }])
+  })
+})

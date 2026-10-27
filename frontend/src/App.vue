@@ -29,6 +29,7 @@ const initialUi = ref(null)
 const page = ref(null)
 const editId = ref(null)
 const error = ref('')
+const sessionsLoaded = ref(false)
 const isAdmin = ref(false)
 const settingsTab = ref(SETTINGS_DEFAULT_TAB)
 const query = ref('')
@@ -93,6 +94,7 @@ async function refresh() {
     const prevSessions = sessions.value // empty on the first refresh — no alerts on page load
     const [listed, projectList, order] = await Promise.all([api.listSessions(), api.listProjects(), api.listSessionOrder?.().catch(() => []) || []])
     sessions.value = orderedSessions(listed, order)
+    sessionsLoaded.value = true
     projects.value = projectList
     for (const alert of detectAlerts(prevSessions, sessions.value)) showAlert(alert, selectSession)
   } catch (e) {
@@ -245,6 +247,7 @@ onBeforeUnmount(() => {
         <TerminalView @runtime-updated="refresh" v-else-if="activeSession" :key="activeSession.id" :session="activeSession" :initial-ui="initialUi" @back="activeId = null" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
         <SessionsView v-else-if="page === 'sessions'" :sessions="sessions" :projects="projects" :query="query" @select="selectSession" @new="openPage('new')" @remove="remove" @resume="resume" @pause="pause" @edit="openEdit" @duplicate="openDuplicate" @converted="converted" />
         <UsageView v-else-if="page === 'usage'" />
+        <p v-else-if="activeId && sessionsLoaded" role="status" class="page">This session is unavailable or is not shared with this account. Sign in with the invited account or ask the owner for access.</p>
         <HomeView v-else :sessions="sessions" @select="selectSession" @sessions="openPage('sessions')" @usage="openPage('usage')" @new="openPage('new')" @resume="resume" />
       </section>
     </div>

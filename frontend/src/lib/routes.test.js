@@ -66,3 +66,7 @@ describe('tab classification', () => {
     expect(isSettingsTab('nope')).toBe(false)
   })
 })
+
+it('keeps malformed shared token escapes in the invalid-link flow', () => {
+  expect(sharedTokenFromPath('/shared/%broken')).toBe('%broken')
+})
