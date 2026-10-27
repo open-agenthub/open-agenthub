@@ -184,7 +184,7 @@ public sealed class ApiKeyAuthHandler(
         {
             limiter.RecordFailure(Context);
             Logger.LogWarning("Rejected a wrong API key from {Client} for {Method} {Path}",
-                ApiKeyFailureLimiter.ClientOf(Context), Request.Method, Request.Path.Value);
+                ApiKeyFailureLimiter.ClientOf(Context), Request.Method, ApiKeyFailureLimiter.LogSafe(Request.Path.Value));
         }
         Response.StatusCode = StatusCodes.Status401Unauthorized;
         Response.Headers.WWWAuthenticate = "Bearer realm=\"agenthub\"";
@@ -256,8 +256,20 @@ public sealed class ApiKeyFailureLimiter(TimeProvider? time = null)
     {
         var forwarded = ctx.Request.Headers["X-Forwarded-For"].ToString();
         var last = forwarded.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
-        return last is null ? AddressOf(ctx) : $"{AddressOf(ctx)} via {last}";
+        if (last is null) return AddressOf(ctx);
+        // Only an address counts. The value ends up in the log and as a bucket key, and anything
+        // else in the header comes straight from the client.
+        return System.Net.IPAddress.TryParse(last, out var ip)
+            ? $"{AddressOf(ctx)} via {ip}"
+            : $"{AddressOf(ctx)} via (not an address)";
     }
+
+    /// <summary>
+    /// Request-supplied text for a log line. Kestrel decodes the path, so an encoded CR/LF in the
+    /// URL would otherwise start a forged log entry.
+    /// </summary>
+    public static string LogSafe(string? value)
+        => (value ?? "").Replace("\r", "").Replace("\n", "");
 
     public bool IsLimited(HttpContext ctx) => Count(ClientOf(ctx)) >= MaxFailuresPerClient;
 

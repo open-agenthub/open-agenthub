@@ -183,6 +183,23 @@ public class HubAuthTests
         }
     }
 
+    [Theory]
+    [InlineData("203.0.113.5", "10.0.0.7 via 203.0.113.5")]
+    [InlineData("evil, 2001:db8::1", "10.0.0.7 via 2001:db8::1")]
+    [InlineData("forged\r\nwarn: fake entry", "10.0.0.7 via (not an address)")]
+    [InlineData(null, "10.0.0.7")]
+    public void The_client_names_only_an_address_from_the_forwarded_header(string? forwarded, string expected)
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.7");
+        if (forwarded is not null) ctx.Request.Headers["X-Forwarded-For"] = forwarded;
+        Assert.Equal(expected, ApiKeyFailureLimiter.ClientOf(ctx));
+    }
+
+    [Fact]
+    public void Log_values_cannot_start_a_new_line()
+        => Assert.Equal("/api/sessionswarn: forged", ApiKeyFailureLimiter.LogSafe("/api/sessions\r\nwarn: forged"));
+
     [Fact]
     public async Task Only_a_challenge_counts_so_other_bearer_tokens_never_throttle()
     {

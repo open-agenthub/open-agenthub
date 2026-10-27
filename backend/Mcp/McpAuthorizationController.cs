@@ -264,7 +264,8 @@ public sealed class McpAuthorizationController(
         {
             keyLimiter.RecordFailure(HttpContext);
             logger.LogWarning("Rejected a wrong API key from {Client} on the MCP consent for client {ClientId}",
-                AgentHub.Api.Auth.ApiKeyFailureLimiter.ClientOf(HttpContext), request.ClientId);
+                AgentHub.Api.Auth.ApiKeyFailureLimiter.ClientOf(HttpContext),
+                AgentHub.Api.Auth.ApiKeyFailureLimiter.LogSafe(request.ClientId));
             return ConsentPage(request, owner, askForKey: true, error: "That API key is not valid.",
                 statusCode: StatusCodes.Status401Unauthorized);
         }

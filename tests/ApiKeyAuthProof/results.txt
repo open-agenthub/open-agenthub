@@ -81,7 +81,7 @@ PASS 300 wrong keys from rotating clients through one address: all 401 — 401
 PASS and the owner with the right key still gets in
 PASS 30 personal-token calls from one client do not count as wrong keys
 PASS each wrong key is logged with the client, without the value
-PASS the backend log never contains the key — 3999 log lines
+PASS the backend log never contains the key — 4018 log lines
 PASS nor a wrong key that was presented
 PASS the log names the mode and the owner
 
