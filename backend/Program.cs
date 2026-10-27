@@ -1,3 +1,4 @@
+using AgentHub.Api.Auth;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using AgentHub.Api.Mcp;
@@ -593,6 +594,8 @@ if (mcpOptions.IsConfigured)
     forwarded.KnownProxies.Clear();
     app.UseForwardedHeaders(forwarded);
 }
+
+app.UseApiKeyClientAddress(builder.Configuration);
 
 app.UseCors();
 app.UseWebSockets();

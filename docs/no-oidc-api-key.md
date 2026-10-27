@@ -64,17 +64,26 @@ gets 429 with `Retry-After: 60` until the minute ends. This applies to the REST 
 WebSockets and the MCP consent form. The right key is throttled too, for that client only;
 otherwise the limit would not slow that client's guessing.
 
-- **Which client.** The connection address plus the last `X-Forwarded-For` entry. With the
-  chart's ingress, `/api`, `/ws`, `/mcp` and `/connect` go straight to the backend, so every
-  connection comes from the ingress pod. The ingress appends the real client address last, and a
-  client cannot override that entry. The header decides nothing else: pod identity keeps relying
-  on the socket address only, as `Program.cs` requires.
-- **Deliberately no limit per connection address.** Behind the ingress that is one address for
-  everybody. Any cap on it would let anyone lock out every user, the owner with the right key
-  included, just by sending wrong keys. That is a cheaper attack than the guessing it would slow.
-  The price: without an ingress, a client that invents a new `X-Forwarded-For` per request gets
-  a new bucket each time, so the limit does not slow it down. Accepted, because guessing a key
-  that passes the startup checks is out of reach either way.
+- **Which client.** ASP.NET Forwarded Headers reads one `X-Forwarded-For` entry from the
+  right only when the socket peer matches `ForwardedHeaders:KnownProxies` or
+  `ForwardedHeaders:KnownNetworks`. Otherwise the socket address is the client, regardless of
+  invented headers. The validated address is saved only for the API-key limiter; pod identity
+  still uses the original socket address. The ingress must append or replace XFF with the
+  actual client address. An extra invented entry on the left cannot select the bucket.
+- **Proxy configuration.** Chart values `backend.forwardedHeaders.knownProxies` and
+  `backend.forwardedHeaders.knownNetworks` are comma-separated IP addresses and CIDRs. Defaults
+  are `127.0.0.1,::1` and `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`, respectively, covering
+  common private ingress pod addresses. Every peer in those ranges can assert a client address:
+  narrow them to your ingress source addresses or subnet, particularly if other pods can reach
+  the backend. Configure IPv6 ingress ranges explicitly. Set both strings to empty to ignore
+  XFF entirely, including on direct installations. Outside the chart the default trusts loopback
+  only. Invalid IPs/CIDRs fail startup rather than silently changing the trust boundary.
+- **Deliberately no shared ingress bucket.** It would let one client lock out all other clients
+  through the same proxy, including an owner presenting the right key. Each validated client
+  gets its own bucket. A correct key from an unaffected client remains accepted.
+- Rejected: parsing raw XFF, or clearing the middleware trust lists to accept every proxy.
+  Either lets a direct caller rotate invented addresses to evade the limiter. Globally replacing
+  `RemoteIpAddress` was also rejected because pod authorization needs the direct socket peer.
 - **What counts.** A failure counts only where an endpoint challenges the API-key scheme. Personal
   tokens on `/api/remote` and OAuth tokens on `/mcp` also arrive as `Bearer` and pass through
   the same handler. Counting them would lock their owner out after ten legitimate calls.

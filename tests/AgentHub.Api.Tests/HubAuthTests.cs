@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using System.Text.Encodings.Web;
 using AgentHub.Api.Admin;
 using AgentHub.Api.Auth;
@@ -114,6 +115,10 @@ public class HubAuthTests
         var ctx = new DefaultHttpContext();
         ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.7");
         request(ctx.Request);
+        var app = new Microsoft.AspNetCore.Builder.ApplicationBuilder(
+            new ServiceCollection().AddLogging().BuildServiceProvider());
+        app.UseApiKeyClientAddress(Config(("ForwardedHeaders:KnownProxies", "10.0.0.7")));
+        await app.Build()(ctx);
         await handler.InitializeAsync(
             new AuthenticationScheme(ApiKeyAuthHandler.SchemeName, null, typeof(ApiKeyAuthHandler)), ctx);
         var result = await handler.AuthenticateAsync();
@@ -184,16 +189,39 @@ public class HubAuthTests
     }
 
     [Theory]
-    [InlineData("203.0.113.5", "10.0.0.7 via 203.0.113.5")]
-    [InlineData("evil, 2001:db8::1", "10.0.0.7 via 2001:db8::1")]
-    [InlineData("forged\r\nwarn: fake entry", "10.0.0.7 via (not an address)")]
+    [InlineData("203.0.113.5", "10.0.0.7")]
+    [InlineData("evil, 2001:db8::1", "10.0.0.7")]
+    [InlineData("forged\r\nwarn: fake entry", "10.0.0.7")]
     [InlineData(null, "10.0.0.7")]
-    public void The_client_names_only_an_address_from_the_forwarded_header(string? forwarded, string expected)
+    public void Raw_forwarded_headers_cannot_select_a_client_without_middleware(string? forwarded, string expected)
     {
         var ctx = new DefaultHttpContext();
         ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.7");
         if (forwarded is not null) ctx.Request.Headers["X-Forwarded-For"] = forwarded;
         Assert.Equal(expected, ApiKeyFailureLimiter.ClientOf(ctx));
+    }
+
+    [Theory]
+    [InlineData("10.0.0.7", "", "invented, 203.0.113.8", "203.0.113.8")]
+    [InlineData("", "10.0.0.0/24", "203.0.113.8", "203.0.113.8")]
+    [InlineData("10.0.0.8", "", "203.0.113.8", "10.0.0.7")]
+    [InlineData("", "", "203.0.113.8", "10.0.0.7")]
+    [InlineData("10.0.0.7", "", "forged\r\nline", "10.0.0.7")]
+    public async Task Forwarded_client_requires_a_trusted_peer_and_preserves_socket_identity(
+        string proxies, string networks, string forwarded, string expected)
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.7");
+        ctx.Connection.RemotePort = 12345;
+        ctx.Request.Headers["X-Forwarded-For"] = forwarded;
+        var app = new Microsoft.AspNetCore.Builder.ApplicationBuilder(
+            new ServiceCollection().AddLogging().BuildServiceProvider());
+        app.UseApiKeyClientAddress(Config(("ForwardedHeaders:KnownProxies", proxies),
+            ("ForwardedHeaders:KnownNetworks", networks)));
+        await app.Build()(ctx);
+        Assert.Equal(expected, ApiKeyFailureLimiter.ClientOf(ctx));
+        Assert.Equal("10.0.0.7", ctx.Connection.RemoteIpAddress.ToString());
+        Assert.Equal(12345, ctx.Connection.RemotePort);
     }
 
     [Fact]
