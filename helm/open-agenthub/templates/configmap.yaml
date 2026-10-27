@@ -5,6 +5,7 @@ metadata:
   name: agenthub-config
   labels: {{ include "agenthub.labels" . | nindent 4 }}
 data:
+  Sharing__UserSuggestionsEnabled: {{ dig "sharing" "userSuggestionsEnabled" true .Values.AsMap | quote }}
   Kestrel__Limits__MaxRequestBodySize: "57671680"
   ASPNETCORE_ENVIRONMENT: {{ .Values.backend.environment | default "Production" | quote }}
   DevelopmentAuth__Enabled: {{ .Values.backend.developmentAuth.enabled | default false | quote }}

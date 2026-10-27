@@ -1,0 +1,31 @@
+PASS 1 Alice JWT cannot read Bob’s foreign session
+PASS 2 wrong signed-in account gets clear access message
+PASS 3 owner sees bounded autocomplete with expected username
+PASS 4 owner shares using selected username
+PASS 5 copied relative backend URL becomes absolute
+PASS 6 OIDC callback returns to named session
+PASS 7 login preserves query
+PASS 8 named grant is discoverable in sidebar
+PASS 9 recipient reads real stored transcript
+PASS 10 viewer cannot resume owner session
+PASS 11 session HTTP response is sanitized
+PASS 12 wrong user cannot read session
+PASS 13 wrong user cannot read conversation
+PASS 14 wrong user cannot read transcript
+PASS 15 foreign session cannot search recipients
+PASS 16 foreign session cannot mint links
+PASS 17 bounded prefix picker suggests username without email
+PASS 18 empty query never enumerates
+PASS 19 self excluded
+PASS 20 exact email maps to username
+PASS 21 revoked named grant is denied immediately
+PASS 22 revocation removes active session and explains account/access
+PASS 23 bearer link opens without login
+PASS 24 revoked bearer link has clear message
+PASS 25 invalid bearer link has clear message
+
+Backend suite: 2535 passed, 0 failed, 0 skipped (real Postgres enabled).
+Frontend suite: 930 passed, 0 failed.
+Production frontend and proof-host builds: passed.
+Chart template checks: default true, explicit false passed.
+Real HTTP configuration: prefix disabled, exact username/email retained, 429 rate limiting passed.

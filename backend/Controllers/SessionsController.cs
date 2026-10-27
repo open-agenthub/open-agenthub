@@ -1,5 +1,7 @@
 using System.Security.Claims;
 using AgentHub.Api.Agents;
+using AgentHub.Api.Ee.Sharing;
+using AgentHub.Api.Browser;
 using AgentHub.Api.Models;
 using AgentHub.Api.Permissions;
 using AgentHub.Api.Persistence;
@@ -15,6 +17,8 @@ namespace AgentHub.Api.Controllers;
 public sealed class SessionsController : ControllerBase
 {
     private readonly ISessionService _svc;
+    private readonly ISessionAccessService? _access;
+    private readonly IBrowserService? _browsers;
     private readonly PermissionStore _permissions;
     private readonly IEnumerable<IPermissionPromptEditor> _promptEditors;
     private readonly ISessionMessageStore? _messages;
@@ -25,11 +29,14 @@ public sealed class SessionsController : ControllerBase
     public SessionsController(ISessionService svc, PermissionStore permissions,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMessageStore? messages = null,
         ISessionMessageDelivery? delivery = null, ILiveTranscriptReader? liveTranscripts = null,
-        ISessionContextClear? contextClear = null)
+        ISessionContextClear? contextClear = null, ISessionAccessService? access = null,
+        IBrowserService? browsers = null)
     {
         _svc = svc; _permissions = permissions; _promptEditors = promptEditors; _messages = messages; _delivery = delivery;
         _liveTranscripts = liveTranscripts;
         _contextClear = contextClear;
+        _access = access;
+        _browsers = browsers;
     }
 
     private string Owner =>
@@ -62,7 +69,13 @@ public sealed class SessionsController : ControllerBase
 
     [HttpGet("{id}")]
     public async Task<ActionResult<SessionInfo>> Get(string id, CancellationToken ct)
-        => await _svc.GetSessionAsync(Owner, id, ct) is { } s ? Ok(s) : NotFound();
+    {
+        if (await _svc.GetSessionAsync(Owner, id, ct) is { } owned) return Ok(owned);
+        var shared = _access is null ? null : await _access.ResolveUserAsync(Owner, id, ct);
+        if (shared is null) return NotFound();
+        var browser = _browsers is null ? BrowserSummary.Stopped : await _browsers.GetSummaryAsync(id, ct);
+        return Ok(SharedSessionSanitizer.Sanitize(shared, browser));
+    }
 
     [HttpPost]
     public async Task<ActionResult<SessionInfo>> Create([FromBody] CreateSessionRequest req, CancellationToken ct)
@@ -242,7 +255,9 @@ public sealed class SessionsController : ControllerBase
     [HttpGet("{id}/transcript")]
     public async Task<IActionResult> Transcript(string id, CancellationToken ct)
     {
-        var text = await _svc.GetTranscriptAsync(Owner, id, ct);
+        var resolved = _access is null ? null : await _access.ResolveUserAsync(Owner, id, ct);
+        if (_access is not null && resolved is null) return NotFound();
+        var text = await _svc.GetTranscriptAsync(resolved?.Session.Owner ?? Owner, id, ct);
         return text is null ? NotFound() : Content(text, "text/plain");
     }
 
@@ -257,13 +272,16 @@ public sealed class SessionsController : ControllerBase
         // Phase before text, as the remote API does: a session that finishes between the two
         // reads is reported as still running with its final output present, so the tab polls
         // once more and then stops — rather than stopping with output missing.
-        var session = await _svc.GetSessionAsync(Owner, id, ct);
+        var resolved = _access is null ? null : await _access.ResolveUserAsync(Owner, id, ct);
+        if (_access is not null && resolved is null) return NotFound();
+        var sessionOwner = resolved?.Session.Owner ?? Owner;
+        var session = await _svc.GetSessionAsync(sessionOwner, id, ct);
         if (session is null) return NotFound();
         // A running session is read from its pod, so the Workspace follows the agent within its
         // one-second poll rather than the pod's 30-second upload (#111).
         var live = _liveTranscripts is null ? null
             : (Func<CancellationToken, Task<IReadOnlyList<TranscriptEntry>?>>)(token => _liveTranscripts.ReadAsync(session, token));
-        var page = await SessionTranscripts.PageAsync(_svc, Owner, id, session.Phase, offset, max, ct, live);
+        var page = await SessionTranscripts.PageAsync(_svc, sessionOwner, id, session.Phase, offset, max, ct, live);
         return Ok(page);
     }
 
