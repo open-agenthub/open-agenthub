@@ -103,9 +103,8 @@ public sealed class SecretRequestsController(ISecretRequestStore requests, ISess
         try { await sessions.DeleteSessionSecretAsync(Owner, secretId, CancellationToken.None); }
         catch (SessionSecretCopiesPendingException e)
         {
-            // The id only, as everywhere secrets are logged; the refused grant's error is what the owner sees.
-            log?.LogWarning("Removed the ungranted secret {SecretId}, but {Sessions} session copies could not be rewritten",
-                secretId, e.Sessions);
+            // Nothing from the request goes into the line; the refused grant's error is what the owner sees.
+            log?.LogWarning("Removed an ungranted secret, but {Sessions} session copies could not be rewritten", e.Sessions);
         }
     }
 
