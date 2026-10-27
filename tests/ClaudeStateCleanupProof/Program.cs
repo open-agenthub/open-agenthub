@@ -11,6 +11,9 @@ using AgentHub.Api.Services;
 using AgentHub.Api.Storage;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Models;
+using AgentHub.Api.Files;
+using AgentHub.Api.Library;
+using AgentHub.Api.Library.ApiMcpGateway;
 using k8s;
 using k8s.Models;
 using Microsoft.AspNetCore.Authentication;
@@ -27,7 +30,8 @@ var storage = new S3ArtifactStore(builder.Configuration);
 var registry = new PostgresSessionStore(builder.Configuration);
 await registry.InitializeAsync();
 var locks = new PostgresSessionExpiryLock(builder.Configuration);
-using var cluster = new Kubernetes(KubernetesClientConfiguration.BuildConfigFromConfigFile(Environment.GetEnvironmentVariable("PROOF_KUBECONFIG")));
+var clusterConfig = KubernetesClientConfiguration.BuildConfigFromConfigFile(Environment.GetEnvironmentVariable("PROOF_KUBECONFIG"));
+using var cluster = new Kubernetes(clusterConfig);
 const string ns = "claude-cleanup-proof";
 try { await cluster.CoreV1.CreateNamespaceAsync(new V1Namespace { Metadata = new V1ObjectMeta { Name = ns } }); }
 catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.Conflict) { }
@@ -53,6 +57,7 @@ async Task Put(string k, byte[] bytes) => Check(await storage.TryPutStreamAsync(
 async Task<byte[]> Read(string k) { await using var s = await storage.OpenReadAsync(k) ?? throw new Exception("Missing object"); using var b = new MemoryStream(); await s.CopyToAsync(b); return b.ToArray(); }
 try
 {
+    await registry.UpsertAsync(new SessionRecord { Id = "proof-316", Owner = owner, CallbackToken = "synthetic-callback-only", Status = "Paused" });
     await Put(key, original); await Put(foreignKey, original); await Put(rawOwnerKey, original);
     await storage.TryPutTextAsync(prefix + "codex-state.tgz", "other provider");
     var route = "/api/admin/session-storage-cleanup/claude-backups";
@@ -93,6 +98,43 @@ try
     terminating.Metadata.Finalizers = [];
     await cluster.CoreV1.ReplaceNamespacedPodAsync(terminating, terminating.Metadata.Name, ns);
     Check((await cleanup.RunAsync(owner, true, default)).Rewritten == 1, "rewrite after real producer exit");
+    await Put(key, original);
+    var cron = await cluster.BatchV1.CreateNamespacedCronJobAsync(new V1CronJob {
+        Metadata = new V1ObjectMeta { Name = "session-proof-316" },
+        Spec = new V1CronJobSpec { Schedule = "0 0 * * *", Suspend = true,
+            JobTemplate = new V1JobTemplateSpec { Spec = new V1JobSpec { Template = new V1PodTemplateSpec { Spec = new V1PodSpec { RestartPolicy = "Never", Containers = pod.Spec.Containers } } } } }
+    }, ns);
+    Check((await cleanup.RunAsync(owner, true, default)).Skipped == 1, "suspended CronJob skipped");
+    var job = await cluster.BatchV1.CreateNamespacedJobAsync(new V1Job {
+        Metadata = new V1ObjectMeta { Name = "owned-job-316", Finalizers = ["example.com/proof"], OwnerReferences = [new V1OwnerReference { ApiVersion = "batch/v1", Kind = "CronJob", Name = cron.Metadata.Name, Uid = cron.Metadata.Uid }] },
+        Spec = cron.Spec.JobTemplate.Spec
+    }, ns);
+    await cluster.BatchV1.DeleteNamespacedCronJobAsync(cron.Metadata.Name, ns, propagationPolicy: "Background");
+    Check((await cleanup.RunAsync(owner, true, default)).Skipped == 1, "owned Job skipped after CronJob deletion");
+    job = await cluster.BatchV1.ReadNamespacedJobAsync(job.Metadata.Name, ns);
+    job.Metadata.Finalizers = [];
+    await cluster.BatchV1.ReplaceNamespacedJobAsync(job, job.Metadata.Name, ns);
+    try { await cluster.BatchV1.DeleteNamespacedJobAsync(job.Metadata.Name, ns, propagationPolicy: "Background"); }
+    catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound) { Console.WriteLine("PASS garbage collector already removed completed proof Job"); }
+    using (var deniedCluster = new Kubernetes(new KubernetesClientConfiguration { Host = clusterConfig.Host, AccessToken = "synthetic-invalid-token", SkipTlsVerify = true }))
+    {
+        var denied = new ClaudeStateCleanup(storage, registry, locks, builder.Configuration, deniedCluster);
+        Check((await denied.RunAsync(owner, true, default)).Failed == 1, "unknown cluster status fails closed");
+        Check(Same(original, await Read(key)), "cluster denial preserves archive");
+    }
+    var callback = new AgentCallbackAuthorizer(registry);
+    var context = new DefaultHttpContext(); context.Request.Headers["X-Agent-Token"] = "synthetic-callback-only";
+    Check(await callback.AuthorizeAsync(context.Request, "proof-316") is not null, "live callback token accepted");
+    var tokens = new McpGatewayTokenService(new EphemeralDataProtectionProvider());
+    var gatewayToken = tokens.Issue("proof-316", "fixture-server", owner);
+    Check(tokens.TryValidate(gatewayToken, "fixture-server", out _), "gateway token issued");
+    await registry.DeleteAsync("proof-316");
+    Check(await callback.AuthorizeAsync(context.Request, "proof-316") is null, "deleted callback token rejected");
+    var gateway = new ApiMcpGatewayHandler(null!, null!, tokens, null!, new HttpClient(), registry, null!);
+    var gatewayContext = new DefaultHttpContext(); gatewayContext.Request.Method = "POST";
+    gatewayContext.Request.Headers[McpGatewayTokenService.HeaderName] = gatewayToken;
+    await gateway.HandleCatalogAsync(gatewayContext, "fixture-server");
+    Check(gatewayContext.Response.StatusCode == 401, "real gateway rejects deleted session despite valid token");
     await Put(key, [1, 2, 3]);
     Check((await cleanup.RunAsync(owner, true, default)).Failed == 1, "malformed object counted");
     Check((await Read(key)).SequenceEqual(new byte[] { 1, 2, 3 }), "malformed object untouched");
@@ -101,6 +143,7 @@ try
 }
 finally
 {
+    await registry.DeleteAsync("proof-316");
     await storage.DeleteByPrefixAsync(prefix); await storage.DeleteAsync(foreignKey); await storage.DeleteAsync(rawOwnerKey);
     await app.StopAsync();
 }

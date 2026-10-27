@@ -60,12 +60,17 @@ public sealed class ClaudeStateCleanup(IArtifactStore artifacts, ISessionStore s
         // The resume/delete lock and actual producer absence prevent overwriting that history.
         if ((await _cluster.CoreV1.ListNamespacedPodAsync(_namespace,
             labelSelector: $"agenthub.dev/session={id}", cancellationToken: ct)).Items.Count != 0) return true;
-        try { await _cluster.CoreV1.ReadNamespacedPodAsync(name, _namespace, cancellationToken: ct); return true; }
-        catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound) { }
-        try { await _cluster.BatchV1.ReadNamespacedCronJobAsync(name, _namespace, cancellationToken: ct); return true; }
-        catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound) { }
+        if (await ExistsAsync(() => _cluster.CoreV1.ReadNamespacedPodAsync(name, _namespace, cancellationToken: ct))) return true;
+        if (await ExistsAsync(() => _cluster.BatchV1.ReadNamespacedCronJobAsync(name, _namespace, cancellationToken: ct))) return true;
         return (await _cluster.BatchV1.ListNamespacedJobAsync(_namespace, cancellationToken: ct)).Items
             .Any(job => job.Metadata.OwnerReferences?.Any(reference => reference.Kind == "CronJob" && reference.Name == name) == true);
+    }
+
+    private static async Task<bool> ExistsAsync<T>(Func<Task<T>> read)
+    {
+        try { await read(); return true; }
+        catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == HttpStatusCode.NotFound)
+        { return false; }
     }
 
     public static async Task<MemoryStream?> RemoveBackupsAsync(Stream input, CancellationToken ct)

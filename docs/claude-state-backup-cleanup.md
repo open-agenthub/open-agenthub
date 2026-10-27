@@ -82,7 +82,9 @@ are different: deleting a registry row does not invalidate their storage signatu
 they remain valid until expiry (normally twelve hours). Apply storage-side controls
 if immediate revocation is required.
 
-The account metadata in `.claude.json` is personal data. Its presence alone does
+The account metadata in `.claude.json` can include account/email/organization identifiers,
+userID and machineID; an approved API key can leave its 20-character suffix there.
+These values are personal data. Its presence alone does
 not establish exposure of provider login credentials, whose primary file is
 excluded separately. Review any additional custom configuration/backup values;
 rotate provider credentials if those values contained them. No real credential is

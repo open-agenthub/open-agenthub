@@ -9,11 +9,20 @@ const old = path.join(root, 'old.tgz'), clean = path.join(root, 'cleaned.tgz');
 const list = file => execFileSync('tar', ['tvzf', file], { encoding: 'utf8' }).trim().split('\n');
 assert.deepEqual(list(clean), list(old).filter(line => !line.includes('.claude/backups')));
 const source = fs.readFileSync(path.join(__dirname, '../../agent-runtime/common/entrypoint-common.sh'), 'utf8');
-const command = source.split('\n').find(line => line.trim().startsWith('tar xzf /tmp/state.tgz')).trim().replace(/; then$/, '');
+const command = 'tar xzf /tmp/state.tgz --exclude=".claude/backups" --exclude="./.claude/backups" -C "$HOME" 2>/dev/null';
+assert.ok(source.includes(command + '; then'));
 const restore = path.join(root, 'restored');
 fs.mkdirSync(restore, { recursive: true });
-execFileSync('bash', ['-c', command.replace('/tmp/state.tgz', '"$1"'), 'restore', old], { env: { ...process.env, HOME: restore } });
+execFileSync('tar', ['xzf', old, '--exclude=.claude/backups', '--exclude=./.claude/backups', '-C', restore]);
 assert.ok(!fs.existsSync(path.join(restore, '.claude/backups')));
+function hashFile(file) {
+  // Hash an opened regular file so a replaced symlink cannot redirect the read after lstat.
+  const fd = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+  try {
+    assert.ok(fs.fstatSync(fd).isFile());
+    return crypto.hash('sha256', fs.readFileSync(fd));
+  } finally { fs.closeSync(fd); }
+}
 function check(dir, relative = '') {
   for (const name of fs.readdirSync(dir)) {
     const rel = path.join(relative, name);
@@ -23,7 +32,7 @@ function check(dir, relative = '') {
     assert.equal(actual.mode, stat.mode);
     if (stat.isDirectory()) check(original, rel);
     else if (stat.isSymbolicLink()) assert.equal(fs.readlinkSync(restored), fs.readlinkSync(original));
-    else assert.equal(crypto.hash('sha256', fs.readFileSync(restored)), crypto.hash('sha256', fs.readFileSync(original)));
+    else assert.equal(hashFile(restored), hashFile(original));
   }
 }
 check(path.join(root, 'home'));
