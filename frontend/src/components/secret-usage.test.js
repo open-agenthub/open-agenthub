@@ -82,7 +82,7 @@ describe('where a secret is used', () => {
     await flushPromises()
     expect(wrapper.find('[data-project-secrets]').exists()).toBe(true)
     mocks.api.listProjects.mockResolvedValue([{ ...projects[0], secretIds: [] }, projects[1]])
-    await wrapper.get('[data-project-secret="k1"]').setValue(false)
+    await wrapper.get('[data-project-secret="k1"] [data-grant-level="none"]').trigger('click')
     await wrapper.get('[data-project-secrets-save]').trigger('click')
     await flushPromises()
     expect(mocks.api.updateProject).toHaveBeenCalledWith('p1', { secretIds: [] })

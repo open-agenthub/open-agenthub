@@ -121,3 +121,54 @@ export function provenanceLabel(use, projects) {
 export function sessionHref(id) {
   return `/s/${encodeURIComponent(id)}`
 }
+
+/**
+ * The one control for what a session gets of a secret (#329). A session stores two things: the
+ * selection (`secretIds`, the project's or its own) and grants (`secretGrants`). They used to have
+ * a control each, ticks for the selection and three buttons for the grants, side by side in every
+ * session dialog. The three levels below cover both, because the hub already treats a selected
+ * secret as one that passes to child sessions: a spawn gets the parent's selection, and
+ * `secrets_list` reports `inheritToChildren` for it.
+ */
+export const GRANT_LEVELS = [
+  { value: 'none', label: 'Not allowed' },
+  { value: 'session', label: 'This session' },
+  { value: 'children', label: 'Also child sessions' }
+]
+
+/**
+ * The level a stored state shows. `selected` is the dialogs' list of ticked ids
+ * (secretSelectionFor), `grants` the session's grants.
+ */
+export function secretLevel(id, selected, grants) {
+  const grant = (grants || []).find(g => g.secretId === id)
+  if (grant?.inheritToChildren || (selected || []).includes(id)) return 'children'
+  return grant ? 'session' : 'none'
+}
+
+/**
+ * The selection and grants after the owner picks `level` for one secret; everything else is left
+ * as it was, so a dialog nobody touched still sends nothing. `selectable` is what the selection can
+ * hold here: the project's selection inside a project, every stored secret outside one.
+ * - none: neither selected nor granted.
+ * - session: a grant without inheritance, and out of the selection, which would pass it on.
+ * - children: an existing grant inherits; otherwise the secret goes back into the selection where
+ *   it can (with all of a project's secrets back in, the session follows the project again), and
+ *   only a secret the selection cannot hold becomes an inheriting grant.
+ */
+export function withSecretLevel(id, level, { selected = [], grants = [], selectable = [] }) {
+  if (secretLevel(id, selected, grants) === level) return { selected, grants }
+  const grant = grants.find(g => g.secretId === id)
+  const without = selected.filter(s => s !== id)
+  if (level === 'none') return { selected: without, grants: grants.filter(g => g.secretId !== id) }
+  if (level === 'session') {
+    return {
+      selected: without,
+      grants: grant ? grants.map(g => g.secretId === id ? { ...g, inheritToChildren: false } : g)
+        : [...grants, { secretId: id, inheritToChildren: false }]
+    }
+  }
+  if (grant) return { selected, grants: grants.map(g => g.secretId === id ? { ...g, inheritToChildren: true } : g) }
+  if (selectable.includes(id)) return { selected: selected.includes(id) ? selected : [...selected, id], grants }
+  return { selected, grants: [...grants, { secretId: id, inheritToChildren: true }] }
+}

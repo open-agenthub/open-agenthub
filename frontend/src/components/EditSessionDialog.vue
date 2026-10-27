@@ -9,7 +9,6 @@ import {
 import { autoDeleteForm, autoDeletePayload } from '../lib/expiry.js'
 import RepoPicker from './RepoPicker.vue'
 import GitPatPicker from './GitPatPicker.vue'
-import SecretPicker from './SecretPicker.vue'
 import SecretGrantsPicker from './SecretGrantsPicker.vue'
 import SecretConflictNote from './SecretConflictNote.vue'
 import { secretIdsChange, secretOptions, secretSelectionFor, chosenSecrets, secretConflicts } from '../lib/secrets.js'
@@ -233,9 +232,8 @@ async function save() {
         <SystemPromptField v-model="f.systemPrompt" :readonly="scheduled"
           readonly-hint="Fixed by the CronJob spec — delete and recreate the session to change it." />
         <div class="field last"><label>Project</label><select v-model="f.projectId"><option value="">No project</option><option v-for="project in projects" :key="project.id" :value="project.id">{{ project.name }}</option></select></div>
-        <SecretPicker v-if="!scheduled" v-model="selectedSecrets" :options="secrets" :in-project="!!selectedProject"
-          :project-has-none="!!selectedProject && storedSecrets.length > 0" />
-        <SecretGrantsPicker v-if="!scheduled" v-model="selectedGrants" :options="storedSecrets" :effective="session.effectiveSecrets || []" />
+        <SecretGrantsPicker v-if="!scheduled" v-model="selectedGrants" v-model:selected="selectedSecrets" :selectable="secrets.map(s => s.id)"
+          :in-project="!!selectedProject" :options="storedSecrets" :effective="session.effectiveSecrets || []" />
         <SecretConflictNote v-if="!scheduled" :secrets="chosen" />
         <div class="field last toggle-field">
           <label>Auto approve <span class="dim">— run tools without asking</span></label>

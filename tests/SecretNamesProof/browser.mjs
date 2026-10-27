@@ -45,8 +45,8 @@ await post('/secrets', { id: staging.id, name: 'API_KEY', delivery: 'env' })
 
 await page.goto('http://localhost:5173/')
 await page.click('text=+ Give an agent a task')
-await page.waitForSelector(`[data-secret-option="${prod.id}"]`)
-await page.check(`[data-secret-option="${prod.id}"]`)
+await page.waitForSelector(`[data-secret-grant="${prod.id}"]`)
+await page.click(`[data-secret-grant="${prod.id}"] [data-grant-level="children"]`)
 await page.click(`[data-secret-grant="${staging.id}"] [data-grant-level="session"]`)
 const conflict = await page.textContent('[data-secret-conflict]')
 check(conflict.includes('2 secrets as $API_KEY'), 'the new-session dialog shows the clash', conflict.replace(/\s+/g, ' ').trim())
@@ -57,7 +57,7 @@ await page.click(`[data-secret-grant="${staging.id}"] [data-grant-level="none"]`
 check(!(await page.$('[data-secret-conflict]')) && !(await page.isDisabled('[data-submit]')), 'revoking the grant clears it')
 
 await page.click(`[data-project-secrets-open="${project.id}"]`)
-await page.check(`[data-project-secret="${staging.id}"]`)
+await page.click(`[data-project-secret="${staging.id}"] [data-grant-level="project"]`)
 check((await page.textContent('[data-project-secrets] [data-secret-conflict]')).includes('Every session in this project would receive 2 secrets'),
   'the project dialog shows the clash')
 check(await page.isDisabled('[data-project-secrets-save]'), 'and Save is disabled')
