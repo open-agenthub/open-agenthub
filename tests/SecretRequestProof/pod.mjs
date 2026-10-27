@@ -28,7 +28,7 @@ const log = (file, line) => fs.appendFileSync(path.join(R, file), `${new Date().
 
 // The branch's runtime, laid out as in the image, with node_modules (incl. the built node-pty) from
 // the image's session agent.
-execFileSync('sh', ['-c', `mkdir -p "${R}/sa" && tar c --exclude=node_modules -C "${REPO}" agent-runtime | tar x -C "${R}/sa"`])
+fs.cpSync(path.join(REPO, 'agent-runtime'), SA, { recursive: true, filter: src => path.basename(src) !== 'node_modules' })
 fs.symlinkSync('/opt/session-agent/node_modules', path.join(SA, 'node_modules'))
 fs.symlinkSync('/opt/session-agent/node_modules', path.join(SA, 'session-agent/node_modules'))
 
