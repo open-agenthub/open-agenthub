@@ -15,6 +15,7 @@ import SettingsView from './components/SettingsView.vue'
 import AdminView from './components/AdminView.vue'
 import SharedSessionView from './components/SharedSessionView.vue'
 import SessionSearch from './components/SessionSearch.vue'
+import ApiKeyLogin from './components/ApiKeyLogin.vue'
 import { REPO_URL, versionLabel } from './lib/docs.js'
 import { SETTINGS_DEFAULT_TAB, settingsPath, settingsTabFromPath, sharedTokenFromPath } from './lib/routes.js'
 import { initials } from './lib/text.js'
@@ -38,6 +39,8 @@ const sharedToken = sharedTokenFromPath(location.pathname)
 const activeSession = computed(() => sessions.value.find(session => session.id === activeId.value) || null)
 const editSession = computed(() => sessions.value.find(session => session.id === editId.value) || null)
 const needsLogin = !sharedToken && auth.enabled && !auth.isAuthenticated
+// The app reads the login state once at setup; a reload starts it with the key in place.
+function reloadSignedIn() { location.reload() }
 const waitingCount = computed(() => sessions.value.filter(s => s.questionPending).length)
 let refreshTimer
 
@@ -191,6 +194,7 @@ onBeforeUnmount(() => {
 </script>
 <template>
   <SharedSessionView v-if="sharedToken" :token="sharedToken" />
+  <ApiKeyLogin v-else-if="needsLogin && auth.mode === 'apiKey'" @signed-in="reloadSignedIn" />
   <div v-else-if="needsLogin" class="login"><div class="login-card"><h1>Open AgentHub</h1><p>Please sign in to manage your agent sessions.</p><button class="primary" @click="auth.login()">Sign in</button></div></div>
   <div v-else class="shell" :class="{ 'session-open': activeSession && !page, 'mobile-navigation-open': mobileNavigationOpen, 'side-collapsed': sidebarCollapsed, 'side-resizing': sidebarResizing }"
     :style="{ '--side-width': `${sidebarWidth}px` }">
@@ -224,6 +228,9 @@ onBeforeUnmount(() => {
         <button v-if="auth.enabled" class="ghost" title="Sign out" @click="auth.logout()">Sign out</button>
         <span class="avatar" :title="auth.user" @click="openSettings()">{{ initials(auth.user) }}</span>
       </header>
+      <div v-if="auth.insecure" class="banner error" role="alert" data-insecure-dev-banner>
+        <span>Insecure development mode: there is no login, and anyone who can reach this instance acts as admin. Configure OIDC or an API key before exposing it.</span>
+      </div>
       <div v-if="banner" class="banner" :class="banner.kind">
         <span>{{ banner.text }}</span>
         <button class="ghost" @click="banner = null">✕</button>

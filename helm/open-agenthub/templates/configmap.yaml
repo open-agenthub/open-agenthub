@@ -114,6 +114,12 @@ data:
   Oidc__ClientId: {{ .Values.oidc.clientId | quote }}
   Oidc__Scope: {{ .Values.oidc.scope | quote }}
   Oidc__RequireHttpsMetadata: {{ .Values.oidc.requireHttpsMetadata | quote }}
+  {{- $authMode := include "agenthub.authMode" . }}
+  {{- if eq $authMode "apiKey" }}
+  Auth__ApiKeyOwner: {{ include "agenthub.apiKeyOwner" . | quote }}
+  {{- else if eq $authMode "insecureDev" }}
+  Auth__InsecureDevMode: "true"
+  {{- end }}
   FrontendOrigin: {{ .Values.frontendOrigin | default (printf "https://%s" .Values.ingress.host) | quote }}
   {{- if .Values.mcp.enabled }}
   {{- /* The issuer is baked into every token and into the discovery document, so it has to be

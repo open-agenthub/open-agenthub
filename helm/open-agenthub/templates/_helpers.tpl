@@ -139,3 +139,49 @@ Host=postgres.{{ .Release.Namespace }}.svc.cluster.local;Database=agenthub;Usern
 {{- printf "%s/agent-runtime-opencode:%s" $registry $tag -}}
 {{- end -}}
 {{- end }}
+
+{{- /* auth.* is read through dig: `helm upgrade --reuse-values` from a release older than these
+       values carries no auth block at all, and a plain .Values.auth.apiKey would fail the
+       upgrade with a nil pointer.
+       Which login guards the API (docs/no-oidc-api-key.md): oidc, apiKey or insecureDev. */}}
+{{- define "agenthub.authMode" -}}
+{{- if .Values.oidc.authority -}}oidc
+{{- else if eq (toString (dig "auth" "insecureDevMode" false .Values.AsMap)) "true" -}}insecureDev
+{{- else -}}apiKey
+{{- end -}}
+{{- end -}}
+
+{{- define "agenthub.apiKeyExistingSecret" -}}
+{{- dig "auth" "apiKey" "existingSecret" "" .Values.AsMap -}}
+{{- end -}}
+
+{{- define "agenthub.apiKeySecretName" -}}
+{{- include "agenthub.apiKeyExistingSecret" . | default "agenthub-api-key" -}}
+{{- end -}}
+
+{{- define "agenthub.apiKeySecretKey" -}}
+{{- if include "agenthub.apiKeyExistingSecret" . -}}{{ dig "auth" "apiKey" "existingSecretKey" "" .Values.AsMap | default "api-key" }}{{- else -}}api-key{{- end -}}
+{{- end -}}
+
+{{- /* The owner the API key acts as. Decided once and then read back from the cluster: a later
+       upgrade must not move an install from "admin" to "dev" or back, which would hide every
+       session it has. The ConfigMap is the fallback for a Secret someone deleted to rotate the
+       key, and for auth.apiKey.existingSecret. With neither, an upgrade means the release existed
+       before the key did — it ran in the open mode where everything belonged to "dev". */}}
+{{- define "agenthub.apiKeyOwner" -}}
+{{- $owner := dig "auth" "apiKey" "owner" "" .Values.AsMap -}}
+{{- $existingSecret := include "agenthub.apiKeyExistingSecret" . -}}
+{{- $secret := lookup "v1" "Secret" .Release.Namespace "agenthub-api-key" -}}
+{{- $config := lookup "v1" "ConfigMap" .Release.Namespace "agenthub-config" -}}
+{{- if $owner -}}
+{{- $owner -}}
+{{- else if and (not $existingSecret) $secret $secret.data (hasKey $secret.data "owner") -}}
+{{- index $secret.data "owner" | b64dec -}}
+{{- else if and $config $config.data (hasKey $config.data "Auth__ApiKeyOwner") -}}
+{{- index $config.data "Auth__ApiKeyOwner" -}}
+{{- else if .Release.IsUpgrade -}}
+dev
+{{- else -}}
+admin
+{{- end -}}
+{{- end -}}

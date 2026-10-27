@@ -2,14 +2,23 @@ import { UserManager, WebStorageStateStore } from 'oidc-client-ts'
 import { reactive } from 'vue'
 import { DEV_VERSION, REPO_URL } from './lib/docs.js'
 
-// Generic OIDC sign-in (Authorization Code + PKCE) via oidc-client-ts.
-// The provider config is fetched at RUNTIME from the backend (GET /api/config), because
-// the frontend is deployed as a static nginx image – no build-time env vars.
-// Empty authority = "auth disabled" mode (local development, no login).
+// Sign-in, chosen at RUNTIME from the backend (GET /api/config) because the frontend is deployed
+// as a static nginx image – no build-time env vars. authMode is one of:
+//   oidc         generic OIDC (Authorization Code + PKCE) via oidc-client-ts
+//   apiKey       the install's static API key, asked for once per browser session
+//   insecureDev  no login at all (local development only); the app shows a warning banner
+
+// sessionStorage, not localStorage: the key is a long-lived admin credential, so it should end
+// with the browser session instead of sitting on disk for every later user of the profile.
+export const API_KEY_STORAGE = 'agenthub.apiKey'
+const API_KEY_USER_STORAGE = 'agenthub.apiKeyUser'
 
 let manager = null
 let user = null
 let enabled = false
+let mode = 'insecureDev'
+let apiKey = null
+let apiKeyUser = null
 
 // Runtime backend config (e.g. whether Git OAuth providers / Slack are configured).
 // `version` starts as the value baked into this bundle so the footer has a label before
@@ -31,7 +40,17 @@ export async function initAuth() {
   config.signalEnabled = !!cfg.signalEnabled
   if (cfg.version) config.version = String(cfg.version)
   if (cfg.repoUrl) config.repoUrl = String(cfg.repoUrl)
-  enabled = !!cfg.authority
+  // A backend older than authMode only knows OIDC or the open "dev" mode.
+  mode = cfg.authMode || (cfg.authority ? 'oidc' : 'insecureDev')
+  if (mode === 'apiKey') {
+    enabled = true
+    try {
+      apiKey = sessionStorage.getItem(API_KEY_STORAGE)
+      apiKeyUser = sessionStorage.getItem(API_KEY_USER_STORAGE)
+    } catch { apiKey = null }
+    return
+  }
+  enabled = mode === 'oidc' && !!cfg.authority
   if (!enabled) return
 
   // Request offline_access so we get a refresh token (needed to survive long idle
@@ -75,11 +94,37 @@ export async function initAuth() {
 }
 
 export function login() {
+  // API-key mode: forget the key that was just rejected; the reload shows the key prompt.
+  if (mode === 'apiKey') { forgetApiKey(); location.reload(); return }
   return manager?.signinRedirect({ state: { returnTo: location.pathname + location.search } })
+}
+
+function forgetApiKey() {
+  apiKey = null
+  apiKeyUser = null
+  try { sessionStorage.removeItem(API_KEY_STORAGE); sessionStorage.removeItem(API_KEY_USER_STORAGE) } catch {}
+}
+
+// Checks a key against an authenticated endpoint before keeping it, so a typo is reported on the
+// prompt instead of surfacing as a 401 from whichever page loads first. Throws on a wrong key.
+export async function signInWithApiKey(key, fetchImpl = fetch) {
+  const candidate = String(key || '').trim()
+  if (!candidate) throw new Error('Enter the API key.')
+  const res = await fetchImpl('/api/admin/access', { headers: { Authorization: `Bearer ${candidate}` } })
+  if (res.status === 401) throw new Error('That API key is not valid.')
+  if (!res.ok) throw new Error(`Could not check the key (HTTP ${res.status}).`)
+  const body = await res.json().catch(() => ({}))
+  apiKey = candidate
+  apiKeyUser = body.user || null
+  try {
+    sessionStorage.setItem(API_KEY_STORAGE, candidate)
+    if (apiKeyUser) sessionStorage.setItem(API_KEY_USER_STORAGE, apiKeyUser)
+  } catch {}
 }
 
 // Return a valid access token; silently renew shortly before expiry.
 export async function getToken() {
+  if (mode === 'apiKey') return apiKey
   if (!enabled) return null
   if (user && (user.expired || (user.expires_in != null && user.expires_in < 30)))
     user = await manager.signinSilent().catch(() => user)
@@ -88,10 +133,21 @@ export async function getToken() {
 
 export const auth = {
   get enabled() { return enabled },
-  get isAuthenticated() { return !enabled || (!!user && !user.expired) },
-  get user() { return enabled ? (user?.profile?.preferred_username ?? '–') : 'dev' },
-  get displayName() { return enabled ? (user?.profile?.name ?? this.user) : 'dev' },
-  get email() { return enabled ? (user?.profile?.email ?? null) : null },
+  get mode() { return mode },
+  get insecure() { return mode === 'insecureDev' },
+  get isAuthenticated() {
+    if (mode === 'apiKey') return !!apiKey
+    return !enabled || (!!user && !user.expired)
+  },
+  get user() {
+    if (mode === 'apiKey') return apiKeyUser ?? '–'
+    return enabled ? (user?.profile?.preferred_username ?? '–') : 'dev'
+  },
+  get displayName() { return mode === 'oidc' && enabled ? (user?.profile?.name ?? this.user) : this.user },
+  get email() { return mode === 'oidc' && enabled ? (user?.profile?.email ?? null) : null },
   login,
-  logout: () => manager?.signoutRedirect()
+  logout: () => {
+    if (mode === 'apiKey') { forgetApiKey(); location.reload(); return }
+    return manager?.signoutRedirect()
+  }
 }

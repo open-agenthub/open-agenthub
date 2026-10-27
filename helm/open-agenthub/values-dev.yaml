@@ -17,6 +17,10 @@ ingress:
 
 frontendOrigin: http://localhost:8080
 
+# Docker Desktop development has no OIDC provider; without this the backend refuses to start.
+auth:
+  insecureDevMode: true
+
 backend:
   replicas: 1
   environment: Development
