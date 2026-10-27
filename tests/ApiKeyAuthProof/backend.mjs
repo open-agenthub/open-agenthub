@@ -1,7 +1,7 @@
 // Starts the REAL backend in one of the authentication modes of #324, with the rig's Postgres and
 // kube-apiserver (README.md). The API key is read from a file so it never appears on a command
 // line or in tool output. Exported for proof.mjs; also runnable on its own for browser.mjs:
-//   node backend.mjs <AgentHub.Api.dll> <none|short|apiKey|insecure|insecureTypo> [log file]
+//   node backend.mjs <AgentHub.Api.dll> <none|short|lowEntropy|apiKey|insecure|insecureTypo> [log file]
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +17,7 @@ function authEnv(mode) {
   switch (mode) {
     case 'none': return {}
     case 'short': return { Auth__ApiKey: 'changeme' }
+    case 'lowEntropy': return { Auth__ApiKey: 'changemechangemechangemechangeme' }
     case 'insecureTypo': return { Auth__InsecureDevMode: 'yes' }
     case 'insecure': return { Auth__InsecureDevMode: 'true' }
     case 'apiKey': return { Auth__ApiKey: readKey() }

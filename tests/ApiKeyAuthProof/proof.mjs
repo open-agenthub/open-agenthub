@@ -94,7 +94,7 @@ if (baselineDll) {
 
 // ---------------------------------------------------------------------------------------------
 console.log('\n== 1. Startup is refused without an auth configuration ==')
-for (const [mode, expect] of [['none', 'No authentication is configured'], ['short', 'shorter than 32 characters'], ['insecureTypo', 'No authentication is configured']]) {
+for (const [mode, expect] of [['none', 'No authentication is configured'], ['short', 'shorter than 32 characters'], ['lowEntropy', 'fewer than 8 different characters'], ['insecureTypo', 'No authentication is configured']]) {
   const r = await runUntilExit(mode, `${RIG}/proof-refuse-${mode}.log`)
   check(r.code === 1, `mode "${mode}": the process exits with code 1`, `exit ${r.code}`)
   check(r.log.includes('FATAL: ') && r.log.includes(expect), `mode "${mode}": one FATAL line naming the fix`,
@@ -277,6 +277,13 @@ page.client = attacker
 const consentThrottled = await post(page, { password: KEY })
 check(consentThrottled.status === 429, 'and so is the MCP consent form', `HTTP ${consentThrottled.status}`)
 check((await call('GET', '/api/sessions', KEY)).status === 200, 'another client (the owner behind the same ingress) is unaffected')
+// Behind the ingress every client shares one socket address; a flood through it must not
+// lock out the owner (no per-address bucket on purpose).
+const flood = []
+for (let i = 0; i < 300; i++) flood.push(call('GET', '/api/sessions', 'wrong-' + i, undefined, { 'X-Forwarded-For': `192.0.2.${i % 250}, 10.77.${Math.floor(i / 250)}.${i % 250}` }))
+const floodCodes = (await Promise.all(flood)).map(r => r.status)
+check(floodCodes.every(c => c === 401), '300 wrong keys from rotating clients through one address: all 401', [...new Set(floodCodes)].join(','))
+check((await call('GET', '/api/sessions', KEY, undefined, { 'X-Forwarded-For': '198.51.100.20' })).status === 200, 'and the owner with the right key still gets in')
 for (let i = 0; i < 30; i++) await call('GET', '/api/remote/sessions', personal, undefined, { 'X-Forwarded-For': '203.0.113.77' })
 check((await call('GET', '/api/sessions', KEY, undefined, { 'X-Forwarded-For': '203.0.113.77' })).status === 200,
   '30 personal-token calls from one client do not count as wrong keys')

@@ -11,8 +11,11 @@ PASS mode "none": the process exits with code 1 — exit 1
 PASS mode "none": one FATAL line naming the fix — FATAL: No authentication is configured, so the backend refuses to start. Configure one of: Oidc:Authority (an OIDC provider), Auth:ApiKey (a static key of at least 32 characters; the chart generates one when oidc.authority is empty), or, for local development only, Auth:InsecureDevMode=true, which lets anyone who can reach the backend act as an admin.
 PASS mode "none": nothing ever listened on 8080
 PASS mode "short": the process exits with code 1 — exit 1
-PASS mode "short": one FATAL line naming the fix — FATAL: Auth:ApiKey is shorter than 32 characters. Use a random key, e.g. `openssl rand -base64 36`, or leave it to the chart, which generates one.
+PASS mode "short": one FATAL line naming the fix — FATAL: Auth:ApiKey is shorter than 32 characters. Use a random key, e.g. `openssl rand -hex 24`, or leave it to the chart, which generates one.
 PASS mode "short": nothing ever listened on 8080
+PASS mode "lowEntropy": the process exits with code 1 — exit 1
+PASS mode "lowEntropy": one FATAL line naming the fix — FATAL: Auth:ApiKey uses fewer than 8 different characters, so it is not random. Use e.g. `openssl rand -hex 24`, or leave it to the chart, which generates one.
+PASS mode "lowEntropy": nothing ever listened on 8080
 PASS mode "insecureTypo": the process exits with code 1 — exit 1
 PASS mode "insecureTypo": one FATAL line naming the fix — FATAL: No authentication is configured, so the backend refuses to start. Configure one of: Oidc:Authority (an OIDC provider), Auth:ApiKey (a static key of at least 32 characters; the chart generates one when oidc.authority is empty), or, for local development only, Auth:InsecureDevMode=true, which lets anyone who can reach the backend act as an admin.
 PASS mode "insecureTypo": nothing ever listened on 8080
@@ -74,9 +77,11 @@ PASS the 11th attempt gets 429 with Retry-After, even with the right key — HTT
 PASS the WebSocket route is throttled for that client too — HTTP 429
 PASS and so is the MCP consent form — HTTP 429
 PASS another client (the owner behind the same ingress) is unaffected
+PASS 300 wrong keys from rotating clients through one address: all 401 — 401
+PASS and the owner with the right key still gets in
 PASS 30 personal-token calls from one client do not count as wrong keys
 PASS each wrong key is logged with the client, without the value
-PASS the backend log never contains the key — 1289 log lines
+PASS the backend log never contains the key — 3999 log lines
 PASS nor a wrong key that was presented
 PASS the log names the mode and the owner
 
@@ -88,7 +93,7 @@ PASS and are admin user "dev" — {"isAdmin":true,"user":"dev"}
 PASS WebSockets need no token either
 PASS a warning is logged on start — INSECURE DEVELOPMENT MODE (Auth:InsecureDevMode=true): there is no login. Every request is authentic
 
-81/81 checks passed
+86/86 checks passed
 
 == browser.mjs apiKey ==
 PASS without a key the app shows the API key prompt

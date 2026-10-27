@@ -33,6 +33,15 @@ public sealed class HubAuthOptions
     /// </summary>
     public const int MinApiKeyLength = 32;
 
+    /// <summary>
+    /// The key is the defence against brute force: the rate limit is per client, and without an
+    /// ingress a client can make itself a new one per request. Length alone lets "changeme"
+    /// repeated four times through. A random hex key of 32 characters has about 14 distinct
+    /// characters, and the chance that it has fewer than 8 is negligible. A repeated word, a
+    /// date or a run of one letter has fewer.
+    /// </summary>
+    public const int MinDistinctApiKeyCharacters = 8;
+
     public const string DefaultApiKeyOwner = "admin";
 
     /// <summary>The owner every request is attributed to in insecure development mode.</summary>
@@ -71,7 +80,11 @@ public sealed class HubAuthOptions
             if (key.Length < MinApiKeyLength)
                 throw new HubAuthConfigurationException(
                     $"Auth:ApiKey is shorter than {MinApiKeyLength} characters. Use a random key, e.g. "
-                    + "`openssl rand -base64 36`, or leave it to the chart, which generates one.");
+                    + "`openssl rand -hex 24`, or leave it to the chart, which generates one.");
+            if (key.Distinct().Count() < MinDistinctApiKeyCharacters)
+                throw new HubAuthConfigurationException(
+                    $"Auth:ApiKey uses fewer than {MinDistinctApiKeyCharacters} different characters, so it is "
+                    + "not random. Use e.g. `openssl rand -hex 24`, or leave it to the chart, which generates one.");
             var owner = cfg["Auth:ApiKeyOwner"]?.Trim();
             return new HubAuthOptions
             {
@@ -212,23 +225,25 @@ public sealed class InsecureDevAuthHandler(
 }
 
 /// <summary>
-/// Throttles guessing the API key: after <see cref="MaxFailuresPerClient"/> wrong keys from one
-/// client within <see cref="Window"/>, every key from that client — the right one too — gets 429
-/// until the window ends. A generated key cannot be guessed either way; this is for a hand-picked
-/// one, which only has to be 32 characters long.
+/// Slows down guessing from one client: after <see cref="MaxFailuresPerClient"/> wrong keys
+/// within <see cref="Window"/>, every key from that client — the right one too — gets 429 until
+/// the window ends. The defence against brute force is the key's entropy, which
+/// <see cref="HubAuthOptions.Resolve"/> enforces; this limit keeps one noisy client from filling
+/// the log and from guessing at request rate.
 ///
 /// The client is the connection's address plus the last X-Forwarded-For entry. Behind the
-/// ingress every connection comes from the ingress pod, so the address alone would put all users
-/// in one bucket and let one attacker lock the owner out; the ingress appends the real client
-/// address last, which a client cannot override. Without an ingress a client can invent that
-/// header, so the address alone also has a limit, <see cref="MaxFailuresPerAddress"/>, that
-/// rotating the header does not escape. The header is used for nothing but this bucket — pod
-/// identity elsewhere keeps relying on the socket address only.
+/// ingress every connection comes from the ingress pod, and the ingress appends the real client
+/// address last, where a client cannot override it. Without an ingress a client can invent that
+/// header and so get a fresh bucket per request. Accepted, because entropy carries the defence.
+///
+/// Deliberately no bucket for the connection address alone. Behind the ingress that is one
+/// address for everybody, so any limit on it would let anyone lock out every user, the owner with
+/// the right key included, by sending wrong keys. The header decides nothing else: pod identity
+/// elsewhere keeps relying on the socket address only.
 /// </summary>
 public sealed class ApiKeyFailureLimiter(TimeProvider? time = null)
 {
     public const int MaxFailuresPerClient = 10;
-    public const int MaxFailuresPerAddress = 100;
     public static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
     private const int MaxTrackedBuckets = 10_000;
 
@@ -244,15 +259,12 @@ public sealed class ApiKeyFailureLimiter(TimeProvider? time = null)
         return last is null ? AddressOf(ctx) : $"{AddressOf(ctx)} via {last}";
     }
 
-    public bool IsLimited(HttpContext ctx)
-        => Count("client:" + ClientOf(ctx)) >= MaxFailuresPerClient
-           || Count("address:" + AddressOf(ctx)) >= MaxFailuresPerAddress;
+    public bool IsLimited(HttpContext ctx) => Count(ClientOf(ctx)) >= MaxFailuresPerClient;
 
     public void RecordFailure(HttpContext ctx)
     {
         if (_buckets.Count > MaxTrackedBuckets) Prune();
-        Add("client:" + ClientOf(ctx));
-        Add("address:" + AddressOf(ctx));
+        Add(ClientOf(ctx));
     }
 
     private int Count(string bucket)

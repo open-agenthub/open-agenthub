@@ -23,12 +23,13 @@ CDP=... UI=... PW_DIR=... node browser.mjs insecure <outdir>
 
 ## Result (2026-10-27)
 
-`proof.mjs`: 81/81 (output in `results.txt`). `browser.mjs apiKey`: 16/16. `browser.mjs insecure`: 4/4.
+`proof.mjs`: 86/86 (output in `results.txt`). `browser.mjs apiKey`: 16/16. `browser.mjs insecure`: 4/4.
 
 - **Baseline v1.4.0, no configuration:** it starts and answers anonymous `GET /api/sessions`,
   `/api/admin/overview` and `/api/admin/roles` with 200. It also runs an anonymous admin cleanup
   dry-run, which fails with 500 only because the rig has no object storage.
-- **Refused startup:** with no auth configured, with `Auth:ApiKey=changeme`, and with
+- **Refused startup:** with no auth configured, with `Auth:ApiKey=changeme`, with `changeme`
+  repeated to 32 characters (fewer than 8 distinct characters), and with
   `Auth:InsecureDevMode=yes`, the process exits with code 1 and prints one `FATAL:` line naming the
   fix. Nothing ever listens on 8080.
 - **API key:** `/api/sessions`, `/api/projects`, `/api/admin/{access,overview,roles}`, the cleanup
@@ -49,8 +50,9 @@ CDP=... UI=... PW_DIR=... node browser.mjs insecure <outdir>
   The API key itself is not an MCP token.
 - **Throttling:** 10 wrong keys from one client each get 401. The 11th attempt gets 429 with
   `Retry-After: 60`, even with the right key, on REST, the WebSocket and the MCP consent form.
-  Another client behind the same address is unaffected, and 30 personal-token calls do not
-  count. Each wrong key is logged as `Rejected a wrong API key from 127.0.0.1 via 203.0.113.50
+  Another client behind the same address is unaffected. 300 wrong keys from rotating clients
+  through one address all get 401 and do not lock out the owner, and 30 personal-token calls do
+  not count. Each wrong key is logged as `Rejected a wrong API key from 127.0.0.1 via 203.0.113.50
   for GET /api/sessions`.
 - **Logs:** neither the right key nor a presented wrong one appears in any backend log. The first
   run found the key in clear text in OpenIddict's request log under the field name `api_key`. The

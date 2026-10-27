@@ -148,12 +148,39 @@ public class HubAuthTests
     }
 
     [Fact]
-    public async Task Rotating_an_invented_forwarded_header_does_not_escape_the_address_limit()
+    public async Task A_flood_of_wrong_keys_through_the_shared_ingress_address_never_locks_out_the_owner()
     {
+        // Behind the ingress every client has the same socket address. A limit on that address
+        // would be a cheap way to lock everybody out, the owner with the right key included.
         var limiter = new ApiKeyFailureLimiter(new Clock());
-        for (var i = 0; i < ApiKeyFailureLimiter.MaxFailuresPerAddress; i++)
+        for (var i = 0; i < 2000; i++)
             await RequestAsync(WithKey("wrong", $"192.0.2.{i % 250}, 10.9.{i / 250}.{i % 250}"), limiter);
-        Assert.Equal(429, (await RequestAsync(WithKey(Key, "192.0.2.251"), limiter)).Status);
+        Assert.True((await RequestAsync(WithKey(Key, "198.51.100.9"), limiter)).Result.Succeeded);
+        Assert.True((await RequestAsync(WithKey(Key), limiter)).Result.Succeeded);
+    }
+
+    [Theory]
+    [InlineData("changemechangemechangemechangeme")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    [InlineData("2026-10-27-2026-10-27-2026-10-27-2026")]
+    public void A_long_key_with_few_different_characters_refuses_to_start(string key)
+    {
+        // The rate limit is per client and a client without an ingress can be a new one per
+        // request, so the key itself has to be the defence.
+        var e = Assert.Throws<HubAuthConfigurationException>(() => HubAuthOptions.Resolve(Config(("Auth:ApiKey", key))));
+        Assert.Contains("different characters", e.Message);
+        Assert.DoesNotContain(key, e.Message);
+    }
+
+    [Fact]
+    public void A_random_hex_key_of_the_minimum_length_is_accepted()
+    {
+        // openssl rand -hex 16: the shortest key the docs suggest must never trip the entropy check.
+        for (var i = 0; i < 2000; i++)
+        {
+            var key = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
+            Assert.Equal(HubAuthMode.ApiKey, HubAuthOptions.Resolve(Config(("Auth:ApiKey", key))).Mode);
+        }
     }
 
     [Fact]
