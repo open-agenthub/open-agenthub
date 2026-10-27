@@ -4,15 +4,22 @@
 //   node proof.mjs <branch AgentHub.Api.dll> [baseline AgentHub.Api.dll]
 // The baseline (v1.4.0) run shows the defect itself: no configuration, and every admin endpoint
 // answers an anonymous caller.
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import http from 'node:http'
 import { HTTP, HTTPS, readKey, startBackend, waitHealthy } from './backend.mjs'
 
-process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0' // the rig's self-signed certificate on 8443
 const [dll, baselineDll] = process.argv.slice(2)
 const RIG = process.env.RIG || process.env.HOME + '/rig'
+// Trust the rig's own certificate on 8443 instead of switching verification off. Node reads
+// NODE_EXTRA_CA_CERTS only at startup, so the script runs itself once more with it set.
+if (!process.env.NODE_EXTRA_CA_CERTS) {
+  const r = spawnSync(process.execPath, process.argv.slice(1), {
+    stdio: 'inherit', env: { ...process.env, NODE_EXTRA_CA_CERTS: RIG + '/tls/cert.pem' }
+  })
+  process.exit(r.status ?? 1)
+}
 const KEY = readKey()
 const WRONG = crypto.randomBytes(36).toString('base64url')
 const kubectl = (...a) => execFileSync(process.env.KUBECTL || 'kubectl', ['-n', 'agenthub-sessions', ...a], { encoding: 'utf8' })
@@ -182,13 +189,15 @@ const authorizeQuery = new URLSearchParams({ response_type: 'code', client_id: r
 const silent = await fetch(`${HTTPS}/connect/authorize?${authorizeQuery}&prompt=none`, { redirect: 'manual' })
 check(silent.status === 302 && /error=login_required/.test(silent.headers.get('location') || ''), 'MCP: prompt=none cannot get a code without the key', silent.headers.get('location')?.replace(/state=[^&]*/, '') || `HTTP ${silent.status}`)
 
+// &amp; last, so an escaped "&amp;quot;" stays the literal text "&quot;".
+const unescapeHtml = v => v.replace(/&#43;|&#x2B;/g, '+').replace(/&quot;/g, '"').replace(/&amp;/g, '&')
 async function consent() {
   const r = await fetch(`${HTTPS}/connect/authorize?${authorizeQuery}`, { redirect: 'manual' })
   const html = await r.text()
   const cookies = r.headers.getSetCookie().map(c => c.split(';')[0]).join('; ')
   const fields = {}
   for (const m of html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)">/g))
-    fields[m[1].replace(/&amp;/g, '&')] = m[2].replace(/&amp;/g, '&').replace(/&#43;/g, '+').replace(/&#x2B;/g, '+').replace(/&quot;/g, '"')
+    fields[unescapeHtml(m[1])] = unescapeHtml(m[2])
   return { status: r.status, html, cookies, fields }
 }
 async function post(page, extra) {

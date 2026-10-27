@@ -23,7 +23,7 @@ CDP=... UI=... PW_DIR=... node browser.mjs insecure <outdir>
 
 ## Result (2026-10-27)
 
-`proof.mjs`: 74/74. `browser.mjs apiKey`: 16/16. `browser.mjs insecure`: 4/4.
+`proof.mjs`: 74/74 (output in `results.txt`). `browser.mjs apiKey`: 16/16. `browser.mjs insecure`: 4/4.
 
 - **Baseline v1.4.0, no configuration:** it starts and answers anonymous `GET /api/sessions`,
   `/api/admin/overview` and `/api/admin/roles` with 200. It also runs an anonymous admin cleanup
