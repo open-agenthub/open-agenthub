@@ -189,6 +189,18 @@ public sealed class SessionsController : ControllerBase
         catch (AgentNotAllowedException e) { return ForbiddenAgent(e); }
     }
 
+    /// <summary>Writes the session's secret copies again after they were withdrawn (#303).</summary>
+    [HttpPost("{id}/resync-secrets")]
+    public async Task<ActionResult<SessionInfo>> ResyncSecrets(string id, CancellationToken ct)
+    {
+        try { return Ok(await _svc.ResyncSessionSecretsAsync(Owner, id, ct)); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (SessionSecretCopiesPendingException e)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { code = "secret_copies_pending", error = e.Message, sessions = e.Sessions });
+        }
+    }
+
     [HttpPost("{id}/resume")]
     public async Task<ActionResult<SessionInfo>> Resume(string id, CancellationToken ct)
     {

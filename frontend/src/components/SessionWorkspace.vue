@@ -277,7 +277,7 @@ onBeforeUnmount(() => {
     </template>
     <div v-for="secret in session.effectiveSecrets" v-else :key="secret.id">{{ secret.name }} · {{ secret.delivery }} · {{ secret.provenance }} · {{ secret.inheritToChildren ? 'inherits to children' : 'this session only' }}</div>
   </details>
-  <SecretRestartNote v-if="grantsEditable || session.scheduleSecretsOutdated" :session="session" @restarted="emit('updated')" />
+  <SecretRestartNote v-if="grantsEditable || session.scheduleSecretsOutdated || session.secretsWithdrawn" :session="session" @restarted="emit('updated')" />
   <GitSignInNote v-if="grantsEditable" :session="session" />
   <SessionStartupFailure v-if="session?.failureReason" :reason="session.failureReason" />
   <div v-if="companionVisible" class="workspace-shell">

@@ -861,6 +861,9 @@ public record SessionInfo
     /// its variable copy holds: an update of its template failed and is retried at the next sync
     /// or through apply-resources (#301).</summary>
     public bool ScheduleSecretsOutdated { get; init; }
+    /// <summary>This session's secret copies were withdrawn after a failed rewrite (#303): its files
+    /// and later runs receive no secrets until a sync writes them again (resync-secrets).</summary>
+    public bool SecretsWithdrawn { get; init; }
     public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
     /// <summary>Self-deletion deadline in seconds; null = the session is kept.</summary>
     public int? AutoDeleteAfterSeconds { get; init; }

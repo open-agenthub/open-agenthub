@@ -183,9 +183,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     {
         if (await ReadSecretOrNullAsync(UserSecretsName(owner), ct) is null) return;
         var removed = await ChangeUserSecretsAsync(owner, data => SessionSecretStore.Remove(data, id), ct);
-        if (!removed) return;
-        _log.LogInformation("Removed a secret for {Owner}", owner);
-        await TrySyncSessionSecretsAsync(owner, ct);
+        if (removed) _log.LogInformation("Removed a secret for {Owner}", owner);
+        // Strict, unlike a store write (#303): success has to mean no copy still holds the value,
+        // and a delete repeated after a failure — the id already gone from the store — runs the
+        // sync again rather than answering success for copies nobody touched.
+        await SyncSessionSecretsAsync(owner, ct);
     }
 
     public async Task<IReadOnlyList<string>> ResolveSessionSecretIdsAsync(string owner, string? projectId,
@@ -250,20 +252,43 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await _store.UpsertAsync(session, ct);
         }
         // Every session that was ever spawned has a file copy, so the copies are the list of
-        // sessions to bring up to date; a session that never ran has nothing to update.
+        // sessions to bring up to date; a session that never ran has nothing to update. Sessions
+        // with a live pod and scheduled sessions are added as well: a copy withdrawn below must come
+        // back with a later sync, not only at the next spawn, which a running pod or a scheduled
+        // run never goes through.
         var copies = await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
             labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}={SessionSecretDeliveryFactory.FilesComponent}",
             cancellationToken: ct);
-        if (copies.Items.Count == 0) return;
-        var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;
         var sessionIds = copies.Items
             .Select(copy => copy.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var id) ? id : null)
-            .OfType<string>();
+            .OfType<string>()
+            .Concat((await _store.ListAsync(owner, ct)).Where(r => r.Mode == SessionMode.Scheduled).Select(r => r.Id))
+            .Concat((await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace,
+                    labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}=agent", cancellationToken: ct)).Items
+                .Where(pod => pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is "Pending" or "Running")
+                .Select(pod => pod.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var id) ? id : null).OfType<string>())
+            .Distinct().ToList();
+        if (sessionIds.Count == 0) return;
+        var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;
+        var pending = 0;
         foreach (var sessionId in sessionIds)
         {
             if (await _store.GetAsync(owner, sessionId, ct) is { } rec)
             {
-                await WriteSessionSecretsAsync(owner, rec, store, ct, resolver);
+                try
+                {
+                    await WriteSessionSecretsAsync(owner, rec, store, ct, resolver);
+                }
+                catch (Exception e) when (e is k8s.Autorest.HttpOperationException or HttpRequestException)
+                {
+                    // Fails closed (#303): a copy that kept a removed value would hand it to the
+                    // running pod's files and to every scheduled run. Without copies the session
+                    // receives nothing until they are written again — its references are optional,
+                    // so nothing fails to start — and the other sessions are still brought up to date.
+                    _log.LogWarning(e, "Could not rewrite the secret copies of a session; withdrawing them");
+                    if (!await TryWithdrawSessionSecretsAsync(rec.Id, ct)) pending++;
+                    continue;
+                }
                 // A run copies its pod from the template, so the copy alone changes only the values
                 // behind names the template already lists (#301).
                 if (rec.Mode == SessionMode.Scheduled) await TryRefreshScheduledSecretEnvAsync(rec.Id, ct);
@@ -273,6 +298,29 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             // values nobody can receive any more, and no later session delete would reach them.
             await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(sessionId), ct);
             await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(sessionId), ct);
+        }
+        if (pending > 0) throw new SessionSecretCopiesPendingException(pending);
+    }
+
+    public async Task<SessionInfo> ResyncSessionSecretsAsync(string owner, string id, CancellationToken ct = default)
+    {
+        if (await _store.GetAsync(owner, id, ct) is null) throw new KeyNotFoundException($"Session {id} not found.");
+        await SyncSessionSecretsAsync(owner, ct);
+        return (await GetSessionAsync(owner, id, ct))!;
+    }
+
+    private async Task<bool> TryWithdrawSessionSecretsAsync(string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(sessionId), ct);
+            await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(sessionId), ct);
+            return true;
+        }
+        catch (Exception e) when (e is k8s.Autorest.HttpOperationException or HttpRequestException)
+        {
+            _log.LogWarning(e, "Could not withdraw the secret copies of a session either");
+            return false;
         }
     }
 
@@ -336,8 +384,24 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     public static bool SecretsPendingRestart(V1Pod? pod, string? envVersion)
     {
         if (pod?.Metadata?.DeletionTimestamp is not null || pod?.Status?.Phase is not ("Pending" or "Running")) return false;
+        // A missing copy while the pod has a recorded start is a withdrawal (#303): the process
+        // still holds whatever it started with, possibly a value that was deleted since.
         return pod.Metadata.Annotations?.TryGetValue(SecretEnvVersionAnnotation, out var started) == true
-            && envVersion is not null && started != envVersion;
+            && (envVersion is null || started != envVersion);
+    }
+
+    /// <summary>
+    /// The session should have secret copies but has none: a failed rewrite withdrew them (#303).
+    /// Its files and later runs receive nothing until a sync writes them again. A live pod that
+    /// recorded its start, or a schedule whose template has the variable block, was started with
+    /// copies, so "none" cannot be a session that never had any.
+    /// </summary>
+    public static bool SecretsWithdrawn(V1Pod? livePod, V1PodSpec? scheduledTemplate, bool copyExists)
+    {
+        if (copyExists) return false;
+        var live = livePod?.Metadata?.DeletionTimestamp is null && livePod?.Status?.Phase is "Pending" or "Running"
+            && livePod.Metadata?.Annotations?.ContainsKey(SecretEnvVersionAnnotation) == true;
+        return live || (scheduledTemplate is not null && ScheduledTemplateSecrets.Names(scheduledTemplate) is not null);
     }
 
     private async Task<bool> SecretsPendingRestartAsync(string id, V1Pod? pod, CancellationToken ct) =>
@@ -2335,8 +2399,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 ResourcesPendingRestart = ResourcesPendingRestart(r, pod),
                 SecretsPendingRestart = SecretsPendingRestart(pod, envVersions.GetValueOrDefault(r.Id)),
                 ScheduleMoveUnfinished = unfinishedMoves.Contains(r.Id),
-                ScheduleSecretsOutdated = !unfinishedMoves.Contains(r.Id) && scheduledTemplates.TryGetValue(r.Id, out var scheduled)
-                    && ScheduledTemplateSecrets.Outdated(scheduled, envCopies.GetValueOrDefault(r.Id)?.Data?.Keys),
+                ScheduleSecretsOutdated = !unfinishedMoves.Contains(r.Id) && envCopies.TryGetValue(r.Id, out var envCopy)
+                    && scheduledTemplates.TryGetValue(r.Id, out var scheduled)
+                    && ScheduledTemplateSecrets.Outdated(scheduled, envCopy.Data?.Keys),
+                SecretsWithdrawn = SecretsWithdrawn(r.Mode == SessionMode.Scheduled ? null : pod,
+                    r.Mode == SessionMode.Scheduled ? scheduledTemplates.GetValueOrDefault(r.Id) : null, envCopies.ContainsKey(r.Id)),
                 OutdatedImage = RuntimeImageOutdated(r,
                     pod ?? (scheduledTemplates.TryGetValue(r.Id, out var template) ? new V1Pod { Spec = template } : null)) });
         }
@@ -2353,15 +2420,18 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await _browsers.GetSummaryAsync(id, ct), ct);
         var moveUnfinished = false;
         var secretsOutdated = false;
+        var livePod = pod;
+        V1PodSpec? template = null;
+        var envCopy = await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct);
         if (pod is null && rec.Mode == SessionMode.Scheduled)
         {
             try
             {
                 var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
-                pod = new V1Pod { Spec = cron.Spec.JobTemplate.Spec.Template.Spec };
+                template = cron.Spec.JobTemplate.Spec.Template.Spec;
+                pod = new V1Pod { Spec = template };
                 moveUnfinished = cron.Metadata.Annotations?.ContainsKey(ProjectMoveSuspendAnnotation) == true;
-                secretsOutdated = !moveUnfinished && ScheduledTemplateSecrets.Outdated(pod.Spec,
-                    (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct))?.Data?.Keys);
+                secretsOutdated = !moveUnfinished && envCopy is not null && ScheduledTemplateSecrets.Outdated(pod.Spec, envCopy.Data?.Keys);
             }
             catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
@@ -2370,7 +2440,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         }
         return info with { OutdatedImage = RuntimeImageOutdated(rec, pod), ResourcesPendingRestart = ResourcesPendingRestart(rec, pod),
             ScheduleMoveUnfinished = moveUnfinished, ScheduleSecretsOutdated = secretsOutdated,
-            SecretsPendingRestart = await SecretsPendingRestartAsync(id, pod, ct) };
+            SecretsWithdrawn = SecretsWithdrawn(livePod, template, envCopy is not null),
+            SecretsPendingRestart = livePod is not null && SecretsPendingRestart(livePod, envCopy?.Metadata?.ResourceVersion) };
     }
 
     public async Task ClearQuestionAsync(string owner, string id, CancellationToken ct = default)

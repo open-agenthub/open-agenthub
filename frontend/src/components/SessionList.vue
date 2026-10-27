@@ -16,6 +16,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
       <!-- Only a marker: the full diagnostic wrapped over a dozen lines here and pushed the other
            sessions out of view. The selected session's Workspace shows it in full. -->
       <div v-if="s.failureReason" class="startup-failure" data-session-failure-marker>Cannot start · open for details</div>
+      <div v-if="s.secretsWithdrawn" class="startup-failure" data-secrets-withdrawn>Secrets withdrawn · open to retry</div>
       <div v-if="s.scheduleSecretsOutdated" class="startup-failure" data-schedule-secrets-outdated>Schedule secrets outdated · open to update</div>
       <div v-if="s.scheduleMoveUnfinished" class="startup-failure" data-schedule-move-unfinished>Move unfinished · schedule paused</div>
       <div v-if="s.description" class="desc" data-session-description>{{ s.description }}</div>

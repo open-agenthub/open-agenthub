@@ -397,6 +397,48 @@ selection in effect. Grant changes refresh the session's copies through the exis
 path. Files update live; environment variables require the next start. For a scheduled session
 the next start is the next run, and grants and the selection change like any other session's.
 
+### Removing a secret fails closed (#303)
+
+A delete, a narrowed project selection or a deleted project removes a value from the sessions'
+copies. The copies are what a running pod's files, and every scheduled run, read. A copy that
+keeps the value therefore keeps handing it out. Before #303 a delete went through the lenient
+sync, which logged a failed copy rewrite and answered 204. The first failure also stopped the
+loop, so the remaining sessions were not rewritten either.
+
+- A copy that cannot be rewritten is withdrawn: both of that session's copies are deleted. Without
+  copies the session receives nothing. Its volume and variable references are optional, so
+  nothing fails to start. A resume writes the copies again. The sync also lists sessions with a
+  live agent pod and scheduled sessions, not only sessions with copies. A later sync therefore
+  gives a running pod its files back, and a schedule's runs their copies, without waiting for a
+  spawn that neither goes through. Every other session is still brought up to date.
+- A withdrawal is not silent. It takes all of the session's secrets, not only the deleted one, so
+  a running agent's files disappear until the copies are written again. `secretsWithdrawn` is
+  derived at read time: a live pod that recorded its start, or a schedule whose template has the
+  variable block, but no variable copy. The session view shows a notice with **Retry**
+  (`resync-secrets`, the strict sync, nothing restarted), the sidebar marks the session, and
+  Settings → Secrets lists it after a change.
+- **What this does not cover: a running process's environment.** Fail-closed applies to the copies,
+  so to files in a running pod and to every pod or run started from now on. A variable is fixed
+  when the container starts, so a running agent keeps a deleted variable's value until it
+  restarts, as for any change in #255. A missing variable copy therefore counts as
+  `secretsPendingRestart` for a pod that recorded its start, so the #255 restart (`apply-resources`)
+  is offered with the note "including any secret deleted since it started". Before #303, a missing
+  copy reported nothing pending and the restart was not offered. Pause the session to remove the
+  value at once.
+- Only when the withdrawal fails too does the request answer 503 `secret_copies_pending`. That is
+  the one case where a copy may still hold the value. The store change has happened, and Settings →
+  Secrets keeps the notice with **Retry**. A repeated delete runs the strict sync again, even
+  though the id is already gone from the store. Before, a repeat found nothing to remove and
+  returned at once.
+- Saving or rotating a secret keeps the lenient sync. The owner's write has happened, and failing it
+  would tell them it had not. A copy left with the previous value of a rotated secret is
+  outside #303.
+
+Rejected: rewriting the copies before removing the value from the store. A copy computed from a
+store that still holds the value can only keep it. Also rejected: answering 503 at the first failed
+rewrite without withdrawing. That leaves the value in place exactly when the owner most wants it
+gone, and depends on the owner retrying.
+
 ### Scheduled templates follow the variable copy (#301)
 
 A scheduled session's CronJob template lists its variable names, as references into the

@@ -176,15 +176,17 @@ public class ScheduledTemplateSecretSyncTests
     }
 
     [Fact]
-    public async Task ACopyThatCannotBeRewritten_LeavesTheTemplateAloneAndTheFailureVisibleToTheCaller()
+    public async Task ACopyThatCannotBeRewritten_IsWithdrawnAndTheTemplateLeftAlone()
     {
         var (rig, _, neu) = await Started();
         await using var __ = rig;
         rig.Fault = ScheduleFault.WriteSecretCopies;
         rig.SetProject(rig.Project("source") with { SecretIds = [neu] });
 
-        // The project change path calls the sync directly, so the owner hears the copy failed.
-        await Assert.ThrowsAnyAsync<Exception>(() => rig.Service.SyncSessionSecretsAsync("owner"));
+        // Fails closed (#303): no copy rather than a stale one, and the run's optional references
+        // resolve to nothing until a later sync writes the copy again.
+        await rig.Service.SyncSessionSecretsAsync("owner");
+        Assert.False(rig.HasSecret(SessionSecretDeliveryFactory.EnvSecretName("sid")));
         Assert.DoesNotContain("NEW_NAME", rig.TemplateEnvNames);
     }
 }

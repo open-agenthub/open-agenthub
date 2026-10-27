@@ -33,6 +33,11 @@ internal sealed class ScheduleClusterRig : IAsyncDisposable
     public SessionRecord Record = null!;
     public ScheduleFault? Fault;
     public bool ActiveRun;
+    // The session is hidden while Start stores the secrets, so their syncs leave the template and
+    // copies as the test set them up.
+    private bool _ready;
+    /// <summary>Refuses deleting the session's secret copies, on top of any <see cref="Fault"/>.</summary>
+    public bool RefuseCopyDeletes;
     /// <summary>How many template patches answer 409 while <see cref="ScheduleFault.ReplaceTemplate"/> is set; null = all.</summary>
     public int? FaultsLeft;
     public readonly List<string> Deleted = [];
@@ -57,6 +62,7 @@ internal sealed class ScheduleClusterRig : IAsyncDisposable
     public string? TemplateEnvValue(string name) => _cron["spec"]!["jobTemplate"]!["spec"]!["template"]!["spec"]!["containers"]!
         .AsArray().Single(c => c!["name"]!.GetValue<string>() == "agent")!["env"]!.AsArray()
         .Single(e => e!["name"]!.GetValue<string>() == name)!["value"]?.GetValue<string>();
+    public bool HasSecret(string name) => _secrets.ContainsKey(name);
     public Dictionary<string, string> EnvCopy => _secrets[SessionSecretDeliveryFactory.EnvSecretName("sid")].Data?
         .ToDictionary(d => d.Key, d => Encoding.UTF8.GetString(d.Value)) ?? [];
 
@@ -84,6 +90,7 @@ internal sealed class ScheduleClusterRig : IAsyncDisposable
         var neu = await rig.Service.UpsertSessionSecretAsync("owner", new("NEW_NAME", "env", "new-value", null));
         rig._projects["source"] = new("source", "Source", null, 0, [old.Id]);
         rig._projects["target"] = new("target", "Target", null, 1, [neu.Id]);
+        rig._ready = true;
         return rig;
     }
 
@@ -127,6 +134,11 @@ internal sealed class ScheduleClusterRig : IAsyncDisposable
             Items = _secrets.Values.Where(secret => Matches(secret.Metadata.Labels, labelSelector)).ToList() }));
         app.MapPost("/api/v1/namespaces/{ns}/secrets", (V1Secret secret) => Write(secret, create: true));
         app.MapPut("/api/v1/namespaces/{ns}/secrets/{name}", (V1Secret secret) => Write(secret, create: false));
+        app.MapDelete("/api/v1/namespaces/{ns}/secrets/{name}", (string name) =>
+        {
+            if (RefuseCopyDeletes && name.StartsWith("session")) return Results.Json(new V1Status { Code = 403, Reason = "Forbidden" }, statusCode: 403);
+            return _secrets.Remove(name) ? Results.Json(new V1Status { Code = 200 }) : Results.Json(new V1Status { Code = 404 }, statusCode: 404);
+        });
     }
 
     private static bool Matches(IDictionary<string, string>? labels, string? selector) =>
@@ -175,8 +187,8 @@ internal sealed class ScheduleClusterRig : IAsyncDisposable
     {
         var store = RuntimeProofProxy.Make<ISessionStore>((method, args) => method.Name switch
         {
-            "GetAsync" => Task.FromResult(args![0] as string == Record.Owner && args[1] as string == Record.Id ? Copy(Record) : null),
-            "ListAsync" => Task.FromResult<IReadOnlyList<SessionRecord>>([Copy(Record)]),
+            "GetAsync" => Task.FromResult(_ready && args![0] as string == Record.Owner && args[1] as string == Record.Id ? Copy(Record) : null),
+            "ListAsync" => Task.FromResult<IReadOnlyList<SessionRecord>>(_ready ? [Copy(Record)] : []),
             "UpsertAsync" => Fault == ScheduleFault.StoreRecord ? Task.FromException(new InvalidOperationException("store failed"))
                 : Store((SessionRecord)args![0]!),
             _ => null
