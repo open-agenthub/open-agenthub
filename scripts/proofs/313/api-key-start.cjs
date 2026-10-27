@@ -73,6 +73,7 @@ function build() {
 const callbacks = [];
 // A fake key with a recognisable, non-repeating tail, so a leaked suffix is found by search.
 const API_KEY = 'sk-ant-api03-example-' + crypto.randomBytes(30).toString('hex');
+const MCP_TOKEN = 'example-mcp-token-' + crypto.randomBytes(12).toString('hex');
 const modelRequests = [];
 // Upload bodies stay in memory and are only searched; nothing of them is printed.
 const uploads = [];
@@ -169,6 +170,13 @@ function podEnv() {
     // Nothing pre-approved here: approving the key is what the entrypoint is under test for.
   }
   if (scenario === 'none') env.AGENTHUB_AUTH_MODE = 'auto';
+  // PROOF_MCP=1: a session MCP server whose definition carries a fake bearer token, as a user's
+  // remote MCP server would.
+  if (process.env.PROOF_MCP === '1') {
+    env.AGENTHUB_HAS_MCP = '1';
+    fs.writeFileSync(path.join(ROOT, 'secrets/mcp/mcp.json'), JSON.stringify({ mcpServers: {
+      example: { type: 'http', url: 'https://example.com/mcp', headers: { Authorization: 'Bearer ' + MCP_TOKEN } } } }));
+  }
   return env;
 }
 
@@ -261,16 +269,20 @@ function podEnv() {
   const keyQuestion = /Do you want to use this API key/;
   const screenBefore = screen();
   let turn = {};
-  if (scenario === 'apikey') {
-    // One turn, typed the way the Workspace composer sends it.
-    socket.send(JSON.stringify({ type: 'input', data: '\x1b[200~say done\x1b[201~' }));
-    await new Promise(r => setTimeout(r, 200));
-    socket.send(JSON.stringify({ type: 'input', data: '\r' }));
-    const end = Date.now() + 30000;
-    while (Date.now() < end && !/⏺ done|● done/.test(screen())) await new Promise(r => setTimeout(r, 100));
-    turn.answered = /⏺ done|● done/.test(screen());
+  // 'mock' (fake subscription login through the local fake identity) inspects the uploads too,
+  // without a turn: the CLI then holds an account in ~/.claude.json.
+  if (scenario === 'apikey' || scenario === 'mock') {
+    if (scenario === 'apikey') {
+      // One turn, typed the way the Workspace composer sends it.
+      socket.send(JSON.stringify({ type: 'input', data: '\x1b[200~say done\x1b[201~' }));
+      await new Promise(r => setTimeout(r, 200));
+      socket.send(JSON.stringify({ type: 'input', data: '\r' }));
+      const end = Date.now() + 30000;
+      while (Date.now() < end && !/⏺ done|● done/.test(screen())) await new Promise(r => setTimeout(r, 100));
+      turn.answered = /⏺ done|● done/.test(screen());
+    }
     // The session agent's periodic upload (30 s) of scrollback, transcript and state.
-    const wanted = ['/upload/scrollback', '/upload/state', '/upload/transcript'];
+    const wanted = scenario === 'apikey' ? ['/upload/scrollback', '/upload/state', '/upload/transcript'] : ['/upload/state'];
     const end2 = Date.now() + 75000;
     while (Date.now() < end2 && !wanted.every(w => uploads.some(u => u.url === w))) await new Promise(r => setTimeout(r, 500));
     const suffix = API_KEY.slice(-20);
@@ -279,6 +291,32 @@ function podEnv() {
     try { transcript = await fetch(`http://127.0.0.1:${AGENT_PORT}/agenthub/transcript`, { headers: { 'X-Agent-Token': 'example-callback-token' } }).then(r => r.text()); } catch {}
     const home = path.join(ROOT, 'home');
     const claudeDir = fs.readdirSync(path.join(home, '.claude'), { recursive: true }).map(f => path.join(home, '.claude', f)).filter(f => { try { return fs.statSync(f).isFile(); } catch { return false; } });
+    // What the uploaded state archive holds: entry paths, and for the CLI's ~/.claude.json backups
+    // only key names and whether a known secret value occurs; no values are printed.
+    const lastState = uploads.filter(u => u.url === '/upload/state').at(-1);
+    const entries = [];
+    if (lastState) {
+      const tar = require('node:zlib').gunzipSync(lastState.body);
+      for (let at = 0; at + 512 <= tar.length;) {
+        const name = tar.toString('utf8', at, at + 100).replace(/\0.*$/s, '');
+        if (!name) break;
+        const size = parseInt(tar.toString('utf8', at + 124, at + 136).replace(/\0.*$/s, '').trim() || '0', 8);
+        entries.push({ name, body: tar.subarray(at + 512, at + 512 + size) });
+        at += 512 + Math.ceil(size / 512) * 512;
+      }
+    }
+    const secrets = { apiKey: API_KEY, keySuffix: API_KEY.slice(-20), callbackToken: 'example-callback-token', mcpToken: MCP_TOKEN };
+    turn.archive = {
+      claudeJsonEntries: entries.filter(e => /(^|\/)\.claude\.json$/.test(e.name)).map(e => e.name),
+      backups: entries.filter(e => e.name.includes('.claude/backups/') && e.body.length).map(e => {
+        let config = {}; try { config = JSON.parse(e.body.toString('utf8')); } catch {}
+        const text = e.body.toString('utf8');
+        return { name: e.name.replace(/\d{10,}/, '<ts>'), keys: Object.keys(config),
+          mcpServers: Object.fromEntries(Object.entries(config.mcpServers || {}).map(([n, v]) => [n, { env: Object.keys(v.env || {}), headers: Object.keys(v.headers || {}) }])),
+          oauthAccountFields: Object.keys(config.oauthAccount || {}),
+          secretsFound: Object.entries(secrets).filter(([, v]) => text.includes(v)).map(([k]) => k) };
+      })
+    };
     turn = { ...turn,
       uploads: [...new Set(uploads.map(u => u.url))],
       keyInUploads: texts.some(t => t.includes(API_KEY)), suffixInUploads: texts.some(t => t.includes(suffix)),
