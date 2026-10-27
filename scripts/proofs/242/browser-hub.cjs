@@ -1,11 +1,13 @@
 // The real branch runtime and real CLIs, behind a deliberately small stand-in hub.
 // Neither PTY frames nor authorization values are logged or saved by this harness.
 const fs = require('node:fs');
+// Select the candidate dependency tree without mutating the installed baseline modules.
+const modules = process.env.SIGNIN_NODE_MODULES || '/opt/session-agent/node_modules';
 const path = require('node:path');
 const os = require('node:os');
 const http = require('node:http');
 const { spawn } = require('node:child_process');
-const { WebSocket, WebSocketServer } = require('/opt/session-agent/node_modules/ws');
+const { WebSocket, WebSocketServer } = require(modules + '/ws');
 const repo = path.resolve(__dirname, '../../..');
 const root = process.env.SIGNIN_PROOF_ROOT || fs.mkdtempSync(path.join(os.tmpdir(), 'signin-browser-'));
 const bins = process.env.SIGNIN_CLI_BIN || '/tmp/signin-242-clis/node_modules/.bin';
@@ -31,6 +33,13 @@ if (process.argv[2] === '--runtime') {
   config.oauthAccount={accountUuid:'example-account',emailAddress:'person@example.com',organizationUuid:'example-organization',organizationName:'Example'};
   fs.writeFileSync(home+'/.claude.json',JSON.stringify(config));
   }
+ }
+ if(process.env.SIGNIN_QUESTION_MODEL && name==='claude') {
+  const key='sk-ant-api03-'+'x'.repeat(80);
+  Object.assign(env,{ANTHROPIC_API_KEY:key,ANTHROPIC_BASE_URL:process.env.SIGNIN_QUESTION_MODEL});
+  const config=JSON.parse(fs.readFileSync(home+'/.claude.json','utf8'));
+  config.customApiKeyResponses={approved:[key.slice(-20)],rejected:[]};
+  fs.writeFileSync(home+'/.claude.json',JSON.stringify(config));
  }
  const commands={claude:[path.join(bins,'claude'),[]],codex:[path.join(bins,'codex'),['login','--device-auth']],cursor:[cursor,['login']],openclaw:[path.join(bins,'openclaw'),['models','auth','add']],opencode:[path.join(bins,'opencode'),['auth','login']]};
  const driver=require(path.join(root,'agent-runtime',name,'driver.js'));
@@ -58,7 +67,7 @@ if(process.env.SIGNIN_SOURCE_REF){
  const archive=require('node:child_process').execFileSync('git',['archive',process.env.SIGNIN_SOURCE_REF,'agent-runtime'],{cwd:repo,maxBuffer:32*1024*1024});
  require('node:child_process').execFileSync('tar',['-xf','-','-C',root],{input:archive});
 }else fs.cpSync(path.join(repo,'agent-runtime'),path.join(root,'agent-runtime'),{recursive:true,filter:source=>!source.includes('/node_modules')});
-fs.symlinkSync('/opt/session-agent/node_modules',path.join(root,'agent-runtime/node_modules'));
+fs.symlinkSync(modules,path.join(root,'agent-runtime/node_modules'));
 const serverPath=path.join(root,'agent-runtime/common/server.js');
 let source=fs.readFileSync(serverPath,'utf8');
 for(const file of ['state.tgz','scrollback.log','agenthub-auth-watcher.pid']) source=source.split('/tmp/'+file).join(path.join(root,file));
@@ -71,7 +80,7 @@ async function start(name, mock = false) {
  if(child&&child.exitCode===null) {const ended=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGTERM');await ended;}
  agent=name;uploads=[];authTokens=new Set();authMode=null;privacy=null;providerSelected=false;methodSelected=false;
  watchTerminal?.dispose();
- watchTerminal=new (require('/opt/session-agent/node_modules/@xterm/headless').Terminal)({cols:120,rows:32,allowProposedApi:true,scrollback:0});
+ watchTerminal=new (require(modules + '/@xterm/headless').Terminal)({cols:120,rows:32,allowProposedApi:true,scrollback:0});
  child=spawn(process.execPath,[__filename,'--runtime',name],{env:{...process.env,SIGNIN_PROOF_ROOT:root,SIGNIN_MOCK_AUTH:mock?'1':'0'},stdio:['ignore','ignore','pipe','ipc']});
  child.stderr.on('data',bytes=>{const error=bytes.toString().split('\n').find(line=>/^Error:/.test(line));if(error)console.error(error.replace(/https?:\/\/\S+/g,'[URL omitted]'));});
  child.on('exit',code=>console.log('Isolated runtime exit code:',code));
@@ -80,7 +89,7 @@ async function start(name, mock = false) {
  await new Promise(resolve=>setTimeout(resolve,500));
  if(process.env.SIGNIN_LIFECYCLE==='1'&&name==='opencode') {
   // A separate terminal observer avoids interleaving duplicate browser subscriptions.
-  const terminal=new (require('/opt/session-agent/node_modules/@xterm/headless').Terminal)({cols:120,rows:40,allowProposedApi:true,scrollback:0});
+  const terminal=new (require(modules + '/@xterm/headless').Terminal)({cols:120,rows:40,allowProposedApi:true,scrollback:0});
   lifecycleSocket=new WebSocket('ws://127.0.0.1:7685/','tty');
   const send=data=>lifecycleSocket.send(JSON.stringify({type:'input',data}));
   terminal.onData(send);
