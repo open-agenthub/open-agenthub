@@ -17,7 +17,9 @@ node tests/ClaudeStateCleanupProof/verify.cjs /tmp/claude-cleanup-proof
 provider command. `NODE_PATH` must point to installed runtime dependencies (the
 session image has `/opt/session-agent/node_modules`). It deliberately supplies the
 pre-fix driver exclusions to reproduce historical archives even after the producer
-fix lands. All fixture credentials are synthetic. The admin HTTP proof substitutes
+fix lands. The producer starts with an environment allowlist, synthetic loopback callback
+credentials, and a private nonexistent watcher pidfile; it never inherits live
+session transport variables. All fixture credentials are synthetic. The admin HTTP proof substitutes
 only authentication, using a local header to exercise anonymous/nonadmin/admin
 identities; authorization, controller, registry, lock, object storage and cluster
 client/API are real. No kubelet, external upload-URL holder, object version history,

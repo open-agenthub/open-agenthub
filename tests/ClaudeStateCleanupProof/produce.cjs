@@ -6,6 +6,9 @@ const { spawn } = require('node:child_process');
 const assert = require('node:assert/strict');
 const repo = path.resolve(__dirname, '../..');
 const root = process.argv[2];
+// A real server must never inherit the session's callback credentials or upload destinations.
+const childBaseEnv = Object.fromEntries(['PATH', 'LD_LIBRARY_PATH', 'LANG', 'LC_ALL', 'TERM']
+  .filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
 if (!root) throw new Error('Pass a disposable proof directory');
 fs.mkdirSync(root, { recursive: true });
 const home = path.join(root, 'home');
@@ -18,6 +21,7 @@ fs.writeFileSync(path.join(home, '.claude/' + 'long-name-'.repeat(25)), 'long na
 if (!fs.existsSync(path.join(home, '.claude/link'))) fs.symlinkSync('binary', path.join(home, '.claude/link'));
 let uploaded = false;
 const server = http.createServer((req, res) => {
+  if (req.headers['x-agent-token']) assert.equal(req.headers['x-agent-token'], 'synthetic-callback-only');
   const chunks = [];
   req.on('data', chunk => chunks.push(chunk));
   req.on('end', () => {
@@ -33,9 +37,12 @@ server.listen(0, '127.0.0.1', () => {
   const source = `const {createCommonServer}=require(${JSON.stringify(path.join(repo, 'agent-runtime/common/server.js'))});
 const driver={...require(${JSON.stringify(path.join(repo, 'agent-runtime/claude/driver.js'))}),stateExcludes:['.claude/plugins/marketplaces'],prepare(){},buildCommand(){return {cmd:'bash',args:['-c','sleep 600']}}};
 createCommonServer({driver}); console.log("PROOF_READY");`;
-  const child = spawn(process.execPath, ['-e', source], { env: { ...process.env, HOME: home,
+  const child = spawn(process.execPath, ['-e', source], { env: { ...childBaseEnv, HOME: home,
     NODE_PATH: process.env.NODE_PATH || '/opt/session-agent/node_modules', AGENTHUB_WORKDIR: home,
     AGENTHUB_WORKSPACE_ROOT: home, AGENTHUB_FILE_ROOT: path.join(root, 'files'),
+    AGENTHUB_AUTH_WATCHER_PIDFILE: path.join(root, 'unused-watcher.pid'),
+    AGENTHUB_SESSION_ID: 'synthetic-316', AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback-only',
+    AGENTHUB_CALLBACK_URL: `http://127.0.0.1:${server.address().port}/internal/sessions/synthetic-316`,
     AGENTHUB_STATE_PUT_URL: `http://127.0.0.1:${server.address().port}/state`,
     AGENTHUB_PORT: '0', AGENTHUB_SKILLS_SYNC_SECONDS: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let log = '', stopping = false;
