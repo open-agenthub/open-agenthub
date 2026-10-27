@@ -102,6 +102,20 @@ async function nextRun(id, after) {
   await note.locator('[role="alert"]').waitFor()
   log('policy refuses the patch: project change saved, scheduleSecretsOutdated, sidebar marker, Update schedule refused with', (await note.locator('[role="alert"]').textContent()).slice(0, 80))
 
+  // 4. Fail closed: a run that starts from the outdated template after a revocation (ALPHA left
+  // the project) and a deletion (CHARLIE). Its pod still names both, but the copy was rewritten
+  // first, so neither value is there; the references are optional, so the missing keys leave the
+  // variables unset instead of failing the container.
+  assert.equal((await api('secrets/' + c.id, 'DELETE')).status, 204)
+  assert.deepEqual(templateNames(id), [renamed, b.name, c.name].sort())
+  const during = await nextRun(id, Date.now())
+  const refs = during.spec.containers.find(x => x.name === 'agent').env.filter(e => e.valueFrom?.secretKeyRef?.name === 'sessionenv-' + id)
+  assert.deepEqual(refs.map(e => e.name).sort(), [renamed, b.name, c.name].sort())
+  assert.ok(refs.every(e => e.valueFrom.secretKeyRef.optional === true))
+  assert.deepEqual(Object.keys(decode(get('secret', 'sessionenv-' + id))), [b.name])
+  assert.deepEqual(secretEnv(during), { [b.name]: 'bravo-' + n })
+  log('run during refusal', during.metadata.name, 'names', refs.map(e => e.name).join(','), 'resolves', JSON.stringify(secretEnv(during)), 'all optional')
+
   kube(['delete', 'validatingadmissionpolicybinding,validatingadmissionpolicy', 'proof-freeze-schedules'])
   await until('policy lifted', () => { try { kubectl('annotate', 'cronjob', 'session-' + id, 'proof/probe-', '--overwrite'); return true } catch { return false } }, 30000)
   const applied = page.waitForResponse(r => r.url().endsWith('/apply-resources'))
@@ -109,13 +123,13 @@ async function nextRun(id, after) {
   assert.equal((await applied).status(), 200)
   await note.waitFor({ state: 'detached' })
   assert.equal((await api('sessions/' + id)).body.scheduleSecretsOutdated, false)
-  assert.deepEqual(templateNames(id), [b.name, c.name].sort())
+  assert.deepEqual(templateNames(id), [b.name])
 
   const third = await nextRun(id, Date.now())
-  assert.deepEqual(secretEnv(third), { [b.name]: 'bravo-' + n, [c.name]: 'charlie-' + n })
+  assert.deepEqual(secretEnv(third), { [b.name]: 'bravo-' + n })
   log('run 3', third.metadata.name, JSON.stringify(secretEnv(third)))
 
   assert.deepEqual(errors, [])
-  console.log('PASS real Chromium + real controllers/Postgres + real kube-apiserver with CronJob/Job controllers: project selection, rename and session-view grant reach the next run exactly; a real admission refusal leaves the change saved, reports scheduleSecretsOutdated with a sidebar marker, and Update schedule applies it once allowed')
+  console.log('PASS real Chromium + real controllers/Postgres + real kube-apiserver with CronJob/Job controllers: project selection, rename and session-view grant reach the next run exactly; a run started from the refused, outdated template after a revocation and a deletion gets neither value (optional references, copy rewritten first); a real admission refusal leaves the change saved, reports scheduleSecretsOutdated with a sidebar marker, and Update schedule applies it once allowed')
   await context.close(); await browser.close()
 })().catch(e => { console.error(e); process.exit(1) })

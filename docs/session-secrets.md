@@ -418,6 +418,11 @@ a conflict.
   sidebar marks it, the session view and Settings → Secrets offer **Update schedule**
   (`apply-resources`), and the next sync tries again. A state flag stored on the record was rejected:
   a crash between the copy and the patch would leave it wrong, and the comparison cannot be.
+- Revocation fails closed. The copy is rewritten before the template is patched, and a failed
+  copy write stops the sync before the patch. A run started from a stale template still names a
+  revoked or deleted variable, but the copy no longer has a value for it. Every reference is
+  `optional`, so the missing key leaves the variable unset instead of stopping the container
+  in CreateContainerConfigError.
 - During an unfinished project move the sync leaves the template alone, because the move's final
   patch writes it. A template from before session secrets has no block, so it cannot be updated
   and is not reported as outdated. It has to be recreated.

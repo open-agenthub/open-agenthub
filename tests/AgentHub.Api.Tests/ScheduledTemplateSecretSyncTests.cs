@@ -139,4 +139,52 @@ public class ScheduledTemplateSecretSyncTests
         Assert.False(info.ScheduleSecretsOutdated);
         await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Service.ApplyResourcesAsync("owner", "sid"));
     }
+
+    // Revocation fails closed (#301 review): the copy is rewritten without the value before the
+    // template is patched, so a run admitted from a stale template finds the name and no value.
+    // The reference is optional, so the missing key leaves the variable unset rather than
+    // stopping the container in CreateContainerConfigError.
+    [Fact]
+    public async Task ARevocationWhoseTemplatePatchFails_LeavesNoValueBehindTheStaleName()
+    {
+        var (rig, old, _) = await Started();
+        await using var __ = rig;
+        rig.Fault = ScheduleFault.ReplaceTemplate;
+
+        await rig.Service.DeleteSessionSecretAsync("owner", old);
+
+        Assert.Contains("OLD_NAME", rig.TemplateEnvNames);
+        Assert.False(rig.EnvCopy.ContainsKey("OLD_NAME"));
+        Assert.Equal(("sessionenv-sid", "OLD_NAME", true), rig.TemplateReference("OLD_NAME"));
+        Assert.True((await rig.Service.GetSessionAsync("owner", "sid"))!.ScheduleSecretsOutdated);
+    }
+
+    [Fact]
+    public async Task ARevocationDuringAnUnfinishedMove_LeavesNoValueBehindTheStaleName()
+    {
+        var (rig, _, _) = await Started();
+        await using var __ = rig;
+        rig.Annotate(KubernetesSessionService.ProjectMoveSuspendAnnotation, "false");
+        rig.Annotate(KubernetesSessionService.ProjectMoveFromAnnotation, "source");
+
+        rig.SetProject(rig.Project("source") with { SecretIds = [] });
+        await rig.Service.SyncSessionSecretsAsync("owner");
+
+        Assert.Contains("OLD_NAME", rig.TemplateEnvNames);
+        Assert.False(rig.EnvCopy.ContainsKey("OLD_NAME"));
+        Assert.True(rig.TemplateReference("OLD_NAME").Optional);
+    }
+
+    [Fact]
+    public async Task ACopyThatCannotBeRewritten_LeavesTheTemplateAloneAndTheFailureVisibleToTheCaller()
+    {
+        var (rig, _, neu) = await Started();
+        await using var __ = rig;
+        rig.Fault = ScheduleFault.WriteSecretCopies;
+        rig.SetProject(rig.Project("source") with { SecretIds = [neu] });
+
+        // The project change path calls the sync directly, so the owner hears the copy failed.
+        await Assert.ThrowsAnyAsync<Exception>(() => rig.Service.SyncSessionSecretsAsync("owner"));
+        Assert.DoesNotContain("NEW_NAME", rig.TemplateEnvNames);
+    }
 }

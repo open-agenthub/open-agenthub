@@ -46,6 +46,14 @@ internal sealed class ScheduleClusterRig : IAsyncDisposable
         .Select(a => a.Key).Where(k => k.StartsWith("agenthub.dev/project-move")).ToList() ?? [];
     public IReadOnlyList<string> TemplateEnvNames => _cron["spec"]!["jobTemplate"]!["spec"]!["template"]!["spec"]!["containers"]!
         .AsArray().Single(c => c!["name"]!.GetValue<string>() == "agent")!["env"]!.AsArray().Select(e => e!["name"]!.GetValue<string>()).ToList();
+    /// <summary>The template's reference for <paramref name="name"/> into the variable copy: what a run's pod resolves.</summary>
+    public (string Secret, string Key, bool Optional) TemplateReference(string name)
+    {
+        var reference = _cron["spec"]!["jobTemplate"]!["spec"]!["template"]!["spec"]!["containers"]!.AsArray()
+            .Single(c => c!["name"]!.GetValue<string>() == "agent")!["env"]!.AsArray()
+            .Single(e => e!["name"]!.GetValue<string>() == name)!["valueFrom"]!["secretKeyRef"]!;
+        return (reference["name"]!.GetValue<string>(), reference["key"]!.GetValue<string>(), reference["optional"]?.GetValue<bool>() == true);
+    }
     public string? TemplateEnvValue(string name) => _cron["spec"]!["jobTemplate"]!["spec"]!["template"]!["spec"]!["containers"]!
         .AsArray().Single(c => c!["name"]!.GetValue<string>() == "agent")!["env"]!.AsArray()
         .Single(e => e!["name"]!.GetValue<string>() == name)!["value"]?.GetValue<string>();
