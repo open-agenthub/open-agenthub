@@ -2399,9 +2399,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 ResourcesPendingRestart = ResourcesPendingRestart(r, pod),
                 SecretsPendingRestart = SecretsPendingRestart(pod, envVersions.GetValueOrDefault(r.Id)),
                 ScheduleMoveUnfinished = unfinishedMoves.Contains(r.Id),
-                ScheduleSecretsOutdated = !unfinishedMoves.Contains(r.Id) && envCopies.ContainsKey(r.Id)
+                ScheduleSecretsOutdated = !unfinishedMoves.Contains(r.Id) && envCopies.TryGetValue(r.Id, out var envCopy)
                     && scheduledTemplates.TryGetValue(r.Id, out var scheduled)
-                    && ScheduledTemplateSecrets.Outdated(scheduled, envCopies[r.Id].Data?.Keys),
+                    && ScheduledTemplateSecrets.Outdated(scheduled, envCopy.Data?.Keys),
                 SecretsWithdrawn = SecretsWithdrawn(r.Mode == SessionMode.Scheduled ? null : pod,
                     r.Mode == SessionMode.Scheduled ? scheduledTemplates.GetValueOrDefault(r.Id) : null, envCopies.ContainsKey(r.Id)),
                 OutdatedImage = RuntimeImageOutdated(r,
