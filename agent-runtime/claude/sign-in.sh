@@ -7,16 +7,12 @@
 # at once, where /login first stops on a method chooser, and it leaves the positional argument
 # free for the session's task, which the TUI then starts with the new login.
 
-# A handler, not `trap '' INT`: an ignored signal stays ignored across exec and would reach the
-# TUI. Without one, bash dies with the SIGINT that cancels the login and the TUI never starts.
-trap : INT
-
 if [ ! -s "$HOME/.claude/.credentials.json" ] && [ -z "${ANTHROPIC_API_KEY:-}" ] \
    && [ -z "${ANTHROPIC_AUTH_TOKEN:-}" ] && [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] \
    && claude auth status --json 2>/dev/null | grep -Eq '"loggedIn":[[:space:]]*false'; then
   # A cancelled or failed login still starts the TUI: it says "Not logged in · Run /login",
-  # which offers the method chooser this route skips.
+  # which offers the method chooser this route skips. Ctrl+C ends the login with exit 130 and
+  # leaves this script running (measured in a real PTY), so no trap is needed for that.
   claude auth login || true
 fi
-trap - INT
 exec claude "$@"
