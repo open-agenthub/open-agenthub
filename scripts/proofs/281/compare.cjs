@@ -24,8 +24,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
  let model;
  if (process.env.PROOF_QUESTION) {
   model = require('node:http').createServer((req,res)=>{
-   let body=''; req.on('data',data=>body+=data);req.on('end',()=>{
-    let input;try{input=JSON.parse(body);}catch{input={};}
+   req.resume(); req.on('end',()=>{
     if (!req.url.startsWith('/v1/messages')) {res.writeHead(200,{'content-type':'application/json'});res.end('{}');return;}
     res.writeHead(200,{'content-type':'text/event-stream'});
     const event=(type,data)=>res.write('event: '+type+'\ndata: '+JSON.stringify({type,...data})+'\n\n');
