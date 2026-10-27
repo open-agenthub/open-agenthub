@@ -61,6 +61,9 @@ RUN chmod +x /usr/local/bin/entrypoint.sh \
     /opt/session-agent/cursor/entrypoint.sh \
     /opt/session-agent/cursor/login.sh
 
+# Keep standalone image use safe; pod mounts are prepared separately.
+RUN chmod 1777 /tmp
+
 USER 1000:1000
 ENV HOME=/home/agent
 WORKDIR /workspace

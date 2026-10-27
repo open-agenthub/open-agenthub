@@ -15,6 +15,12 @@ public sealed class BrowserPodSpecFactoryTests
         var resources = BrowserPodSpecFactory.Build(Session(), Lease(), Context());
         var pod = resources.Pod.Spec;
 
+        var prepare = Assert.Single(pod.InitContainers);
+        Assert.Equal("prepare-tmp", prepare.Name);
+        Assert.Contains("chmod 1777 /volume/tmp", prepare.Command.Last());
+        Assert.True(prepare.SecurityContext.RunAsNonRoot);
+        Assert.True(prepare.SecurityContext.ReadOnlyRootFilesystem);
+        Assert.Equal("tmp", Assert.Single(pod.Containers).VolumeMounts.Single(m => m.MountPath == "/tmp").SubPath);
         Assert.False(pod.AutomountServiceAccountToken);
         Assert.True(pod.SecurityContext.RunAsNonRoot);
         Assert.Equal(1000, pod.SecurityContext.RunAsUser);

@@ -14,6 +14,27 @@ public class AgentPodSpecFactoryTests
     [InlineData(AgentKind.Cursor)]
     [InlineData(AgentKind.OpenClaw)]
     [InlineData(AgentKind.OpenCode)]
+    public void TemporaryMount_IsPreparedBeforeConsumersWithoutRoot(AgentKind agent)
+    {
+        var pod = Build(agent, AgentAuthMode.ApiKey);
+        var prepare = pod.InitContainers.First();
+        Assert.Equal("prepare-tmp", prepare.Name);
+        Assert.Contains("chmod 1777 /volume/tmp", prepare.Command.Last());
+        Assert.Equal("/volume", Assert.Single(prepare.VolumeMounts).MountPath);
+        Assert.True(prepare.SecurityContext.RunAsNonRoot);
+        Assert.Equal(1000, prepare.SecurityContext.RunAsUser);
+        Assert.True(prepare.SecurityContext.ReadOnlyRootFilesystem);
+        Assert.False(prepare.SecurityContext.AllowPrivilegeEscalation);
+        Assert.Contains("ALL", prepare.SecurityContext.Capabilities.Drop);
+        Assert.Equal("tmp", Assert.Single(pod.Containers).VolumeMounts.Single(m => m.MountPath == "/tmp").SubPath);
+    }
+
+    [Theory]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.Cursor)]
+    [InlineData(AgentKind.OpenClaw)]
+    [InlineData(AgentKind.OpenCode)]
     public void TrustedCa_IsMountedReadOnlyAndUsedByNode(AgentKind agent)
     {
         var runtime = Context().Runtime with { TrustedCaConfigMap = "runtime-ca" };
@@ -391,7 +412,7 @@ public class AgentPodSpecFactoryTests
         Assert.DoesNotContain("anthropic_api_key", projectedCredentialKeys);
         Assert.DoesNotContain("openai_api_key", projectedCredentialKeys);
         Assert.DoesNotContain(container.Env, e => e.Name == "CODEX_API_KEY");
-        Assert.Empty(pod.InitContainers ?? Array.Empty<V1Container>());
+        Assert.Equal("prepare-tmp", Assert.Single(pod.InitContainers).Name);
         Assert.False(pod.AutomountServiceAccountToken);
         Assert.False(pod.EnableServiceLinks);
         Assert.Equal("agenthub-agent", pod.ServiceAccountName);
