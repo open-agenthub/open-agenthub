@@ -348,7 +348,7 @@ function createCommonServer(options = {}) {
       onDelivered: ({ fresh, attempt, round }) => {
         console.log('[agent] Context handover delivered (attempt ' + attempt + (round ? ', fallback round ' + round : '') + ')' +
           (fresh ? '' : '; the conversation was not cleared, so it went into the previous one'));
-        setHandoverProblem(null);
+        if (handoverProblem) setHandoverProblem(null);
       },
       onError: (error, { retry, deferred }) => {
         const reason = error && error.message || String(error);

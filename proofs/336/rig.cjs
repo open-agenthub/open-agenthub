@@ -8,7 +8,8 @@
 //   R=<rig dir> AGENT=claude|codex FAULT=none|drop|busy|restart node rig.cjs
 // Options, from the owner's report: QUEUED=1 has the owner send a message while the clearing
 // turn still runs (the CLI queues it); REMINDER=1 makes that turn count as work, so the
-// production skill-reminder Stop hook continues it once before it ends.
+// production skill-reminder Stop hook continues it once before it ends. MENU_ANSWER_MS=<ms>
+// answers an open CLI menu with Enter that long after the clear, then the owner sends a prompt.
 // Prints one `RESULT {...}` line.
 'use strict';
 const http = require('node:http');
@@ -47,6 +48,7 @@ const HANDOVER = 'HANDOVER-336 State: the patch is written. Open task: run the t
 const requests = []; // { at, text, helper }
 let clearPostedAt = 0;
 let currentTmp = null;
+const handoverFrames = [];
 const QUEUED = process.env.QUEUED === '1';
 const REMINDER = process.env.REMINDER === '1';
 let oldSeen = false;
@@ -179,7 +181,13 @@ async function connect() {
       break;
     } catch { await sleep(200); }
   }
-  ws.on('message', d => term.write(d.toString()));
+  ws.send(JSON.stringify({ type: 'subscribe', channel: 'activity' }));
+  ws.on('message', d => {
+    const data = d.toString();
+    if (data.startsWith('{"type":"agenthub","subtype":"handover"')) { handoverFrames.push(JSON.parse(data)); say('frame ' + data); return; }
+    if (data.startsWith('{"type":"agenthub"')) return;
+    term.write(data);
+  });
   term.onData(data => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'input', data })); });
 }
 const ready = () => CODEX ? /›/.test(screen()) && /Codex/.test(screen()) : /for shortcuts|❯/.test(screen());
@@ -242,6 +250,17 @@ function nativeFirstUserTurn() {
     startAgent({ PROOF_FAULT: 'none', AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1' }, 'second');
     await connect();
   }
+  if (process.env.MENU_ANSWER_MS) {
+    await sleep(Number(process.env.MENU_ANSWER_MS));
+    fs.writeFileSync(run + '/screen-menu.txt', screen());
+    say('handover typed into the menu? ' + requests.some(r => r.text.includes('HANDOVER-336')));
+    ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+    say('menu answered with Enter');
+    await sleep(3000);
+    ws.send(JSON.stringify({ type: 'input', data: '\x1b[200~OWNER-NEXT-336 what now?\x1b[201~' }));
+    await sleep(400);
+    ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+  }
   const delivered = await until(() => requests.some(r => !r.helper && r.text.includes('HANDOVER-336')), WAIT_MS);
   await sleep(4000);
   fs.writeFileSync(run + '/screen-end.txt', screen());
@@ -260,8 +279,10 @@ function nativeFirstUserTurn() {
       if (r.text.includes('QUEUED-OWNER-336')) tags.push('queued');
       if (r.text.includes('Before you finish: is there a reusable')) tags.push('reminder');
       if (r.text.includes(OLD)) tags.push('old');
+      if (r.text.includes('OWNER-NEXT-336')) tags.push('owner-next');
       return tags.join('+');
     }),
+    handoverFrames,
     agentLog: logs.split('\n').filter(l => /context|handover|Context|\[fault\]|Conversation/.test(l)).slice(0, 20)
   };
   say('RESULT ' + JSON.stringify(result));
