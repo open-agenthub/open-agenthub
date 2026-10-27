@@ -183,9 +183,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     {
         if (await ReadSecretOrNullAsync(UserSecretsName(owner), ct) is null) return;
         var removed = await ChangeUserSecretsAsync(owner, data => SessionSecretStore.Remove(data, id), ct);
-        if (!removed) return;
-        _log.LogInformation("Removed a secret for {Owner}", owner);
-        await TrySyncSessionSecretsAsync(owner, ct);
+        if (removed) _log.LogInformation("Removed a secret for {Owner}", owner);
+        // Strict, unlike a store write (#303): success has to mean no copy still holds the value,
+        // and a delete repeated after a failure — the id already gone from the store — runs the
+        // sync again rather than answering success for copies nobody touched.
+        await SyncSessionSecretsAsync(owner, ct);
     }
 
     public async Task<IReadOnlyList<string>> ResolveSessionSecretIdsAsync(string owner, string? projectId,
@@ -250,20 +252,38 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await _store.UpsertAsync(session, ct);
         }
         // Every session that was ever spawned has a file copy, so the copies are the list of
-        // sessions to bring up to date; a session that never ran has nothing to update.
+        // sessions to bring up to date; a session that never ran has nothing to update. Scheduled
+        // sessions are added by record: their runs read the copies directly, so one whose copies
+        // were withdrawn below must get them back from a later sync, not from a spawn.
         var copies = await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
             labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}={SessionSecretDeliveryFactory.FilesComponent}",
             cancellationToken: ct);
-        if (copies.Items.Count == 0) return;
-        var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;
         var sessionIds = copies.Items
             .Select(copy => copy.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var id) ? id : null)
-            .OfType<string>();
+            .OfType<string>()
+            .Concat((await _store.ListAsync(owner, ct)).Where(r => r.Mode == SessionMode.Scheduled).Select(r => r.Id))
+            .Distinct().ToList();
+        if (sessionIds.Count == 0) return;
+        var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;
+        var pending = 0;
         foreach (var sessionId in sessionIds)
         {
             if (await _store.GetAsync(owner, sessionId, ct) is { } rec)
             {
-                await WriteSessionSecretsAsync(owner, rec, store, ct, resolver);
+                try
+                {
+                    await WriteSessionSecretsAsync(owner, rec, store, ct, resolver);
+                }
+                catch (Exception e) when (e is k8s.Autorest.HttpOperationException or HttpRequestException)
+                {
+                    // Fails closed (#303): a copy that kept a removed value would hand it to the
+                    // running pod's files and to every scheduled run. Without copies the session
+                    // receives nothing until they are written again — its references are optional,
+                    // so nothing fails to start — and the other sessions are still brought up to date.
+                    _log.LogWarning(e, "Could not rewrite the secret copies of a session; withdrawing them");
+                    if (!await TryWithdrawSessionSecretsAsync(rec.Id, ct)) pending++;
+                    continue;
+                }
                 // A run copies its pod from the template, so the copy alone changes only the values
                 // behind names the template already lists (#301).
                 if (rec.Mode == SessionMode.Scheduled) await TryRefreshScheduledSecretEnvAsync(rec.Id, ct);
@@ -273,6 +293,22 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             // values nobody can receive any more, and no later session delete would reach them.
             await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(sessionId), ct);
             await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(sessionId), ct);
+        }
+        if (pending > 0) throw new SessionSecretCopiesPendingException(pending);
+    }
+
+    private async Task<bool> TryWithdrawSessionSecretsAsync(string sessionId, CancellationToken ct)
+    {
+        try
+        {
+            await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(sessionId), ct);
+            await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.FilesSecretName(sessionId), ct);
+            return true;
+        }
+        catch (Exception e) when (e is k8s.Autorest.HttpOperationException or HttpRequestException)
+        {
+            _log.LogWarning(e, "Could not withdraw the secret copies of a session either");
+            return false;
         }
     }
 

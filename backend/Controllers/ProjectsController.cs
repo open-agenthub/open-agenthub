@@ -48,6 +48,7 @@ public sealed class ProjectsController : ControllerBase
             return Ok(await _store.CreateAsync(Owner, request, ct));
         }
         catch (ArgumentException e) { return BadRequest(e.Message); }
+        catch (SessionSecretCopiesPendingException e) { return CopiesPending(e); }
         catch (PostgresException e) when (e.SqlState == PostgresErrorCodes.UniqueViolation)
         {
             return Conflict("A project with this name already exists.");
@@ -88,9 +89,15 @@ public sealed class ProjectsController : ControllerBase
     {
         if (!await _store.DeleteAsync(Owner, id, ct)) return NotFound();
         // Its sessions are now outside any project, where following the project means nothing.
-        if (_sessions is not null) await _sessions.SyncSessionSecretsAsync(Owner, ct);
+        try { if (_sessions is not null) await _sessions.SyncSessionSecretsAsync(Owner, ct); }
+        catch (SessionSecretCopiesPendingException e) { return CopiesPending(e); }
         return NoContent();
     }
+
+    // The project change is stored; a narrowed selection must not look finished while a session's
+    // copy may still hold a value it no longer allows (#303). Saving the project again retries.
+    private ObjectResult CopiesPending(SessionSecretCopiesPendingException e) =>
+        StatusCode(StatusCodes.Status503ServiceUnavailable, new { code = "secret_copies_pending", error = e.Message, sessions = e.Sessions });
 
     private async Task<List<string>?> NormalizeSecretIdsAsync(List<string>? requested, CancellationToken ct)
     {

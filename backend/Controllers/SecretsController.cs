@@ -41,7 +41,11 @@ public sealed class SecretsController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<IActionResult> Delete(string id, CancellationToken ct)
     {
-        await _svc.DeleteSessionSecretAsync(Owner, id, ct);
+        try { await _svc.DeleteSessionSecretAsync(Owner, id, ct); }
+        catch (SessionSecretCopiesPendingException e)
+        {
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { code = "secret_copies_pending", error = e.Message, sessions = e.Sessions });
+        }
         return NoContent();
     }
 }
