@@ -179,7 +179,7 @@ public static class AgentPodSpecFactory
         {
             new() { Name = "workspace", MountPath = "/workspace" },
             new() { Name = "home", MountPath = home },
-            new() { Name = "tmp", MountPath = "/tmp" },
+            new() { Name = "tmp", MountPath = "/tmp", SubPath = "tmp" },
             new() { Name = "creds", MountPath = "/secrets/creds", ReadOnlyProperty = true }
         };
         var gitCloneMounts = new List<V1VolumeMount>(mounts);
@@ -409,7 +409,7 @@ public static class AgentPodSpecFactory
             env.Add(new() { Name = "OTEL_RESOURCE_ATTRIBUTES", Value = $"agenthub.session_id={record.Id},agenthub.owner={context.Owner}" });
         }
 
-        var initContainers = new List<V1Container>();
+        var initContainers = new List<V1Container> { TemporaryVolume.Prepare(runtimeImage, context.RuntimeImages.PullPolicy) };
         if (customImage is not null)
         {
             var copyScript = record.Agent switch

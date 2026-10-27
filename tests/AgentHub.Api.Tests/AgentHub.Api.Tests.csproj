@@ -17,4 +17,8 @@
     <ProjectReference Include="../../backend/AgentHub.Api.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Update="Fixtures/claude-startup.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
