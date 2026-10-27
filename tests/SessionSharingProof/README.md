@@ -45,22 +45,24 @@ ShareRecipientSearchPostgresTests covers the result cap, literal wildcards, mini
 self exclusion, exact email and opt-out; enable Postgres tests with
 AGENTHUB_TEST_POSTGRES_CONNECTION_STRING.
 
-## Baseline and results
+## Baseline comparison and coverage
 
 Current-main baseline f168837 was built in a separate worktree on proof/328-baseline. Copy the
 proof host into that tree, remove its two recipient-rate-limiter registration/middleware calls
 (absent on baseline), and build against its backend. Run its frontend on port 5173 and host
 without PROOF_ISSUER, then run named-baseline.cjs with a browser-reachable UI origin.
-The grant exists in /api/sessions/shared, but metadata/conversation/transcript return 404 to Bob.
-Chromium's named deep link falls to Home with no Shared with me group. baseline.cjs separately
-confirms a generated bearer link succeeds on current main.
+The baseline script checks for a grant in /api/sessions/shared alongside metadata/conversation/
+transcript 404 responses for Bob, and a named deep link falling through to Home without a
+Shared with me group. baseline.cjs separately checks a generated bearer link.
 
-Fixed branch: 25 browser/HTTP checks pass: Alice selects Bob from actual autocomplete, the
-copied link is absolute, Bob's Code+PKCE login returns to the named session with its query,
-the grant is discoverable and transcript readable, metadata sanitized, wrong users/foreign
-sessions denied, named grant revocable, bearer access anonymous, invalid/revoked links explained.
-The opt-out/rate-limit proof passes three checks; both chart renders pass. Results and browser
-screenshots are alongside the scripts.
+browser.cjs covers recipient selection, absolute copied links, Code+PKCE login return with
+query preservation, grant discovery, readable transcripts, sanitized metadata, wrong-user and
+foreign-session denials, revocation, anonymous bearer access and invalid-link messages.
+The opt-out/rate-limit script checks exact-only lookup and HTTP 429; chart.cjs checks both renders.
+
+Generated screenshots and result logs are ignored locally. Record verification results in the
+PR body and attach visual evidence there rather than committing generated output; retaining
+only reproducible sources avoids stale results and binary churn on subsequent proof runs.
 
 Not established: the owner's deployed public-host/proxy configuration or original bearer URL;
 an external production identity provider; a live terminal, browser workload or kubelet. The
