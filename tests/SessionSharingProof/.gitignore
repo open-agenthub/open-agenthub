@@ -1,0 +1,3 @@
+# Keep generated evidence in PRs so reruns do not add binary or transient output to source.
+/*.png
+/*-results.txt
