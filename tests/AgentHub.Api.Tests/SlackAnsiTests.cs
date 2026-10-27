@@ -16,6 +16,13 @@ public class SlackAnsiTests
     }
 
     [Fact]
+    public void CursorGaps_HaveBoundedExpansion()
+    {
+        Assert.Equal(4098, AgentTerminal.StripAnsi("a\u001b[2147483647Cb").Length);
+        Assert.Equal("ab", AgentTerminal.StripAnsi("a\u001b[999999999999999999Cb"));
+    }
+
+    [Fact]
     public void RealClaudeStartup_PreservesRenderedCellGaps()
     {
         var fixture = System.Text.Json.JsonDocument.Parse(File.ReadAllText(

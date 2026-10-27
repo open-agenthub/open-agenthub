@@ -72,6 +72,7 @@ public static class AgentTerminal
         var output = new StringBuilder(text.Length);
         var column = 0;
         var position = 0;
+        var remainingGapBudget = Math.Clamp(text.Length, maximumGap, 1_000_000);
         foreach (Match control in Csi.Matches(text))
         {
             AppendText(text.AsSpan(position, control.Index - position));
@@ -84,7 +85,9 @@ public static class AgentTerminal
                 var amount = parameter.IsEmpty ? 1 : int.Parse(parameter);
                 amount = Math.Clamp(amount, 1, maximumGap);
                 var gap = command == 'C' ? amount : Math.Max(0, amount - 1 - column);
+                gap = Math.Min(gap, remainingGapBudget);
                 output.Append(' ', gap);
+                remainingGapBudget -= gap;
                 column = command == 'C' ? Math.Min(maximumGap, column + gap) : amount - 1;
             }
             else output.Append(control.Value);

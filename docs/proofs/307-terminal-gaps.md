@@ -17,3 +17,9 @@ scripts/proofs/307/capture.cjs launches the exact 2.1.287 native CLI in a real P
 answers terminal queries through the real headless renderer and captures a
 synthetic, isolated startup. The regression checks real absolute-column and
 cursor-forward gaps alongside targeted word-spacing cases.
+
+Validation: replacing the converter with origin/main makes 6 of the 14 spacing
+and control tests fail, including the real startup fixture. With the fix, the
+full backend suite passes: 2302 passed, 159 database-dependent tests skipped.
+A separate expansion-bound test covers oversized and overflowing cursor counts.
+Total additional whitespace is bounded as well as each individual move.
