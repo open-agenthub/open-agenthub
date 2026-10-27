@@ -86,9 +86,25 @@ function liftPolicy() { kube(['delete', 'validatingadmissionpolicybinding,valida
   assert.deepEqual(secretEnv(during), {})
   log('A: delete 204 with copies withdrawn; run', during.metadata.name, 'resolves', JSON.stringify(secretEnv(during)), '(optional refs, no copy)')
 
+  // Not silent: both sessions say their secrets are withdrawn, and the running one is offered the
+  // restart, because its process still holds the variables it started with, the deleted one too.
+  const [si, ii] = [(await api('sessions/' + scheduled)).body, (await api('sessions/' + interactive)).body]
+  assert.equal(si.secretsWithdrawn, true); assert.equal(ii.secretsWithdrawn, true); assert.equal(ii.secretsPendingRestart, true)
+  await page.goto(process.env.PROOF_URL + '/s/' + interactive)
+  for (const id of [scheduled, interactive]) await page.locator('[data-session-row="' + id + '"] [data-secrets-withdrawn]').waitFor()
+  const withdrawnNote = page.locator('[data-secrets-withdrawn-note="' + interactive + '"]'); await withdrawnNote.waitFor()
+  assert.match(await withdrawnNote.textContent(), /secrets are withdrawn/)
+  assert.match(await page.locator('[data-secret-restart-note="' + interactive + '"]').textContent(), /including any secret deleted since it started/)
+  log('A: secretsWithdrawn on both, sidebar markers, session notice; restart offered for the running process')
+
   liftPolicy(); await policyActive(false)
-  // Any later sync brings the copies back, without the deleted value; the scheduled one by record.
-  assert.equal((await api('projects/' + project.id, 'PATCH', { secretIds: [keep.id, doomed2.id] })).status, 200)
+  // The session's Retry runs the strict sync: copies come back without the deleted value, for the
+  // scheduled session too (by record) and the interactive one (by its live pod).
+  const resynced = page.waitForResponse(r => r.url().endsWith('/api/sessions/' + interactive + '/resync-secrets'))
+  await withdrawnNote.locator('[data-secrets-resync]').click()
+  assert.equal((await resynced).status(), 200)
+  await withdrawnNote.waitFor({ state: 'detached' })
+  assert.equal((await api('sessions/' + scheduled)).body.secretsWithdrawn, false)
   const back = { [keep.name]: 'keep-' + n, [doomed2.name]: 'doomed-two-' + n }
   assert.deepEqual(copy('sessionenv-' + scheduled), back); assert.deepEqual(copy('sessionenv-' + interactive), back)
   log('A: copies restored by the next sync without', doomed.name)

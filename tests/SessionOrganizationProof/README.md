@@ -73,9 +73,11 @@ It uses a scheduled and an interactive session in one project:
 
 - Phase A: a ValidatingAdmissionPolicy refuses CREATE and UPDATE of the session copies. The
   delete answers 204, and both sessions' copies are withdrawn. A real run started then
-  references the deleted name optionally and resolves nothing. Once the policy is lifted, the
-  next sync restores both copies without the value. For the interactive session that happens
-  through its live pod.
+  references the deleted name optionally and resolves nothing. Both sessions report
+  `secretsWithdrawn`, and the sidebar marks them. The interactive session's view shows the
+  withdrawn notice and offers the #255 restart, "including any secret deleted since it started".
+  After the policy is lifted, the notice's Retry (`resync-secrets`) restores both copies without
+  the value: the scheduled one by its record, the interactive one through its live pod.
 - Phase B: the policy also refuses DELETE. The delete from Settings → Secrets in Chromium answers
   503 `secret_copies_pending`, and the notice with Retry shows. The copies still hold the value,
   which is why no success was reported. After the policy is lifted, Retry answers 204, the copies
