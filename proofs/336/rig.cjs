@@ -6,6 +6,9 @@
 // the way the backend forwards the context_clear tool call. fault-server.cjs injects the fault.
 //
 //   R=<rig dir> AGENT=claude|codex FAULT=none|drop|busy|restart node rig.cjs
+// Options, from the owner's report: QUEUED=1 has the owner send a message while the clearing
+// turn still runs (the CLI queues it); REMINDER=1 makes that turn count as work, so the
+// production skill-reminder Stop hook continues it once before it ends.
 // Prints one `RESULT {...}` line.
 'use strict';
 const http = require('node:http');
@@ -43,6 +46,9 @@ const OLD = 'OLD-MARKER-336';
 const HANDOVER = 'HANDOVER-336 State: the patch is written. Open task: run the tests and push.';
 const requests = []; // { at, text, helper }
 let clearPostedAt = 0;
+let currentTmp = null;
+const QUEUED = process.env.QUEUED === '1';
+const REMINDER = process.env.REMINDER === '1';
 let oldSeen = false;
 
 // ---- mock model + stand-in hub ------------------------------------------------------------
@@ -93,6 +99,7 @@ const hub = http.createServer(async (req, res) => {
 async function modelAnswer(text, helper) {
   if (helper) return 'Rig title';
   if (text.includes('HANDOVER-336')) return 'HANDOVER-ACK';
+  if (text.includes('Before you finish: is there a reusable procedure') && !text.includes('REMINDER-ANSWERED')) return 'REMINDER-ANSWERED nothing to save';
   if (text.includes(OLD) && !oldSeen) {
     oldSeen = true;
     // The context_clear call happens inside the turn; the backend forwards it to the pod.
@@ -102,6 +109,19 @@ async function modelAnswer(text, helper) {
     });
     clearPostedAt = Date.now();
     say('context-clear scheduled: ' + response.status + ' ' + await response.text());
+    if (REMINDER) {
+      // What the PostToolUse --mark hook writes after a changing tool call in this turn.
+      const id = CODEX ? rolloutId() : claudeSessionId;
+      const key = crypto.createHash('sha256').update(String(id)).digest('hex').slice(0, 16);
+      fs.writeFileSync(currentTmp + '/.agenthub-skill-work-' + key, '');
+      say('skill reminder armed for ' + id);
+    }
+    if (QUEUED) {
+      ws.send(JSON.stringify({ type: 'input', data: '\x1b[200~QUEUED-OWNER-336 a message sent while the agent worked\x1b[201~' }));
+      await sleep(400);
+      ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+      say('owner message sent mid-turn');
+    }
     await sleep(3000);
     return 'OLD-ANSWER';
   }
@@ -139,6 +159,7 @@ let proc = null;
 function startAgent(extraEnv, label) {
   const env = { ...baseEnv, ...extraEnv };
   const tmp = fs.mkdtempSync(run + '/tmp-');
+  currentTmp = tmp;
   proc = spawn(S + '/proot', ['-b', R + '/rt:/opt/session-agent', '-b', R + '/etc-codex:/etc/codex', '-b', tmp + ':/tmp',
     'node', '/opt/session-agent/fault-server.cjs'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
   const out = fs.createWriteStream(run + '/agent-' + label + '.log');
@@ -162,6 +183,14 @@ async function connect() {
   term.onData(data => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'input', data })); });
 }
 const ready = () => CODEX ? /›/.test(screen()) && /Codex/.test(screen()) : /for shortcuts|❯/.test(screen());
+
+function rolloutId() {
+  const files = [];
+  const walk = dir => { try { for (const e of fs.readdirSync(dir, { withFileTypes: true })) { const p = path.join(dir, e.name); if (e.isDirectory()) walk(p); else files.push(p); } } catch {} };
+  walk(home + '/.codex/sessions');
+  const match = files.map(f => /-([0-9a-f-]{36})\.jsonl$/.exec(f)).filter(Boolean).pop();
+  return match ? match[1] : '';
+}
 
 // The first user turn of the newest native transcript, as the CLI wrote it.
 function nativeFirstUserTurn() {
@@ -225,6 +254,14 @@ function nativeFirstUserTurn() {
     freshContext: first ? !first.text.includes(OLD) : null,
     handoverRequests: requests.filter(r => !r.helper && r.text.includes('HANDOVER-336') && r.text.includes('[AgentHub context handover]')).length,
     native: nativeFirstUserTurn(),
+    order: requests.filter(r => !r.helper).map(r => {
+      const tags = [];
+      if (r.text.includes('HANDOVER-336')) tags.push('handover');
+      if (r.text.includes('QUEUED-OWNER-336')) tags.push('queued');
+      if (r.text.includes('Before you finish: is there a reusable')) tags.push('reminder');
+      if (r.text.includes(OLD)) tags.push('old');
+      return tags.join('+');
+    }),
     agentLog: logs.split('\n').filter(l => /context|handover|Context|\[fault\]|Conversation/.test(l)).slice(0, 20)
   };
   say('RESULT ' + JSON.stringify(result));
