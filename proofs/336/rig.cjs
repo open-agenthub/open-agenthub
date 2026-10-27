@@ -67,7 +67,6 @@ const hub = http.createServer(async (req, res) => {
     const text = JSON.stringify(body.messages || []);
     const helper = !(body.tools && body.tools.length) || /Reply with ONLY the suggestion/.test(text);
     requests.push({ at: Date.now(), text, helper });
-    fs.writeFileSync(run + '/model-requests.json', JSON.stringify(requests, null, 1));
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     const ev = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, ...data })}\n\n`);
     ev('message_start', { message: { id: 'm' + requests.length, type: 'message', role: 'assistant', model: body.model || 'm', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } } });
@@ -83,7 +82,6 @@ const hub = http.createServer(async (req, res) => {
     const text = JSON.stringify(body.input || []);
     const helper = /Generate a concise, single-line task title/.test(text) || !body.stream;
     requests.push({ at: Date.now(), text, helper });
-    fs.writeFileSync(run + '/model-requests.json', JSON.stringify(requests, null, 1));
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     res.write(sse([{ type: 'response.created', response: { id: 'r' + requests.length } }]));
     const answer = await modelAnswer(text, helper);
@@ -110,7 +108,8 @@ async function modelAnswer(text, helper) {
       body: JSON.stringify({ followUp: HANDOVER })
     });
     clearPostedAt = Date.now();
-    say('context-clear scheduled: ' + response.status + ' ' + await response.text());
+    // Only the status is logged: the rig records assertions, not what came over the network.
+    say('context-clear scheduled: HTTP ' + Number(response.status));
     if (REMINDER) {
       // What the PostToolUse --mark hook writes after a changing tool call in this turn.
       const id = CODEX ? rolloutId() : claudeSessionId;
@@ -184,7 +183,8 @@ async function connect() {
   ws.send(JSON.stringify({ type: 'subscribe', channel: 'activity' }));
   ws.on('message', d => {
     const data = d.toString();
-    if (data.startsWith('{"type":"agenthub","subtype":"handover"')) { handoverFrames.push(JSON.parse(data)); say('frame ' + data); return; }
+    if (data.startsWith('{"type":"agenthub","subtype":"handover"')) { const frame = JSON.parse(data);
+      handoverFrames.push({ failed: frame.failed === true, ...(/^context_clear_[a-z_]+$/.test(frame.reason) ? { reason: frame.reason } : {}) }); say('handover frame failed=' + (frame.failed === true)); return; }
     if (data.startsWith('{"type":"agenthub"')) return;
     term.write(data);
   });
@@ -235,12 +235,12 @@ function nativeFirstUserTurn() {
   await new Promise(r => hub.listen(HUB, '127.0.0.1', r));
   startAgent({ PROOF_FAULT: FAULT }, 'first');
   await connect();
-  if (!await until(ready, 60_000)) { say('CLI not ready'); fs.writeFileSync(run + '/screen-notready.txt', screen()); process.exit(2); }
+  if (!await until(ready, 60_000)) { say('CLI not ready'); console.log(screen()); process.exit(2); }
   await sleep(3000);
   ws.send(JSON.stringify({ type: 'input', data: '\x1b[200~' + OLD + ': start the task.\x1b[201~' }));
   await sleep(400);
   ws.send(JSON.stringify({ type: 'input', data: '\r' }));
-  if (!await until(() => clearPostedAt > 0, 60_000)) { say('old turn never reached the model'); fs.writeFileSync(run + '/screen-old.txt', screen()); process.exit(2); }
+  if (!await until(() => clearPostedAt > 0, 60_000)) { say('old turn never reached the model'); console.log(screen()); process.exit(2); }
   if (FAULT === 'restart') {
     await new Promise(resolve => proc.once('exit', resolve));
     say('pod lost; starting a new one on the same home (resume)');
@@ -252,7 +252,7 @@ function nativeFirstUserTurn() {
   }
   if (process.env.MENU_ANSWER_MS) {
     await sleep(Number(process.env.MENU_ANSWER_MS));
-    fs.writeFileSync(run + '/screen-menu.txt', screen());
+    console.log(screen());
     say('handover typed into the menu? ' + requests.some(r => r.text.includes('HANDOVER-336')));
     ws.send(JSON.stringify({ type: 'input', data: '\r' }));
     say('menu answered with Enter');
@@ -263,7 +263,7 @@ function nativeFirstUserTurn() {
   }
   const delivered = await until(() => requests.some(r => !r.helper && r.text.includes('HANDOVER-336')), WAIT_MS);
   await sleep(4000);
-  fs.writeFileSync(run + '/screen-end.txt', screen());
+  if (process.env.SHOW_SCREEN) console.log(screen());
   const first = requests.find(r => !r.helper && r.text.includes('HANDOVER-336'));
   const logs = fs.readdirSync(run).filter(f => f.startsWith('agent-')).map(f => fs.readFileSync(run + '/' + f, 'utf8')).join('\n');
   const result = {
