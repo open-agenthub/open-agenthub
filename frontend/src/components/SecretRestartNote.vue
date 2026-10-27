@@ -19,7 +19,8 @@ const busy = ref(false)
 const error = ref('')
 
 async function restart() {
-  if (!armed.value) { armed.value = true; return }
+  // A schedule's template update restarts nothing, so it needs no second click.
+  if (!armed.value && !props.session.scheduleSecretsOutdated) { armed.value = true; return }
   busy.value = true
   error.value = ''
   try {
@@ -36,7 +37,13 @@ async function restart() {
 </script>
 
 <template>
-  <div v-if="session.secretsPendingRestart" class="secret-restart" role="status" :data-secret-restart-note="session.id">
+  <div v-if="session.scheduleSecretsOutdated" class="secret-restart" role="status" :data-schedule-secrets-note="session.id">
+    <span><template v-if="named">“{{ session.title || session.id }}”: </template>the next scheduled run would still start with
+      the previous secret variables, because its schedule could not be updated. It is retried at the next secret or project change.</span>
+    <button type="button" :disabled="busy" data-schedule-secrets-update @click="restart">{{ busy ? 'Updating…' : 'Update schedule' }}</button>
+    <small v-if="error" class="err" role="alert">{{ error }}</small>
+  </div>
+  <div v-else-if="session.secretsPendingRestart" class="secret-restart" role="status" :data-secret-restart-note="session.id">
     <span><template v-if="named">“{{ session.title || session.id }}”: </template>changed secret variables reach the agent
       at its next start; the running process still has the previous ones. Files in <code>~/.secrets</code> are already current.</span>
     <button v-if="canApplyNow(session)" type="button" :class="{ armed }" :disabled="busy" data-secret-restart

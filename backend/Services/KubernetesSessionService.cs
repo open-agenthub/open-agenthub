@@ -264,6 +264,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             if (await _store.GetAsync(owner, sessionId, ct) is { } rec)
             {
                 await WriteSessionSecretsAsync(owner, rec, store, ct, resolver);
+                // A run copies its pod from the template, so the copy alone changes only the values
+                // behind names the template already lists (#301).
+                if (rec.Mode == SessionMode.Scheduled) await TryRefreshScheduledSecretEnvAsync(rec.Id, ct);
                 continue;
             }
             // The session is gone but its copies are not (a delete that failed half-way): they hold
@@ -1446,6 +1449,21 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await using var held = await _runtimeUpdateLock.TryAcquireAsync(id, ct);
         if (held is null) throw new InvalidOperationException("Session maintenance is already in progress.");
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
+        if (record.Mode == SessionMode.Scheduled)
+        {
+            // The owner's retry for a template a sync could not update; nothing is restarted.
+            bool updated;
+            try { updated = await RefreshScheduledSecretEnvAsync(id, ct); }
+            // A refusal by the cluster (an admission policy, a conflict that outlasted the retries)
+            // is the owner's answer here, not a server error: the copy and the record are fine.
+            catch (k8s.Autorest.HttpOperationException e) when ((int)e.Response.StatusCode is >= 400 and < 500)
+            {
+                throw new InvalidOperationException("The cluster refused to update this schedule's template. It is retried at the next secret or project change.", e);
+            }
+            if (!updated)
+                throw new InvalidOperationException("This schedule's template cannot be updated now. Finish its project move, or recreate it if it predates session secrets.");
+            return (await GetSessionAsync(owner, id, ct))!;
+        }
         var pod = await TryReadPodAsync($"session-{id}", ct);
         if (!ResourcesPendingRestart(record, pod) && !await SecretsPendingRestartAsync(id, pod, ct))
             return (await GetSessionAsync(owner, id, ct))!;
@@ -1828,6 +1846,62 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         catch (Exception e) when (e is k8s.Autorest.HttpOperationException or HttpRequestException or OperationCanceledException)
         {
             _log.LogWarning(e, "Could not restore the schedule of session {Id} after a refused move", sessionId);
+        }
+    }
+
+    /// <summary>
+    /// Brings a scheduled session's template up to the names its variable copy holds now. The
+    /// names are read off the copy at patch time, not taken from the caller: two syncs that write
+    /// the copy in one order and patch in the other still leave the template matching the copy
+    /// that was written last. A run already started keeps its pod; only later runs change, which
+    /// is why this needs no pause, unlike a project move, which also changes file access.
+    /// Returns false when nothing could be applied; the session then reports
+    /// <c>ScheduleSecretsOutdated</c> until a later sync or apply-resources succeeds.
+    /// </summary>
+    private async Task<bool> RefreshScheduledSecretEnvAsync(string id, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            V1CronJob cron;
+            try { cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct); }
+            catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { return false; }
+            // An unfinished move writes the block itself when it completes; patching under it would
+            // also bump the resourceVersion its own final patch is tested against.
+            if (cron.Metadata.Annotations?.ContainsKey(ProjectMoveSuspendAnnotation) == true) return false;
+            var spec = cron.Spec.JobTemplate.Spec.Template.Spec;
+            var names = (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct))?.Data?.Keys
+                .Order(StringComparer.Ordinal).ToList() ?? [];
+            if (ScheduledTemplateSecrets.Names(spec) is null) return false;
+            if (!ScheduledTemplateSecrets.Outdated(spec, names)) return true;
+            var (container, env) = ScheduledTemplateSecrets.Replace(spec, id, names);
+            var operations = new List<object> {
+                new { op = "test", path = "/metadata/resourceVersion", value = cron.Metadata.ResourceVersion },
+                new { op = "replace", path = $"/spec/jobTemplate/spec/template/spec/containers/{container}/env", value = env }
+            };
+            try
+            {
+                await _k8s.BatchV1.PatchNamespacedCronJobAsync(new V1Patch(KubernetesJson.Serialize(operations), V1Patch.PatchType.JsonPatch),
+                    cron.Metadata.Name, _opts.Namespace, cancellationToken: ct);
+                _log.LogInformation("Updated the secret variables of schedule {Name}", cron.Metadata.Name);
+                return true;
+            }
+            // A failed "test" is 422 on the API server; a concurrent writer is 409. Either way the
+            // CronJob changed underneath: read it again.
+            catch (k8s.Autorest.HttpOperationException e) when ((int)e.Response.StatusCode is 409 or 422 && attempt < 3)
+            {
+                continue;
+            }
+        }
+    }
+
+    private async Task TryRefreshScheduledSecretEnvAsync(string id, CancellationToken ct)
+    {
+        // Not thrown: the store or project change the owner made has happened, and failing it over
+        // one schedule would hide that. The read-time comparison reports the drift instead.
+        try { await RefreshScheduledSecretEnvAsync(id, ct); }
+        catch (Exception e) when (e is k8s.Autorest.HttpOperationException or HttpRequestException)
+        {
+            _log.LogWarning(e, "Could not update the secret variables of a scheduled session");
         }
     }
 
@@ -2243,11 +2317,12 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var projectSecrets = (await _projects.ListAsync(owner, ct)).ToDictionary(p => p.Id, p => p.SecretIds);
         // One list for every session's variable copy rather than a read per row; from the watch
         // cache like the pods above, for the same reason.
-        var envVersions = (await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
+        var envCopies = (await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
                 labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}={SessionSecretDeliveryFactory.EnvComponent}",
                 resourceVersion: "0", cancellationToken: ct)).Items
             .Where(s => s.Metadata.Labels?.ContainsKey(SessionLabel) == true)
-            .ToDictionary(s => s.Metadata.Labels[SessionLabel], s => s.Metadata.ResourceVersion);
+            .ToDictionary(s => s.Metadata.Labels[SessionLabel]);
+        var envVersions = envCopies.ToDictionary(c => c.Key, c => c.Value.Metadata.ResourceVersion);
         var result = new List<SessionInfo>();
         foreach (var r in records)
         {
@@ -2260,6 +2335,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 ResourcesPendingRestart = ResourcesPendingRestart(r, pod),
                 SecretsPendingRestart = SecretsPendingRestart(pod, envVersions.GetValueOrDefault(r.Id)),
                 ScheduleMoveUnfinished = unfinishedMoves.Contains(r.Id),
+                ScheduleSecretsOutdated = !unfinishedMoves.Contains(r.Id) && scheduledTemplates.TryGetValue(r.Id, out var scheduled)
+                    && ScheduledTemplateSecrets.Outdated(scheduled, envCopies.GetValueOrDefault(r.Id)?.Data?.Keys),
                 OutdatedImage = RuntimeImageOutdated(r,
                     pod ?? (scheduledTemplates.TryGetValue(r.Id, out var template) ? new V1Pod { Spec = template } : null)) });
         }
@@ -2275,6 +2352,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var info = await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
             await _browsers.GetSummaryAsync(id, ct), ct);
         var moveUnfinished = false;
+        var secretsOutdated = false;
         if (pod is null && rec.Mode == SessionMode.Scheduled)
         {
             try
@@ -2282,6 +2360,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
                 pod = new V1Pod { Spec = cron.Spec.JobTemplate.Spec.Template.Spec };
                 moveUnfinished = cron.Metadata.Annotations?.ContainsKey(ProjectMoveSuspendAnnotation) == true;
+                secretsOutdated = !moveUnfinished && ScheduledTemplateSecrets.Outdated(pod.Spec,
+                    (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct))?.Data?.Keys);
             }
             catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
@@ -2289,7 +2369,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             }
         }
         return info with { OutdatedImage = RuntimeImageOutdated(rec, pod), ResourcesPendingRestart = ResourcesPendingRestart(rec, pod),
-            ScheduleMoveUnfinished = moveUnfinished,
+            ScheduleMoveUnfinished = moveUnfinished, ScheduleSecretsOutdated = secretsOutdated,
             SecretsPendingRestart = await SecretsPendingRestartAsync(id, pod, ct) };
     }
 

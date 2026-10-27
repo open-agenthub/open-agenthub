@@ -46,3 +46,21 @@ the first 16 hex characters of the SHA-256 of `proof-owner`). Then run:
 Without a kubelet, the proof verifies the admitted run pod and the secrets it references, not a
 running container's environment. The failure paths (each step failing after the suspension)
 are covered by `ScheduledSessionMoveFailureTests` against a fake cluster API.
+
+## Scheduled templates following secret changes (#301)
+
+Same rig and fake key as above. Run
+`KUBECTL=<kubectl> PROOF_KUBECONFIG=<rig kubeconfig> node tests/SessionOrganizationProof/secret-sync.cjs`. It:
+
+- waits for a real run, then changes the project's selection and renames a secret while that run
+  is in progress. It grants a third secret through the session view's grant switch in Chromium.
+  The next real run resolves exactly the renamed, the added and the granted variable, and the
+  first run kept its pod.
+- installs a ValidatingAdmissionPolicy that refuses CronJob updates, so the template patch
+  really fails. The project change still returns 200, the session reports
+  `scheduleSecretsOutdated`, and the sidebar marks it. Update schedule answers 409 with the
+  reason. Once the policy is removed, Update schedule applies the change, and the next run
+  resolves exactly the current selection.
+
+The script deletes a run's Job to stand in for the run finishing: without a kubelet its pod stays
+Pending, and the CronJob's Forbid policy would hold the next run back.

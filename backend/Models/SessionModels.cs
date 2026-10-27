@@ -857,6 +857,10 @@ public record SessionInfo
     /// schedule stays suspended, so no run starts with half of each project, until the move is
     /// retried (docs/session-organization.md).</summary>
     public bool ScheduleMoveUnfinished { get; init; }
+    /// <summary>This scheduled session's next run would start with other secret variables than
+    /// its variable copy holds: an update of its template failed and is retried at the next sync
+    /// or through apply-resources (#301).</summary>
+    public bool ScheduleSecretsOutdated { get; init; }
     public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
     /// <summary>Self-deletion deadline in seconds; null = the session is kept.</summary>
     public int? AutoDeleteAfterSeconds { get; init; }

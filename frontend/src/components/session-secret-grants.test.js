@@ -66,9 +66,12 @@ it('keeps the read-only list for someone who cannot manage the session', async (
   wrapper.unmount()
 })
 
-it('shows a scheduled session its grants without letting them change', async () => {
+// #301: the schedule's template follows the change, so its grants are edited like any other.
+it("lets a scheduled session's grants change, applying from its next run", async () => {
   const wrapper = await mountView({ canManage: true, session: { ...session, mode: 'Scheduled' } })
-  expect(wrapper.get('[data-secret-grant="g"] [data-grant-level="session"]').attributes('disabled')).toBeDefined()
-  expect(wrapper.text()).toContain('delete and recreate it')
+  expect(wrapper.get('[data-scheduled-grants-note]').text()).toContain('next scheduled run')
+  await wrapper.get('[data-secret-grant="g"] [data-grant-level="session"]').trigger('click')
+  await flushPromises()
+  expect(api.updateSession).toHaveBeenCalledWith('s1', { secretGrants: [{ secretId: 'g', inheritToChildren: false }] })
   wrapper.unmount()
 })

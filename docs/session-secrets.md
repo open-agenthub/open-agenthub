@@ -110,8 +110,8 @@ A project holds `secretIds`; a session holds `secretIds` too.
   permissions nobody uses by default. The issue asked for "a session created in the project
   receives that selection"; the allow list falls out of it.
 - A duplicate keeps the source's list when it stays in the same project and follows the new
-  project otherwise. Scheduled sessions refuse a change of `secretIds` like any other runtime
-  field, because their CronJob template fixes the variable names.
+  project otherwise. A scheduled session's `secretIds` can change too; its template follows (#301,
+  below).
 
 ## Delivery into the pod
 
@@ -394,9 +394,42 @@ the owner dialogs separately edit project selection and session grants. `project
 ordinary selection path, including explicitly selected secrets outside a project. When a secret
 is both selected and granted, the grant origin is shown; removing that grant leaves the ordinary
 selection in effect. Grant changes refresh the session's copies through the existing delivery
-path. Files update live; environment variables require the next start. Scheduled sessions can
-choose grants at creation, but changes are rejected like other runtime fields because the
-CronJob fixes variable names. Delete and recreate one to change grants.
+path. Files update live; environment variables require the next start. For a scheduled session
+the next start is the next run, and grants and the selection change like any other session's.
+
+### Scheduled templates follow the variable copy (#301)
+
+A scheduled session's CronJob template lists its variable names, as references into the
+session's variable copy. The copy is rewritten on every change of the store, a project selection
+or a grant. Before #301 the template was not, so later runs missed new variables and kept names
+that no longer existed. Now every secret sync also patches a scheduled session's variable block
+(`ScheduledTemplateSecrets`, the block a project move replaces, see
+docs/session-organization.md). The patch is tested against the resourceVersion and read again on
+a conflict.
+
+- The names come from the copy as it stands when the template is patched, not from the sync that
+  triggered it. Two syncs that write the copy in one order and patch in the other still leave the
+  template matching the copy written last.
+- A run in progress is not paused or stopped. Its Job copied the pod when it started, so only later
+  runs change. A project move does stop or refuse such a run, because a move also changes the
+  run's file access.
+- A failed patch does not fail the owner's change, which has happened. The session reports
+  `scheduleSecretsOutdated` by comparing the template's names with the copy's at read time. The
+  sidebar marks it, the session view and Settings → Secrets offer **Update schedule**
+  (`apply-resources`), and the next sync tries again. A state flag stored on the record was rejected:
+  a crash between the copy and the patch would leave it wrong, and the comparison cannot be.
+- Revocation fails closed. The copy is rewritten before the template is patched, and a failed
+  copy write stops the sync before the patch. A run started from a stale template still names a
+  revoked or deleted variable, but the copy no longer has a value for it. Every reference is
+  `optional`, so the missing key leaves the variable unset instead of stopping the container
+  in CreateContainerConfigError.
+- During an unfinished project move the sync leaves the template alone, because the move's final
+  patch writes it. A template from before session secrets has no block, so it cannot be updated
+  and is not reported as outdated. It has to be recreated.
+
+Rejected: rebuilding the template from the record at each sync, for the reasons the move gives,
+and deferring the patch while a run is active. That deferral gains nothing for an already-started
+pod, and loses the change if no later sync comes.
 
 Rejected alternatives:
 

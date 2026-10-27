@@ -15,6 +15,23 @@ public static class ScheduledTemplateSecrets
 {
     public const string NamesVariable = "AGENTHUB_SECRET_ENV";
 
+    /// <summary>The variable names the template's next run is given, or null for a template
+    /// without the secret block.</summary>
+    public static IReadOnlyList<string>? Names(V1PodSpec spec) =>
+        spec.Containers.FirstOrDefault(c => c.Name == "agent")?.Env?.FirstOrDefault(e => e.Name == NamesVariable)?.Value is { } joined
+            ? joined.Split(',', StringSplitOptions.RemoveEmptyEntries)
+            : null;
+
+    /// <summary>
+    /// Whether the next run would start with other variables than the session's variable copy
+    /// holds. The copy is written on every change of the store, the project selection or a grant;
+    /// the template only by an explicit patch, so the two can drift (#301). False for a template
+    /// without the block, which cannot be updated in place.
+    /// </summary>
+    public static bool Outdated(V1PodSpec spec, IEnumerable<string>? copyNames) =>
+        Names(spec) is { } names && !names.Order(StringComparer.Ordinal)
+            .SequenceEqual((copyNames ?? []).Order(StringComparer.Ordinal), StringComparer.Ordinal);
+
     /// <summary>The agent container's variables with the secret block replaced by
     /// <paramref name="names"/>, in the position and form <see cref="AgentPodSpecFactory"/>
     /// writes it. Throws <see cref="InvalidOperationException"/> for a template without the block
