@@ -25,8 +25,7 @@ an approved key by that suffix). The owner made the choice by selecting API-key 
 The proof found the suffix in the uploaded state archive: Claude Code keeps copies of
 `~/.claude.json` in `~/.claude/backups/`, and `~/.claude` is what the archive carries. The archive
 deliberately leaves `~/.claude.json` itself out, and the entrypoint rewrites it on every start, so a
-backup is never read; the driver now excludes `.claude/backups` (`stateExcludes`). The same copies
-also carried the account details the CLI keeps in that file.
+backup is never read; the driver now excludes `.claude/backups` (`stateExcludes`).
 
 On `main` the suffix also reached the uploaded scrollback, because the question displays it
 (`sk-ant-...` plus the last 20 characters). With the question gone it is not drawn either.
