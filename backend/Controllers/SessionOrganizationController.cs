@@ -8,6 +8,7 @@ using Microsoft.AspNetCore.Mvc;
 namespace AgentHub.Api.Controllers;
 
 public sealed record SessionOrderRequest(List<string>? SessionIds);
+/// <summary>Moves a session to another project (null = none) once the owner confirmed the change.</summary>
 /// <param name="StopActiveRun">Scheduled sessions only: stop a run in progress instead of
 /// refusing the move while it lasts.</param>
 public sealed record MoveSessionProjectRequest(string? ProjectId, bool Confirm = false, bool StopActiveRun = false);

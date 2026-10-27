@@ -1742,7 +1742,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 // schedule goes back to how the owner left it; otherwise (an earlier attempt stored
                 // the destination) it stays suspended and visibly unfinished until a retry succeeds.
                 if (templateProject == originalProject)
-                    await RestoreScheduleAsync(name, wasSuspended);
+                    await RestoreScheduleAsync(rec.Id, wasSuspended);
                 throw;
             }
         }
@@ -1754,15 +1754,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync(name, _opts.Namespace, cancellationToken: ct);
         var (container, env) = ScheduledTemplateSecrets.Replace(cron.Spec.JobTemplate.Spec.Template.Spec, id, envNames);
         var operations = new List<object> {
-            new { op = "test", path = "/metadata/resourceVersion", value = (object)cron.Metadata.ResourceVersion },
-            new { op = "replace", path = $"/spec/jobTemplate/spec/template/spec/containers/{container}/env", value = (object)env },
-            new { op = "replace", path = "/spec/suspend", value = (object)wasSuspended },
+            new { op = "test", path = "/metadata/resourceVersion", value = cron.Metadata.ResourceVersion },
+            new { op = "replace", path = $"/spec/jobTemplate/spec/template/spec/containers/{container}/env", value = env },
+            new { op = "replace", path = "/spec/suspend", value = wasSuspended },
             new { op = "remove", path = AnnotationPath(ProjectMoveSuspendAnnotation) },
             new { op = "remove", path = AnnotationPath(ProjectMoveFromAnnotation) }
         };
         await _k8s.BatchV1.PatchNamespacedCronJobAsync(new V1Patch(KubernetesJson.Serialize(operations), V1Patch.PatchType.JsonPatch),
             name, _opts.Namespace, cancellationToken: ct);
-        _log.LogInformation("Moved scheduled session {Id} to another project", id);
+        _log.LogInformation("Moved scheduled session {Id} to another project", rec.Id);
         return (await GetSessionAsync(owner, id, ct))!;
     }
 
@@ -1806,10 +1806,14 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     private static async Task IgnoreMissingAsync(Func<Task> delete)
     {
         try { await delete(); }
-        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            // Already gone is the outcome the caller wants; the next poll confirms it.
+            return;
+        }
     }
 
-    private async Task RestoreScheduleAsync(string name, bool suspended)
+    private async Task RestoreScheduleAsync(string sessionId, bool suspended)
     {
         // Not the request's token: a cancelled request must not leave the schedule suspended.
         try
@@ -1817,9 +1821,14 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             var restore = new V1Patch(JsonSerializer.Serialize(new {
                 metadata = new { annotations = new Dictionary<string, string?> { [ProjectMoveSuspendAnnotation] = null, [ProjectMoveFromAnnotation] = null } },
                 spec = new { suspend = suspended } }), V1Patch.PatchType.MergePatch);
-            await _k8s.BatchV1.PatchNamespacedCronJobAsync(restore, name, _opts.Namespace);
+            await _k8s.BatchV1.PatchNamespacedCronJobAsync(restore, $"session-{sessionId}", _opts.Namespace);
         }
-        catch (Exception e) { _log.LogWarning(e, "Could not restore the schedule of {Name} after a refused move", name); }
+        // Logged, not thrown: the caller is already rethrowing the failure that made it roll back,
+        // and the annotations left behind report the move as unfinished.
+        catch (Exception e) when (e is k8s.Autorest.HttpOperationException or HttpRequestException or OperationCanceledException)
+        {
+            _log.LogWarning(e, "Could not restore the schedule of session {Id} after a refused move", sessionId);
+        }
     }
 
     private async Task<SessionInfo> UpdateSessionCoreAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct)

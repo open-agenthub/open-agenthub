@@ -168,7 +168,8 @@ public class ScheduledSessionMoveFailureTests
                 new JsonObject { ["apiVersion"] = "batch/v1", ["kind"] = "CronJobList", ["items"] = new JsonArray(_cron.DeepClone()) }.ToJsonString(), "application/json"));
             app.MapMethods(cronPath, ["PATCH"], async (HttpRequest request) =>
             {
-                var body = JsonNode.Parse(await new StreamReader(request.Body).ReadToEndAsync())!;
+                using var reader = new StreamReader(request.Body);
+                var body = JsonNode.Parse(await reader.ReadToEndAsync())!;
                 if (request.ContentType!.Contains("json-patch"))
                 {
                     if (Fault == Step.ReplaceTemplate) return Results.Json(new V1Status { Code = 409, Reason = "Conflict" }, statusCode: 409);
