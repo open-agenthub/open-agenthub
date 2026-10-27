@@ -42,4 +42,13 @@ public class McpOAuthTests
     [InlineData(null, false)]
     public void Redirect_uris_must_be_https_or_loopback(string? uri, bool acceptable)
         => Assert.Equal(acceptable, McpRedirectUri.IsAcceptable(uri));
+
+    [Fact]
+    public void The_api_key_field_is_one_OpenIddict_redacts_in_its_logs()
+    {
+        // The consent form posts to the OpenIddict authorize endpoint, which logs every parameter
+        // at Information. As "api_key" the key landed in the log in clear text (#324); "password"
+        // is on OpenIddict's list of parameters it writes as [redacted].
+        Assert.Equal(OpenIddict.Abstractions.OpenIddictConstants.Parameters.Password, McpAuthorizationController.ApiKeyField);
+    }
 }

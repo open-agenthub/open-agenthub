@@ -38,8 +38,13 @@ public sealed class McpAuthorizationController(
     /// <summary>The user the insecure development mode attributes everything to.</summary>
     public const string AnonymousUser = AgentHub.Api.Auth.HubAuthOptions.InsecureDevUser;
 
-    /// <summary>Consent form field carrying the API key in API-key mode.</summary>
-    public const string ApiKeyField = "api_key";
+    /// <summary>
+    /// Consent form field carrying the API key in API-key mode. Named "password" because the form
+    /// posts to the OpenIddict authorize endpoint, which logs every request parameter at
+    /// Information and redacts only the ones it knows to be secret — under any other name the key
+    /// was written to the log in clear text.
+    /// </summary>
+    public const string ApiKeyField = OpenIddictConstants.Parameters.Password;
 
     /// <summary>
     /// Registration is anonymous — a client has to exist before anybody signs in — so it is
