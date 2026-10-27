@@ -64,3 +64,19 @@ Same rig and fake key as above. Run
 
 The script deletes a run's Job to stand in for the run finishing: without a kubelet its pod stays
 Pending, and the CronJob's Forbid policy would hold the next run back.
+
+## Deleting a secret fails closed (#303)
+
+Same rig and fake key. Run
+`KUBECTL=<kubectl> PROOF_KUBECONFIG=<rig kubeconfig> node tests/SessionOrganizationProof/secret-delete.cjs`.
+It uses a scheduled and an interactive session in one project:
+
+- Phase A: a ValidatingAdmissionPolicy refuses CREATE and UPDATE of the session copies. The
+  delete answers 204, and both sessions' copies are withdrawn. A real run started then
+  references the deleted name optionally and resolves nothing. Once the policy is lifted, the
+  next sync restores both copies without the value. For the interactive session that happens
+  through its live pod.
+- Phase B: the policy also refuses DELETE. The delete from Settings → Secrets in Chromium answers
+  503 `secret_copies_pending`, and the notice with Retry shows. The copies still hold the value,
+  which is why no success was reported. After the policy is lifted, Retry answers 204, the copies
+  hold only the remaining secret, and the next run resolves only that one.

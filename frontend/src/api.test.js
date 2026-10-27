@@ -135,6 +135,14 @@ describe('error mapping', () => {
     expect((await api.listSessionShares('s1').catch(e => e)).code).toBe('license_required')
   })
 
+  it('reads the code and message of a pending secret delete (#303)', async () => {
+    globalThis.fetch = failing(503, '{"code":"secret_copies_pending","error":"1 session(s) may still hold the previous secret values","sessions":1}')
+    const err = await api.deleteSecret('e1').catch(e => e)
+    expect(err.status).toBe(503)
+    expect(err.code).toBe('secret_copies_pending')
+    expect(err.message).toBe('1 session(s) may still hold the previous secret values')
+  })
+
   it('sets no code on other failures', async () => {
     globalThis.fetch = failing(404, '{"error":"not found","code":"session_not_found"}')
     const err = await api.listSessionShares('s1').catch(e => e)

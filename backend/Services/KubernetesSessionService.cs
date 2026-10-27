@@ -252,9 +252,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             await _store.UpsertAsync(session, ct);
         }
         // Every session that was ever spawned has a file copy, so the copies are the list of
-        // sessions to bring up to date; a session that never ran has nothing to update. Scheduled
-        // sessions are added by record: their runs read the copies directly, so one whose copies
-        // were withdrawn below must get them back from a later sync, not from a spawn.
+        // sessions to bring up to date; a session that never ran has nothing to update. Sessions
+        // with a live pod and scheduled sessions are added as well: a copy withdrawn below must come
+        // back with a later sync, not only at the next spawn, which a running pod or a scheduled
+        // run never goes through.
         var copies = await _k8s.CoreV1.ListNamespacedSecretAsync(_opts.Namespace,
             labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}={SessionSecretDeliveryFactory.FilesComponent}",
             cancellationToken: ct);
@@ -262,6 +263,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             .Select(copy => copy.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var id) ? id : null)
             .OfType<string>()
             .Concat((await _store.ListAsync(owner, ct)).Where(r => r.Mode == SessionMode.Scheduled).Select(r => r.Id))
+            .Concat((await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace,
+                    labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}=agent", cancellationToken: ct)).Items
+                .Where(pod => pod.Metadata.DeletionTimestamp is null && pod.Status?.Phase is "Pending" or "Running")
+                .Select(pod => pod.Metadata.Labels is { } labels && labels.TryGetValue(SessionLabel, out var id) ? id : null).OfType<string>())
             .Distinct().ToList();
         if (sessionIds.Count == 0) return;
         var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;

@@ -23,7 +23,9 @@ async function responseError(res) {
   const text = await res.text()
   const err = new Error(`${res.status} ${text}`)
   err.status = res.status
-  if (res.status === 409) {
+  // 503 too: a secret delete whose session copies are not all cleared answers
+  // `secret_copies_pending` (#303), and the settings page keys its retry on that code.
+  if (res.status === 409 || res.status === 503) {
     try { const body = JSON.parse(text); err.code = body.code; err.message = body.error || err.message } catch {}
   }
   if (res.status === 402) err.code = codeFromBody(text) || 'license_required'
