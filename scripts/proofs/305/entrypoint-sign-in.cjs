@@ -56,19 +56,29 @@ function build() {
 // Stand-in hub: callbacks answer {} and are counted by path only; the web app gets one session
 // and its terminal socket is proxied to the session agent, as the backend's TerminalProxy does.
 const callbacks = [];
+// Upload bodies stay in memory and are only searched; nothing of them is printed.
+const uploads = [];
 const session = { id: 's1', title: 'Sign-in proof', agent: 'Claude', phase: 'Running', status: 'Running', mode: 'Interactive',
   uiMode: 'terminal', accessRole: 'Owner', authMode: 'Auto', createdAt: new Date().toISOString(), repos: [], browser: { phase: 'Stopped' } };
 const hub = http.createServer(async (req, res) => {
-  for await (const _ of req) {}
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
   const url = req.url.split('?')[0];
+  if (req.method === 'PUT') uploads.push({ url, body: Buffer.concat(chunks) });
   if (!url.startsWith('/api/')) callbacks.push(req.method + ' ' + url.replace(/[0-9a-f-]{36}/g, '<id>'));
   const json = v => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)); };
-  if (url === '/api/config') return json({ authority: '' });
+  if (url === '/api/config') return json({ authority: '', version: 'proof' });
   if (url === '/api/sessions') return json([session]);
   if (url === '/api/sessions/s1') return json(session);
-  if (url === '/api/sessions/s1/conversation') return json({ source: 'native', entries: [], text: '', offset: 0, nextOffset: 0, length: 0, running: true });
-  if (/\/(permissions|messages|files|accounts|credentials|projects|sessions|skills)$/.test(url) || url.endsWith('/allowed')) return json([]);
-  return json({});
+  if (url === '/api/agents/allowed') return json({ agents: ['Claude'] });
+  if (url === '/api/admin/access') return json({ isAdmin: false });
+  if (url === '/api/credentials/accounts' || url === '/api/credentials') return json({});
+  if (url.endsWith('/conversation')) return json({ source: 'native', entries: [], text: '', offset: 0, nextOffset: 0, length: 0 });
+  if (url.endsWith('/files/capabilities')) return json({ canRead: true, canUpload: false, limits: { presentationPollMilliseconds: 30000 } });
+  if (url.endsWith('/files/presentation')) return json({ revision: 0, fileId: null });
+  if (['/api/projects', '/api/mcp-servers'].includes(url) || /\/(permissions|messages|files|commands)$/.test(url)) return json([]);
+  if (!url.startsWith('/api/')) return json({});
+  res.writeHead(404); res.end();
 });
 const wss = new WebSocketServer({ noServer: true, handleProtocols: () => 'tty' });
 hub.on('upgrade', (req, socket, head) => wss.handleUpgrade(req, socket, head, client => {
@@ -80,6 +90,8 @@ hub.on('upgrade', (req, socket, head) => wss.handleUpgrade(req, socket, head, cl
   client.on('message', d => upstream.readyState === 1 ? upstream.send(d.toString()) : pending.push(d.toString()));
   client.on('close', () => upstream.close());
   upstream.on('close', () => client.close());
+  // Before the agent listens; the web app reconnects, as it does to a starting pod.
+  upstream.on('error', () => client.close());
 }));
 
 // A Messages endpoint for the API-key and custom-endpoint starts; nothing is asked of it unless
@@ -213,6 +225,14 @@ function sanitize(rows) {
     // The shipped watcher hands a login made in the session to the hub as the owner's account.
     for (let i = 0; i < 90 && !callbacks.some(c => c.endsWith('/claude-credentials')); i++) await new Promise(r => setTimeout(r, 500));
     result.loginUploadedToHub = callbacks.some(c => c.endsWith('/claude-credentials'));
+    // The session agent's periodic upload (30 s) after the login: scrollback and state must not
+    // carry the sign-in address or its state value (docs/proofs/242-cli-sign-in.md).
+    const before = uploads.length;
+    for (let i = 0; i < 90 && !uploads.slice(before).some(u => u.url.endsWith('/scrollback')); i++) await new Promise(r => setTimeout(r, 500));
+    const text = uploads.map(u => u.url.endsWith('/state') ? require('node:zlib').gunzipSync(u.body).toString('latin1') : u.body.toString('utf8'));
+    result.uploadsAfterLogin = uploads.slice(before).map(u => u.url);
+    result.signInDataInUploads = text.some(t => t.includes(state) || t.includes(address) || t.includes('example-code#'));
+    result.scrollbackMarksOmission = text.some(t => t.includes('[Sign-in terminal output omitted]'));
   }
   await new Promise(r => setTimeout(r, 1000));
   result.launch = (log.find(l => l.startsWith('[agent] driver=')) || '').replace(/ cwd=\S+/, '').replace(ROOT, '<root>').replaceAll(ROOT, '<root>');
