@@ -24,8 +24,8 @@ image:
 
 # Remote MCP server at <host>/mcp, so AI clients can drive sessions on behalf of a signed-in
 # user. Guarded by an OAuth 2.1 authorization server this instance runs itself, which federates
-# the login to the configured OIDC provider (or, on an instance without one, attributes
-# everything to the local "dev" user like the rest of the API does).
+# the login to the configured OIDC provider (or, on an instance without one, asks for the API
+# key on its consent screen).
 #
 # Off by default: enabling it exposes an authorization server and a dynamic client registration
 # endpoint, which should be a deliberate choice rather than something a chart upgrade turns on.
@@ -235,7 +235,7 @@ browser:
 # Production clusters should enable API-server encryption at rest (preferably KMS),
 # restrict RBAC and network access, and rotate credentials regularly.
 
-# OAuth2/OIDC provider. Empty authority = auth disabled (dev mode, all requests as user "dev").
+# OAuth2/OIDC provider. Empty authority = the API key below guards the instance instead.
 oidc:
   authority: ""
   # Expected "aud" claim of access tokens. Empty = skip audience validation
@@ -244,6 +244,22 @@ oidc:
   clientId: agenthub
   scope: openid profile email
   requireHttpsMetadata: true
+
+# Login for installs without OIDC (oidc.authority empty), docs/no-oidc-api-key.md. The backend
+# refuses to start unless OIDC, an API key or insecureDevMode is configured.
+auth:
+  apiKey:
+    # Existing Secret holding the key (at least 32 characters). Empty = the chart generates a
+    # random key into the Secret "agenthub-api-key" on first install and keeps it on upgrades;
+    # `helm template`-based GitOps cannot look it up, so set this there instead.
+    existingSecret: ""
+    existingSecretKey: api-key
+    # The owner the key acts as; always an admin. Empty = "admin" on a new install, and "dev" on
+    # an upgrade of an install from before the key existed, so its sessions stay visible.
+    owner: ""
+  # No login at all: every request is admin user "dev". Local development only — anyone who
+  # can reach the backend controls every session. Ignored when oidc.authority is set.
+  insecureDevMode: false
 
 # Skill library: agents get a built-in "skill-library" MCP server in every
 # session to search, upload and version skills (per project or personal).

@@ -17,6 +17,7 @@ spec:
         # Force a rollout when the config/secret changes
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        checksum/api-key: {{ include (print $.Template.BasePath "/api-key-secret.yaml") . | sha256sum }}
     spec:
       serviceAccountName: agenthub-backend
       {{- if .Values.image.pullSecret }}
@@ -35,6 +36,16 @@ spec:
           envFrom:
             - configMapRef: { name: agenthub-config }
             - secretRef:    { name: agenthub-secrets }
+          {{- if eq (include "agenthub.authMode" .) "apiKey" }}
+          env:
+            # Referenced, not copied into agenthub-secrets: the key's Secret may be one the
+            # chart does not own (auth.apiKey.existingSecret).
+            - name: Auth__ApiKey
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "agenthub.apiKeySecretName" . }}
+                  key: {{ include "agenthub.apiKeySecretKey" . }}
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

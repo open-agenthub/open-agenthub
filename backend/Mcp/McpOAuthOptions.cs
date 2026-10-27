@@ -17,8 +17,8 @@ public sealed class McpOAuthOptions
 
     /// <summary>
     /// Whether the instance has an OIDC authority to federate the browser login to. False means
-    /// the backend is in its "auth disabled" mode, where every caller is the local "dev" user —
-    /// the MCP login then has nowhere to go and is skipped, matching the rest of the API.
+    /// API-key mode, where the consent screen asks for the key, or the insecure development mode,
+    /// where every caller is the local "dev" user and the login is skipped.
     /// </summary>
     public bool AuthEnabled { get; init; }
 

@@ -33,7 +33,9 @@ public sealed class AdminController : ControllerBase
 
     /// <summary>Whether the current user may see the admin area (drives the nav item).</summary>
     [HttpGet("access")]
-    public async Task<object> Access(CancellationToken ct) => new { isAdmin = await IsAdminAsync(ct) };
+    // The user name lets the API-key login show who the key acts as; nothing else tells the
+    // browser, since a static key carries no profile the way an OIDC token does.
+    public async Task<object> Access(CancellationToken ct) => new { isAdmin = await IsAdminAsync(ct), user = Owner };
 
     public sealed record SeatInfo(int Used, int Included);
     public sealed record Overview(

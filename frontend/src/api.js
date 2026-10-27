@@ -7,7 +7,8 @@ async function authHeaders() {
   return t ? { Authorization: `Bearer ${t}` } : {}
 }
 
-// On 401, go back to the provider – the session has expired or the token is invalid.
+// On 401, sign in again: back to the provider (expired or invalid token), or back to the key
+// prompt in API-key mode (the stored key was rotated).
 function handle401() {
   if (auth.enabled) login()
   throw new Error('401 Sign-in required')
