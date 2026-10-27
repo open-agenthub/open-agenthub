@@ -1,10 +1,14 @@
 # Removing historical Claude configuration backups
 
-State archives written by versions 1.0.0 through 1.2.0 can contain
-`.claude/backups/`: the CLI copies `~/.claude.json` there. That file contains
+State archives written before 1.3.0 can contain `.claude/backups/` when the CLI
+created that directory: the CLI copies `~/.claude.json` there. That file contains
 account metadata and user-scoped MCP configuration. Excluding only the primary
 credential file did not exclude these derived copies. New archives exclude this
-directory, and restore excludes it even when reading an older archive.
+directory, and restore excludes it even when reading an older archive. Archive
+selection already included this tree in 0.1.0; the earliest CLI version that
+created backups was not established. User-scoped MCP config writing is present
+from 0.11.0. Primary provider login files in 0.1.0–0.4.0 are a separate category; see
+[the provider-login audit and cleanup](provider-state-login-cleanup.md).
 
 ## One-time administrator cleanup
 
@@ -89,8 +93,9 @@ if immediate revocation is required.
 The account metadata in `.claude.json` can include account/email/organization identifiers,
 userID and machineID; an approved API key can leave its 20-character suffix there.
 These values are personal data. Its presence alone does
-not establish exposure of provider login credentials, whose primary file is
-excluded separately. Review any additional custom configuration/backup values;
+not establish exposure of provider login credentials. Their primary file is
+excluded separately from 0.5.0 onward; earlier sessions need the provider-login
+audit and revocation guidance linked above. Review any additional custom configuration/backup values;
 rotate provider credentials if those values contained them. No real credential is
 needed to run the proof below.
 

@@ -138,6 +138,11 @@ try
     await Put(key, [1, 2, 3]);
     Check((await cleanup.RunAsync(owner, true, default)).Failed == 1, "malformed object counted");
     Check((await Read(key)).SequenceEqual(new byte[] { 1, 2, 3 }), "malformed object untouched");
+    if (args.Contains("--provider-logins"))
+    {
+        await HistoricalLogins.RunAsync(root, http, storage, registry, locks, cluster, ns, owner, prefix);
+        Check(Same(original, await Read(foreignKey)) && Same(original, await Read(rawOwnerKey)), "provider cleanup owner isolation");
+    }
     Console.WriteLine("PASS real S3 + real admin HTTP: authorization, preview, rewrite, owner isolation, idempotence, malformed archive and real producer/lock guards");
     foreach (var item in after) Console.WriteLine($"SHA256 {item.Key} {item.Value}");
 }
