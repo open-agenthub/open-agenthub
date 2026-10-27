@@ -237,7 +237,11 @@ module.exports = {
   // the archive, is what tells it to. Installed plugins (plugins/cache) and the skills are
   // kept: nothing was shown to bring back a plugin the user installed, and a skill written in
   // the session exists nowhere else until the library sync has taken it.
-  stateExcludes: ['.claude/plugins/marketplaces'],
+  //
+  // .claude/backups holds the CLI's copies of ~/.claude.json, which the archive deliberately leaves
+  // out: it is rewritten by the entrypoint on every start, so a backup is never read, and the
+  // copies carried the approved API key's suffix (#313) into every uploaded archive.
+  stateExcludes: ['.claude/plugins/marketplaces', '.claude/backups'],
   limitPatterns,
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
