@@ -5,6 +5,36 @@ namespace AgentHub.Api.Tests;
 
 public class SlackAnsiTests
 {
+    [Theory]
+    [InlineData("Try\u001b[C\"refactor\u001b[C<filepath>\"", "Try \"refactor <filepath>\"")]
+    [InlineData("auto\u001b[1Cmode\u001b[Con (shift+tab\u001b[Cto\u001b[Ccycle)", "auto mode on (shift+tab to cycle)")]
+    [InlineData("a\u001b[4Gb", "a  b")]
+    [InlineData("a\u009b0Cb", "a b")]
+    public void PreservesCursorMotionSpaces(string input, string expected)
+    {
+        Assert.Equal(expected, AgentTerminal.CleanTranscript(input));
+    }
+
+    [Fact]
+    public void CursorGaps_HaveBoundedExpansion()
+    {
+        Assert.Equal(4098, AgentTerminal.StripAnsi("a\u001b[2147483647Cb").Length);
+        Assert.Equal("ab", AgentTerminal.StripAnsi("a\u001b[999999999999999999Cb"));
+    }
+
+    [Fact]
+    public void RealClaudeStartup_PreservesRenderedCellGaps()
+    {
+        var fixture = System.Text.Json.JsonDocument.Parse(File.ReadAllText(
+            Path.Join(AppContext.BaseDirectory, "Fixtures", "claude-startup.json"))).RootElement;
+        var text = AgentTerminal.CleanTranscript(fixture.GetProperty("output").GetString())!;
+        var screen = fixture.GetProperty("screen").GetString()!;
+        Assert.Contains("Claude Code v2.1.287", screen);
+        Assert.Contains("Claude Code v2.1.287", text);
+        Assert.Contains("auto mode on (shift+tab to cycle)", text);
+        Assert.Contains("  bit (owner 0:1000, mode 2777)", text);
+    }
+
     [Fact]
     public void StripsCsiColorCodes()
     {
@@ -33,7 +63,7 @@ public class SlackAnsiTests
             + $"{esc}[38;5;220m────{esc}[39m\n"
             + $"{esc}[2G{esc}[1mAccessing workspace:{esc}[22m{esc}[39m";
 
-        Assert.Equal("────\nAccessing workspace:", AgentTerminal.StripAnsi(input));
+        Assert.Equal("────\n Accessing workspace:", AgentTerminal.StripAnsi(input));
     }
 
     [Fact]
