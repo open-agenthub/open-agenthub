@@ -72,8 +72,8 @@ public class ScheduledTemplateSecretSyncTests
     [Fact]
     public async Task AConcurrentChangeOfTheCronJob_IsReadAgainAndApplied()
     {
-        var (rig, old, neu) = await Started();
-        await using var _ = rig;
+        var (rig, _, neu) = await Started();
+        await using var __ = rig;
         rig.Fault = ScheduleFault.ReplaceTemplate; rig.FaultsLeft = 2;
         rig.SetProject(rig.Project("source") with { SecretIds = [neu] });
 
@@ -85,8 +85,8 @@ public class ScheduledTemplateSecretSyncTests
     [Fact]
     public async Task ATemplateThatCannotBeUpdated_IsReportedAndTheOwnerCanRetry()
     {
-        var (rig, old, neu) = await Started();
-        await using var _ = rig;
+        var (rig, _, neu) = await Started();
+        await using var __ = rig;
         rig.Fault = ScheduleFault.ReplaceTemplate;
         rig.SetProject(rig.Project("source") with { SecretIds = [neu] });
 

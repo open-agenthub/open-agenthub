@@ -1887,7 +1887,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             }
             // A failed "test" is 422 on the API server; a concurrent writer is 409. Either way the
             // CronJob changed underneath: read it again.
-            catch (k8s.Autorest.HttpOperationException e) when ((int)e.Response.StatusCode is 409 or 422 && attempt < 3) { }
+            catch (k8s.Autorest.HttpOperationException e) when ((int)e.Response.StatusCode is 409 or 422 && attempt < 3)
+            {
+                continue;
+            }
         }
     }
 
