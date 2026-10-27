@@ -110,6 +110,21 @@ describe('Settings → Secrets', () => {
     expect(mocks.api.deleteSecret).toHaveBeenCalledWith('s1')
   })
 
+  // #303: a delete whose session copies could not all be cleared is not shown as done.
+  it('keeps a pending delete visible with a retry until the hub confirms it', async () => {
+    mocks.api.deleteSecret.mockRejectedValueOnce(Object.assign(new Error('1 session(s) may still hold the previous secret values'), { code: 'secret_copies_pending' }))
+    const wrapper = mount(SecretsPane)
+    await flushPromises()
+    await wrapper.get('[data-secret="DEPLOY_TOKEN"] [data-secret-remove]').trigger('click')
+    await wrapper.get('[data-secret="DEPLOY_TOKEN"] [data-secret-remove]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-secret-delete-pending]').text()).toContain('may still hold the previous secret values')
+    await wrapper.get('[data-secret-delete-retry]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.deleteSecret.mock.calls).toEqual([['s1'], ['s1']])
+    expect(wrapper.find('[data-secret-delete-pending]').exists()).toBe(false)
+  })
+
   it('opens a prefilled form for an agent request, the existing entry when the name is stored', async () => {
     const fresh = mount(SecretsPane, { props: { prefill: { name: 'SENTRY_DSN', delivery: 'env', description: 'error reporting' } } })
     await flushPromises()

@@ -18,6 +18,9 @@ const emit = defineEmits(['saved'])
 const secrets = ref([])
 const loaded = ref(false)
 const loadError = ref('')
+// A delete the hub could not finish in every session's copy (#303). The secret is already gone
+// from the list, so the retry has to live here: repeating the delete repeats the copy rewrite.
+const pendingDelete = ref(null)
 // null = no form open; otherwise the draft, with `existing` set when an entry is being edited.
 const draft = ref(null)
 const busy = ref(false)
@@ -189,8 +192,18 @@ async function save() {
 async function remove(secret) {
   if (confirming.value !== secret.id) { confirming.value = secret.id; return }
   confirming.value = ''
+  await deleteSecret(secret)
+}
+
+async function deleteSecret(secret) {
+  pendingDelete.value = null
   try { await api.deleteSecret(secret.id); await Promise.all([load(), afterChange()]) }
-  catch (e) { loadError.value = String(e.message || e) }
+  catch (e) {
+    if (e.code === 'secret_copies_pending') {
+      pendingDelete.value = { id: secret.id, name: secret.name, message: String(e.message || e) }
+      await load()
+    } else loadError.value = String(e.message || e)
+  }
 }
 
 // The link in the notification carries the request; once answered it is taken off the address,
@@ -293,6 +306,10 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
       </ul>
       <ProjectSecretsDialog v-if="projectDialog" :project="projectDialog" @close="projectDialog = null" @saved="projectSaved" />
       <p v-if="loadError" class="err" data-secret-load-error>{{ loadError }}</p>
+      <div v-if="pendingDelete" class="err" role="alert" data-secret-delete-pending>
+        “{{ pendingDelete.name }}” is removed from your secrets, but {{ pendingDelete.message }}
+        <button type="button" data-secret-delete-retry @click="deleteSecret(pendingDelete)">Retry</button>
+      </div>
 
       <div v-if="draft" class="form" data-secret-form>
         <p v-if="answering" class="answering" data-secret-answering>For “{{ answering.sessionTitle || answering.sessionId }}”,
