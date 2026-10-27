@@ -2,6 +2,7 @@
 // storage: nothing on the secret request path reads or writes the state archive.
 // Run: node backend.mjs <AgentHub.Api.dll> ['{"Extra__Setting":"value"}']
 import { spawn } from 'node:child_process'
+import fs from 'node:fs'
 const [dll, extra = '{}'] = process.argv.slice(2)
 const env = {
   ...process.env,
@@ -13,7 +14,10 @@ const env = {
   // The proof pod's own session agent listens on 7681 on every interface; a stand-in pod on
   // 127.0.0.1 must not reach it.
   AgentHub__AgentPort: '7699',
-  Browser__Enabled: 'false', Auth__InsecureDevMode: 'true',
+  Browser__Enabled: 'false',
+  // API_KEY_FILE switches to API-key mode, so that a callback token sent to the owner API is
+  // turned away (insecure dev mode lets every request act as the owner).
+  ...(process.env.API_KEY_FILE ? { Auth__ApiKey: fs.readFileSync(process.env.API_KEY_FILE, 'utf8').trim() } : { Auth__InsecureDevMode: 'true' }),
   ...JSON.parse(extra)
 }
 const child = spawn(process.env.DOTNET || 'dotnet', [dll], { env, stdio: ['ignore', 'inherit', 'inherit'] })

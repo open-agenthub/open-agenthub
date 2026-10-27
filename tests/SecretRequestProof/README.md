@@ -20,6 +20,7 @@ npm i pg playwright-core            # next to these scripts
 node backend.mjs <backend>/bin/Debug/net10.0/AgentHub.Api.dll &
 (cd ../../frontend && npx vite --port 5173 --strictPort &)
 node repro.mjs <repo>              # HTTP only: owner-created vs agent-spawned session
+API_KEY_FILE=<file> node backend.mjs ... ; API_KEY_FILE=<file> node repro.mjs <repo>   # adds the 401 checks
 REPO=<repo> KUBECTL=kubectl KUBECONFIG_ADMIN=<rig>/k8s/kubeconfig CLAUDE_BIN_DIR=<dir with claude 2.1.287> \
   ANSWER_AFTER_MS=150000 node e2e.mjs <chrome-headless-shell> <outdir> <scratch dir>
 ```
@@ -33,6 +34,7 @@ the session agent of the pod the proof runs in.
 |---|---|---|
 | `repro.mjs`, owner-created session | 6/6 | 6/6 |
 | `repro.mjs`, agent-spawned session | `provide` → 403 `secret_not_allowed` | 6/6 |
+| `repro.mjs`, tokens and rollback (API-key mode) | — | 8/8: callback tokens of the session and its parent get 401 on the owner API; the agent's spawn beyond the ceiling gets 403; a refused answer leaves no secret stored and the request open |
 | `e2e.mjs` | 8/16: Save shows nothing, the agent's call never returns `provided`, the request is still there after a reload | 16/16, also with the owner answering after 150 s |
 
 Claude Code 2.1.287 moves an MCP call still running after 120 s into the background and reports

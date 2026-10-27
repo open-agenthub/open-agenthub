@@ -249,7 +249,24 @@ ceiling of the requesting session, and to nothing else. Only the signed-in owner
 (`/api/secret-requests` is not reachable with a personal API token or a session's callback
 token), so this is the same person who could have created the session with the secret in the first
 place. A session spawned from it later still gets at most what it holds. A refused answer (a name
-clash, a scheduled session) is now shown above the list, and the request stays open for another try.
+clash, a scheduled session) leaves the form open with the error and the typed value, and the request
+stays open for another try.
+
+**Storing and granting are one call.** The form used to store the value through `/api/secrets` and
+then answer with its id, so a refused grant left a stored secret nobody had been given. Now
+`POST /api/secret-requests/{id}/provide` takes the secret itself. A new secret is stored, granted,
+and removed again if the grant is refused. An existing one is granted first and only then given
+the new name or value, so a refusal changes nothing that other sessions receive. Answering with
+`secretId` alone, for a secret stored before, still works.
+
+**Who can widen a ceiling.** Only this call does, and only for the requesting session, with a
+non-inheritable grant. Checked against the real backend in API-key mode
+(`tests/SecretRequestProof/repro.mjs`, 20 checks):
+- the callback token of the requesting session and of its parent, sent as `Bearer` or
+  `X-Agent-Token`, gets `401` on `/api/secret-requests/{id}/provide`;
+- the agent's own spawn of a child asking for the answered secret, or for one outside the ceiling,
+  gets `403`: the answer is not inheritable unless the owner later says so in the session's grants;
+- the ceiling grew by exactly the answered ids.
 
 - *Rejected: leave the ceiling alone and tell the owner to grant the secret to the parent first.*
   The parent's grant does not reach a child that is already running; its ceiling was fixed at the

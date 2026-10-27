@@ -9,8 +9,9 @@ namespace AgentHub.Api.Controllers;
 
 /// <summary>
 /// The owner's side of a secret request (docs/session-secrets.md): what the agents asked for, and
-/// the answer — a stored secret granted to that one session, or a refusal. The value itself is
-/// stored through <see cref="SecretsController"/> first; nothing here carries one.
+/// the answer — a secret granted to that one session, or a refusal. Since #330 the answer form
+/// sends the value here, so that storing it and granting it succeed or fail together; it goes to
+/// the store and never into a response or a log.
 /// </summary>
 [ApiController]
 [Authorize]
@@ -47,26 +48,59 @@ public sealed class SecretRequestsController(ISecretRequestStore requests, ISess
         => await requests.GetAsync(id, ct) is { } r && r.Owner == Owner ? Ok(await InfoAsync(r, ct)) : NotFound();
 
     /// <summary>
-    /// Grants a stored secret to the requesting session and closes the request, also for a session
-    /// created by a restricted token or by another session (#330); 409 when the request was closed
-    /// in the meantime.
+    /// Answers the request: grants a secret to the requesting session and closes the request, also
+    /// for a session created by a restricted token or by another session (#330). With
+    /// <c>secret</c> the value is stored in the same call. 400 when the hub refuses the grant, and
+    /// then nothing the call stored stays stored; 409 when the request was closed in the meantime.
     /// </summary>
     [HttpPost("{id}/provide")]
     public async Task<ActionResult<SessionSecretGrant>> Provide(string id, [FromBody] ProvideSecretRequestBody body, CancellationToken ct)
     {
         if (await requests.GetAsync(id, ct) is not { } request || request.Owner != Owner) return NotFound();
         if (request.Status != SecretRequest.Pending) return Conflict(new { error = "request_closed", status = request.Status });
-        if (string.IsNullOrWhiteSpace(body.SecretId)) return BadRequest("secretId is required.");
+        var existingId = (body.Secret?.Id ?? body.SecretId)?.Trim();
+        if (body.Secret is null && string.IsNullOrWhiteSpace(existingId)) return BadRequest("secretId or secret is required.");
         SessionSecretGrant grant;
-        try { grant = await sessions.GrantSessionSecretAsync(Owner, request.SessionId, body.SecretId.Trim(), ct); }
-        catch (KeyNotFoundException) { return NotFound(); }
-        catch (ArgumentException e) { return BadRequest(e.Message); }
+        string? created = null;
+        try
+        {
+            // Store and grant used to be two calls from the page, and a refused grant left the
+            // typed value stored with nothing pointing at it. A stored secret is granted first and
+            // only then given the new value; a new one has to exist before it can be granted, so it
+            // is removed again if the grant is refused.
+            // A stored secret whose new name or value the store then refuses keeps the grant, the
+            // same as answering with it unchanged, and the request stays open for another try.
+            if (!string.IsNullOrWhiteSpace(existingId))
+            {
+                grant = await sessions.GrantSessionSecretAsync(Owner, request.SessionId, existingId, ct);
+                if (body.Secret is { } update) await sessions.UpsertSessionSecretAsync(Owner, update with { Id = existingId }, ct);
+            }
+            else
+            {
+                created = (await sessions.UpsertSessionSecretAsync(Owner, body.Secret!, ct)).Id;
+                grant = await sessions.GrantSessionSecretAsync(Owner, request.SessionId, created, ct);
+            }
+        }
+        catch (Exception e) when (e is KeyNotFoundException or ArgumentException)
+        {
+            if (created is not null) await RemoveUngrantedAsync(created);
+            return e is KeyNotFoundException ? NotFound() : BadRequest(e.Message);
+        }
         // The grant stands even when the tool gave up a moment ago: the owner meant to give the
         // session this secret, and the next request for it is then answered at once.
         if (!await requests.ResolveAsync(id, SecretRequest.Provided, grant.SecretId, ct))
             return Conflict(new { error = "request_closed" });
         await ClearQuestionIfAnsweredAsync(request.SessionId, ct);
         return Ok(grant);
+    }
+
+    // The secret was never granted, so no session's copy holds it. The delete's strict sync can
+    // still report some other session's copy as unwritable (#303); the value is out of the store
+    // by then, which is what this is for.
+    private async Task RemoveUngrantedAsync(string secretId)
+    {
+        try { await sessions.DeleteSessionSecretAsync(Owner, secretId, CancellationToken.None); }
+        catch (SessionSecretCopiesPendingException) { }
     }
 
     [HttpPost("{id}/refuse")]

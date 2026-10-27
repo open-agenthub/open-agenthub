@@ -36,8 +36,12 @@ public sealed record SessionSecretGrant(string SecretId, string Name, string Del
 /// <summary>An agent asks for a secret: a name, how it wants it, what it is for. Never a value.</summary>
 public sealed record SecretRequestBody(string? Name, string? Delivery, string? Purpose);
 
-/// <summary>The owner answers a request with a stored secret.</summary>
-public sealed record ProvideSecretRequestBody(string? SecretId);
+/// <summary>
+/// The owner answers a request: with a stored secret by <see cref="SecretId"/>, or with
+/// <see cref="Secret"/>, which is stored in the same call so that a refused grant leaves nothing
+/// stored (#330).
+/// </summary>
+public sealed record ProvideSecretRequestBody(string? SecretId, UpsertSessionSecretRequest? Secret = null);
 
 /// <summary>An owner grant is private to this session unless inheritance is explicitly enabled.</summary>
 public sealed record SessionSecretAccess(string SecretId, bool InheritToChildren = false);

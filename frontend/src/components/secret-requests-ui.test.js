@@ -58,8 +58,9 @@ describe('answering in Settings → Secrets', () => {
     await wrapper.get('[data-secret-save]').trigger('click')
     await flushPromises()
 
-    expect(mocks.api.upsertSecret).toHaveBeenCalledWith(expect.objectContaining({ name: 'SENTRY_DSN', value: 'https://key@sentry.example.com/1' }))
-    expect(mocks.api.provideSecretRequest).toHaveBeenCalledWith('r1', 'sec1')
+    // One call stores and grants; a separate store would leave the value behind on a refusal.
+    expect(mocks.api.upsertSecret).not.toHaveBeenCalled()
+    expect(mocks.api.provideSecretRequest).toHaveBeenCalledWith('r1', expect.objectContaining({ name: 'SENTRY_DSN', delivery: 'env', value: 'https://key@sentry.example.com/1' }))
     expect(window.location.search).toBe('')
     expect(wrapper.get('[data-secret-granted]').text()).toContain('from its next start')
     expect(wrapper.html()).not.toContain('sentry.example.com/1')
@@ -74,7 +75,7 @@ describe('answering in Settings → Secrets', () => {
   })
 
   // #330: the hub refusing the answer used to be shown inside the form that saving had just closed.
-  it('says so when the answer is refused, and keeps the request open', async () => {
+  it('keeps the form open with the error and the value when the answer is refused, for a retry', async () => {
     window.history.replaceState(null, '', '/settings/secrets?request=r1')
     mocks.api.provideSecretRequest.mockRejectedValue(new Error('secret_not_allowed'))
     const wrapper = mount(SecretsPane)
@@ -83,17 +84,23 @@ describe('answering in Settings → Secrets', () => {
     await wrapper.get('[data-secret-save]').trigger('click')
     await flushPromises()
 
-    expect(wrapper.find('[data-secret-form]').exists()).toBe(false)
-    expect(wrapper.get('[data-secret-answer-error]').text()).toContain('could not be given to “Deploy bot”: secret_not_allowed')
+    expect(wrapper.get('[data-secret-error]').text()).toContain('secret_not_allowed')
+    expect(wrapper.find('[data-secret-answering]').exists()).toBe(true)
+    expect(wrapper.get('[data-secret-value]').element.value).toBe('https://key@sentry.example.com/1')
     expect(wrapper.find('[data-secret-granted]').exists()).toBe(false)
-    expect(wrapper.find('[data-secret-request-row="r1"]').exists()).toBe(true)
+    expect(mocks.api.upsertSecret).not.toHaveBeenCalled()
     expect(window.location.search).toBe('?request=r1')
+
+    mocks.api.provideSecretRequest.mockResolvedValue({ secretId: 'sec1', name: 'SENTRY_DSN', delivery: 'env', restartRequired: false })
+    await wrapper.get('[data-secret-save]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-secret-form]').exists()).toBe(false)
+    expect(wrapper.find('[data-secret-granted]').exists()).toBe(true)
     expect(wrapper.html()).not.toContain('sentry.example.com/1')
   })
 
   it('answers with an existing secret without retyping it', async () => {
     mocks.api.listSecrets.mockResolvedValue([{ id: 'old', name: 'SENTRY_DSN', delivery: 'env', description: null }])
-    mocks.api.upsertSecret.mockResolvedValue({ id: 'old', name: 'SENTRY_DSN', delivery: 'env' })
     mocks.api.provideSecretRequest.mockResolvedValue({ secretId: 'old', name: 'SENTRY_DSN', delivery: 'env', restartRequired: false })
     const wrapper = mount(SecretsPane)
     await flushPromises()
@@ -101,8 +108,7 @@ describe('answering in Settings → Secrets', () => {
     expect(wrapper.get('[data-secret-name]').element.value).toBe('SENTRY_DSN')
     await wrapper.get('[data-secret-save]').trigger('click')
     await flushPromises()
-    expect(mocks.api.upsertSecret).toHaveBeenCalledWith(expect.objectContaining({ id: 'old', name: 'SENTRY_DSN', value: null }))
-    expect(mocks.api.provideSecretRequest).toHaveBeenCalledWith('r1', 'old')
+    expect(mocks.api.provideSecretRequest).toHaveBeenCalledWith('r1', expect.objectContaining({ id: 'old', name: 'SENTRY_DSN', value: null }))
   })
 
   it('says so when the link points at a request that is already closed', async () => {
