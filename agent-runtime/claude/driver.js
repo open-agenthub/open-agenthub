@@ -147,6 +147,11 @@ function buildCommand(env, allowResume) {
   // a resumed session start its work from the top.
   if (prompt && !resuming) args.push(prompt);
 
+  // Set by the entrypoint when the pod has no credential at all; sign-in.sh signs in first and
+  // then execs the same command, so the pid server.js tracks is the TUI's.
+  if (env.AGENTHUB_CLAUDE_SIGN_IN === '1') {
+    return { cmd: 'bash', args: [path.join(__dirname, 'sign-in.sh'), ...args] };
+  }
   return { cmd: 'claude', args };
 }
 
@@ -237,7 +242,11 @@ module.exports = {
   // the archive, is what tells it to. Installed plugins (plugins/cache) and the skills are
   // kept: nothing was shown to bring back a plugin the user installed, and a skill written in
   // the session exists nowhere else until the library sync has taken it.
-  stateExcludes: ['.claude/plugins/marketplaces'],
+  //
+  // .claude/backups holds the CLI's copies of ~/.claude.json, which the archive deliberately leaves
+  // out: it is rewritten by the entrypoint on every start, so a backup is never read, and the
+  // copies carried the approved API key's suffix (#313) into every uploaded archive.
+  stateExcludes: ['.claude/plugins/marketplaces', '.claude/backups'],
   limitPatterns,
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),

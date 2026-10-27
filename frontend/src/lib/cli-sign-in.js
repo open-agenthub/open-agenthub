@@ -13,11 +13,16 @@ export function detectSignIn(lines) {
   if (/Token provider/.test(text) && /Auth profile:/.test(text)) return outcome('saved');
   if (/Starting login process/.test(text) && /Login failed or timed out\.|Login error:/.test(text)) return outcome('failed');
   if (/^Successfully logged in$/m.test(text)) return outcome('succeeded');
+  // `claude auth login` (claude/sign-in.sh) echoes its result after the pasted code and exits.
+  if (/If the browser didn't open, visit:/.test(text) && /(?:^|>\s*)Login successful\.$/m.test(text)) return outcome('succeeded');
   if (/^Error logging in with device code:/m.test(text)) return outcome('failed');
   if (/Add credential/.test(text) && /└\s+Done/.test(text)) return outcome('saved');
   if (/Token provider/.test(text) && /Setup cancelled\./.test(text)) return outcome('cancelled');
   let mode;
-  if (/Paste code here if prompted\s*>/i.test(text) && /Browser didn't open\?/i.test(text)) mode = 'code';
+  // The TUI's /login says "Browser didn't open?"; `claude auth login` says "If the browser didn't
+  // open, visit:" and, as a plain prompt, ignores Esc: only Ctrl+C cancels it.
+  const standalone = /If the browser didn't open, visit:/i.test(text);
+  if (/Paste code here if prompted\s*>/i.test(text) && (standalone || /Browser didn't open\?/i.test(text))) mode = 'code';
   else if ((/Follow these steps to sign in.*device code authorization/i.test(text) && /Enter this one-time code/i.test(text)) || (/Waiting for authorization/i.test(text) && /Enter code:/.test(text))) mode = 'device';
   else if ((/Waiting for browser authentication/i.test(text) && /Open a browser and navigate to this link/i.test(text)) || (/Complete authorization in your browser/i.test(text) && /Waiting for authorization/i.test(text))) mode = 'browser';
   else if (/Paste .*setup-token|Enter your API key/i.test(text)) mode = 'credential';
@@ -39,7 +44,13 @@ export function detectSignIn(lines) {
   const isDeviceCode = row => /^(?:[A-Z0-9]{8,}|[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+)$/.test(row);
   const wrappedCode = codeRows.map((row, i) => row + (codeRows[i + 1] || '')).find(isDeviceCode);
   const code = mode === 'device' ? (deviceIndex >= 0 ? codeRows.find(row => /^[A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+$/.test(row)) || wrappedCode : /Enter code:\s*([A-Z0-9]{4,}(?:-[A-Z0-9]{4,})+|[A-Z0-9]{8,})/.exec(text)?.[1]) || '' : '';
-  return { kind: 'signin', mode, status: 'waiting', url, code, invalid: mode === 'credential' && /Expected token starting|└\s+Required/.test(text), options: [] };
+  // It also prints a rejected code on the prompt's line and keeps reading, with no new prompt.
+  const lastRow = rows.filter(Boolean).at(-1) || '';
+  const invalid = (mode === 'credential' && /Expected token starting|└\s+Required/.test(text)) ||
+    (mode === 'code' && standalone && /Invalid code\. Please make sure the full code was copied\.$/.test(lastRow));
+  const result = { kind: 'signin', mode, status: 'waiting', url, code, invalid, options: [] };
+  if (mode === 'code' && standalone) result.cancel = 'interrupt';
+  return result;
 }
 
 
@@ -47,7 +58,7 @@ export function detectSignIn(lines) {
 // prompt proves that the CLI moved on; a composer above a newly opened login dialog does not.
 export function signInFinished(lines) {
   const rows = (lines || []).map(line => String(line ?? '').trim());
-  const lastAuth = rows.findLastIndex(row => /Select login method|Starting login process|Follow these steps to sign in|Paste code here|Enter this one-time code|Enter code:|Waiting for (?:browser authentication|authorization)|Complete authorization|Enter your API key|Paste .*setup-token|Token provider|Token method|OAuth error:|Press Enter to retry|Login successful\. Press Enter|^Successfully logged in$/.test(row));
+  const lastAuth = rows.findLastIndex(row => /Select login method|If the browser didn't open|Starting login process|Follow these steps to sign in|Paste code here|Enter this one-time code|Enter code:|Waiting for (?:browser authentication|authorization)|Complete authorization|Enter your API key|Paste .*setup-token|Token provider|Token method|OAuth error:|Press Enter to retry|Login successful\. Press Enter|^Successfully logged in$/.test(row));
   const lastPrompt = rows.findLastIndex(row => /^❯\s*$/.test(row));
   if (lastPrompt > lastAuth) return true;
   const header = rows.findLastIndex(row => />_ .*\bCodex\b/.test(row));

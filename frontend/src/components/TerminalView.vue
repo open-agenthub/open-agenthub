@@ -518,7 +518,9 @@ function confirmCliMenu() {
   void agentTerminal.value?.sendKeys([CONFIRM_KEYS]).catch(() => {})
 }
 function cancelCliMenu() {
-  void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
+  // A sign-in prompt outside the TUI (claude/sign-in.sh) does not read Esc; Ctrl+C ends it.
+  const keys = cliMenu.value?.cancel === 'interrupt' ? '\x03' : CANCEL_KEYS
+  void agentTerminal.value?.sendKeys([keys]).catch(() => {})
 }
 function toggleDrawer(kind) {
   if (kind === 'shell') shellOpened.value = true

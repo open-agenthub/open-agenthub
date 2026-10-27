@@ -34,7 +34,7 @@ test('Claude driver exposes its state and subscription-auth contract', () => {
   assert.equal(driver.stateDir, '.claude');
   assert.equal(driver.authFilename, '.credentials.json');
   // Only what the CLI fetches again by itself; installed plugins and skills stay in the archive.
-  assert.deepEqual(driver.stateExcludes, ['.claude/plugins/marketplaces']);
+  assert.deepEqual(driver.stateExcludes, ['.claude/plugins/marketplaces', '.claude/backups']);
   assert.deepEqual(driver.attachmentCapabilities, {
     nativeImages: false,
     localImagePaths: true,
@@ -386,4 +386,97 @@ test('restored Claude discovery uses the cleared ID before its process has launc
   fs.writeFileSync(path.join(root, 'agenthub-session-id'), id + '\n');
   assert.equal(driver.findTranscript({ env: environment({ AGENTHUB_RESUME: '1', AGENTHUB_CLAUDE_SESSION_ID: 'original' }), home, cwd: '/workspace/repo', fs }), file);
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('Claude without a credential signs in inside the agent PTY before the interactive CLI', () => {
+  const signIn = path.join(runtimeDir, 'claude', 'sign-in.sh');
+  assert.deepEqual(driver.buildCommand(environment({
+    AGENTHUB_CLAUDE_SIGN_IN: '1', AGENTHUB_PROMPT: 'triage the failing build',
+    AGENTHUB_CLAUDE_SESSION_ID: '11111111-1111-4111-8111-111111111111'
+  }), true), { cmd: 'bash', args: [signIn, '--session-id', '11111111-1111-4111-8111-111111111111', 'triage the failing build'] });
+  // Chat mode and unattended runs have no terminal to sign in through.
+  assert.equal(driver.buildCommand(environment({ AGENTHUB_CLAUDE_SIGN_IN: '1', AGENTHUB_UI_MODE: 'chat' }), true).cmd, 'claude');
+  assert.equal(driver.buildCommand(environment({ AGENTHUB_CLAUDE_SIGN_IN: '1', AGENTHUB_MODE: 'autonomous' }), true).cmd, 'claude');
+  assert.equal(driver.buildCommand(environment(), true).cmd, 'claude');
+});
+
+// Runs the entrypoint's own credential section, with the mounted secret's path pointed at a
+// fixture, so the decision under test is the shell that ships rather than a copy of it.
+function entrypointDecision({ mounted = false, env = {} } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-entrypoint-'));
+  try {
+    const entrypoint = fs.readFileSync(path.join(runtimeDir, 'claude', 'entrypoint.sh'), 'utf8');
+    const start = entrypoint.indexOf('AUTH_EXPECT_CREATE=1');
+    const end = entrypoint.indexOf('CLAUDE_WORKDIR=');
+    const secret = path.join(dir, 'credentials.json');
+    if (mounted) fs.writeFileSync(secret, '{"claudeAiOauth":{}}');
+    const section = entrypoint.slice(start, end)
+      .replaceAll('/secrets/claude/credentials.json', secret)
+      .replace('node "$RUNTIME/common/model-endpoint.js" probe messages', ':');
+    const result = require('node:child_process').spawnSync('bash', ['-c',
+      'set -euo pipefail\n' + section + '\necho "sign-in=${AGENTHUB_CLAUDE_SIGN_IN:-0}"'], {
+      env: { PATH: process.env.PATH, HOME: dir, ...env }, encoding: 'utf8'
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return result.stdout.trim().split('\n').at(-1);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('Claude entrypoint starts the sign-in only when the pod has no credential at all', () => {
+  assert.equal(entrypointDecision(), 'sign-in=1');
+  assert.equal(entrypointDecision({ env: { AGENTHUB_MODE: 'interactive', AGENTHUB_AUTH_MODE: 'auto' } }), 'sign-in=1');
+  assert.equal(entrypointDecision({ mounted: true }), 'sign-in=0');
+  assert.equal(entrypointDecision({ env: { ANTHROPIC_API_KEY: 'sk-ant-example' } }), 'sign-in=0');
+  assert.equal(entrypointDecision({ env: { AGENTHUB_AUTH_MODE: 'customendpoint' } }), 'sign-in=0');
+  assert.equal(entrypointDecision({ env: { AGENTHUB_MODE: 'autonomous' } }), 'sign-in=0');
+  assert.equal(entrypointDecision({ env: { AGENTHUB_MODE: 'scheduled' } }), 'sign-in=0');
+  // An optional secret key the owner never stored arrives as an empty variable or none at all.
+  assert.equal(entrypointDecision({ env: { ANTHROPIC_API_KEY: '' } }), 'sign-in=1');
+});
+
+// sign-in.sh against a stand-in `claude` that records how it was called and answers
+// `auth status` the way 2.1.287 does.
+function runSignIn({ loggedIn = false, credentials = false, env = {}, loginExit = 0, interrupt = false } = {}) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-sign-in-'));
+  try {
+    const bin = path.join(dir, 'bin');
+    fs.mkdirSync(bin);
+    fs.mkdirSync(path.join(dir, '.claude'));
+    if (credentials) fs.writeFileSync(path.join(dir, '.claude', '.credentials.json'), '{"claudeAiOauth":{}}');
+    const log = path.join(dir, 'calls');
+    fs.writeFileSync(path.join(bin, 'claude'), `#!/usr/bin/env bash
+echo "$*" >> "${log}"
+if [ "$1 $2" = "auth status" ]; then
+  printf '{\\n  "loggedIn": ${loggedIn},\\n  "authMethod": "none"\\n}\\n'; exit ${loggedIn ? 0 : 1}
+fi
+if [ "$1 $2" = "auth login" ]; then
+  ${interrupt ? 'kill -INT $PPID; sleep 0.2; exit 130' : `exit ${loginExit}`}
+fi
+exit 0
+`, { mode: 0o755 });
+    const result = require('node:child_process').spawnSync('bash', [path.join(runtimeDir, 'claude', 'sign-in.sh'), '--session-id', 'example', 'the task'], {
+      env: { PATH: bin + ':' + process.env.PATH, HOME: dir, ...env }, encoding: 'utf8'
+    });
+    return { status: result.status, calls: fs.readFileSync(log, 'utf8').trim().split('\n') };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('Claude sign-in.sh logs in only when nothing is there, then always starts the TUI', () => {
+  const tui = '--session-id example the task';
+  assert.deepEqual(runSignIn().calls, ['auth status --json', 'auth login', tui]);
+  // A restart after the login wrote its file, or any credential the CLI itself reports.
+  assert.deepEqual(runSignIn({ credentials: true }).calls, [tui]);
+  assert.deepEqual(runSignIn({ loggedIn: true }).calls, ['auth status --json', tui]);
+  for (const name of ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN']) {
+    assert.deepEqual(runSignIn({ env: { [name]: 'example' } }).calls, [tui]);
+  }
+  // A failed or cancelled login leaves the person at the TUI's own /login.
+  assert.deepEqual(runSignIn({ loginExit: 1 }).calls, ['auth status --json', 'auth login', tui]);
+  const interrupted = runSignIn({ interrupt: true });
+  assert.deepEqual(interrupted.calls, ['auth status --json', 'auth login', tui]);
+  assert.equal(interrupted.status, 0);
 });
