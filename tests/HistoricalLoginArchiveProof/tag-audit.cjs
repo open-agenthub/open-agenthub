@@ -31,11 +31,11 @@ for (const tag of tags) {
   const common = read(tag, 'agent-runtime/common/state-archive.js') || read(tag, 'agent-runtime/common/server.js');
   if (!common) {
     const old = read(tag, 'agent-runtime/session-agent/server.js');
-    if (!old || !old.includes('tar czf /tmp/state.tgz') || !old.includes('.claude')) throw new Error('Unrecognized archive: ' + tag);
+    if (!old || !old.includes('tar czf /tmp/state.tgz -C "${HOME}" .claude 2>/dev/null')) throw new Error('Unrecognized archive: ' + tag);
     emit({ tag, agent: 'claude', stateDir: '.claude', authFilename: '.credentials.json', excluded: false, stateExcludes: [] });
     continue;
   }
-  if (!common.includes("driver.stateDir + '/' + driver.authFilename") || !common.includes('excludeArgs')) throw new Error('Unrecognized exclusions: ' + tag);
+  if (!common.includes("driver.stateDir + '/' + driver.authFilename") || !common.includes(' + excludeArgs + ')) throw new Error('Unrecognized exclusions: ' + tag);
   for (const agent of ['claude', 'codex', 'cursor', 'openclaw', 'opencode']) {
     const driver = read(tag, `agent-runtime/${agent}/driver.js`);
     if (!driver) continue;
