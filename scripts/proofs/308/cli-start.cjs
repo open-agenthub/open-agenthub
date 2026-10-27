@@ -8,6 +8,7 @@ const {execFileSync} = require('node:child_process');
 const pty = require('/opt/session-agent/node_modules/node-pty');
 const {Terminal} = require(process.env.PROOF_XTERM || '/tmp/proof-tools/node_modules/@xterm/headless');
 const root = process.env.TASK_ROOT || '/tmp/proof-308-vm';
+const evidence = fs.mkdtempSync(path.join(require('node:os').tmpdir(),'agenthub-cli-proof-'));
 const ssh = ['-i',root+'/private/demo-ssh','-p','2222','-o','BatchMode=yes','-o','UserKnownHostsFile='+root+'/private/known_hosts','demo@127.0.0.1'];
 const prefix = 'sudo k3s kubectl -n tmp-proof exec -i agent-tmp-proof -- ';
 const key='sk-ant-api03-'+'x'.repeat(80);
@@ -35,10 +36,10 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
   const sockets=execFileSync('ssh',[...ssh,prefix+"find /tmp -type s"],{encoding:'utf8'}).trim();
   assert.ok(sockets,'real CLI did not create a messaging socket');
   console.log('Real Claude Code 2.1.287 ready; messaging warning absent; socket created:',sockets);
-  fs.writeFileSync(path.join(root,'cli-screen.txt'),screen+'\n');
-  const probe = `const net=require('net');const socket=net.createConnection(${JSON.stringify(sockets.split('\n')[0])});socket.setTimeout(3000);socket.on('connect',()=>{console.log('Native messaging socket accepts connections');socket.end();});socket.on('error',()=>{process.exitCode=1;});socket.on('timeout',()=>{socket.destroy();process.exitCode=1;});`;
+  fs.writeFileSync(path.join(evidence,'screen.txt'),screen+'\n',{mode:0o600,flag:'wx'});
+  const probe = `const fs=require('fs'),net=require('net');const candidates=${JSON.stringify(sockets.split('\n'))};candidates.sort((a,b)=>fs.statSync(b).mtimeMs-fs.statSync(a).mtimeMs);const socket=net.createConnection(candidates[0]);socket.setTimeout(3000);socket.on('connect',()=>{console.log('Native messaging socket accepts connections');socket.end();});socket.on('error',()=>{process.exitCode=1;});socket.on('timeout',()=>{socket.destroy();process.exitCode=1;});`;
   const result=execFileSync('ssh',[...ssh,prefix+'node'],{input:probe,encoding:'utf8'});
   assert.ok(result.includes('Native messaging socket accepts connections'));
   console.log(result.trim());
- } finally {fs.writeFileSync(path.join(root,'cli-raw.txt'),raw);child.kill();term.dispose();}
+ } finally {fs.writeFileSync(path.join(evidence,'raw.txt'),raw,{mode:0o600,flag:'wx'});child.kill();term.dispose();}
 })().catch(error=>{console.error(error);process.exitCode=1;});
