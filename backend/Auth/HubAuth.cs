@@ -81,7 +81,9 @@ public sealed class HubAuthOptions
             };
         }
 
-        if (cfg.GetValue("Auth:InsecureDevMode", false))
+        // Parsed by hand: GetValue throws on an empty or misspelt value, and anything short of an
+        // unambiguous "true" has to mean "not opted in" rather than a crash or an open API.
+        if (bool.TryParse(cfg["Auth:InsecureDevMode"], out var insecure) && insecure)
             return new HubAuthOptions { Mode = HubAuthMode.InsecureDev };
 
         throw new HubAuthConfigurationException(
