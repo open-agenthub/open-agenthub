@@ -7,18 +7,19 @@ valid. No production archives or real credentials were inspected.
 
 ## Version boundaries
 
-The reproducible audit checks all 49 release tags in both naming families through
-1.2.0, including release candidates and `v0.6.0` (which has no matching long-name
+The reproducible audit checks all 51 release tags in both naming families through
+1.3.0, including release candidates and `v0.6.0` (which has no matching long-name
 tag). It checks the archive script and each available driver's login filename and
-additional exclusions, not only the presence of a driver file.
+additional exclusions, not only the presence of a driver file. All 190 provider/tag
+cases also pass a real GNU tar fixture check for the root/nested login stores.
 
 | Runtime | Known login stores | Release archive selection |
 | --- | --- | --- |
-| Claude | `.claude/.credentials.json` | Not excluded in 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.4.0. Excluded from 0.5.0 through 1.2.0, including RCs. |
-| Codex | `.codex/auth.json` | Excluded from its first tagged runtime, 0.5.0, through 1.2.0. |
-| Cursor | Canonical `.cursor/auth.json`; Linux CLI path links to it | Excluded from its first tagged runtime, 0.5.0, through 1.2.0. |
-| OpenClaw | Root `auth-profiles.json`; nested `agents/*/agent/auth-profiles.json` and `openclaw-agent.sqlite` plus WAL/SHM | All excluded from its first tagged runtime, 0.5.0, through 1.2.0. |
-| OpenCode | `.opencode/auth.json` and `.opencode/mcp-auth.json` | Both excluded from its first tagged runtime, 0.13.0, through 1.2.0. |
+| Claude | `.claude/.credentials.json` | Not excluded in 0.1.0, 0.2.0, 0.2.1, 0.3.0, 0.3.1, 0.4.0. Excluded from 0.5.0 through 1.3.0, including RCs. |
+| Codex | `.codex/auth.json` | Excluded from its first tagged runtime, 0.5.0, through 1.3.0. |
+| Cursor | Canonical `.cursor/auth.json`; Linux CLI path links to it | Excluded from its first tagged runtime, 0.5.0, through 1.3.0. |
+| OpenClaw | Root `auth-profiles.json`; nested `agents/*/agent/auth-profiles.json` and `openclaw-agent.sqlite` plus WAL/SHM | All excluded from its first tagged runtime, 0.5.0, through 1.3.0. |
+| OpenCode | `.opencode/auth.json` and `.opencode/mcp-auth.json` | Both excluded from its first tagged runtime, 0.13.0, through 1.3.0. |
 
 The 0.1.0 and 0.4.0 session servers were run with real PTYs, tar/gzip and a
 loopback HTTP upload, with synthetic access/refresh tokens in the credential file.

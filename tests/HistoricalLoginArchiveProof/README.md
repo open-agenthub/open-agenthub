@@ -10,11 +10,14 @@ for agent in codex cursor openclaw opencode; do
   node tests/HistoricalLoginArchiveProof/produce-providers.cjs /tmp/historical-logins/$agent $agent
 done
 dotnet run --project tests/ClaudeStateCleanupProof -- /tmp/historical-logins --provider-logins
+node tests/HistoricalLoginArchiveProof/verify.cjs /tmp/historical-logins
 ```
 
 The tag audit emits JSONL for every available release tag, checks the common tar
 exclusion mechanism, and reports each driver's default auth filename/additional
-excludes. Unknown archive mechanisms fail rather than guessing. It needs Git tag
+excludes. Every agent/tag case also runs real GNU tar with those exclusions and
+checks synthetic root/nested login stores and retained history. Unknown archive
+mechanisms fail rather than guessing. It needs Git tag
 history, not only a shallow checkout.
 
 The historical producer executes the actual tagged 0.1.0/0.4.0 server with real

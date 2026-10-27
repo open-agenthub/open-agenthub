@@ -30,11 +30,12 @@ public static class HistoricalLogins
         async Task Put(AgentKind agent, byte[] bytes) => Check(await storage.TryPutStreamAsync(Key(agent), new MemoryStream(bytes), "application/gzip"), "storage configured");
         foreach (var agent in paths.Keys)
         {
-            var input = agent == AgentKind.Claude ? Path.Combine(root, "old.tgz") : Path.Combine(root, agent.ToString().ToLowerInvariant(), "old.tgz");
+            var input = agent == AgentKind.Claude ? Path.Join(root, "old.tgz") : Path.Join(root, agent.ToString().ToLowerInvariant(), "old.tgz");
             originals[agent] = await File.ReadAllBytesAsync(input);
             await Put(agent, originals[agent]);
-            await File.WriteAllBytesAsync(Path.Combine(root, agent + "-before.tgz"), originals[agent]);
+            await File.WriteAllBytesAsync(Path.Join(root, agent + "-before.tgz"), originals[agent]);
         }
+        await storage.TryPutTextAsync(prefix + "unrelated.txt", "unrelated-kept");
         await registry.UpsertAsync(new SessionRecord { Id = "proof-316", Owner = owner, CallbackToken = "synthetic-provider-proof-only", Status = "Paused" });
         var body = new AdminClaudeStateCleanupController.CleanupRequest(owner, true);
         const string route = "/api/admin/session-storage-cleanup/provider-logins";
@@ -50,7 +51,7 @@ public static class HistoricalLogins
         }
         Check((await Call(false)).Rewritten == 5, "five preview candidates");
         foreach (var agent in paths.Keys) Check(Same(originals[agent], await Read(agent)), "provider preview read-only");
-        await using (var held = await locks.TryAcquireAsync("proof-316") ?? throw new Exception("Lock unavailable"))
+        await using (await locks.TryAcquireAsync("proof-316") ?? throw new Exception("Lock unavailable"))
             Check((await Call(true)).Skipped == 5, "all providers skip held lock");
         var pod = await cluster.CoreV1.CreateNamespacedPodAsync(new V1Pod {
             Metadata = new V1ObjectMeta { Name = "session-proof-316" },
@@ -69,7 +70,7 @@ public static class HistoricalLogins
             foreach (var secretPath in paths[agent]) { Check(before.ContainsKey(secretPath), "fixture includes login path"); Check(!after.ContainsKey(secretPath), "login removed: " + secretPath); }
             bool Removed(string name) => paths[agent].Contains(name) || (agent == AgentKind.Claude && (name.TrimEnd('/') == ".claude/backups" || name.StartsWith(".claude/backups/", StringComparison.Ordinal)));
             Check(before.Where(e => !Removed(e.Key)).OrderBy(e => e.Key).SequenceEqual(after.OrderBy(e => e.Key)), "byte-identical retained tar blocks: " + agent);
-            await File.WriteAllBytesAsync(Path.Combine(root, agent + "-after.tgz"), cleaned[agent]);
+            await File.WriteAllBytesAsync(Path.Join(root, agent + "-after.tgz"), cleaned[agent]);
             Console.WriteLine("PASS real S3 provider scrub and retained raw-entry SHA256: " + agent);
         }
         Check((await Call(true)).Clean == 5, "five clean archives on repeat");
@@ -78,7 +79,7 @@ public static class HistoricalLogins
         var malformed = await Call(true);
         Check(malformed.Failed == 1 && malformed.Clean == 4, "provider malformed counted independently");
         Check(Same([1, 2, 3], await Read(AgentKind.Codex)), "provider malformed preserved");
-        Check(await storage.GetTextAsync(prefix + "unrelated.txt") is null, "no unrelated key created");
+        Check(await storage.GetTextAsync(prefix + "unrelated.txt") == "unrelated-kept", "unrelated object preserved");
         Console.WriteLine("PASS provider-login endpoint authorization/preview/guards/rewrites/idempotence/malformed preservation");
     }
 

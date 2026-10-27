@@ -90,6 +90,12 @@ public sealed class ClaudeStateCleanup(IArtifactStore artifacts, ISessionStore s
     public static Task<MemoryStream?> RemoveCredentialsAsync(Stream input, AgentKind agent, CancellationToken ct)
         => RewriteAsync(input, agent, true, ct);
 
+    private static bool IsClaudeBackup(AgentKind agent, string name)
+    {
+        if (agent != AgentKind.Claude) return false;
+        return name.TrimEnd('/') == ".claude/backups" || name.StartsWith(".claude/backups/", StringComparison.Ordinal);
+    }
+
     private static async Task<MemoryStream?> RewriteAsync(Stream input, AgentKind agent, bool removeLogins, CancellationToken ct)
     {
         using var raw = new MemoryStream();
@@ -117,7 +123,7 @@ public sealed class ClaudeStateCleanup(IArtifactStore artifacts, ISessionStore s
             if (end > raw.Length) throw new InvalidDataException("Truncated tar entry.");
             var name = entry.Name;
             while (name.StartsWith("./", StringComparison.Ordinal)) name = name[2..];
-            if ((agent == AgentKind.Claude && (name.TrimEnd('/') == ".claude/backups" || name.StartsWith(".claude/backups/", StringComparison.Ordinal))) ||
+            if (IsClaudeBackup(agent, name) ||
                 (removeLogins && StateArchiveCredentials.Contains(agent, name)))
                 removed = true;
             else
