@@ -148,19 +148,43 @@ public class SecretRequestFlowTests
     }
 
     [Fact]
-    public async Task AGrantOutsideTheSessionsLimit_Is403_AndTheRequestStaysOpen()
+    public async Task AGrantTheHubRefuses_IsReported_AndTheRequestStaysOpen()
     {
         var world = new World();
-        world.Sessions.GrantError = new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
+        world.Sessions.GrantError = new ArgumentException("Two secrets would both be the variable X_TOKEN.");
         var id = Body(await world.Agent().CreateSecretRequest("s1", new SecretRequestBody("X_TOKEN", "env", null), CancellationToken.None))
             .GetProperty("id").GetString()!;
 
         var result = await world.OwnerApi().Provide(id, new ProvideSecretRequestBody("sec1"), CancellationToken.None);
 
-        var status = Assert.IsType<ObjectResult>(result.Result);
-        Assert.Equal(StatusCodes.Status403Forbidden, status.StatusCode);
-        Assert.Equal("secret_not_allowed", status.Value);
+        Assert.IsType<BadRequestObjectResult>(result.Result);
         Assert.Equal(SecretRequest.Pending, (await world.Requests.GetAsync(id))!.Status);
+    }
+
+    // #330: every session an agent spawns has a ceiling, and a secret typed in to answer its
+    // request was never inside it, so the answer used to be refused with secret_not_allowed.
+    [Fact]
+    public void AnAnswer_WidensTheCeilingByThatSecretOnly()
+    {
+        var spawned = new SessionRecord { Id = "child", Owner = Owner, Title = "t", CallbackToken = "x", SecretCeilingJson = """["a"]""" };
+
+        Assert.True(SessionSecretGrants.AnswerRequest(spawned, "new"));
+
+        Assert.Equal(["a", "new"], SessionSecretSelection.Parse(spawned.SecretCeilingJson));
+        var grant = Assert.Single(SessionSecretGrants.Parse(spawned.SecretGrantIdsJson));
+        Assert.Equal(new StoredSessionSecretGrant("new", false, "requested"), grant);
+        Assert.False(SessionSecretGrants.AnswerRequest(spawned, "new"));
+    }
+
+    [Fact]
+    public void AnAnswer_LeavesASessionWithoutCeilingWithoutOne_AndAnExistingGrantAsItWas()
+    {
+        var created = new SessionRecord { Id = "s", Owner = Owner, Title = "t", CallbackToken = "x",
+            SecretGrantIdsJson = SessionSecretGrants.Serialize([new("kept", true, "granted")]) };
+
+        Assert.False(SessionSecretGrants.AnswerRequest(created, "kept"));
+        Assert.Null(created.SecretCeilingJson);
+        Assert.Equal(new StoredSessionSecretGrant("kept", true, "granted"), Assert.Single(SessionSecretGrants.Parse(created.SecretGrantIdsJson)));
     }
 
     [Fact]

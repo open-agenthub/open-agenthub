@@ -47,9 +47,9 @@ public sealed class SecretRequestsController(ISecretRequestStore requests, ISess
         => await requests.GetAsync(id, ct) is { } r && r.Owner == Owner ? Ok(await InfoAsync(r, ct)) : NotFound();
 
     /// <summary>
-    /// Grants a stored secret to the requesting session and closes the request. 403
-    /// <c>secret_not_allowed</c> when the session was created by a restricted token or another
-    /// session that does not hold the secret; 409 when the request was closed in the meantime.
+    /// Grants a stored secret to the requesting session and closes the request, also for a session
+    /// created by a restricted token or by another session (#330); 409 when the request was closed
+    /// in the meantime.
     /// </summary>
     [HttpPost("{id}/provide")]
     public async Task<ActionResult<SessionSecretGrant>> Provide(string id, [FromBody] ProvideSecretRequestBody body, CancellationToken ct)
@@ -60,7 +60,6 @@ public sealed class SecretRequestsController(ISecretRequestStore requests, ISess
         SessionSecretGrant grant;
         try { grant = await sessions.GrantSessionSecretAsync(Owner, request.SessionId, body.SecretId.Trim(), ct); }
         catch (KeyNotFoundException) { return NotFound(); }
-        catch (CredentialScopeException e) { return StatusCode(StatusCodes.Status403Forbidden, e.Code); }
         catch (ArgumentException e) { return BadRequest(e.Message); }
         // The grant stands even when the tool gave up a moment ago: the owner meant to give the
         // session this secret, and the next request for it is then answered at once.

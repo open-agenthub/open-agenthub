@@ -32,6 +32,7 @@ const valueField = ref(null)
 const requests = ref([])
 const answering = ref(null)
 const granted = ref(null)
+const answerError = ref('')
 const restartArmed = ref(false)
 const restartBusy = ref(false)
 // The owner's sessions and projects: where each secret is used (#254), and which running sessions
@@ -127,6 +128,7 @@ function openFor(base) {
 
 function answer(request) {
   granted.value = null
+  answerError.value = ''
   answering.value = request
   openFor({ name: request.name, delivery: request.delivery, description: request.purpose })
 }
@@ -175,10 +177,17 @@ async function save() {
     if (answering.value) {
       const request = answering.value
       answering.value = null
-      const grant = await api.provideSecretRequest(request.id, saved.id)
-      granted.value = { ...grant, sessionId: request.sessionId, sessionTitle: request.sessionTitle }
-      restartArmed.value = false
-      dropRequestFromUrl()
+      try {
+        const grant = await api.provideSecretRequest(request.id, saved.id)
+        granted.value = { ...grant, sessionId: request.sessionId, sessionTitle: request.sessionTitle }
+        restartArmed.value = false
+        dropRequestFromUrl()
+      } catch (e) {
+        // The form is closed by now, so an error shown inside it would be shown nowhere: before
+        // #330 a refused answer left the value stored, the session without it and the request
+        // open, with nothing on the page saying so. The request stays listed for another try.
+        answerError.value = `“${saved.name}” is stored, but it could not be given to “${request.sessionTitle || request.sessionId}”: ${String(e.message || e)}`
+      }
     }
     await Promise.all([load(), loadRequests(), afterChange()])
     emit('saved', saved)
@@ -257,6 +266,8 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
         </li>
       </ul>
     </section>
+
+    <p v-if="answerError" class="err" role="alert" data-secret-answer-error>{{ answerError }}</p>
 
     <SecretRestartNote v-for="session in pendingRestart" :key="session.id" :session="session" named
       @restarted="loadReach" />
