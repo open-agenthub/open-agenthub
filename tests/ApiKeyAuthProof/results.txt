@@ -69,7 +69,14 @@ PASS MCP: tools/list answers — 21 tools
 PASS MCP: session_list shows the key owner's session
 PASS MCP: the API key itself is not an MCP token (scheme untouched)
 PASS MCP: /mcp without a token is 401
-PASS the backend log never contains the key — 728 log lines
+PASS 10 wrong keys from one client: each 401 — 401,401,401,401,401,401,401,401,401,401
+PASS the 11th attempt gets 429 with Retry-After, even with the right key — HTTP 429, Retry-After 60
+PASS the WebSocket route is throttled for that client too — HTTP 429
+PASS and so is the MCP consent form — HTTP 429
+PASS another client (the owner behind the same ingress) is unaffected
+PASS 30 personal-token calls from one client do not count as wrong keys
+PASS each wrong key is logged with the client, without the value
+PASS the backend log never contains the key — 1289 log lines
 PASS nor a wrong key that was presented
 PASS the log names the mode and the owner
 
@@ -81,7 +88,7 @@ PASS and are admin user "dev" — {"isAdmin":true,"user":"dev"}
 PASS WebSockets need no token either
 PASS a warning is logged on start — INSECURE DEVELOPMENT MODE (Auth:InsecureDevMode=true): there is no login. Every request is authentic
 
-74/74 checks passed
+81/81 checks passed
 
 == browser.mjs apiKey ==
 PASS without a key the app shows the API key prompt

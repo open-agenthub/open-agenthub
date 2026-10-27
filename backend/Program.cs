@@ -29,6 +29,7 @@ catch (AgentHub.Api.Auth.HubAuthConfigurationException e)
     return 1;
 }
 builder.Services.AddSingleton(hubAuth);
+builder.Services.AddSingleton(new AgentHub.Api.Auth.ApiKeyFailureLimiter());
 AgentHub.Api.Files.SessionFileLogging.KeepStreamTicketsOutOfLogs(builder.Services);
 
 // (De)serialize enums as strings – the frontend sends e.g. mode: "Interactive".

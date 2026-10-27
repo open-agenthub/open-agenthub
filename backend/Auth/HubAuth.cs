@@ -120,10 +120,13 @@ public sealed class HubAuthConfigurationException(string message) : Exception(me
 /// </summary>
 public sealed class ApiKeyAuthHandler(
     IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder,
-    HubAuthOptions hubAuth)
+    HubAuthOptions hubAuth, ApiKeyFailureLimiter limiter)
     : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
 {
     public const string SchemeName = "ApiKey";
+
+    private const string WrongKeyItem = "agenthub.apiKey.wrong";
+    private const string LimitedItem = "agenthub.apiKey.limited";
 
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
     {
@@ -131,9 +134,19 @@ public sealed class ApiKeyAuthHandler(
         // NoResult rather than Fail: anonymous endpoints (internal callbacks, the remote API with
         // personal tokens) receive their own bearer tokens here, and must stay unaffected.
         if (presented is null) return Task.FromResult(AuthenticateResult.NoResult());
+        // Checked before comparing, and for the right key too: a limit that let a correct guess
+        // through would not limit guessing at all.
+        if (limiter.IsLimited(Context))
+        {
+            Context.Items[LimitedItem] = true;
+            return Task.FromResult(AuthenticateResult.Fail("Too many failed API key attempts"));
+        }
         // The failure text reaches the logs; it must never carry the presented value.
         if (!hubAuth.ApiKeyMatches(presented))
+        {
+            Context.Items[WrongKeyItem] = true;
             return Task.FromResult(AuthenticateResult.Fail("Invalid API key"));
+        }
 
         var identity = new ClaimsIdentity(
             [new Claim("preferred_username", hubAuth.ApiKeyOwner), new Claim("name", hubAuth.ApiKeyOwner)],
@@ -142,8 +155,24 @@ public sealed class ApiKeyAuthHandler(
             new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName)));
     }
 
+    // A failure is counted here rather than in HandleAuthenticateAsync: only an endpoint that
+    // needs this scheme challenges. Every other bearer token passes through authentication too —
+    // personal tokens on /api/remote, OAuth tokens on /mcp — and counting those as wrong keys
+    // would lock their owner out after a few legitimate calls.
     protected override Task HandleChallengeAsync(AuthenticationProperties properties)
     {
+        if (Context.Items.ContainsKey(LimitedItem))
+        {
+            Response.StatusCode = StatusCodes.Status429TooManyRequests;
+            Response.Headers.RetryAfter = ((int)ApiKeyFailureLimiter.Window.TotalSeconds).ToString();
+            return Task.CompletedTask;
+        }
+        if (Context.Items.ContainsKey(WrongKeyItem))
+        {
+            limiter.RecordFailure(Context);
+            Logger.LogWarning("Rejected a wrong API key from {Client} for {Method} {Path}",
+                ApiKeyFailureLimiter.ClientOf(Context), Request.Method, Request.Path.Value);
+        }
         Response.StatusCode = StatusCodes.Status401Unauthorized;
         Response.Headers.WWWAuthenticate = "Bearer realm=\"agenthub\"";
         return Task.CompletedTask;
@@ -179,5 +208,69 @@ public sealed class InsecureDevAuthHandler(
         var identity = new ClaimsIdentity([new Claim("preferred_username", HubAuthOptions.InsecureDevUser)], SchemeName);
         return Task.FromResult(AuthenticateResult.Success(
             new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName)));
+    }
+}
+
+/// <summary>
+/// Throttles guessing the API key: after <see cref="MaxFailuresPerClient"/> wrong keys from one
+/// client within <see cref="Window"/>, every key from that client — the right one too — gets 429
+/// until the window ends. A generated key cannot be guessed either way; this is for a hand-picked
+/// one, which only has to be 32 characters long.
+///
+/// The client is the connection's address plus the last X-Forwarded-For entry. Behind the
+/// ingress every connection comes from the ingress pod, so the address alone would put all users
+/// in one bucket and let one attacker lock the owner out; the ingress appends the real client
+/// address last, which a client cannot override. Without an ingress a client can invent that
+/// header, so the address alone also has a limit, <see cref="MaxFailuresPerAddress"/>, that
+/// rotating the header does not escape. The header is used for nothing but this bucket — pod
+/// identity elsewhere keeps relying on the socket address only.
+/// </summary>
+public sealed class ApiKeyFailureLimiter(TimeProvider? time = null)
+{
+    public const int MaxFailuresPerClient = 10;
+    public const int MaxFailuresPerAddress = 100;
+    public static readonly TimeSpan Window = TimeSpan.FromMinutes(1);
+    private const int MaxTrackedBuckets = 10_000;
+
+    private readonly TimeProvider _time = time ?? TimeProvider.System;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, (DateTimeOffset Start, int Count)> _buckets = new();
+
+    public static string AddressOf(HttpContext ctx) => ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+    public static string ClientOf(HttpContext ctx)
+    {
+        var forwarded = ctx.Request.Headers["X-Forwarded-For"].ToString();
+        var last = forwarded.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
+        return last is null ? AddressOf(ctx) : $"{AddressOf(ctx)} via {last}";
+    }
+
+    public bool IsLimited(HttpContext ctx)
+        => Count("client:" + ClientOf(ctx)) >= MaxFailuresPerClient
+           || Count("address:" + AddressOf(ctx)) >= MaxFailuresPerAddress;
+
+    public void RecordFailure(HttpContext ctx)
+    {
+        if (_buckets.Count > MaxTrackedBuckets) Prune();
+        Add("client:" + ClientOf(ctx));
+        Add("address:" + AddressOf(ctx));
+    }
+
+    private int Count(string bucket)
+        => _buckets.TryGetValue(bucket, out var b) && _time.GetUtcNow() - b.Start < Window ? b.Count : 0;
+
+    private void Add(string bucket)
+    {
+        var now = _time.GetUtcNow();
+        _buckets.AddOrUpdate(bucket, _ => (now, 1),
+            (_, b) => now - b.Start < Window ? (b.Start, b.Count + 1) : (now, 1));
+    }
+
+    // Expired buckets go once the table is large, so invented X-Forwarded-For values from earlier
+    // windows do not pile up for the life of the process.
+    private void Prune()
+    {
+        var now = _time.GetUtcNow();
+        foreach (var (key, b) in _buckets)
+            if (now - b.Start >= Window) _buckets.TryRemove(key, out _);
     }
 }

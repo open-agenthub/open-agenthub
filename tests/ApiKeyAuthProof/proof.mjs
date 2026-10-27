@@ -31,10 +31,15 @@ function check(ok, what, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${what}${detail ? ' — ' + detail : ''}`)
 }
 const bearer = k => (k ? { Authorization: `Bearer ${k}` } : {})
+// The backend throttles wrong keys per client (the last X-Forwarded-For entry, as the ingress
+// appends it). This proof presents wrong keys on purpose all over, so each request is its own
+// client unless a section pins one, as the rate-limit section does.
+let clientCounter = 0
+const nextClient = () => ({ 'X-Forwarded-For': `198.18.${Math.floor(++clientCounter / 250)}.${clientCounter % 250}` })
 async function call(method, path, key, body, extraHeaders = {}) {
   const r = await fetch(HTTP + path, {
     method, redirect: 'manual',
-    headers: { ...bearer(key), ...(body ? { 'Content-Type': 'application/json' } : {}), ...extraHeaders },
+    headers: { ...nextClient(), ...bearer(key), ...(body ? { 'Content-Type': 'application/json' } : {}), ...extraHeaders },
     body: body && JSON.stringify(body)
   })
   const text = await r.text()
@@ -47,7 +52,7 @@ async function call(method, path, key, body, extraHeaders = {}) {
 function wsStatus(path) {
   return new Promise((resolve, reject) => {
     const req = http.request(HTTP + path, {
-      headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64') }
+      headers: { ...nextClient(), Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64') }
     })
     req.on('upgrade', (res, socket) => { socket.destroy(); resolve(res.statusCode) })
     req.on('response', res => { res.resume(); resolve(res.statusCode) })
@@ -203,7 +208,7 @@ async function consent() {
 async function post(page, extra) {
   return fetch(`${HTTPS}/connect/authorize`, {
     method: 'POST', redirect: 'manual',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: page.cookies },
+    headers: { ...nextClient(), 'Content-Type': 'application/x-www-form-urlencoded', Cookie: page.cookies, ...(page.client || {}) },
     body: new URLSearchParams({ ...page.fields, 'submit.Accept': 'accept', ...extra })
   })
 }
@@ -251,8 +256,35 @@ if (listTool) {
 check((await mcp(KEY, { jsonrpc: '2.0', id: 4, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'p', version: '1' } } })).status === 401, 'MCP: the API key itself is not an MCP token (scheme untouched)')
 check((await mcp(null, { jsonrpc: '2.0', id: 5, method: 'tools/list' })).status === 401, 'MCP: /mcp without a token is 401')
 
+// --- Throttling wrong keys ---
+const attacker = { 'X-Forwarded-For': '203.0.113.50' }
+const codes = []
+for (let i = 0; i < 10; i++) codes.push((await call('GET', '/api/sessions', crypto.randomBytes(36).toString('base64url'), undefined, attacker)).status)
+check(codes.every(c => c === 401), '10 wrong keys from one client: each 401', codes.join(','))
+const throttled = await call('GET', '/api/sessions', KEY, undefined, attacker)
+check(throttled.status === 429 && throttled.headers.get('retry-after') === '60', 'the 11th attempt gets 429 with Retry-After, even with the right key', `HTTP ${throttled.status}, Retry-After ${throttled.headers.get('retry-after')}`)
+const wsThrottled = await new Promise(resolve => {
+  const req = http.request(HTTP + `/ws/sessions/${encodeURIComponent(session.id)}/events?access_token=${encodeURIComponent(KEY)}`, {
+    headers: { ...attacker, Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': crypto.randomBytes(16).toString('base64') }
+  })
+  req.on('upgrade', (res, sock) => { sock.destroy(); resolve(res.statusCode) })
+  req.on('response', res => { res.resume(); resolve(res.statusCode) })
+  req.end()
+})
+check(wsThrottled === 429, 'the WebSocket route is throttled for that client too', `HTTP ${wsThrottled}`)
+page = await consent()
+page.client = attacker
+const consentThrottled = await post(page, { password: KEY })
+check(consentThrottled.status === 429, 'and so is the MCP consent form', `HTTP ${consentThrottled.status}`)
+check((await call('GET', '/api/sessions', KEY)).status === 200, 'another client (the owner behind the same ingress) is unaffected')
+for (let i = 0; i < 30; i++) await call('GET', '/api/remote/sessions', personal, undefined, { 'X-Forwarded-For': '203.0.113.77' })
+check((await call('GET', '/api/sessions', KEY, undefined, { 'X-Forwarded-For': '203.0.113.77' })).status === 200,
+  '30 personal-token calls from one client do not count as wrong keys')
+
 await stop(backend)
 const log = fs.readFileSync(logPath, 'utf8')
+check(/warn: AgentHub\.Api\.Auth\.ApiKeyAuthHandler\[0\]\s+Rejected a wrong API key from 127\.0\.0\.1 via 203\.0\.113\.50 for GET \/api\/sessions/.test(log),
+  'each wrong key is logged with the client, without the value')
 check(!log.includes(KEY), 'the backend log never contains the key', `${log.split('\n').length} log lines`)
 check(!log.includes(WRONG), 'nor a wrong key that was presented')
 check(log.includes('Authentication: API key, acting as owner admin'), 'the log names the mode and the owner')

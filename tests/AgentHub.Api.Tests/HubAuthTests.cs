@@ -95,15 +95,76 @@ public class HubAuthTests
         public IDisposable? OnChange(Action<AuthenticationSchemeOptions, string?> listener) => null;
     }
 
+    private sealed class Clock : TimeProvider
+    {
+        public DateTimeOffset Now { get; set; } = new(2026, 10, 27, 12, 0, 0, TimeSpan.Zero);
+        public override DateTimeOffset GetUtcNow() => Now;
+    }
+
     private static async Task<AuthenticateResult> AuthenticateAsync(Action<HttpRequest> request, string owner = "admin")
+        => (await RequestAsync(request, new ApiKeyFailureLimiter(), challenge: false, owner)).Result;
+
+    // One request through the handler as the authentication middleware and an [Authorize]
+    // endpoint drive it: authenticate, and challenge when that did not succeed.
+    private static async Task<(AuthenticateResult Result, int Status)> RequestAsync(
+        Action<HttpRequest> request, ApiKeyFailureLimiter limiter, bool challenge = true, string owner = "admin")
     {
         var handler = new ApiKeyAuthHandler(new Monitor(), NullLoggerFactory.Instance, UrlEncoder.Default,
-            HubAuthOptions.ForApiKey(Key, owner));
+            HubAuthOptions.ForApiKey(Key, owner), limiter);
         var ctx = new DefaultHttpContext();
+        ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.7");
         request(ctx.Request);
         await handler.InitializeAsync(
             new AuthenticationScheme(ApiKeyAuthHandler.SchemeName, null, typeof(ApiKeyAuthHandler)), ctx);
-        return await handler.AuthenticateAsync();
+        var result = await handler.AuthenticateAsync();
+        if (challenge && !result.Succeeded) await handler.ChallengeAsync(null);
+        return (result, ctx.Response.StatusCode);
+    }
+
+    private static Action<HttpRequest> WithKey(string key, string? forwardedFor = null) => r =>
+    {
+        r.Headers.Authorization = $"Bearer {key}";
+        if (forwardedFor is not null) r.Headers["X-Forwarded-For"] = forwardedFor;
+    };
+
+    [Fact]
+    public async Task Wrong_keys_from_one_client_are_throttled_and_the_right_key_with_them()
+    {
+        var clock = new Clock();
+        var limiter = new ApiKeyFailureLimiter(clock);
+        for (var i = 0; i < ApiKeyFailureLimiter.MaxFailuresPerClient; i++)
+            Assert.Equal(401, (await RequestAsync(WithKey("wrong-" + i, "203.0.113.5"), limiter)).Status);
+
+        // Letting a correct guess through would not limit guessing at all.
+        var limited = await RequestAsync(WithKey(Key, "203.0.113.5"), limiter);
+        Assert.Equal(429, limited.Status);
+        Assert.False(limited.Result.Succeeded);
+
+        // Behind the ingress every connection shares its address; another client is unaffected.
+        Assert.True((await RequestAsync(WithKey(Key, "198.51.100.9"), limiter)).Result.Succeeded);
+
+        clock.Now += ApiKeyFailureLimiter.Window;
+        Assert.True((await RequestAsync(WithKey(Key, "203.0.113.5"), limiter)).Result.Succeeded);
+    }
+
+    [Fact]
+    public async Task Rotating_an_invented_forwarded_header_does_not_escape_the_address_limit()
+    {
+        var limiter = new ApiKeyFailureLimiter(new Clock());
+        for (var i = 0; i < ApiKeyFailureLimiter.MaxFailuresPerAddress; i++)
+            await RequestAsync(WithKey("wrong", $"192.0.2.{i % 250}, 10.9.{i / 250}.{i % 250}"), limiter);
+        Assert.Equal(429, (await RequestAsync(WithKey(Key, "192.0.2.251"), limiter)).Status);
+    }
+
+    [Fact]
+    public async Task Only_a_challenge_counts_so_other_bearer_tokens_never_throttle()
+    {
+        // Personal tokens on /api/remote and OAuth tokens on /mcp also pass through this handler,
+        // on endpoints that never challenge it. Fifty of them must not lock the owner out.
+        var limiter = new ApiKeyFailureLimiter(new Clock());
+        for (var i = 0; i < 50; i++)
+            Assert.False((await RequestAsync(WithKey("oah_personal-token"), limiter, challenge: false)).Result.Succeeded);
+        Assert.True((await RequestAsync(WithKey(Key), limiter)).Result.Succeeded);
     }
 
     [Fact]

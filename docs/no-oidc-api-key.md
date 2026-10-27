@@ -51,6 +51,32 @@ placeholder like `changeme` than a key. Starting with it would look secured with
   returns the owner's name, which a static key cannot carry the way a token's profile does. A
   401 later (after rotation) drops the key and shows the prompt again.
 
+## Throttling wrong keys
+
+After 10 wrong keys from one client within a minute, every key from that client gets 429 with
+`Retry-After: 60` until the minute ends — on the REST API, the WebSockets and the MCP consent form.
+The right key is throttled too: a limit that let a correct guess through would not limit
+guessing. A generated key (48 alphanumerics) cannot be guessed either way; the limit is for a
+hand-picked one, which only has to be 32 characters.
+
+- **Which client.** The connection address plus the last `X-Forwarded-For` entry. With the
+  chart's ingress, `/api`, `/ws`, `/mcp` and `/connect` go straight to the backend, so every
+  connection comes from the ingress pod. Bucketing by that address alone would let one attacker
+  lock the owner out. The ingress appends the real client address last, and a client cannot
+  override that entry. Without an ingress a client can invent the header, so the connection
+  address also has its own limit of 100 wrong keys a minute, which rotating the header does not
+  escape. The header decides nothing else: pod identity keeps relying on the socket address
+  only, as `Program.cs` requires.
+- **What counts.** A failure counts only where an endpoint challenges the API-key scheme. Personal
+  tokens on `/api/remote` and OAuth tokens on `/mcp` also arrive as `Bearer` and pass through
+  the same handler. Counting them would lock their owner out after ten legitimate calls.
+- **Logs.** Each wrong key is a warning with the client and path, never the value.
+- Rejected: ASP.NET's rate-limiting middleware on 401 responses. It partitions before the
+  request runs, so it cannot count only failures without a second pass, and it would also
+  throttle the anonymous endpoints the key does not guard.
+- Per replica: with `backend.replicas: 2` an attacker gets twice the attempts. That is still far
+  too few to matter, and a shared counter in Postgres would put a write on every failed request.
+
 ## One owner, always an admin
 
 A key carries no identity, so it acts as one configured owner. `AdminAccess` adds that owner to

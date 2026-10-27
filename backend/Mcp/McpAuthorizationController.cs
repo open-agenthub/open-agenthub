@@ -29,7 +29,8 @@ public sealed class McpAuthorizationController(
     McpClientStore clients,
     IAntiforgery antiforgery,
     ILogger<McpAuthorizationController> logger,
-    AgentHub.Api.Auth.HubAuthOptions hubAuth) : Controller
+    AgentHub.Api.Auth.HubAuthOptions hubAuth,
+    AgentHub.Api.Auth.ApiKeyFailureLimiter keyLimiter) : Controller
 {
     /// <summary>Scheme names for the browser login used only by this controller.</summary>
     public const string CookieScheme = "McpCookie";
@@ -255,9 +256,15 @@ public sealed class McpAuthorizationController(
         if (decision == ConsentDecision.Deny)
             return ForbidOAuth(Errors.AccessDenied, "The user denied the request.");
 
+        // The same limit as the API: the consent form is another place to guess the key at.
+        if (keyLimiter.IsLimited(HttpContext))
+            return ConsentPage(request, owner, askForKey: true, error: "Too many wrong keys. Try again in a minute.",
+                statusCode: StatusCodes.Status429TooManyRequests);
         if (!hubAuth.ApiKeyMatches(Request.Form[ApiKeyField].ToString()))
         {
-            logger.LogWarning("Rejected an MCP consent post for client {ClientId}: wrong API key", request.ClientId);
+            keyLimiter.RecordFailure(HttpContext);
+            logger.LogWarning("Rejected a wrong API key from {Client} on the MCP consent for client {ClientId}",
+                AgentHub.Api.Auth.ApiKeyFailureLimiter.ClientOf(HttpContext), request.ClientId);
             return ConsentPage(request, owner, askForKey: true, error: "That API key is not valid.",
                 statusCode: StatusCodes.Status401Unauthorized);
         }
