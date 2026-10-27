@@ -125,3 +125,19 @@ test('the activity answer says the CLI is running before its first hook, and not
   h.intervals.find(i => i.ms === 500).callback();
   assert.equal(frames(viewer).at(-1).ready, false);
 });
+
+// A CLI that drops keys typed before it has drawn names its input box; until this attempt's
+// output shows it, the CLI is not ready even though it runs.
+test('a driver with an input-box screen is ready only once that box is drawn', async () => {
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token' }, {
+    turnHooks: true, inputReadyScreen: rows => rows.some(row => row.trim() === '> ask here')
+  });
+  const viewer = new FakeSocket(); h.runtime.webSocketServer.connect(viewer, '/'); subscribe(viewer);
+  assert.equal(frames(viewer).at(-1).ready, false);
+  h.terminals[0].emitData('loading…\r\n');
+  for (let i = 0; i < 20; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(frames(viewer).at(-1).ready, false);
+  h.terminals[0].emitData('> ask here\r\n');
+  for (let i = 0; i < 50 && frames(viewer).at(-1).ready !== true; i++) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual(frames(viewer).at(-1), { type: 'agenthub', subtype: 'activity', state: 'unknown', source: 'hooks', ready: true });
+});

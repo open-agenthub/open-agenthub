@@ -8,7 +8,7 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage, INTERRUPT_PAUSE_MS, ESCAPE } = require('./terminal-inject');
-const { createNextTurnDelivery, IDLE_QUIET_MS } = require('./next-turn');
+const { createNextTurnDelivery, renderScreen, IDLE_QUIET_MS } = require('./next-turn');
 const { createContextClear } = require('./context-clear');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs, stateExcludes } = require('./state-archive');
@@ -324,6 +324,31 @@ function createCommonServer(options = {}) {
   let activityPromptAt = now();
   let activityLastOutput = 0;
   let activityLastFrame = '';
+  // A CLI that keeps keys typed before it has drawn takes input from the moment it is spawned. One
+  // that drops them names its input box (driver.inputReadyScreen), and is ready once this
+  // attempt's own output shows it (docs/session-starting.md).
+  let agentReady = false;
+  let readyCheck = null;
+  let readyCheckAgain = false;
+  let HeadlessTerminal = supplied.HeadlessTerminal;
+  function checkAgentReady() {
+    if (agentReady || !term) return;
+    if (readyCheck) { readyCheckAgain = true; return; }
+    // Images install modules beside common/; source checkouts install them in session-agent/.
+    HeadlessTerminal ||= require(require.resolve('@xterm/headless', {
+      paths: [__dirname, require('node:path').join(__dirname, '..', 'session-agent')]
+    })).Terminal;
+    const checking = term;
+    readyCheck = renderScreen(attemptOutput, lastSize || { cols: 120, rows: 32 }, HeadlessTerminal).then(rows => {
+      if (term === checking && driver.inputReadyScreen(rows)) {
+        agentReady = true;
+        publishActivity();
+      }
+    }).catch(() => {}).finally(() => {
+      readyCheck = null;
+      if (readyCheckAgain) { readyCheckAgain = false; checkAgentReady(); }
+    });
+  }
   let stateWithheld = false;
   function persistenceFrame() {
     return JSON.stringify({ type: 'agenthub', subtype: 'persistence', withheld: stateWithheld });
@@ -350,10 +375,8 @@ function createCommonServer(options = {}) {
     // Whether the CLI runs and takes input, apart from what its turn is doing. A hook-driven
     // state stays 'unknown' until the CLI's first hook, which an idle TUI never fires before a
     // person types; the Workspace waited for that and showed "Session starting" over a CLI that
-    // was already reading keys (#306). Input sent the moment the PTY exists reaches the CLI's
-    // prompt even before it has drawn anything (docs/session-starting.md), so a spawned, not yet
-    // exited process is ready.
-    const ready = Boolean(term) && !exited && restartReason === null && !runtimeDraining;
+    // was already reading keys (#306). See agentReady for when that is.
+    const ready = agentReady && Boolean(term) && !exited && restartReason === null && !runtimeDraining;
     return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ready, ...(reason ? { reason } : {}) });
   }
   function removeActivityClient(socket) {
@@ -1106,6 +1129,8 @@ function createCommonServer(options = {}) {
     launchedAt = now();
     if (!firstLaunchedAt) firstLaunchedAt = launchedAt;
     chatMode = command.pipe === true;
+    // A piped CLI reads its stream from the start; there is no screen to wait for.
+    agentReady = chatMode || typeof driver.inputReadyScreen !== 'function';
     console.log('[agent] driver=' + driver.name + ' mode=' + mode + ' resume=' + attemptedResume +
       (chatMode ? ' ui=chat' : '') +
       ' cwd=' + cwd + ' cmd=' + command.cmd + ' ' + command.args.join(' '));
@@ -1128,6 +1153,7 @@ function createCommonServer(options = {}) {
       remember(data);
       broadcast(data);
       limitDetector.feedTerminal(data);
+      if (!agentReady) checkAgentReady();
     });
 
     term.onExit(({ exitCode, signal }) => handleAgentExit(exitCode, signal));

@@ -104,6 +104,7 @@ const model = http.createServer(async (req, res) => {
   let body = '';
   for await (const chunk of req) body += chunk;
   let json = {}; try { json = JSON.parse(body); } catch {}
+  if (serve && req.url.startsWith('/v1/messages') && body.includes('say done')) console.log(JSON.stringify({ modelGotTask: true }));
   const msg = { id: 'msg_' + crypto.randomUUID(), type: 'message', role: 'assistant', model: json.model || 'proof-model', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 1 } };
   if (!req.url.startsWith('/v1/messages') || req.url.includes('count_tokens') || !json.stream) {
     res.writeHead(200, { 'content-type': 'application/json' });
@@ -168,6 +169,11 @@ function podEnv() {
   await new Promise(r => model.listen(MODEL_PORT, '127.0.0.1', r));
   const log = [];
   const env = podEnv();
+  // --serve: the web app can be open before the "container" starts, as when a session is created.
+  if (serve && process.env.PROOF_DELAY_AGENT_MS) {
+    console.log(JSON.stringify({ scenario, serving: `hub http://127.0.0.1:${HUB_PORT}`, agentPort: AGENT_PORT, agentStartsInMs: Number(process.env.PROOF_DELAY_AGENT_MS) }));
+    await new Promise(r => setTimeout(r, Number(process.env.PROOF_DELAY_AGENT_MS)));
+  }
   started = Date.now();
   // Its own process group, so the stop below also ends the CLI and the auth watcher.
   const agent = spawn('bash', [path.join(rt, 'claude/entrypoint.sh')], { env, cwd: path.join(ROOT, 'work'), stdio: ['ignore', 'pipe', 'pipe'], detached: true });
@@ -178,11 +184,14 @@ function podEnv() {
     try { process.kill(-agent.pid, 'SIGTERM'); } catch {}
     await new Promise(r => setTimeout(r, 1500));
     try { process.kill(-agent.pid, 'SIGKILL'); } catch {}
+    // The entrypoint starts the auth watcher in the background; it was seen to outlive the group.
+    try { process.kill(Number(fs.readFileSync(path.join(ROOT, 'tmp/agenthub-auth-watcher.pid'), 'utf8')), 'SIGKILL'); } catch {}
     hub.close(); model.close();
-    fs.rmSync(ROOT, { recursive: true, force: true });
+    fs.rmSync(ROOT, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   };
   if (serve) {
-    console.log(JSON.stringify({ scenario, serving: `hub http://127.0.0.1:${HUB_PORT}`, agentPort: AGENT_PORT }));
+    if (!process.env.PROOF_DELAY_AGENT_MS) console.log(JSON.stringify({ scenario, serving: `hub http://127.0.0.1:${HUB_PORT}`, agentPort: AGENT_PORT }));
+    console.log(JSON.stringify({ agentStarted: true }));
     process.on('SIGINT', () => stop().then(() => process.exit(0)));
     process.on('SIGTERM', () => stop().then(() => process.exit(0)));
     return;

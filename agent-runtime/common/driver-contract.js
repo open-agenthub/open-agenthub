@@ -34,6 +34,12 @@ function validateDriver(driver) {
   // Optional: findTranscript({ env, home, cwd, fs, launchedAt }) names the provider's own
   // conversation file (Claude's project JSONL, Codex's rollout) once it exists, or returns
   // null. Runtimes without a readable native transcript simply leave it out.
+  // Optional: inputReadyScreen(rows) is true once the rendered screen shows the CLI's input box.
+  // Only for a CLI that drops keys typed before it has drawn: the session agent then reports the
+  // CLI ready (the Workspace's starting state ends) at that screen instead of at the spawn.
+  if (driver.inputReadyScreen !== undefined && typeof driver.inputReadyScreen !== 'function') {
+    throw new Error('Agent driver inputReadyScreen must be a function');
+  }
   if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
     throw new Error('Agent driver findTranscript must be a function');
   }
