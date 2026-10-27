@@ -1,5 +1,6 @@
 using System.Net;
 using AgentHub.Api.Persistence;
+using AgentHub.Api.Services;
 using k8s;
 using k8s.Models;
 
@@ -60,7 +61,7 @@ public static class BrowserPodSpecFactory
         var mounts = new List<V1VolumeMount>
         {
             new() { Name = "data", MountPath = "/data" },
-            new() { Name = "tmp", MountPath = "/tmp" },
+            new() { Name = "tmp", MountPath = "/tmp", SubPath = "tmp" },
             new() { Name = "shm", MountPath = "/dev/shm" }
         };
         var container = new V1Container
@@ -132,6 +133,7 @@ public static class BrowserPodSpecFactory
                     FsGroup = 1000,
                     SeccompProfile = new V1SeccompProfile { Type = "RuntimeDefault" }
                 },
+                InitContainers = [TemporaryVolume.Prepare(options.Image, options.PullPolicy)],
                 Containers = [container],
                 Volumes =
                 [
