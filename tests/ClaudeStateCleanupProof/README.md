@@ -11,13 +11,15 @@ keys and removes those storage keys when finished. Use an empty disposable datab
 node tests/ClaudeStateCleanupProof/produce.cjs /tmp/claude-cleanup-proof
 dotnet run --project tests/ClaudeStateCleanupProof -- /tmp/claude-cleanup-proof
 node tests/ClaudeStateCleanupProof/verify.cjs /tmp/claude-cleanup-proof
+node tests/ClaudeStateCleanupProof/produce.cjs /tmp/claude-current-proof --current
 ```
 
 `produce.cjs` uses the real server, real installed node-pty and a harmless sleeping
 provider command. `NODE_PATH` must point to installed runtime dependencies (the
 session image has `/opt/session-agent/node_modules`). It deliberately supplies the
 pre-fix driver exclusions to reproduce historical archives even after the producer
-fix lands. The producer starts with an environment allowlist, synthetic loopback callback
+fix lands. The separate `--current` run uses the current driver and asserts that its
+uploaded archive omits the synthetic backup directory. The producer starts with an environment allowlist, synthetic loopback callback
 credentials, and a private nonexistent watcher pidfile; it never inherits live
 session transport variables. All fixture credentials are synthetic. The admin HTTP proof substitutes
 only authentication, using a local header to exercise anonymous/nonadmin/admin
