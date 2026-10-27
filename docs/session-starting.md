@@ -30,7 +30,9 @@ When a CLI is ready is measured, not assumed:
 
 OpenCode's driver names its input box (`inputReadyScreen`, the same predicate `/clear` already
 waits for); the session agent renders the CLI's output with the headless terminal and reports
-`ready` when the box appears. A driver without it is ready at the spawn.
+`ready` when the box appears. A driver without it is ready at the spawn. An OpenCode session that starts on its sign-in screen
+(no credential) therefore keeps "Starting the agent…" above the sign-in card until the login is done
+and the box is drawn, as before this change; Claude and Codex show the card with the invitation.
 `scripts/proofs/306/ready-input.cjs` types a marker over the agent socket the instant `ready`
 turns true: all three CLIs keep it; with OpenCode's predicate removed, `ready` came at the spawn and
 the marker was lost.
