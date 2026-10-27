@@ -22,6 +22,8 @@ Upstream changes: https://github.com/xtermjs/xterm.js/releases/tag/6.0.0
   baseline image modules. Candidate modules come from this worktree. It uses a fresh home,
   keeps authorization data in memory and removes that home afterwards.
 
-Question, other CLI and browser proofs are still pending. This evidence does not establish
+Real pinned OpenCode 1.18.35 provider selection through credential entry also produced identical
+visible cells, sign-in/menu classifications and private export buffers (7 PTY frames).
+Question, remaining CLI and browser proofs are still pending. This evidence does not establish
 real-account authorization or deployed-cluster behavior. The local suite used the image's
 compiled node-pty; rebuilding it here requires build tools absent from this session.

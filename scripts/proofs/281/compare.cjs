@@ -21,6 +21,26 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
  Object.assign(env, {HOME:home, XDG_CONFIG_HOME:home+'/.config', XDG_DATA_HOME:home+'/.local/share', XDG_STATE_HOME:home+'/.local/state', TERM:'xterm-256color', DISABLE_AUTOUPDATER:'1', OPENCODE_DISABLE_AUTOUPDATE:'1'});
  let child, pending = Promise.resolve(), frames = 0;
  const rows = terminal => {const b=terminal.buffer.active;return Array.from({length:terminal.rows},(_,i)=>b.getLine(b.baseY+i)?.translateToString(true)||'');};
+ let model;
+ if (process.env.PROOF_QUESTION) {
+  model = require('node:http').createServer((req,res)=>{
+   let body=''; req.on('data',data=>body+=data);req.on('end',()=>{
+    let input;try{input=JSON.parse(body);}catch{input={};}
+    if (!req.url.startsWith('/v1/messages')) {res.writeHead(200,{'content-type':'application/json'});res.end('{}');return;}
+    res.writeHead(200,{'content-type':'text/event-stream'});
+    const event=(type,data)=>res.write('event: '+type+'\ndata: '+JSON.stringify({type,...data})+'\n\n');
+    event('message_start',{message:{id:'msg_proof',type:'message',role:'assistant',model:'proof',content:[],stop_reason:null,usage:{input_tokens:1,output_tokens:1}}});
+    const question={questions:[{question:'Which proof should run next?',header:'Proof',options:[{label:'Runtime',description:'Run the runtime proof'},{label:'Browser',description:'Run the browser proof'}],multiSelect:false}]};
+    event('content_block_start',{index:0,content_block:{type:'tool_use',id:'toolu_proof',name:'AskUserQuestion',input:{}}});
+    event('content_block_delta',{index:0,delta:{type:'input_json_delta',partial_json:JSON.stringify(question)}});
+    event('content_block_stop',{index:0});event('message_delta',{delta:{stop_reason:'tool_use'},usage:{output_tokens:1}});event('message_stop',{});res.end();
+   });
+  });
+  await new Promise(resolve=>model.listen(0,'127.0.0.1',resolve));
+  const key='sk-ant-api03-'+'x'.repeat(80);
+  Object.assign(env,{ANTHROPIC_API_KEY:key,ANTHROPIC_BASE_URL:'http://127.0.0.1:'+model.address().port,CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:'1'});
+  fs.writeFileSync(home+'/.claude.json',JSON.stringify({hasCompletedOnboarding:true,theme:'dark',customApiKeyResponses:{approved:[key.slice(-20)],rejected:[]},projects:{[home]:{hasTrustDialogAccepted:true,hasCompletedProjectOnboarding:true}}}));
+ }
  const args = JSON.parse(process.env.PROOF_ARGS || '[]');
  try {
   child = pty.spawn(process.env.PROOF_CLI || '/usr/local/bin/codex', args, {cwd:home,env,cols:120,rows:40,name:'xterm-256color'});
@@ -31,6 +51,11 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
    frames++;
   });});
   for (const step of JSON.parse(process.env.PROOF_STEPS || '[{"wait":6000}]')) {
+   if (step.ready) {
+    const end=Date.now()+60000;
+    while (!rows(terms[0]).join('\n').includes(step.ready) && Date.now()<end) await sleep(100);
+    assert.ok(rows(terms[0]).join('\n').includes(step.ready),'CLI readiness not observed');
+   }
    await sleep(step.wait || 200);await pending;
    if(step.keys)child.write(step.keys);
   }
@@ -50,6 +75,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   try{child?.kill();}catch{}
   await sleep(200);await pending;
   terms.forEach(t=>t.dispose());
+  if(model)await new Promise(resolve=>model.close(resolve));
   fs.rmSync(home,{recursive:true,force:true});
  }
 })().catch(error=>{console.error('Comparison failed; terminal and authorization details withheld');process.exitCode=1;});
