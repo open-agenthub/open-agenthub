@@ -853,6 +853,10 @@ public record SessionInfo
     /// (a grant, a revoke, a new value or a rename since its start): they reach the agent at its
     /// next start, or now through apply-resources. Files are not counted; they update live (#255).</summary>
     public bool SecretsPendingRestart { get; init; }
+    /// <summary>A project move of this scheduled session stopped after the record changed: the
+    /// schedule stays suspended, so no run starts with half of each project, until the move is
+    /// retried (docs/session-organization.md).</summary>
+    public bool ScheduleMoveUnfinished { get; init; }
     public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
     /// <summary>Self-deletion deadline in seconds; null = the session is kept.</summary>
     public int? AutoDeleteAfterSeconds { get; init; }

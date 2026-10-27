@@ -126,7 +126,7 @@ export const api = {
   duplicateSession: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/duplicate`, data),
   listSessionOrder: () => req('GET', '/session-organization/order'),
   setSessionOrder: sessionIds => req('PUT', '/session-organization/order', { sessionIds }),
-  moveSessionProject: (id, projectId) => req('POST', '/session-organization/' + encodeURIComponent(id) + '/project', { projectId, confirm: true }),
+  moveSessionProject: (id, projectId, { stopActiveRun = false } = {}) => req('POST', '/session-organization/' + encodeURIComponent(id) + '/project', { projectId, confirm: true, stopActiveRun }),
   listProjects: () => req('GET', '/projects'),
   createProject: (data) => req('POST', '/projects', data),
   updateProject: (id, data) => req('PATCH', `/projects/${encodeURIComponent(id)}`, data),
