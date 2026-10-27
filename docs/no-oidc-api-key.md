@@ -74,8 +74,13 @@ otherwise the limit would not slow that client's guessing.
   `backend.forwardedHeaders.knownNetworks` are comma-separated IP addresses and CIDRs. Defaults
   are `127.0.0.1,::1` and `10.0.0.0/8,172.16.0.0/12,192.168.0.0/16`, respectively, covering
   common private ingress pod addresses. Every peer in those ranges can assert a client address:
-  narrow them to your ingress source addresses or subnet, particularly if other pods can reach
-  the backend. Configure IPv6 ingress ranges explicitly. Set both strings to empty to ignore
+  narrow them to your ingress source addresses or subnet. The chart's agent callback policy
+  and dynamic browser egress policy permit backend ports 80/8080; these are layer-4 rules and
+  permit `/api` as well as `/internal`. With the broad defaults those pods can assert XFF too.
+  Use exact ingress IPs or a dedicated ingress source range to exclude untrusted workloads;
+  namespaces do not generally have separate pod CIDRs. The defaults keep typical ingress
+  installations working, rather than claiming to isolate workloads sharing a trusted range.
+  Configure IPv6 ingress ranges explicitly. Set both strings to empty to ignore
   XFF entirely, including on direct installations. Outside the chart the default trusts loopback
   only. Invalid IPs/CIDRs fail startup rather than silently changing the trust boundary.
 - **Deliberately no shared ingress bucket.** It would let one client lock out all other clients
