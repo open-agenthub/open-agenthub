@@ -108,7 +108,14 @@ async function sharedReq(path, method = 'GET', body) {
 
 
 export const api = {
-  listSessions: () => req('GET', '/sessions'),
+  listSessions: async () => {
+    const [owned, shared] = await Promise.all([
+      req('GET', '/sessions'),
+      req('GET', '/sessions/shared').catch(error => { if (error.status === 402) return []; throw error })
+    ])
+    return [...owned, ...shared.filter(session => !owned.some(item => item.id === session.id))]
+  },
+  findShareRecipients: (id, query) => req('GET', `/ee/sessions/${encodeURIComponent(id)}/shares/recipients?query=${encodeURIComponent(query)}`),
   getSession: (id) => req('GET', `/sessions/${id}`),
   sessionCommands: id => req('GET', `/sessions/${encodeURIComponent(id)}/commands`),
   terminalAttachments: (id, fileIds) => req('POST', `/sessions/${encodeURIComponent(id)}/terminal-attachments`, { fileIds }),

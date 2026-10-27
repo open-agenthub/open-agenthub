@@ -58,7 +58,7 @@ describe('shared browser phase refresh', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-terminal]').exists()).toBe(false)
-    expect(wrapper.text()).toContain('share revoked')
+    expect(wrapper.text()).toContain('invalid, expired, or revoked')
     wrapper.unmount()
   })
   it('retains the live session during a transient refresh failure', async () => {

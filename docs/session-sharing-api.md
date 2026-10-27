@@ -106,3 +106,49 @@ returned `mcpPolicy`. The MCP-security textareas therefore came up empty on ever
 the form with one restriction silently dropped the others. Fixed, and the vitest now seeds
 `mcpPolicy` the way the backend spells it; the old test passed only because its mock used the same
 wrong key as the component.
+
+## Recipient visibility and opening a grant (#328)
+
+The share dialog searches users who have already signed in to this hub. A signed-in session
+owner may request suggestions for their own session: after two typed characters the server
+returns at most eight username/display-name prefix matches, excluding the caller. The response
+contains only the display name and the exact sign-in username that the grant will use. An exact
+email may find a recipient, but emails are never returned. Empty input returns no users;
+`%` and `_` are literal characters, not search wildcards. The endpoint is limited to 30 requests
+per minute per authenticated identity, without a queue. It checks the license and session
+ownership before querying the directory; knowing another owner's session id cannot open search.
+
+This is an explicit team-directory visibility choice: colleagues' names and usernames are
+searchable by signed-in session owners. Deployments that need stricter visibility can set
+`sharing.userSuggestionsEnabled: false` in the chart (`Sharing:UserSuggestionsEnabled=false`
+in backend configuration). That retains exact username/email confirmation and removes prefix
+suggestions. An unrestricted directory download and email-bearing suggestions were rejected
+because they reveal more than the owner needs to select a recipient. Exact-only lookup as the
+default was rejected because it does not help owners discover the expected username.
+
+Named grants open at `/s/<session-id>` after sign-in. The frontend loads both owned sessions
+and the licensed `/api/sessions/shared` list. Metadata, transcript and conversation reads resolve
+the caller's grant on every request; metadata for recipients uses the sanitized shared shape.
+Management endpoints retain their owner checks. A revoked grant disappears on the next list
+refresh and the page explains that the session is unavailable for this account. Wrong users
+receive the same HTTP 404 as nonexistent sessions, preventing session-id probing. Sign-in
+preserves the original path and query through the OIDC callback.
+
+Bearer links open at `/shared/<token>` without signing in. Their generated path agrees with the
+SPA parser, frontend fallback and ingress; current-main Chromium reproduction did not find a
+routing 404 on that path. The reproduced 404 was the named-user session read, which previously
+called the owner-only service with the invitee's username. The app also previously omitted the
+shared list, so a named deep link fell through to Home. Replacing those owner-only reads was
+chosen over relaxing the session store's ownership checks, which would expose management paths.
+
+`FrontendOrigin` selects the trusted public origin for generated bearer links, including when
+an internal backend host differs from the public frontend. Set it correctly behind a proxy;
+forwarded request hosts do not override it. Without it, the backend returns a root-relative path
+and the share dialog resolves that against the browser origin before copying. These deployments
+serve the app at the origin root: putting a path prefix in `FrontendOrigin` cannot make the
+SPA, API, auth callback and ingress support a subpath, so it is not a supported routing setting.
+Invalid, expired and revoked bearer links show one clear message without disclosing which
+condition applied. Malformed URL escapes also reach this state instead of aborting app setup.
+
+The repeatable real-service/Chromium proof and its limitations are in
+`tests/SessionSharingProof/README.md`.

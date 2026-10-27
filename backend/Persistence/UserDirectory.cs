@@ -62,6 +62,28 @@ public sealed class UserDirectory : AgentHub.Api.Usage.IPersonalUsageLimitSource
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task<IReadOnlyList<AppUser>> FindShareRecipientsAsync(string caller, string query,
+        bool suggestions, CancellationToken ct = default)
+    {
+        // Prefixes use left(), so wildcard characters in an identifier cannot broaden the search.
+        await using var cmd = _db.CreateCommand($"""
+            SELECT {AppUserColumns} FROM app_users
+            WHERE owner <> @caller AND (
+                owner = @query OR lower(email) = lower(@query)
+                OR (@suggestions AND (lower(left(owner, length(@query))) = lower(@query)
+                    OR lower(left(display_name, length(@query))) = lower(@query))))
+            ORDER BY CASE WHEN owner = @query THEN 0 ELSE 1 END, owner
+            LIMIT 8
+            """);
+        cmd.Parameters.AddWithValue("caller", caller);
+        cmd.Parameters.AddWithValue("query", query);
+        cmd.Parameters.AddWithValue("suggestions", suggestions && query.Length >= 2);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var result = new List<AppUser>();
+        while (await reader.ReadAsync(ct)) result.Add(ReadAppUser(reader));
+        return result;
+    }
+
     /// <summary>All known users, most recently active first — for the admin overview.</summary>
     public async Task<IReadOnlyList<AdminUser>> ListAsync(CancellationToken ct = default)
     {

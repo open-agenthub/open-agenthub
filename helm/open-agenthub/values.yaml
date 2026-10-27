@@ -64,6 +64,11 @@ frontend:
 # Override for a local browser origin when ingress is disabled.
 frontendOrigin: ""
 
+sharing:
+  # Signed-in session owners can search known colleagues by name/username after two characters.
+  # Disable to allow exact username/email confirmation only.
+  userSuggestionsEnabled: true
+
 agent:
   port: 7681
   gitCloneImage: alpine/git:2.45.2

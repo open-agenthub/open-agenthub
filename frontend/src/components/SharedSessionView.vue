@@ -19,7 +19,9 @@ async function refresh() {
   } catch (e) {
     if (active) {
       if ([401, 403, 404].includes(e.status)) session.value = null
-      error.value = String(e.message || e)
+      error.value = [403, 404].includes(e.status)
+        ? 'This share link is invalid, expired, or revoked. Ask the session owner for a new link.'
+        : e.status === 401 ? 'Sign in to open this shared session.' : 'Could not load the shared session. Retrying…'
     }
   } finally { refreshing = false }
 }

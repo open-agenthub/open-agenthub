@@ -11,6 +11,7 @@ const apiMocks = vi.hoisted(() => ({
     createShareUser: vi.fn(), updateShareUser: vi.fn(), deleteShareUser: vi.fn(),
     createShareLink: vi.fn(), updateShareLink: vi.fn(), deleteShareLink: vi.fn(),
     updateMcpPolicy: vi.fn(),
+    findShareRecipients: vi.fn().mockResolvedValue([]),
     getCredentialStatus: vi.fn(), switchSessionGitPats: vi.fn()
   }
 }))
@@ -104,7 +105,7 @@ describe('ShareSessionDialog without a license', () => {
     await flushPromises()
     expect(wrapper.find('[data-license-gate]').exists()).toBe(false)
 
-    await wrapper.get('input[placeholder="Add people by username…"]').setValue('carol')
+    await wrapper.get('input[aria-label="Recipient username or email"]').setValue('carol')
     await wrapper.findAll('button').find(b => b.text() === 'Add').trigger('click')
     await flushPromises()
 
@@ -120,7 +121,7 @@ describe('ShareSessionDialog without a license', () => {
     const wrapper = mount(ShareSessionDialog, { props: { session } })
     await flushPromises()
 
-    await wrapper.get('input[placeholder="Add people by username…"]').setValue('nobody')
+    await wrapper.get('input[aria-label="Recipient username or email"]').setValue('nobody')
     await wrapper.findAll('button').find(b => b.text() === 'Add').trigger('click')
     await flushPromises()
 
@@ -174,5 +175,28 @@ describe('ShareSessionDialog git identity', () => {
     const none = mount(ShareSessionDialog, { props: { session } })
     await flushPromises()
     expect(none.find('[data-share-git]').exists()).toBe(false)
+  })
+})
+
+describe('recipient picker', () => {
+  it('does not enumerate on open and submits the selected username', async () => {
+    vi.clearAllMocks()
+    vi.useFakeTimers()
+    apiMocks.api.listSessionShares.mockResolvedValue({ users: [], links: [], mcpPolicy: null })
+    apiMocks.api.findShareRecipients.mockResolvedValue([{ username: 'bob', displayName: 'Bob Example' }])
+    apiMocks.api.createShareUser.mockResolvedValue({})
+    const wrapper = mount(ShareSessionDialog, { props: { session } })
+    await flushPromises()
+    expect(apiMocks.api.findShareRecipients).not.toHaveBeenCalled()
+    await wrapper.get('[aria-label="Recipient username or email"]').setValue('bo')
+    await vi.advanceTimersByTimeAsync(250)
+    await flushPromises()
+    expect(apiMocks.api.findShareRecipients).toHaveBeenCalledWith('s1', 'bo')
+    await wrapper.findAll('button').find(button => button.text() === 'Bob Example · Username: bob').trigger('click')
+    await wrapper.findAll('button').find(button => button.text() === 'Add').trigger('click')
+    await flushPromises()
+    expect(apiMocks.api.createShareUser).toHaveBeenCalledWith('s1', { recipient: 'bob', role: 'Viewer' })
+    wrapper.unmount()
+    vi.useRealTimers()
   })
 })
