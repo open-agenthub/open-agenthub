@@ -15,5 +15,5 @@ and that saving untouched sends neither field. It then changes levels in the edi
 session view and the project dialog, and reads the result back from the API, after a reload, and
 from the session's copies (`sessionsecrets-<id>`, `sessionenv-<id>`).
 
-Result: 25/25 on the branch. On main the same edit dialog shows 2 selection checkboxes next to
+Result: 28/28 on the branch (including the note when a session stops following its project). On main the same edit dialog shows 2 selection checkboxes next to
 the grant buttons.
