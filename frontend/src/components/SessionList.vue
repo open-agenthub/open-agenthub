@@ -16,6 +16,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
       <!-- Only a marker: the full diagnostic wrapped over a dozen lines here and pushed the other
            sessions out of view. The selected session's Workspace shows it in full. -->
       <div v-if="s.failureReason" class="startup-failure" data-session-failure-marker>Cannot start · open for details</div>
+      <div v-if="s.scheduleMoveUnfinished" class="startup-failure" data-schedule-move-unfinished>Move unfinished · schedule paused</div>
       <div v-if="s.description" class="desc" data-session-description>{{ s.description }}</div>
       <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · <SessionIcon name="expiry" /> {{ formatRemaining(s.expiresAt) }}</span></div>
     </div>

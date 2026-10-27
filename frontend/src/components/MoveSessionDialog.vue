@@ -9,8 +9,11 @@ const busy = ref(false)
 const error = ref('')
 const current = computed(() => props.projects.find(p => p.id === props.session.projectId))
 const destination = computed(() => props.projects.find(p => p.id === target.value))
-const changed = computed(() => (props.session.projectId || '') !== target.value)
 const scheduled = computed(() => props.session.mode === 'Scheduled')
+// An earlier move stored the project but not the template; the schedule stays paused until a move
+// finishes, so the dialog must allow one even to the project the session already shows.
+const unfinished = computed(() => scheduled.value && !!props.session.scheduleMoveUnfinished)
+const changed = computed(() => (props.session.projectId || '') !== target.value || unfinished.value)
 // The list shows a scheduled run's pod as the session's phase, but a run can also start after the
 // list was read; the server's scheduled_run_active refusal sets this so the owner decides then.
 const runActive = ref(false)
@@ -53,6 +56,7 @@ async function move() {
       <option value="">No project</option>
       <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
     </select>
+    <p v-if="unfinished" role="status" data-schedule-move-unfinished>The last move of this schedule stopped part-way. Its schedule is paused until a move finishes, so no run starts with a mix of both projects.</p>
     <div v-if="changed" data-project-move-impact>
       <p>Move from <b>{{ current?.name || 'No project' }}</b> to <b>{{ destination?.name || 'No project' }}</b>.</p>
       <p>Project secrets: {{ removed }} removed, {{ added }} added to the project selection. A narrowed session selection stays narrowed; individual grants stay with this session.</p>
@@ -66,7 +70,7 @@ async function move() {
     </div>
     <p v-if="error" role="alert">{{ error }} {{ scheduled ? 'You can retry; a move that stopped part-way finishes on retry.' : 'If the session was paused, it stays paused; you can retry or resume it.' }}</p>
     <div class="row">
-      <button class="primary" data-confirm-move :disabled="busy || !changed" @click="move">{{ busy ? 'Moving…' : !active ? 'Confirm move' : scheduled ? 'Stop run and move' : 'Pause and move' }}</button>
+      <button class="primary" data-confirm-move :disabled="busy || !changed" @click="move">{{ busy ? 'Moving…' : active ? (scheduled ? 'Stop run and move' : 'Pause and move') : unfinished && (session.projectId || '') === target ? 'Finish move' : 'Confirm move' }}</button>
       <button :disabled="busy" @click="emit('close')">Close</button>
     </div>
   </dialog>

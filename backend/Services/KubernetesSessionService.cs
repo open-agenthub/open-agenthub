@@ -1679,6 +1679,13 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     /// already-stored destination for "nothing to do" and leaving the schedule suspended.</summary>
     public const string ProjectMoveSuspendAnnotation = "agenthub.dev/project-move-suspend";
 
+    /// <summary>The project the template's secret block was built for while a move is unfinished
+    /// (empty = none). Rolling back is safe only while the record still names that project; once
+    /// the record names the destination, unsuspending would run the old block with the new access.</summary>
+    public const string ProjectMoveFromAnnotation = "agenthub.dev/project-move-from";
+
+    private static string AnnotationPath(string key) => "/metadata/annotations/" + key.Replace("~", "~0").Replace("/", "~1");
+
     public async Task<SessionInfo> MoveScheduledSessionAsync(string owner, string id, string? projectId, bool stopActiveRun,
         CancellationToken ct = default)
     {
@@ -1696,6 +1703,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         { throw new InvalidOperationException("The schedule of this session is missing. Recreate it in the destination project."); }
         string? stored = null;
         var unfinished = cron.Metadata.Annotations?.TryGetValue(ProjectMoveSuspendAnnotation, out stored) == true;
+        var originalProject = rec.ProjectId;
+        var templateProject = unfinished && cron.Metadata.Annotations!.TryGetValue(ProjectMoveFromAnnotation, out var from)
+            ? (from.Length == 0 ? null : from) : rec.ProjectId;
         if (!unfinished && rec.ProjectId == projectId)
             return (await GetSessionAsync(owner, id, ct))!;
         var wasSuspended = unfinished ? stored == "true" : cron.Spec.Suspend == true;
@@ -1709,7 +1719,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             // source's variables. The resourceVersion makes the patch fail on a concurrent change.
             var suspend = new V1Patch(JsonSerializer.Serialize(new {
                 metadata = new { resourceVersion = cron.Metadata.ResourceVersion,
-                    annotations = new Dictionary<string, string> { [ProjectMoveSuspendAnnotation] = wasSuspended ? "true" : "false" } },
+                    annotations = new Dictionary<string, string> { [ProjectMoveSuspendAnnotation] = wasSuspended ? "true" : "false",
+                        [ProjectMoveFromAnnotation] = rec.ProjectId ?? "" } },
                 spec = new { suspend = true } }), V1Patch.PatchType.MergePatch);
             await _k8s.BatchV1.PatchNamespacedCronJobAsync(suspend, name, _opts.Namespace, cancellationToken: ct);
         }
@@ -1727,14 +1738,17 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             }
             catch
             {
-                // Nothing has moved yet: the schedule goes back to how the owner left it. Not after
-                // an interrupted move, whose template still holds the previous project's names.
-                if (!unfinished) await RestoreScheduleAsync(name, wasSuspended);
+                // The record has not changed in this attempt. If it still matches the template, the
+                // schedule goes back to how the owner left it; otherwise (an earlier attempt stored
+                // the destination) it stays suspended and visibly unfinished until a retry succeeds.
+                if (templateProject == originalProject)
+                    await RestoreScheduleAsync(name, wasSuspended);
                 throw;
             }
         }
-        // From here the record names the destination. A failure leaves the schedule suspended
-        // with the annotation, so no run starts with a mixed template, and a retry finishes the move.
+        // From here the record names the destination. A failure leaves the schedule suspended and
+        // annotated: no run starts with a mixed template, the session reports ScheduleMoveUnfinished,
+        // and a retry finishes the move.
         var (envNames, _) = await WriteSessionSecretsAsync(owner, rec,
             (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data, ct);
         cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync(name, _opts.Namespace, cancellationToken: ct);
@@ -1743,7 +1757,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             new { op = "test", path = "/metadata/resourceVersion", value = (object)cron.Metadata.ResourceVersion },
             new { op = "replace", path = $"/spec/jobTemplate/spec/template/spec/containers/{container}/env", value = (object)env },
             new { op = "replace", path = "/spec/suspend", value = (object)wasSuspended },
-            new { op = "remove", path = "/metadata/annotations/" + ProjectMoveSuspendAnnotation.Replace("~", "~0").Replace("/", "~1") }
+            new { op = "remove", path = AnnotationPath(ProjectMoveSuspendAnnotation) },
+            new { op = "remove", path = AnnotationPath(ProjectMoveFromAnnotation) }
         };
         await _k8s.BatchV1.PatchNamespacedCronJobAsync(new V1Patch(KubernetesJson.Serialize(operations), V1Patch.PatchType.JsonPatch),
             name, _opts.Namespace, cancellationToken: ct);
@@ -1800,7 +1815,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         try
         {
             var restore = new V1Patch(JsonSerializer.Serialize(new {
-                metadata = new { annotations = new Dictionary<string, string?> { [ProjectMoveSuspendAnnotation] = null } },
+                metadata = new { annotations = new Dictionary<string, string?> { [ProjectMoveSuspendAnnotation] = null, [ProjectMoveFromAnnotation] = null } },
                 spec = new { suspend = suspended } }), V1Patch.PatchType.MergePatch);
             await _k8s.BatchV1.PatchNamespacedCronJobAsync(restore, name, _opts.Namespace);
         }
@@ -2197,13 +2212,18 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                 byId[sid] = p;
 
         var scheduledTemplates = new Dictionary<string, V1PodSpec>();
+        var unfinishedMoves = new HashSet<string>();
         if (records.Any(r => r.Mode == SessionMode.Scheduled))
         {
             var schedules = await _k8s.BatchV1.ListNamespacedCronJobAsync(_opts.Namespace,
                 labelSelector: $"{OwnerLabel}={Sanitize(owner)},{ComponentLabel}=cronjob",
                 resourceVersion: "0", cancellationToken: ct);
             foreach (var cron in schedules.Items.Where(cron => cron.Metadata.Labels.ContainsKey(SessionLabel)))
+            {
                 scheduledTemplates[cron.Metadata.Labels[SessionLabel]] = cron.Spec.JobTemplate.Spec.Template.Spec;
+                if (cron.Metadata.Annotations?.ContainsKey(ProjectMoveSuspendAnnotation) == true)
+                    unfinishedMoves.Add(cron.Metadata.Labels[SessionLabel]);
+            }
         }
         var browserSummaries = await _browsers.GetSummariesAsync(
             records.Select(record => record.Id).ToArray(), ct);
@@ -2230,6 +2250,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
                     .Where(s => secretResolver.Effective(r).Contains(s.Id)).ToList(),
                 ResourcesPendingRestart = ResourcesPendingRestart(r, pod),
                 SecretsPendingRestart = SecretsPendingRestart(pod, envVersions.GetValueOrDefault(r.Id)),
+                ScheduleMoveUnfinished = unfinishedMoves.Contains(r.Id),
                 OutdatedImage = RuntimeImageOutdated(r,
                     pod ?? (scheduledTemplates.TryGetValue(r.Id, out var template) ? new V1Pod { Spec = template } : null)) });
         }
@@ -2244,12 +2265,14 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await ObserveFailureAsync(rec, pod, ct);
         var info = await ToInfoAsync(rec, EffectivePhase(rec, pod), pod?.Status?.PodIP,
             await _browsers.GetSummaryAsync(id, ct), ct);
+        var moveUnfinished = false;
         if (pod is null && rec.Mode == SessionMode.Scheduled)
         {
             try
             {
                 var cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync($"session-{id}", _opts.Namespace, cancellationToken: ct);
                 pod = new V1Pod { Spec = cron.Spec.JobTemplate.Spec.Template.Spec };
+                moveUnfinished = cron.Metadata.Annotations?.ContainsKey(ProjectMoveSuspendAnnotation) == true;
             }
             catch (k8s.Autorest.HttpOperationException ex) when (ex.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
             {
@@ -2257,6 +2280,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
             }
         }
         return info with { OutdatedImage = RuntimeImageOutdated(rec, pod), ResourcesPendingRestart = ResourcesPendingRestart(rec, pod),
+            ScheduleMoveUnfinished = moveUnfinished,
             SecretsPendingRestart = await SecretsPendingRestartAsync(id, pod, ct) };
     }
 

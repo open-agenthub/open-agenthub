@@ -35,6 +35,17 @@ describe('moving a scheduled session', () => {
     expect(api.pauseSession).not.toHaveBeenCalled()
   })
 
+  it('offers to finish an interrupted move into the project the session already names', async () => {
+    vi.mocked(api.moveSessionProject).mockResolvedValue({})
+    const wrapper = mount(MoveSessionDialog, { attachTo: document.body, props: { projects, sessions: [],
+      session: { id: 's', title: 'Nightly', projectId: 'target', mode: 'Scheduled', phase: 'Scheduled', scheduleMoveUnfinished: true } } })
+    expect(wrapper.get('[data-schedule-move-unfinished]').text()).toContain('schedule is paused')
+    expect(confirm(wrapper).text()).toBe('Finish move')
+    expect(confirm(wrapper).attributes('disabled')).toBeUndefined()
+    await confirm(wrapper).trigger('click'); await flushPromises()
+    expect(api.moveSessionProject).toHaveBeenCalledWith('s', 'target', { stopActiveRun: false })
+  })
+
   it('turns a run that started after the list was read into an explicit choice', async () => {
     vi.mocked(api.moveSessionProject)
       .mockRejectedValueOnce(Object.assign(new Error('A scheduled run is in progress.'), { code: 'scheduled_run_active' }))
