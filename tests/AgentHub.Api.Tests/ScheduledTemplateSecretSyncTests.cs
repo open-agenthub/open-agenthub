@@ -97,6 +97,9 @@ public class ScheduledTemplateSecretSyncTests
         Assert.True((await rig.Service.GetSessionAsync("owner", "sid"))!.ScheduleSecretsOutdated);
         Assert.True(Assert.Single(await rig.Service.ListSessionsAsync("owner")).ScheduleSecretsOutdated);
 
+        // The owner's retry while the cluster still refuses: an explained conflict, not a server error.
+        await Assert.ThrowsAsync<InvalidOperationException>(() => rig.Service.ApplyResourcesAsync("owner", "sid"));
+
         rig.Fault = null;
         var applied = await rig.Service.ApplyResourcesAsync("owner", "sid");
 

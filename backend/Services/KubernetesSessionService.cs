@@ -1452,7 +1452,15 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (record.Mode == SessionMode.Scheduled)
         {
             // The owner's retry for a template a sync could not update; nothing is restarted.
-            if (!await RefreshScheduledSecretEnvAsync(id, ct))
+            bool updated;
+            try { updated = await RefreshScheduledSecretEnvAsync(id, ct); }
+            // A refusal by the cluster (an admission policy, a conflict that outlasted the retries)
+            // is the owner's answer here, not a server error: the copy and the record are fine.
+            catch (k8s.Autorest.HttpOperationException e) when ((int)e.Response.StatusCode is >= 400 and < 500)
+            {
+                throw new InvalidOperationException("The cluster refused to update this schedule's template. It is retried at the next secret or project change.", e);
+            }
+            if (!updated)
                 throw new InvalidOperationException("This schedule's template cannot be updated now. Finish its project move, or recreate it if it predates session secrets.");
             return (await GetSessionAsync(owner, id, ct))!;
         }
