@@ -55,6 +55,10 @@ public interface ISessionService
     /// <summary>Rewrites the secret copies of the owner's sessions from the current store, project
     /// and session selections — after a project's selection changed. Default no-op.</summary>
     Task SyncSessionSecretsAsync(string owner, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>The owner's retry for withdrawn copies (#303): runs the strict sync and returns the
+    /// session. Throws <see cref="SessionSecretCopiesPendingException"/> while copies stay unwritable.</summary>
+    Task<SessionInfo> ResyncSessionSecretsAsync(string owner, string id, CancellationToken ct = default)
+        => throw new NotSupportedException();
     /// <summary>Refuses a project selection under which the project, or one of its sessions, would
     /// receive two secrets landing in the same place (#253). <paramref name="projectId"/> is null
     /// for a project being created. Default no-op, for test doubles without secrets.</summary>

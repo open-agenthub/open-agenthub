@@ -10,7 +10,7 @@ import EditSessionDialog from './EditSessionDialog.vue'
 const mocks = vi.hoisted(() => ({
   api: {
     listSecrets: vi.fn(), upsertSecret: vi.fn(), deleteSecret: vi.fn(), listSessions: vi.fn(),
-    applySessionResources: vi.fn(), updateSession: vi.fn(), listSecretRequests: vi.fn(),
+    applySessionResources: vi.fn(), resyncSessionSecrets: vi.fn(), updateSession: vi.fn(), listSecretRequests: vi.fn(),
     getCredentialStatus: vi.fn(), getAllowedAgents: vi.fn()
   },
   config: { gitEnabled: false }
@@ -74,6 +74,33 @@ describe('the schedule note', () => {
     await wrapper.get('[data-schedule-secrets-update]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Finish its project move')
+  })
+})
+
+// #303: copies withdrawn after a failed rewrite are visible on the session, with a retry, and the
+// restart is still offered because the running process keeps what it started with.
+describe('the withdrawn note', () => {
+  const withdrawn = { ...running, secretsWithdrawn: true, secretsPendingRestart: true }
+
+  it('says the secrets are withdrawn, retries without restarting, and still offers the restart', async () => {
+    mocks.api.resyncSessionSecrets.mockResolvedValue({ ...running, secretsWithdrawn: false })
+    const wrapper = mount(SecretRestartNote, { props: { session: withdrawn } })
+    expect(wrapper.get('[data-secrets-withdrawn-note]').text()).toContain('secrets are withdrawn')
+    expect(wrapper.get('[data-secret-restart-note]').text()).toContain('including any secret deleted since it started')
+    expect(wrapper.get('[data-secret-restart-note]').text()).not.toContain('already current')
+    await wrapper.get('[data-secrets-resync]').trigger('click')
+    await flushPromises()
+    expect(mocks.api.resyncSessionSecrets).toHaveBeenCalledWith('r1')
+    expect(mocks.api.applySessionResources).not.toHaveBeenCalled()
+    expect(wrapper.emitted('restarted')[0][0].secretsWithdrawn).toBe(false)
+  })
+
+  it('shows a retry that is still refused', async () => {
+    mocks.api.resyncSessionSecrets.mockRejectedValue(new Error('1 session(s) may still hold the previous secret values'))
+    const wrapper = mount(SecretRestartNote, { props: { session: withdrawn } })
+    await wrapper.get('[data-secrets-resync]').trigger('click')
+    await flushPromises()
+    expect(wrapper.get('[data-secrets-withdrawn-note] [role="alert"]').text()).toContain('may still hold')
   })
 })
 

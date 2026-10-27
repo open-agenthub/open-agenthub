@@ -37,7 +37,19 @@ public class SecretsPendingRestartTests
         // Unknown is not "changed": nagging every session started before the upgrade would teach
         // the owner to ignore the note.
         Assert.False(KubernetesSessionService.SecretsPendingRestart(Pod(null), "57"));
-        Assert.False(KubernetesSessionService.SecretsPendingRestart(Pod("41"), null));
+    }
+
+    [Fact]
+    public void AWithdrawnCopy_LeavesTheRunningProcessWithWhatItStartedWith()
+    {
+        // #303: the copy is gone, the process is not; a deleted variable stays in it until a restart.
+        Assert.True(KubernetesSessionService.SecretsPendingRestart(Pod("41"), null));
+        Assert.True(KubernetesSessionService.SecretsWithdrawn(Pod("41"), null, copyExists: false));
+        Assert.False(KubernetesSessionService.SecretsWithdrawn(Pod("41"), null, copyExists: true));
+        // A pod from before recorded starts, or one that is not live, says nothing about copies.
+        Assert.False(KubernetesSessionService.SecretsWithdrawn(Pod(null), null, copyExists: false));
+        Assert.False(KubernetesSessionService.SecretsWithdrawn(Pod("41", phase: "Succeeded"), null, copyExists: false));
+        Assert.False(KubernetesSessionService.SecretsWithdrawn(null, null, copyExists: false));
     }
 
     [Fact]

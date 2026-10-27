@@ -411,6 +411,20 @@ loop, so the remaining sessions were not rewritten either.
   live agent pod and scheduled sessions, not only sessions with copies. A later sync therefore
   gives a running pod its files back, and a schedule's runs their copies, without waiting for a
   spawn that neither goes through. Every other session is still brought up to date.
+- A withdrawal is not silent. It takes all of the session's secrets, not only the deleted one, so
+  a running agent's files disappear until the copies are written again. `secretsWithdrawn` is
+  derived at read time: a live pod that recorded its start, or a schedule whose template has the
+  variable block, but no variable copy. The session view shows a notice with **Retry**
+  (`resync-secrets`, the strict sync, nothing restarted), the sidebar marks the session, and
+  Settings → Secrets lists it after a change.
+- **What this does not cover: a running process's environment.** Fail-closed applies to the copies,
+  so to files in a running pod and to every pod or run started from now on. A variable is fixed
+  when the container starts, so a running agent keeps a deleted variable's value until it
+  restarts, as for any change in #255. A missing variable copy therefore counts as
+  `secretsPendingRestart` for a pod that recorded its start, so the #255 restart (`apply-resources`)
+  is offered with the note "including any secret deleted since it started". Before #303, a missing
+  copy reported nothing pending and the restart was not offered. Pause the session to remove the
+  value at once.
 - Only when the withdrawal fails too does the request answer 503 `secret_copies_pending`. That is
   the one case where a copy may still hold the value. The store change has happened, and Settings →
   Secrets keeps the notice with **Retry**. A repeated delete runs the strict sync again, even

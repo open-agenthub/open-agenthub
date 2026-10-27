@@ -143,6 +143,7 @@ export const api = {
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
   pauseAndResumeRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/pause-and-resume-runtime`),
   applySessionResources: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/apply-resources`),
+  resyncSessionSecrets: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/resync-secrets`),
   updateRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/update-runtime`),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),

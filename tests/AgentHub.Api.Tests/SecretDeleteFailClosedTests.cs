@@ -37,9 +37,22 @@ public class SecretDeleteFailClosedTests
         Assert.False(rig.HasSecret(Env));
         Assert.False(rig.HasSecret(Files));
 
+        // Not silent: the session says its secrets are withdrawn, in its own view and in the list.
+        Assert.True((await rig.Service.GetSessionAsync("owner", "sid"))!.SecretsWithdrawn);
+        Assert.True(Assert.Single(await rig.Service.ListSessionsAsync("owner")).SecretsWithdrawn);
+
+        // The owner's retry, while the copies still cannot be written, reports that rather than success.
+        await Assert.ThrowsAsync<SessionSecretCopiesPendingException>(async () =>
+        {
+            rig.RefuseCopyDeletes = true;
+            try { await rig.Service.ResyncSessionSecretsAsync("owner", "sid"); }
+            finally { rig.RefuseCopyDeletes = false; }
+        });
+
         // A scheduled session is synced by its record, so its copies come back without the value.
         rig.Fault = null;
-        await rig.Service.SyncSessionSecretsAsync("owner");
+        var resynced = await rig.Service.ResyncSessionSecretsAsync("owner", "sid");
+        Assert.False(resynced.SecretsWithdrawn);
         Assert.True(rig.HasSecret(Env));
         Assert.False(rig.EnvCopy.ContainsKey("OLD_NAME"));
     }
