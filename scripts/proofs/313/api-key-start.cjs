@@ -314,7 +314,7 @@ function podEnv() {
       await new Promise(r => setTimeout(r, 8000));
       try { second.kill('SIGKILL'); } catch {}
       const live = JSON.parse(fs.readFileSync(path.join(ROOT, 'home/.claude.json'), 'utf8'));
-      turn.secondStart = { liveOauthAccountFields: Object.keys(live.oauthAccount || {}),
+      turn.secondStart = { liveHasOauthAccount: live.oauthAccount !== undefined,
         backupsOnDisk: fs.readdirSync(path.join(ROOT, 'home/.claude/backups')).length };
       const before = uploads.length;
       const end3 = Date.now() + 75000;
@@ -342,7 +342,7 @@ function podEnv() {
         const text = e.body.toString('utf8');
         return { name: e.name.replace(/\d{10,}/, '<ts>'), keys: Object.keys(config),
           mcpServers: Object.fromEntries(Object.entries(config.mcpServers || {}).map(([n, v]) => [n, { env: Object.keys(v.env || {}), headers: Object.keys(v.headers || {}) }])),
-          oauthAccountFields: Object.keys(config.oauthAccount || {}),
+          hasOauthAccount: config.oauthAccount !== undefined,
           hasExampleEmail: text.includes('@example.com'),
           secretsFound: Object.entries(secrets).filter(([, v]) => text.includes(v)).map(([k]) => k) };
       })

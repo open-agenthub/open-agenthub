@@ -1,7 +1,7 @@
 // #313 diagnostic, a copy of scripts/proofs/305/entrypoint-sign-in.cjs (run it as `login`): after
 // the fake-identity sign-in, which the #305 runtime does before the TUI starts, it starts the CLI
-// once more and reports, for each ~/.claude/backups file, the key names, the oauthAccount field
-// names and whether the example e-mail occurs — no values. Below, the #305 description:
+// once more and reports, for each ~/.claude/backups file, the key names, whether it records an
+// account (oauthAccount) and whether the example e-mail occurs — no values. Below, the #305 description:
 //
 // #305 proof: the REAL claude/entrypoint.sh and common/server.js from this checkout, with the
 // pinned Claude Code, decide from the pod's credentials whether the session signs in by itself.
@@ -249,15 +249,15 @@ function sanitize(rows) {
     // `claude` in the shell tab, would do.
     const second = require('node:child_process').spawn(path.join(claudeBin, 'claude'), ['-p', 'hi'], { env: { PATH: process.env.PATH, HOME: path.join(ROOT, 'home'), ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' }, stdio: 'ignore' });
     await new Promise(r => setTimeout(r, 8000)); try { second.kill('SIGKILL'); } catch {}
-    result.claudeJsonBackupsOnDisk = (() => { try { return fs.readdirSync(bdir).map(f => { const c = JSON.parse(fs.readFileSync(path.join(bdir, f), 'utf8')); return { keys: Object.keys(c), oauthAccountFields: Object.keys(c.oauthAccount || {}), hasExampleEmail: JSON.stringify(c).includes('person@example.com') }; }); } catch (e) { return String(e.message); } })();
+    result.claudeJsonBackupsOnDisk = (() => { try { return fs.readdirSync(bdir).map(f => { const c = JSON.parse(fs.readFileSync(path.join(bdir, f), 'utf8')); return { keys: Object.keys(c), hasOauthAccount: c.oauthAccount !== undefined, hasExampleEmail: JSON.stringify(c).includes('person@example.com') }; }); } catch (e) { return String(e.message); } })();
     const live = JSON.parse(fs.readFileSync(path.join(ROOT, 'home/.claude.json'), 'utf8'));
-    result.liveConfig = { keys: Object.keys(live), oauthAccountFields: Object.keys(live.oauthAccount || {}) };
+    result.liveConfig = { keys: Object.keys(live), hasOauthAccount: live.oauthAccount !== undefined };
     if (st) { const tar = require('node:zlib').gunzipSync(st.body);
       for (let at = 0; at + 512 <= tar.length;) { const name = tar.toString('utf8', at, at + 100).replace(/\0.*$/s, ''); if (!name) break;
         const size = parseInt(tar.toString('utf8', at + 124, at + 136).replace(/\0.*$/s, '').trim() || '0', 8);
         result.names = (result.names || []).concat(name.split('/').slice(0, 2).join('/'));
         if (name.includes('.claude/backups/') && size) { let c = {}; try { c = JSON.parse(tar.subarray(at + 512, at + 512 + size).toString()); } catch {}
-          result.backups.push({ keys: Object.keys(c), oauthAccountFields: Object.keys(c.oauthAccount || {}), hasExampleEmail: JSON.stringify(c).includes('person@example.com') }); }
+          result.backups.push({ keys: Object.keys(c), hasOauthAccount: c.oauthAccount !== undefined, hasExampleEmail: JSON.stringify(c).includes('person@example.com') }); }
         at += 512 + Math.ceil(size / 512) * 512; } }
     result.scrollbackMarksOmission = text.some(t => t.includes('[Sign-in terminal output omitted]'));
   }
