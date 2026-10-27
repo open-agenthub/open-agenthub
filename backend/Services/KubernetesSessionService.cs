@@ -1674,12 +1674,147 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         return await UpdateSessionCoreAsync(owner, id, req, ct);
     }
 
+    /// <summary>The CronJob's own <c>spec.suspend</c> from before a project move suspended it.
+    /// Present only while a move is unfinished, so a retry completes it instead of mistaking the
+    /// already-stored destination for "nothing to do" and leaving the schedule suspended.</summary>
+    public const string ProjectMoveSuspendAnnotation = "agenthub.dev/project-move-suspend";
+
+    public async Task<SessionInfo> MoveScheduledSessionAsync(string owner, string id, string? projectId, bool stopActiveRun,
+        CancellationToken ct = default)
+    {
+        await using var held = _runtimeUpdateLock is null ? null : await _runtimeUpdateLock.TryAcquireAsync(id, ct);
+        if (_runtimeUpdateLock is not null && held is null)
+            throw new InvalidOperationException("Session maintenance is already in progress.");
+        var rec = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException($"Session {id} not found.");
+        if (rec.Mode != SessionMode.Scheduled) throw new ArgumentException("Only scheduled sessions move this way.");
+        if (projectId is not null && await _projects.GetAsync(owner, projectId, ct) is null)
+            throw new KeyNotFoundException("Project not found.");
+        var name = $"session-{id}";
+        V1CronJob cron;
+        try { cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync(name, _opts.Namespace, cancellationToken: ct); }
+        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        { throw new InvalidOperationException("The schedule of this session is missing. Recreate it in the destination project."); }
+        string? stored = null;
+        var unfinished = cron.Metadata.Annotations?.TryGetValue(ProjectMoveSuspendAnnotation, out stored) == true;
+        if (!unfinished && rec.ProjectId == projectId)
+            return (await GetSessionAsync(owner, id, ct))!;
+        var wasSuspended = unfinished ? stored == "true" : cron.Spec.Suspend == true;
+        // Checked before anything changes, so a schedule too old to update stays as it is.
+        ScheduledTemplateSecrets.Replace(cron.Spec.JobTemplate.Spec.Template.Spec, id, []);
+
+        if (!unfinished)
+        {
+            // Suspended first: a run the controller started between the active-run check and the
+            // template replacement would get the destination's files and file access with the
+            // source's variables. The resourceVersion makes the patch fail on a concurrent change.
+            var suspend = new V1Patch(JsonSerializer.Serialize(new {
+                metadata = new { resourceVersion = cron.Metadata.ResourceVersion,
+                    annotations = new Dictionary<string, string> { [ProjectMoveSuspendAnnotation] = wasSuspended ? "true" : "false" } },
+                spec = new { suspend = true } }), V1Patch.PatchType.MergePatch);
+            await _k8s.BatchV1.PatchNamespacedCronJobAsync(suspend, name, _opts.Namespace, cancellationToken: ct);
+        }
+        if (rec.ProjectId != projectId)
+        {
+            try
+            {
+                await EndActiveRunsAsync(id, name, stopActiveRun, ct);
+                rec.ProjectId = projectId;
+                await EnsureNoSecretConflictAsync(owner, rec, ct);
+                // Checked once more right before the record changes: a run admitted from the
+                // controller's cache just before the suspension reached it is caught here.
+                await EndActiveRunsAsync(id, name, stopActiveRun, ct);
+                await _store.UpsertAsync(rec, ct);
+            }
+            catch
+            {
+                // Nothing has moved yet: the schedule goes back to how the owner left it. Not after
+                // an interrupted move, whose template still holds the previous project's names.
+                if (!unfinished) await RestoreScheduleAsync(name, wasSuspended);
+                throw;
+            }
+        }
+        // From here the record names the destination. A failure leaves the schedule suspended
+        // with the annotation, so no run starts with a mixed template, and a retry finishes the move.
+        var (envNames, _) = await WriteSessionSecretsAsync(owner, rec,
+            (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data, ct);
+        cron = await _k8s.BatchV1.ReadNamespacedCronJobAsync(name, _opts.Namespace, cancellationToken: ct);
+        var (container, env) = ScheduledTemplateSecrets.Replace(cron.Spec.JobTemplate.Spec.Template.Spec, id, envNames);
+        var operations = new List<object> {
+            new { op = "test", path = "/metadata/resourceVersion", value = (object)cron.Metadata.ResourceVersion },
+            new { op = "replace", path = $"/spec/jobTemplate/spec/template/spec/containers/{container}/env", value = (object)env },
+            new { op = "replace", path = "/spec/suspend", value = (object)wasSuspended },
+            new { op = "remove", path = "/metadata/annotations/" + ProjectMoveSuspendAnnotation.Replace("~", "~0").Replace("/", "~1") }
+        };
+        await _k8s.BatchV1.PatchNamespacedCronJobAsync(new V1Patch(KubernetesJson.Serialize(operations), V1Patch.PatchType.JsonPatch),
+            name, _opts.Namespace, cancellationToken: ct);
+        _log.LogInformation("Moved scheduled session {Id} to another project", id);
+        return (await GetSessionAsync(owner, id, ct))!;
+    }
+
+    /// <summary>Refuses, or with <paramref name="stop"/> ends, the session's runs that have not
+    /// finished, and returns once their pods are gone. A terminating pod still holds the source
+    /// project's variables and a valid callback token, so "deleted" is not enough.</summary>
+    private async Task EndActiveRunsAsync(string id, string cronName, bool stop, CancellationToken ct)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(TimeSpan.FromMinutes(2));
+        try
+        {
+            while (true)
+            {
+                var jobs = (await _k8s.BatchV1.ListNamespacedJobAsync(_opts.Namespace, cancellationToken: deadline.Token)).Items
+                    .Where(job => job.Metadata.OwnerReferences?.Any(r => r.Kind == "CronJob" && r.Name == cronName) == true
+                        && job.Status?.Conditions?.Any(c => c.Type is "Complete" or "Failed" && c.Status == "True") != true)
+                    .ToList();
+                var pods = (await _k8s.CoreV1.ListNamespacedPodAsync(_opts.Namespace,
+                    labelSelector: $"{SessionLabel}={id},{ComponentLabel}=agent", cancellationToken: deadline.Token)).Items
+                    .Where(pod => pod.Metadata.DeletionTimestamp is not null || pod.Status?.Phase is not ("Succeeded" or "Failed"))
+                    .ToList();
+                if (jobs.Count == 0 && pods.Count == 0) return;
+                if (!stop)
+                    throw new ScheduledRunActiveException("A scheduled run is in progress. Wait for it to finish, or stop it and move.");
+                foreach (var job in jobs.Where(j => j.Metadata.DeletionTimestamp is null))
+                    await IgnoreMissingAsync(() => _k8s.BatchV1.DeleteNamespacedJobAsync(job.Metadata.Name, _opts.Namespace,
+                        propagationPolicy: "Foreground", cancellationToken: deadline.Token));
+                foreach (var pod in pods.Where(p => p.Metadata.DeletionTimestamp is null))
+                    await IgnoreMissingAsync(() => _k8s.CoreV1.DeleteNamespacedPodAsync(pod.Metadata.Name, _opts.Namespace,
+                        cancellationToken: deadline.Token));
+                await Task.Delay(TimeSpan.FromMilliseconds(500), deadline.Token);
+            }
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException("The stopped run is still terminating. Retry the move once it has stopped.");
+        }
+    }
+
+    private static async Task IgnoreMissingAsync(Func<Task> delete)
+    {
+        try { await delete(); }
+        catch (k8s.Autorest.HttpOperationException e) when (e.Response.StatusCode == System.Net.HttpStatusCode.NotFound) { }
+    }
+
+    private async Task RestoreScheduleAsync(string name, bool suspended)
+    {
+        // Not the request's token: a cancelled request must not leave the schedule suspended.
+        try
+        {
+            var restore = new V1Patch(JsonSerializer.Serialize(new {
+                metadata = new { annotations = new Dictionary<string, string?> { [ProjectMoveSuspendAnnotation] = null } },
+                spec = new { suspend = suspended } }), V1Patch.PatchType.MergePatch);
+            await _k8s.BatchV1.PatchNamespacedCronJobAsync(restore, name, _opts.Namespace);
+        }
+        catch (Exception e) { _log.LogWarning(e, "Could not restore the schedule of {Name} after a refused move", name); }
+    }
+
     private async Task<SessionInfo> UpdateSessionCoreAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct)
     {
         var rec = await _store.GetAsync(owner, id, ct)
             ?? throw new KeyNotFoundException($"Session {id} not found.");
         if (req.ProjectIdSpecified && req.ProjectId != rec.ProjectId) {
             var projectPod = await TryReadPodAsync($"session-{id}", ct);
+            if (rec.Mode == SessionMode.Scheduled)
+                throw new InvalidOperationException("Move a scheduled session with the project move, which also replaces its schedule's template.");
             if (rec.Status is "Running" or "Pending" or "Scheduled" || projectPod?.Status?.Phase is "Running" or "Pending")
                 throw new InvalidOperationException("Pause the session before moving it to another project. Resume afterwards to apply the new project secrets and settings.");
         }

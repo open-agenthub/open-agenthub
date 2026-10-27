@@ -163,6 +163,14 @@ public interface ISessionService
         CancellationToken ct = default) => throw new NotSupportedException();
     /// <summary>Partial update of session settings; non-title changes apply on the next resume.</summary>
     Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default);
+    /// <summary>
+    /// Moves a scheduled session to another project (null = none) and replaces the project-bound
+    /// part of its workload template, so its next run receives the destination's secrets only
+    /// (docs/session-organization.md). An active run is refused with
+    /// <see cref="ScheduledRunActiveException"/> unless <paramref name="stopActiveRun"/> is set.
+    /// </summary>
+    Task<SessionInfo> MoveScheduledSessionAsync(string owner, string id, string? projectId, bool stopActiveRun,
+        CancellationToken ct = default) => throw new NotSupportedException();
     Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default);
     Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Clears the "waiting for reply" flag (e.g. once the user opens the terminal).</summary>
