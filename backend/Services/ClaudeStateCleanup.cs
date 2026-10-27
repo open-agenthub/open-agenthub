@@ -2,6 +2,7 @@ using System.Formats.Tar;
 using System.IO.Compression;
 using System.Net;
 using AgentHub.Api.Persistence;
+using AgentHub.Api.Models;
 using AgentHub.Api.Storage;
 using k8s;
 
@@ -16,7 +17,13 @@ public sealed class ClaudeStateCleanup(IArtifactStore artifacts, ISessionStore s
     public sealed record Result(int Scanned, int Missing, int Clean, int Rewritten, int Skipped, int Failed);
     public const int MaxArchiveBytes = 256 * 1024 * 1024;
 
-    public async Task<Result> RunAsync(string owner, bool apply, CancellationToken ct)
+    public Task<Result> RunAsync(string owner, bool apply, CancellationToken ct)
+        => RunCoreAsync(owner, apply, [AgentKind.Claude], false, ct);
+
+    public Task<Result> RunProviderLoginsAsync(string owner, bool apply, CancellationToken ct)
+        => RunCoreAsync(owner, apply, Enum.GetValues<AgentKind>(), true, ct);
+
+    private async Task<Result> RunCoreAsync(string owner, bool apply, AgentKind[] agents, bool removeLogins, CancellationToken ct)
     {
         if (!artifacts.IsConfigured) throw new InvalidOperationException("Object storage is not configured.");
         var ownerPrefix = $"sessions/{KubernetesSessionService.OwnerKey(owner)}/";
@@ -25,29 +32,33 @@ public sealed class ClaudeStateCleanup(IArtifactStore artifacts, ISessionStore s
         {
             if (!prefix.StartsWith(ownerPrefix, StringComparison.Ordinal) || SessionStorageCleanup.SessionId(prefix) is null)
                 continue;
-            scanned++;
-            try
+            foreach (var agent in agents)
             {
-                var id = SessionStorageCleanup.SessionId(prefix)!;
-                await using var held = await locks.TryAcquireAsync(id, ct);
-                if (held is null) { skipped++; continue; }
-                var session = await sessions.GetByIdAsync(id, ct);
-                if ((session is not null && session.Owner != owner) || await HasProducerAsync(id, ct))
-                { skipped++; continue; }
-                await using var input = await artifacts.OpenReadAsync(prefix + "claude-state.tgz", ct);
-                if (input is null) { missing++; continue; }
-                using var output = await RemoveBackupsAsync(input, ct);
-                if (output is null) { clean++; continue; }
-                if (!apply) { rewritten++; continue; }
-                if (!await artifacts.TryPutStreamAsync(prefix + "claude-state.tgz", output, "application/gzip", output.Length, ct))
-                    throw new IOException("Object storage is unavailable.");
-                rewritten++;
-            }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException or Amazon.Runtime.AmazonServiceException or
-                Amazon.Runtime.AmazonClientException or HttpRequestException or k8s.Autorest.HttpOperationException)
-            {
-                // Counts keep malformed tar names and storage error messages from exposing credentials.
-                failed++;
+                scanned++;
+                try
+                {
+                    var id = SessionStorageCleanup.SessionId(prefix)!;
+                    await using var held = await locks.TryAcquireAsync(id, ct);
+                    if (held is null) { skipped++; continue; }
+                    var session = await sessions.GetByIdAsync(id, ct);
+                    if ((session is not null && session.Owner != owner) || await HasProducerAsync(id, ct))
+                    { skipped++; continue; }
+                    var key = IArtifactStore.StateKey(KubernetesSessionService.OwnerKey(owner), id, agent);
+                    await using var input = await artifacts.OpenReadAsync(key, ct);
+                    if (input is null) { missing++; continue; }
+                    using var output = await RewriteAsync(input, agent, removeLogins, ct);
+                    if (output is null) { clean++; continue; }
+                    if (!apply) { rewritten++; continue; }
+                    if (!await artifacts.TryPutStreamAsync(key, output, "application/gzip", output.Length, ct))
+                        throw new IOException("Object storage is unavailable.");
+                    rewritten++;
+                }
+                catch (Exception ex) when (ex is IOException or InvalidDataException or FormatException or Amazon.Runtime.AmazonServiceException or
+                    Amazon.Runtime.AmazonClientException or HttpRequestException or k8s.Autorest.HttpOperationException)
+                {
+                    // Counts keep malformed tar names and storage error messages from exposing credentials.
+                    failed++;
+                }
             }
         }
         return new Result(scanned, missing, clean, rewritten, skipped, failed);
@@ -73,7 +84,13 @@ public sealed class ClaudeStateCleanup(IArtifactStore artifacts, ISessionStore s
         { return false; }
     }
 
-    public static async Task<MemoryStream?> RemoveBackupsAsync(Stream input, CancellationToken ct)
+    public static Task<MemoryStream?> RemoveBackupsAsync(Stream input, CancellationToken ct)
+        => RewriteAsync(input, AgentKind.Claude, false, ct);
+
+    public static Task<MemoryStream?> RemoveCredentialsAsync(Stream input, AgentKind agent, CancellationToken ct)
+        => RewriteAsync(input, agent, true, ct);
+
+    private static async Task<MemoryStream?> RewriteAsync(Stream input, AgentKind agent, bool removeLogins, CancellationToken ct)
     {
         using var raw = new MemoryStream();
         using (var gzip = new GZipStream(input, CompressionMode.Decompress, leaveOpen: true))
@@ -100,7 +117,8 @@ public sealed class ClaudeStateCleanup(IArtifactStore artifacts, ISessionStore s
             if (end > raw.Length) throw new InvalidDataException("Truncated tar entry.");
             var name = entry.Name;
             while (name.StartsWith("./", StringComparison.Ordinal)) name = name[2..];
-            if (name.TrimEnd('/') == ".claude/backups" || name.StartsWith(".claude/backups/", StringComparison.Ordinal))
+            if ((agent == AgentKind.Claude && (name.TrimEnd('/') == ".claude/backups" || name.StartsWith(".claude/backups/", StringComparison.Ordinal))) ||
+                (removeLogins && StateArchiveCredentials.Contains(agent, name)))
                 removed = true;
             else
             {

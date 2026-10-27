@@ -13,6 +13,16 @@ public sealed class AdminClaudeStateCleanupController(AdminAccess access, Claude
 {
     public sealed record CleanupRequest(string Owner, bool Apply = false);
 
+    [HttpPost("/api/admin/session-storage-cleanup/provider-logins")]
+    public async Task<IActionResult> ProviderLogins(CleanupRequest request, CancellationToken ct)
+    {
+        var admin = User.FindFirstValue("preferred_username") ?? User.FindFirstValue(ClaimTypes.NameIdentifier) ?? "dev";
+        if (!await access.IsAdminAsync(admin, ct)) return Forbid();
+        if (string.IsNullOrWhiteSpace(request.Owner) || request.Owner.Length > 512)
+            return BadRequest(new { error = "An owner is required." });
+        return Ok(await cleanup.RunProviderLoginsAsync(request.Owner, request.Apply, ct));
+    }
+
     [HttpPost]
     public async Task<IActionResult> Run(CleanupRequest request, CancellationToken ct)
     {
