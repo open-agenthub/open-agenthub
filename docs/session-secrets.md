@@ -234,10 +234,47 @@ request, and widening the project for every session would give it to agents that
 edit dialog's compatibility field `secretGrantIds` only revokes. The owner can now replace
 `secretGrants` explicitly, as described below.
 
-**Asking cannot widen a limit.** A session created by a restricted token, or spawned by another
-session, records a ceiling at creation (`sessions.secret_ceiling`): the token's secrets, or the
-parent's at the moment of the spawn. A grant outside it is `403 secret_not_allowed`. The field is
-set by the hub only and is ignored in a request body; otherwise the caller could lift its own limit.
+**Asking alone cannot widen a limit.** A session created by a restricted token, or spawned by
+another session, records a ceiling at creation (`sessions.secret_ceiling`): the token's secrets,
+or the parent's at the moment of the spawn. A grant outside it is `403 secret_not_allowed`. The
+field is set by the hub only and is ignored in a request body; otherwise the caller could lift its
+own limit.
+
+**The owner's answer widens it by that one secret (#330).** Until #330 the ceiling refused request
+answers as well. Every session an agent spawns has a ceiling, and a secret typed in to answer a
+request is new, so it was never inside one: the answer came back `403`, the value stayed stored,
+the session got nothing, and the request stayed open. The page did not say so either, because the
+error was shown inside the form that saving had just closed. Now an answer adds the secret to the
+ceiling of the requesting session, and to nothing else. Only the signed-in owner can answer
+(`/api/secret-requests` is not reachable with a personal API token or a session's callback
+token), so this is the same person who could have created the session with the secret in the first
+place. A session spawned from it later still gets at most what it holds. A refused answer (a name
+clash, a scheduled session) leaves the form open with the error and the typed value, and the request
+stays open for another try.
+
+**Storing and granting are one call.** The form used to store the value through `/api/secrets` and
+then answer with its id, so a refused grant left a stored secret nobody had been given. Now
+`POST /api/secret-requests/{id}/provide` takes the secret itself. A new secret is stored, granted,
+and removed again if the grant is refused. An existing one is granted first and only then given
+the new name or value, so a refusal changes nothing that other sessions receive. Answering with
+`secretId` alone, for a secret stored before, still works.
+
+**Who can widen a ceiling.** Only this call does, and only for the requesting session, with a
+non-inheritable grant. Checked against the real backend in API-key mode
+(`tests/SecretRequestProof/repro.mjs`, 20 checks):
+- the callback token of the requesting session and of its parent, sent as `Bearer` or
+  `X-Agent-Token`, gets `401` on `/api/secret-requests/{id}/provide`;
+- the agent's own spawn of a child asking for the answered secret, or for one outside the ceiling,
+  gets `403`: the answer is not inheritable unless the owner later says so in the session's grants;
+- the ceiling grew by exactly the answered ids.
+
+- *Rejected: leave the ceiling alone and tell the owner to grant the secret to the parent first.*
+  The parent's grant does not reach a child that is already running; its ceiling was fixed at the
+  spawn. The owner would have to recreate the session to answer a question it asked.
+- *Rejected: drop the ceiling of a session once its owner answers anything.* That would turn one
+  answer into consent to every secret the parent or token was kept from handing over.
+- Grants set in the edit dialog still stop at the ceiling. They are a list the client sends, not an
+  answer to the agent's request for one name.
 
 - *Rejected: the backend handing the value to the tool.* It would put the value into the MCP
   result and from there into the transcript, the one place the whole flow exists to avoid.
@@ -384,8 +421,8 @@ Disabling inheritance or deleting the parent also ends inherited access. Revoked
 are removed even from unstarted sessions so regranting a parent cannot resurrect old child access.
 
 Restricted token creation and grant updates check every grant id against the token's secret
-scope before looking up secrets. Existing session ceilings also constrain owner grant updates
-and request answers. The agent's spawn endpoint rejects owner-grant fields; it only attaches
+scope before looking up secrets. Existing session ceilings also constrain owner grant updates;
+a request answer widens the ceiling by the answered secret only (#330, above). The agent's spawn endpoint rejects owner-grant fields; it only attaches
 inherited grants computed by the service. A client cannot supply provenance or a ceiling.
 
 `secrets_list` reports `provenance` (`project`, `granted`, `inherited`, `requested`) and

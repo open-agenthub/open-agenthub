@@ -75,9 +75,9 @@ public interface ISessionService
         => ResolveSessionSecretIdsAsync(owner, session.ProjectId, SessionSecretSelection.Parse(session.SecretIdsJson), ct);
     /// <summary>
     /// Gives a session a stored secret in answer to its own request, and delivers it at once where
-    /// that is possible. Throws <see cref="KeyNotFoundException"/> (no such session),
-    /// <see cref="ArgumentException"/> (no such secret) or <see cref="CredentialScopeException"/>
-    /// (outside the limit the session was created with).
+    /// that is possible. The session's ceiling, if it has one, grows by this secret: the owner
+    /// answered for this session alone. Throws <see cref="KeyNotFoundException"/> (no such
+    /// session) or <see cref="ArgumentException"/> (no such secret, a name clash, a scheduled session).
     /// </summary>
     Task<SessionSecretGrant> GrantSessionSecretAsync(string owner, string sessionId, string secretId,
         CancellationToken ct = default) => throw new NotSupportedException();

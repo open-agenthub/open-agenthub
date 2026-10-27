@@ -184,7 +184,8 @@ export const api = {
   // stored secret granted to that one session, or a refusal.
   listSecretRequests: (sessionId) => req('GET', sessionId ? `/secret-requests?sessionId=${encodeURIComponent(sessionId)}` : '/secret-requests'),
   getSecretRequest: (id) => req('GET', `/secret-requests/${encodeURIComponent(id)}`),
-  provideSecretRequest: (id, secretId) => req('POST', `/secret-requests/${encodeURIComponent(id)}/provide`, { secretId }),
+  // With the secret itself it is stored and granted in one call, and nothing stays stored if the grant is refused (#330).
+  provideSecretRequest: (id, secret) => req('POST', `/secret-requests/${encodeURIComponent(id)}/provide`, { secret }),
   refuseSecretRequest: (id) => req('POST', `/secret-requests/${encodeURIComponent(id)}/refuse`),
   // A subscription login is captured from a session by its runtime rather than typed in here,
   // so this is the only way to get rid of one that stopped working.

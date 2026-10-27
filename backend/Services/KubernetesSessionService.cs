@@ -420,18 +420,12 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         var rec = await _store.GetAsync(owner, sessionId, ct) ?? throw new KeyNotFoundException($"Session {sessionId} not found.");
         if (rec.Mode == SessionMode.Scheduled)
             throw new ArgumentException("Recreate a scheduled session to change its secrets.");
-        if (SessionSecretSelection.Parse(rec.SecretCeilingJson) is { } allowed && !allowed.Contains(secretId))
-            throw new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
         var store = (await ReadSecretOrNullAsync(UserSecretsName(owner), ct))?.Data;
         var entry = SessionSecretStore.Read(store).FirstOrDefault(e => e.Id == secretId)
             ?? throw new ArgumentException($"No stored secret with id '{secretId}'.");
-        // The limit a restricted token or a spawning parent set holds for what the agent asks for
-        // later, too; otherwise asking would be the way around it.
-        var grants = SessionSecretGrants.Parse(rec.SecretGrantIdsJson).ToList();
-        if (!grants.Any(g => g.SecretId == secretId))
+        // Only the owner's answer reaches this; the ceiling grows by this one secret, see AnswerRequest.
+        if (SessionSecretGrants.AnswerRequest(rec, secretId))
         {
-            grants.Add(new(secretId, false, "requested"));
-            rec.SecretGrantIdsJson = SessionSecretGrants.Serialize(grants);
             await EnsureNoSecretConflictAsync(owner, rec, ct);
             await _store.UpsertAsync(rec, ct);
         }

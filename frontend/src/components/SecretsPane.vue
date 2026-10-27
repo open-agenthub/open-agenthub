@@ -160,7 +160,7 @@ async function save() {
   busy.value = true
   error.value = ''
   try {
-    const saved = await api.upsertSecret({
+    const secret = {
       // The id, not the name, says which secret this is: two may share a name, and a rename
       // keeps the id, so every project and session selection keeps pointing at it.
       id: draft.value.existing || undefined,
@@ -169,17 +169,25 @@ async function save() {
       // Omitted on an edit with the field left empty: the stored value is kept.
       value: draft.value.value.length ? draft.value.value : null,
       description: draft.value.description.trim() || null
-    })
-    // The typed value is not kept around in the page once it is stored.
-    draft.value = null
+    }
+    let saved
     if (answering.value) {
+      // One call stores and grants (#330). Before, the value was stored first and a refused grant
+      // left it stored, the session without it and the request open, with the error shown in a
+      // form that saving had already closed. Now the form stays open with the error and the
+      // typed value until the hub has granted.
       const request = answering.value
+      const grant = await api.provideSecretRequest(request.id, secret)
+      saved = { id: grant.secretId, name: grant.name, delivery: grant.delivery }
       answering.value = null
-      const grant = await api.provideSecretRequest(request.id, saved.id)
       granted.value = { ...grant, sessionId: request.sessionId, sessionTitle: request.sessionTitle }
       restartArmed.value = false
       dropRequestFromUrl()
+    } else {
+      saved = await api.upsertSecret(secret)
     }
+    // The typed value is not kept around in the page once it is stored.
+    draft.value = null
     await Promise.all([load(), loadRequests(), afterChange()])
     emit('saved', saved)
   } catch (e) {
@@ -346,7 +354,7 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
         <p v-if="namesakes.length" class="namesake" data-secret-namesake>Also stored as <code>{{ secretPlace(draft) }}</code>:
           {{ namesakes.map(s => s.description ? `${s.description} (${s.id})` : s.id).join(", ") }}. That is fine as long as no
           session receives both; the session and project dialogs refuse a choice that would.</p>
-        <p v-if="error" class="err" data-secret-error>{{ error }}</p>
+        <p v-if="error" class="err" role="alert" data-secret-error>{{ error }}</p>
         <div class="buttons">
           <button type="button" class="primary" data-secret-save :disabled="!canSave" @click="save">{{ busy ? 'Saving…' : editing ? 'Save' : 'Add secret' }}</button>
           <button type="button" data-secret-cancel @click="close">Cancel</button>

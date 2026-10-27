@@ -148,19 +148,115 @@ public class SecretRequestFlowTests
     }
 
     [Fact]
-    public async Task AGrantOutsideTheSessionsLimit_Is403_AndTheRequestStaysOpen()
+    public async Task AGrantTheHubRefuses_IsReported_AndTheRequestStaysOpen()
     {
         var world = new World();
-        world.Sessions.GrantError = new CredentialScopeException(CredentialScopeException.SecretNotAllowed);
+        world.Sessions.GrantError = new ArgumentException("Two secrets would both be the variable X_TOKEN.");
         var id = Body(await world.Agent().CreateSecretRequest("s1", new SecretRequestBody("X_TOKEN", "env", null), CancellationToken.None))
             .GetProperty("id").GetString()!;
 
         var result = await world.OwnerApi().Provide(id, new ProvideSecretRequestBody("sec1"), CancellationToken.None);
 
-        var status = Assert.IsType<ObjectResult>(result.Result);
-        Assert.Equal(StatusCodes.Status403Forbidden, status.StatusCode);
-        Assert.Equal("secret_not_allowed", status.Value);
+        Assert.IsType<BadRequestObjectResult>(result.Result);
         Assert.Equal(SecretRequest.Pending, (await world.Requests.GetAsync(id))!.Status);
+    }
+
+    // #330: the answer form used to store the value and then ask for the grant in a second call; a
+    // refused grant left the typed value stored with nothing pointing at it.
+    [Fact]
+    public async Task ANewSecretWhoseGrantIsRefused_IsNotLeftStored()
+    {
+        var world = new World();
+        world.Sessions.GrantError = new ArgumentException("Two secrets would both be the variable X_TOKEN.");
+        var id = Body(await world.Agent().CreateSecretRequest("s1", new SecretRequestBody("X_TOKEN", "env", null), CancellationToken.None))
+            .GetProperty("id").GetString()!;
+
+        var result = await world.OwnerApi().Provide(id, new ProvideSecretRequestBody(null,
+            new UpsertSessionSecretRequest("X_TOKEN", "env", "typed-value", null)), CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+        Assert.Equal(["store", "grant new0"], world.Sessions.Calls);
+        Assert.Equal(["new0"], world.Sessions.Deleted);
+        Assert.Empty(world.Sessions.Stored);
+        Assert.Equal(SecretRequest.Pending, (await world.Requests.GetAsync(id))!.Status);
+    }
+
+    [Fact]
+    public async Task AStoredSecretWhoseGrantIsRefused_KeepsItsValue()
+    {
+        var world = new World();
+        world.Sessions.Stored.Add(new SessionSecretInfo("old", "X_TOKEN", "env", null, DateTime.UtcNow));
+        world.Sessions.GrantError = new ArgumentException("Recreate a scheduled session to change its secrets.");
+        var id = Body(await world.Agent().CreateSecretRequest("s1", new SecretRequestBody("X_TOKEN", "env", null), CancellationToken.None))
+            .GetProperty("id").GetString()!;
+
+        var result = await world.OwnerApi().Provide(id, new ProvideSecretRequestBody(null,
+            new UpsertSessionSecretRequest("X_TOKEN", "env", "new-value", null, "old")), CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result.Result);
+        // Granted first, so the refusal comes before the new value is written anywhere.
+        Assert.Equal(["grant old"], world.Sessions.Calls);
+        Assert.Empty(world.Sessions.Deleted);
+    }
+
+    [Fact]
+    public async Task AnAnswerWithTheSecret_StoresGrantsAndCloses_InOneCall()
+    {
+        var world = new World();
+        world.Sessions.Stored.Add(new SessionSecretInfo("old", "X_TOKEN", "env", null, DateTime.UtcNow));
+        var fresh = Body(await world.Agent().CreateSecretRequest("s1", new SecretRequestBody("Y_TOKEN", "env", null), CancellationToken.None))
+            .GetProperty("id").GetString()!;
+        var known = Body(await world.Agent().CreateSecretRequest("s1", new SecretRequestBody("X_TOKEN", "env", null), CancellationToken.None))
+            .GetProperty("id").GetString()!;
+
+        Assert.IsType<OkObjectResult>((await world.OwnerApi().Provide(fresh, new ProvideSecretRequestBody(null,
+            new UpsertSessionSecretRequest("Y_TOKEN", "env", "y", null)), CancellationToken.None)).Result);
+        Assert.IsType<OkObjectResult>((await world.OwnerApi().Provide(known, new ProvideSecretRequestBody(null,
+            new UpsertSessionSecretRequest("X_TOKEN", "env", "x2", null, "old")), CancellationToken.None)).Result);
+
+        Assert.Equal(["store", "grant new1", "grant old", "update old"], world.Sessions.Calls);
+        Assert.Equal(SecretRequest.Provided, (await world.Requests.GetAsync(fresh))!.Status);
+        Assert.Equal(SecretRequest.Provided, (await world.Requests.GetAsync(known))!.Status);
+        Assert.Empty(world.Sessions.Deleted);
+    }
+
+    // Widening the ceiling is the owner's answer and nothing else: the answer is on the owner's
+    // authenticated API, and an agent's callback token authenticates only /internal routes, none
+    // of which grants (docs/session-secrets.md). The real-backend side is tests/SecretRequestProof.
+    [Fact]
+    public void OnlyTheAuthenticatedOwnerApi_CanAnswer()
+    {
+        Assert.NotNull(typeof(SecretRequestsController).GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AuthorizeAttribute), true).SingleOrDefault());
+        Assert.All(typeof(SecretRequestsController).GetMethods(), m =>
+            Assert.Empty(m.GetCustomAttributes(typeof(Microsoft.AspNetCore.Authorization.AllowAnonymousAttribute), true)));
+        // No route an agent can reach accepts a secret id to grant.
+        Assert.DoesNotContain(typeof(InternalController).GetMethods(), m => m.GetParameters().Any(p => p.ParameterType == typeof(ProvideSecretRequestBody)));
+    }
+
+    // #330: every session an agent spawns has a ceiling, and a secret typed in to answer its
+    // request was never inside it, so the answer used to be refused with secret_not_allowed.
+    [Fact]
+    public void AnAnswer_WidensTheCeilingByThatSecretOnly()
+    {
+        var spawned = new SessionRecord { Id = "child", Owner = Owner, Title = "t", CallbackToken = "x", SecretCeilingJson = """["a"]""" };
+
+        Assert.True(SessionSecretGrants.AnswerRequest(spawned, "new"));
+
+        Assert.Equal(["a", "new"], SessionSecretSelection.Parse(spawned.SecretCeilingJson));
+        var grant = Assert.Single(SessionSecretGrants.Parse(spawned.SecretGrantIdsJson));
+        Assert.Equal(new StoredSessionSecretGrant("new", false, "requested"), grant);
+        Assert.False(SessionSecretGrants.AnswerRequest(spawned, "new"));
+    }
+
+    [Fact]
+    public void AnAnswer_LeavesASessionWithoutCeilingWithoutOne_AndAnExistingGrantAsItWas()
+    {
+        var created = new SessionRecord { Id = "s", Owner = Owner, Title = "t", CallbackToken = "x",
+            SecretGrantIdsJson = SessionSecretGrants.Serialize([new("kept", true, "granted")]) };
+
+        Assert.False(SessionSecretGrants.AnswerRequest(created, "kept"));
+        Assert.Null(created.SecretCeilingJson);
+        Assert.Equal(new StoredSessionSecretGrant("kept", true, "granted"), Assert.Single(SessionSecretGrants.Parse(created.SecretGrantIdsJson)));
     }
 
     [Fact]
@@ -249,6 +345,23 @@ public class SecretRequestFlowTests
         public List<(string Session, string Secret)> Granted { get; } = [];
         public List<(string Session, string Owner)> Cleared { get; } = [];
         public Exception? GrantError { get; set; }
+        public List<string> Calls { get; } = [];
+        public List<string> Deleted { get; } = [];
+
+        public Task<SessionSecretInfo> UpsertSessionSecretAsync(string owner, UpsertSessionSecretRequest request, CancellationToken ct = default)
+        {
+            Calls.Add(request.Id is null ? "store" : $"update {request.Id}");
+            var info = new SessionSecretInfo(request.Id ?? $"new{Stored.Count}", request.Name!, request.Delivery ?? "env", request.Description, DateTime.UtcNow);
+            Stored.RemoveAll(s => s.Id == info.Id);
+            Stored.Add(info);
+            return Task.FromResult(info);
+        }
+        public Task DeleteSessionSecretAsync(string owner, string id, CancellationToken ct = default)
+        {
+            Deleted.Add(id);
+            Stored.RemoveAll(s => s.Id == id);
+            return Task.CompletedTask;
+        }
 
         public Task<IReadOnlyList<SessionSecretInfo>> ListSessionSecretsAsync(string owner, CancellationToken ct = default)
             => Task.FromResult<IReadOnlyList<SessionSecretInfo>>(Stored);
@@ -256,6 +369,7 @@ public class SecretRequestFlowTests
             => Task.FromResult<IReadOnlyList<string>>(Held);
         public Task<SessionSecretGrant> GrantSessionSecretAsync(string owner, string sessionId, string secretId, CancellationToken ct = default)
         {
+            Calls.Add($"grant {secretId}");
             if (GrantError is not null) throw GrantError;
             Granted.Add((sessionId, secretId));
             Held.Add(secretId);
