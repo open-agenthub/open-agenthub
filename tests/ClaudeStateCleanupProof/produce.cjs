@@ -31,10 +31,10 @@ const server = http.createServer((req, res) => {
 server.listen(0, '127.0.0.1', () => {
   // Use the real server and real PTY; only the provider command and pre-fix excludes differ.
   const source = `const {createCommonServer}=require(${JSON.stringify(path.join(repo, 'agent-runtime/common/server.js'))});
-const driver={...require(${JSON.stringify(path.join(repo, 'agent-runtime/claude/driver.js'))}),stateExcludes:[],prepare(){},buildCommand(){return {cmd:'bash',args:['-c','sleep 600']}}};
+const driver={...require(${JSON.stringify(path.join(repo, 'agent-runtime/claude/driver.js'))}),stateExcludes:['.claude/plugins/marketplaces'],prepare(){},buildCommand(){return {cmd:'bash',args:['-c','sleep 600']}}};
 createCommonServer({driver}); console.log("PROOF_READY");`;
   const child = spawn(process.execPath, ['-e', source], { env: { ...process.env, HOME: home,
-    NODE_PATH: '/opt/session-agent/node_modules', AGENTHUB_WORKDIR: home,
+    NODE_PATH: process.env.NODE_PATH || '/opt/session-agent/node_modules', AGENTHUB_WORKDIR: home,
     AGENTHUB_WORKSPACE_ROOT: home, AGENTHUB_FILE_ROOT: path.join(root, 'files'),
     AGENTHUB_STATE_PUT_URL: `http://127.0.0.1:${server.address().port}/state`,
     AGENTHUB_PORT: '0', AGENTHUB_SKILLS_SYNC_SECONDS: '0' }, stdio: ['ignore', 'pipe', 'pipe'] });

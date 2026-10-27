@@ -31,7 +31,11 @@ It skips a locked session or any session with a named/labeled pod (including
 terminating pods), a CronJob, or an owned Job. Pause interactive sessions and wait
 for actual pod exit before retrying. Scheduled sessions should use the updated
 runtime: their next state upload is clean; their retained CronJob causes cleanup
-to skip them. Do not operate external archive writers during cleanup. The lock
+to skip them. Terminal pod objects are conservatively skipped too; remove completed
+pod objects without deleting the session registry row, then retry. To scrub a
+scheduled archive immediately, stop scheduling and remove its CronJob, Jobs and
+pods while retaining its registry record; restore scheduling with the updated
+runtime after cleanup. Do not operate external archive writers during cleanup. The lock
 coordinates hub operations, not someone holding an old presigned upload URL.
 
 A registry status check was rejected because pause can return before the final
