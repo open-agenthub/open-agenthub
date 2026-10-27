@@ -30,7 +30,8 @@ const home = path.join(root, 'home');
 const work = path.join(root, 'work');
 fs.mkdirSync(home); fs.mkdirSync(work); fs.mkdirSync(path.join(home, 'tmp'));
 const PORT = 17725;
-const hub = http.createServer((req, res) => { req.resume(); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); }).listen(PORT + 1, '127.0.0.1');
+// Stand-in hub: the callbacks the agent makes at start only need an answer.
+http.createServer((req, res) => { req.resume(); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}'); }).listen(PORT + 1, '127.0.0.1');
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^(CLAUDE|AGENTHUB|ANTHROPIC|OPENAI|CODEX|OPENCODE|XDG_)/.test(k)));
 Object.assign(env, {
   HOME: home, TMPDIR: path.join(home, 'tmp'), TERM: 'xterm-256color', XDG_CONFIG_HOME: home + '/.config', XDG_DATA_HOME: home + '/.local/share', XDG_STATE_HOME: home + '/.local/state',
