@@ -1,0 +1,13 @@
+[Unit]
+Description=Local video demo Kubernetes (isolated guest only)
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s server --disable traefik --disable servicelb --disable metrics-server --disable local-storage --cluster-cidr 10.88.0.0/16 --service-cidr 10.89.0.0/16 --tls-san 127.0.0.1 --node-name rc5-demo --node-ip 10.0.2.15 --advertise-address 10.0.2.15 --flannel-iface enp0s2 --write-kubeconfig-mode 600
+Restart=on-failure
+LimitNOFILE=1048576
+TasksMax=infinity
+Delegate=yes
+[Install]
+WantedBy=multi-user.target
