@@ -38,9 +38,13 @@ archive's entries: no `.claude.json`, and with this change no backups.
   headers and env**. A fake `Authorization: Bearer` token of a session MCP server was found in the
   uploaded state archive. Every archive of a Claude session with a header- or env-authenticated MCP
   server holds those values.
-- A second CLI start in the same home (a restart for resume or account switch, `claude` in the shell
-  tab) backs up the live file: `oauthAccount` (account UUID, e-mail address, organization UUID),
-  `userID` and `machineID`. A run with a fake login showed the e-mail in that backup.
+- When the login happens before the TUI starts — the order #305 introduces for a session without a
+  credential — a later CLI start in the same home (here `claude -p`, as a resume restart or the
+  shell tab would start one) backs up the signed-in file: `oauthAccount` (account UUID, e-mail
+  address, organization UUID), `userID` and `machineID`; the example e-mail of the fake identity was
+  in it (`scripts/proofs/313/backup-after-sign-in.cjs` against the #305 runtime). In `main`'s order
+  (TUI start, `/login`, another TUI start in the same home) no second backup was written within the
+  run (`PROOF_SECOND_START=1`), so on `main` the observed archived backup was the entrypoint's file.
 - A key approved by hand ("Yes" on the question) would have put its suffix there the same way.
 
 No login tokens: `.credentials.json` was excluded before and the backups are of `~/.claude.json`

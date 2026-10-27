@@ -291,6 +291,35 @@ function podEnv() {
     try { transcript = await fetch(`http://127.0.0.1:${AGENT_PORT}/agenthub/transcript`, { headers: { 'X-Agent-Token': 'example-callback-token' } }).then(r => r.text()); } catch {}
     const home = path.join(ROOT, 'home');
     const claudeDir = fs.readdirSync(path.join(home, '.claude'), { recursive: true }).map(f => path.join(home, '.claude', f)).filter(f => { try { return fs.statSync(f).isFile(); } catch { return false; } });
+    // PROOF_SECOND_START=1: start the CLI a second time in the same home, as a restart for a resume
+    // or an account switch, or `claude` in the shell tab, would; it backs up the live config.
+    if (process.env.PROOF_SECOND_START === '1') {
+      // First a sign-in with the fake identity, as a person's /login would: it writes the account
+      // into ~/.claude.json, and the CLI backs the file up only once it has changed.
+      const pty = require(modules + '/node-pty');
+      const login = pty.spawn(path.join(claudeBin, 'claude'), ['auth', 'login'], { cols: 120, rows: 40, cwd: path.join(ROOT, 'work'),
+        env: { PATH: env.PATH, HOME: path.join(ROOT, 'home'), TERM: 'xterm-256color', HTTPS_PROXY: env.HTTPS_PROXY, NODE_EXTRA_CA_CERTS: env.NODE_EXTRA_CA_CERTS } });
+      const loginTerm = new Terminal({ cols: 120, rows: 40, allowProposedApi: true });
+      login.onData(d => loginTerm.write(d));
+      const loginRows = () => { const b = loginTerm.buffer.active; return Array.from({ length: 40 }, (_, y) => b.getLine(b.baseY + y)?.translateToString(true) || ''); };
+      for (let i = 0; i < 100 && !loginRows().some(r => r.includes('Paste code here')); i++) await new Promise(r => setTimeout(r, 100));
+      const rows2 = loginRows(); let address = '';
+      for (let i = 0; i < rows2.length; i++) { const m = /https:\/\/\S+/.exec(rows2[i]); if (!m) continue; address = m[0]; while (i + 1 < rows2.length && /^\S+$/.test(rows2[i + 1].trim())) address += rows2[++i].trim(); }
+      login.write('\x1b[200~example-code#' + new URL(address).searchParams.get('state') + '\x1b[201~'); await new Promise(r => setTimeout(r, 150)); login.write('\r');
+      await new Promise(resolve => { login.onExit(resolve); setTimeout(resolve, 20000); });
+      // The interactive TUI: `claude -p` was measured not to write a backup.
+      const second = pty.spawn(path.join(claudeBin, 'claude'), [], { cols: 120, rows: 40, cwd: path.join(ROOT, 'work'),
+        env: { PATH: env.PATH, HOME: path.join(ROOT, 'home'), TERM: 'xterm-256color', ANTHROPIC_BASE_URL: 'http://127.0.0.1:9' } });
+      second.onData(() => {});
+      await new Promise(r => setTimeout(r, 8000));
+      try { second.kill('SIGKILL'); } catch {}
+      const live = JSON.parse(fs.readFileSync(path.join(ROOT, 'home/.claude.json'), 'utf8'));
+      turn.secondStart = { liveOauthAccountFields: Object.keys(live.oauthAccount || {}),
+        backupsOnDisk: fs.readdirSync(path.join(ROOT, 'home/.claude/backups')).length };
+      const before = uploads.length;
+      const end3 = Date.now() + 75000;
+      while (Date.now() < end3 && !uploads.slice(before).some(u => u.url === '/upload/state')) await new Promise(r => setTimeout(r, 500));
+    }
     // What the uploaded state archive holds: entry paths, and for the CLI's ~/.claude.json backups
     // only key names and whether a known secret value occurs; no values are printed.
     const lastState = uploads.filter(u => u.url === '/upload/state').at(-1);
@@ -314,6 +343,7 @@ function podEnv() {
         return { name: e.name.replace(/\d{10,}/, '<ts>'), keys: Object.keys(config),
           mcpServers: Object.fromEntries(Object.entries(config.mcpServers || {}).map(([n, v]) => [n, { env: Object.keys(v.env || {}), headers: Object.keys(v.headers || {}) }])),
           oauthAccountFields: Object.keys(config.oauthAccount || {}),
+          hasExampleEmail: text.includes('@example.com'),
           secretsFound: Object.entries(secrets).filter(([, v]) => text.includes(v)).map(([k]) => k) };
       })
     };
