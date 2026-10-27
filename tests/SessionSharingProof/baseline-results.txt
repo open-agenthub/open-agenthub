@@ -1,0 +1,5 @@
+BASELINE named recipient GET /api/sessions/<id>: 404
+BASELINE named recipient GET /api/sessions/<id>/conversation: 404
+BASELINE named recipient GET /api/sessions/<id>/transcript: 404
+BASELINE /api/sessions/shared contains grant, but frontend never requests it
+BASELINE Chromium: named deep link falls through to home; no Shared with me group

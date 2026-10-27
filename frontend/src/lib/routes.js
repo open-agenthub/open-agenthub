@@ -1,6 +1,7 @@
 export function sharedTokenFromPath(pathname) {
   const match = String(pathname || '').match(/^\/shared\/([^/]+)\/?$/)
-  return match ? decodeURIComponent(match[1]) : null
+  if (!match) return null
+  try { return decodeURIComponent(match[1]) } catch { return match[1] }
 }
 
 // Settings tabs by URL segment. The lists live here rather than in SettingsView so that the

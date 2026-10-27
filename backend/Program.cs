@@ -358,6 +358,7 @@ else
             AgentHub.Api.Auth.InsecureDevAuthHandler.SchemeName, null);
 }
 builder.Services.AddAuthorization();
+builder.Services.AddSharingRecipientSearch();
 
 // --- Remote MCP endpoint (Streamable HTTP) and its OAuth 2.1 authorization server ---
 // Opt-in: only active when Mcp:PublicUrl names the externally reachable HTTPS origin of this
@@ -623,6 +624,7 @@ if (mcpOptions.IsConfigured)
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 // Capture the signed-in identity (owner + email + name) per user — refreshed every few
 // minutes rather than once per process, so group-claim changes in the IdP propagate

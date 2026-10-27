@@ -60,6 +60,25 @@ public sealed class SharingController(ISessionSharingService sharing) : Controll
         }
     }
 
+    [HttpGet("shares/recipients")]
+    [Microsoft.AspNetCore.RateLimiting.EnableRateLimiting(SharingRecipientSearch.Policy)]
+    public async Task<IActionResult> FindRecipient(string sessionId, [FromQuery] string? query,
+        [FromServices] AgentHub.Api.Persistence.UserDirectory users,
+        [FromServices] IConfiguration configuration, CancellationToken ct)
+    {
+        try
+        {
+            await sharing.ListAsync(Owner, sessionId, ct);
+            var identifier = query?.Trim();
+            if (string.IsNullOrEmpty(identifier) || identifier.Length > 254) return Ok(Array.Empty<object>());
+            var people = await users.FindShareRecipientsAsync(Owner, identifier,
+                configuration.GetValue("Sharing:UserSuggestionsEnabled", true), ct);
+            return Ok(people.Select(person => new { username = person.Owner, displayName = person.DisplayName }));
+        }
+        catch (LicenseRequiredException exception) { return SharingResponses.LicenseRequired(this, exception); }
+        catch (KeyNotFoundException) { return NotFound(); }
+    }
+
     [HttpPost("shares/users")]
     public async Task<IActionResult> CreateUser(
         string sessionId,
