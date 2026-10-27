@@ -16,7 +16,8 @@ namespace AgentHub.Api.Controllers;
 [ApiController]
 [Authorize]
 [Route("api/secret-requests")]
-public sealed class SecretRequestsController(ISecretRequestStore requests, ISessionService sessions, ISessionStore records)
+public sealed class SecretRequestsController(ISecretRequestStore requests, ISessionService sessions, ISessionStore records,
+    ILogger<SecretRequestsController>? log = null)
     : ControllerBase
 {
     private string Owner =>
@@ -100,7 +101,12 @@ public sealed class SecretRequestsController(ISecretRequestStore requests, ISess
     private async Task RemoveUngrantedAsync(string secretId)
     {
         try { await sessions.DeleteSessionSecretAsync(Owner, secretId, CancellationToken.None); }
-        catch (SessionSecretCopiesPendingException) { }
+        catch (SessionSecretCopiesPendingException e)
+        {
+            // The id only, as everywhere secrets are logged; the refused grant's error is what the owner sees.
+            log?.LogWarning("Removed the ungranted secret {SecretId}, but {Sessions} session copies could not be rewritten",
+                secretId, e.Sessions);
+        }
     }
 
     [HttpPost("{id}/refuse")]
