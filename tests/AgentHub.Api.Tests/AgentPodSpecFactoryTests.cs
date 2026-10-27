@@ -19,7 +19,7 @@ public class AgentPodSpecFactoryTests
         var pod = Build(agent, AgentAuthMode.ApiKey);
         var prepare = pod.InitContainers.First();
         Assert.Equal("prepare-tmp", prepare.Name);
-        Assert.Contains("chmod 1777 /volume/tmp", prepare.Command.Last());
+        Assert.Contains("chmod 01777 /volume/tmp", prepare.Command.Last());
         Assert.Equal("/volume", Assert.Single(prepare.VolumeMounts).MountPath);
         Assert.True(prepare.SecurityContext.RunAsNonRoot);
         Assert.Equal(1000, prepare.SecurityContext.RunAsUser);

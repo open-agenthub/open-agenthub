@@ -24,11 +24,8 @@ export AGENTHUB_SKILLS_MCP_ENABLED="${AGENTHUB_SKILLS_MCP_ENABLED:-1}"
 : "${AGENTHUB_STATE_DIR:?AGENTHUB_STATE_DIR is required}"
 mkdir -p "$HOME/.ssh" "$HOME/$AGENTHUB_STATE_DIR"
 
-# /tmp is an emptyDir, and Kubernetes chowns it to root:<fsGroup> with the setgid bit,
-# which drops the sticky bit — it ends up world-writable without +t (0:1000, mode 2777).
-# Tools that refuse such a directory then disable themselves (Claude Code turns off
-# cross-session messaging, whose socket dir lives under the temp dir). The agent does not
-# own /tmp and so cannot chmod it; point it at a private temp dir it does own instead.
+# Keep generic tool scratch files private. The pod separately prepares a sticky /tmp
+# subPath: the CLI's messaging socket setup checks /tmp directly, ignoring TMPDIR.
 export TMPDIR="$HOME/tmp"
 mkdir -p "$TMPDIR"
 chmod 700 "$TMPDIR"

@@ -35,7 +35,7 @@ RUN chmod 0555 /opt/browser/entrypoint.sh \
 ENV HOME=/data/home
 EXPOSE 6080 6081 6082 9222
 # Keep standalone image use safe; pod mounts are prepared separately.
-RUN chmod 1777 /tmp
+RUN chmod 01777 /tmp
 
 USER 1000:1000
 ENTRYPOINT ["/opt/browser/entrypoint.sh"]

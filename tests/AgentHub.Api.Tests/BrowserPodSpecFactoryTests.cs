@@ -17,7 +17,7 @@ public sealed class BrowserPodSpecFactoryTests
 
         var prepare = Assert.Single(pod.InitContainers);
         Assert.Equal("prepare-tmp", prepare.Name);
-        Assert.Contains("chmod 1777 /volume/tmp", prepare.Command.Last());
+        Assert.Contains("chmod 01777 /volume/tmp", prepare.Command.Last());
         Assert.True(prepare.SecurityContext.RunAsNonRoot);
         Assert.True(prepare.SecurityContext.ReadOnlyRootFilesystem);
         Assert.Equal("tmp", Assert.Single(pod.Containers).VolumeMounts.Single(m => m.MountPath == "/tmp").SubPath);
