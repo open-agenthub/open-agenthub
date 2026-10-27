@@ -407,9 +407,10 @@ loop, so the remaining sessions were not rewritten either.
 
 - A copy that cannot be rewritten is withdrawn: both of that session's copies are deleted. Without
   copies the session receives nothing. Its volume and variable references are optional, so
-  nothing fails to start. A resume writes the copies again. Scheduled sessions are synced by
-  record as well as by copy, so a later sync gives their runs the copies back. Every other session
-  is still brought up to date.
+  nothing fails to start. A resume writes the copies again. The sync also lists sessions with a
+  live agent pod and scheduled sessions, not only sessions with copies. A later sync therefore
+  gives a running pod its files back, and a schedule's runs their copies, without waiting for a
+  spawn that neither goes through. Every other session is still brought up to date.
 - Only when the withdrawal fails too does the request answer 503 `secret_copies_pending`. That is
   the one case where a copy may still hold the value. The store change has happened, and Settings →
   Secrets keeps the notice with **Retry**. A repeated delete runs the strict sync again, even
