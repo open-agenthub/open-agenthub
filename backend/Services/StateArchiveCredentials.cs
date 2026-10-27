@@ -6,6 +6,21 @@ public static class StateArchiveCredentials
 {
     public static bool Contains(AgentKind agent, string name)
     {
+        if (IsCanonical(agent, name)) return true;
+        var slash = name.LastIndexOf('/');
+        var file = name[(slash + 1)..];
+        if (!file.StartsWith('.') || !file.EndsWith(".tmp", StringComparison.Ordinal)) return false;
+        var stem = file[..^4];
+        var separator = stem.LastIndexOf('.');
+        if (separator <= 1) return false;
+        var pid = stem[(separator + 1)..];
+        if (pid.Length == 0 || pid[0] == '0' || !pid.All(char.IsAsciiDigit)) return false;
+        // Match the writer's sibling name only at known credential locations, preserving history.
+        return IsCanonical(agent, name[..(slash + 1)] + stem[1..separator]);
+    }
+
+    private static bool IsCanonical(AgentKind agent, string name)
+    {
         return agent switch
         {
             AgentKind.Claude => name == ".claude/.credentials.json",

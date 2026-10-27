@@ -38,7 +38,7 @@ server.listen(0, '127.0.0.1', () => {
   const source = `const {createCommonServer}=require(${JSON.stringify(path.join(repo, 'agent-runtime/common/server.js'))});
 const base=require(${JSON.stringify(path.join(repo, 'agent-runtime/claude/driver.js'))});
 const driver={...base,stateExcludes:${legacy ? JSON.stringify(['.claude/plugins/marketplaces']) : 'base.stateExcludes'},prepare(){},buildCommand(){return {cmd:'bash',args:['-c','sleep 600']}}};
-createCommonServer({driver}); console.log("PROOF_READY");`;
+createCommonServer({driver,dependencies:require(${JSON.stringify(path.join(repo, 'tests/ClaudeStateCleanupProof/isolated-archive.cjs'))}).dependencies(${JSON.stringify(root)})}); console.log("PROOF_READY");`;
   const child = spawn(process.execPath, ['-e', source], { env: { ...childBaseEnv, HOME: home,
     NODE_PATH: process.env.NODE_PATH || '/opt/session-agent/node_modules', AGENTHUB_WORKDIR: home,
     AGENTHUB_WORKSPACE_ROOT: home, AGENTHUB_FILE_ROOT: path.join(root, 'files'),

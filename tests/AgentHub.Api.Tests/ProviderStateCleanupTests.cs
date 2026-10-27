@@ -20,6 +20,13 @@ public class ProviderStateCleanupTests
     [InlineData(AgentKind.OpenClaw, ".openclaw/agents/another/agent/openclaw-agent.sqlite")]
     [InlineData(AgentKind.OpenClaw, ".openclaw/agents/another/agent/openclaw-agent.sqlite-wal")]
     [InlineData(AgentKind.OpenClaw, ".openclaw/agents/another/agent/openclaw-agent.sqlite-shm")]
+    [InlineData(AgentKind.Claude, ".claude/..credentials.json.123.tmp")]
+    [InlineData(AgentKind.Codex, ".codex/.auth.json.123.tmp")]
+    [InlineData(AgentKind.Cursor, ".cursor/.auth.json.123.tmp")]
+    [InlineData(AgentKind.OpenCode, ".opencode/.auth.json.123.tmp")]
+    [InlineData(AgentKind.OpenCode, ".opencode/.mcp-auth.json.123.tmp")]
+    [InlineData(AgentKind.OpenClaw, ".openclaw/.auth-profiles.json.123.tmp")]
+    [InlineData(AgentKind.OpenClaw, ".openclaw/agents/main/agent/.auth-profiles.json.123.tmp")]
     public async Task RemovesOnlyKnownLoginEntries(AgentKind agent, string login)
     {
         using var input = new MemoryStream();
@@ -51,6 +58,13 @@ public class ProviderStateCleanupTests
     [InlineData(AgentKind.OpenCode, ".opencode/projects/mcp-auth.json")]
     [InlineData(AgentKind.OpenClaw, ".openclaw/agents/main/sessions/auth-profiles.json")]
     [InlineData(AgentKind.OpenClaw, ".openclaw/agents/main/agent/openclaw-agent.sqlite.backup")]
+    [InlineData(AgentKind.Codex, ".codex/.auth.json.notes.tmp")]
+    [InlineData(AgentKind.Codex, ".codex/.auth.json.0.tmp")]
+    [InlineData(AgentKind.Codex, ".codex/.auth.json.012.tmp")]
+    [InlineData(AgentKind.Codex, ".codex/.auth.json.-12.tmp")]
+    [InlineData(AgentKind.Codex, ".codex/.history.123.tmp")]
+    [InlineData(AgentKind.Codex, ".cursor/.auth.json.123.tmp")]
+    [InlineData(AgentKind.OpenClaw, ".openclaw/agents/main/sessions/.auth-profiles.json.123.tmp")]
     public void KeepsUnrelatedNamesAndOtherProviders(AgentKind agent, string path)
         => Assert.False(StateArchiveCredentials.Contains(agent, path));
 }
