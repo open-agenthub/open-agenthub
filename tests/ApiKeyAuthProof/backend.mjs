@@ -25,7 +25,7 @@ function authEnv(mode) {
   }
 }
 
-export function startBackend(dll, mode, logFile) {
+export function startBackend(dll, mode, logFile, extraEnv = {}) {
   const env = {
     ...process.env,
     ASPNETCORE_ENVIRONMENT: 'Production',
@@ -44,11 +44,12 @@ export function startBackend(dll, mode, logFile) {
     AgentHub__AgentImage: 'registry.example.com/agent:proof',
     Browser__Enabled: 'false',
     DOTNET_GCHeapHardLimit: '0x30000000',
-    ...authEnv(mode)
+    ...authEnv(mode),
+    ...extraEnv
   }
   // Inherited from a shell that ran another mode; each run decides its own.
   for (const k of ['Auth__ApiKey', 'Auth__InsecureDevMode', 'Oidc__Authority'])
-    if (!(k in authEnv(mode))) delete env[k]
+    if (!(k in authEnv(mode)) && !(k in extraEnv)) delete env[k]
   const out = logFile ? fs.openSync(logFile, 'w') : 'inherit'
   return spawn(process.env.DOTNET || 'dotnet', [dll], { env, stdio: ['ignore', out, out] })
 }

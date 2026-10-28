@@ -5,6 +5,8 @@ metadata:
   name: agenthub-config
   labels: {{ include "agenthub.labels" . | nindent 4 }}
 data:
+  ForwardedHeaders__KnownProxies: {{ dig "backend" "forwardedHeaders" "knownProxies" "127.0.0.1,::1" .Values.AsMap | quote }}
+  ForwardedHeaders__KnownNetworks: {{ dig "backend" "forwardedHeaders" "knownNetworks" "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16" .Values.AsMap | quote }}
   Sharing__UserSuggestionsEnabled: {{ dig "sharing" "userSuggestionsEnabled" true .Values.AsMap | quote }}
   Kestrel__Limits__MaxRequestBodySize: "57671680"
   ASPNETCORE_ENVIRONMENT: {{ .Values.backend.environment | default "Production" | quote }}

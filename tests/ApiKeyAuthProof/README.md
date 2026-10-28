@@ -68,3 +68,41 @@ Not shown here: a real kubelet with a running agent behind the terminal socket (
 happens before the proxy, which the 401/upgrade results cover), and an OIDC provider (that mode's
 code path is unchanged). The shutdown `ObjectDisposedException` in the logs is pre-existing: the
 v1.4.0 baseline logs it too.
+
+## Trusted forwarding regression (#327)
+
+`forwarded.mjs` starts the real backend using the same prerequisites above. Run:
+
+```bash
+RIG=<rig directory> DOTNET=<dotnet binary> node tests/ApiKeyAuthProof/forwarded.mjs <fixed backend dll> [baseline backend dll]
+```
+
+The optional baseline must be built from main before #327. The proof reproduces rotating-XFF
+limit evasion there, then checks the fixed backend with an exact trusted proxy and again with
+an exact trusted network. Requests bind to separate loopback source addresses: an untrusted
+peer cannot buy a fresh bucket by changing XFF, and clients behind a trusted peer have separate
+buckets. Invented left entries, malformed addresses, Retry-After, another client's correct key,
+an exhausted client's correct key, encoded log-forging paths and absent credentials in logs
+are checked. Agent/browser pods with IPs inside the trusted ranges cannot assert XFF; creating
+and deleting another pod after startup verifies that the live watch updates the exclusion. The backend's Postgres and Kubernetes API server are real; no ingress controller
+or kubelet is needed for these authentication decisions. Log files remain in the rig directory,
+not in Git.
+
+Verified on 2026-10-27: 115 assertions, backend suite 2,547 passed with real Postgres and zero
+skips, and `tests/helm/api-key-values.ps1` passed. The existing `proof.mjs` also passed
+81/81 checks (without its optional v1.4.0 baseline), covering REST, WebSocket, personal-token,
+MCP consent/OAuth and insecure-mode behavior after the forwarding change. Socket-IP preservation and empty trust lists
+are also covered by the backend suite. A deployed ingress and IPv6 network were not exercised.
+
+`inventory-outage.mjs` verifies the fail-closed path against that same backend. Select only
+this rig's rootless API-server PID (the script verifies the process name), then run:
+
+```bash
+PROOF_APISERVER_PID=<proof API-server PID> RIG=<rig directory> DOTNET=<dotnet binary> node tests/ApiKeyAuthProof/inventory-outage.mjs <fixed backend dll>
+```
+
+It pauses the API server, waits for the inventory timeout, proves rotating XFF cannot escape
+the socket bucket, checks another socket client's correct key, resumes the API server and
+proves proxy separation recovers. It asserts exactly one outage warning, one recovery message,
+and no credential disclosure. A `finally` block always resumes the proof API server.
+This outage/recovery proof passed against the real backend and rootless API server.
