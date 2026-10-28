@@ -115,8 +115,9 @@ public class HubAuthTests
         var ctx = new DefaultHttpContext();
         ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.7");
         request(ctx.Request);
+        ctx.RequestServices = new ServiceCollection().AddSingleton<IForwardedPeerGuard>(new PeerGuard()).BuildServiceProvider();
         var app = new Microsoft.AspNetCore.Builder.ApplicationBuilder(
-            new ServiceCollection().AddLogging().BuildServiceProvider());
+            new ServiceCollection().AddLogging().AddSingleton<IForwardedPeerGuard>(new PeerGuard()).BuildServiceProvider());
         app.UseApiKeyClientAddress(Config(("ForwardedHeaders:KnownProxies", "10.0.0.7")));
         await app.Build()(ctx);
         await handler.InitializeAsync(
@@ -214,14 +215,34 @@ public class HubAuthTests
         ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.7");
         ctx.Connection.RemotePort = 12345;
         ctx.Request.Headers["X-Forwarded-For"] = forwarded;
+        ctx.RequestServices = new ServiceCollection().AddSingleton<IForwardedPeerGuard>(new PeerGuard()).BuildServiceProvider();
         var app = new Microsoft.AspNetCore.Builder.ApplicationBuilder(
-            new ServiceCollection().AddLogging().BuildServiceProvider());
+            new ServiceCollection().AddLogging().AddSingleton<IForwardedPeerGuard>(new PeerGuard()).BuildServiceProvider());
         app.UseApiKeyClientAddress(Config(("ForwardedHeaders:KnownProxies", proxies),
             ("ForwardedHeaders:KnownNetworks", networks)));
         await app.Build()(ctx);
         Assert.Equal(expected, ApiKeyFailureLimiter.ClientOf(ctx));
         Assert.Equal("10.0.0.7", ctx.Connection.RemoteIpAddress.ToString());
         Assert.Equal(12345, ctx.Connection.RemotePort);
+    }
+
+    private sealed class PeerGuard(bool allowed = true) : IForwardedPeerGuard
+    {
+        public Task<bool> CanForwardAsync(System.Net.IPAddress address, CancellationToken ct)
+            => Task.FromResult(allowed);
+    }
+
+    [Fact]
+    public async Task A_workload_inside_the_trusted_network_cannot_assert_a_client()
+    {
+        var ctx = new DefaultHttpContext();
+        ctx.Connection.RemoteIpAddress = System.Net.IPAddress.Parse("10.0.0.7");
+        ctx.Request.Headers["X-Forwarded-For"] = "203.0.113.9";
+        ctx.RequestServices = new ServiceCollection().AddSingleton<IForwardedPeerGuard>(new PeerGuard(false)).BuildServiceProvider();
+        var app = new Microsoft.AspNetCore.Builder.ApplicationBuilder(new ServiceCollection().AddLogging().BuildServiceProvider());
+        app.UseApiKeyClientAddress(Config(("ForwardedHeaders:KnownNetworks", "10.0.0.0/8")));
+        await app.Build()(ctx);
+        Assert.Equal("10.0.0.7", ApiKeyFailureLimiter.ClientOf(ctx));
     }
 
     [Fact]

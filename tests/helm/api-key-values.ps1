@@ -113,3 +113,9 @@ Assert-Contains $direct 'ForwardedHeaders__KnownProxies: ""'
 Assert-Contains $direct 'ForwardedHeaders__KnownNetworks: ""'
 $old = Render @('--is-upgrade', '--set', 'backend.forwardedHeaders=null')
 Assert-Contains $old 'ForwardedHeaders__KnownNetworks: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"'
+
+$config = Get-Document $default 'ConfigMap' 'agenthub-config'
+# Valid values in metadata silently render but are rejected by the API server.
+if ($config -notmatch '(?s)\ndata:\s+ForwardedHeaders__KnownProxies:.*ForwardedHeaders__KnownNetworks:') {
+    throw 'Forwarded-header settings must be ConfigMap data, not metadata.'
+}

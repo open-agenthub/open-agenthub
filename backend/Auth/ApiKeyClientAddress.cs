@@ -33,10 +33,17 @@ public static class ApiKeyClientAddress
             {
                 await middleware.Invoke(context);
             }
-            context.Items[ItemKey] = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+            var clientAddress = context.Connection.RemoteIpAddress;
             // Pod authorization must continue to identify the direct peer, never an ingress user.
             context.Connection.RemoteIpAddress = socketAddress;
             context.Connection.RemotePort = socketPort;
+            if (socketAddress is not null && clientAddress is not null && !clientAddress.Equals(socketAddress))
+            {
+                var guard = context.RequestServices.GetService<IForwardedPeerGuard>();
+                if (guard is not null && !await guard.CanForwardAsync(socketAddress, context.RequestAborted))
+                    clientAddress = socketAddress;
+            }
+            context.Items[ItemKey] = clientAddress?.ToString() ?? "unknown";
             await next(context);
         });
     }
