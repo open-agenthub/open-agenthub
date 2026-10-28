@@ -89,5 +89,7 @@ or kubelet is needed for these authentication decisions. Log files remain in the
 not in Git.
 
 Verified on 2026-10-27: 115 assertions, backend suite 2,547 passed with real Postgres and zero
-skips, and `tests/helm/api-key-values.ps1` passed. Socket-IP preservation and empty trust lists
+skips, and `tests/helm/api-key-values.ps1` passed. The existing `proof.mjs` also passed
+81/81 checks (without its optional v1.4.0 baseline), covering REST, WebSocket, personal-token,
+MCP consent/OAuth and insecure-mode behavior after the forwarding change. Socket-IP preservation and empty trust lists
 are also covered by the backend suite. A deployed ingress and IPv6 network were not exercised.

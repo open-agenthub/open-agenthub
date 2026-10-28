@@ -31,8 +31,8 @@ function check(ok, what, detail = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'} ${what}${detail ? ' — ' + detail : ''}`)
 }
 const bearer = k => (k ? { Authorization: `Bearer ${k}` } : {})
-// The backend throttles wrong keys per client (the last X-Forwarded-For entry, as the ingress
-// appends it). This proof presents wrong keys on purpose all over, so each request is its own
+// Loopback is a configured trusted proxy in this rig. This proof presents wrong keys on
+// purpose all over, so each request is its own
 // client unless a section pins one, as the rate-limit section does.
 let clientCounter = 0
 const nextClient = () => ({ 'X-Forwarded-For': `198.18.${Math.floor(++clientCounter / 250)}.${clientCounter % 250}` })
@@ -290,7 +290,7 @@ check((await call('GET', '/api/sessions', KEY, undefined, { 'X-Forwarded-For': '
 
 await stop(backend)
 const log = fs.readFileSync(logPath, 'utf8')
-check(/warn: AgentHub\.Api\.Auth\.ApiKeyAuthHandler\[0\]\s+Rejected a wrong API key from 127\.0\.0\.1 via 203\.0\.113\.50 for GET \/api\/sessions/.test(log),
+check(/warn: AgentHub\.Api\.Auth\.ApiKeyAuthHandler\[0\]\s+Rejected a wrong API key from 203\.0\.113\.50 for GET \/api\/sessions/.test(log),
   'each wrong key is logged with the client, without the value')
 check(!log.includes(KEY), 'the backend log never contains the key', `${log.split('\n').length} log lines`)
 check(!log.includes(WRONG), 'nor a wrong key that was presented')
