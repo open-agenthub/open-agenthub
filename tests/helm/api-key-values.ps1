@@ -101,3 +101,21 @@ $dev = Render @('--values', (Join-Path $chartPath 'values-dev.yaml'))
 Assert-Contains $dev 'Auth__InsecureDevMode: "true"'
 
 Write-Host 'API key chart assertions passed.'
+
+# Empty strings must survive rendering: the backend uses them to trust nobody.
+Assert-Contains $default 'ForwardedHeaders__KnownNetworks: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"'
+Assert-Contains $default 'ForwardedHeaders__KnownProxies: "127.0.0.1,::1"'
+$proxies = Render @('--set-string', 'backend.forwardedHeaders.knownProxies=192.0.2.4', '--set-string', 'backend.forwardedHeaders.knownNetworks=198.51.100.0/24')
+Assert-Contains $proxies 'ForwardedHeaders__KnownProxies: "192.0.2.4"'
+Assert-Contains $proxies 'ForwardedHeaders__KnownNetworks: "198.51.100.0/24"'
+$direct = Render @('--set-string', 'backend.forwardedHeaders.knownProxies=', '--set-string', 'backend.forwardedHeaders.knownNetworks=')
+Assert-Contains $direct 'ForwardedHeaders__KnownProxies: ""'
+Assert-Contains $direct 'ForwardedHeaders__KnownNetworks: ""'
+$old = Render @('--is-upgrade', '--set', 'backend.forwardedHeaders=null')
+Assert-Contains $old 'ForwardedHeaders__KnownNetworks: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"'
+
+$config = Get-Document $default 'ConfigMap' 'agenthub-config'
+# Valid values in metadata silently render but are rejected by the API server.
+if ($config -notmatch '(?s)\ndata:\s+ForwardedHeaders__KnownProxies:.*ForwardedHeaders__KnownNetworks:') {
+    throw 'Forwarded-header settings must be ConfigMap data, not metadata.'
+}

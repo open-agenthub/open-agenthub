@@ -1,3 +1,4 @@
+using AgentHub.Api.Auth;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using AgentHub.Api.Mcp;
@@ -29,6 +30,12 @@ catch (AgentHub.Api.Auth.HubAuthConfigurationException e)
     return 1;
 }
 builder.Services.AddSingleton(hubAuth);
+if (hubAuth.Mode == HubAuthMode.ApiKey)
+{
+    builder.Services.AddSingleton<KubernetesForwardedPeerGuard>();
+    builder.Services.AddSingleton<IForwardedPeerGuard>(sp => sp.GetRequiredService<KubernetesForwardedPeerGuard>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<KubernetesForwardedPeerGuard>());
+}
 builder.Services.AddSingleton(new AgentHub.Api.Auth.ApiKeyFailureLimiter());
 AgentHub.Api.Files.SessionFileLogging.KeepStreamTicketsOutOfLogs(builder.Services);
 
@@ -593,6 +600,8 @@ if (mcpOptions.IsConfigured)
     forwarded.KnownProxies.Clear();
     app.UseForwardedHeaders(forwarded);
 }
+
+app.UseApiKeyClientAddress(builder.Configuration);
 
 app.UseCors();
 app.UseWebSockets();

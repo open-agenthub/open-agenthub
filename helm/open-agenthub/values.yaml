@@ -48,6 +48,10 @@ ingress:
 backend:
   replicas: 2
   environment: Production
+  # Narrow these to the ingress source ranges; all pods in these networks are trusted proxies.
+  forwardedHeaders:
+    knownProxies: "127.0.0.1,::1"
+    knownNetworks: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
   developmentAuth:
     enabled: false
     headerName: X-AgentHub-Test-User

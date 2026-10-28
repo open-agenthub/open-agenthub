@@ -231,15 +231,8 @@ public sealed class InsecureDevAuthHandler(
 /// <see cref="HubAuthOptions.Resolve"/> enforces; this limit keeps one noisy client from filling
 /// the log and from guessing at request rate.
 ///
-/// The client is the connection's address plus the last X-Forwarded-For entry. Behind the
-/// ingress every connection comes from the ingress pod, and the ingress appends the real client
-/// address last, where a client cannot override it. Without an ingress a client can invent that
-/// header and so get a fresh bucket per request. Accepted, because entropy carries the defence.
-///
-/// Deliberately no bucket for the connection address alone. Behind the ingress that is one
-/// address for everybody, so any limit on it would let anyone lock out every user, the owner with
-/// the right key included, by sending wrong keys. The header decides nothing else: pod identity
-/// elsewhere keeps relying on the socket address only.
+/// The client address is resolved by trusted forwarded-header middleware. No shared socket
+/// bucket is added: that would let one ingress client lock out every other client.
 /// </summary>
 public sealed class ApiKeyFailureLimiter(TimeProvider? time = null)
 {
@@ -253,16 +246,7 @@ public sealed class ApiKeyFailureLimiter(TimeProvider? time = null)
     public static string AddressOf(HttpContext ctx) => ctx.Connection.RemoteIpAddress?.ToString() ?? "unknown";
 
     public static string ClientOf(HttpContext ctx)
-    {
-        var forwarded = ctx.Request.Headers["X-Forwarded-For"].ToString();
-        var last = forwarded.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).LastOrDefault();
-        if (last is null) return AddressOf(ctx);
-        // Only an address counts. The value ends up in the log and as a bucket key, and anything
-        // else in the header comes straight from the client.
-        return System.Net.IPAddress.TryParse(last, out var ip)
-            ? $"{AddressOf(ctx)} via {ip}"
-            : $"{AddressOf(ctx)} via (not an address)";
-    }
+        => ctx.Items[ApiKeyClientAddress.ItemKey] as string ?? AddressOf(ctx);
 
     /// <summary>
     /// Request-supplied text for a log line. Kestrel decodes the path, so an encoded CR/LF in the
