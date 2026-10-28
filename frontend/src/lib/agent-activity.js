@@ -22,3 +22,16 @@ export function parsePersistenceFrame(data) {
       typeof frame.withheld === 'boolean' ? { withheld: frame.withheld } : null
   } catch { return null }
 }
+
+// A context-clear handover the runtime could not deliver yet (#336): the fresh conversation would
+// otherwise start without it and nothing outside the terminal would say so.
+export function parseHandoverFrame(data) {
+  if (typeof data !== 'string' || !data.startsWith('{')) return null
+  try {
+    const frame = JSON.parse(data)
+    if (frame?.type !== 'agenthub' || frame.subtype !== 'handover' || typeof frame.failed !== 'boolean') return null
+    if (!frame.failed) return { failed: false }
+    const text = value => typeof value === 'string' ? value.slice(0, 200) : ''
+    return { failed: true, reason: text(frame.reason), next: text(frame.next) }
+  } catch { return null }
+}

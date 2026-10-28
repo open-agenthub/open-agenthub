@@ -434,3 +434,41 @@ test('an interrupting priority message sends the driver\'s interrupt keys, one p
   // A pause after the first Escape and after the second, before the paste.
   assert.deepEqual(pauses.slice(0, 2), [1, 2]);
 });
+
+test('a handover saved by an earlier run goes to a restarted CLI that has reported no turn yet (#336)', async () => {
+  const w = world();
+  const ran = [];
+  w.delivery.agentStarted();
+  w.delivery.scheduleAtSafePoint(async () => { ran.push('plain'); });
+  w.advance(2000);
+  assert.equal(await w.deliver(), false, 'an ordinary action still waits for a turn to end');
+  const start = world();
+  start.delivery.agentStarted();
+  start.delivery.scheduleAtSafePoint(async () => { ran.push('saved handover'); }, { atStart: true });
+  start.delivery.agentOutput();
+  assert.equal(await start.deliver(), false, 'not while the CLI is still drawing');
+  start.advance(2000);
+  assert.equal(await start.deliver(), true);
+  assert.deepEqual(ran, ['saved handover']);
+});
+
+test('a handover retry presses Enter alone when the earlier paste is still on the screen', async () => {
+  const text = '[AgentHub context handover]\nState: tests pass. Next: push the branch.';
+  // Inside a safe-point action, as the session agent runs it: the prompt event counts then.
+  async function retry(w, screen) {
+    let submitted;
+    w.delivery.scheduleAtSafePoint(async () => {
+      submitted = await w.delivery.typeHandover(w.terminal, text, () => screen, SIZE, { retry: true });
+      return submitted;
+    });
+    await w.deliver();
+    return submitted;
+  }
+  const stuck = await idleWorld();
+  assert.equal(await retry(stuck, '› ' + text.replace(/\n/g, '\r\n') + '\r\n'), true);
+  assert.deepEqual(stuck.terminal.writes, ['\r']);
+  // Nothing of it on the screen: it was lost, so it is pasted again.
+  const lost = await idleWorld();
+  assert.equal(await retry(lost, '› Ask the agent to do anything\r\n'), true);
+  assert.equal(lost.terminal.writes[0], '\x1b[200~' + text + '\x1b[201~');
+});

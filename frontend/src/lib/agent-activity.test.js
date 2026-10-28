@@ -22,3 +22,13 @@ it('validates the reconnect-safe persistence status', () => {
   expect(parsePersistenceFrame('{"type":"agenthub","subtype":"persistence","withheld":false}')).toEqual({ withheld: false })
   expect(parsePersistenceFrame('{"type":"agenthub","subtype":"persistence","withheld":"yes"}')).toBeNull()
 })
+
+import { parseHandoverFrame } from './agent-activity.js'
+it('reads an undelivered context handover and its clearing, nothing else (#336)', () => {
+  expect(parseHandoverFrame(JSON.stringify({ type: 'agenthub', subtype: 'handover', failed: true, reason: 'context_clear_input_not_ready', next: 'it is sent at the next safe point' })))
+    .toEqual({ failed: true, reason: 'context_clear_input_not_ready', next: 'it is sent at the next safe point' })
+  expect(parseHandoverFrame('{"type":"agenthub","subtype":"handover","failed":false}')).toEqual({ failed: false })
+  expect(parseHandoverFrame(JSON.stringify({ type: 'agenthub', subtype: 'handover', failed: true, reason: 'x'.repeat(500) })).reason).toHaveLength(200)
+  for (const data of ['{"type":"agenthub","subtype":"handover","failed":"yes"}', '{"type":"agenthub","subtype":"persistence","withheld":true}', 'plain text'])
+    expect(parseHandoverFrame(data)).toBeNull()
+})
