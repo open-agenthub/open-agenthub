@@ -28,7 +28,7 @@ function onKeydown(event, number) {
   <section class="cli-menu" role="status" aria-live="polite" data-cli-menu>
     <p class="cli-menu-head">
       <span class="dot" aria-hidden="true"></span>
-      <strong>{{ menu.kind === 'choice' ? 'The agent is showing a menu' : menu.kind === 'confirm' ? 'The agent is waiting for you to submit' : 'The agent is waiting for input' }}</strong>
+      <strong>{{ /^Select login method/i.test(menu.title || '') ? 'Sign in to the agent CLI' : menu.kind === 'choice' ? 'The agent is showing a menu' : menu.kind === 'confirm' ? 'The agent is waiting for you to submit' : 'The agent is waiting for input' }}</strong>
     </p>
     <p v-if="menu.title" class="cli-menu-title" data-cli-title>{{ menu.title }}</p>
     <div v-if="menu.kind === 'choice' && canAnswer" class="cli-menu-options">

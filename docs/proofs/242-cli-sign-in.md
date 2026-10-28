@@ -156,3 +156,31 @@ Final stronger validation also distinguishes the authorization screen's public c
 The native scan opens with no-follow/nonblocking flags before inspecting metadata, then validates the open descriptor and pathname identity after reading. The earlier lstat-before-open shape was rejected because it leaves a path replacement window for analysis even with a later inode check. A real-filesystem regression replaces the pathname while its descriptor is being read and verifies that the scan refuses the snapshot.
 
 After the final main/SDK CI merge, all 768 runtime tests passed; the isolated nine archive tests passed too. The known metadata-timestamp signature test failed once in a prior full run and passed unchanged on isolated and complete reruns. Frontend validation remains 882 tests plus the production build.
+
+## One primary action per step (#344)
+
+The first card offered every action as a button of the same weight. Claude's code screen showed
+the page as a plain link, then *Send to CLI*, *Open terminal* and *Cancel (Esc)*. Codex's device
+screen showed *Copy device code* and *Open terminal* as buttons. The owner found it clunky: too
+many buttons, and nothing said which one came next.
+
+The card now numbers the CLI's own steps in the CLI's words. Claude: open the sign-in page,
+paste the code the page shows. Codex: open this link and sign in, enter this one-time code. Each
+step has one action, and only the current step's is filled. The page is the primary action until
+it has been opened, then *Send code* takes over and the page becomes *Open again*. A pasted
+value also moves it, because the address may have been opened another way, for example copied
+from the terminal. An outcome has one action too: *Try again* or *Continue*. *Open terminal*,
+*Cancel* and *Copy* are links below the steps. The title names the CLI ("Sign in to Claude
+Code"), and the login method menu before the card says it belongs to signing in.
+
+Rejected: an overflow menu for the secondary actions. For `claude auth login` at session start
+(`docs/claude-auto-sign-in.md`), Cancel (Ctrl+C) is the only way to the TUI's other login
+methods, and on a phone a menu costs one more tap to reach it. Also rejected: showing the code
+field only after the page was opened, because a Retry or an address copied from the terminal
+would leave nowhere to paste. And dropping *Open terminal*, which remains the way out for any
+screen the card does not recognise.
+
+Verified in Chromium with the pinned Claude Code (`/login`, a fake identity, an invalid code, Try
+again, a valid code, Continue) and Codex (`login --device-auth` with the device poll held
+pending, Copy into the real clipboard). The page opens in a new tab without an opener. The
+screenshots mask the device code and the terminal.

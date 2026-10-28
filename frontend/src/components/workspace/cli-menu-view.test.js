@@ -63,7 +63,8 @@ describe('agent CLI menus in the Workspace', () => {
 
     mocks.menu(login)
     await flushPromises()
-    expect(wrapper.get('[data-cli-menu]').text()).toContain('The agent is showing a menu')
+    // #344: the login method menu is the sign-in's first step, and says so.
+    expect(wrapper.get('[data-cli-menu]').text()).toContain('Sign in to the agent CLI')
     expect(wrapper.get('[data-cli-menu]').text()).toContain('Select login method:')
     expect(drawerOpen(wrapper)).toBe(false)
 
@@ -201,7 +202,40 @@ describe('CLI sign-in in Workspace', () => {
     mocks.menu({ kind: 'signin', mode: 'outcome', status: 'failed', retry: true, options: [] })
     await flushPromises()
     expect(wrapper.get('[data-cli-signin]').text()).toContain('Sign-in failed')
-    await wrapper.get('[data-cli-signin] button').trigger('click')
+    expect(wrapper.get('[data-cli-signin] .primary').text()).toBe('Try again')
+    await wrapper.get('[data-cli-signin-retry]').trigger('click')
+    expect(mocks.sendKeys).toHaveBeenLastCalledWith(['\r'])
+  })
+  // #344: one primary action per step, in the CLI's words; the rest are links.
+  it('makes the page the primary action until it is opened, then the code field', async () => {
+    const wrapper = view()
+    await flushPromises()
+    mocks.menu({ kind: 'signin', mode: 'code', status: 'waiting', url: 'https://example.com/authorize', options: [] })
+    await flushPromises()
+    const card = wrapper.get('[data-cli-signin]')
+    const primaries = () => card.findAll('.primary').map(element => element.text())
+    expect(card.get('.title').text()).toBe('Sign in to Claude Code')
+    expect(primaries()).toEqual(['Open sign-in page'])
+    expect(card.findAll('button:not(.link)').map(button => button.text())).toEqual(['Send code'])
+    expect(card.findAll('.secondary .link').map(button => button.text())).toEqual(['Open terminal', 'Cancel (Esc)'])
+    await card.get('[data-cli-signin-open]').trigger('click')
+    expect(primaries()).toEqual(['Send code'])
+    expect(card.get('[data-cli-signin-open]').text()).toBe('Open again')
+    // A new address (Retry, /login again) starts over at the page.
+    mocks.menu({ kind: 'signin', mode: 'code', status: 'waiting', url: 'https://example.com/authorize?again=1', options: [] })
+    await flushPromises()
+    expect(primaries()).toEqual(['Open sign-in page'])
+
+    mocks.menu({ kind: 'signin', mode: 'device', status: 'waiting', url: 'https://example.com/device', code: 'ABCD-12345', options: [] })
+    await flushPromises()
+    expect(primaries()).toEqual(['Open sign-in page'])
+    expect(card.get('[data-cli-device-code]').text()).toBe('ABCD-12345')
+    expect(card.get('[data-cli-signin-copy]').classes()).toContain('link')
+    expect(card.find('[data-cli-signin-code]').exists()).toBe(false)
+    mocks.menu({ kind: 'signin', mode: 'outcome', status: 'succeeded', confirm: true, options: [] })
+    await flushPromises()
+    expect(primaries()).toEqual(['Continue'])
+    await card.get('[data-cli-signin-continue]').trigger('click')
     expect(mocks.sendKeys).toHaveBeenLastCalledWith(['\r'])
   })
   it('rejects control characters and clears secrets when a new login screen appears', async () => {
