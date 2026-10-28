@@ -93,3 +93,16 @@ skips, and `tests/helm/api-key-values.ps1` passed. The existing `proof.mjs` also
 81/81 checks (without its optional v1.4.0 baseline), covering REST, WebSocket, personal-token,
 MCP consent/OAuth and insecure-mode behavior after the forwarding change. Socket-IP preservation and empty trust lists
 are also covered by the backend suite. A deployed ingress and IPv6 network were not exercised.
+
+`inventory-outage.mjs` verifies the fail-closed path against that same backend. Select only
+this rig's rootless API-server PID (the script verifies the process name), then run:
+
+```bash
+PROOF_APISERVER_PID=<proof API-server PID> RIG=<rig directory> DOTNET=<dotnet binary> node tests/ApiKeyAuthProof/inventory-outage.mjs <fixed backend dll>
+```
+
+It pauses the API server, waits for the inventory timeout, proves rotating XFF cannot escape
+the socket bucket, checks another socket client's correct key, resumes the API server and
+proves proxy separation recovers. It asserts exactly one outage warning, one recovery message,
+and no credential disclosure. A `finally` block always resumes the proof API server.
+This outage/recovery proof passed against the real backend and rootless API server.

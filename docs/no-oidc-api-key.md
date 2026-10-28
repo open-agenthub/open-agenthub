@@ -79,7 +79,9 @@ otherwise the limit would not slow that client's guessing.
   inside these CIDRs. A background Kubernetes list/watch tracks primary and secondary pod IPs,
   including terminating pods. It resumes from the list's resource version and reconnects every
   two seconds; requests only read the inventory. An unavailable inventory, or one older than
-  five seconds, fails closed to the socket address. A workload assigned a new IP becomes
+  five seconds, fails closed to the socket address. One warning records the outage and an
+  information log records recovery; proxy clients can temporarily share a throttle bucket
+  during that outage. A workload assigned a new IP becomes
   excluded when its watch event arrives. Narrow ranges remain useful for other untrusted pods.
   Configure IPv6 ingress ranges explicitly. Set both strings to empty to ignore
   XFF entirely, including on direct installations. Outside the chart the default trusts loopback

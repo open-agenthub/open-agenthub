@@ -14,13 +14,16 @@ public sealed class KubernetesForwardedPeerGuard : BackgroundService, IForwarded
 {
     private readonly Kubernetes _kubernetes;
     private readonly string _namespace;
+    private readonly ILogger<KubernetesForwardedPeerGuard> _logger;
+    private bool _outageReported;
     private readonly object _gate = new();
     private Dictionary<string, IPAddress[]>? _pods;
     private DateTimeOffset _refreshed;
     private const string Selector = "agenthub.dev/component in (agent,browser)";
 
-    public KubernetesForwardedPeerGuard(IConfiguration configuration)
+    public KubernetesForwardedPeerGuard(IConfiguration configuration, ILogger<KubernetesForwardedPeerGuard> logger)
     {
+        _logger = logger;
         _namespace = configuration["AgentHub:Namespace"] ?? "agenthub-sessions";
         _kubernetes = new Kubernetes(KubernetesClientConfiguration.IsInCluster()
             ? KubernetesClientConfiguration.InClusterConfig()
@@ -30,8 +33,15 @@ public sealed class KubernetesForwardedPeerGuard : BackgroundService, IForwarded
     public Task<bool> CanForwardAsync(IPAddress address, CancellationToken ct)
     {
         lock (_gate)
-            return Task.FromResult(_pods is not null && DateTimeOffset.UtcNow - _refreshed < TimeSpan.FromSeconds(5) &&
-                !_pods.Values.SelectMany(ips => ips).Any(ip => IpAddressNormalization.Equals(address, ip)));
+        {
+            if (_pods is null || DateTimeOffset.UtcNow - _refreshed >= TimeSpan.FromSeconds(5))
+            {
+                Invalidate();
+                return Task.FromResult(false);
+            }
+            return Task.FromResult(!_pods.Values.SelectMany(ips => ips)
+                .Any(ip => IpAddressNormalization.Equals(address, ip)));
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -53,6 +63,9 @@ public sealed class KubernetesForwardedPeerGuard : BackgroundService, IForwarded
                 {
                     _pods = pods.Items.ToDictionary(pod => pod.Metadata.Name, Addresses);
                     _refreshed = DateTimeOffset.UtcNow;
+                    if (_outageReported)
+                        _logger.LogInformation("Forwarded-header workload inventory recovered; configured proxy trust is restored.");
+                    _outageReported = false;
                 }
                 await foreach (var (type, pod) in response.WatchAsync<V1Pod, V1PodList>(cancellationToken: timeout.Token))
                 {
@@ -66,6 +79,7 @@ public sealed class KubernetesForwardedPeerGuard : BackgroundService, IForwarded
             }
             catch (k8s.Autorest.HttpOperationException) { Invalidate(); }
             catch (HttpRequestException) { Invalidate(); }
+            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested) { break; }
             catch (OperationCanceledException) { Invalidate(); }
             catch (k8s.KubernetesException) { Invalidate(); }
             catch (IOException) { Invalidate(); }
@@ -82,7 +96,13 @@ public sealed class KubernetesForwardedPeerGuard : BackgroundService, IForwarded
 
     private void Invalidate()
     {
-        lock (_gate) _pods = null;
+        lock (_gate)
+        {
+            _pods = null;
+            if (_outageReported) return;
+            _outageReported = true;
+            _logger.LogWarning("Forwarded-header workload inventory unavailable; using socket addresses for API-key throttling. Clients sharing a proxy may temporarily share a throttle bucket.");
+        }
     }
 
     public override void Dispose()
