@@ -8,7 +8,10 @@ const { LocalFileStore, LocalFileError } = require('../files/local-store');
 const { AttachmentMaterializer } = require('../files/materialize');
 const credentials = require('./credential-install');
 const { injectTerminalInput, formatFleetMessage, INTERRUPT_PAUSE_MS, ESCAPE } = require('./terminal-inject');
-const { createNextTurnDelivery, IDLE_QUIET_MS } = require('./next-turn');
+const { createNextTurnDelivery, renderScreen, IDLE_QUIET_MS } = require('./next-turn');
+// How long a typed handover may take to appear in the CLI's transcript. Both CLIs write the
+// user turn when it is submitted, before the model answers.
+const HANDOVER_VERIFY_MS = 10_000;
 const { createContextClear } = require('./context-clear');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs, stateExcludes } = require('./state-archive');
@@ -268,9 +271,29 @@ function createCommonServer(options = {}) {
   // landing in the middle of it.
   let inputHeldForTyping = [];
   let clearTarget = null;
+  // The handover of a context clear not yet seen in the fresh transcript (#336). Inside the state
+  // directory, so the archive carries it to a pod that replaces this one.
+  const handoverFile = require('node:path').join(home, driver.stateDir, 'agenthub-context-handover.json');
+  // A delivery that failed so far, for the Workspace banner; null once delivered.
+  let handoverProblem = null;
   const contextClear = nextTurn && driver.contextClearCommand && !chatMode
     ? createContextClear({
-      scheduleAtSafePoint: action => nextTurn.scheduleAtSafePoint(action),
+      store: {
+        load() {
+          try { return JSON.parse(fs.readFileSync(handoverFile, 'utf8')); } catch { return null; }
+        },
+        save(state) {
+          fs.writeFileSync(handoverFile + '.tmp', JSON.stringify(state), { mode: 0o600 });
+          fs.renameSync(handoverFile + '.tmp', handoverFile);
+          // The next tick archives instead of waiting out the interval.
+          stateTicksSinceUpload = STATE_ARCHIVE_EVERY_TICKS;
+        },
+        remove() {
+          try { fs.rmSync(handoverFile, { force: true }); } catch {}
+          stateTicksSinceUpload = STATE_ARCHIVE_EVERY_TICKS;
+        }
+      },
+      scheduleAtSafePoint: (action, options) => nextTurn.scheduleAtSafePoint(action, options),
       clear: async () => {
         if (exited || !term || restartReason !== null || runtimeDraining) throw new Error('context_clear_unavailable');
         clearTarget = term;
@@ -285,21 +308,75 @@ function createCommonServer(options = {}) {
           const deadline = now() + 15_000;
           while (locateTranscript() === previous && now() < deadline) {
             await new Promise(resolve => setTimeoutImpl(resolve, 100));
+            assertClearTarget();
           }
           if (locateTranscript() === previous) throw new Error('context_clear_identity_unchanged');
         }
+        // A driver's fresh-screen check confirms its clear command; it is not checked again before
+        // a retry, since a typed handover replaces that screen whether or not the CLI took it.
         await nextTurn.waitForInputReady(clearTarget, () => scrollback, lastSize || { cols: 120, rows: 32 }, driver.contextClearScreen);
-        if (term !== clearTarget || exited || restartReason !== null) throw new Error('context_clear_agent_restarted');
+        assertClearTarget();
       },
-      deliver: text => injectTerminalInput(clearTarget, '\x1b[200~' + text + '\x1b[201~', {
-        wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
-      }),
-      onError: () => {
-        const notice = '\r\n[agent] Context clear failed; the follow-up was not sent. Check the terminal.\r\n';
+      waitForInput: async () => {
+        assertClearTarget();
+        await nextTurn.waitForInputReady(clearTarget, () => scrollback, lastSize || { cols: 120, rows: 32 });
+        assertClearTarget();
+      },
+      deliver: async (text, { attempt }) => {
+        return nextTurn.typeHandover(clearTarget, text, () => scrollback, lastSize || { cols: 120, rows: 32 }, { retry: attempt > 1 });
+      },
+      verify: async (text, previous, { submitted }) => {
+        // The transcript is the record of what the model gets. A prompt event only says that
+        // something was submitted, and an owner message the CLI had queued during the clearing
+        // turn is submitted too (#336). The first lines are enough to tell, JSON-escaped the way
+        // the transcript stores them.
+        const needle = JSON.stringify(text.split('\n').slice(0, 2).join('\n').slice(0, 160)).slice(1, -1);
+        // Without a prompt event the CLI most likely never took it: one look, then the next attempt.
+        const deadline = now() + (submitted ? HANDOVER_VERIFY_MS : 0);
+        for (;;) {
+          const file = locateTranscript();
+          let found = false;
+          if (file) {
+            try { found = fs.readFileSync(file, 'utf8').toString().includes(needle); } catch {}
+          }
+          if (found) return { fresh: file !== previous };
+          if (now() >= deadline) return null;
+          await new Promise(resolve => setTimeoutImpl(resolve, 200));
+        }
+      },
+      log: line => console.log('[agent] ' + line),
+      onDelivered: ({ fresh, attempt, round }) => {
+        console.log('[agent] Context handover delivered (attempt ' + attempt + (round ? ', fallback round ' + round : '') + ')' +
+          (fresh ? '' : '; the conversation was not cleared, so it went into the previous one'));
+        if (handoverProblem) setHandoverProblem(null);
+      },
+      onError: (error, { retry, deferred }) => {
+        const reason = error && error.message || String(error);
+        const next = deferred ? 'it is sent when the agent is back'
+          : retry ? 'it is sent at the next safe point' : 'it stays saved and is sent at the next agent start';
+        console.warn('[agent] Context handover not delivered (' + reason + '); ' + next + '.');
+        const notice = '\r\n[agent] Context handover not delivered yet (' + reason + '); ' + next + '.\r\n';
         remember(notice);
         broadcast(notice);
+        setHandoverProblem({ reason, next });
+        // The agent came back while this attempt was still waiting on the one it replaced; its
+        // start found the handover still queued and left it to this attempt.
+        if (deferred && term && term !== clearTarget && !exited && restartReason === null && !runtimeDraining) {
+          setTimeoutImpl(() => contextClear.resume(), 0);
+        }
       }
     }) : null;
+  function assertClearTarget() {
+    if (term !== clearTarget || exited || restartReason !== null || runtimeDraining) throw new Error('context_clear_agent_restarted');
+  }
+  function handoverFrame() {
+    return JSON.stringify({ type: 'agenthub', subtype: 'handover', failed: handoverProblem !== null,
+      ...(handoverProblem ? handoverProblem : {}) });
+  }
+  function setHandoverProblem(value) {
+    handoverProblem = value;
+    for (const socket of activityClients) safeSend(socket, handoverFrame());
+  }
 
   function remember(chunk) {
     signInPrivacy.feed(chunk);
@@ -324,6 +401,31 @@ function createCommonServer(options = {}) {
   let activityPromptAt = now();
   let activityLastOutput = 0;
   let activityLastFrame = '';
+  // A CLI that keeps keys typed before it has drawn takes input from the moment it is spawned. One
+  // that drops them names its input box (driver.inputReadyScreen), and is ready once this
+  // attempt's own output shows it (docs/session-starting.md).
+  let agentReady = false;
+  let readyCheck = null;
+  let readyCheckAgain = false;
+  let HeadlessTerminal = supplied.HeadlessTerminal;
+  function checkAgentReady() {
+    if (agentReady || !term) return;
+    if (readyCheck) { readyCheckAgain = true; return; }
+    // Images install modules beside common/; source checkouts install them in session-agent/.
+    HeadlessTerminal ||= require(require.resolve('@xterm/headless', {
+      paths: [__dirname, require('node:path').join(__dirname, '..', 'session-agent')]
+    })).Terminal;
+    const checking = term;
+    readyCheck = renderScreen(attemptOutput, lastSize || { cols: 120, rows: 32 }, HeadlessTerminal).then(rows => {
+      if (term === checking && driver.inputReadyScreen(rows)) {
+        agentReady = true;
+        publishActivity();
+      }
+    }).catch(() => {}).finally(() => {
+      readyCheck = null;
+      if (readyCheckAgain) { readyCheckAgain = false; checkAgentReady(); }
+    });
+  }
   let stateWithheld = false;
   function persistenceFrame() {
     return JSON.stringify({ type: 'agenthub', subtype: 'persistence', withheld: stateWithheld });
@@ -347,7 +449,12 @@ function createCommonServer(options = {}) {
       else state = activityLastOutput > 0 && now() - activityLastOutput < IDLE_QUIET_MS ? 'working' : 'idle';
     }
     if (state === 'waiting') reason = activityWaitingFor;
-    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ...(reason ? { reason } : {}) });
+    // Whether the CLI runs and takes input, apart from what its turn is doing. A hook-driven
+    // state stays 'unknown' until the CLI's first hook, which an idle TUI never fires before a
+    // person types; the Workspace waited for that and showed "Session starting" over a CLI that
+    // was already reading keys (#306). See agentReady for when that is.
+    const ready = agentReady && Boolean(term) && !exited && restartReason === null && !runtimeDraining;
+    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ready, ...(reason ? { reason } : {}) });
   }
   function removeActivityClient(socket) {
     activityClients.delete(socket);
@@ -384,21 +491,31 @@ function createCommonServer(options = {}) {
         return done && done(new Error('sign-in state withheld'));
       }
       const revision = signInPrivacy.revision();
-      execFile('/bin/sh', ['-c', archiveScript(driver), 'sh', '/tmp/state.tgz'], { cwd: home }, archiveError => {
-        if (archiveError) return done && done(archiveError);
+      let directory;
+      try {
+        // Other processes share /tmp; neither the archive nor its .part file may use a predictable path.
+        directory = fs.mkdtempSync(require('node:path').join(env.TMPDIR || require('node:os').tmpdir(), 'agenthub-state-'));
+      } catch (error) { return done && done(error); }
+      const file = require('node:path').join(directory, 'state.tgz');
+      const finish = error => {
+        try { fs.rmSync(directory, { recursive: true, force: true }); }
+        catch { console.warn('[agent] Archive scratch cleanup failed.'); }
+        if (done) done(error);
+      };
+      execFile('/bin/sh', ['-c', archiveScript(driver), 'sh', file], { cwd: home }, archiveError => {
+        if (archiveError) return finish(archiveError);
         const upload = () => {
           const pending = signInPrivacy.flush();
           if (pending) { void pending.then(upload); return; }
           // An authorization screen can appear while tar runs. Never upload that snapshot,
           // even if the person already finished or cancelled the flow before tar exited.
           if (signInPrivacy.active() || revision !== signInPrivacy.revision()) {
-            try { fs.unlinkSync('/tmp/state.tgz'); } catch {}
             setStateWithheld(true);
-            return done && done(new Error('sign-in state changed'));
+            return finish(new Error('sign-in state changed'));
           }
-          execFile('curl', uploadArgs('/tmp/state.tgz', statePut, insecureStorage), error => {
+          execFile('curl', uploadArgs(file, statePut, insecureStorage), error => {
             if (!error) { uploadedStateSignature = signature; stateTicksSinceUpload = 0; setStateWithheld(false); }
-            if (done) done(error);
+            finish(error);
           });
         };
         upload();
@@ -1099,6 +1216,8 @@ function createCommonServer(options = {}) {
     launchedAt = now();
     if (!firstLaunchedAt) firstLaunchedAt = launchedAt;
     chatMode = command.pipe === true;
+    // A piped CLI reads its stream from the start; there is no screen to wait for.
+    agentReady = chatMode || typeof driver.inputReadyScreen !== 'function';
     console.log('[agent] driver=' + driver.name + ' mode=' + mode + ' resume=' + attemptedResume +
       (chatMode ? ' ui=chat' : '') +
       ' cwd=' + cwd + ' cmd=' + command.cmd + ' ' + command.args.join(' '));
@@ -1114,6 +1233,7 @@ function createCommonServer(options = {}) {
     });
 
     if (nextTurn) nextTurn.agentStarted();
+    if (contextClear) contextClear.resume();
     term.onData(data => {
       activityLastOutput = now();
       if (nextTurn) nextTurn.agentOutput();
@@ -1121,9 +1241,12 @@ function createCommonServer(options = {}) {
       remember(data);
       broadcast(data);
       limitDetector.feedTerminal(data);
+      if (!agentReady) checkAgentReady();
     });
 
     term.onExit(({ exitCode, signal }) => handleAgentExit(exitCode, signal));
+    // Subscribers otherwise learn of the new process on the next 500 ms tick.
+    publishActivity();
   }
 
   function attachmentDelivery() {
@@ -1213,6 +1336,7 @@ function createCommonServer(options = {}) {
         }
         safeSend(socket, activityFrame());
         safeSend(socket, persistenceFrame());
+        if (handoverProblem) safeSend(socket, handoverFrame());
         return;
       }
       if (exited) return;
@@ -1626,7 +1750,7 @@ function createCommonServer(options = {}) {
   }
 
   function deliverNextTurnIfIdle() {
-    if (!nextTurn || chatMode || exited || restartReason !== null || runtimeDraining) return;
+    if (!nextTurn || chatMode || exited || restartReason !== null || runtimeDraining || !agentReady) return;
     const target = term;
     nextTurn.deliverIfIdle(target, () => scrollback, lastSize || { cols: 120, rows: 32 })
       .catch(error => console.log('[agent] next-turn: delivery failed: ' + (error && error.message || error)))

@@ -55,6 +55,10 @@ public interface ISessionService
     /// <summary>Rewrites the secret copies of the owner's sessions from the current store, project
     /// and session selections — after a project's selection changed. Default no-op.</summary>
     Task SyncSessionSecretsAsync(string owner, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>The owner's retry for withdrawn copies (#303): runs the strict sync and returns the
+    /// session. Throws <see cref="SessionSecretCopiesPendingException"/> while copies stay unwritable.</summary>
+    Task<SessionInfo> ResyncSessionSecretsAsync(string owner, string id, CancellationToken ct = default)
+        => throw new NotSupportedException();
     /// <summary>Refuses a project selection under which the project, or one of its sessions, would
     /// receive two secrets landing in the same place (#253). <paramref name="projectId"/> is null
     /// for a project being created. Default no-op, for test doubles without secrets.</summary>
@@ -71,9 +75,9 @@ public interface ISessionService
         => ResolveSessionSecretIdsAsync(owner, session.ProjectId, SessionSecretSelection.Parse(session.SecretIdsJson), ct);
     /// <summary>
     /// Gives a session a stored secret in answer to its own request, and delivers it at once where
-    /// that is possible. Throws <see cref="KeyNotFoundException"/> (no such session),
-    /// <see cref="ArgumentException"/> (no such secret) or <see cref="CredentialScopeException"/>
-    /// (outside the limit the session was created with).
+    /// that is possible. The session's ceiling, if it has one, grows by this secret: the owner
+    /// answered for this session alone. Throws <see cref="KeyNotFoundException"/> (no such
+    /// session) or <see cref="ArgumentException"/> (no such secret, a name clash, a scheduled session).
     /// </summary>
     Task<SessionSecretGrant> GrantSessionSecretAsync(string owner, string sessionId, string secretId,
         CancellationToken ct = default) => throw new NotSupportedException();
@@ -163,6 +167,14 @@ public interface ISessionService
         CancellationToken ct = default) => throw new NotSupportedException();
     /// <summary>Partial update of session settings; non-title changes apply on the next resume.</summary>
     Task<SessionInfo> UpdateSessionAsync(string owner, string id, UpdateSessionRequest req, CancellationToken ct = default);
+    /// <summary>
+    /// Moves a scheduled session to another project (null = none) and replaces the project-bound
+    /// part of its workload template, so its next run receives the destination's secrets only
+    /// (docs/session-organization.md). An active run is refused with
+    /// <see cref="ScheduledRunActiveException"/> unless <paramref name="stopActiveRun"/> is set.
+    /// </summary>
+    Task<SessionInfo> MoveScheduledSessionAsync(string owner, string id, string? projectId, bool stopActiveRun,
+        CancellationToken ct = default) => throw new NotSupportedException();
     Task<IReadOnlyList<SessionInfo>> ListSessionsAsync(string owner, CancellationToken ct = default);
     Task<SessionInfo?> GetSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>Clears the "waiting for reply" flag (e.g. once the user opens the terminal).</summary>

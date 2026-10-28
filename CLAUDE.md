@@ -98,9 +98,9 @@ Do not add a comment that restates the code. Do not leave commented-out code beh
 
 - **Session pods run with a read-only root filesystem** and as uid 1000. Anything that writes to
   disk outside `/tmp` or `$HOME` fails at runtime while passing every test.
-- **`/tmp` in a session pod is an emptyDir with `fsGroup` set**, so Kubernetes gives it mode 2777
-  without the sticky bit. Tools that refuse such a directory disable themselves. `TMPDIR` points
-  at a directory the agent owns; leave it that way.
+- **`/tmp` is an owned subPath inside an emptyDir**: the non-root `prepare-tmp` init sets it
+  to 1777 before consumers start. Mounting the volume root instead exposes mode 2777 without
+  the sticky bit under `fsGroup`. Keep this setup and the private `TMPDIR` directory.
 - **The agent runtime ships `node` and `npm` only** — no `dotnet`, `docker`, `trivy` or `pwsh`. A
   session asked to run the .NET suite cannot, unless it is started with `runAsRoot` so it can
   install what it needs, or with a custom image.

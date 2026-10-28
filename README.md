@@ -171,8 +171,15 @@ storage can be skipped with `AGENTHUB_OBJECT_STORAGE=0` — not recommended.
    default): `kubectl -n agenthub port-forward svc/agenthub-frontend 8080:80` →
    http://localhost:8080 (the quickstart prints the command with the right `--context`).
    The frontend proxies `/api` and `/ws` to the backend, so one port-forward is enough.
-2. **Enable authentication** (auth is *disabled* by default — fine for a first test, not
-   for anything reachable by others). See the
+2. **Sign in with the API key.** Without OIDC the chart generates a random API key into the
+   Secret `agenthub-api-key`; the UI asks for it once per browser session and it acts as the
+   admin user `admin`. `helm status agenthub -n agenthub` prints how to read it:
+   ```bash
+   kubectl -n agenthub get secret agenthub-api-key -o jsonpath='{.data.api-key}' | base64 -d; echo
+   ```
+   The backend refuses to start with no login configured at all; `auth.insecureDevMode=true`
+   turns the login off for local development only ([docs/no-oidc-api-key.md](docs/no-oidc-api-key.md)).
+3. **For more than one person, enable OIDC.** See the
    [provider examples below](#configuring-oauthoidc-login), then:
    ```bash
    helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
@@ -180,11 +187,11 @@ storage can be skipped with `AGENTHUB_OBJECT_STORAGE=0` — not recommended.
      --set oidc.clientId=<client-id> \
      --set oidc.audience=<expected-audience>
    ```
-3. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
+4. **Store your credentials** (Settings → Credentials): SSH key or GitLab/GitHub token
    for repo access, plus an Anthropic, OpenAI, Cursor, or OpenCode API key if using API-key billing.
    OpenClaw ApiKey mode reuses those existing keys (pick Anthropic, OpenAI, or Cursor as the
    source). These inputs are write-only; status responses expose only stored/not-stored booleans.
-4. **Start your first session**: pick Claude, Codex, Cursor, OpenClaw, or OpenCode, Subscription or API key,
+5. **Start your first session**: pick Claude, Codex, Cursor, OpenClaw, or OpenCode, Subscription or API key,
    and a mode (interactive / autonomous / scheduled), plus any repo, custom image,
    policy, and MCP config. An Interactive Subscription session can complete provider
    login in its terminal; Codex uses `codex login --device-auth`, Cursor uses

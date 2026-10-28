@@ -1,0 +1,124 @@
+
+== 0. Baseline v1.4.0: no auth configured ==
+PASS baseline starts with no auth configured at all
+PASS baseline answers an anonymous GET /api/sessions (the defect) — HTTP 200
+PASS baseline answers an anonymous GET /api/admin/overview (the defect) — HTTP 200
+PASS baseline answers an anonymous GET /api/admin/roles (the defect) — HTTP 200
+PASS baseline runs an anonymous admin cleanup dry-run (the defect) — HTTP 500
+
+== 1. Startup is refused without an auth configuration ==
+PASS mode "none": the process exits with code 1 — exit 1
+PASS mode "none": one FATAL line naming the fix — FATAL: No authentication is configured, so the backend refuses to start. Configure one of: Oidc:Authority (an OIDC provider), Auth:ApiKey (a static key of at least 32 characters; the chart generates one when oidc.authority is empty), or, for local development only, Auth:InsecureDevMode=true, which lets anyone who can reach the backend act as an admin.
+PASS mode "none": nothing ever listened on 8080
+PASS mode "short": the process exits with code 1 — exit 1
+PASS mode "short": one FATAL line naming the fix — FATAL: Auth:ApiKey is shorter than 32 characters. Use a random key, e.g. `openssl rand -hex 24`, or leave it to the chart, which generates one.
+PASS mode "short": nothing ever listened on 8080
+PASS mode "lowEntropy": the process exits with code 1 — exit 1
+PASS mode "lowEntropy": one FATAL line naming the fix — FATAL: Auth:ApiKey uses fewer than 8 different characters, so it is not random. Use e.g. `openssl rand -hex 24`, or leave it to the chart, which generates one.
+PASS mode "lowEntropy": nothing ever listened on 8080
+PASS mode "insecureTypo": the process exits with code 1 — exit 1
+PASS mode "insecureTypo": one FATAL line naming the fix — FATAL: No authentication is configured, so the backend refuses to start. Configure one of: Oidc:Authority (an OIDC provider), Auth:ApiKey (a static key of at least 32 characters; the chart generates one when oidc.authority is empty), or, for local development only, Auth:InsecureDevMode=true, which lets anyone who can reach the backend act as an admin.
+PASS mode "insecureTypo": nothing ever listened on 8080
+
+== 2. API key mode ==
+PASS backend starts with an API key
+PASS /api/config: authMode apiKey, anonymous, without the key
+PASS GET /api/sessions: 401 without a key and with a wrong one — 401/401
+PASS GET /api/sessions: the right key gets through — HTTP 200
+PASS GET /api/projects: 401 without a key and with a wrong one — 401/401
+PASS GET /api/projects: the right key gets through — HTTP 200
+PASS GET /api/admin/access: 401 without a key and with a wrong one — 401/401
+PASS GET /api/admin/access: the right key gets through — HTTP 200
+PASS GET /api/admin/overview: 401 without a key and with a wrong one — 401/401
+PASS GET /api/admin/overview: the right key gets through — HTTP 200
+PASS GET /api/admin/roles: 401 without a key and with a wrong one — 401/401
+PASS GET /api/admin/roles: the right key gets through — HTTP 200
+PASS POST /api/admin/session-storage-cleanup/dry-run: 401 without a key and with a wrong one — 401/401
+PASS POST /api/admin/session-storage-cleanup/dry-run: the right key gets through — HTTP 500
+PASS GET /api/tokens: 401 without a key and with a wrong one — 401/401
+PASS GET /api/tokens: the right key gets through — HTTP 200
+PASS 401 carries a Bearer challenge
+PASS the key in a query string is ignored outside /ws
+PASS a key one character short is refused
+PASS the key acts as the configured owner, an admin — {"isAdmin":true,"user":"admin"}
+PASS credentials stored as the key owner
+PASS session created with the key — HTTP 200
+PASS the session pod exists on the real API server with a callback token
+PASS the API key does not reach the session pod spec
+PASS WebSocket events: 401 without a key and with a wrong one — 401/401
+PASS WebSocket terminal: 401 without a key and with a wrong one — 401/401
+PASS WebSocket shell: 401 without a key and with a wrong one — 401/401
+PASS WebSocket events: the right key in access_token upgrades (101)
+PASS WebSocket events: the key in the Authorization header upgrades too (101)
+PASS WebSocket terminal: the right key passes authentication (the pod has no agent in the rig) — HTTP 409
+PASS internal callback: the session token works without the API key — HTTP 204
+PASS internal callback: a wrong session token is still refused — HTTP 401
+PASS internal callback: the API key is no substitute for the session token — HTTP 401
+PASS internal GET with the session token is not caught by the API key scheme — HTTP 200
+PASS a personal API token is issued to the key owner
+PASS remote API: the personal token lists the owner's session, no API key involved — HTTP 200
+PASS remote API: still 401 without a token
+PASS a personal token is not accepted as the API key
+PASS MCP: anonymous client registration still works
+PASS MCP: prompt=none cannot get a code without the key — http://127.0.0.1:9/callback?error=login_required&error_description=The%20API%20key%20has%20to%20be%20entered%20on%20the%20consent%20screen.&error_uri=https%3A%2F%2Fdocumentation.openiddict.com%2Ferrors%2FID2015&&iss=https%3A%2F%2F127.0.0.1%3A8443%2F
+PASS MCP: the consent screen asks for the API key
+PASS MCP: a wrong key re-renders the form with 401, without echoing it — HTTP 401
+PASS MCP: approving without a key is refused — HTTP 401
+PASS MCP: the right key yields an authorization code — HTTP 302
+PASS MCP: a stored approval does not skip the key next time
+PASS MCP: code exchanged for an access token
+PASS MCP: /mcp initialises with the OAuth token — HTTP 200
+PASS MCP: tools/list answers — 21 tools
+PASS MCP: session_list shows the key owner's session
+PASS MCP: the API key itself is not an MCP token (scheme untouched)
+PASS MCP: /mcp without a token is 401
+PASS 10 wrong keys from one client: each 401 — 401,401,401,401,401,401,401,401,401,401
+PASS the 11th attempt gets 429 with Retry-After, even with the right key — HTTP 429, Retry-After 60
+PASS the WebSocket route is throttled for that client too — HTTP 429
+PASS and so is the MCP consent form — HTTP 429
+PASS another client (the owner behind the same ingress) is unaffected
+PASS 300 wrong keys from rotating clients through one address: all 401 — 401
+PASS and the owner with the right key still gets in
+PASS 30 personal-token calls from one client do not count as wrong keys
+PASS each wrong key is logged with the client, without the value
+PASS the backend log never contains the key — 4018 log lines
+PASS nor a wrong key that was presented
+PASS the log names the mode and the owner
+
+== 3. Insecure development mode ==
+PASS backend starts with Auth:InsecureDevMode=true
+PASS /api/config reports insecureDev, so the UI warns
+PASS anonymous requests work, as before
+PASS and are admin user "dev" — {"isAdmin":true,"user":"dev"}
+PASS WebSockets need no token either
+PASS a warning is logged on start — INSECURE DEVELOPMENT MODE (Auth:InsecureDevMode=true): there is no login. Every request is authentic
+
+86/86 checks passed
+
+== browser.mjs apiKey ==
+PASS without a key the app shows the API key prompt
+PASS no API data was loaded before the key — [["/api/config",200]]
+PASS a wrong key is reported on the prompt — That API key is not valid.
+PASS a wrong key is not stored
+PASS the right key opens the app
+PASS the key is in sessionStorage only, not localStorage
+PASS the key owner's session is listed (REST with the key)
+PASS the avatar names the owner "admin"
+PASS the session event socket carries the key in access_token
+PASS and stays open (the backend accepted it) — 1 frames, closed=false
+PASS the admin area opens for the key owner
+PASS a reload keeps the key for the browser session
+PASS a new browser session (empty sessionStorage) asks for the key again
+PASS a rejected stored key is dropped and the prompt returns
+PASS sign out forgets the key
+PASS no page errors
+
+16/16 checks passed
+
+== browser.mjs insecure ==
+PASS insecure mode: the warning banner is shown
+PASS insecure mode: no key prompt
+PASS insecure mode: the banner cannot be dismissed
+PASS no page errors
+
+4/4 checks passed

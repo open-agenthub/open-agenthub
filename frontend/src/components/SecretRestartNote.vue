@@ -15,11 +15,23 @@ const props = defineProps({
 const emit = defineEmits(['restarted'])
 
 const armed = ref(false)
+const resyncing = ref(false)
+const resyncError = ref('')
+
+// #303: copies withdrawn after a failed rewrite. Retrying writes them again; it restarts nothing.
+async function resync() {
+  resyncing.value = true
+  resyncError.value = ''
+  try { emit('restarted', await api.resyncSessionSecrets(props.session.id)) }
+  catch (e) { resyncError.value = String(e.message || e) }
+  finally { resyncing.value = false }
+}
 const busy = ref(false)
 const error = ref('')
 
 async function restart() {
-  if (!armed.value) { armed.value = true; return }
+  // A schedule's template update restarts nothing, so it needs no second click.
+  if (!armed.value && !props.session.scheduleSecretsOutdated) { armed.value = true; return }
   busy.value = true
   error.value = ''
   try {
@@ -36,14 +48,31 @@ async function restart() {
 </script>
 
 <template>
-  <div v-if="session.secretsPendingRestart" class="secret-restart" role="status" :data-secret-restart-note="session.id">
+  <template v-if="session.secretsWithdrawn || session.scheduleSecretsOutdated || session.secretsPendingRestart">
+  <div v-if="session.secretsWithdrawn" class="secret-restart" role="status" :data-secrets-withdrawn-note="session.id">
+    <span><template v-if="named">“{{ session.title || session.id }}”: </template>this session's secrets are withdrawn
+      after an update could not be written, so no stale value stays behind. Its files in <code>~/.secrets</code>
+      <template v-if="session.mode === 'Scheduled'">and its next runs</template> have none until they are written again,
+      which is retried at the next secret or project change.</span>
+    <button type="button" :disabled="resyncing" data-secrets-resync @click="resync">{{ resyncing ? 'Retrying…' : 'Retry' }}</button>
+    <small v-if="resyncError" class="err" role="alert">{{ resyncError }}</small>
+  </div>
+  <div v-if="session.scheduleSecretsOutdated" class="secret-restart" role="status" :data-schedule-secrets-note="session.id">
+    <span><template v-if="named">“{{ session.title || session.id }}”: </template>the next scheduled run would still start with
+      the previous secret variables, because its schedule could not be updated. It is retried at the next secret or project change.</span>
+    <button type="button" :disabled="busy" data-schedule-secrets-update @click="restart">{{ busy ? 'Updating…' : 'Update schedule' }}</button>
+    <small v-if="error" class="err" role="alert">{{ error }}</small>
+  </div>
+  <div v-else-if="session.secretsPendingRestart" class="secret-restart" role="status" :data-secret-restart-note="session.id">
     <span><template v-if="named">“{{ session.title || session.id }}”: </template>changed secret variables reach the agent
-      at its next start; the running process still has the previous ones. Files in <code>~/.secrets</code> are already current.</span>
+      at its next start; the running process still has the previous ones<template v-if="session.secretsWithdrawn">, including
+      any secret deleted since it started</template>.<template v-if="!session.secretsWithdrawn"> Files in <code>~/.secrets</code> are already current.</template></span>
     <button v-if="canApplyNow(session)" type="button" :class="{ armed }" :disabled="busy" data-secret-restart
       @click="restart">{{ busy ? 'Restarting…' : armed ? 'Really restart? A turn in progress is interrupted' : 'Restart now' }}</button>
     <span v-else class="later">It is not running interactively, so it is not restarted for them.</span>
     <small v-if="error" class="err" role="alert">{{ error }}</small>
   </div>
+  </template>
 </template>
 
 <style scoped>

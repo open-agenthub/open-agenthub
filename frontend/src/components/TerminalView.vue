@@ -78,7 +78,8 @@ const drawerKind = ref('agent')
 // Keep menu detection independent of drawer visibility so answering never requires opening it.
 const cliMenu = ref(null)
 const stateWithheld = ref(false)
-watch(() => props.session.id, () => { stateWithheld.value = false })
+const handoverProblem = ref(null)
+watch(() => props.session.id, () => { stateWithheld.value = false; handoverProblem.value = null })
 const promptSuggestion = ref('')
 const agentActivity = ref({ state: 'unknown', source: 'hooks' })
 watch(() => agentActivity.value.state, state => { if (state === 'working') promptSuggestion.value = '' })
@@ -113,12 +114,15 @@ const transcriptItems = computed(() => toTranscriptItems(conversation.value))
 // output: it has no idle prompt to invite a task at, so its empty conversation only means early.
 // "Connected" alone is not "up": the hub accepts the terminal socket before it dials the pod, so
 // while the agent's server is not listening yet the socket opens, closes and reopens every two
-// seconds. The agent answers the activity subscription at once with a known state, and every
-// close resets it to 'unknown', so a known state is what says the agent is there.
+// seconds. The agent answers the activity subscription at once, and every close resets the state
+// to 'unknown'. Its `ready` says the CLI runs and takes input; a hook-driven state stays
+// 'unknown' until the CLI's first hook, which an idle Claude never fires before someone types
+// (#306). A runtime without `ready` is up once its state is known.
 const conversationStarting = computed(() => {
   if (!isLive.value || transcriptItems.value.length) return ''
   if (props.session?.phase === 'Pending') return 'Waiting for the session’s pod to start…'
-  if (statuses.agent !== 'connected' || agentActivity.value.state === 'unknown') return 'Starting the agent…'
+  const agentUp = agentActivity.value.ready ?? agentActivity.value.state !== 'unknown'
+  if (statuses.agent !== 'connected' || !agentUp) return 'Starting the agent…'
   return String(props.session?.mode).toLowerCase() === 'interactive' ? '' : 'The agent is starting its task…'
 })
 // Composer messages that reached the terminal and that the CLI has not taken yet (#153), kept
@@ -515,7 +519,9 @@ function confirmCliMenu() {
   void agentTerminal.value?.sendKeys([CONFIRM_KEYS]).catch(() => {})
 }
 function cancelCliMenu() {
-  void agentTerminal.value?.sendKeys([CANCEL_KEYS]).catch(() => {})
+  // A sign-in prompt outside the TUI (claude/sign-in.sh) does not read Esc; Ctrl+C ends it.
+  const keys = cliMenu.value?.cancel === 'interrupt' ? '\x03' : CANCEL_KEYS
+  void agentTerminal.value?.sendKeys([keys]).catch(() => {})
 }
 function toggleDrawer(kind) {
   if (kind === 'shell') shellOpened.value = true
@@ -728,6 +734,9 @@ function interruptWorkspaceAgent() {
         <div v-if="stateWithheld && capabilities.canManage && !sharedToken" role="status" class="session-input-state" data-state-withheld>
           State not saved: sign-in data is present or its privacy check could not finish. New resume state will be saved when the check passes; restarting now may lose recent progress.
         </div>
+        <div v-if="handoverProblem" role="alert" class="session-input-state" data-handover-failed>
+          Context handover not delivered: the cleared conversation has not received the agent's handover yet ({{ handoverProblem.reason }}); {{ handoverProblem.next }}. Check the agent terminal.
+        </div>
         <ConversationTimeline v-if="modern && !isChat" :key="session.id" :session-id="session.id" :shared-token="sharedToken" :items="transcriptItems" :loading="transcriptBusy" :starting="conversationStarting"
           :error="transcriptError" :source="conversation?.source" :can-quote="canCompose" :inviting="canTask"
           :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" @send-pending="sendPendingNow" />
@@ -747,7 +756,7 @@ function interruptWorkspaceAgent() {
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
             :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
-            @menu="onCliMenu" @suggestion="promptSuggestion = $event" @activity="agentActivity = $event" @persistence="stateWithheld = $event.withheld" />
+            @menu="onCliMenu" @suggestion="promptSuggestion = $event" @activity="agentActivity = $event" @persistence="stateWithheld = $event.withheld" @handover="handoverProblem = $event.failed ? $event : null" />
           <TerminalPane v-if="isLive && capabilities.canShell && shellOpened" v-show="activeTab === 'shell' || (modern && drawerKind === 'shell')"
             :session="session" kind="shell" :active="activeTab === 'shell' || (modern && terminalOpened && drawerKind === 'shell')" @status="statuses.shell = $event" />
         </div>

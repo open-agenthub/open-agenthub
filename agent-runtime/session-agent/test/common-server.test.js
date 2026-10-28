@@ -330,15 +330,15 @@ test('common transport archives driver state without its subscription credential
   // Every presigned url goes to curl as an argument, never through a shell.
   assert.deepEqual(harness.commands[0], { file: 'curl',
     args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/agenthub-scrollback-proof/scrollback.log', 'https://storage.invalid/scrollback'] });
-  assert.match(harness.commands[1].args[1], /find "\.test-agent" \\\( -path "\.test-agent\/auth\.json" \\\) -prune /);
+  assert.match(harness.commands[1].args[1], /-path "\.test-agent\/auth\.json" -o /);
   assert.match(harness.commands[2].args[1], /tar -I 'gzip -1' -cf "\$1\.part" /);
-  assert.deepEqual(harness.commands[2].args.slice(2), ['sh', '/tmp/state.tgz']);
+  assert.deepEqual(harness.commands[2].args.slice(2), ['sh', '/tmp/agenthub-state-proof/state.tgz']);
   // The home directory is the working directory, not an argument a shell would see.
   assert.deepEqual(harness.commands[2].options, { cwd: '/home/agent' });
   assert.deepEqual(harness.commands[1].options, { cwd: '/home/agent' });
   assert.doesNotMatch(harness.commands[2].args[1], /curl|storage\.invalid/);
   assert.deepEqual(harness.commands[3], { file: 'curl',
-    args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/state.tgz', 'https://storage.invalid/state'] });
+    args: ['-fsS', '-k', '--max-time', '120', '-T', '/tmp/agenthub-state-proof/state.tgz', 'https://storage.invalid/state'] });
   assert.deepEqual(harness.commands[1].args.slice(2), []);
   assert.match(harness.commands[2].args[1], /"\.test-agent"/);
   assert.match(harness.commands[2].args[1], /--exclude="\.test-agent\/auth\.json"/);
@@ -365,7 +365,7 @@ test('common transport applies optional stateExcludes as extra tar excludes', ()
   // would count as changed state and trigger an archive that does not even contain it.
   const signature = harness.commands[0].args[1];
   assert.match(signature, /-path "\.openclaw\/auth-profiles\.json" -o /);
-  assert.match(signature, /-o -path "\.openclaw\/agents\/\*\/agent\/openclaw-agent\.sqlite" \\\) -prune /);
+  assert.match(signature, /-path "\.openclaw\/agents\/\*\/agent\/openclaw-agent\.sqlite" -o /);
 });
 
 test('common transport keeps the last archive unless tar finished, accepting files changed while read', () => {
@@ -1384,4 +1384,26 @@ test('common transport validates turnHooks when a driver declares it', () => {
   };
   assert.throws(() => validateDriver({ ...base, turnHooks: 'yes' }), /turnHooks must be a boolean/);
   assert.equal(validateDriver({ ...base, turnHooks: true }).turnHooks, true);
+});
+
+test('state archives use separate real 0700 temporary directories and remove them after upload', t => {
+  const root = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'archive-private-proof-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const directories = [];
+  const harness = createHarness({ TMPDIR: root, AGENTHUB_STATE_PUT_URL: 'https://example.com/state' }, {}, {
+    mkdtempSync(prefix) {
+      const directory = fs.mkdtempSync(prefix);
+      assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+      directories.push(directory); return directory;
+    },
+    rmSync: (file, options) => fs.rmSync(file, options)
+  });
+  harness.intervals[0].callback();
+  harness.signals.SIGTERM();
+  assert.equal(directories.length, 2);
+  assert.notEqual(directories[0], directories[1]);
+  for (const directory of directories) {
+    assert.equal(fs.existsSync(directory), false);
+    assert.ok(harness.commands.some(command => command.args.includes(path.join(directory, 'state.tgz'))));
+  }
 });

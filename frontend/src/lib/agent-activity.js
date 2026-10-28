@@ -7,7 +7,9 @@ export function parseActivityFrame(data) {
     return frame?.type === 'agenthub' && frame.subtype === 'activity' &&
       ['working', 'waiting', 'idle', 'unknown'].includes(frame.state) &&
       ['hooks', 'output'].includes(frame.source)
-      ? { state: frame.state, source: frame.source, ...(['approval', 'answer'].includes(frame.reason) ? { reason: frame.reason } : {}) }
+      ? { state: frame.state, source: frame.source,
+          ...(typeof frame.ready === 'boolean' ? { ready: frame.ready } : {}),
+          ...(['approval', 'answer'].includes(frame.reason) ? { reason: frame.reason } : {}) }
       : null
   } catch { return null }
 }
@@ -18,5 +20,18 @@ export function parsePersistenceFrame(data) {
     const frame = JSON.parse(data)
     return frame?.type === 'agenthub' && frame.subtype === 'persistence' &&
       typeof frame.withheld === 'boolean' ? { withheld: frame.withheld } : null
+  } catch { return null }
+}
+
+// A context-clear handover the runtime could not deliver yet (#336): the fresh conversation would
+// otherwise start without it and nothing outside the terminal would say so.
+export function parseHandoverFrame(data) {
+  if (typeof data !== 'string' || !data.startsWith('{')) return null
+  try {
+    const frame = JSON.parse(data)
+    if (frame?.type !== 'agenthub' || frame.subtype !== 'handover' || typeof frame.failed !== 'boolean') return null
+    if (!frame.failed) return { failed: false }
+    const text = value => typeof value === 'string' ? value.slice(0, 200) : ''
+    return { failed: true, reason: text(frame.reason), next: text(frame.next) }
   } catch { return null }
 }

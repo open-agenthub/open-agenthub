@@ -110,8 +110,8 @@ A project holds `secretIds`; a session holds `secretIds` too.
   permissions nobody uses by default. The issue asked for "a session created in the project
   receives that selection"; the allow list falls out of it.
 - A duplicate keeps the source's list when it stays in the same project and follows the new
-  project otherwise. Scheduled sessions refuse a change of `secretIds` like any other runtime
-  field, because their CronJob template fixes the variable names.
+  project otherwise. A scheduled session's `secretIds` can change too; its template follows (#301,
+  below).
 
 ## Delivery into the pod
 
@@ -234,10 +234,47 @@ request, and widening the project for every session would give it to agents that
 edit dialog's compatibility field `secretGrantIds` only revokes. The owner can now replace
 `secretGrants` explicitly, as described below.
 
-**Asking cannot widen a limit.** A session created by a restricted token, or spawned by another
-session, records a ceiling at creation (`sessions.secret_ceiling`): the token's secrets, or the
-parent's at the moment of the spawn. A grant outside it is `403 secret_not_allowed`. The field is
-set by the hub only and is ignored in a request body; otherwise the caller could lift its own limit.
+**Asking alone cannot widen a limit.** A session created by a restricted token, or spawned by
+another session, records a ceiling at creation (`sessions.secret_ceiling`): the token's secrets,
+or the parent's at the moment of the spawn. A grant outside it is `403 secret_not_allowed`. The
+field is set by the hub only and is ignored in a request body; otherwise the caller could lift its
+own limit.
+
+**The owner's answer widens it by that one secret (#330).** Until #330 the ceiling refused request
+answers as well. Every session an agent spawns has a ceiling, and a secret typed in to answer a
+request is new, so it was never inside one: the answer came back `403`, the value stayed stored,
+the session got nothing, and the request stayed open. The page did not say so either, because the
+error was shown inside the form that saving had just closed. Now an answer adds the secret to the
+ceiling of the requesting session, and to nothing else. Only the signed-in owner can answer
+(`/api/secret-requests` is not reachable with a personal API token or a session's callback
+token), so this is the same person who could have created the session with the secret in the first
+place. A session spawned from it later still gets at most what it holds. A refused answer (a name
+clash, a scheduled session) leaves the form open with the error and the typed value, and the request
+stays open for another try.
+
+**Storing and granting are one call.** The form used to store the value through `/api/secrets` and
+then answer with its id, so a refused grant left a stored secret nobody had been given. Now
+`POST /api/secret-requests/{id}/provide` takes the secret itself. A new secret is stored, granted,
+and removed again if the grant is refused. An existing one is granted first and only then given
+the new name or value, so a refusal changes nothing that other sessions receive. Answering with
+`secretId` alone, for a secret stored before, still works.
+
+**Who can widen a ceiling.** Only this call does, and only for the requesting session, with a
+non-inheritable grant. Checked against the real backend in API-key mode
+(`tests/SecretRequestProof/repro.mjs`, 20 checks):
+- the callback token of the requesting session and of its parent, sent as `Bearer` or
+  `X-Agent-Token`, gets `401` on `/api/secret-requests/{id}/provide`;
+- the agent's own spawn of a child asking for the answered secret, or for one outside the ceiling,
+  gets `403`: the answer is not inheritable unless the owner later says so in the session's grants;
+- the ceiling grew by exactly the answered ids.
+
+- *Rejected: leave the ceiling alone and tell the owner to grant the secret to the parent first.*
+  The parent's grant does not reach a child that is already running; its ceiling was fixed at the
+  spawn. The owner would have to recreate the session to answer a question it asked.
+- *Rejected: drop the ceiling of a session once its owner answers anything.* That would turn one
+  answer into consent to every secret the parent or token was kept from handing over.
+- Grants set in the edit dialog still stop at the ceiling. They are a list the client sends, not an
+  answer to the agent's request for one name.
 
 - *Rejected: the backend handing the value to the tool.* It would put the value into the MCP
   result and from there into the transcript, the one place the whole flow exists to avoid.
@@ -272,8 +309,9 @@ the kubelet, copying the session's secret into the directory.
   session selected.
 - **The project selection is a dialog on the project in the sidebar** (the key button next to
   rename and color), the same place every other project setting is changed. The session dialogs
-  show the picker under the project field, because what they offer depends on it: the project's
-  selection inside a project, every stored secret outside one, and the hint says which applies.
+  show their secret control under the project field, because what it starts from depends on it:
+  the project's selection inside a project, nothing outside one, and the hint says which applies.
+  Both use the one control described in "One control for a secret" below.
 - **The token scope editor** lists secrets like git tokens. A token that ticks none is stored
   without a `secrets` part, exactly like a token restricted before secrets existed.
 - **The share dialog says** that anyone with terminal input can read the session's secrets: the
@@ -384,19 +422,144 @@ Disabling inheritance or deleting the parent also ends inherited access. Revoked
 are removed even from unstarted sessions so regranting a parent cannot resurrect old child access.
 
 Restricted token creation and grant updates check every grant id against the token's secret
-scope before looking up secrets. Existing session ceilings also constrain owner grant updates
-and request answers. The agent's spawn endpoint rejects owner-grant fields; it only attaches
+scope before looking up secrets. Existing session ceilings also constrain owner grant updates;
+a request answer widens the ceiling by the answered secret only (#330, above). The agent's spawn endpoint rejects owner-grant fields; it only attaches
 inherited grants computed by the service. A client cannot supply provenance or a ceiling.
 
 `secrets_list` reports `provenance` (`project`, `granted`, `inherited`, `requested`) and
 `inheritToChildren` without values. The session view shows the same origin for effective secrets;
-the owner dialogs separately edit project selection and session grants. `project` labels the
+one control edits both (#329, below). `project` labels the
 ordinary selection path, including explicitly selected secrets outside a project. When a secret
 is both selected and granted, the grant origin is shown; removing that grant leaves the ordinary
 selection in effect. Grant changes refresh the session's copies through the existing delivery
-path. Files update live; environment variables require the next start. Scheduled sessions can
-choose grants at creation, but changes are rejected like other runtime fields because the
-CronJob fixes variable names. Delete and recreate one to change grants.
+path. Files update live; environment variables require the next start. For a scheduled session
+the next start is the next run, and grants and the selection change like any other session's.
+
+### One control for a secret (#329)
+
+Until #329 every session dialog had two controls for one question: ticks for the selection
+(`secretIds`) and, below them, the three buttons of #233 for the grants. A secret could be ticked
+in one and "Not allowed" in the other, and the project dialog had ticks only. Now each secret
+has one segmented control, in the new, edit and duplicate dialogs, in the session view, and in
+the project dialog.
+
+In a session it has three levels and edits both stored fields. The mapping follows what the hub
+already does: a spawn passes the parent's selection on, and `secrets_list` reports
+`inheritToChildren` for a selected secret. A selected secret is therefore one that also reaches
+child sessions.
+
+| Shown | Stored |
+|---|---|
+| Not allowed | neither selected nor granted |
+| This session | a grant without inheritance, not selected |
+| Also child sessions | selected, or a grant with inheritance (or both) |
+
+| Chosen | Written |
+|---|---|
+| Not allowed | out of the selection, grant removed |
+| This session | out of the selection, a grant without inheritance (an existing grant keeps its origin) |
+| Also child sessions | an existing grant inherits; otherwise back into the selection where the selection can hold it (all of a project's secrets back in = follow the project again); otherwise a grant with inheritance |
+
+Every stored combination shows exactly one level. Choosing the level already shown changes
+nothing, so a dialog nobody touched sends neither field, as before (`lib/secrets.test.js`
+covers every combination). Nothing in the API or the database changed. The session view saves a
+choice as one request carrying whichever of the two fields changed.
+
+A session that follows its project and gets one of the project's secrets lowered stops following
+it. Its selection becomes an explicit list, and a secret the project adds later no longer reaches
+it. The control says so under the list while the selection is narrowed. Setting every project
+secret back to "Also child sessions" restores following. *Rejected: a per-secret exception that
+keeps following the project.* There is no stored form for it, and adding one would change what
+`secretIds` means for every client.
+
+In the project dialog the control has two levels, "Not allowed" and "Sessions in this project".
+A project's selection is all or nothing per secret, and it already passes to the child sessions
+started in the project. A "this session" level has no meaning there, so it is left out rather
+than shown disabled.
+
+- *Rejected: keep only the grant buttons and drop the selection from the dialogs.* A session in a
+  project would then have no way to narrow the project's selection.
+- *Rejected: "Also child sessions" always as an inheriting grant.* Raising a project secret back
+  from "Not allowed" would then turn a session that followed its project into an explicit list
+  plus a grant. It would stop following later project changes for a choice that looks like
+  undoing a click.
+- Verified in real Chromium against the real backend (`tests/SecretGrantControlProof`).
+
+### Removing a secret fails closed (#303)
+
+A delete, a narrowed project selection or a deleted project removes a value from the sessions'
+copies. The copies are what a running pod's files, and every scheduled run, read. A copy that
+keeps the value therefore keeps handing it out. Before #303 a delete went through the lenient
+sync, which logged a failed copy rewrite and answered 204. The first failure also stopped the
+loop, so the remaining sessions were not rewritten either.
+
+- A copy that cannot be rewritten is withdrawn: both of that session's copies are deleted. Without
+  copies the session receives nothing. Its volume and variable references are optional, so
+  nothing fails to start. A resume writes the copies again. The sync also lists sessions with a
+  live agent pod and scheduled sessions, not only sessions with copies. A later sync therefore
+  gives a running pod its files back, and a schedule's runs their copies, without waiting for a
+  spawn that neither goes through. Every other session is still brought up to date.
+- A withdrawal is not silent. It takes all of the session's secrets, not only the deleted one, so
+  a running agent's files disappear until the copies are written again. `secretsWithdrawn` is
+  derived at read time: a live pod that recorded its start, or a schedule whose template has the
+  variable block, but no variable copy. The session view shows a notice with **Retry**
+  (`resync-secrets`, the strict sync, nothing restarted), the sidebar marks the session, and
+  Settings → Secrets lists it after a change.
+- **What this does not cover: a running process's environment.** Fail-closed applies to the copies,
+  so to files in a running pod and to every pod or run started from now on. A variable is fixed
+  when the container starts, so a running agent keeps a deleted variable's value until it
+  restarts, as for any change in #255. A missing variable copy therefore counts as
+  `secretsPendingRestart` for a pod that recorded its start, so the #255 restart (`apply-resources`)
+  is offered with the note "including any secret deleted since it started". Before #303, a missing
+  copy reported nothing pending and the restart was not offered. Pause the session to remove the
+  value at once.
+- Only when the withdrawal fails too does the request answer 503 `secret_copies_pending`. That is
+  the one case where a copy may still hold the value. The store change has happened, and Settings →
+  Secrets keeps the notice with **Retry**. A repeated delete runs the strict sync again, even
+  though the id is already gone from the store. Before, a repeat found nothing to remove and
+  returned at once.
+- Saving or rotating a secret keeps the lenient sync. The owner's write has happened, and failing it
+  would tell them it had not. A copy left with the previous value of a rotated secret is
+  outside #303.
+
+Rejected: rewriting the copies before removing the value from the store. A copy computed from a
+store that still holds the value can only keep it. Also rejected: answering 503 at the first failed
+rewrite without withdrawing. That leaves the value in place exactly when the owner most wants it
+gone, and depends on the owner retrying.
+
+### Scheduled templates follow the variable copy (#301)
+
+A scheduled session's CronJob template lists its variable names, as references into the
+session's variable copy. The copy is rewritten on every change of the store, a project selection
+or a grant. Before #301 the template was not, so later runs missed new variables and kept names
+that no longer existed. Now every secret sync also patches a scheduled session's variable block
+(`ScheduledTemplateSecrets`, the block a project move replaces, see
+docs/session-organization.md). The patch is tested against the resourceVersion and read again on
+a conflict.
+
+- The names come from the copy as it stands when the template is patched, not from the sync that
+  triggered it. Two syncs that write the copy in one order and patch in the other still leave the
+  template matching the copy written last.
+- A run in progress is not paused or stopped. Its Job copied the pod when it started, so only later
+  runs change. A project move does stop or refuse such a run, because a move also changes the
+  run's file access.
+- A failed patch does not fail the owner's change, which has happened. The session reports
+  `scheduleSecretsOutdated` by comparing the template's names with the copy's at read time. The
+  sidebar marks it, the session view and Settings → Secrets offer **Update schedule**
+  (`apply-resources`), and the next sync tries again. A state flag stored on the record was rejected:
+  a crash between the copy and the patch would leave it wrong, and the comparison cannot be.
+- Revocation fails closed. The copy is rewritten before the template is patched, and a failed
+  copy write stops the sync before the patch. A run started from a stale template still names a
+  revoked or deleted variable, but the copy no longer has a value for it. Every reference is
+  `optional`, so the missing key leaves the variable unset instead of stopping the container
+  in CreateContainerConfigError.
+- During an unfinished project move the sync leaves the template alone, because the move's final
+  patch writes it. A template from before session secrets has no block, so it cannot be updated
+  and is not reported as outdated. It has to be recreated.
+
+Rejected: rebuilding the template from the record at each sync, for the reasons the move gives,
+and deferring the patch while a run is active. That deferral gains nothing for an already-started
+pod, and loses the change if no later sync comes.
 
 Rejected alternatives:
 

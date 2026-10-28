@@ -160,3 +160,6 @@ jobs:
       - name: Verify the agent service account has no permissions
         shell: pwsh
         run: ./tests/helm/agent-service-account.ps1
+      - name: Verify the API key login of installs without OIDC
+        shell: pwsh
+        run: ./tests/helm/api-key-values.ps1

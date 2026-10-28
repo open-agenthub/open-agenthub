@@ -18,6 +18,9 @@ const emit = defineEmits(['saved'])
 const secrets = ref([])
 const loaded = ref(false)
 const loadError = ref('')
+// A delete the hub could not finish in every session's copy (#303). The secret is already gone
+// from the list, so the retry has to live here: repeating the delete repeats the copy rewrite.
+const pendingDelete = ref(null)
 // null = no form open; otherwise the draft, with `existing` set when an entry is being edited.
 const draft = ref(null)
 const busy = ref(false)
@@ -48,7 +51,7 @@ async function loadReach() {
   ])
 }
 // Only after a change on this page: before one, nothing this page did needs a restart.
-const pendingRestart = computed(() => !changedHere.value ? [] : sessions.value.filter(s => s.secretsPendingRestart
+const pendingRestart = computed(() => !changedHere.value ? [] : sessions.value.filter(s => s.secretsWithdrawn || s.scheduleSecretsOutdated || s.secretsPendingRestart
   && !(granted.value?.restartRequired && granted.value.sessionId === s.id)))
 const usage = computed(() => Object.fromEntries(secrets.value.map(secret =>
   [secret.id, secretUsage(secret.id, sessions.value, projects.value)])))
@@ -157,7 +160,7 @@ async function save() {
   busy.value = true
   error.value = ''
   try {
-    const saved = await api.upsertSecret({
+    const secret = {
       // The id, not the name, says which secret this is: two may share a name, and a rename
       // keeps the id, so every project and session selection keeps pointing at it.
       id: draft.value.existing || undefined,
@@ -166,17 +169,25 @@ async function save() {
       // Omitted on an edit with the field left empty: the stored value is kept.
       value: draft.value.value.length ? draft.value.value : null,
       description: draft.value.description.trim() || null
-    })
-    // The typed value is not kept around in the page once it is stored.
-    draft.value = null
+    }
+    let saved
     if (answering.value) {
+      // One call stores and grants (#330). Before, the value was stored first and a refused grant
+      // left it stored, the session without it and the request open, with the error shown in a
+      // form that saving had already closed. Now the form stays open with the error and the
+      // typed value until the hub has granted.
       const request = answering.value
+      const grant = await api.provideSecretRequest(request.id, secret)
+      saved = { id: grant.secretId, name: grant.name, delivery: grant.delivery }
       answering.value = null
-      const grant = await api.provideSecretRequest(request.id, saved.id)
       granted.value = { ...grant, sessionId: request.sessionId, sessionTitle: request.sessionTitle }
       restartArmed.value = false
       dropRequestFromUrl()
+    } else {
+      saved = await api.upsertSecret(secret)
     }
+    // The typed value is not kept around in the page once it is stored.
+    draft.value = null
     await Promise.all([load(), loadRequests(), afterChange()])
     emit('saved', saved)
   } catch (e) {
@@ -189,8 +200,18 @@ async function save() {
 async function remove(secret) {
   if (confirming.value !== secret.id) { confirming.value = secret.id; return }
   confirming.value = ''
+  await deleteSecret(secret)
+}
+
+async function deleteSecret(secret) {
+  pendingDelete.value = null
   try { await api.deleteSecret(secret.id); await Promise.all([load(), afterChange()]) }
-  catch (e) { loadError.value = String(e.message || e) }
+  catch (e) {
+    if (e.code === 'secret_copies_pending') {
+      pendingDelete.value = { id: secret.id, name: secret.name, message: String(e.message || e) }
+      await load()
+    } else loadError.value = String(e.message || e)
+  }
 }
 
 // The link in the notification carries the request; once answered it is taken off the address,
@@ -293,6 +314,10 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
       </ul>
       <ProjectSecretsDialog v-if="projectDialog" :project="projectDialog" @close="projectDialog = null" @saved="projectSaved" />
       <p v-if="loadError" class="err" data-secret-load-error>{{ loadError }}</p>
+      <div v-if="pendingDelete" class="err" role="alert" data-secret-delete-pending>
+        “{{ pendingDelete.name }}” is removed from your secrets, but {{ pendingDelete.message }}
+        <button type="button" data-secret-delete-retry @click="deleteSecret(pendingDelete)">Retry</button>
+      </div>
 
       <div v-if="draft" class="form" data-secret-form>
         <p v-if="answering" class="answering" data-secret-answering>For “{{ answering.sessionTitle || answering.sessionId }}”,
@@ -329,7 +354,7 @@ watch(() => props.prefill, prefill => { if (prefill) open(prefill) })
         <p v-if="namesakes.length" class="namesake" data-secret-namesake>Also stored as <code>{{ secretPlace(draft) }}</code>:
           {{ namesakes.map(s => s.description ? `${s.description} (${s.id})` : s.id).join(", ") }}. That is fine as long as no
           session receives both; the session and project dialogs refuse a choice that would.</p>
-        <p v-if="error" class="err" data-secret-error>{{ error }}</p>
+        <p v-if="error" class="err" role="alert" data-secret-error>{{ error }}</p>
         <div class="buttons">
           <button type="button" class="primary" data-secret-save :disabled="!canSave" @click="save">{{ busy ? 'Saving…' : editing ? 'Save' : 'Add secret' }}</button>
           <button type="button" data-secret-cancel @click="close">Cancel</button>

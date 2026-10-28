@@ -7,7 +7,8 @@ async function authHeaders() {
   return t ? { Authorization: `Bearer ${t}` } : {}
 }
 
-// On 401, go back to the provider – the session has expired or the token is invalid.
+// On 401, sign in again: back to the provider (expired or invalid token), or back to the key
+// prompt in API-key mode (the stored key was rotated).
 function handle401() {
   if (auth.enabled) login()
   throw new Error('401 Sign-in required')
@@ -23,7 +24,9 @@ async function responseError(res) {
   const text = await res.text()
   const err = new Error(`${res.status} ${text}`)
   err.status = res.status
-  if (res.status === 409) {
+  // 503 too: a secret delete whose session copies are not all cleared answers
+  // `secret_copies_pending` (#303), and the settings page keys its retry on that code.
+  if (res.status === 409 || res.status === 503) {
     try { const body = JSON.parse(text); err.code = body.code; err.message = body.error || err.message } catch {}
   }
   if (res.status === 402) err.code = codeFromBody(text) || 'license_required'
@@ -105,7 +108,14 @@ async function sharedReq(path, method = 'GET', body) {
 
 
 export const api = {
-  listSessions: () => req('GET', '/sessions'),
+  listSessions: async () => {
+    const [owned, shared] = await Promise.all([
+      req('GET', '/sessions'),
+      req('GET', '/sessions/shared').catch(error => { if (error.status === 402) return []; throw error })
+    ])
+    return [...owned, ...shared.filter(session => !owned.some(item => item.id === session.id))]
+  },
+  findShareRecipients: (id, query) => req('GET', `/ee/sessions/${encodeURIComponent(id)}/shares/recipients?query=${encodeURIComponent(query)}`),
   getSession: (id) => req('GET', `/sessions/${id}`),
   sessionCommands: id => req('GET', `/sessions/${encodeURIComponent(id)}/commands`),
   terminalAttachments: (id, fileIds) => req('POST', `/sessions/${encodeURIComponent(id)}/terminal-attachments`, { fileIds }),
@@ -126,7 +136,7 @@ export const api = {
   duplicateSession: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/duplicate`, data),
   listSessionOrder: () => req('GET', '/session-organization/order'),
   setSessionOrder: sessionIds => req('PUT', '/session-organization/order', { sessionIds }),
-  moveSessionProject: (id, projectId) => req('POST', '/session-organization/' + encodeURIComponent(id) + '/project', { projectId, confirm: true }),
+  moveSessionProject: (id, projectId, { stopActiveRun = false } = {}) => req('POST', '/session-organization/' + encodeURIComponent(id) + '/project', { projectId, confirm: true, stopActiveRun }),
   listProjects: () => req('GET', '/projects'),
   createProject: (data) => req('POST', '/projects', data),
   updateProject: (id, data) => req('PATCH', `/projects/${encodeURIComponent(id)}`, data),
@@ -141,6 +151,7 @@ export const api = {
   updateMcpPolicy: (id, data) => req('PUT', `/ee/sessions/${encodeURIComponent(id)}/mcp-policy`, data),
   pauseAndResumeRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/pause-and-resume-runtime`),
   applySessionResources: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/apply-resources`),
+  resyncSessionSecrets: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/resync-secrets`),
   updateRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/update-runtime`),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
@@ -173,7 +184,8 @@ export const api = {
   // stored secret granted to that one session, or a refusal.
   listSecretRequests: (sessionId) => req('GET', sessionId ? `/secret-requests?sessionId=${encodeURIComponent(sessionId)}` : '/secret-requests'),
   getSecretRequest: (id) => req('GET', `/secret-requests/${encodeURIComponent(id)}`),
-  provideSecretRequest: (id, secretId) => req('POST', `/secret-requests/${encodeURIComponent(id)}/provide`, { secretId }),
+  // With the secret itself it is stored and granted in one call, and nothing stays stored if the grant is refused (#330).
+  provideSecretRequest: (id, secret) => req('POST', `/secret-requests/${encodeURIComponent(id)}/provide`, { secret }),
   refuseSecretRequest: (id) => req('POST', `/secret-requests/${encodeURIComponent(id)}/refuse`),
   // A subscription login is captured from a session by its runtime rather than typed in here,
   // so this is the only way to get rid of one that stopped working.

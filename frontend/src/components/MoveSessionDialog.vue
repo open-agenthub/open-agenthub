@@ -9,9 +9,15 @@ const busy = ref(false)
 const error = ref('')
 const current = computed(() => props.projects.find(p => p.id === props.session.projectId))
 const destination = computed(() => props.projects.find(p => p.id === target.value))
-const changed = computed(() => (props.session.projectId || '') !== target.value)
-const active = computed(() => ['Running', 'Pending'].includes(props.session.phase))
 const scheduled = computed(() => props.session.mode === 'Scheduled')
+// An earlier move stored the project but not the template; the schedule stays paused until a move
+// finishes, so the dialog must allow one even to the project the session already shows.
+const unfinished = computed(() => scheduled.value && !!props.session.scheduleMoveUnfinished)
+const changed = computed(() => (props.session.projectId || '') !== target.value || unfinished.value)
+// The list shows a scheduled run's pod as the session's phase, but a run can also start after the
+// list was read; the server's scheduled_run_active refusal sets this so the owner decides then.
+const runActive = ref(false)
+const active = computed(() => ['Running', 'Pending'].includes(props.session.phase) || runActive.value)
 const removed = computed(() => (current.value?.secretIds || []).filter(id => !destination.value?.secretIds?.includes(id)).length)
 const added = computed(() => (destination.value?.secretIds || []).filter(id => !current.value?.secretIds?.includes(id)).length)
 const siblings = computed(() => props.sessions.filter(s => (!s.accessRole || s.accessRole === 'Owner') && (s.projectId || '') === (props.session.projectId || '')))
@@ -20,13 +26,21 @@ onMounted(() => dialog.value.showModal())
 async function move() {
   busy.value = true; error.value = ''
   try {
+    if (scheduled.value) {
+      await api.moveSessionProject(props.session.id, target.value || null, { stopActiveRun: active.value })
+      emit('changed'); emit('close')
+      return
+    }
     if (active.value) {
       await api.pauseSession(props.session.id)
       emit('changed')
     }
     await api.moveSessionProject(props.session.id, target.value || null)
     emit('changed'); emit('close')
-  } catch (e) { error.value = String(e.message || e) }
+  } catch (e) {
+    if (e.code === 'scheduled_run_active') runActive.value = true
+    error.value = String(e.message || e)
+  }
   finally { busy.value = false }
 }
 </script>
@@ -42,17 +56,21 @@ async function move() {
       <option value="">No project</option>
       <option v-for="p in projects" :key="p.id" :value="p.id">{{ p.name }}</option>
     </select>
+    <p v-if="unfinished" role="status" data-schedule-move-unfinished>The last move of this schedule stopped part-way. Its schedule is paused until a move finishes, so no run starts with a mix of both projects.</p>
     <div v-if="changed" data-project-move-impact>
       <p>Move from <b>{{ current?.name || 'No project' }}</b> to <b>{{ destination?.name || 'No project' }}</b>.</p>
       <p>Project secrets: {{ removed }} removed, {{ added }} added to the project selection. A narrowed session selection stays narrowed; individual grants stay with this session.</p>
       <p>Access to files in the old project ends; files in the destination project become available, subject to sharing rules. This session’s own files stay with it.</p>
-      <p v-if="active">The session will pause before moving. Resume it afterwards to load the destination project’s secrets and settings. Work may be interrupted.</p>
+      <template v-if="scheduled">
+        <p>The schedule is paused while its template is replaced, then continues unchanged. Its next run starts with the destination project’s secrets only; earlier runs keep their history.</p>
+        <p v-if="active" data-scheduled-run-active>A run is in progress with the current project’s secrets. Wait for it to finish, or stop it now and move. Its unfinished work is lost.</p>
+      </template>
+      <p v-else-if="active">The session will pause before moving. Resume it afterwards to load the destination project’s secrets and settings. Work may be interrupted.</p>
       <p v-else>Destination project secrets and settings apply on the next start. Project file access changes immediately.</p>
-      <p v-if="scheduled" role="status">Scheduled sessions use a fixed workload template. Recreate the scheduled session in the destination project.</p>
     </div>
-    <p v-if="error" role="alert">{{ error }} If the session was paused, it stays paused; you can retry or resume it.</p>
+    <p v-if="error" role="alert">{{ error }} {{ scheduled ? 'You can retry; a move that stopped part-way finishes on retry.' : 'If the session was paused, it stays paused; you can retry or resume it.' }}</p>
     <div class="row">
-      <button class="primary" data-confirm-move :disabled="busy || !changed || scheduled" @click="move">{{ busy ? 'Moving…' : active ? 'Pause and move' : 'Confirm move' }}</button>
+      <button class="primary" data-confirm-move :disabled="busy || !changed" @click="move">{{ busy ? 'Moving…' : active ? (scheduled ? 'Stop run and move' : 'Pause and move') : unfinished && (session.projectId || '') === target ? 'Finish move' : 'Confirm move' }}</button>
       <button :disabled="busy" @click="emit('close')">Close</button>
     </div>
   </dialog>

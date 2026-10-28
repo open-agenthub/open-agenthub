@@ -1,3 +1,4 @@
+using AgentHub.Api.Auth;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using AgentHub.Api.Mcp;
@@ -15,6 +16,27 @@ using OpenIddict.Validation.AspNetCore;
 using static OpenIddict.Abstractions.OpenIddictConstants;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Decided before anything else is built, so an install without any login configured stops here
+// with one readable line instead of serving an API that treats every caller as an admin.
+AgentHub.Api.Auth.HubAuthOptions hubAuth;
+try
+{
+    hubAuth = AgentHub.Api.Auth.HubAuthOptions.Resolve(builder.Configuration);
+}
+catch (AgentHub.Api.Auth.HubAuthConfigurationException e)
+{
+    Console.Error.WriteLine($"FATAL: {e.Message}");
+    return 1;
+}
+builder.Services.AddSingleton(hubAuth);
+if (hubAuth.Mode == HubAuthMode.ApiKey)
+{
+    builder.Services.AddSingleton<KubernetesForwardedPeerGuard>();
+    builder.Services.AddSingleton<IForwardedPeerGuard>(sp => sp.GetRequiredService<KubernetesForwardedPeerGuard>());
+    builder.Services.AddHostedService(sp => sp.GetRequiredService<KubernetesForwardedPeerGuard>());
+}
+builder.Services.AddSingleton(new AgentHub.Api.Auth.ApiKeyFailureLimiter());
 AgentHub.Api.Files.SessionFileLogging.KeepStreamTicketsOutOfLogs(builder.Services);
 
 // (De)serialize enums as strings – the frontend sends e.g. mode: "Interactive".
@@ -258,6 +280,7 @@ builder.Services.AddHostedService<AgentHub.Api.Permissions.PermissionSweepServic
 // Sessions with a self-deletion deadline (docs/session-expiry.md). The lock keeps two replicas
 // from deleting the same session at once.
 builder.Services.AddSingleton<SessionStorageCleanup>();
+builder.Services.AddSingleton<ClaudeStateCleanup>();
 builder.Services.AddSingleton<ISessionExpiryLock, PostgresSessionExpiryLock>();
 builder.Services.AddHostedService<SessionExpirySweepService>();
 builder.Services.AddHostedService<SessionRuntimeImageSweepService>();
@@ -293,9 +316,10 @@ builder.Services.AddHostedService<AgentHub.Api.Containers.SessionContainerReconc
 builder.Services.AddHealthChecks();
 
 // --- Auth: generic OIDC/JWT provider (e.g. Keycloak). Multi-user separation via preferred_username. ---
-// Without an authority the backend runs in "auth disabled" mode (local development): every request = user "dev".
+// Without an authority: a static API key acting as one configured owner, or — only when explicitly
+// opted into — the insecure development mode where every request is user "dev".
 var oidc = builder.Configuration.GetSection("Oidc");
-var authEnabled = !string.IsNullOrWhiteSpace(oidc["Authority"]);
+var authEnabled = hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.Oidc;
 AuthenticationBuilder authBuilder;
 if (authEnabled)
 {
@@ -326,13 +350,22 @@ if (authEnabled)
             };
         });
 }
+else if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
+{
+    authBuilder = builder.Services
+        .AddAuthentication(AgentHub.Api.Auth.ApiKeyAuthHandler.SchemeName)
+        .AddScheme<AuthenticationSchemeOptions, AgentHub.Api.Auth.ApiKeyAuthHandler>(
+            AgentHub.Api.Auth.ApiKeyAuthHandler.SchemeName, null);
+}
 else
 {
     authBuilder = builder.Services
-        .AddAuthentication(DevAuthHandler.SchemeName)
-        .AddScheme<AuthenticationSchemeOptions, DevAuthHandler>(DevAuthHandler.SchemeName, null);
+        .AddAuthentication(AgentHub.Api.Auth.InsecureDevAuthHandler.SchemeName)
+        .AddScheme<AuthenticationSchemeOptions, AgentHub.Api.Auth.InsecureDevAuthHandler>(
+            AgentHub.Api.Auth.InsecureDevAuthHandler.SchemeName, null);
 }
 builder.Services.AddAuthorization();
+builder.Services.AddSharingRecipientSearch();
 
 // --- Remote MCP endpoint (Streamable HTTP) and its OAuth 2.1 authorization server ---
 // Opt-in: only active when Mcp:PublicUrl names the externally reachable HTTPS origin of this
@@ -470,6 +503,14 @@ builder.Services.AddCors(c => c.AddDefaultPolicy(p =>
 
 var app = builder.Build();
 
+// Every start, not once: the log is where an operator notices an install that was left open.
+if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.InsecureDev)
+    app.Logger.LogWarning("INSECURE DEVELOPMENT MODE (Auth:InsecureDevMode=true): there is no login. Every request is "
+        + "authenticated as admin user \"dev\", so anyone who can reach this backend controls every session. "
+        + "Never run this outside local development; configure oidc.authority or an API key instead.");
+else if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
+    app.Logger.LogInformation("Authentication: API key, acting as owner {Owner}", hubAuth.ApiKeyOwner);
+
 // Create the Postgres schema idempotently.
 using (var scope = app.Services.CreateScope())
 {
@@ -560,6 +601,8 @@ if (mcpOptions.IsConfigured)
     app.UseForwardedHeaders(forwarded);
 }
 
+app.UseApiKeyClientAddress(builder.Configuration);
+
 app.UseCors();
 app.UseWebSockets();
 
@@ -590,6 +633,7 @@ if (mcpOptions.IsConfigured)
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
 
 // Capture the signed-in identity (owner + email + name) per user — refreshed every few
 // minutes rather than once per process, so group-claim changes in the IdP propagate
@@ -679,9 +723,11 @@ app.MapMethods("/mcp/session/{sessionId}/{name}", new[] { "GET" },
     () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed)).AllowAnonymous();
 
 // Runtime config for the frontend (static nginx image, no build-time env vars):
-// empty authority = auth disabled, so the frontend does not enforce a login.
+// authMode tells it which login to show; authority is only set in OIDC mode.
 app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptions slack) => Results.Ok(new
 {
+    // "oidc", "apiKey" or "insecureDev": which login the frontend shows, and whether it warns.
+    authMode = hubAuth.ConfigName,
     authority = oidc["Authority"] ?? "",
     clientId = oidc["ClientId"] ?? "agenthub",
     scope = oidc["Scope"] ?? "openid profile email",
@@ -840,18 +886,4 @@ app.Map("/ws/shared/{token}/events", (HttpContext ctx, string token, ISessionAcc
     SharedSessionEventsWs(ctx, token, access, eventBus, lf));
 
 app.Run();
-
-// Dev auth (only active without a configured Oidc__Authority): authenticates every request as "dev",
-// so [Authorize] endpoints and owner separation work locally without an OIDC provider.
-file sealed class DevAuthHandler(
-    IOptionsMonitor<AuthenticationSchemeOptions> options, ILoggerFactory logger, UrlEncoder encoder)
-    : AuthenticationHandler<AuthenticationSchemeOptions>(options, logger, encoder)
-{
-    public const string SchemeName = "Dev";
-    protected override Task<AuthenticateResult> HandleAuthenticateAsync()
-    {
-        var identity = new ClaimsIdentity([new Claim("preferred_username", "dev")], SchemeName);
-        return Task.FromResult(AuthenticateResult.Success(
-            new AuthenticationTicket(new ClaimsPrincipal(identity), SchemeName)));
-    }
-}
+return 0;

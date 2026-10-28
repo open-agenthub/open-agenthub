@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { api } from '../api.js'
 import { initials } from '../lib/text.js'
 import { isLicenseError } from '../lib/license.js'
@@ -52,7 +52,31 @@ async function applyGit() {
 const props = defineProps({ session: Object, embedded: { type: Boolean, default: false } })
 const emit = defineEmits(['close'])
 const data = ref({ users: [], links: [], policy: { blockedServers: [], blockedTools: [] } })
-const recipient = ref(''); const role = ref('Viewer'); const expiresAt = ref('')
+const recipient = ref('')
+const recipientOptions = ref([])
+const recipientBusy = ref(false)
+const recipientChecked = ref(false)
+let recipientGeneration = 0
+let recipientTimer
+watch(recipient, value => {
+  const generation = ++recipientGeneration
+  clearTimeout(recipientTimer)
+  recipientOptions.value = []
+  recipientChecked.value = false
+  recipientBusy.value = false
+  if (!value.trim()) return
+  recipientBusy.value = true
+  recipientTimer = setTimeout(async () => {
+    try {
+      const options = await api.findShareRecipients(props.session.id, value.trim())
+      if (generation === recipientGeneration) { recipientOptions.value = options; recipientChecked.value = true }
+    } catch (e) {
+      if (generation === recipientGeneration) error.value = String(e.message || e)
+    } finally { if (generation === recipientGeneration) recipientBusy.value = false }
+  }, 250)
+})
+function chooseRecipient(person) { recipient.value = person.username }
+const role = ref('Viewer'); const expiresAt = ref('')
 const blockedServers = ref(''); const blockedTools = ref(''); const oneTimeUrl = ref(''); const error = ref('')
 const linkDrafts = ref({})
 // 'load' — the overview itself answered 402, so there is nothing to edit and the gate replaces
@@ -104,7 +128,8 @@ async function removePerson(person) { await change(() => api.deleteShareUser(pro
 async function createLink() {
   await change(async () => {
     const result = await api.createShareLink(props.session.id, { role: role.value, expiresAt: expiresAt.value || null })
-    oneTimeUrl.value = result.url || result.oneTimeUrl || ''
+    const url = result.url || result.oneTimeUrl
+    oneTimeUrl.value = url ? new URL(url, location.origin).href : ''
   })
 }
 async function saveLink(link) { const draft = linkDrafts.value[link.id]; await change(() => api.updateShareLink(props.session.id, link.id, { role: draft.role, expiresAt: draft.expiresAt || null })) }
@@ -115,6 +140,11 @@ onMounted(() => { load(); loadGit() })
 function reset() {
   data.value = { users: [], links: [], policy: { blockedServers: [], blockedTools: [] } }
   recipient.value = ''
+  ++recipientGeneration
+  clearTimeout(recipientTimer)
+  recipientOptions.value = []
+  recipientBusy.value = false
+  recipientChecked.value = false
   role.value = 'Viewer'
   expiresAt.value = ''
   blockedServers.value = ''
@@ -128,6 +158,7 @@ function reset() {
   loadGit()
 }
 watch(() => props.session.id, reset)
+onUnmounted(() => { ++recipientGeneration; clearTimeout(recipientTimer) })
 </script>
 <template>
   <div :class="embedded ? 'embed' : 'overlay'" @click.self="embedded || $emit('close')"><div :class="embedded ? 'embed-inner share-inner' : 'modal'">
@@ -140,7 +171,13 @@ watch(() => props.session.id, reset)
       transcripts and chat messages, not in a live terminal.</p>
 
     <section>
-      <div class="add-row"><input v-model="recipient" placeholder="Add people by username…" @keyup.enter="addPerson" /><select v-model="role" class="fit"><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button></div>
+      <p class="sub" id="recipient-help">Enter a name or username (at least two characters), or an exact email. Select the sign-in username to share. Suggestions may be disabled by your administrator.</p>
+      <div class="add-row"><input v-model="recipient" aria-label="Recipient username or email" placeholder="Name, username, or exact email…" autocomplete="off" aria-describedby="recipient-help" @keyup.enter="addPerson" /><select v-model="role" class="fit"><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button></div>
+      <p v-if="recipientBusy" class="sub" role="status">Checking recipient…</p>
+      <ul v-if="recipientOptions.length" aria-label="Matching recipients" class="recipient-options">
+        <li v-for="person in recipientOptions" :key="person.username"><button type="button" @click="chooseRecipient(person)">{{ person.displayName || person.username }} · Username: {{ person.username }}</button></li>
+      </ul>
+      <p v-else-if="recipientChecked" class="sub" role="status">No matching user. Try the exact sign-in username or email; the person must have signed in here before.</p>
       <div v-for="person in people" :key="person.recipient || person.owner" class="person">
         <span class="avatar">{{ initials(person.recipient || person.owner) }}</span>
         <span class="pname">{{ person.recipient || person.owner }}</span>
@@ -209,6 +246,7 @@ section.bordered { border-top: 1px solid var(--border); margin-top: 14px; paddin
 .add-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 10px; }
 .add-row.tight { margin: 0; flex-wrap: wrap; }
 .add-row input { flex: 1; }
+.recipient-options { list-style: none; padding: 0; margin: 6px 0; }
 .fit { width: auto; }
 .exp { min-width: 170px; }
 .person { display: flex; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; }

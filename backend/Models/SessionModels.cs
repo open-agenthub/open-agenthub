@@ -853,6 +853,17 @@ public record SessionInfo
     /// (a grant, a revoke, a new value or a rename since its start): they reach the agent at its
     /// next start, or now through apply-resources. Files are not counted; they update live (#255).</summary>
     public bool SecretsPendingRestart { get; init; }
+    /// <summary>A project move of this scheduled session stopped after the record changed: the
+    /// schedule stays suspended, so no run starts with half of each project, until the move is
+    /// retried (docs/session-organization.md).</summary>
+    public bool ScheduleMoveUnfinished { get; init; }
+    /// <summary>This scheduled session's next run would start with other secret variables than
+    /// its variable copy holds: an update of its template failed and is retried at the next sync
+    /// or through apply-resources (#301).</summary>
+    public bool ScheduleSecretsOutdated { get; init; }
+    /// <summary>This session's secret copies were withdrawn after a failed rewrite (#303): its files
+    /// and later runs receive no secrets until a sync writes them again (resync-secrets).</summary>
+    public bool SecretsWithdrawn { get; init; }
     public BrowserSummary Browser { get; init; } = BrowserSummary.Stopped;
     /// <summary>Self-deletion deadline in seconds; null = the session is kept.</summary>
     public int? AutoDeleteAfterSeconds { get; init; }

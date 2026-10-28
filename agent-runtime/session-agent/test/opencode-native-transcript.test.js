@@ -40,6 +40,12 @@ test('OpenCode confirms its fresh /new screen before the lazy transcript exists'
   assert.equal(driver.contextClearScreen(fresh), true);
   assert.equal(driver.contextClearScreen(['  ┃ Ask anything "Fix a TODO"', fresh[1]]), true);
   assert.equal(driver.contextClearScreen([fresh[0]]), false);
+  // The same box says the TUI reads keys: 1.18.35 drops what is typed before it is drawn (#306).
+  // Rows of its first screen in a 120x40 PTY.
+  const measured = ['                       ┃  Ask anything "Fix a TODO in the codebase"', '                       ┃',
+    '                       ┃  Build   Big Pickle OpenCode Zen', '                                                                       tab agents  ctrl+p commands'];
+  assert.equal(driver.inputReadyScreen(measured), true);
+  assert.equal(driver.inputReadyScreen(['', '  ~                                                    1.18.35']), false);
   assert.equal(driver.contextClearScreen([' ┃ unsent draft', fresh[1]]), false);
   assert.equal(driver.contextClearScreen([' ┃ NORMAL-MATCHER-PROBE', 'NO-IMAGE', ' ┃', fresh[1]]), false);
 });
