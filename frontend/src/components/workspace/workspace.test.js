@@ -191,9 +191,14 @@ describe('integrated workspace', () => {
     terminal.vm.$emit('activity', { state: 'waiting', source: 'hooks' })
     await wrapper.vm.$nextTick()
     expect(wrapper.get('[data-workspace-activity]').text()).toBe('Waiting for your answer…')
+    // #343: the hub's questionPending means a turn ended (the relays' "question"), not that a
+    // question is open; Claude Code raises it a minute after every answer.
     terminal.vm.$emit('activity', { state: 'working', source: 'hooks' })
     await wrapper.setProps({ session: { ...session, questionPending: true } })
-    expect(wrapper.get('[data-workspace-activity]').text()).toBe('Waiting for your answer…')
+    expect(wrapper.get('[data-workspace-activity]').text()).toBe('Working…')
+    terminal.vm.$emit('activity', { state: 'idle', source: 'hooks' })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('[data-workspace-activity]').exists()).toBe(false)
     await wrapper.setProps({ session: { ...session, phase: 'Paused' } })
     expect(wrapper.find('[data-workspace-activity]').exists()).toBe(false)
   })

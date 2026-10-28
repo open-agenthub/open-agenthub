@@ -81,14 +81,39 @@ test('verified provider interruption keys clear presentation only, also in a per
   assert.equal(frames(socket).at(-1).state, 'idle');
 });
 
-test('a question waits for an answer, and the answer resumes the turn', async () => {
+test('a question waits for its answer hook, not the first Enter, and the answer resumes the turn', async () => {
   const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token' }, { turnHooks: true });
   const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/'); subscribe(socket);
   await turn(h, 'prompt');
   await turn(h, 'question');
   assert.equal(frames(socket).at(-1).reason, 'answer');
+  // Claude Code moves to its next question or ticks a multi-select entry with Enter (#343).
   socket.emit('message', JSON.stringify({ type: 'input', data: '\r' }));
+  assert.equal(frames(socket).at(-1).reason, 'answer');
+  await turn(h, 'answered');
   assert.deepEqual(frames(socket).at(-1), { type: 'agenthub', subtype: 'activity', state: 'working', source: 'hooks', ready: true });
+});
+
+test('the questions an open question tool asks go out with the waiting state, bounded and masked (#343)', async () => {
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token', AGENTHUB_SECRET_ENV: 'RIG_TOKEN', RIG_TOKEN: 'sekrit-value-1234' }, { turnHooks: true });
+  const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/'); subscribe(socket);
+  const long = 'Why? '.repeat(2000);
+  const questions = [{ header: 'Mode', question: 'Use sekrit-value-1234 or not?', multiSelect: true, options: [{ label: 'Yes', description: 'go' }, { label: '', description: 'no label' }, 'bogus'] },
+    { question: long, options: [] }, { question: '   ' }, ...Array.from({ length: 10 }, (_, i) => ({ question: 'Q' + i, options: [] }))];
+  await turn(h, 'prompt');
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'question', questions }), '127.0.0.1');
+  const frame = frames(socket).at(-1);
+  assert.equal(frame.reason, 'answer');
+  assert.equal(frame.questions.length, 8);
+  assert.deepEqual(frame.questions[0], { header: 'Mode', question: frame.questions[0].question, multiSelect: true, options: [{ label: 'Yes', description: 'go' }] });
+  assert.doesNotMatch(frame.questions[0].question, /sekrit-value-1234/);
+  assert.equal(frame.questions[1].question.length, 4000);
+  assert.equal(frame.questions[2].question, 'Q0');
+  // A permission dialog carries none, and the answer clears them.
+  await turn(h, 'answered');
+  assert.equal(frames(socket).at(-1).questions, undefined);
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'permission', questions }), '127.0.0.1');
+  assert.equal(frames(socket).at(-1).questions, undefined);
 });
 
 test('a prompt clears the previous hub question before the native hook returns', async () => {

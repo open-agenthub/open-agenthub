@@ -55,8 +55,24 @@ A generic Escape rule was rejected: another runtime requires two presses, so int
 is only recognized by the driver whose pinned CLI was verified. Visible menus retain precedence.
 
 For sessions without interactive turn hooks, recent PTY output is only an approximation of work.
-It expires after 1.5 seconds of quiet and is identified by a tooltip. QuestionPending, pending
-approval records and detected CLI menus override that approximation with a waiting label.
+It expires after 1.5 seconds of quiet and is identified by a tooltip. Pending approval records and
+detected CLI menus override that approximation with a waiting label.
+
+**"Waiting for your answer" means a question is open (#343).** The Workspace used to say it also
+whenever the session's `questionPending` was set. The hub sets that flag on every "question" a
+hook sends to `/notify`, because the chat relays open a session's thread on that event
+(`docs/chat-relay.md`). For the relays it means the turn ended and the person may reply. Claude
+Code sends it as its `idle_prompt` notification about 60 seconds after every answer, and the
+Codex, Cursor and OpenCode turn hooks send it at the end of every turn. So an idle session said
+*Waiting for your answer* until the next prompt, nearly all the time. The Workspace now says it
+only when the runtime reports an open question tool or the screen shows a CLI menu. The runtime
+learns of the tool from its own events: PermissionRequest, or for Codex PreToolUse, opens it.
+PostToolUse, OpenCode's `question.replied` or `question.rejected`, the interruption key, the next
+prompt or the turn's end closes it. The first Enter no longer closes a question, as it still
+closes an approval. Claude Code steps through several questions and ticks a multi-select list
+with Enter, and the question stays open until PostToolUse.
+Rejected: no longer setting `questionPending` for idle notifications and turn ends. The relays,
+the session list's *waiting on you* and Home's *needs you* rely on it meaning "your turn".
 Streaming sessions use their existing streamed-turn busy state. Disconnected, stopped and unknown
 states show no working spinner. Reduced-motion viewers keep a static marker instead of rotation.
 

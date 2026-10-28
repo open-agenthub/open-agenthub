@@ -286,6 +286,14 @@ test('MCP policy delegates allowed interactive calls to approval after policy', 
 // backend's /permission endpoint and nothing but pretooluse-hook.sh calls it, so leaving the
 // built-in matcher out made the session flag unreachable: an autonomous run stalled on its
 // first Bash, WebFetch or WebSearch call with "requires approval" and nobody to ask.
+// #343: PermissionRequest opens an AskUserQuestion for the Workspace and PostToolUse closes it.
+test('settings report a question opening and being answered to the session agent', () => {
+  const settings = renderSettings('interactive');
+  const fleet = entry => entry.hooks.some(hook => hook.command.includes('common/fleet-turn-hook.mjs'));
+  assert.ok(settings.hooks.PermissionRequest.some(fleet));
+  assert.deepEqual(settings.hooks.PostToolUse.filter(fleet).map(entry => entry.matcher), ['^AskUserQuestion$']);
+});
+
 test('MCP policy settings register both matchers in every mode', () => {
   for (const mode of ['interactive', 'autonomous', 'scheduled']) {
     const settings = renderSettings(mode);

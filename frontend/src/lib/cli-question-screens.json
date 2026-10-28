@@ -1,0 +1,135 @@
+{
+ "_about": "Real screens of Claude Code 2.1.287 (80x24, the size of a Workspace terminal never opened), Codex 0.160.0 and OpenCode 1.18.35 (120x40) showing a question their question tool was given, rendered by xterm 5.5, with the tool input that produced each (#343).",
+ "claude80x24": {
+  "input": {
+   "questions": [
+    {
+     "question": "Before I refactor the upload path I need to know how you want failures handled.\n\nThe current code retries three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. A second problem: the retry loop holds the request open for up to 45 seconds, so the browser times out first and retries on its own, which doubles every upload under load.\n\nWhich behaviour do you want for the refactored path, keeping in mind that the mobile client cannot show a progress bar?",
+     "header": "Failures",
+     "multiSelect": false,
+     "options": [
+      {
+       "label": "Retry with backoff (Recommended)",
+       "description": "Retry five times with exponential backoff starting at 200 ms, then surface the error to the caller and leave the file unmarked"
+      },
+      {
+       "label": "Fail fast",
+       "description": "Report the first error to the user immediately and never retry on the server side"
+      },
+      {
+       "label": "Queue and retry later",
+       "description": "Accept the upload into a durable queue, answer 202 at once and retry in the background with a dead-letter list"
+      },
+      {
+       "label": "Keep the current behaviour",
+       "description": "Leave the retry loop as it is and only fix the false 'uploaded' mark"
+      }
+     ]
+    }
+   ]
+  },
+  "screen": [
+   "│ error and marks the file as uploaded anyway, which is why the Files pane",
+   "│ sometimes shows files that never reached storage. A second problem: the retry",
+   "│ loop holds the request open for up to 45 seconds, so the browser times out",
+   "│ first and retries on its own, which doubles every upload under load.",
+   "│",
+   "│ Which behaviour do you want for the refactored path, keeping in mind that the",
+   "│ mobile client cannot show a progress bar?",
+   "",
+   "❯ 1. Retry with backoff (Recommended)",
+   "     Retry five times with exponential backoff starting at 200 ms, then surface",
+   "     the error to the caller and leave the file unmarked",
+   "  2. Fail fast",
+   "     Report the first error to the user immediately and never retry on the",
+   "     server side",
+   "  3. Queue and retry later",
+   "     Accept the upload into a durable queue, answer 202 at once and retry in the",
+   "     background with a dead-letter list",
+   "  4. Keep the current behaviour",
+   "     Leave the retry loop as it is and only fix the false 'uploaded' mark",
+   "  5. Type something.",
+   "────────────────────────────────────────────────────────────────────────────────",
+   "  6. Chat about this",
+   "",
+   "Enter to select · ↑/↓ to navigate · Esc to cancel"
+  ]
+ },
+ "codex": {
+  "input": {
+   "questions": [
+    {
+     "id": "failures",
+     "header": "Failures",
+     "question": "Before I refactor the upload path I need to know how you want failures handled. The current code retries three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. Which behaviour do you want?",
+     "options": [
+      {
+       "label": "Retry with backoff (Recommended)",
+       "description": "Retry five times with exponential backoff, then surface the error"
+      },
+      {
+       "label": "Fail fast",
+       "description": "Report the first error to the user immediately"
+      }
+     ]
+    }
+   ]
+  },
+  "screen": [
+   "› ASK-ME please",
+   "",
+   "",
+   "",
+   "  Question 1/1 (1 unanswered)",
+   "  Before I refactor the upload path I need to know how you want failures handled. The current code retries three",
+   "  times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane",
+   "  sometimes shows files that never reached storage. Which behaviour do you want?",
+   "",
+   "  › 1. Retry with backoff (Recommended)  Retry five times with exponential backoff, then surface the error",
+   "    2. Fail fast                         Report the first error to the user immediately",
+   "    3. None of the above                 Optionally, add details in notes (tab)",
+   "",
+   "  tab to add notes | enter to submit answer | esc to interrupt",
+   ""
+  ]
+ },
+ "opencode": {
+  "input": {
+   "questions": [
+    {
+     "header": "Failures",
+     "question": "Before I refactor the upload path I need to know how you want failures handled. The current code retries three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. Which behaviour do you want?",
+     "options": [
+      {
+       "label": "Retry with backoff",
+       "description": "Retry five times with exponential backoff, then surface the error"
+      },
+      {
+       "label": "Fail fast",
+       "description": "Report the first error to the user immediately"
+      }
+     ]
+    }
+   ]
+  },
+  "screen": [
+   "",
+   "",
+   "",
+   "  ┃",
+   "  ┃  Before I refactor the upload path I need to know how you want failures handled. The current code retries",
+   "  ┃  three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why",
+   "  ┃  the Files pane sometimes shows files that never reached storage. Which behaviour do you want?",
+   "  ┃",
+   "  ┃  1. Retry with backoff",
+   "  ┃     Retry five times with exponential backoff, then surface the error",
+   "  ┃  2. Fail fast",
+   "  ┃     Report the first error to the user immediately",
+   "  ┃  3. Type your own answer",
+   "  ┃",
+   "  ┃  ↑↓ select  enter submit  esc dismiss",
+   "  ┃",
+   ""
+  ]
+ }
+}

@@ -26,6 +26,9 @@ render_settings() {
   # delegates to the approval hook, whose poll window (AGENTHUB_PERMISSION_POLL_SECONDS,
   # default 1740s) has to fit inside it. With auto-approve on, /permission answers "allow"
   # on the first POST and nothing polls at all.
+  #
+  # PermissionRequest and PostToolUse on AskUserQuestion open and close a question for the
+  # Workspace (#343), which shows its text from the tool input rather than from the screen.
   cat <<JSON
 {
   "hooks": {
@@ -47,7 +50,8 @@ render_settings() {
     ],
     "PostToolUse": [
       { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit|Bash)$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark work", "timeout": 10 } ] },
-      { "matcher": ".*upload_skill$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark uploaded", "timeout": 10 } ] }
+      { "matcher": ".*upload_skill$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark uploaded", "timeout": 10 } ] },
+      { "matcher": "^AskUserQuestion$", "hooks": [ { "type": "command", "command": "$FLEET_TURN", "timeout": 10 } ] }
     ],
     "Stop": [
       { "hooks": [ { "type": "command", "command": "$SKILL_REMINDER", "timeout": 10 },
