@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
     getConversation: vi.fn(), listPermissions: vi.fn().mockResolvedValue([]),
     listSessionMessages: vi.fn().mockResolvedValue([]), decidePermission: vi.fn()
   },
-  sendKeys: vi.fn(), submit: vi.fn(), menu: null
+  sendKeys: vi.fn(), submit: vi.fn(), menu: null, activity: null
 }))
 vi.mock('../../api.js', () => ({ api: mocks.api, getSharedConversation: vi.fn() }))
 vi.mock('../../lib/mermaid.js', () => ({ renderMermaidBlocks: vi.fn() }))
@@ -30,12 +30,15 @@ function view() {
     global: { stubs: {
       SessionWorkspace: { template: '<div><slot /></div>' }, ShareSessionDialog: true,
       TerminalPane: defineComponent({
-        props: ['kind'], emits: ['status', 'menu'],
+        props: ['kind'], emits: ['status', 'menu', 'activity'],
         setup(props, { emit, expose }) {
           expose({ submitMessage: mocks.submit, interruptAgent: vi.fn(), sendKeys: mocks.sendKeys })
           onMounted(() => {
             emit('status', 'connected')
-            if (props.kind === 'agent') mocks.menu = value => emit('menu', value)
+            if (props.kind === 'agent') {
+              mocks.menu = value => emit('menu', value)
+              mocks.activity = value => emit('activity', value)
+            }
           })
           return () => null
         }
@@ -55,6 +58,35 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
 describe('agent CLI menus in the Workspace', () => {
+  it('shows an open question tool\'s whole question and option descriptions, and answers through the screen (#343)', async () => {
+    const wrapper = view()
+    await flushPromises()
+    const question = 'First paragraph the screen lost.\n\nWhich behaviour do you want?'
+    mocks.activity({ state: 'waiting', source: 'hooks', reason: 'answer', questions: [{ header: 'Failures', question, multiSelect: false,
+      options: [{ label: 'Retry with backoff', description: 'Retry five times' }, { label: 'Fail fast', description: 'Report at once' }] }] })
+    await flushPromises()
+    // Nothing recognised on screen yet: the question is shown, to be answered in the terminal.
+    expect(wrapper.get('[data-cli-menu]').text()).toContain('The agent is asking')
+    expect(wrapper.get('[data-cli-title]').text()).toBe(question)
+    expect(wrapper.findAll('[data-cli-listed-option]').map(option => option.text())).toEqual(['Retry with backoffRetry five times', 'Fail fastReport at once'])
+    expect(wrapper.find('[data-cli-option]').exists()).toBe(false)
+
+    mocks.menu({ kind: 'choice', title: 'Which behaviour do you want?', options: [
+      { number: 1, label: 'Retry with backoff', selected: true }, { number: 2, label: 'Fail fast', selected: false },
+      { number: 3, label: 'Type something.', selected: false, freeText: true }] })
+    await flushPromises()
+    expect(wrapper.get('[data-cli-header]').text()).toBe('Failures')
+    expect(wrapper.get('[data-cli-title]').text()).toBe(question)
+    expect(wrapper.get('[data-cli-option="2"] [data-cli-option-description]').text()).toBe('Report at once')
+    await wrapper.get('[data-cli-option="2"]').trigger('click')
+    expect(mocks.sendKeys).toHaveBeenCalledWith(['\x1b[B', '\r'])
+
+    mocks.activity({ state: 'working', source: 'hooks' })
+    mocks.menu(null)
+    await flushPromises()
+    expect(wrapper.find('[data-cli-menu]').exists()).toBe(false)
+  })
+
   it('offers choices with the terminal closed and waits for the screen to leave the menu', async () => {
     const wrapper = view()
     await flushPromises()

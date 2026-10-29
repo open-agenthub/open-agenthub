@@ -12,6 +12,8 @@ const { pathToFileURL } = require('node:url');
 const shared = pathToFileURL(path.join(__dirname, '..', 'common', 'turn-notify-hook.mjs')).href;
 
 import(shared)
-  .then(module => module.cli())
+  // Codex asks through request_user_input, reported by the session agent (#343); the end of a
+  // turn tells the chat relays it finished, without marking the session as waiting on a question.
+  .then(module => module.cli({ idle: true }))
   // A hook that fails must never be the reason a turn breaks.
   .catch(() => {});

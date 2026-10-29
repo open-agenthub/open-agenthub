@@ -32,12 +32,13 @@ async function notified(options, event = { type: 'session.idle', properties: { s
   return sent;
 }
 
-test('the end of an interactive turn relays the last assistant text as a question', async () => {
+// #343: idle, because OpenCode's real questions come through its question tool.
+test('the end of an interactive turn relays the last assistant text, marked idle', async () => {
   const sent = await notified({ client: client({ messages: [
     { info: { role: 'user' }, parts: [{ type: 'text', text: 'go' }] },
     assistant('first'), assistant('Which branch should I use?')
   ] }) });
-  assert.deepEqual(sent, [{ event: 'question', message: 'Which branch should I use?' }]);
+  assert.deepEqual(sent, [{ event: 'question', message: 'Which branch should I use?', idle: true }]);
 });
 
 test('a subagent finishing inside the turn is not relayed', async () => {

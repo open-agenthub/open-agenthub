@@ -22,7 +22,7 @@ function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MO
     logs: [] as string[],
     usage: { context: { window: 200000, tokens: 1000, percent: 1 }, rateLimits: [] as unknown[] },
     limitStatus: 202,
-    refuseSubmit: false
+    refuseSubmit: undefined as 'drop' | 'fail' | undefined
   }
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: undefined }))
@@ -42,8 +42,13 @@ function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MO
     const status = reply.status ?? 200
     return { value: { status, ok: status < 300, headers: {}, text: JSON.stringify({ messages: reply.messages ?? [] }) } }
   })
-  on('prompt.submit', ($, e) => {
-    if (calls.refuseSubmit) return { deny: 'session closed' }
+  on('prompt.submit', ($, e, next) => {
+    // A refusal is { drop }, as a blocking settings hook beneath answers; prompt.submit has no
+    // { deny }, and Claude Code 2.1.292+ fails a test whose own hook returns one (#340).
+    if (calls.refuseSubmit === 'drop') return { drop: 'blocked by a UserPromptSubmit hook' }
+    // Beneath this hook the kit has no engine, so passing the prompt on rejects: the engine
+    // failing outright rather than refusing.
+    if (calls.refuseSubmit === 'fail') return next(e)
     calls.submits.push(e.text)
     calls.contexts.push(e.context)
     return { text: e.text }
@@ -177,19 +182,38 @@ test('waiting messages ride along as context with the next prompt, once', async 
   expect(calls.submits.length).toBe(2)
 })
 
-test('a release the engine refuses keeps the message and tries again on the next idle poll', async ($, on) => {
-  const { clock, calls } = world(on, [{ messages: [plain] }])
-  calls.refuseSubmit = true
+for (const refusal of ['drop', 'fail'] as const) {
+  test(`a release the engine refuses (${refusal}) keeps the message and tries again on the next idle poll`, async ($, on) => {
+    const { clock, calls } = world(on, [{ messages: [plain] }])
+    calls.refuseSubmit = refusal
+
+    await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+    await clock.advance(3000)
+    expect(calls.submits).toEqual([])
+    expect(calls.logs.some(line => /fleet prompt failed/.test(line))).toBe(true)
+    expect(calls.statuses.at(-1)).toBe('📨 1 fleet message — /inbox')
+
+    calls.refuseSubmit = undefined
+    await clock.advance(3000)
+    expect(calls.submits).toEqual([plainText])
+    expect(calls.statuses.at(-1)).toBeUndefined()
+  })
+}
+
+test('a dropped priority message is not lost: it waits and goes on the next idle poll', async ($, on) => {
+  const { clock, calls } = world(on, [{ messages: [priority] }])
+  calls.refuseSubmit = 'drop'
 
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   await clock.advance(3000)
   expect(calls.submits).toEqual([])
-  expect(calls.logs.some(line => /fleet prompt failed/.test(line))).toBe(true)
+  expect(calls.logs.some(line => /fleet prompt failed: dropped: blocked/.test(line))).toBe(true)
   expect(calls.statuses.at(-1)).toBe('📨 1 fleet message — /inbox')
 
-  calls.refuseSubmit = false
+  calls.refuseSubmit = undefined
   await clock.advance(3000)
-  expect(calls.submits).toEqual([plainText])
+  expect(calls.submits.length).toBe(1)
+  expect(calls.submits[0]).toContain('Please fix MR 42')
 })
 
 test('a failed poll is a debug line and the timer keeps going', async ($, on) => {

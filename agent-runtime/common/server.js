@@ -16,6 +16,7 @@ const { createContextClear } = require('./context-clear');
 const { createLimitDetector, stripAnsi, toIso } = require('./limit-detector');
 const { signatureScript, archiveScript, uploadArgs, stateExcludes } = require('./state-archive');
 const { createSecretMask } = require('./secret-mask');
+const { normalizeQuestions, maskQuestions } = require('./agent-questions');
 const { createSignInPrivacy } = require('./sign-in-privacy');
 const gitIdentity = require('./git-identity');
 
@@ -45,6 +46,8 @@ const MAX_MESSAGE_BYTES = 64 * 1024;
 const MOD_HEARTBEAT_TTL_MS = 15_000;
 // A mod's limit report: kind, percent, reset time — small by construction.
 const MAX_LIMIT_REPORT_BYTES = 4 * 1024;
+// A turn report can carry a question tool's input (agent-questions.js bounds it to about 200 KB).
+const MAX_TURN_REPORT_BYTES = 256 * 1024;
 // How long a restarted TUI gets to draw its prompt box before a message held back during the
 // restart is typed into it. Text written earlier lands in a terminal nothing reads yet.
 const RESTART_INPUT_DELAY_MS = 3_000;
@@ -397,6 +400,34 @@ function createCommonServer(options = {}) {
   // What a waiting turn waits for: 'approval' (a permission dialog) or 'answer' (a question), or
   // null while it works.
   let activityWaitingFor = null;
+  // The questions an open question tool asks, from its own input (#343); [] when none is open
+  // or the CLI reported none.
+  let activityQuestions = [];
+  // The hub's questionPending follows the question tool too (#343): set with the question's own
+  // text when it opens (the chat relays post it), cleared when it is answered, cancelled or the
+  // turn ends. The turn-end notifications of these CLIs are idle and no longer set it. One chain,
+  // so a clear never overtakes the notify it belongs to.
+  let hubQuestionOpen = false;
+  let hubQuestionCalls = Promise.resolve();
+  function hubCall(pathName, body) {
+    hubQuestionCalls = hubQuestionCalls.then(() => fetchImpl(callback + pathName, { method: 'POST',
+      headers: { 'X-Agent-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(5000) })).catch(() => {});
+    return hubQuestionCalls;
+  }
+  function openHubQuestion(questions) {
+    if (!callback || !token) return;
+    hubQuestionOpen = true;
+    const text = questions.map(entry => [(entry.header ? entry.header + ': ' : '') + entry.question,
+      ...entry.options.map((option, index) => `${index + 1}. ${option.label}${option.description ? ' — ' + option.description : ''}`)].join('\n')).join('\n\n');
+    const message = secretMask.mask(text || 'The agent is asking a question.').slice(0, 12000).replace(/[\uD800-\uDBFF]$/, '');
+    void hubCall('/notify', { event: 'question', message });
+  }
+  function closeHubQuestion() {
+    if (!hubQuestionOpen || !callback || !token) return;
+    hubQuestionOpen = false;
+    void hubCall('/turn-started');
+  }
   let activityIdleOverride = false;
   let activityPromptAt = now();
   let activityLastOutput = 0;
@@ -449,12 +480,13 @@ function createCommonServer(options = {}) {
       else state = activityLastOutput > 0 && now() - activityLastOutput < IDLE_QUIET_MS ? 'working' : 'idle';
     }
     if (state === 'waiting') reason = activityWaitingFor;
+    const questions = reason === 'answer' && activityQuestions.length ? maskQuestions(activityQuestions, text => secretMask.mask(text)) : null;
     // Whether the CLI runs and takes input, apart from what its turn is doing. A hook-driven
     // state stays 'unknown' until the CLI's first hook, which an idle TUI never fires before a
     // person types; the Workspace waited for that and showed "Session starting" over a CLI that
     // was already reading keys (#306). See agentReady for when that is.
     const ready = agentReady && Boolean(term) && !exited && restartReason === null && !runtimeDraining;
-    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ready, ...(reason ? { reason } : {}) });
+    return JSON.stringify({ type: 'agenthub', subtype: 'activity', state, source, ready, ...(reason ? { reason } : {}), ...(questions ? { questions } : {}) });
   }
   function removeActivityClient(socket) {
     activityClients.delete(socket);
@@ -1366,11 +1398,15 @@ function createCommonServer(options = {}) {
         if (nextTurn?.state === 'busy' && driver.isTurnInterrupt?.(message.data)) {
           activityIdleOverride = true;
           activityWaitingFor = null;
+          activityQuestions = [];
+          closeHubQuestion();
           publishActivity();
         }
         // An approval selected in the terminal resumes the same turn, so there is no new prompt
-        // hook. The client still gives a visible menu precedence until its screen clears.
-        if (activityWaitingFor && /[\r\n]|^[yYnN]$/.test(message.data)) {
+        // hook. The client still gives a visible menu precedence until its screen clears. A
+        // question is not over at the first Enter — a CLI steps through several questions and a
+        // multi-select list with it — so it waits for the hook that says it was answered.
+        if (activityWaitingFor === 'approval' && /[\r\n]|^[yYnN]$/.test(message.data)) {
           activityWaitingFor = null;
           publishActivity();
         }
@@ -1775,10 +1811,11 @@ function createCommonServer(options = {}) {
       fileError(response, 405, 'method_not_allowed');
       return;
     }
-    const raw = await readBoundedBody(request, MAX_LIMIT_REPORT_BYTES);
-    let event = null;
-    try { event = raw && JSON.parse(raw.toString('utf8')).event; } catch {}
-    if (!['prompt', 'permission', 'question', 'stop', 'idle'].includes(event)) return fileError(response, 400, 'invalid_event');
+    const raw = await readBoundedBody(request, MAX_TURN_REPORT_BYTES);
+    let body = null;
+    try { body = raw && JSON.parse(raw.toString('utf8')); } catch {}
+    const event = body?.event;
+    if (!['prompt', 'permission', 'question', 'answered', 'stop', 'idle'].includes(event)) return fileError(response, 400, 'invalid_event');
     // A Stop during an update or restart is answered with nothing: the agent is about to go.
     // An interrupted/failed plugin turn is idle to viewers but is not a safe point for fleet
     // continuation. Keep that distinction instead of turning its idle report into a Stop.
@@ -1787,14 +1824,15 @@ function createCommonServer(options = {}) {
       // Complete before the prompt hook returns so a later question cannot be cleared by a
       // delayed callback from the previous prompt. Failure must not prevent the native turn.
       if (callback && token) {
-        try {
-          await fetchImpl(callback + '/turn-started', { method: 'POST',
-            headers: { 'X-Agent-Token': token }, signal: AbortSignal.timeout(5000) });
-        } catch {}
+        hubQuestionOpen = false;
+        await hubCall('/turn-started');
       }
     }
     activityIdleOverride = event === 'idle';
     activityWaitingFor = event === 'permission' ? 'approval' : event === 'question' ? 'answer' : null;
+    activityQuestions = event === 'question' ? normalizeQuestions(body.questions) : [];
+    if (event === 'question') openHubQuestion(activityQuestions);
+    else if (event !== 'prompt') closeHubQuestion();
     const text = event === 'idle' || runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
     publishActivity();
     sendJson(response, 200, text ? { text } : {});

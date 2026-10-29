@@ -124,8 +124,19 @@ jobs:
           git push -f origin "$branch"
 
           body="$(printf 'Nightly upstream check. Every changed runtime was built **and smoke-tested** before this PR was opened.\n\n%s\n' "$(cat "$RUNNER_TEMP/bump-notes.md")")"
-          gh pr create --title "chore(agent-runtime): update pinned CLI versions" \
-                       --body "$body" --base main --head "$branch" \
-            || gh pr edit "$branch" --body "$body"
+          # Only an OPEN pull request is updated. `gh pr edit <branch>` also matches a merged
+          # one, and with `create || edit` a refused create went there: run after run rewrote
+          # the description of long-merged #47, opened nothing, and reported success (#340).
+          open_pr="$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [ -n "$open_pr" ]; then
+            gh pr edit "$open_pr" --body "$body"
+          elif ! gh pr create --title "chore(agent-runtime): update pinned CLI versions" \
+                              --body "$body" --base main --head "$branch"; then
+            # Refused while the repository does not allow GitHub Actions to create pull
+            # requests (Settings → Actions → General → Workflow permissions). The verified
+            # branch is pushed either way; failing makes the missing PR visible.
+            echo "::error::Could not open the pull request; the verified bump is on branch $branch"
+            exit 1
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

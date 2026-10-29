@@ -99,7 +99,12 @@ public sealed class InternalController : ControllerBase
     }
 
     public record StatusBody(string Status);
-    public record NotifyBody(string Message, string? Event);
+    /// <summary>A hook's "the agent waits" notification, relayed to the chat bridges.</summary>
+    /// <param name="Message">What the relays post.</param>
+    /// <param name="Event">The relay event, "question" for every hook today.</param>
+    /// <param name="Idle">The turn ended without a question of its own (Claude Code's
+    /// <c>idle_prompt</c>, the Codex and OpenCode turn ends), so it does not mark the session pending.</param>
+    public record NotifyBody(string Message, string? Event, bool? Idle = null);
 
     private async Task<SessionRecord?> AuthAsync(string id, CancellationToken ct)
     {
@@ -157,7 +162,10 @@ public sealed class InternalController : ControllerBase
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
 
-        await _store.SetQuestionPendingAsync(id, true, ct);
+        // An idle notification still opens the chat thread (the relays create one only on a
+        // "question"), but it asks nothing: pending, it put "waiting on you" on every idle Claude
+        // session in agents_list, the sidebar and the Workspace until the next prompt (#343).
+        if (body.Idle != true) await _store.SetQuestionPendingAsync(id, true, ct);
         // Codex's and Cursor's turn hooks send the agent's last message, which may quote a secret
         // the agent just read; the relays post it to a chat that outlives the session.
         await NotifyAllAsync(rec, body.Event ?? "question",

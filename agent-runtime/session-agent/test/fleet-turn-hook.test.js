@@ -57,6 +57,28 @@ test('a PermissionRequest for a question is reported as a question, not as a per
   assert.deepEqual(calls.map(call => call.body.event), ['question', 'permission']);
 });
 
+// #343: the question goes with the report, from the tool's own input; Codex 0.160.0 raises only
+// PreToolUse and PostToolUse for request_user_input, both CLIs PostToolUse on the answer.
+test('a question tool reports its questions when it opens and "answered" when it closes', async () => {
+  const { run } = await import('../../common/fleet-turn-hook.mjs');
+  const { calls, fetchImpl } = recorder();
+  const tool_input = { questions: [{ id: 'failures', header: 'Failures', question: 'Which behaviour?', options: [{ label: 'Fail fast', description: 'At once' }] }] };
+  const expected = [{ header: 'Failures', question: 'Which behaviour?', multiSelect: false, options: [{ label: 'Fail fast', description: 'At once' }] }];
+
+  await run({ ...thread, hook_event_name: 'PreToolUse', tool_name: 'request_user_input', tool_input }, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'PostToolUse', tool_name: 'request_user_input', tool_input, tool_response: '{}' }, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'PermissionRequest', tool_name: 'AskUserQuestion', tool_input: { ...tool_input, questions: [{ ...tool_input.questions[0], multiSelect: true }] } }, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'PostToolUse', tool_name: 'AskUserQuestion', tool_input }, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'PreToolUse', tool_name: 'shell', tool_input }, env, fetchImpl);
+  await run({ ...thread, hook_event_name: 'PreToolUse', tool_name: 'request_user_input', tool_input: { questions: 'no' } }, env, fetchImpl);
+
+  assert.deepEqual(calls.map(call => call.body), [
+    { event: 'question', questions: expected }, { event: 'answered' },
+    { event: 'question', questions: [{ ...expected[0], multiSelect: true }] }, { event: 'answered' },
+    { event: 'question' }
+  ]);
+});
+
 test('a Stop with messages blocks with them as the reason; other events and empty answers print nothing', async () => {
   const { run } = await import('../../common/fleet-turn-hook.mjs');
   const text = '[AgentHub message from agent "Code Reviewer" (rev-1)]\nPlease fix MR 42';
@@ -125,6 +147,9 @@ test('requirements.toml runs the hook on turn events, after the policy hook on a
   for (const event of ['UserPromptSubmit', 'PermissionRequest', 'Stop', 'Interrupt']) {
     assert.ok(section(event).includes(command), event + ' runs fleet-turn-hook.js');
   }
+  // The question tool's own Pre-/PostToolUse entries, apart from the policy hook's catch-all (#343).
+  const questionHooks = [...requirements.matchAll(/^\[\[hooks\.(PreToolUse|PostToolUse)\]\]\nmatcher = "\^request_user_input\$"\n\n\[\[hooks\.\1\.hooks\]\]\ntype = "command"\n(command = .*)$/gm)];
+  assert.deepEqual(questionHooks.map(match => [match[1], match[2]]), [['PreToolUse', command], ['PostToolUse', command]]);
   const permission = section('PermissionRequest');
   assert.ok(permission.indexOf('policy-hook.js') < permission.indexOf('fleet-turn-hook.js'));
   assert.equal(require('../../codex/driver.js').turnHooks, true);
