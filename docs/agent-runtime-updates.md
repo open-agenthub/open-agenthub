@@ -220,6 +220,20 @@ Because PRs opened with `GITHUB_TOKEN` do not trigger other workflows, that PR s
 image-build check of its own — the job's own build is the evidence. Merging runs the real
 build on `main`.
 
+Opening that PR needs the repository setting *Allow GitHub Actions to create and approve pull
+requests* (Settings → Actions → General → Workflow permissions). Without it the job pushes the
+verified branch, reports the refused create as an error and fails. It used to fall back to
+`gh pr edit chore/agent-runtime-versions`, which also matches a merged PR: from 2026-10-03 on,
+every green run rewrote the description of the long-merged #47, opened nothing and reported
+success, so the pins stayed at 2.1.287 / 0.160.0 unnoticed (#340). Only an open PR on the
+branch is updated now.
+
+The Claude image build also runs `claude plugin test` on the fleet mod with the bumped CLI, so
+a mods-API change fails the bump. Claude Code 2.1.292 began failing a test whose own stand-in
+hook returns a result the engine refuses. The mod's test had refused a prompt with `{ deny }`,
+which `prompt.submit` does not have; its results are `{ text }` or `{ drop }`. That test had
+been passing for the wrong reason (#340, `docs/priority-messages.md`).
+
 ## Scanning
 
 | What | Where | Blocking |

@@ -136,7 +136,13 @@ fetched them when the agent is idle, otherwise on the first poll after the runni
 (at most 3 s later). While a turn runs they stay on the status line, `/inbox` still prints
 them, and a prompt the person sends meanwhile still carries them as context — whichever comes
 first takes them, once. A submit Claude Code refuses puts them back on that list for the next
-idle poll. They are framed as the plugin's message, not as the person's words, so the model
+idle poll; the same holds for a priority message (#340). A refusal does not reject. It resolves
+to `{ drop: reason }`, for example when a person's `UserPromptSubmit` settings hook blocks the
+prompt or another mod drops it, so the mod checks the result as well as catching a rejection.
+Catching alone lost every dropped message after the hub had marked it delivered. A hook that
+keeps refusing means a retry every 3 s while the session is idle. That is the cost of not
+losing the message: each retry is one hook call and no model turn, and the status line shows
+what is waiting. They are framed as the plugin's message, not as the person's words, so the model
 can tell a peer's report from its owner's instruction.
 
 Rejected on the way:

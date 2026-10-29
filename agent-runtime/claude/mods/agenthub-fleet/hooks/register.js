@@ -144,9 +144,7 @@ async function poll($) {
     for (const message of plan.submit) {
       // Not awaited: the call resolves when the turn starts, which is after the running one
       // ends, and a poll that waited for it would hold the timer and every later message.
-      $.prompt.submit({ text: formatFleetMessage(message) }).catch(error => {
-        $.ui.log('fleet prompt failed: ' + describe(error), { to: 'debug' })
-      })
+      submit($, formatFleetMessage(message), [message])
     }
     if (plan.release.length) release($, plan.release)
     else if (waiting.length) $.ui.status(inboxStatus(waiting.length))
@@ -156,15 +154,28 @@ async function poll($) {
 }
 
 // The session is idle and the session agent has already told the hub these were delivered, so
-// they become a turn now rather than wait for a prompt nobody may type (#98). A submit the
-// engine refuses puts them back: they stay on the status line and go with the next prompt.
+// they become a turn now rather than wait for a prompt nobody may type (#98).
 function release($, messages) {
   $.ui.status(undefined)
-  $.prompt.submit({ text: inboxText(messages) }).catch(error => {
-    $.ui.log('fleet prompt failed: ' + describe(error), { to: 'debug' })
+  submit($, inboxText(messages), messages)
+}
+
+// The session agent has already told the hub these messages were delivered, so a submit that
+// does not enter must not lose them: they go back on the waiting list, stay on the status line,
+// ride along with the next prompt and are released again on the next idle poll (#340).
+// A refusal resolves to { drop } and never rejects — a settings UserPromptSubmit hook that
+// blocks, or another mod's prompt.submit hook — so a .catch alone dropped such messages
+// silently. A rejection is the engine failing outright, and is handled the same way.
+function submit($, text, messages) {
+  const keep = reason => {
+    $.ui.log('fleet prompt failed: ' + reason, { to: 'debug' })
     waiting = [...messages, ...waiting]
     $.ui.status(inboxStatus(waiting.length))
-  })
+  }
+  $.prompt.submit({ text }).then(
+    result => { if (result && typeof result.drop === 'string') keep('dropped: ' + result.drop) },
+    error => keep(describe(error))
+  )
 }
 
 function describe(error) {
