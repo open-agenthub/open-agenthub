@@ -6,4 +6,8 @@ import './fonts.js'
 import './style.css'
 
 // Initialize OIDC first (runtime config + possible callback), then mount the app.
-initAuth().then(() => createApp(App).mount('#app'))
+initAuth().then(async () => {
+  const root = location.pathname === '/browser-popout'
+    ? (await import('./components/BrowserPopout.vue')).default : App
+  createApp(root).mount('#app')
+})
