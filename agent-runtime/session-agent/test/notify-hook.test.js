@@ -117,6 +117,9 @@ test('forwards a question that merely mentions permission', async () => {
       'Claude is waiting for your input',
       'Do I have permission to force-push, or should I open a PR?'
     ]);
+    // #343: the idle notification opens the chat thread but is marked idle, so the hub does not
+    // take it for an open question; a real question carries no such mark.
+    assert.deepEqual(server.requests.map(r => r.body.idle), [true, undefined]);
   } finally {
     await server.close();
   }

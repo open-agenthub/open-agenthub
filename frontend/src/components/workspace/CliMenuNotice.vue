@@ -7,6 +7,8 @@ import { ref } from 'vue'
 // of being picked ("Type something.", #250) is a text field whose content is sent as the answer.
 // A multi-select list ticks its options one by one and moves on with its own step button
 // ("Submit", "Next"); OpenCode then shows a review of the answers to submit (#284).
+// A question tool's question, header and option descriptions come from the tool's own input
+// (#343); with no menu recognised on the screen they are shown to be answered in the terminal.
 defineProps({ menu: Object, canAnswer: Boolean })
 const emit = defineEmits(['choose', 'answer', 'step', 'confirm', 'cancel', 'open-terminal'])
 const drafts = ref({})
@@ -28,9 +30,22 @@ function onKeydown(event, number) {
   <section class="cli-menu" role="status" aria-live="polite" data-cli-menu>
     <p class="cli-menu-head">
       <span class="dot" aria-hidden="true"></span>
-      <strong>{{ menu.kind === 'choice' ? 'The agent is showing a menu' : menu.kind === 'confirm' ? 'The agent is waiting for you to submit' : 'The agent is waiting for input' }}</strong>
+      <strong>{{ menu.kind === 'question' || menu.header !== undefined ? 'The agent is asking'
+        : menu.kind === 'choice' ? 'The agent is showing a menu' : menu.kind === 'confirm' ? 'The agent is waiting for you to submit' : 'The agent is waiting for input' }}</strong>
+      <span v-if="menu.header" class="cli-menu-header" data-cli-header>{{ menu.header }}</span>
     </p>
     <p v-if="menu.title" class="cli-menu-title" data-cli-title>{{ menu.title }}</p>
+    <div v-if="menu.kind === 'question'" class="cli-menu-questions">
+      <div v-for="(question, index) in menu.questions" :key="index" class="cli-menu-question" data-cli-question>
+        <p v-if="question.header && menu.questions.length > 1" class="cli-menu-header">{{ question.header }}</p>
+        <p class="cli-menu-title" data-cli-title>{{ question.question }}</p>
+        <ol class="cli-menu-list">
+          <li v-for="(option, number) in question.options" :key="number" data-cli-listed-option>
+            <span class="option-text"><span>{{ option.label }}</span><span v-if="option.description" class="option-description">{{ option.description }}</span></span>
+          </li>
+        </ol>
+      </div>
+    </div>
     <div v-if="menu.kind === 'choice' && canAnswer" class="cli-menu-options">
       <template v-for="option in menu.options" :key="option.number">
         <form v-if="option.freeText" class="free-text" :class="{ current: option.selected }" :data-cli-free-text="option.number"
@@ -42,7 +57,8 @@ function onKeydown(event, number) {
         </form>
         <button v-else type="button" :class="{ current: option.selected }"
           :data-cli-option="option.number" @click="$emit('choose', option.number)">
-          <span class="number">{{ option.number }}</span>{{ option.label }}
+          <span class="number">{{ option.number }}</span>
+          <span class="option-text"><span>{{ option.label }}</span><span v-if="option.description" class="option-description" data-cli-option-description>{{ option.description }}</span></span>
         </button>
       </template>
       <button v-if="menu.step" type="button" class="step primary" :class="{ current: menu.step.selected }" data-cli-step
@@ -54,6 +70,7 @@ function onKeydown(event, number) {
     </div>
     <p class="cli-menu-hint">
       {{ menu.kind === 'confirm' ? 'Submit here or in the agent terminal.'
+        : menu.kind === 'question' ? 'Answer it in the agent terminal.'
         : menu.kind !== 'choice' ? 'Type the answer in the agent terminal.'
           : menu.partial ? 'The terminal shows only part of the list; the rest is in the agent terminal.'
             : menu.step ? `Tick what applies, then ${menu.step.label}.` : 'Choose here or in the agent terminal.' }}
@@ -69,6 +86,11 @@ function onKeydown(event, number) {
 /* The whole question, wrapped: a long one scrolls inside the notice rather than being cut. */
 .cli-menu-title { margin: 0 0 8px; color: var(--text); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 30vh; overflow-y: auto; line-height: 1.45; }
 .cli-menu-options { display: flex; flex-direction: column; gap: 4px; }
+.cli-menu-header { padding: 1px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 11px; }
+p.cli-menu-header { display: inline-block; margin: 0 0 6px; }
+.option-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.option-description { color: var(--muted); font-size: 11px; }
+.cli-menu-list { margin: 0 0 8px; padding-left: 22px; display: flex; flex-direction: column; gap: 4px; }
 .cli-menu-options button { display: flex; gap: 8px; text-align: left; padding: 7px 10px; border-radius: 9px; font-size: 12px; overflow-wrap: anywhere; }
 .cli-menu-options button.current, .free-text.current { border-color: var(--accent); }
 .free-text { display: flex; align-items: flex-start; gap: 8px; padding: 4px 4px 4px 10px; border: 1px solid var(--border); border-radius: 9px; }

@@ -52,6 +52,33 @@ public class InternalNotifyTests
         Assert.Equal("New question", world.Notifier.Events.Last().Item3);
     }
 
+    // #343: Claude Code's idle_prompt notification arrives a minute after every answer. It still
+    // opens the chat thread, but marked pending it said "waiting on you" for every idle session.
+    [Fact]
+    public async Task Notify_IdleNotification_RelaysButLeavesNoQuestionPending()
+    {
+        var world = new NotifyWorld(AgentKind.Claude);
+        var result = await world.Controller().Notify("s1",
+            new InternalController.NotifyBody("Here is the summary.", "question", Idle: true), CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        var (_, ev, message) = Assert.Single(world.Notifier.Events);
+        Assert.Equal("question", ev);
+        Assert.Equal("Here is the summary.", message);
+        Assert.Empty(world.Store.QuestionPending);
+    }
+
+    // The hook's bytes as MVC binds them: an older hook sends no "idle" at all.
+    [Theory]
+    [InlineData("{\"message\":\"m\",\"event\":\"question\",\"idle\":true}", true)]
+    [InlineData("{\"message\":\"m\",\"event\":\"question\"}", null)]
+    public void NotifyBody_BindsTheHooksIdleMark(string json, bool? idle)
+    {
+        var body = System.Text.Json.JsonSerializer.Deserialize<InternalController.NotifyBody>(json, System.Text.Json.JsonSerializerOptions.Web);
+        Assert.Equal(idle, body!.Idle);
+        Assert.Equal("question", body.Event);
+    }
+
     [Theory]
     [InlineData(AgentKind.Codex)]
     [InlineData(AgentKind.Cursor)]

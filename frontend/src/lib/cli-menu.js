@@ -141,6 +141,57 @@ function wrappedAbove(region, index, width) {
   return lines
 }
 
+// A multi-select entry's checkbox, which the CLI draws in front of the label.
+const CHECKBOX = /^\[[ ✔✓]\]\s*/
+function plain(label) {
+  return String(label).replace(CHECKBOX, '').replace(/\s+/g, ' ').trim()
+}
+// Whether an option read off the screen is the tool's option `label`: the same text, or that text
+// followed by its description in a second column (Codex: "Fail fast · Report the first…"), or the
+// start of it where the CLI cut a long label short.
+function sameOption(screen, label) {
+  const shown = plain(screen).replace(/…$/, '')
+  const full = plain(label)
+  return Boolean(full) && (shown === full || shown.startsWith(full + ' · ') || (shown.length >= 8 && full.startsWith(shown)))
+}
+
+/**
+ * The detected menu completed with the questions the CLI's question tool asked (#343), as the
+ * runtime relays them from the tool's own input. The screen still decides what is shown and where
+ * the cursor is — the keys depend on it — but the text comes from the tool: the screen loses the
+ * top of a question taller than the terminal and shows option descriptions on rows of their own
+ * that the option list does not read. The question on screen is the one whose options match.
+ * With no menu on screen, the questions are shown to be answered in the terminal.
+ * @param {ReturnType<typeof detectMenu>} menu
+ * @param {{ header: string, question: string, multiSelect: boolean, options: { label: string, description: string }[] }[] | undefined} questions
+ */
+export function withQuestions(menu, questions) {
+  if (!questions?.length) return menu
+  if (!menu) return { kind: 'question', title: '', options: [], questions }
+  if (menu.kind !== 'choice') return menu
+  let best = null
+  let bestScore = 0
+  for (const question of questions) {
+    const score = menu.options.filter(option => question.options.some(entry => sameOption(option.label, entry.label))).length
+    if (score > bestScore) { best = question; bestScore = score }
+  }
+  if (!best) return menu
+  const options = menu.options.map(option => {
+    const index = best.options.findIndex(entry => sameOption(option.label, entry.label))
+    if (index < 0) return option
+    const box = CHECKBOX.exec(option.label)?.[0] ?? ''
+    return { ...option, label: box + best.options[index].label, ...(best.options[index].description ? { description: best.options[index].description } : {}) }
+  })
+  // A list scrolled to its cursor shows only some options; the CLIs number the tool's options
+  // from 1 in order, so the missing ones are known. Keys reach them from the cursor by number.
+  for (const [index, entry] of best.options.entries()) {
+    if (!options.some(option => option.number === index + 1)) options.push({ number: index + 1, label: entry.label, selected: false, ...(entry.description ? { description: entry.description } : {}) })
+  }
+  options.sort((a, b) => a.number - b.number)
+  const shownAfter = menu.options.some(option => option.number > best.options.length)
+  return { ...menu, title: best.question, header: best.header, options, partial: Boolean(menu.partial) && !shownAfter }
+}
+
 /** Whether two detections describe the same screen, so an unchanged menu is not re-announced. */
 export function sameMenu(a, b) {
   return JSON.stringify(a) === JSON.stringify(b)

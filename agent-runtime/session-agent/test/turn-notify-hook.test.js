@@ -179,6 +179,7 @@ test('run as a command in interactive mode it POSTs the question to /notify', as
     assert.equal(server.requests.length, 1);
     assert.equal(server.requests[0].path, '/internal/sessions/s1/notify');
     assert.equal(server.requests[0].token, 'tok');
+    // Run directly, as Cursor runs it: Cursor has no structured question, so its turn end counts.
     assert.deepEqual(server.requests[0].body, { event: 'question', message: 'Which branch should I use?' });
   } finally {
     await server.close();
@@ -222,6 +223,8 @@ test('the codex wrapper runs the shared hook from its managed directory', async 
     });
     assert.equal(server.requests.length, 1);
     assert.equal(server.requests[0].body.event, 'question');
+    // #343: Codex asks through request_user_input; its turn end is idle, not a pending question.
+    assert.equal(server.requests[0].body.idle, true);
   } finally {
     await server.close();
   }

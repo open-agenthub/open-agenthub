@@ -32,3 +32,11 @@ it('reads an undelivered context handover and its clearing, nothing else (#336)'
   for (const data of ['{"type":"agenthub","subtype":"handover","failed":"yes"}', '{"type":"agenthub","subtype":"persistence","withheld":true}', 'plain text'])
     expect(parseHandoverFrame(data)).toBeNull()
 })
+
+it('carries an open question tool\'s questions as plain strings, only while it waits for an answer (#343)', () => {
+  const questions = [{ header: 'Mode', question: 'Which?', multiSelect: false, options: [{ label: 'A', description: 'first' }, { label: 'B' }, { label: 7 }, null] }, { question: '' }]
+  expect(parseActivityFrame(JSON.stringify({ type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', reason: 'answer', questions })))
+    .toEqual({ state: 'waiting', source: 'hooks', reason: 'answer', questions: [{ header: 'Mode', question: 'Which?', multiSelect: false, options: [{ label: 'A', description: 'first' }, { label: 'B', description: '' }] }] })
+  expect(parseActivityFrame(JSON.stringify({ type: 'agenthub', subtype: 'activity', state: 'waiting', source: 'hooks', reason: 'approval', questions })))
+    .toEqual({ state: 'waiting', source: 'hooks', reason: 'approval' })
+})

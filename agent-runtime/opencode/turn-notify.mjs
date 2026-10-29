@@ -49,7 +49,9 @@ export function createTurnNotifier({ client, env = process.env, sendImpl = send 
     } catch {
       // Without the text the generic message is still a correct notification.
     }
+    // Idle (#343): OpenCode asks through its question tool, which question-activity.mjs reports and
+    // the session agent marks pending. The end of a turn only tells the relays it finished.
     const body = decide(payload, env);
-    if (body) await sendImpl(body, env);
+    if (body) await sendImpl({ ...body, idle: true }, env);
   };
 }

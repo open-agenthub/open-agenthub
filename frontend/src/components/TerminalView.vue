@@ -11,7 +11,7 @@ import CliMenuNotice from './workspace/CliMenuNotice.vue'
 import CliSignInNotice from './workspace/CliSignInNotice.vue'
 import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
-import { CANCEL_KEYS, CONFIRM_KEYS, keysForAnswer, keysForOption, keysForStep } from '../lib/cli-menu.js'
+import { CANCEL_KEYS, CONFIRM_KEYS, keysForAnswer, keysForOption, keysForStep, withQuestions } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
 import { canPause, isSessionStopped, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
@@ -90,10 +90,22 @@ const workspaceActivity = computed(() => {
   // runtime did not label is an answer the person owes.
   if (pendingPermissions.value.length || (agentActivity.value.state === 'waiting' && agentActivity.value.reason === 'approval'))
     return { state: 'waiting', reason: 'approval' }
-  if (agentActivity.value.state === 'waiting' || cliMenu.value || props.session.questionPending) return { state: 'waiting', reason: 'answer' }
+  // Not the session's questionPending (#343): the hub sets it for the chat relays whenever a turn
+  // ends — Claude Code's idle notification a minute after every answer, the Codex, Cursor and
+  // OpenCode turn hooks at once — so it said "Waiting for your answer" at nearly every idle prompt.
+  // The runtime knows when a question tool opens and closes; the screen shows a CLI's own menus.
+  if (agentActivity.value.state === 'waiting' || cliMenu.value) return { state: 'waiting', reason: 'answer' }
   return statuses.agent === 'connected' ? agentActivity.value : { state: 'unknown' }
 })
 watch(() => props.session.id, () => { promptSuggestion.value = ''; agentActivity.value = { state: 'unknown', source: 'hooks' } })
+// The banner over the session (#343): "asking" only while a question is open. The hub's
+// questionPending, set whenever a turn ends, still means "your turn" where the activity line and
+// notice are not shown — the terminal tab and streaming sessions — and says so, not "asking".
+const asking = computed(() => workspaceActivity.value.state === 'waiting' && workspaceActivity.value.reason === 'answer' ? 'question'
+  : props.session.questionPending && (!modern.value || isChat.value) ? 'reply' : '')
+// The CLI screen the notice shows, its text completed from the open question tool's own input.
+const questionMenu = computed(() => withQuestions(cliMenu.value,
+  agentActivity.value.state === 'waiting' && agentActivity.value.reason === 'answer' ? agentActivity.value.questions : undefined))
 const agentTerminal = ref(null)
 const composer = ref(null)
 const transcriptError = ref('')
@@ -534,11 +546,13 @@ function sendWorkspaceMessage(text, options) {
   }
   // A message pasted into one of the CLI's own screens is not a message: its Enter picks the
   // highlighted option, or submits the text as a login code. Refused, so the draft stays.
-  if (cliMenu.value) {
-    throw new Error(cliMenu.value.kind === 'signin'
+  if (questionMenu.value) {
+    throw new Error(questionMenu.value.kind === 'signin'
       ? 'Finish signing in above or in the terminal first; your draft is still here.'
-      : cliMenu.value.kind === 'choice'
+      : questionMenu.value.kind === 'choice'
       ? 'The agent is showing a menu. Answer it above or in the terminal first; your draft is still here.'
+      : questionMenu.value.kind === 'question'
+      ? 'The agent is asking a question. Answer it in the terminal first; your draft is still here.'
       : 'The agent is waiting for input in its terminal. Answer it there first; your draft is still here.')
   }
   return agentTerminal.value.submitMessage(text, options)
@@ -655,8 +669,8 @@ function interruptWorkspaceAgent() {
         </span>
       </div>
     </div>
-    <div v-if="session.questionPending && capabilities.canWrite" class="asking">
-      <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ modern || isChat ? 'below' : 'in the terminal below' }}.
+    <div v-if="asking && capabilities.canWrite" class="asking" data-asking>
+      <span class="ask-dot"></span>{{ asking === 'question' ? 'THE AGENT IS ASKING' : 'THE AGENT IS WAITING FOR YOUR REPLY' }} — reply {{ modern || isChat ? 'below' : 'in the terminal below' }}.
     </div>
     <div v-if="autoApprove && isLive && capabilities.canManage && !sharedToken" class="perm auto-on">
       <span class="ask-dot"></span>
@@ -744,7 +758,7 @@ function interruptWorkspaceAgent() {
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
         <CliSignInNotice v-if="modern && !isChat && cliMenu?.kind === 'signin'" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive" :send="sendSignInCode"
           @retry="retrySignIn" @continue="retrySignIn" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
-        <CliMenuNotice v-else-if="modern && !isChat && cliMenu" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive"
+        <CliMenuNotice v-else-if="modern && !isChat && questionMenu" :menu="questionMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @answer="answerCliMenuText" @step="stepCliMenu" @confirm="confirmCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <div v-if="modern" class="drawer-toolbar">
           <span v-if="!isChat" class="sync-note">Conversation · follows the agent live</span>
@@ -752,7 +766,7 @@ function interruptWorkspaceAgent() {
           <button v-if="isLive && capabilities.canShell" type="button" :aria-expanded="terminalOpened && drawerKind === 'shell'" data-drawer-shell @click="toggleDrawer('shell')">›_ Shell</button>
         </div>
         <div v-if="!isChat || (isLive && capabilities.canShell && shellOpened)" class="terminal-host"
-          :class="{ 'terminal-drawer': modern, 'menu-open': modern && cliMenu && drawerKind === 'agent' }" v-show="activeTab === 'agent' || activeTab === 'shell' || (modern && terminalOpened)">
+          :class="{ 'terminal-drawer': modern, 'menu-open': modern && questionMenu && drawerKind === 'agent' }" v-show="activeTab === 'agent' || activeTab === 'shell' || (modern && terminalOpened)">
           <TerminalPane v-if="!isChat" ref="agentTerminal" v-show="activeTab === 'agent' || (modern && drawerKind === 'agent')"
             :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" kind="agent" :show-composer="!modern"
             :active="activeTab === 'agent' || (modern && terminalOpened && drawerKind === 'agent')" @status="statuses.agent = $event"
@@ -762,7 +776,7 @@ function interruptWorkspaceAgent() {
         </div>
         <WorkspaceComposer v-if="workspaceOpened && !isChat && !isStopped && capabilities.canWrite && String(session.mode).toLowerCase() === 'interactive'" v-show="modern"
           ref="composer" :session-id="session.id" :enabled="canCompose" :queueable="canTask && !canCompose" :status="statuses.agent" :agent="session.agent"
-          :suggestion="canCompose && !cliMenu && agentActivity.state !== 'working' ? promptSuggestion : ''" :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
+          :suggestion="canCompose && !questionMenu && agentActivity.state !== 'working' ? promptSuggestion : ''" :send="sendWorkspaceMessage" :interrupt="interruptWorkspaceAgent" @sent="onComposerSent" :load-commands="sharedToken ? undefined : loadAgentCommands"
           :attach="sharedToken ? undefined : attachWorkspaceFiles" />
         <div v-if="isStopped" class="session-input-state" data-session-input-state>
           <SessionStoppedNotice :session="session" :shared-token="sharedToken" @resume="$emit('resume', $event)" />

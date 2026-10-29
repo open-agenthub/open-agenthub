@@ -42,6 +42,25 @@ type = "command"
 command = "node /opt/session-agent/codex/fleet-turn-hook.js"
 timeout = 10
 
+# A question screen opens and closes (#343): the session agent relays the questions from the
+# tool's input to the Workspace and says "Waiting for your answer" only while one is open.
+# Codex 0.160.0 raises no PermissionRequest for request_user_input.
+[[hooks.PreToolUse]]
+matcher = "^request_user_input$"
+
+[[hooks.PreToolUse.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/fleet-turn-hook.js"
+timeout = 10
+
+[[hooks.PostToolUse]]
+matcher = "^request_user_input$"
+
+[[hooks.PostToolUse.hooks]]
+type = "command"
+command = "node /opt/session-agent/codex/fleet-turn-hook.js"
+timeout = 10
+
 # Records that the turn changed something, so the reminder below stays off a turn that only
 # answered a question.
 [[hooks.PostToolUse]]
