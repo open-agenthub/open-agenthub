@@ -10,6 +10,10 @@
 // turn still runs (the CLI queues it); REMINDER=1 makes that turn count as work, so the
 // production skill-reminder Stop hook continues it once before it ends. MENU_ANSWER_MS=<ms>
 // answers an open CLI menu with Enter that long after the clear, then the owner sends a prompt.
+// FOLLOW=1 (with FAULT=none) then checks that the Workspace follows the new conversation: the
+// pod's live transcript and the backend's conversation page (HOST_DLL, Host/ built with
+// `dotnet build -o`) show "Conversation cleared" with the new thread's identity, and a later turn
+// lands after it. RESTART=1 adds a pod restart after that: the new pod resumes the new thread.
 // Prints one `RESULT {...}` line.
 'use strict';
 const http = require('node:http');
@@ -51,6 +55,9 @@ let currentTmp = null;
 const handoverFrames = [];
 const QUEUED = process.env.QUEUED === '1';
 const REMINDER = process.env.REMINDER === '1';
+const FOLLOW = process.env.FOLLOW === '1' || process.env.RESTART === '1';
+const RESTART = process.env.RESTART === '1';
+const HOST_PORT = HUB + 2000;
 let oldSeen = false;
 
 // ---- mock model + stand-in hub ------------------------------------------------------------
@@ -165,7 +172,7 @@ function startAgent(extraEnv, label) {
   const tmp = fs.mkdtempSync(run + '/tmp-');
   currentTmp = tmp;
   proc = spawn(S + '/proot', ['-b', R + '/rt:/opt/session-agent', '-b', R + '/etc-codex:/etc/codex', '-b', tmp + ':/tmp',
-    'node', '/opt/session-agent/fault-server.cjs'], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    'node', '/opt/session-agent/fault-server.cjs'], { env, stdio: ['ignore', 'pipe', 'pipe'], detached: true });
   const out = fs.createWriteStream(run + '/agent-' + label + '.log');
   proc.stdout.on('data', d => out.write(d));
   proc.stderr.on('data', d => out.write(d));
@@ -174,6 +181,7 @@ function startAgent(extraEnv, label) {
 
 const term = new Terminal({ cols: 120, rows: 36, allowProposedApi: true });
 let ws = null;
+let terminalCleared = 0;
 const screen = () => { const b = term.buffer.active; const rows = []; for (let i = 0; i < term.rows; i++) rows.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? ''); return rows.join('\n'); };
 async function connect() {
   for (let i = 0; i < 100; i++) {
@@ -189,6 +197,7 @@ async function connect() {
     if (data.startsWith('{"type":"agenthub","subtype":"handover"')) { const frame = JSON.parse(data);
       handoverFrames.push({ failed: frame.failed === true, ...(/^context_clear_[a-z_]+$/.test(frame.reason) ? { reason: frame.reason } : {}) }); say('handover frame failed=' + (frame.failed === true)); return; }
     if (data.startsWith('{"type":"agenthub"')) return;
+    if (data.includes('[agent] Conversation cleared.')) terminalCleared++;
     term.write(data);
   });
   term.onData(data => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'input', data })); });
@@ -234,8 +243,107 @@ function nativeFirstUserTurn() {
   return result;
 }
 
+// ---- Workspace follow (FOLLOW=1 / RESTART=1) ----------------------------------------------
+const rolloutIdOf = name => (/-([0-9a-f-]{36})\.jsonl$/.exec(name || '') || [])[1] || '';
+async function live() {
+  const response = await fetch(`http://127.0.0.1:${PORT}/agenthub/transcript?from=0`, { headers: { 'X-Agent-Token': TOKEN } });
+  return { id: response.headers.get('X-Transcript-Id'), text: await response.text() };
+}
+async function backendConversation() {
+  if (!process.env.HOST_DLL) return null;
+  try { return await (await fetch(`http://127.0.0.1:${HOST_PORT}/conversation?max=5000`)).json(); } catch { return null; }
+}
+// The page as the Workspace renders it: one tag per entry, so the order is the assertion.
+function conversationTags(page) {
+  return (page && page.entries || []).map(entry => {
+    if (entry.role === 'boundary') return 'boundary:' + entry.text;
+    const tag = ['OLD-MARKER-336', 'HANDOVER-336', 'LATER-351', 'AFTER-RESTART-351'].find(m => (entry.text || '').includes(m));
+    return tag ? entry.role + ':' + tag : null;
+  }).filter(Boolean);
+}
+function liveSummary(text) {
+  const lines = text.split('\n').filter(Boolean);
+  const boundary = lines.map(l => { try { return JSON.parse(l); } catch { return null; } }).find(r => r && r.type === 'agenthub_conversation');
+  const at = marker => text.indexOf(marker);
+  return {
+    boundaryText: boundary ? boundary.text : null, boundaryThread: boundary ? rolloutIdOf(boundary.id) : null,
+    oldBeforeBoundary: at(OLD) >= 0 && at(OLD) < at('agenthub_conversation'),
+    handoverAfterBoundary: at('agenthub_conversation') >= 0 && at('HANDOVER-336') > at('agenthub_conversation')
+  };
+}
+function codexResumeArgs() {
+  const found = [];
+  for (const pid of fs.readdirSync('/proc').filter(n => /^\d+$/.test(n))) {
+    let args; try { args = fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0'); } catch { continue; }
+    // Only this run's pod: the CLI's environment carries the run's home.
+    try { if (!fs.readFileSync(`/proc/${pid}/environ`, 'utf8').split('\0').includes('HOME=' + home)) continue; } catch { continue; }
+    const at = args.indexOf('resume');
+    if (at > 0 && args.some(a => /codex/.test(a)) && args[at + 1]) found.push(args[at + 1]);
+  }
+  return [...new Set(found)];
+}
+async function paste(text) {
+  ws.send(JSON.stringify({ type: 'input', data: '\x1b[200~' + text + '\x1b[201~' }));
+  await sleep(400);
+  ws.send(JSON.stringify({ type: 'input', data: '\r' }));
+}
+async function follow() {
+  const out = {};
+  const oldThread = rolloutIdOf(fs.readdirSync(home + '/.codex/sessions', { recursive: true }).map(String)
+    .find(f => f.endsWith('.jsonl') && fs.readFileSync(home + '/.codex/sessions/' + f, 'utf8').includes(OLD)));
+  const newThread = () => fs.readFileSync(home + '/.codex/agenthub-thread-id', 'utf8').trim();
+  out.oldThread = oldThread;
+  out.newThread = newThread();
+  await until(async () => liveSummary((await live()).text).handoverAfterBoundary, 30_000);
+  const first = await live();
+  out.live = { id: first.id, ...liveSummary(first.text) };
+  out.terminalCleared = terminalCleared;
+  await until(async () => conversationTags(await backendConversation()).includes('user:HANDOVER-336'), 30_000);
+  out.backendAfterClear = conversationTags(await backendConversation());
+  await paste('LATER-351 and the next step?');
+  await until(() => requests.some(r => !r.helper && r.text.includes('LATER-351')), 60_000);
+  const later = requests.find(r => !r.helper && r.text.includes('LATER-351'));
+  out.laterRequest = later ? { handover: later.text.includes('HANDOVER-336'), old: later.text.includes(OLD) } : null;
+  await until(async () => conversationTags(await backendConversation()).includes('user:LATER-351'), 30_000);
+  out.backendAfterLater = conversationTags(await backendConversation());
+  if (!RESTART) return out;
+
+  say('restart: killing the pod after the handover and a later turn');
+  await sleep(2000);
+  try { process.kill(-proc.pid, 'SIGKILL'); } catch {}
+  await new Promise(resolve => proc.exitCode !== null || proc.signalCode ? resolve() : proc.once('exit', resolve));
+  try { ws.terminate(); } catch {}
+  term.reset();
+  // Excluded from the state archive (driver stateExcludes), so a new pod never has it.
+  fs.rmSync(home + '/.codex/agenthub-active', { recursive: true, force: true });
+  await sleep(500);
+  startAgent({ PROOF_FAULT: 'none', AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1' }, 'resumed');
+  await connect();
+  if (!await until(ready, 60_000)) throw new Error('resumed CLI not ready');
+  out.resumeArgs = codexResumeArgs();
+  await sleep(3000);
+  await paste('AFTER-RESTART-351 still there?');
+  await until(() => requests.some(r => !r.helper && r.text.includes('AFTER-RESTART-351')), 60_000);
+  const resumed = requests.find(r => !r.helper && r.text.includes('AFTER-RESTART-351'));
+  out.resumedRequest = resumed ? { handover: resumed.text.includes('HANDOVER-336'), later: resumed.text.includes('LATER-351'), old: resumed.text.includes(OLD) } : null;
+  const rollouts = fs.readdirSync(home + '/.codex/sessions', { recursive: true }).map(String).filter(f => f.endsWith('.jsonl'));
+  out.afterRestartIn = rollouts.filter(f => fs.readFileSync(home + '/.codex/sessions/' + f, 'utf8').includes('AFTER-RESTART-351')).map(rolloutIdOf);
+  await until(async () => conversationTags(await backendConversation()).includes('user:AFTER-RESTART-351'), 30_000);
+  const page = await backendConversation();
+  out.backendAfterRestart = conversationTags(page);
+  out.liveIdAfterRestart = (await live()).id;
+  return out;
+}
+
 (async () => {
   await new Promise(r => hub.listen(HUB, '127.0.0.1', r));
+  let host = null;
+  if (process.env.HOST_DLL) {
+    host = spawn('dotnet', [process.env.HOST_DLL], { env: { ...process.env, PROOF_AGENT_PORT: String(PORT), PROOF_HOST_PORT: String(HOST_PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const out = fs.createWriteStream(run + '/host.log');
+    host.stdout.on('data', d => out.write(d)); host.stderr.on('data', d => out.write(d));
+    process.on('exit', () => { try { host.kill('SIGKILL'); } catch {} });
+  }
   startAgent({ PROOF_FAULT: FAULT }, 'first');
   await connect();
   if (!await until(ready, 60_000)) { say('CLI not ready'); console.log(screen()); process.exit(2); }
@@ -266,6 +374,7 @@ function nativeFirstUserTurn() {
   }
   const delivered = await until(() => requests.some(r => !r.helper && r.text.includes('HANDOVER-336')), WAIT_MS);
   await sleep(4000);
+  const followed = FOLLOW && delivered ? await follow() : undefined;
   if (process.env.SHOW_SCREEN) console.log(screen());
   const first = requests.find(r => !r.helper && r.text.includes('HANDOVER-336'));
   const logs = fs.readdirSync(run).filter(f => f.startsWith('agent-')).map(f => fs.readFileSync(run + '/' + f, 'utf8')).join('\n');
@@ -286,10 +395,11 @@ function nativeFirstUserTurn() {
       return tags.join('+');
     }),
     handoverFrames,
-    agentLog: logs.split('\n').filter(l => /context|handover|Context|\[fault\]|Conversation/.test(l)).slice(0, 20)
+    ...(followed ? { follow: followed } : {}),
+    agentLog: logs.split('\n').filter(l => /context|handover|Context|\[fault\]|Conversation|Transcript:/.test(l)).slice(0, 20)
   };
   say('RESULT ' + JSON.stringify(result));
-  try { process.kill(proc.pid, 'SIGTERM'); } catch {}
+  try { process.kill(-proc.pid, 'SIGTERM'); } catch {}
   await sleep(500);
   process.exit(0);
 })().catch(error => { say('ERROR ' + (error && error.stack || error)); process.exit(1); });
