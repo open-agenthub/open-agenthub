@@ -156,16 +156,18 @@ export async function send(body, env = process.env, fetchImpl = fetch) {
 }
 
 /** Entry point. Exported because Codex reaches it through a wrapper in its managed
- * hooks directory rather than by running this file. Prints nothing: Codex rejects plain
+ * hooks directory rather than by running this file. `idle` marks the turn's end as not a question
+ * of its own (#343): Codex reports its real questions as request_user_input, which the session
+ * agent relays and marks pending; Cursor has no such signal, so its turn end still counts. Prints nothing: Codex rejects plain
  * text on Stop, and an empty stdout is "no decision" for both agents. */
-export async function cli() {
+export async function cli({ idle = false } = {}) {
   const raw = await readStdin();
   let payload = {};
   try { payload = raw.trim() ? JSON.parse(raw) : {}; } catch { payload = {}; }
   if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) payload = {};
 
   const body = decide(payload);
-  if (body) await send(body);
+  if (body) await send(idle ? { ...body, idle: true } : body);
 }
 
 // A hook that throws blocks the agent for no reason, so every failure path here is silent.

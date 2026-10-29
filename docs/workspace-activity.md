@@ -74,13 +74,21 @@ with Enter, and the question stays open until PostToolUse.
 The banner over the session follows the same rule. *The agent is asking* shows only while a question
 is open. In the terminal tab and in streaming sessions, which have no activity line, `questionPending`
 still shows a banner, worded *The agent is waiting for your reply*.
-The hub no longer sets `questionPending` for Claude Code's idle notification either. Before, it put
-*waiting on you* on every idle Claude session in `agents_list`, the sidebar and Home a minute after
-each answer. notify-hook marks that notification `idle: true`. `/notify` still relays it as a
-"question", because the relays open their thread on nothing else, but it leaves the session not
-pending. Rejected: dropping the idle notification in the hook, which would leave a Claude session
-that finished without asking out of chat entirely. The Codex, Cursor and OpenCode turn-end hooks
-are unchanged: their notification carries the turn's last message, which is often the question.
+At the hub, `questionPending` now follows the question tool as well. When a question tool opens,
+the session agent posts its text to `/notify`. The relays then show the actual question, and the
+session is pending in `agents_list`, the sidebar and Home. When the tool closes (answered, Esc, the
+next prompt or the turn's end), the session agent clears it through `/turn-started`. A single
+promise chain keeps a clear from overtaking its own notify.
+
+The turn-end notifications of the hooked CLIs say nothing more and are marked `idle: true`:
+Claude Code's `idle_prompt` about a minute after every answer, the Codex Stop hook and OpenCode's
+`session.idle`. `/notify` still relays them, because the relays open a thread on nothing else, but it
+leaves the session not pending. Before, every idle session read *waiting on you*, which misled a
+coordinating agent about who was waiting for whom.
+
+Cursor has no structured question signal, so its turn-end notification still sets `questionPending`.
+That is a known limitation. Rejected: dropping the idle notifications in the hooks, which would
+leave a session that finished without asking out of chat entirely.
 Streaming sessions use their existing streamed-turn busy state. Disconnected, stopped and unknown
 states show no working spinner. Reduced-motion viewers keep a static marker instead of rotation.
 

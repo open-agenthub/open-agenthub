@@ -99,8 +99,11 @@ public sealed class InternalController : ControllerBase
     }
 
     public record StatusBody(string Status);
-    /// <param name="Idle">The CLI says it sits idle at its prompt rather than asking anything
-    /// (Claude Code's <c>idle_prompt</c> notification, about a minute after every answer).</param>
+    /// <summary>A hook's "the agent waits" notification, relayed to the chat bridges.</summary>
+    /// <param name="Message">What the relays post.</param>
+    /// <param name="Event">The relay event, "question" for every hook today.</param>
+    /// <param name="Idle">The turn ended without a question of its own (Claude Code's
+    /// <c>idle_prompt</c>, the Codex and OpenCode turn ends), so it does not mark the session pending.</param>
     public record NotifyBody(string Message, string? Event, bool? Idle = null);
 
     private async Task<SessionRecord?> AuthAsync(string id, CancellationToken ct)

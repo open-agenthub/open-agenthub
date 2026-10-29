@@ -166,3 +166,32 @@ test('a driver with an input-box screen is ready only once that box is drawn', a
   for (let i = 0; i < 50 && frames(viewer).at(-1).ready !== true; i++) await new Promise(resolve => setTimeout(resolve, 10));
   assert.deepEqual(frames(viewer).at(-1), { type: 'agenthub', subtype: 'activity', state: 'unknown', source: 'hooks', ready: true });
 });
+
+test('a question tool sets the hub question with its text and clears it once answered or cancelled (#343)', async () => {
+  const calls = [];
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token', AGENTHUB_CALLBACK_URL: 'https://example.com/internal/sessions/s1' },
+    { turnHooks: true, isTurnInterrupt: data => data === '\x1b' }, { fetchResponse: (url, options) => {
+      if (/\/(notify|turn-started)$/.test(url)) calls.push({ path: url.replace('https://example.com/internal/sessions/s1', ''), body: options.body ? JSON.parse(options.body) : null });
+      return undefined;
+    } });
+  const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/'); subscribe(socket);
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+  await turn(h, 'prompt');
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'question', questions: [
+    { header: 'Mode', question: 'Which way?', options: [{ label: 'Fast', description: 'at once' }, { label: 'Safe' }] }] }), '127.0.0.1');
+  await turn(h, 'answered');
+  // Nothing open: a later stop or permission sends no clear of its own.
+  await turn(h, 'stop');
+  await turn(h, 'prompt');
+  await turn(h, 'question');
+  socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
+  await settle();
+  assert.deepEqual(calls, [
+    { path: '/turn-started', body: null },
+    { path: '/notify', body: { event: 'question', message: 'Mode: Which way?\n1. Fast — at once\n2. Safe' } },
+    { path: '/turn-started', body: null },
+    { path: '/turn-started', body: null },
+    { path: '/notify', body: { event: 'question', message: 'The agent is asking a question.' } },
+    { path: '/turn-started', body: null }
+  ]);
+});

@@ -47,6 +47,7 @@ if (scenario === 'ask' || scenario === 'cancel' || scenario === 'multi') {
   out.header = await page.locator('[data-cli-header]').innerText({ timeout: 500 }).catch(() => '')
   out.options = await page.locator('[data-cli-option]').allInnerTexts()
   out.activity = await activity()
+  out.pendingWhileOpen = Boolean((await hubSession()).questionPending)
   await notice.screenshot({ path: path.join(shots, `343-${agent}-${label}.png`) })
   await page.screenshot({ path: path.join(shots, `343-${agent}-${label}-page.png`) })
   if (scenario === 'multi') {
@@ -71,7 +72,7 @@ if (scenario === 'ask' || scenario === 'cancel' || scenario === 'multi') {
     await page.waitForTimeout(5000)
     out.noticeAfter = await notice.count()
     out.activityAfter = await activity()
-    out.screen = (await page.evaluate(() => null))
+    out.pendingAfter = Boolean((await hubSession()).questionPending)
     say(JSON.stringify(out, null, 1)); fs.writeFileSync(path.join(H, `result-${scenario}-${agent}-${label}.json`), JSON.stringify(out, null, 1)); await browser.close(); process.exit(0)
   }
   await page.locator('[data-cli-option="2"]').click()
@@ -81,6 +82,7 @@ if (scenario === 'ask' || scenario === 'cancel' || scenario === 'multi') {
   await page.waitForTimeout(4000)
   out.noticeAfter = await notice.count()
   out.activityAfter = await activity()
+  out.pendingAfter = Boolean((await hubSession()).questionPending)
 } else {
   await composer.fill('hello there'); await composer.press('Enter')
   const t0 = Date.now(); out.samples = []

@@ -403,6 +403,31 @@ function createCommonServer(options = {}) {
   // The questions an open question tool asks, from its own input (#343); [] when none is open
   // or the CLI reported none.
   let activityQuestions = [];
+  // The hub's questionPending follows the question tool too (#343): set with the question's own
+  // text when it opens (the chat relays post it), cleared when it is answered, cancelled or the
+  // turn ends. The turn-end notifications of these CLIs are idle and no longer set it. One chain,
+  // so a clear never overtakes the notify it belongs to.
+  let hubQuestionOpen = false;
+  let hubQuestionCalls = Promise.resolve();
+  function hubCall(pathName, body) {
+    hubQuestionCalls = hubQuestionCalls.then(() => fetchImpl(callback + pathName, { method: 'POST',
+      headers: { 'X-Agent-Token': token, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(5000) })).catch(() => {});
+    return hubQuestionCalls;
+  }
+  function openHubQuestion(questions) {
+    if (!callback || !token) return;
+    hubQuestionOpen = true;
+    const text = questions.map(entry => [(entry.header ? entry.header + ': ' : '') + entry.question,
+      ...entry.options.map((option, index) => `${index + 1}. ${option.label}${option.description ? ' — ' + option.description : ''}`)].join('\n')).join('\n\n');
+    const message = secretMask.mask(text || 'The agent is asking a question.').slice(0, 12000).replace(/[\uD800-\uDBFF]$/, '');
+    void hubCall('/notify', { event: 'question', message });
+  }
+  function closeHubQuestion() {
+    if (!hubQuestionOpen || !callback || !token) return;
+    hubQuestionOpen = false;
+    void hubCall('/turn-started');
+  }
   let activityIdleOverride = false;
   let activityPromptAt = now();
   let activityLastOutput = 0;
@@ -1374,6 +1399,7 @@ function createCommonServer(options = {}) {
           activityIdleOverride = true;
           activityWaitingFor = null;
           activityQuestions = [];
+          closeHubQuestion();
           publishActivity();
         }
         // An approval selected in the terminal resumes the same turn, so there is no new prompt
@@ -1798,15 +1824,15 @@ function createCommonServer(options = {}) {
       // Complete before the prompt hook returns so a later question cannot be cleared by a
       // delayed callback from the previous prompt. Failure must not prevent the native turn.
       if (callback && token) {
-        try {
-          await fetchImpl(callback + '/turn-started', { method: 'POST',
-            headers: { 'X-Agent-Token': token }, signal: AbortSignal.timeout(5000) });
-        } catch {}
+        hubQuestionOpen = false;
+        await hubCall('/turn-started');
       }
     }
     activityIdleOverride = event === 'idle';
     activityWaitingFor = event === 'permission' ? 'approval' : event === 'question' ? 'answer' : null;
     activityQuestions = event === 'question' ? normalizeQuestions(body.questions) : [];
+    if (event === 'question') openHubQuestion(activityQuestions);
+    else if (event !== 'prompt') closeHubQuestion();
     const text = event === 'idle' || runtimeDraining || restartReason !== null ? null : await nextTurn.turnEvent(event);
     publishActivity();
     sendJson(response, 200, text ? { text } : {});
