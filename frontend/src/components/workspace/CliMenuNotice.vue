@@ -31,7 +31,8 @@ function onKeydown(event, number) {
     <p class="cli-menu-head">
       <span class="dot" aria-hidden="true"></span>
       <strong>{{ menu.kind === 'question' || menu.header !== undefined ? 'The agent is asking'
-        : menu.kind === 'choice' ? 'The agent is showing a menu' : menu.kind === 'confirm' ? 'The agent is waiting for you to submit' : 'The agent is waiting for input' }}</strong>
+        : /^Select login method/i.test(menu.title || '') ? 'Sign in to the agent CLI'
+          : menu.kind === 'choice' ? 'The agent is showing a menu' : menu.kind === 'confirm' ? 'The agent is waiting for you to submit' : 'The agent is waiting for input' }}</strong>
       <span v-if="menu.header" class="cli-menu-header" data-cli-header>{{ menu.header }}</span>
     </p>
     <p v-if="menu.title" class="cli-menu-title" data-cli-title>{{ menu.title }}</p>

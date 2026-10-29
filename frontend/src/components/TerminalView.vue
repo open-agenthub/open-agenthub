@@ -756,7 +756,7 @@ function interruptWorkspaceAgent() {
           :start-index="conversation?.source === 'native' ? conversation.offset : 0" :has-earlier="conversation?.offset > 0" @load-earlier="loadEarlier" :pending="pendingItems" @retry="loadTranscript" @quote="composer?.quote($event)" @dismiss-pending="dismissPending" @send-pending="sendPendingNow" />
         <WorkspaceStream v-if="isChat" v-show="modern" :session="session" :shared-token="sharedToken" :readonly="!capabilities.canWrite" @status="statuses.agent = $event" @activity="agentActivity = $event" />
         <WorkspaceActivity v-if="modern" v-bind="workspaceActivity" :can-respond="capabilities.canWrite" />
-        <CliSignInNotice v-if="modern && !isChat && cliMenu?.kind === 'signin'" :menu="cliMenu" :can-answer="capabilities.canWrite && isLive" :send="sendSignInCode"
+        <CliSignInNotice v-if="modern && !isChat && cliMenu?.kind === 'signin'" :menu="cliMenu" :agent="session.agent" :can-answer="capabilities.canWrite && isLive" :send="sendSignInCode"
           @retry="retrySignIn" @continue="retrySignIn" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
         <CliMenuNotice v-else-if="modern && !isChat && questionMenu" :menu="questionMenu" :can-answer="capabilities.canWrite && isLive"
           @choose="answerCliMenu" @answer="answerCliMenuText" @step="stepCliMenu" @confirm="confirmCliMenu" @cancel="cancelCliMenu" @open-terminal="terminalOpened = true; drawerKind = 'agent'" />
