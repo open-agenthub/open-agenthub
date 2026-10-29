@@ -1,0 +1,10 @@
+<!doctype html>
+<html><body style="margin:0"><div id="app" style="height:100vh"></div><script type="module">
+import { createApp } from 'vue'
+import BrowserPane from './src/components/BrowserPane.vue'
+import { initAuth } from './src/api.js'
+import './src/style.css'
+sessionStorage.setItem('agenthub.apiKey', 'popout-proof-key')
+await initAuth()
+createApp(BrowserPane, { session: { id: 'popout', title: 'Pop-out proof', browser: { phase: 'Running' } }, canWrite: true }).mount('#app')
+</script></body></html>

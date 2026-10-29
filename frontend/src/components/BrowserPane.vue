@@ -4,14 +4,33 @@ import {
   browserUrl, copyBrowserClipboard, copySharedBrowserClipboard, pasteBrowserClipboard,
   pasteSharedBrowserClipboard, resizeBrowserViewport, sharedBrowserUrl
 } from '../api.js'
+import { openBrowserPopout } from '../lib/browser-popout.js'
 import { attachBrowserClipboard } from '../lib/browser-clipboard.js'
 
 const props = defineProps({
   session: { type: Object, required: true },
   canWrite: { type: Boolean, default: false },
-  sharedToken: { type: String, default: null }
+  sharedToken: { type: String, default: null },
+  standalone: { type: Boolean, default: false }
 })
 const host = ref(null)
+const poppedOut = ref(false)
+let popout
+function bringBack() { popout?.close() }
+function popOut() {
+  popout = openBrowserPopout(() => ({
+    session: { id: props.session.id, title: props.session.title, browser: { ...props.session.browser } },
+    canWrite: props.canWrite, sharedToken: props.sharedToken
+  }), () => {
+    poppedOut.value = false
+    syncConnection()
+  })
+  if (!popout) { showClipboardNotice('Allow pop-ups to open the browser in another window.'); return }
+  poppedOut.value = true
+  clearViewportTimer()
+  closeRfb()
+}
+watch(() => [props.session, props.canWrite, props.sharedToken], () => popout?.update(), { deep: true })
 const connectionState = ref('waiting')
 const clipboardNotice = ref('')
 const MIN_VIEWPORT = { width: 480, height: 320 }
@@ -52,7 +71,7 @@ function validViewport(viewport) {
     viewport.height <= MAX_VIEWPORT.height
 }
 function mayResizeViewport() {
-  return !disposed && phase.value === 'Running' && props.canWrite && !props.sharedToken
+  return !disposed && !poppedOut.value && phase.value === 'Running' && props.canWrite && !props.sharedToken
 }
 function clearViewportTimer() {
   if (resizeTimer) clearTimeout(resizeTimer)
@@ -123,13 +142,13 @@ function closeRfb() {
   current?.disconnect()
 }
 function scheduleReconnect(currentGeneration) {
-  if (disposed || phase.value !== 'Running' || currentGeneration !== generation) return
+  if (disposed || poppedOut.value || phase.value !== 'Running' || currentGeneration !== generation) return
   connectionState.value = 'reconnecting'
   const delay = Math.min(10_000, 750 * (2 ** reconnectAttempt++))
   reconnectTimer = setTimeout(connect, delay)
 }
 async function connect() {
-  if (disposed || phase.value !== 'Running' || !host.value) return
+  if (disposed || poppedOut.value || phase.value !== 'Running' || !host.value) return
   clearReconnect()
   const currentGeneration = ++generation
   const sessionId = props.session.id
@@ -196,6 +215,7 @@ watch(() => props.canWrite, canWrite => {
 })
 onBeforeUnmount(() => {
   disposed = true
+  popout?.close()
   clearViewportTimer()
   resizeObserver?.disconnect()
   clipboard?.dispose()
@@ -210,9 +230,14 @@ onBeforeUnmount(() => {
       <span class="browser-mark"><i></i>Browser</span>
       <span v-if="clipboardNotice" class="browser-state is-notice" role="status">{{ clipboardNotice }}</span>
       <span v-else class="browser-state">{{ statusLabel }}</span>
+      <button v-if="!standalone && !poppedOut" type="button" @click="popOut">Pop out</button>
     </div>
-    <div ref="host" class="browser-canvas" data-browser-canvas></div>
-    <div v-if="phase !== 'Running' || connectionState !== 'connected'" class="browser-overlay" aria-live="polite">
+    <div v-show="!poppedOut" ref="host" class="browser-canvas" data-browser-canvas></div>
+    <div v-if="poppedOut" class="browser-overlay">
+      <strong>Browser is open in another window.</strong>
+      <button type="button" @click="bringBack">Bring back</button>
+    </div>
+    <div v-else-if="phase !== 'Running' || connectionState !== 'connected'" class="browser-overlay" aria-live="polite">
       <span class="orbit" aria-hidden="true"></span>
       <strong>{{ statusLabel }}</strong>
       <small v-if="phase === 'Pending'">The agent requested a browser. It appears here automatically.</small>
