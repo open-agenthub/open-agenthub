@@ -93,6 +93,11 @@ PTY fault wrapper (dropped first input, 20 s of output after the clear, the pod 
 after the clear) and compares main with the branch. Main lost the handover in each fault case and
 in Codex's default case. The fix delivered it as the first user turn of a fresh transcript, exactly
 once, for Claude Code 2.1.287 and Codex 0.160.0 alike (PR #337 has the table).
+With `/clear` (#351), the same three faults delivered it on Codex 0.160.0 and 0.165.0, and
+main on 0.165.0 lost it to the worktree picker without any fault. The rig's `FOLLOW=1` and
+`RESTART=1` add the Workspace view: a `Conversation cleared` record names the new thread, and
+the backend's conversation page shows the handover and later turns after it. After a pod
+restart, `codex resume` names the new thread (PR #352 has the results).
 
 ## Verification
 
