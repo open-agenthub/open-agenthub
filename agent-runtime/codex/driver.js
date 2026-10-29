@@ -208,7 +208,7 @@ function credentialPath(env) {
   return env.CODEX_HOME ? path.join(env.CODEX_HOME, 'auth.json') : null;
 }
 
-// The CLI's own usage-limit notices, read from the string table of @openai/codex 0.160.0 (the
+// The CLI's own usage-limit notices, read from the string table of @openai/codex 0.165.0 (the
 // pinned version): the TUI's "You've hit your usage limit." / "Usage limit reached" /
 // "You've reached your usage limit." and the error codes `exec --json` emits
 // (usage_limit_reached, rate_limit_reached, workspace_*_usage_limit_reached, quota_exceeded).

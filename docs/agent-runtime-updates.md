@@ -20,7 +20,7 @@ Verified against the shipped packages on 2026-10-17:
 
 | Agent | Inspected version | Runtime control |
 |---|---|---|
-| Codex | 0.160.0 | `check_for_update_on_startup = false` in read-only `/etc/codex/requirements.toml` |
+| Codex | 0.160.0; smoke re-run on 0.165.0 (2026-10-29) | `check_for_update_on_startup = false` in read-only `/etc/codex/requirements.toml` |
 | Claude Code | 2.1.287 | Entry point exports `DISABLE_AUTOUPDATER=1` |
 | Cursor | 2026.10.16-e3cb207 (installer's current unpinned build) | Driver passes `--disable-auto-update` before the prompt in interactive, resumed and unattended commands |
 | OpenClaw | 2026.7.1-2 | Entry point exports `OPENCLAW_NO_AUTO_UPDATE=1`; after restore, `update-policy.js` writes `update.checkOnStart=false` and `update.auto.enabled=false` |
@@ -188,8 +188,9 @@ of them is covered by a smoke test against a real server:
 
 - **Claude Code** (2.1.287): `ANTHROPIC_BASE_URL`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_MODEL`, the
   `ANTHROPIC_DEFAULT_*_MODEL` tiers, `API_TIMEOUT_MS` and `CLAUDE_STREAM_FIRST_BYTE_TIMEOUT_MS`.
-- **Codex** (0.160.0): `[model_providers.<id>]` with `base_url`, `wire_api = "responses"`, `env_key`
-  and `stream_idle_timeout_ms`. 0.160.0 refuses `wire_api = "chat"` at config load.
+- **Codex** (0.165.0): `[model_providers.<id>]` with `base_url`, `wire_api = "responses"`, `env_key`
+  and `stream_idle_timeout_ms`. 0.165.0 refuses `wire_api = "chat"` at config load, and a 2 s
+  `stream_idle_timeout_ms` still ends a stalled stream after about 2 s, as in 0.160.0.
 - **OpenCode** (1.18.35): a `provider` block with `npm: "@ai-sdk/openai-compatible"` (bundled with
   the CLI) and `options.baseURL` / `apiKey` / `headerTimeout`.
 

@@ -1,6 +1,6 @@
 'use strict';
 
-// Read off the "/" menu of Codex 0.160.0 (the pinned version) in a PTY; re-record it when
+// Read off the "/" menu of Codex 0.165.0 (the pinned version) in a PTY; re-record it when
 // CODEX_VERSION changes (docs/agent-runtime-updates.md). This version lists no custom prompt
 // files under "/" and invokes skills with "$name", whose popup takes the Enter the composer
 // sends as "insert" rather than "submit" — so neither is offered here.
@@ -11,7 +11,9 @@ const builtins = [
   ['cd', 'Change the current working directory'],
   ['clear', 'Clear the terminal and start a new chat', null, NEW_CONVERSATION],
   ['compact', 'Summarize conversation to prevent hitting the context limit'],
+  ['config', 'Configure Codex preferences'],
   ['copy', 'Copy the last response or part of it'],
+  ['daybreak', 'Manage broader access for cybersecurity work'],
   ['diff', 'Show git diff (including untracked files)'],
   ['exit', 'Exit Codex'],
   ['experimental', 'Toggle experimental features'],
@@ -23,7 +25,7 @@ const builtins = [
   ['hooks', 'View and manage lifecycle hooks'],
   ['init', 'Create an AGENTS.md file with instructions for Codex'],
   ['logout', 'Log out of Codex'],
-  ['mcp', 'List configured MCP tools; use /mcp verbose for details', '[verbose]'],
+  ['mcp', 'List MCP tools; use /mcp verbose or /mcp login <name>', '[verbose|login <name>]'],
   ['memories', 'Configure memory use and generation'],
   ['mention', 'Mention a file'],
   ['model', 'Choose what model and reasoning effort to use'],
@@ -31,6 +33,7 @@ const builtins = [
   ['permissions', 'Choose what Codex is allowed to do'],
   ['plan', 'Switch to Plan mode'],
   ['plugins', 'Browse plugins'],
+  ['presets', 'Run or save reusable prompts and slash commands'],
   ['ps', 'List background terminals'],
   ['pwd', 'Show the current working directory'],
   ['recap', 'Summarize the current conversation now'],
@@ -47,4 +50,4 @@ const builtins = [
   ['warnings', 'View retained warnings and diagnostic details']
 ].map(([name, description, argumentHint, effect]) => ({ name, description, argumentHint, effect }));
 
-module.exports = { cli: 'Codex 0.160.0', builtins };
+module.exports = { cli: 'Codex 0.165.0', builtins };
