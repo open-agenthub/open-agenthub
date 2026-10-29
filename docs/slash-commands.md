@@ -73,7 +73,7 @@ parts, assembled by the session agent (`GET /agenthub/commands`, `common/slash-c
 | Agent | Custom commands | Skills under `/` |
 |---|---|---|
 | Claude | `.claude/commands/**/*.md` in the workdir and HOME (`sub/name.md` is `/sub:name`) | `.claude/skills/*/SKILL.md` in the workdir and HOME, except `user-invocable: false` |
-| Codex | none: 0.160.0 lists no prompt files under `/` | none: skills are invoked with `$name`, and its popup takes the composer's Enter as "insert", not "send" |
+| Codex | none: 0.165.0 lists no prompt files under `/` | none: skills are invoked with `$name`, and its popup takes the composer's Enter as "insert", not "send" |
 | OpenCode | `command` in its user and project `opencode.json`, `.opencode/command(s)/*.md`, `~/.config/opencode/command(s)/*.md` | none: not part of its `/` menu |
 | Cursor | `.cursor/commands` and `.claude/commands` in the workdir and HOME | not offered: unverified without a login |
 | OpenClaw | none | none |
