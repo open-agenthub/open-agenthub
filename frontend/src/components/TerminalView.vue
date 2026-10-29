@@ -98,6 +98,11 @@ const workspaceActivity = computed(() => {
   return statuses.agent === 'connected' ? agentActivity.value : { state: 'unknown' }
 })
 watch(() => props.session.id, () => { promptSuggestion.value = ''; agentActivity.value = { state: 'unknown', source: 'hooks' } })
+// The banner over the session (#343): "asking" only while a question is open. The hub's
+// questionPending, set whenever a turn ends, still means "your turn" where the activity line and
+// notice are not shown — the terminal tab and streaming sessions — and says so, not "asking".
+const asking = computed(() => workspaceActivity.value.state === 'waiting' && workspaceActivity.value.reason === 'answer' ? 'question'
+  : props.session.questionPending && (!modern.value || isChat.value) ? 'reply' : '')
 // The CLI screen the notice shows, its text completed from the open question tool's own input.
 const questionMenu = computed(() => withQuestions(cliMenu.value,
   agentActivity.value.state === 'waiting' && agentActivity.value.reason === 'answer' ? agentActivity.value.questions : undefined))
@@ -664,8 +669,8 @@ function interruptWorkspaceAgent() {
         </span>
       </div>
     </div>
-    <div v-if="session.questionPending && capabilities.canWrite" class="asking">
-      <span class="ask-dot"></span>THE AGENT IS ASKING — reply {{ modern || isChat ? 'below' : 'in the terminal below' }}.
+    <div v-if="asking && capabilities.canWrite" class="asking" data-asking>
+      <span class="ask-dot"></span>{{ asking === 'question' ? 'THE AGENT IS ASKING' : 'THE AGENT IS WAITING FOR YOUR REPLY' }} — reply {{ modern || isChat ? 'below' : 'in the terminal below' }}.
     </div>
     <div v-if="autoApprove && isLive && capabilities.canManage && !sharedToken" class="perm auto-on">
       <span class="ask-dot"></span>

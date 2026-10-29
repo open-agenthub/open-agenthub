@@ -1,0 +1,293 @@
+{
+ "ask-claude-fixed": {
+  "head": "The agent is asking\nFailures",
+  "header": "Failures",
+  "title": "Before I refactor the upload path I need to know how you want failures handled.\n\nThe current code retries three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. A second problem: the retry loop holds the request open for up to 45 seconds, so the browser times out first and retries on its own, which doubles every upload under load.\n\nWhich behaviour do you want for the refactored path, keeping in mind that the mobile client cannot show a progress bar?",
+  "options": [
+   "1 | Retry with backoff (Recommended) | Retry five times with exponential backoff starting at 200 ms, then surface the error to the caller and leave the file unmarked",
+   "2 | Fail fast | Report the first error to the user immediately and never retry on the server side",
+   "3 | Queue and retry later | Accept the upload into a durable queue, answer 202 at once and retry in the background with a dead-letter list",
+   "4 | Keep the current behaviour | Leave the retry loop as it is and only fix the false 'uploaded' mark",
+   "6 | Chat about this"
+  ],
+  "activityWhileOpen": "Waiting for your answer…",
+  "toolResultStart": "[\"Your questions have been answered: \\\"Before I refactor the upload path I need to know how you",
+  "noticeAfter": 0,
+  "activityAfter": "(none)"
+ },
+ "ask-claude-main": {
+  "head": "The agent is showing a menu",
+  "header": "",
+  "title": "error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. A second problem: the retry loop holds the request open for up to 45 seconds, so the browser times out first and retries on its own, which doubles every upload under load. Which behaviour do you want for the refactored path, keeping in mind that the mobile client cannot show a progress bar?",
+  "options": [
+   "1 | Retry with backoff (Recommended)",
+   "2 | Fail fast",
+   "3 | Queue and retry later",
+   "4 | Keep the current behaviour",
+   "6 | Chat about this"
+  ],
+  "activityWhileOpen": "Waiting for your answer…",
+  "toolResultStart": "[\"Your questions have been answered: \\\"Before I refactor the upload path I need to know how you",
+  "noticeAfter": 0,
+  "activityAfter": "(none)"
+ },
+ "ask-codex-fixed": {
+  "head": "The agent is asking\nFailures",
+  "header": "Failures",
+  "title": "Before I refactor the upload path I need to know how you want failures handled. The current code retries three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. Which behaviour do you want?",
+  "options": [
+   "1 | Retry with backoff (Recommended) | Retry five times with exponential backoff, then surface the error",
+   "2 | Fail fast | Report the first error to the user immediately"
+  ],
+  "activityWhileOpen": "Waiting for your answer…",
+  "toolResultStart": "[\"{\\\"answers\\\":{\\\"failures\\\":{\\\"answers\\\":[\\\"Fail fast\\\"]}}}\"]\n",
+  "noticeAfter": 0,
+  "activityAfter": "(none)"
+ },
+ "ask-codex-main": {
+  "head": "The agent is showing a menu",
+  "header": "",
+  "title": "Before I refactor the upload path I need to know how you want failures handled. The current code retries three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. Which behaviour do you want?",
+  "options": [
+   "1 | Retry with backoff (Recommended) · Retry five times with exponential backoff, then surface the error",
+   "2 | Fail fast · Report the first error to the user immediately"
+  ],
+  "activityWhileOpen": "Waiting for your answer…",
+  "toolResultStart": "[\"{\\\"answers\\\":{\\\"failures\\\":{\\\"answers\\\":[\\\"Fail fast\\\"]}}}\"]\n",
+  "noticeAfter": 0,
+  "activityAfter": "Waiting for your answer…"
+ },
+ "ask-opencode-fixed": {
+  "head": "The agent is asking\nFailures",
+  "header": "Failures",
+  "title": "Before I refactor the upload path I need to know how you want failures handled. The current code retries three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. Which behaviour do you want?",
+  "options": [
+   "1 | Retry with backoff | Retry five times with exponential backoff, then surface the error",
+   "2 | Fail fast | Report the first error to the user immediately"
+  ],
+  "activityWhileOpen": "Waiting for your answer…",
+  "toolResultStart": "[\"User has answered your questions: \\\"Before I refactor the upload path I need to know how you ",
+  "noticeAfter": 0,
+  "activityAfter": "(none)"
+ },
+ "ask-opencode-main": {
+  "head": "The agent is showing a menu",
+  "header": "",
+  "title": "Before I refactor the upload path I need to know how you want failures handled. The current code retries three times with a fixed delay, swallows the last error and marks the file as uploaded anyway, which is why the Files pane sometimes shows files that never reached storage. Which behaviour do you want?",
+  "options": [
+   "1 | Retry with backoff",
+   "2 | Fail fast"
+  ],
+  "activityWhileOpen": "Waiting for your answer…",
+  "toolResultStart": "[\"User has answered your questions: \\\"Before I refactor the upload path I need to know how you ",
+  "noticeAfter": 0,
+  "activityAfter": "Waiting for your answer…"
+ },
+ "cancel-claude-fixed": {
+  "activityWhileOpen": "Waiting for your answer…",
+  "noticeAfterEsc": 0,
+  "activityAfterEsc": "(none)"
+ },
+ "cancel-codex-fixed": {
+  "activityWhileOpen": "Waiting for your answer…",
+  "noticeAfterEsc": 0,
+  "activityAfterEsc": "(none)"
+ },
+ "cancel-opencode-fixed": {
+  "activityWhileOpen": "Waiting for your answer…",
+  "noticeAfterEsc": 0,
+  "activityAfterEsc": "(none)"
+ },
+ "multi-claude-fixed": {
+  "ticked": "2\n[✔] Lint\nESLint and dotnet format",
+  "titleKeptAfterTick": true,
+  "activityAfterTick": "Waiting for your answer…",
+  "toolResultStart": "[\"Your questions have been answered: \\\"Which checks should run before every push? Pick everything that has to pass, because the branch protection will be configured from this list and a missing check cannot be added later without an admin.\\\"=\\\"Lint\\\". You can now continue wi",
+  "noticeAfter": 0,
+  "activityAfter": "(none)"
+ },
+ "idle-claude-fixed": [
+  {
+   "s": 5,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 11,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 16,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 22,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 27,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 33,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 38,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 44,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 49,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 55,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 60,
+   "activity": "(none)",
+   "questionPending": true,
+   "notice": 0
+  },
+  {
+   "s": 66,
+   "activity": "(none)",
+   "questionPending": true,
+   "notice": 0
+  },
+  {
+   "s": 71,
+   "activity": "(none)",
+   "questionPending": true,
+   "notice": 0
+  },
+  {
+   "s": 77,
+   "activity": "(none)",
+   "questionPending": true,
+   "notice": 0
+  },
+  {
+   "s": 82,
+   "activity": "(none)",
+   "questionPending": true,
+   "notice": 0
+  }
+ ],
+ "idle-claude-main": [
+  {
+   "s": 5,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 11,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 16,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 22,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 27,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 33,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 38,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 44,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 49,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 55,
+   "activity": "(none)",
+   "questionPending": false,
+   "notice": 0
+  },
+  {
+   "s": 60,
+   "activity": "(none)",
+   "questionPending": true,
+   "notice": 0
+  },
+  {
+   "s": 66,
+   "activity": "Waiting for your answer…",
+   "questionPending": true,
+   "notice": 0
+  },
+  {
+   "s": 71,
+   "activity": "Waiting for your answer…",
+   "questionPending": true,
+   "notice": 0
+  },
+  {
+   "s": 76,
+   "activity": "Waiting for your answer…",
+   "questionPending": true,
+   "notice": 0
+  },
+  {
+   "s": 81,
+   "activity": "Waiting for your answer…",
+   "questionPending": true,
+   "notice": 0
+  }
+ ]
+}

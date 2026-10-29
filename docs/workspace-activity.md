@@ -71,6 +71,9 @@ PostToolUse, OpenCode's `question.replied` or `question.rejected`, the interrupt
 prompt or the turn's end closes it. The first Enter no longer closes a question, as it still
 closes an approval. Claude Code steps through several questions and ticks a multi-select list
 with Enter, and the question stays open until PostToolUse.
+The banner over the session follows the same rule. *The agent is asking* shows only while a question
+is open. In the terminal tab and in streaming sessions, which have no activity line, `questionPending`
+still shows a banner, worded *The agent is waiting for your reply*.
 Rejected: no longer setting `questionPending` for idle notifications and turn ends. The relays,
 the session list's *waiting on you* and Home's *needs you* rely on it meaning "your turn".
 Streaming sessions use their existing streamed-turn busy state. Disconnected, stopped and unknown
