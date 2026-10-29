@@ -24,5 +24,6 @@ backend and runtime, Bring back, and OS-style window close. It rejects browser p
 The local-network permission is needed by recent Chromium for loopback WebSockets. Explicitly
 focus the pop-out before typing; a background window's keyboard does not control the remote page.
 
-Results from distribution Chromium 156 and the branch backend/runtime are in results.txt.
+Results from distribution Chromium 156 and the branch backend/runtime are recorded in the PR body.
+Generated results.txt output is ignored locally.
 Deployment, OIDC renewal and a physical second monitor are outside this proof.

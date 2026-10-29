@@ -1,7 +1,0 @@
-PASS embedded VNC connects through real backend proxy
-PASS credential-free URL, inherited API-key authentication, placeholder and embedded disconnect
-geometry {"bounds":{"x":0,"y":75,"width":1800,"height":1025},"geometry":{"x":80,"y":90,"top":143,"screenX":0,"screenY":0,"width":1800,"height":1025}}
-PASS real VNC mouse and keyboard input
-PASS clipboard paste and copy through real backend controllers and browser supervisor
-PASS Bring back restores embedded VNC
-PASS window close restores embedded VNC
