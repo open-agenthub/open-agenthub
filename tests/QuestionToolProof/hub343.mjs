@@ -19,7 +19,6 @@ const body = req => new Promise(resolve => { const c = []; req.on('data', d => c
 const server = http.createServer(async (req, res) => {
   const url = req.url.split('?')[0]
   const json = (v, status = 200) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)) }
-  let m
   if (url === '/api/config') return json({ authority: '' })
   if (url === '/rig/session') return json(session)
   if (url === '/api/sessions') return json([session])
