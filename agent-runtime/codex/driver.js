@@ -230,9 +230,15 @@ function resetFromJson(match, text, { secondsFromNow }) {
 
 module.exports = {
   failedTurnEnded: require('./turn-activity').failedTurnEnded,
-  contextClearCommand: '/new',
+  // /clear, not /new: both start a fresh thread and keep the old one resumable, but from 0.165.0
+  // /new in a git checkout first asks "Where should the new conversation run?", and the
+  // `worktrees = false` requirement that suppressed it is ignored as a removed feature. The
+  // context-clear flow then waited out that menu and the handover was lost (#336). /clear has no
+  // such picker in 0.160.0 or 0.165.0; it also wipes the terminal, which the Workspace replays
+  // from its own scrollback anyway.
+  contextClearCommand: '/clear',
   // Codex creates its rollout only on the first prompt. Its fresh welcome screen is the
-  // native acknowledgement of /new; requiring the sole empty composer rejects an old turn.
+  // native acknowledgement of /clear; requiring the sole empty composer rejects an old turn.
   contextClearScreen: rows => rows.some(row => />_ .*\bCodex\b/.test(row)) &&
     rows.filter(row => /^\s*›/.test(row)).length === 1 &&
     rows.some(row => /^\s*›\s+Ask Codex to do anything\s*$/.test(row)),

@@ -9,10 +9,10 @@ inside the tool handler would interrupt its own result and lose the handover.
 The runtime queues one context action in the same safe-point queue used by next-turn fleet
 delivery. It waits for a completed turn, no unsent owner draft, quiet terminal output and
 no visible CLI menu. It reserves input across the native slash command and the handover,
-using the same input holding that protects fleet delivery. Claude uses `/clear`; Codex and
-OpenCode use `/new`. Claude must report a different conversation identity before the
+using the same input holding that protects fleet delivery. Claude and Codex use `/clear`;
+OpenCode uses `/new`. Claude must report a different conversation identity before the
 follow-up is sent. Codex creates its rollout only when the first message is submitted, so
-its fresh native welcome screen with a sole empty composer confirms `/new`; waiting for
+its fresh native welcome screen with a sole empty composer confirms `/clear`; waiting for
 a rollout first would deadlock the handover. The shared quiet-output/menu check also runs
 after the command.
 A Stop-hook continuation was rejected: it keeps the old conversation alive rather than
@@ -77,9 +77,14 @@ What happens now:
   happen; sending it into a conversation that was not cleared repeats known state.
 - Each failed round is logged and shown in the Workspace (a `handover` control frame, replayed
   to reconnecting viewers, drives a banner) until the handover is delivered.
-- Codex's managed requirements set `[features] worktrees = false`, so `/new` no longer asks.
-  Answering the menu with keys was rejected: it depends on the option order of one CLI version.
-  The session's workspace is the checkout either way, and agents can still run `git worktree`.
+- Codex clears with `/clear`, which starts the same fresh, resumable thread as `/new` but never
+  asks where to run. In Codex 0.160.0 the managed requirement `[features] worktrees = false`
+  suppressed `/new`'s question. Codex 0.165.0 removed that feature flag: it warns that it
+  ignores the requirement and asks in every git checkout, and no setting turns it off. The
+  context clear then failed exactly as before. Answering the menu with keys was rejected
+  again: the two versions already word and order it differently, and a misread menu would get
+  the handover typed into it. The requirement is gone, so a person's own `/new` asks; the
+  session's workspace is the checkout either way, and agents can still run `git worktree`.
 - The tool result says that the handover is saved and arrives as the first message after the
   turn ends.
 
@@ -88,6 +93,11 @@ PTY fault wrapper (dropped first input, 20 s of output after the clear, the pod 
 after the clear) and compares main with the branch. Main lost the handover in each fault case and
 in Codex's default case. The fix delivered it as the first user turn of a fresh transcript, exactly
 once, for Claude Code 2.1.287 and Codex 0.160.0 alike (PR #337 has the table).
+With `/clear` (#351), the same three faults delivered it on Codex 0.160.0 and 0.165.0, and
+main on 0.165.0 lost it to the worktree picker without any fault. The rig's `FOLLOW=1` and
+`RESTART=1` add the Workspace view: a `Conversation cleared` record names the new thread, and
+the backend's conversation page shows the handover and later turns after it. After a pod
+restart, `codex resume` names the new thread (PR #352 has the results).
 
 ## Verification
 

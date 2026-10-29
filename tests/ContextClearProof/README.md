@@ -35,5 +35,33 @@ The rig prints one `RESULT {...}` line. It contains: whether a model request car
 the seconds since the clear request, whether that request was free of the old task (a fresh
 context), the first user turn of the newest native transcript, the order of model requests, and
 the Workspace `handover` frames. The work directory is a git repository, which is what makes
-Codex 0.160.0's `/new` ask "Where should the new conversation run?" without `worktrees = false`.
-To see that menu with the branch, delete the `worktrees = false` line from `$R/etc-codex/requirements.toml`.
+Codex's `/new` ask "Where should the new conversation run?" (0.160.0 without `worktrees = false`,
+0.165.0 always); the driver clears with `/clear`, which never asks. The fault proxy fires on the
+clear command read from the built driver, so a main build that still types `/new` is faulted too.
+
+## Following the new conversation, and a restart after it (#351)
+
+`FOLLOW=1` (with `FAULT=none`) continues after the handover. It checks what the Workspace shows:
+
+- the pod's live transcript (`/agenthub/transcript`) has the old turn, a `Conversation cleared` record naming the new thread's rollout, and the handover after it;
+- the terminal stream carries `[agent] Conversation cleared.`;
+- the backend's conversation page has the same entries.
+
+It then sends a later turn, which must reach the model with the handover in context and without
+the old task. `RESTART=1` adds a pod restart after that turn. The whole proot process group is
+killed and `.codex/agenthub-active` is removed, because the state archive excludes it. A new
+session agent then starts on the same home with `AGENTHUB_RESUME=1`. The rig records the thread
+id the resumed `codex resume` was started with. One more turn must land in the new thread's
+rollout and on the conversation page.
+
+The backend page comes from `Host/`, a throwaway ASP.NET host. It runs the real
+`LiveTranscriptReader` (pod requests, offset follow, `NativeTranscript` for Codex) and
+`SessionTranscripts.PageAsync`, which is what `GET /api/sessions/{id}/conversation` runs for a
+running session. Session storage and pod identity are fixtures:
+
+```sh
+dotnet build Host -c Release -o $S/host
+cd $S/rig && R=$PWD AGENT=codex FAULT=none RESTART=1 HOST_DLL=$S/host/Host.dll node rig.cjs
+```
+
+Without `HOST_DLL` the backend checks are skipped and only the pod side is recorded.

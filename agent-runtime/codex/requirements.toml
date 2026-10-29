@@ -7,11 +7,6 @@ allow_managed_hooks_only = true
 
 [features]
 hooks = true
-# Codex 0.160.0 asks "Where should the new conversation run?" (current checkout or a new managed
-# worktree) after /new in a git checkout. The session's workspace is the checkout, and that menu
-# held the context-clear handover until it was answered, by which time the handover had been
-# dropped (#336). Agents can still create git worktrees themselves.
-worktrees = false
 
 [hooks]
 managed_dir = "/opt/session-agent/codex"
