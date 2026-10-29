@@ -1,11 +1,11 @@
 // #344: screenshots of each Claude and Codex sign-in step in Chromium, real CLIs behind
-// scripts/proofs/242/browser-hub.cjs. usage: APP=http://localhost:5175 node shots344.mjs <label>
+// ../../scripts/proofs/242/browser-hub.cjs. usage: APP=http://localhost:5175 node shots344.mjs <label>
 // The terminal and device code are masked; authorization values never reach a log or file.
 import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import path from 'node:path'
 const require = createRequire(import.meta.url)
-const { chromium } = require(process.env.PLAYWRIGHT_CORE || path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../browser-runtime/node_modules/playwright-core'))
+const { chromium } = require(process.env.PLAYWRIGHT_CORE || path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../browser-runtime/node_modules/playwright-core'))
 const label = process.argv[2]
 const APP = process.env.APP || 'http://localhost:5173'
 const hub = 'http://127.0.0.1:8080'
