@@ -7,7 +7,7 @@ import { createRequire } from 'node:module'
 import fs from 'node:fs'
 import path from 'node:path'
 const require = createRequire(import.meta.url)
-const { chromium } = require(process.env.PLAYWRIGHT_CORE || path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../../browser-runtime/node_modules/playwright-core'))
+const { chromium } = require(process.env.PLAYWRIGHT_CORE || path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../browser-runtime/node_modules/playwright-core'))
 const R = path.dirname(new URL(import.meta.url).pathname)
 const [scenario, agent, label] = process.argv.slice(2)
 const H = process.env.RIG_HOME || R

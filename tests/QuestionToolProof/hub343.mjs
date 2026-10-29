@@ -1,4 +1,5 @@
-// #343: questionPending follows /notify and /turn-started exactly as InternalController does.
+// #343: questionPending follows /notify (not for an idle notification) and /turn-started exactly
+// as InternalController does.
 // #148 e2e stand-in hub on :8080. The upload takes the real pod-storage path: the browser's PUT is
 // forwarded into the pod's own file store (PUT /agenthub/files/:id), the pod materializes through
 // this hub's /internal/sessions/s1/files/materialize, and /terminal-attachments is forwarded to the
@@ -64,7 +65,7 @@ const server = http.createServer(async (req, res) => {
   // The approval endpoint the PreToolUse hook asks. Unavailable here, so the hook falls back to
   // the CLI's own dialog ("ask"), and every request it would have filed is logged.
   if (url === '/internal/sessions/s1/permission') { trace('permission request ' + (await body(req)).toString()); res.writeHead(503); return res.end() }
-  if (url === '/internal/sessions/s1/notify') { const b = (await body(req)).toString(); trace('notify ' + b); session.questionPending = true; return json({}) }
+  if (url === '/internal/sessions/s1/notify') { const b = (await body(req)).toString(); trace('notify ' + b); if (JSON.parse(b).idle !== true) session.questionPending = true; return json({}) }
   if (url === '/internal/sessions/s1/turn-started') { trace('turn-started'); session.questionPending = false; await body(req); return json({}) }
   if (url.startsWith('/internal/')) { trace('internal ' + req.method + ' ' + url); await body(req); return json({}) }
   if (/\/(permissions|messages|files|accounts|credentials|projects|sessions)$/.test(url) || url.endsWith('/allowed')) return json([])

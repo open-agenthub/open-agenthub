@@ -74,8 +74,13 @@ with Enter, and the question stays open until PostToolUse.
 The banner over the session follows the same rule. *The agent is asking* shows only while a question
 is open. In the terminal tab and in streaming sessions, which have no activity line, `questionPending`
 still shows a banner, worded *The agent is waiting for your reply*.
-Rejected: no longer setting `questionPending` for idle notifications and turn ends. The relays,
-the session list's *waiting on you* and Home's *needs you* rely on it meaning "your turn".
+The hub no longer sets `questionPending` for Claude Code's idle notification either. Before, it put
+*waiting on you* on every idle Claude session in `agents_list`, the sidebar and Home a minute after
+each answer. notify-hook marks that notification `idle: true`. `/notify` still relays it as a
+"question", because the relays open their thread on nothing else, but it leaves the session not
+pending. Rejected: dropping the idle notification in the hook, which would leave a Claude session
+that finished without asking out of chat entirely. The Codex, Cursor and OpenCode turn-end hooks
+are unchanged: their notification carries the turn's last message, which is often the question.
 Streaming sessions use their existing streamed-turn busy state. Disconnected, stopped and unknown
 states show no working spinner. Reduced-motion viewers keep a static marker instead of rotation.
 

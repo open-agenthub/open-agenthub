@@ -99,7 +99,9 @@ public sealed class InternalController : ControllerBase
     }
 
     public record StatusBody(string Status);
-    public record NotifyBody(string Message, string? Event);
+    /// <param name="Idle">The CLI says it sits idle at its prompt rather than asking anything
+    /// (Claude Code's <c>idle_prompt</c> notification, about a minute after every answer).</param>
+    public record NotifyBody(string Message, string? Event, bool? Idle = null);
 
     private async Task<SessionRecord?> AuthAsync(string id, CancellationToken ct)
     {
@@ -157,7 +159,10 @@ public sealed class InternalController : ControllerBase
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
 
-        await _store.SetQuestionPendingAsync(id, true, ct);
+        // An idle notification still opens the chat thread (the relays create one only on a
+        // "question"), but it asks nothing: pending, it put "waiting on you" on every idle Claude
+        // session in agents_list, the sidebar and the Workspace until the next prompt (#343).
+        if (body.Idle != true) await _store.SetQuestionPendingAsync(id, true, ct);
         // Codex's and Cursor's turn hooks send the agent's last message, which may quote a secret
         // the agent just read; the relays post it to a chat that outlives the session.
         await NotifyAllAsync(rec, body.Event ?? "question",
