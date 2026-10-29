@@ -140,16 +140,19 @@ const claudeKey = 'sk-ant-rig-0000000000000000000000000336';
 fs.writeFileSync(home + '/.claude.json', JSON.stringify({ hasCompletedOnboarding: true, autoUpdates: false,
   customApiKeyResponses: { approved: [claudeKey.slice(-20)], rejected: [] }, projects: { [work]: { hasTrustDialogAccepted: true } } }));
 const claudeSessionId = crypto.randomUUID();
+// The fault proxy fires on the clear command the built driver types; taken from that driver so
+// main and a branch that changed it (Codex /new -> /clear) are both faulted.
+const clearCommandOf = name => (/contextClearCommand:\s*'([^']+)'/.exec(fs.readFileSync(`${R}/rt/${name}/driver.js`, 'utf8')) || [])[1];
 const baseEnv = {
   PATH: `${S}/clis/node_modules/.bin:/usr/local/bin:/usr/bin:/bin`, HOME: home, TMPDIR: '/tmp', TERM: 'xterm-256color', LANG: 'C.UTF-8',
   AGENTHUB_MODE: 'interactive', AGENTHUB_PORT: String(PORT), AGENTHUB_SESSION_ID: 's336',
   AGENTHUB_CALLBACK_URL: `http://127.0.0.1:${HUB}/internal/sessions/s336`, AGENTHUB_CALLBACK_TOKEN: TOKEN,
   AGENTHUB_WORKDIR: work, AGENTHUB_SKILLS_SYNC_SECONDS: '0'
 };
-if (CODEX) Object.assign(baseEnv, { CODEX_HOME: home + '/.codex', CODEX_API_KEY: 'rig-key', AGENTHUB_DRIVER: '/opt/session-agent/codex/driver.js', PROOF_CLEAR_COMMAND: '/new' });
+if (CODEX) Object.assign(baseEnv, { CODEX_HOME: home + '/.codex', CODEX_API_KEY: 'rig-key', AGENTHUB_DRIVER: '/opt/session-agent/codex/driver.js', PROOF_CLEAR_COMMAND: clearCommandOf('codex') });
 else {
   Object.assign(baseEnv, { AGENTHUB_DRIVER: '/opt/session-agent/claude/driver.js', ANTHROPIC_API_KEY: claudeKey, ANTHROPIC_BASE_URL: 'http://127.0.0.1:' + HUB,
-    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', AGENTHUB_CLAUDE_SESSION_ID: claudeSessionId, PROOF_CLEAR_COMMAND: '/clear' });
+    CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', DISABLE_AUTOUPDATER: '1', AGENTHUB_CLAUDE_SESSION_ID: claudeSessionId, PROOF_CLEAR_COMMAND: clearCommandOf('claude') });
   // The hooks the entrypoint installs: without them there are no turn events.
   const settings = JSON.parse(execFileSync('bash', [R + '/rt/claude/hooks/mcp-policy-hook.sh', '--settings'],
     { env: { ...baseEnv, RUNTIME: '/opt/session-agent', AGENTHUB_RUNTIME: '/opt/session-agent/claude/hooks' }, encoding: 'utf8' }));

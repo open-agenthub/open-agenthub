@@ -35,5 +35,6 @@ The rig prints one `RESULT {...}` line. It contains: whether a model request car
 the seconds since the clear request, whether that request was free of the old task (a fresh
 context), the first user turn of the newest native transcript, the order of model requests, and
 the Workspace `handover` frames. The work directory is a git repository, which is what makes
-Codex 0.160.0's `/new` ask "Where should the new conversation run?" without `worktrees = false`.
-To see that menu with the branch, delete the `worktrees = false` line from `$R/etc-codex/requirements.toml`.
+Codex's `/new` ask "Where should the new conversation run?" (0.160.0 without `worktrees = false`,
+0.165.0 always); the driver clears with `/clear`, which never asks. The fault proxy fires on the
+clear command read from the built driver, so a main build that still types `/new` is faulted too.
