@@ -172,6 +172,42 @@ shown whole, a free-text answer with a line break, multi-select ticks with the s
 arriving at the model as the tool's result. Against main's frontend the OpenCode question showed
 no notice, and the Claude multi-select list had no way to submit.
 
+**The question's text comes from the question tool, not the screen (#343).** Read off the
+screen, a question was cut off again whenever it was taller than the terminal. A Workspace whose
+drawer was never opened keeps xterm's default 80×24, and the PTY follows the last viewer that
+resized it. Claude Code 2.1.287 then scrolls the question's first lines away above the options,
+and the notice began mid-sentence. Option descriptions sit on rows of their own, which the list
+never read at all. Every pinned CLI hands the full question to something AgentHub already runs:
+
+- Claude Code raises PermissionRequest for AskUserQuestion when the screen opens, and PostToolUse
+  when it is answered, both with the tool input.
+- Codex 0.160.0 raises PreToolUse and PostToolUse for `request_user_input`, and no
+  PermissionRequest. The managed requirements run the turn hook on those two for that tool alone.
+- OpenCode 1.18.35 publishes `question.asked` with the questions on its plugin bus, and
+  `question.replied` or `question.rejected` afterwards. `tool.execute.after` would miss a dismissal.
+
+The hook or plugin reports `question` with the questions, normalised and bounded by
+`common/agent-questions.js`, and `answered` when the tool closes. The session agent masks session
+secrets in them and adds them to the activity frame while it waits for an answer. The notice keeps
+the screen for what only the screen knows: whether a menu is up, where the cursor is, the CLI's
+own extra rows (*Type something.*, *None of the above*), and so the keys. The text comes from the
+tool: the question whole, its header and every option's description. The tool's options are
+matched to the screen's by label, which also picks the question on screen among several. Options a
+short terminal scrolled away are filled in by number, because each CLI numbers the tool's options
+from 1 in order. With no menu recognised on screen, the notice shows the questions read-only, to
+be answered in the terminal.
+
+Rejected: fitting the hidden terminal to a taller size, or reading the scrollback above the
+screen. The PTY's size is shared with the drawer and every other viewer, and a resize makes the
+CLI redraw. A TUI that redraws in place also leaves earlier frames of the same dialog in its
+scrollback. Also rejected: building the notice from the tool input alone. The keys depend on the
+cursor and the rows each CLI adds, which only the screen shows.
+
+Verified with the pinned CLIs against mock models that ask a long question, by logging every hook
+payload and plugin event, and in Chromium through this repository's session agent. The notice
+showed the whole question and every description where main's started mid-sentence, and the answer
+reached the model as the tool's result.
+
 While the CLI shows one of these screens, the composer refuses to send and keeps the draft:
 its Enter would pick whatever option is highlighted, or submit the text as a login code. That
 happened in testing: a `/login` sent into an open login menu chose the first option.

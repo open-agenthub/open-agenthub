@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { detectMenu, keysForAnswer, keysForOption, keysForStep, sameMenu } from './cli-menu.js'
+import { detectMenu, keysForAnswer, keysForOption, keysForStep, sameMenu, withQuestions } from './cli-menu.js'
+import screens from './cli-question-screens.json'
 
 // Screens as Claude Code 2.1.287 drew them at 120x40, rendered by xterm 5.5 (the frontend's
 // version) from the real CLI's output. Option texts are shortened to neutral labels; layout,
@@ -324,5 +325,66 @@ describe('sameMenu', () => {
     expect(sameMenu(detectMenu(login), detectMenu([...login]))).toBe(true)
     expect(sameMenu(detectMenu(login), detectMenu(model))).toBe(false)
     expect(sameMenu(null, null)).toBe(true)
+  })
+})
+
+describe('withQuestions: question text from the question tool\'s input (#343)', () => {
+  const normalize = input => input.questions.map(question => ({ header: question.header, question: question.question,
+    multiSelect: Boolean(question.multiSelect || question.multiple), options: question.options }))
+
+  it('restores the top of a Claude Code question taller than the terminal, and every option description', () => {
+    const { input, screen } = screens.claude80x24
+    const detected = detectMenu(screen)
+    // What the screen alone gives: the question starting mid-sentence, no descriptions.
+    expect(detected.title.startsWith('error and marks the file')).toBe(true)
+    const menu = withQuestions(detected, normalize(input))
+    expect(menu.title).toBe(input.questions[0].question)
+    expect(menu.header).toBe('Failures')
+    expect(menu.options.slice(0, 4).map(option => [option.label, option.description])).toEqual(input.questions[0].options.map(option => [option.label, option.description]))
+    expect(menu.options[4]).toMatchObject({ number: 5, freeText: true })
+    // The keys still follow the screen's cursor.
+    expect(keysForOption(menu, 3)).toEqual(keysForOption(detected, 3))
+  })
+
+  it('splits Codex\'s label and description columns back into the tool\'s own texts', () => {
+    const { input, screen } = screens.codex
+    const menu = withQuestions(detectMenu(screen), normalize(input))
+    expect(menu.title).toBe(input.questions[0].question)
+    expect(menu.options.map(option => option.label)).toEqual(['Retry with backoff (Recommended)', 'Fail fast', 'None of the above · Optionally, add details in notes (tab)'])
+    expect(menu.options[1].description).toBe('Report the first error to the user immediately')
+    expect(menu.options[2]).toMatchObject({ freeText: true, opensWith: '\t' })
+  })
+
+  it('completes OpenCode\'s framed question and keeps answering it by digit', () => {
+    const { input, screen } = screens.opencode
+    const menu = withQuestions(detectMenu(screen), normalize(input))
+    expect(menu.title).toBe(input.questions[0].question)
+    expect(menu.options[0].description).toBe('Retry five times with exponential backoff, then surface the error')
+    expect(keysForOption(menu, 2)).toEqual(['2'])
+  })
+
+  it('picks the question on screen among several by its options, and fills in options scrolled away', () => {
+    const questions = [
+      { header: 'Checks', question: 'Which checks?', multiSelect: true, options: [{ label: 'Unit tests', description: 'fast' }, { label: 'Lint', description: '' }] },
+      { header: 'Target', question: 'Where to deploy?', multiSelect: false, options: [{ label: 'Staging', description: 'first' }, { label: 'Production', description: 'then' }, { label: 'Both', description: '' }] }
+    ]
+    const scrolled = { kind: 'choice', title: 'deploy?', partial: true, options: [{ number: 2, label: 'Production', selected: true }, { number: 3, label: 'Both', selected: false }, { number: 4, label: 'Type something.', selected: false, freeText: true }] }
+    const menu = withQuestions(scrolled, questions)
+    expect(menu.title).toBe('Where to deploy?')
+    expect(menu.options.map(option => option.number)).toEqual([1, 2, 3, 4])
+    expect(menu.options[0]).toMatchObject({ label: 'Staging', description: 'first', selected: false })
+    expect(menu.partial).toBe(false)
+    expect(keysForOption(menu, 1)).toEqual(['\x1b[A', '\r'])
+    const ticked = withQuestions({ kind: 'choice', title: '', options: [{ number: 1, label: '[ ] Unit tests', selected: true }, { number: 2, label: '[✔] Lint', selected: false }] }, questions)
+    expect(ticked.options.map(option => option.label)).toEqual(['[ ] Unit tests', '[✔] Lint'])
+  })
+
+  it('leaves other screens alone, and shows the questions on their own when no menu is on screen', () => {
+    const questions = [{ header: '', question: 'Go?', multiSelect: false, options: [{ label: 'Yes', description: '' }, { label: 'No', description: '' }] }]
+    const login = { kind: 'choice', title: 'Select login method:', options: [{ number: 1, label: 'Claude account', selected: true }, { number: 2, label: 'Console account', selected: false }] }
+    expect(withQuestions(login, questions)).toBe(login)
+    expect(withQuestions(login, undefined)).toBe(login)
+    expect(withQuestions(null, questions)).toEqual({ kind: 'question', title: '', options: [], questions })
+    expect(withQuestions(null, [])).toBe(null)
   })
 })

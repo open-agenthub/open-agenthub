@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
     getConversation: vi.fn(), listPermissions: vi.fn().mockResolvedValue([]),
     listSessionMessages: vi.fn().mockResolvedValue([]), decidePermission: vi.fn()
   },
-  sendKeys: vi.fn(), submit: vi.fn(), menu: null
+  sendKeys: vi.fn(), submit: vi.fn(), menu: null, activity: null
 }))
 vi.mock('../../api.js', () => ({ api: mocks.api, getSharedConversation: vi.fn() }))
 vi.mock('../../lib/mermaid.js', () => ({ renderMermaidBlocks: vi.fn() }))
@@ -30,12 +30,15 @@ function view() {
     global: { stubs: {
       SessionWorkspace: { template: '<div><slot /></div>' }, ShareSessionDialog: true,
       TerminalPane: defineComponent({
-        props: ['kind'], emits: ['status', 'menu'],
+        props: ['kind'], emits: ['status', 'menu', 'activity'],
         setup(props, { emit, expose }) {
           expose({ submitMessage: mocks.submit, interruptAgent: vi.fn(), sendKeys: mocks.sendKeys })
           onMounted(() => {
             emit('status', 'connected')
-            if (props.kind === 'agent') mocks.menu = value => emit('menu', value)
+            if (props.kind === 'agent') {
+              mocks.menu = value => emit('menu', value)
+              mocks.activity = value => emit('activity', value)
+            }
           })
           return () => null
         }
@@ -55,6 +58,35 @@ beforeEach(() => {
 afterEach(() => { wrappers.splice(0).forEach(wrapper => wrapper.unmount()) })
 
 describe('agent CLI menus in the Workspace', () => {
+  it('shows an open question tool\'s whole question and option descriptions, and answers through the screen (#343)', async () => {
+    const wrapper = view()
+    await flushPromises()
+    const question = 'First paragraph the screen lost.\n\nWhich behaviour do you want?'
+    mocks.activity({ state: 'waiting', source: 'hooks', reason: 'answer', questions: [{ header: 'Failures', question, multiSelect: false,
+      options: [{ label: 'Retry with backoff', description: 'Retry five times' }, { label: 'Fail fast', description: 'Report at once' }] }] })
+    await flushPromises()
+    // Nothing recognised on screen yet: the question is shown, to be answered in the terminal.
+    expect(wrapper.get('[data-cli-menu]').text()).toContain('The agent is asking')
+    expect(wrapper.get('[data-cli-title]').text()).toBe(question)
+    expect(wrapper.findAll('[data-cli-listed-option]').map(option => option.text())).toEqual(['Retry with backoffRetry five times', 'Fail fastReport at once'])
+    expect(wrapper.find('[data-cli-option]').exists()).toBe(false)
+
+    mocks.menu({ kind: 'choice', title: 'Which behaviour do you want?', options: [
+      { number: 1, label: 'Retry with backoff', selected: true }, { number: 2, label: 'Fail fast', selected: false },
+      { number: 3, label: 'Type something.', selected: false, freeText: true }] })
+    await flushPromises()
+    expect(wrapper.get('[data-cli-header]').text()).toBe('Failures')
+    expect(wrapper.get('[data-cli-title]').text()).toBe(question)
+    expect(wrapper.get('[data-cli-option="2"] [data-cli-option-description]').text()).toBe('Report at once')
+    await wrapper.get('[data-cli-option="2"]').trigger('click')
+    expect(mocks.sendKeys).toHaveBeenCalledWith(['\x1b[B', '\r'])
+
+    mocks.activity({ state: 'working', source: 'hooks' })
+    mocks.menu(null)
+    await flushPromises()
+    expect(wrapper.find('[data-cli-menu]').exists()).toBe(false)
+  })
+
   it('offers choices with the terminal closed and waits for the screen to leave the menu', async () => {
     const wrapper = view()
     await flushPromises()
@@ -63,7 +95,8 @@ describe('agent CLI menus in the Workspace', () => {
 
     mocks.menu(login)
     await flushPromises()
-    expect(wrapper.get('[data-cli-menu]').text()).toContain('The agent is showing a menu')
+    // #344: the login method menu is the sign-in's first step, and says so.
+    expect(wrapper.get('[data-cli-menu]').text()).toContain('Sign in to the agent CLI')
     expect(wrapper.get('[data-cli-menu]').text()).toContain('Select login method:')
     expect(drawerOpen(wrapper)).toBe(false)
 
@@ -201,7 +234,40 @@ describe('CLI sign-in in Workspace', () => {
     mocks.menu({ kind: 'signin', mode: 'outcome', status: 'failed', retry: true, options: [] })
     await flushPromises()
     expect(wrapper.get('[data-cli-signin]').text()).toContain('Sign-in failed')
-    await wrapper.get('[data-cli-signin] button').trigger('click')
+    expect(wrapper.get('[data-cli-signin] .primary').text()).toBe('Try again')
+    await wrapper.get('[data-cli-signin-retry]').trigger('click')
+    expect(mocks.sendKeys).toHaveBeenLastCalledWith(['\r'])
+  })
+  // #344: one primary action per step, in the CLI's words; the rest are links.
+  it('makes the page the primary action until it is opened, then the code field', async () => {
+    const wrapper = view()
+    await flushPromises()
+    mocks.menu({ kind: 'signin', mode: 'code', status: 'waiting', url: 'https://example.com/authorize', options: [] })
+    await flushPromises()
+    const card = wrapper.get('[data-cli-signin]')
+    const primaries = () => card.findAll('.primary').map(element => element.text())
+    expect(card.get('.title').text()).toBe('Sign in to Claude Code')
+    expect(primaries()).toEqual(['Open sign-in page'])
+    expect(card.findAll('button:not(.link)').map(button => button.text())).toEqual(['Send code'])
+    expect(card.findAll('.secondary .link').map(button => button.text())).toEqual(['Open terminal', 'Cancel (Esc)'])
+    await card.get('[data-cli-signin-open]').trigger('click')
+    expect(primaries()).toEqual(['Send code'])
+    expect(card.get('[data-cli-signin-open]').text()).toBe('Open again')
+    // A new address (Retry, /login again) starts over at the page.
+    mocks.menu({ kind: 'signin', mode: 'code', status: 'waiting', url: 'https://example.com/authorize?again=1', options: [] })
+    await flushPromises()
+    expect(primaries()).toEqual(['Open sign-in page'])
+
+    mocks.menu({ kind: 'signin', mode: 'device', status: 'waiting', url: 'https://example.com/device', code: 'ABCD-12345', options: [] })
+    await flushPromises()
+    expect(primaries()).toEqual(['Open sign-in page'])
+    expect(card.get('[data-cli-device-code]').text()).toBe('ABCD-12345')
+    expect(card.get('[data-cli-signin-copy]').classes()).toContain('link')
+    expect(card.find('[data-cli-signin-code]').exists()).toBe(false)
+    mocks.menu({ kind: 'signin', mode: 'outcome', status: 'succeeded', confirm: true, options: [] })
+    await flushPromises()
+    expect(primaries()).toEqual(['Continue'])
+    await card.get('[data-cli-signin-continue]').trigger('click')
     expect(mocks.sendKeys).toHaveBeenLastCalledWith(['\r'])
   })
   it('rejects control characters and clears secrets when a new login screen appears', async () => {

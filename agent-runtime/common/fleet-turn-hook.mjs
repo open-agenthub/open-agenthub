@@ -3,6 +3,7 @@
 // the agent's next turn when one ends (#173, docs/priority-messages.md).
 //
 //   Codex  requirements.toml  UserPromptSubmit, PermissionRequest  -> POST /agenthub/turn, no output
+//                             Pre-/PostToolUse request_user_input  -> question / answered, no output
 //                             Interrupt                            -> presentation idle, no output
 //                             Stop                                 -> {"decision":"block","reason":<messages>}
 //
@@ -15,13 +16,19 @@
 // in the inbox for agent_inbox, as they do for an autonomous Claude.
 
 import { pathToFileURL } from 'node:url';
+import agentQuestions from './agent-questions.js';
 
 const CALL_TIMEOUT_MS = 8000;
 const EVENTS = { UserPromptSubmit: 'prompt', PermissionRequest: 'permission', Stop: 'stop', Interrupt: 'idle', StopFailure: 'idle' };
 // Tools whose PermissionRequest is a question to the person, not a request for permission (#252):
 // Claude Code 2.1.287 raises PermissionRequest for AskUserQuestion to show its question screen.
 // Reported as "permission", the Workspace said "Waiting for your approval" while it asked.
-const QUESTION_TOOLS = new Set(['AskUserQuestion']);
+// Codex 0.160.0 raises no PermissionRequest for request_user_input, only PreToolUse before the
+// question screen and PostToolUse once it is answered; both CLIs raise PostToolUse on the answer.
+// The question goes with the report, from the tool's own input (#343): read off the screen, a
+// question taller than the terminal lost its first lines.
+const QUESTION_TOOLS = new Set(['AskUserQuestion', 'request_user_input']);
+const TOOL_EVENTS = { PreToolUse: 'question', PostToolUse: 'answered' };
 
 async function readStdin() {
   const chunks = [];
@@ -45,7 +52,7 @@ export function isInteractive(env = process.env) {
  * thread waits at its prompt. Reported, the title helper's prompt would mark an idle agent busy.
  */
 export function eventOf(payload) {
-  const event = EVENTS[payload.hook_event_name];
+  const event = EVENTS[payload.hook_event_name] ?? (QUESTION_TOOLS.has(payload.tool_name) ? TOOL_EVENTS[payload.hook_event_name] : undefined);
   if (!event) return null;
   if (typeof payload.turn_id === 'string' && payload.transcript_path == null) return null;
   if (payload.agent_id != null) return null;
@@ -53,7 +60,14 @@ export function eventOf(payload) {
   return event;
 }
 
-export async function report(event, env = process.env, fetchImpl = fetch) {
+/** What goes with the event besides its name: the questions of a question tool's report. */
+export function detailsOf(event, payload) {
+  if (event !== 'question') return {};
+  const questions = agentQuestions.normalizeQuestions(payload.tool_input);
+  return questions.length ? { questions } : {};
+}
+
+export async function report(event, env = process.env, fetchImpl = fetch, details = {}) {
   const token = env.AGENTHUB_CALLBACK_TOKEN;
   if (!token) return null;
   const port = /^\d{1,5}$/.test(env.AGENTHUB_PORT || '') ? env.AGENTHUB_PORT : '7681';
@@ -63,7 +77,7 @@ export async function report(event, env = process.env, fetchImpl = fetch) {
     const response = await fetchImpl(`http://127.0.0.1:${port}/agenthub/turn`, {
       method: 'POST',
       headers: { 'X-Agent-Token': token, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ event }),
+      body: JSON.stringify({ ...details, event }),
       redirect: 'error',
       signal: controller.signal
     });
@@ -82,7 +96,7 @@ export async function run(payload, env = process.env, fetchImpl = fetch) {
   if (!isInteractive(env)) return null;
   const event = eventOf(payload);
   if (!event) return null;
-  const text = await report(event, env, fetchImpl);
+  const text = await report(event, env, fetchImpl, detailsOf(event, payload));
   if (event !== 'stop' || !text) return null;
   return { decision: 'block', reason: text };
 }

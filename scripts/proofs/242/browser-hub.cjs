@@ -128,7 +128,7 @@ const server=http.createServer(async(req,res)=>{
  else if(pathname.endsWith('/files/capabilities'))data={canRead:true,canUpload:false,limits:{presentationPollMilliseconds:30000}};
  else if(pathname.endsWith('/files/presentation'))data={revision:0,fileId:null};
  else if(pathname.endsWith('/commands')){const r=await fetch('http://127.0.0.1:7685/agenthub/commands',{headers:{'X-Agent-Token':'example-proof-token'}});data=await r.json();}
- else if(['/api/projects','/api/mcp-servers'].includes(pathname)||/\/(permissions|messages|files)$/.test(pathname))data=[];
+ else if(['/api/projects','/api/mcp-servers','/api/sessions/shared','/api/session-organization/order'].includes(pathname)||/\/(permissions|messages|files)$/.test(pathname))data=[];
  else {res.writeHead(404);return res.end();}
  res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify(data));
 });

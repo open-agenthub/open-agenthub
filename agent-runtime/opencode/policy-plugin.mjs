@@ -4,18 +4,20 @@ import { createGate } from './policy-gate.mjs';
 import { createLimitNotice } from './limit-notice.mjs';
 import { createTurnNotifier } from './turn-notify.mjs';
 import { createNextTurnRelay } from './next-turn.mjs';
+import { createQuestionRelay } from './question-activity.mjs';
 import { createTranscriptRecorder } from './native-transcript.mjs';
 import { installSkillRefresher } from './skill-refresh.mjs';
 
 // OpenCode treats every function this module exports as a plugin and calls it at startup, so
 // this file exports the plugin and nothing else; the logic lives in policy-gate.mjs,
-// turn-notify.mjs, next-turn.mjs, native-transcript.mjs, limit-notice.mjs and skill-refresh.mjs.
+// turn-notify.mjs, next-turn.mjs, question-activity.mjs, native-transcript.mjs, limit-notice.mjs and skill-refresh.mjs.
 export const AgentHubPolicy = async (input) => {
   const inputClient = input && input.client;
   const recordTranscript = createTranscriptRecorder({ client: inputClient });
   const gate = createGate();
   const notify = createTurnNotifier({ client: input && input.client });
   const nextTurn = createNextTurnRelay({ client: input && input.client });
+  const questions = createQuestionRelay();
   const limitNotice = createLimitNotice();
   const skills = installSkillRefresher({ client: input && input.client });
   return {
@@ -50,6 +52,7 @@ export const AgentHubPolicy = async (input) => {
           }
         } catch {}
       }
+      await questions.onEvent(event).catch(() => {});
       await notify(event).catch(() => {});
       await nextTurn.onEvent(event).catch(() => {});
     }

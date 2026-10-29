@@ -36,7 +36,10 @@ body="$(printf '%s' "$payload" | "$NODE_BIN" -e '
         }
       }
     } catch {}
-    process.stdout.write(JSON.stringify({ message: msg.slice(0, 12000).replace(/[\uD800-\uDBFF]$/, ""), event: "question" }));
+    // idle_prompt: Claude sits at its prompt a minute after answering. The relays still need the
+    // event to open their thread; the hub must not take it for an open question (#343).
+    const idle = kind === "idle_prompt" ? { idle: true } : {};
+    process.stdout.write(JSON.stringify({ message: msg.slice(0, 12000).replace(/[\uD800-\uDBFF]$/, ""), event: "question", ...idle }));
   });
 ')"
 
