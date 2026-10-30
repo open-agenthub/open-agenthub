@@ -48,6 +48,40 @@ URL userinfo, authentication headers, cookies, named secrets and common token fo
 Unknown failures remain bounded plain text. Tests cover secret-bearing inputs separately from
 mapping, and execute the factory's real shell script against a local bare repository.
 
+## Retrying the clone on network errors (#354)
+
+The first session started after a quiet period sometimes failed with `Could not resolve host:
+github.com`, while other pods resolved the same name in the same minute and a respawn a minute
+later worked. The pod most likely lands on a freshly started node whose DNS path is not ready
+yet. One lookup failure ended the session, because the clone ran exactly once.
+
+The clone step now retries, but only output that a network fault produces: an unresolvable host
+or proxy, a refused, reset or timed-out connection, a dropped transfer, and a 502/503/504. The
+delays are 2, 4, 8, 16, 30, 30 and 30 seconds: eight attempts over about two minutes, which
+covers the minute-long window the incidents showed. A 300-second deadline stops the retry when
+each attempt itself waits out a TCP connect timeout. A 404, a 401/403, a refused SSH key and a
+missing branch match none of these patterns and still fail on the first attempt: retrying them
+only delays the message that tells the user what to fix.
+
+When the retries run out, the termination message carries `failure: network`, the attempt count
+and the elapsed seconds, and the session list reads "Network error: could not reach repository
+… after 8 attempts over 127 s". Without the marker the reason would read like any other clone
+failure and send the user to edit a repository or credential that was correct. The default-branch
+lookup is skipped in that case, as it would only repeat the network failure.
+
+Rejected alternatives:
+
+- Retrying every failure. A wrong URL or token would then cost two minutes before the user sees
+  why, on every start.
+- Waiting for DNS in a separate init step before the clone. It would need a host to probe, which
+  differs per repository and proxy setup, and would not cover a connection that drops mid-clone.
+- Letting Kubernetes restart the init container. Session pods use `restartPolicy: Never`, and
+  that policy covers every container: changing it would also restart a failed agent, retry
+  permanent clone errors without end, and leave no record of why the clone was retried.
+
+`tests/CloneRetryProof` runs the factory's exact script in the real clone image against a
+Service that does not exist yet, so the cluster DNS fails for real.
+
 ## Reproduce the API object proof
 
 Run `dotnet run --project tests/SessionStartupProof -- /path/to/kubeconfig` against a scratch
