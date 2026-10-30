@@ -174,4 +174,27 @@ public class ChatFormattingTests
         var unbreakable = ChatFormatting.TitleFromPrompt(new string('x', 100));
         Assert.Equal(48, unbreakable.Length); // 47 chars + ellipsis
     }
+
+    [Theory]
+    [InlineData(null, "#abcd")]
+    [InlineData("  ", "#abcd")]
+    [InlineData("Build\n\tfix", "Build fix (#abcd)")]
+    [InlineData("<b>A&B</b>_*", "<b>A&B</b>_* (#abcd)")]
+    public void SessionLabelIsPlainSingleLineWithFallback(string? title, string expected)
+        => Assert.Equal(expected, ChatFormatting.SessionLabel("abcdef", title));
+
+    [Fact]
+    public void EveryAnswerChunkHasOriginAndFitsIncludingHeader()
+    {
+        var title = new string('x', 79) + "😀";
+        var messages = ChatFormatting.BuildAnswerMessages("abcdef", title, new string('z', 12000));
+        Assert.True(messages.Count > 1);
+        Assert.All(messages, message =>
+        {
+            Assert.StartsWith(ChatFormatting.Header("abcdef", title) + "\n", message);
+            Assert.InRange(message.Length, 1, 4000);
+            Assert.DoesNotContain("\uD83D…", message);
+        });
+        Assert.Equal(12000, messages.Sum(m => m.Count(c => c == 'z')));
+    }
 }

@@ -30,7 +30,29 @@ public static class ChatFormatting
         return (count == 1 ? match : default, count);
     }
 
-    public static string Header(string sessionId, string title) => $"🤖 #{Tag(sessionId)} · {title}";
+    public static string SessionLabel(string sessionId, string? title)
+    {
+        var name = string.Join(" ", (title ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        if (name.Length == 0) return $"#{Tag(sessionId)}";
+        if (name.Length > 80)
+        {
+            var cut = char.IsHighSurrogate(name[78]) ? 78 : 79;
+            name = name[..cut] + "…";
+        }
+        return $"{name} (#{Tag(sessionId)})";
+    }
+
+    public static string Header(string sessionId, string? title) => $"🤖 {SessionLabel(sessionId, title)}";
+
+    // Repeat the origin after splitting: a forwarded continuation must stand on its own.
+    public static IReadOnlyList<string> SessionMessages(string sessionId, string? title, string text, int maxLen = 4000)
+    {
+        var header = Header(sessionId, title) + "\n";
+        return Split(text, maxLen - header.Length).Select(chunk => header + chunk).ToList();
+    }
+
+    public static IReadOnlyList<string> BuildAnswerMessages(string sessionId, string? title, string message)
+        => SessionMessages(sessionId, title, "💬 The agent says:\n" + message.Trim());
 
     /// <summary>
     /// Recognizes a "start a session" chat command ("/new &lt;prompt&gt;" or "!new &lt;prompt&gt;",
