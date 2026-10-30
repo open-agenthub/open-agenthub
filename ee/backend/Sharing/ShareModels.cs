@@ -207,6 +207,8 @@ public sealed record SharedSessionInfo
     public DateTime CreatedAt { get; init; }
     public string? Schedule { get; init; }
     public bool QuestionPending { get; init; }
+    public bool QuestionOpen { get; init; }
+    public string? QuestionTitle { get; init; }
     public IReadOnlyList<string> RepositoryUrls { get; init; } = [];
     public required string AccessRole { get; init; }
     public string? SharedBy { get; init; }
@@ -233,6 +235,8 @@ public static class SharedSessionSanitizer
             CreatedAt = session.CreatedAt,
             Schedule = session.Schedule,
             QuestionPending = session.QuestionPending,
+            QuestionOpen = session.QuestionOpen,
+            QuestionTitle = session.QuestionOpen ? session.QuestionTitle : null,
             RepositoryUrls = RepositoryUrls(session),
             AccessRole = access.Level.ToString(),
             SharedBy = access.SharedBy,

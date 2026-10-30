@@ -1,5 +1,5 @@
 // #343: questionPending follows /notify (not for an idle notification) and /turn-started exactly
-// as InternalController does.
+// as InternalController does; #361: questionOpen/questionTitle follow /question-state.
 // Stand-in hub on :8080: session metadata for the SPA, the terminal WebSocket relayed to the
 // session agent, and the internal callbacks the hooks and the session agent make.
 // usage: node hub.mjs <AgentName>
@@ -30,6 +30,13 @@ const server = http.createServer(async (req, res) => {
   // the CLI's own dialog ("ask"), and every request it would have filed is logged.
   if (url === '/internal/sessions/s1/permission') { trace('permission request ' + (await body(req)).toString()); res.writeHead(503); return res.end() }
   if (url === '/internal/sessions/s1/notify') { const b = (await body(req)).toString(); trace('notify ' + b); if (JSON.parse(b).idle !== true) session.questionPending = true; return json({}) }
+  // #361: the open question dialog, apart from questionPending, as InternalController.QuestionState
+  // stores it (the controller's masking and bounds are covered by InternalNotifyTests).
+  if (url === '/internal/sessions/s1/question-state') {
+    const b = JSON.parse((await body(req)).toString() || '{}'); trace('question-state ' + JSON.stringify(b))
+    session.questionOpen = b.open === true; session.questionTitle = b.open === true ? String(b.title ?? '').slice(0, 200) : null
+    res.writeHead(204); return res.end()
+  }
   if (url === '/internal/sessions/s1/turn-started') { trace('turn-started'); session.questionPending = false; await body(req); return json({}) }
   if (url.startsWith('/internal/')) { trace('internal ' + req.method + ' ' + url); await body(req); return json({}) }
   if (/\/(permissions|messages|files|accounts|credentials|projects|sessions)$/.test(url) || url.endsWith('/allowed')) return json([])

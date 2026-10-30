@@ -23,3 +23,17 @@ The `idle` scenario is the "no question" proof: one prompt, then the real Claude
 `idle_prompt` notification about 60 s later. It reaches the hub as `{"event":"question","idle":true}`,
 and neither `questionPending` nor the Workspace's waiting line may turn on.
 Results land in `$RIG_HOME/result-*.json`, and screenshots in `$RIG_HOME/shots/`.
+
+## #361: the sidebar marker and the session status for an open question dialog
+
+    RIG_HOME=... ./run361.sh claude|codex sa361|samain <label>   # build.sh output of the branch or main
+    IDLE_S=70 ...                                              # idle phase length (default 75 s for claude, 20 s for codex)
+
+`browser361.mjs` sends a plain prompt and samples the idle prompt, then opens the CLI's question
+dialog and measures how long the sidebar's `[data-session-question]` marker and the header's
+*Question open* take to appear. It then answers option 2 and measures how long the marker takes to
+go. `hub343.mjs` stores `/question-state` as `InternalController.QuestionState` does. The
+controller's masking and bounds are covered by `InternalNotifyTests`. The results are in
+`$RIG_HOME/result-361-*.json`. Screenshots of the sidebar, the status line and the page are in
+`$RIG_HOME/shots/`, and `*-open-tooltip-*` prints the title attribute, because headless Chromium
+draws no native tooltip.

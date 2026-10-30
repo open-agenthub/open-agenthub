@@ -137,6 +137,7 @@ public sealed class InternalController : ControllerBase
         if (body.Status is "Succeeded" or "Failed")
         {
             await _store.SetQuestionPendingAsync(id, false, ct);
+            await _store.SetQuestionDialogAsync(id, false, null, ct);
             if (_browsers is not null) await _browsers.StopAsync(id, ct);
             await NotifyAllAsync(rec, body.Status == "Succeeded" ? "finished" : "failed",
                 body.Status == "Succeeded" ? "Task completed." : "Session failed.", ct);
@@ -172,6 +173,50 @@ public sealed class InternalController : ControllerBase
             string.IsNullOrWhiteSpace(body.Message)
                 ? "The agent is waiting for your reply."
                 : await _svc.MaskSessionSecretsAsync(id, body.Message, ct), ct);
+        return NoContent();
+    }
+
+    /// <summary>Whether a question dialog is open in the agent CLI, and its question (#361).</summary>
+    public record QuestionStateBody(bool Open, string? Title);
+
+    /// <summary>The longest question the session list carries for the sidebar's tooltip.</summary>
+    public const int MaxQuestionTitle = 200;
+
+    /// <summary>
+    /// Called by the session agent when a question dialog opens or closes (#361). Apart from
+    /// <c>notify</c>, which sets questionPending: that one also means "your turn", and a terminal
+    /// that attaches clears it while the dialog is still open.
+    /// </summary>
+    [HttpPost("question-state")]
+    public async Task<IActionResult> QuestionState(string id, [FromBody] QuestionStateBody body, CancellationToken ct)
+    {
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
+
+        string? title = null;
+        if (body.Open)
+        {
+            // The pod already masks it; the hub does not rely on that for a text every viewer of
+            // the session list reads, and bounds it so a pod cannot grow every list response.
+            // Masked before it is cut to length: a secret cut in half no longer matches the mask.
+            // The generous first cut only bounds the masking work; whatever it splits lies far
+            // past the length kept.
+            var raw = body.Title ?? "";
+            if (raw.Length > MaxQuestionTitle * 20) raw = raw[..(MaxQuestionTitle * 20)];
+            // One line of plain text: an escape sequence or a tab from the CLI's input has no
+            // place in a tooltip, and a terminal that renders the session list would execute it.
+            raw = string.Join(' ', raw.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Select(word => new string(word.Where(character => !char.IsControl(character)).ToArray()))
+                .Where(word => word.Length > 0));
+            title = await _svc.MaskSessionSecretsAsync(id, raw, ct);
+            if (title.Length > MaxQuestionTitle)
+            {
+                title = title[..(MaxQuestionTitle - 1)];
+                if (char.IsHighSurrogate(title[^1])) title = title[..^1];
+                title = title.TrimEnd() + "…";
+            }
+        }
+        await _store.SetQuestionDialogAsync(id, body.Open, title, ct);
         return NoContent();
     }
 

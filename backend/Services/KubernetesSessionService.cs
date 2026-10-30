@@ -1643,6 +1643,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         rec.FailureReason = null;
         rec.QuestionPending = false;
         await _store.UpsertAsync(rec, ct);
+        // The dialog went with the pod; the new one reports a question it asks again.
+        rec.QuestionOpen = false;
+        await _store.SetQuestionDialogAsync(id, false, null, ct);
         // Somebody wanted this session back: a resume restarts the idle countdown.
         await _store.TouchActivityAsync(id, ct);
 
@@ -1733,6 +1736,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         rec.Status = SessionStatus.Paused;
         rec.QuestionPending = false;
         await _store.UpsertAsync(rec, ct);
+        rec.QuestionOpen = false;
+        await _store.SetQuestionDialogAsync(id, false, null, ct);
         _log.LogInformation("Paused session {Id} (pod removed, state uploaded to S3)", id);
         return await ToInfoAsync(rec, phase: SessionStatus.Paused, podIp: null, ct: ct);
     }
@@ -2792,6 +2797,8 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         SecretGrants = SessionSecretGrants.Parse(r.SecretGrantIdsJson),
         Policy = ParsePolicy(r),
         QuestionPending = r.QuestionPending,
+        QuestionOpen = r.QuestionOpen,
+        QuestionTitle = r.QuestionOpen ? r.QuestionTitle : null,
         AutoUpdateRuntimeImages = r.AutoUpdateRuntimeImages,
         CanResume = SessionStatus.CanResume(r.Mode, phase),
         CanConvertToInteractive = SessionStatus.CanConvertToInteractive(r.Mode, phase),

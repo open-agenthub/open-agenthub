@@ -24,6 +24,9 @@ const gitIdentity = require('./git-identity');
 // (ScrollbackLimits.MaxChars in backend/Services); the two have to agree, or a resume seeded
 // from the hub's copy comes back shorter than what this process uploaded.
 const MAX_BUFFER = 1_000_000;
+// The question an open dialog shows in the sidebar's tooltip (#361): one line, not the whole
+// question tool input, which the session list would carry on every poll.
+const DIALOG_TITLE_MAX = 200;
 // How long a stopped agent gets to exit on its own before the restart forces it; long enough
 // for a CLI to flush its session file, short enough that a wedged one does not stall the swap.
 const RESTART_KILL_GRACE_MS = 8_000;
@@ -300,6 +303,9 @@ function createCommonServer(options = {}) {
       clear: async () => {
         if (exited || !term || restartReason !== null || runtimeDraining) throw new Error('context_clear_unavailable');
         clearTarget = term;
+        // The clear command is typed at a safe point, but a question left open on the hub must
+        // not outlive the conversation that asked it.
+        reportQuestionDialog(null);
         const previous = locateTranscript();
         await injectTerminalInput(clearTarget, driver.contextClearCommand, {
           wait: ms => new Promise(resolve => setTimeoutImpl(resolve, ms))
@@ -415,7 +421,23 @@ function createCommonServer(options = {}) {
       ...(body ? { body: JSON.stringify(body) } : {}), signal: AbortSignal.timeout(5000) })).catch(() => {});
     return hubQuestionCalls;
   }
+  // The open question dialog itself, reported on its own (#361): questionPending also marks a
+  // finished turn, a secret request and a permission notification, so the sidebar
+  // could not tell "a question with choices waits" from "your turn". Null when none is open, ''
+  // for one without text; undefined until the first report, so a session agent that comes back
+  // after its container restarted clears what the old one may have left open on the hub.
+  let hubDialogTitle;
+  function reportQuestionDialog(questions) {
+    if (!callback || !token) return;
+    const first = questions && secretMask.mask((questions[0]?.question || '').replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim());
+    const title = !questions ? null : first.length <= DIALOG_TITLE_MAX ? first
+      : first.slice(0, DIALOG_TITLE_MAX - 1).replace(/[\uD800-\uDBFF]$/, '').trimEnd() + '…';
+    if (title === hubDialogTitle) return;
+    hubDialogTitle = title;
+    void hubCall('/question-state', title === null ? { open: false } : { open: true, title });
+  }
   function openHubQuestion(questions) {
+    reportQuestionDialog(questions);
     if (!callback || !token) return;
     hubQuestionOpen = true;
     const text = questions.map(entry => [(entry.header ? entry.header + ': ' : '') + entry.question,
@@ -424,6 +446,7 @@ function createCommonServer(options = {}) {
     void hubCall('/notify', { event: 'question', message });
   }
   function closeHubQuestion() {
+    reportQuestionDialog(null);
     if (!hubQuestionOpen || !callback || !token) return;
     hubQuestionOpen = false;
     void hubCall('/turn-started');
@@ -1240,6 +1263,11 @@ function createCommonServer(options = {}) {
   function startAgent(allowResume) {
     activityPromptAt = now();
     activityIdleOverride = false;
+    // A question dialog dies with the CLI that drew it; a restarted CLI that kept it open would
+    // ask again and report it again.
+    activityWaitingFor = null;
+    activityQuestions = [];
+    closeHubQuestion();
     const command = driver.buildCommand(env, allowResume);
     attemptedResume = driver.isResumeCommand(command);
     attemptOutput = '';
@@ -1825,6 +1853,7 @@ function createCommonServer(options = {}) {
       // delayed callback from the previous prompt. Failure must not prevent the native turn.
       if (callback && token) {
         hubQuestionOpen = false;
+        reportQuestionDialog(null);
         await hubCall('/turn-started');
       }
     }

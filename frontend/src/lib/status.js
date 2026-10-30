@@ -29,12 +29,26 @@ export function tabLabel(kind) {
   return TAB_LABELS[kind] || kind
 }
 
-/** Display status for a session row: phases mapped to the design's vocabulary,
- *  with a pending question surfacing as "Waiting". */
+/** Display status for a session row: phases mapped to the design's vocabulary, an open
+ *  question dialog as "Question open" and a pending reply ("your turn", #343) as "Waiting". */
 export function sessionStatus(session) {
   if (!session) return 'Unknown'
+  if (session.questionOpen) return QUESTION_OPEN
   if (session.questionPending) return 'Waiting'
   return { Succeeded: 'Done', Pending: 'Starting' }[session.phase] || session.phase || 'Unknown'
+}
+
+export const QUESTION_OPEN = 'Question open'
+
+/** Whether the session waits for the person: an open question dialog or a pending reply. */
+export function needsYou(session) {
+  return Boolean(session?.questionOpen || session?.questionPending)
+}
+
+/** The tooltip over an open question dialog's marker: the question it asks (#361). */
+export function questionTooltip(session) {
+  if (!session?.questionOpen) return ''
+  return session.questionTitle ? `Question open: ${session.questionTitle}` : 'Question open: the agent asks you to choose an answer'
 }
 
 /** Badge foreground/background per display status. */
@@ -42,6 +56,7 @@ export const STATUS_STYLES = {
   Running:   { color: 'var(--running)', bg: 'rgba(95,214,139,0.1)' },
   Starting:  { color: 'var(--accent)', bg: 'rgba(90,169,245,0.1)' },
   Waiting:   { color: 'var(--warn)', bg: 'rgba(245,197,90,0.12)' },
+  [QUESTION_OPEN]: { color: 'var(--warn)', bg: 'rgba(245,197,90,0.12)' },
   Scheduled: { color: 'var(--sched)', bg: 'rgba(167,139,250,0.1)' },
   Paused:    { color: 'var(--paused)', bg: 'rgba(163,158,150,0.1)' },
   Done:      { color: 'var(--accent)', bg: 'rgba(90,169,245,0.1)' },

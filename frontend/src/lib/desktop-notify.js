@@ -1,6 +1,6 @@
 // Desktop notifications for session events (unit-tested transition detector +
 // thin browser-Notification helpers). Sessions carry the shape stored by
-// App.vue's refresh(): { id, title, phase, questionPending, ... }.
+// App.vue's refresh(): { id, title, phase, questionPending, questionOpen, questionTitle, ... }.
 
 /** Phases a session can end in — entering one of them triggers an alert. */
 const TERMINAL = { Succeeded: 'finished', Failed: 'failed' }
@@ -8,7 +8,9 @@ const TERMINAL = { Succeeded: 'finished', Failed: 'failed' }
 /**
  * Detects sessions that newly need attention between two polling snapshots.
  * Only sessions present in BOTH snapshots can alert (new sessions on page
- * load never do). Returns [{ id, title, kind: 'question'|'finished'|'failed' }].
+ * load never do). Returns [{ id, title, kind: 'question'|'finished'|'failed', question? }]: a
+ * question dialog that opens (#361) alerts once with its question, even when questionPending
+ * turns on in the same poll.
  */
 export function detectAlerts(prev, next) {
   const before = new Map(prev.map(s => [s.id, s]))
@@ -16,7 +18,8 @@ export function detectAlerts(prev, next) {
   for (const s of next) {
     const old = before.get(s.id)
     if (!old) continue
-    if (!old.questionPending && s.questionPending) alerts.push({ id: s.id, title: s.title, kind: 'question' })
+    if (!old.questionOpen && s.questionOpen) alerts.push({ id: s.id, title: s.title, kind: 'question', ...(s.questionTitle ? { question: s.questionTitle } : {}) })
+    else if (!old.questionPending && s.questionPending && !s.questionOpen) alerts.push({ id: s.id, title: s.title, kind: 'question' })
     else if (old.phase !== s.phase && Object.hasOwn(TERMINAL, s.phase)) alerts.push({ id: s.id, title: s.title, kind: TERMINAL[s.phase] })
   }
   return alerts
@@ -58,7 +61,7 @@ export function showAlert(alert, onOpen) {
   // constructor throws despite granted permission — the poll loop must survive that.
   try {
     // tag dedupes per session: a newer notification replaces the older one.
-    const n = new Notification('Open AgentHub', { body: `Session ${alert.title || alert.id} ${body}.`, tag: `agenthub-${alert.id}` })
+    const n = new Notification('Open AgentHub', { body: alert.question ? `Session ${alert.title || alert.id} asks: ${alert.question}` : `Session ${alert.title || alert.id} ${body}.`, tag: `agenthub-${alert.id}` })
     n.onclick = () => { window.focus(); onOpen?.(alert.id); n.close() }
   } catch { /* notifications unavailable here — skip silently */ }
 }

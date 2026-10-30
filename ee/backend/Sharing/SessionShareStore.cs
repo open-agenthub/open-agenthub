@@ -133,7 +133,7 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         command.Parameters.AddWithValue("recipient", recipient);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-            result.Add(new StoredSessionAccess(MapSession(reader), ParseRole(reader.GetString(18))));
+            result.Add(new StoredSessionAccess(MapSession(reader), ParseRole(reader.GetString(AfterSession))));
         return result;
     }
 
@@ -428,7 +428,7 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         if (!await reader.ReadAsync(ct))
             return null;
 
-        ShareRole? role = reader.IsDBNull(18) ? null : ParseRole(reader.GetString(18));
+        ShareRole? role = reader.IsDBNull(AfterSession) ? null : ParseRole(reader.GetString(AfterSession));
         return new StoredSessionAccess(MapSession(reader), role);
     }
 
@@ -467,9 +467,9 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
                 return null;
 
             session = MapSession(reader);
-            role = ParseRole(reader.GetString(18));
-            linkId = reader.GetString(19);
-            storedHash = (byte[])reader.GetValue(20);
+            role = ParseRole(reader.GetString(AfterSession));
+            linkId = reader.GetString(AfterSession + 1);
+            storedHash = (byte[])reader.GetValue(AfterSession + 2);
         }
 
         if (!ShareTokens.Matches(token, storedHash))
@@ -642,8 +642,11 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         sessions.schedule, sessions.agent_session_id, sessions.status,
         sessions.question_pending, sessions.callback_token, sessions.created_at,
         sessions.updated_at, sessions.image, sessions.run_as_root, sessions.cpu,
-        sessions.memory, sessions.mcp_config, sessions.repos
+        sessions.memory, sessions.mcp_config, sessions.repos, sessions.question_open,
+        sessions.question_title
         """;
+    // The first column a query adds after SessionColumns.
+    private const int AfterSession = 20;
 
     private static SessionRecord MapSession(NpgsqlDataReader reader) => new()
     {
@@ -664,6 +667,8 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         Cpu = reader.GetString(14),
         Memory = reader.GetString(15),
         McpConfigJson = reader.IsDBNull(16) ? null : reader.GetString(16),
-        ReposJson = reader.IsDBNull(17) ? null : reader.GetString(17)
+        ReposJson = reader.IsDBNull(17) ? null : reader.GetString(17),
+        QuestionOpen = reader.GetBoolean(18),
+        QuestionTitle = reader.IsDBNull(19) ? null : reader.GetString(19)
     };
 }

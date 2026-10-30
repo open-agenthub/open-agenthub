@@ -89,6 +89,36 @@ coordinating agent about who was waiting for whom.
 Cursor has no structured question signal, so its turn-end notification still sets `questionPending`.
 That is a known limitation. Rejected: dropping the idle notifications in the hooks, which would
 leave a session that finished without asking out of chat entirely.
+
+**An open question dialog is its own state at the hub (#361).** `questionPending` still drives the
+blinking sidebar dot and the waiting counters, and it still means "your turn": a finished Cursor
+turn, a secret request and a Claude permission notification set it too, and a terminal that
+attaches clears it while the dialog is still on screen. So the sidebar could not tell "a question
+with choices waits for you" from an idle prompt. The session agent now reports the dialog apart, to
+`/internal/sessions/{id}/question-state` as `{ open, title }`. It is set when a question tool opens,
+and `title` is the first question, masked and cut to 200 characters. It is cleared on the same
+events that close the question for the Workspace: the answer, Esc, the next prompt and the turn's
+end. It is also cleared when the CLI restarts, before a context clear types its command, and once
+when the session agent starts. That last clear covers a session agent whose predecessor died with
+a dialog open. The hub stores the state in `question_open`/`question_title` and clears it when the
+session ends, pauses or resumes. The sidebar shows a "?" marker with the question as its tooltip,
+and the status everywhere reads *Question open*. The marker shows within one poll of the session
+list (every 5 s): with the real Claude Code 2.1.314 it appeared about 4.7 s after the dialog, and
+with Codex 0.166.0 about 0.6 s after. In both, it was gone about 4.5 s after the answer.
+
+Rejected:
+- Reusing `questionPending`. It would bring back the #343 bug: every idle session would show as
+  asking.
+- Taking the dialog from the screen (`cli-menu.js`'s `detectMenu`) in the runtime. A numbered list
+  with a cursor is also a model picker, a resume list, an approval or a sign-in. The question
+  tool's own hook names the question exactly. The screen still drives the Workspace notice, which
+  needs the cursor and the keys.
+- Writing the state through `UpsertAsync`. An edit writes back a record read moments earlier. That
+  would reopen a dialog that was answered in between, so the state has its own column update.
+
+Cursor and OpenClaw report no question tool, so their sessions never show the marker. OpenCode's
+question plugin feeds the same turn report, but this was proven only with Claude Code and Codex
+(`tests/QuestionToolProof`, `run361.sh`).
 Streaming sessions use their existing streamed-turn busy state. Disconnected, stopped and unknown
 states show no working spinner. Reduced-motion viewers keep a static marker instead of rotation.
 

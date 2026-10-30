@@ -173,6 +173,79 @@ public class InternalNotifyTests
         Assert.All(WorkingIndicator.Frames, f => Assert.Contains("The agent is working", f));
     }
 
+    // #361: an open question dialog is its own state. questionPending keeps its #343 meaning, the
+    // relays hear nothing, and the question every viewer of the session list reads is bounded and masked.
+    [Fact]
+    public async Task QuestionState_RecordsTheDialogApartFromQuestionPending()
+    {
+        var world = new NotifyWorld(AgentKind.Claude);
+        var controller = world.Controller();
+        var long_ = "Deploy with tok-0123456789abcdef\nto " + new string('x', 300) + "?";
+
+        Assert.IsType<NoContentResult>(await controller.QuestionState("s1", new InternalController.QuestionStateBody(true, long_), default));
+        Assert.IsType<NoContentResult>(await controller.QuestionState("s1", new InternalController.QuestionStateBody(true, null), default));
+        Assert.IsType<NoContentResult>(await controller.QuestionState("s1", new InternalController.QuestionStateBody(false, "ignored"), default));
+
+        Assert.Equal(3, world.Store.QuestionDialog.Count);
+        var (_, open, title) = world.Store.QuestionDialog[0];
+        Assert.True(open);
+        Assert.StartsWith("Deploy with ", title);
+        Assert.DoesNotContain("tok-0123456789abcdef", title);
+        Assert.DoesNotContain("\n", title);
+        Assert.True(title!.Length <= InternalController.MaxQuestionTitle);
+        Assert.EndsWith("x…", title);
+        Assert.Equal(("s1", true, ""), world.Store.QuestionDialog[1]);
+        Assert.Equal(("s1", false, null), world.Store.QuestionDialog[2]);
+        Assert.Empty(world.Store.QuestionPending);
+        Assert.Empty(world.Notifier.Events);
+    }
+
+    [Fact]
+    public async Task QuestionState_IsOneLineOfPlainText()
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        await world.Controller().QuestionState("s1", new InternalController.QuestionStateBody(true, "Pick\u001b[31m one\tof\r\n\u0007these?\u0000"), default);
+        Assert.Equal(("s1", true, "Pick[31m one of these?"), world.Store.QuestionDialog.Single());
+    }
+
+    // A session's own valid token does not reach another session's state.
+    [Fact]
+    public async Task QuestionState_RefusesATokenForAnotherSession()
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        var result = await world.Controller("token-s1").QuestionState("s2", new InternalController.QuestionStateBody(true, "Which?"), default);
+        Assert.IsType<UnauthorizedResult>(result);
+        Assert.Empty(world.Store.QuestionDialog);
+    }
+
+    [Fact]
+    public async Task QuestionState_RefusesAnotherSessionsToken()
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        var result = await world.Controller("wrong").QuestionState("s1", new InternalController.QuestionStateBody(true, "Which?"), default);
+        Assert.IsType<UnauthorizedResult>(result);
+        Assert.Empty(world.Store.QuestionDialog);
+    }
+
+    // A terminal that attaches clears questionPending (TerminalProxy); the dialog it shows stays open.
+    [Fact]
+    public async Task TurnStarted_LeavesTheDialogToTheSessionAgent()
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        await world.Controller().TurnStarted("s1", default);
+        Assert.Empty(world.Store.QuestionDialog);
+    }
+
+    [Theory]
+    [InlineData("Succeeded")]
+    [InlineData("Failed")]
+    public async Task Status_AnEndedSessionHasNoOpenDialog(string status)
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        await world.Controller().Status("s1", new InternalController.StatusBody(status), default);
+        Assert.Equal(("s1", false, null), Assert.Single(world.Store.QuestionDialog));
+    }
+
     private sealed class NotifyWorld
     {
         public NotifyWorld(AgentKind agent)
@@ -257,6 +330,12 @@ public class InternalNotifyTests
         public Task SetQuestionPendingAsync(string id, bool pending, CancellationToken ct = default)
         {
             QuestionPending.Add((id, pending));
+            return Task.CompletedTask;
+        }
+        public List<(string Id, bool Open, string? Title)> QuestionDialog { get; } = [];
+        public Task SetQuestionDialogAsync(string id, bool open, string? title, CancellationToken ct = default)
+        {
+            QuestionDialog.Add((id, open, title));
             return Task.CompletedTask;
         }
         public Task SetScrollbackAsync(string id, string text, CancellationToken ct = default) => Task.CompletedTask;
