@@ -37,17 +37,32 @@ public class SessionLookup : DispatchProxy
 }
 
 // Only the transport destination changes; the production client still serializes every Bot API request.
-public sealed class LocalBotFactory(Uri address) : IHttpClientFactory
+public sealed class LocalBotFactory(Uri address) : IHttpClientFactory, IDisposable
 {
-    private sealed class Redirect(Uri address) : DelegatingHandler(new HttpClientHandler())
+    private sealed class Redirect : HttpMessageHandler
     {
+        private readonly Uri _address;
+        private readonly HttpClientHandler _handler = new();
+        private readonly HttpMessageInvoker _transport;
+        public Redirect(Uri address)
+        {
+            _address = address;
+            _transport = new HttpMessageInvoker(_handler, disposeHandler: false);
+        }
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) { _transport.Dispose(); _handler.Dispose(); }
+            base.Dispose(disposing);
+        }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
-            request.RequestUri = new Uri(address, request.RequestUri!.AbsolutePath);
-            return base.SendAsync(request, ct);
+            request.RequestUri = new Uri(_address, request.RequestUri!.AbsolutePath);
+            return _transport.SendAsync(request, ct);
         }
     }
-    public HttpClient CreateClient(string name) => new(new Redirect(address));
+    private readonly HttpClient _client = new(new Redirect(address));
+    public HttpClient CreateClient(string name) => _client;
+    public void Dispose() => _client.Dispose();
 }
 
 public sealed class LocalPod : IAgentPodIdentityResolver
@@ -92,7 +107,7 @@ public static class TelegramSessionScenario
                     socket.Dispose();
                     continue;
                 }
-                var body = await JsonDocument.ParseAsync(ctx.Request.InputStream);
+                using var body = await JsonDocument.ParseAsync(ctx.Request.InputStream);
                 var method = ctx.Request.Url!.Segments.Last();
                 lock (wire) wire.Add(new(method, body.RootElement.Clone()));
                 var result = method == "createForumTopic" ? "{\"message_thread_id\":77}" : "{\"message_id\":42}";
@@ -122,7 +137,8 @@ public static class TelegramSessionScenario
             await bindings.SetActiveAsync("telegram", "5", "abcd1234");
             var permissions = new PermissionStore(cfg); await permissions.InitializeAsync();
             var opts = new TelegramOptions { Enabled = true, BotToken = "stand-in" };
-            var tg = new TelegramClient(new LocalBotFactory(new Uri($"http://127.0.0.1:{port}/")), opts, NullLogger<TelegramClient>.Instance);
+            using var factory = new LocalBotFactory(new Uri($"http://127.0.0.1:{port}/"));
+            var tg = new TelegramClient(factory, opts, NullLogger<TelegramClient>.Instance);
             var conversations = new TelegramConversationFactory(tg, bindings, users, cfg, NullLogger<TelegramConversationFactory>.Instance);
             var sessions = DispatchProxy.Create<ISessionService, SessionLookup>();
             var lookup = (SessionLookup)sessions;
@@ -134,7 +150,7 @@ public static class TelegramSessionScenario
             {
                 await bindings.UpsertAsync(new("telegram", "abcd1234", "previous-owner", "5", null, null, false));
             }
-            var indicator = new WorkingIndicator(TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(1));
+            var indicator = new WorkingIndicator(TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30));
             var notifier = new TelegramNotifier(opts, tg, bindings, users, conversations, indicator, NullLogger<TelegramNotifier>.Instance);
             var editor = new TelegramPermissionNotifier(opts, tg, bindings, users, permissions, sessions);
             var update = new TelegramUpdateService(opts, tg, bindings, new ChatLinkCodeStore(cfg), users,
@@ -168,7 +184,12 @@ public static class TelegramSessionScenario
                 case "indicator":
                     lookup.Running = true;
                     await Dispatch("hello");
-                    await Task.Delay(70);
+                    var deadline = DateTime.UtcNow.AddSeconds(5);
+                    while (DateTime.UtcNow < deadline)
+                    {
+                        lock (wire) { if (wire.Any(w => w.Method == "editMessageText")) break; }
+                        await Task.Delay(10);
+                    }
                     indicator.Stop("abcd1234");
                     break;
                 default: throw new ArgumentException(path);

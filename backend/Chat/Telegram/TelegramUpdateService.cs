@@ -419,7 +419,7 @@ public sealed class TelegramUpdateService : BackgroundService
         catch (AgentPodNotConfirmedException)
         {
             // The stored address is no longer this session's pod (#229); the reply goes nowhere.
-            await ReplySessionAsync(u, binding.SessionId, info?.Title, "⚠️ Session is not running — cannot deliver the reply.", ct);
+            await ReplySessionAsync(u, binding.SessionId, info.Title, "⚠️ Session is not running — cannot deliver the reply.", ct);
             return;
         }
         await _sessions.TouchActivityAsync(binding.Owner, binding.SessionId, ct);
