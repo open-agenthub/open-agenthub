@@ -193,6 +193,7 @@ public class InternalNotifyTests
         Assert.DoesNotContain("tok-0123456789abcdef", title);
         Assert.DoesNotContain("\n", title);
         Assert.True(title!.Length <= InternalController.MaxQuestionTitle);
+        Assert.EndsWith("x…", title);
         Assert.Equal(("s1", true, ""), world.Store.QuestionDialog[1]);
         Assert.Equal(("s1", false, null), world.Store.QuestionDialog[2]);
         Assert.Empty(world.Store.QuestionPending);

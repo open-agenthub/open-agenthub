@@ -206,8 +206,9 @@ public sealed class InternalController : ControllerBase
             title = await _svc.MaskSessionSecretsAsync(id, raw.ReplaceLineEndings(" ").Trim(), ct);
             if (title.Length > MaxQuestionTitle)
             {
-                title = title[..MaxQuestionTitle];
+                title = title[..(MaxQuestionTitle - 1)];
                 if (char.IsHighSurrogate(title[^1])) title = title[..^1];
+                title = title.TrimEnd() + "…";
             }
         }
         await _store.SetQuestionDialogAsync(id, body.Open, title, ct);

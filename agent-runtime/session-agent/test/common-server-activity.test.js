@@ -224,7 +224,7 @@ test('an open question dialog goes to the hub as its own state, with a short mas
   const [opened, ...rest] = calls.splice(0);
   assert.equal(opened.open, true);
   assert.equal(opened.title.length, 200);
-  assert.match(opened.title, /^Use \S+ or x+$/);
+  assert.match(opened.title, /^Use \S+ or x+…$/);
   assert.doesNotMatch(opened.title, /sekrit-value-1234/);
   assert.deepEqual(rest, [{ open: false }]);
 
