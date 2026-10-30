@@ -14,6 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="../TelegramSessionNamesProof/TelegramSessionScenario.cs" Link="TelegramSessionScenario.cs" />
     <ProjectReference Include="../../backend/AgentHub.Api.csproj" />
   </ItemGroup>
 

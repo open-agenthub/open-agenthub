@@ -20,10 +20,11 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
     private readonly ChatBindingStore _bindings;
     private readonly UserDirectory _users;
     private readonly PermissionStore _store;
+    private readonly Services.ISessionService _sessions;
 
     public TelegramPermissionNotifier(TelegramOptions opts, TelegramClient tg,
-        ChatBindingStore bindings, UserDirectory users, PermissionStore store)
-    { _opts = opts; _tg = tg; _bindings = bindings; _users = users; _store = store; }
+        ChatBindingStore bindings, UserDirectory users, PermissionStore store, Services.ISessionService sessions)
+    { _opts = opts; _tg = tg; _bindings = bindings; _users = users; _store = store; _sessions = sessions; }
 
     public async Task<bool> PostAsync(PermissionRequest req, CancellationToken ct = default)
     {
@@ -48,7 +49,7 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
         }
 
         // Plain text (no parse_mode) — the summary goes out verbatim, just capped.
-        var text = $"🔒 The agent wants to use {req.Tool}.";
+        var text = await OriginAsync(req, ct) + $"\n🔒 The agent wants to use {req.Tool}.";
         if (!string.IsNullOrWhiteSpace(req.Summary)) text += "\n" + Trim(req.Summary!, 600);
 
         var markup = new { inline_keyboard = new[] { new object[] {
@@ -75,14 +76,14 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
     {
         if (req.Channel is null || req.MessageTs is null) return;
         // markup null removes the inline keyboard.
-        await _tg.EditMessageTextAsync(req.Channel, req.MessageTs, ExpiredText(req.Tool), null, ct);
+        await _tg.EditMessageTextAsync(req.Channel, req.MessageTs, (await OriginAsync(req, ct)) + "\n" + ExpiredText(req.Tool), null, ct);
     }
 
     /// <summary>The request was decided elsewhere (web app): reflect it and drop the buttons.</summary>
     public async Task MarkDecidedAsync(PermissionRequest req, string decision, CancellationToken ct = default)
     {
         if (req.Channel is null || req.MessageTs is null) return;
-        await _tg.EditMessageTextAsync(req.Channel, req.MessageTs, DecidedText(req.Tool, decision), null, ct);
+        await _tg.EditMessageTextAsync(req.Channel, req.MessageTs, (await OriginAsync(req, ct)) + "\n" + DecidedText(req.Tool, decision), null, ct);
     }
 
     /// <summary>Prompt text once the request was decided on another surface.</summary>
@@ -96,6 +97,9 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
     /// <summary>Prompt text once the request can no longer be answered out-of-band.</summary>
     public static string ExpiredText(string tool)
         => $"⏰ Expired — {tool}. Please answer in the web terminal.";
+
+    private async Task<string> OriginAsync(PermissionRequest req, CancellationToken ct)
+        => ChatFormatting.Header(req.SessionId, (await _sessions.GetSessionAsync(req.Owner, req.SessionId, ct))?.Title);
 
     private static string Trim(string s, int max) => s.Length <= max ? s : s[..max] + " …";
 }

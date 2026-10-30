@@ -127,22 +127,27 @@ public sealed class TelegramUpdateService : BackgroundService
             // Already decided or expired (or unknown) — reflect the final state
             // instead of leaving the press apparently dead.
             var existing = await _permissions.GetAsync(reqId, ct: ct);
-            await _tg.AnswerCallbackAsync(u.CallbackId!,
+            var origin = existing is null ? "" : ChatFormatting.SessionLabel(existing.SessionId,
+                (await _sessions.GetSessionAsync(existing.Owner, existing.SessionId, ct))?.Title) + "\n";
+            await _tg.AnswerCallbackAsync(u.CallbackId!, origin + (
                 existing?.Decision == "expired"
                     ? "Expired — answer in the web terminal"
-                    : $"Already decided ({existing?.Decision ?? "unknown"})", ct);
+                    : $"Already decided ({existing?.Decision ?? "unknown"})"), ct);
             return;
         }
 
         // Update the prompt message to reflect the decision and drop the buttons.
         if (u.ChatId.Length > 0 && u.MessageId is not null)
         {
+            var origin = ChatFormatting.Header(resolved.SessionId,
+                (await _sessions.GetSessionAsync(resolved.Owner, resolved.SessionId, ct))?.Title);
             var verb = decision == "deny" ? "⛔ Denied" : "✅ Allowed";
             var suffix = decision == "allowAlways" ? " (won't ask again this run)" : "";
             var by = u.FromUsername is not null ? $" · by @{u.FromUsername}" : "";
-            await _tg.EditMessageTextAsync(u.ChatId, u.MessageId, $"{verb} — {resolved.Tool}{suffix}{by}", null, ct);
+            await _tg.EditMessageTextAsync(u.ChatId, u.MessageId, $"{origin}\n{verb} — {resolved.Tool}{suffix}{by}", null, ct);
         }
-        await _tg.AnswerCallbackAsync(u.CallbackId!, "Done", ct);
+        await _tg.AnswerCallbackAsync(u.CallbackId!,
+            ChatFormatting.SessionLabel(resolved.SessionId, (await _sessions.GetSessionAsync(resolved.Owner, resolved.SessionId, ct))?.Title) + "\nDone", ct);
     }
 
     // ------------------------------------------------------------------- messages
@@ -250,7 +255,7 @@ public sealed class TelegramUpdateService : BackgroundService
         foreach (var b in bindings)
         {
             var live = await _sessions.GetSessionAsync(b.Owner, b.SessionId, ct);
-            lines.Add($"#{ChatFormatting.Tag(b.SessionId)} · {live?.Phase ?? "Unknown"}{(b.Active ? " · active" : "")}");
+            lines.Add($"{ChatFormatting.SessionLabel(b.SessionId, live?.Title)} · {live?.Phase ?? "Unknown"}{(b.Active ? " · active" : "")}");
         }
         await ReplyAsync(u, string.Join("\n", lines), ct);
     }
@@ -258,8 +263,14 @@ public sealed class TelegramUpdateService : BackgroundService
     /// <summary>Points the chat's plain replies at the session matching the tag.</summary>
     private async Task HandleUseAsync(TelegramUpdate u, string tag, CancellationToken ct)
     {
+        var linked = await _users.GetByTelegramChatAsync(u.ChatId, ct);
+        if (linked is null)
+        {
+            await ReplyAsync(u, "This chat is not linked.", ct);
+            return;
+        }
         var (match, count) = ChatFormatting.FindByTag(tag,
-            await _bindings.ListByChatAsync("telegram", u.ChatId, ct), b => b.SessionId);
+            (await _bindings.ListByChatAsync("telegram", u.ChatId, ct)).Where(b => b.Owner == linked.Owner), b => b.SessionId);
         if (count == 0)
         {
             await ReplyAsync(u, "No session matches that tag.", ct);
@@ -272,7 +283,8 @@ public sealed class TelegramUpdateService : BackgroundService
         }
 
         await _bindings.SetActiveAsync("telegram", u.ChatId, match!.SessionId, ct);
-        await ReplyAsync(u, $"✅ Plain replies now go to #{ChatFormatting.Tag(match.SessionId)}.", ct);
+        var live = await _sessions.GetSessionAsync(match.Owner, match.SessionId, ct);
+        await ReplyAsync(u, $"✅ Plain replies now go to {ChatFormatting.SessionLabel(match.SessionId, live?.Title)}.", ct);
     }
 
     /// <summary>Lists the linked account's git projects: "/repos [query]".</summary>
@@ -343,7 +355,7 @@ public sealed class TelegramUpdateService : BackgroundService
         else
         {
             var link = _frontendOrigin.Length == 0 ? "" : $"\n{_frontendOrigin}/s/{info.Id}";
-            await ReplyAsync(u, $"✅ Session #{ChatFormatting.Tag(info.Id)} started.{link}", ct);
+            await ReplyAsync(u, $"✅ Session {ChatFormatting.SessionLabel(info.Id, info.Title)} started.{link}", ct);
         }
     }
 
@@ -369,7 +381,7 @@ public sealed class TelegramUpdateService : BackgroundService
         var live = await _sessions.GetSessionAsync(binding.Owner, binding.SessionId, ct);
         var pendingTool = await _permissions.GetPendingBySessionAsync(binding.SessionId, ct);
         var link = _frontendOrigin.Length == 0 ? null : $"{_frontendOrigin}/s/{binding.SessionId}";
-        await ReplyAsync(u, ChatFormatting.StatusText(
+        await ReplySessionAsync(u, binding.SessionId, live?.Title, ChatFormatting.StatusText(
             live?.Phase ?? "Unknown", live?.QuestionPending ?? false, pendingTool, link, live?.Agent), ct);
     }
 
@@ -396,7 +408,7 @@ public sealed class TelegramUpdateService : BackgroundService
         var info = await _sessions.GetSessionAsync(binding.Owner, binding.SessionId, ct);
         if (info?.PodIp is not { Length: > 0 } podIp || info.Phase != "Running")
         {
-            await ReplyAsync(u, "⚠️ Session is not running — cannot deliver the reply.", ct);
+            await ReplySessionAsync(u, binding.SessionId, info?.Title, "⚠️ Session is not running — cannot deliver the reply.", ct);
             return;
         }
 
@@ -407,7 +419,7 @@ public sealed class TelegramUpdateService : BackgroundService
         catch (AgentPodNotConfirmedException)
         {
             // The stored address is no longer this session's pod (#229); the reply goes nowhere.
-            await ReplyAsync(u, "⚠️ Session is not running — cannot deliver the reply.", ct);
+            await ReplySessionAsync(u, binding.SessionId, info.Title, "⚠️ Session is not running — cannot deliver the reply.", ct);
             return;
         }
         await _sessions.TouchActivityAsync(binding.Owner, binding.SessionId, ct);
@@ -417,7 +429,8 @@ public sealed class TelegramUpdateService : BackgroundService
         if (binding.StatusRef is { } oldRef) await _tg.DeleteMessageAsync(binding.ChatId, oldRef, ct);
 
         // Show a lightweight "working…" indicator until the session's next event.
-        var frames = WorkingIndicator.FramesFor(info.Agent);
+        var frames = WorkingIndicator.FramesFor(info.Agent)
+            .Select(frame => ChatFormatting.Header(binding.SessionId, info.Title) + "\n" + frame).ToArray();
         var statusId = await _tg.SendMessageAsync(binding.ChatId, frames[0], binding.ThreadId, null, ct);
         if (statusId is not null)
         {
@@ -443,6 +456,15 @@ public sealed class TelegramUpdateService : BackgroundService
         return await _bindings.GetActiveAsync("telegram", u.ChatId, ct);
     }
 
-    private Task ReplyAsync(TelegramUpdate u, string text, CancellationToken ct)
-        => _tg.SendMessageAsync(u.ChatId, text, u.ThreadId, null, ct);
+    private async Task ReplySessionAsync(TelegramUpdate u, string sessionId, string? title, string text, CancellationToken ct)
+    {
+        foreach (var chunk in ChatFormatting.SessionMessages(sessionId, title, text))
+            await _tg.SendMessageAsync(u.ChatId, chunk, u.ThreadId, null, ct);
+    }
+
+    private async Task ReplyAsync(TelegramUpdate u, string text, CancellationToken ct)
+    {
+        foreach (var chunk in ChatFormatting.Split(text, 4000))
+            await _tg.SendMessageAsync(u.ChatId, chunk, u.ThreadId, null, ct);
+    }
 }

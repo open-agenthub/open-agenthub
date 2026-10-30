@@ -56,7 +56,8 @@ public sealed class TelegramNotifier : INotifier
             if (eventType is "finished" or "failed" or "session-expired")
             {
                 if (binding is not null)
-                    await _tg.SendMessageAsync(binding.ChatId, $"🏁 {eventType} — {message}", binding.ThreadId, null, ct);
+                    foreach (var chunk in ChatFormatting.SessionMessages(s.Id, s.Title, $"🏁 {eventType} — {message}"))
+                        await _tg.SendMessageAsync(binding.ChatId, chunk, binding.ThreadId, null, ct);
                 return;
             }
             if (eventType != "question") return;
@@ -70,7 +71,7 @@ public sealed class TelegramNotifier : INotifier
             // The most recent question owns the chat's plain replies (DM reply-routing mode).
             await _bindings.SetActiveAsync("telegram", binding.ChatId, s.Id, ct);
 
-            var messages = BuildAnswerMessages(message);
+            var messages = ChatFormatting.BuildAnswerMessages(s.Id, s.Title, message);
             for (var i = 0; i < messages.Count; i++)
             {
                 if (i > 0) await Task.Delay(1100, ct); // Telegram tolerates ~1 msg/s per chat

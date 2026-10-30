@@ -77,7 +77,7 @@ public sealed class SignalNotifier : INotifier
             // The most recent question owns the chat's plain replies (reply-routing mode).
             await _bindings.SetActiveAsync("signal", binding.ChatId, s.Id, ct);
 
-            var messages = BuildAnswerMessages(message);
+            var messages = ChatFormatting.BuildAnswerMessages(s.Id, s.Title, message);
             for (var i = 0; i < messages.Count; i++)
             {
                 if (i > 0) await Task.Delay(1100, ct); // pace multi-message answers

@@ -40,7 +40,7 @@ public sealed class TelegramConversationFactory
         string? threadId = null;
         if (user.TelegramForum)
         {
-            threadId = await _tg.CreateForumTopicAsync(user.TelegramChatId, $"{title} #{ChatFormatting.Tag(sessionId)}", ct);
+            threadId = await _tg.CreateForumTopicAsync(user.TelegramChatId, ChatFormatting.SessionLabel(sessionId, title), ct);
             if (threadId is null)
                 _log.LogWarning("Telegram forum topic creation failed for session {Id} — using the main chat", sessionId);
         }
