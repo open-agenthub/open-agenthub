@@ -203,7 +203,12 @@ public sealed class InternalController : ControllerBase
             // past the length kept.
             var raw = body.Title ?? "";
             if (raw.Length > MaxQuestionTitle * 20) raw = raw[..(MaxQuestionTitle * 20)];
-            title = await _svc.MaskSessionSecretsAsync(id, raw.ReplaceLineEndings(" ").Trim(), ct);
+            // One line of plain text: an escape sequence or a tab from the CLI's input has no
+            // place in a tooltip, and a terminal that renders the session list would execute it.
+            raw = string.Join(' ', raw.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)
+                .Select(word => new string(word.Where(character => !char.IsControl(character)).ToArray()))
+                .Where(word => word.Length > 0));
+            title = await _svc.MaskSessionSecretsAsync(id, raw, ct);
             if (title.Length > MaxQuestionTitle)
             {
                 title = title[..(MaxQuestionTitle - 1)];

@@ -429,7 +429,7 @@ function createCommonServer(options = {}) {
   let hubDialogTitle;
   function reportQuestionDialog(questions) {
     if (!callback || !token) return;
-    const first = questions && secretMask.mask((questions[0]?.question || '').replace(/\s+/g, ' ').trim());
+    const first = questions && secretMask.mask((questions[0]?.question || '').replace(/[\s\u0000-\u001f\u007f-\u009f]+/g, ' ').trim());
     const title = !questions ? null : first.length <= DIALOG_TITLE_MAX ? first
       : first.slice(0, DIALOG_TITLE_MAX - 1).replace(/[\uD800-\uDBFF]$/, '').trimEnd() + '…';
     if (title === hubDialogTitle) return;

@@ -232,8 +232,8 @@ test('an open question dialog goes to the hub as its own state, with a short mas
   await ask([]);
   socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
   // A CLI that goes away takes its dialog with it.
-  await ask([{ question: 'Again?', options: [] }]);
+  await ask([{ question: 'Again\u001b[2J\u0007?', options: [] }]);
   h.terminals[0].emitExit({ exitCode: 1, signal: 0 });
   await settle();
-  assert.deepEqual(calls.splice(0), [{ open: true, title: '' }, { open: false }, { open: true, title: 'Again?' }, { open: false }]);
+  assert.deepEqual(calls.splice(0), [{ open: true, title: '' }, { open: false }, { open: true, title: 'Again [2J ?' }, { open: false }]);
 });

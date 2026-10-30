@@ -201,6 +201,24 @@ public class InternalNotifyTests
     }
 
     [Fact]
+    public async Task QuestionState_IsOneLineOfPlainText()
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        await world.Controller().QuestionState("s1", new InternalController.QuestionStateBody(true, "Pick\u001b[31m one\tof\r\n\u0007these?\u0000"), default);
+        Assert.Equal(("s1", true, "Pick[31m one of these?"), world.Store.QuestionDialog.Single());
+    }
+
+    // A session's own valid token does not reach another session's state.
+    [Fact]
+    public async Task QuestionState_RefusesATokenForAnotherSession()
+    {
+        var world = new NotifyWorld(AgentKind.Codex);
+        var result = await world.Controller("token-s1").QuestionState("s2", new InternalController.QuestionStateBody(true, "Which?"), default);
+        Assert.IsType<UnauthorizedResult>(result);
+        Assert.Empty(world.Store.QuestionDialog);
+    }
+
+    [Fact]
     public async Task QuestionState_RefusesAnotherSessionsToken()
     {
         var world = new NotifyWorld(AgentKind.Codex);
