@@ -826,6 +826,10 @@ public record SessionInfo
     public string? Schedule { get; init; }
     public DateTimeOffset? NextRunAt { get; init; }
     public bool QuestionPending { get; init; }
+    /// <summary>A question dialog is open in the agent CLI (#361); <see cref="QuestionPending"/> also means "your turn".</summary>
+    public bool QuestionOpen { get; init; }
+    /// <summary>The open dialog's question, for the sidebar's tooltip; null when none is open.</summary>
+    public string? QuestionTitle { get; init; }
     public bool OutdatedImage { get; init; }
     /// <summary>A finished session with saved state can be resumed.</summary>
     public bool CanResume { get; init; }

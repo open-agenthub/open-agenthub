@@ -704,17 +704,20 @@ test('common transport backs up scrollback and posts Running and terminal status
   await tick();
   await tick();
 
-  await waitForExport(() => harness.requests.length >= 3);
+  await waitForExport(() => harness.requests.length >= 4);
   assert.deepEqual(harness.requests.map(request => [request.url, request.options.method]), [
     ['https://backend.invalid/internal/session/status', 'POST'],
+    // A fresh session agent clears a question dialog its predecessor may have left open (#361).
+    ['https://backend.invalid/internal/session/question-state', 'POST'],
     ['https://backend.invalid/internal/session/scrollback', 'PUT'],
     ['https://backend.invalid/internal/session/status', 'POST']
   ]);
   assert.equal(harness.requests[0].options.body, JSON.stringify({ status: 'Running' }));
   const newline = String.fromCharCode(13, 10);
-  assert.equal(harness.requests[1].options.body,
+  assert.equal(harness.requests[1].options.body, JSON.stringify({ open: false }));
+  assert.equal(harness.requests[2].options.body,
     'completed output' + newline + '[agent] Session ended (code 0).' + newline);
-  assert.equal(harness.requests[2].options.body, JSON.stringify({ status: 'Succeeded' }));
+  assert.equal(harness.requests[3].options.body, JSON.stringify({ status: 'Succeeded' }));
   assert.deepEqual(harness.exits, [0]);
 });
 

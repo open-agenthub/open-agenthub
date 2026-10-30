@@ -66,6 +66,16 @@ public sealed class SessionRecord
     public string Status { get; set; } = "Pending";
     public string? FailureReason { get; set; }
     public bool QuestionPending { get; set; }
+    /// <summary>
+    /// A question dialog (a question with choices) is open in the agent CLI (#361). Apart from
+    /// <see cref="QuestionPending"/>, which also means "your turn" after a finished turn, a secret
+    /// request or a permission notification, so the sidebar could not tell those from a question.
+    /// Written only through <see cref="ISessionStore.SetQuestionDialogAsync"/>, never by an Upsert:
+    /// an edit writes back a record read earlier and would restore a dialog answered meanwhile.
+    /// </summary>
+    public bool QuestionOpen { get; set; }
+    /// <summary>The open dialog's question, short and masked; null when none is open.</summary>
+    public string? QuestionTitle { get; set; }
     public bool? AutoUpdateRuntimeImages { get; set; }
     /// <summary>Custom container image (null = default agent image).</summary>
     public string? Image { get; set; }
@@ -117,6 +127,8 @@ public interface ISessionStore
     Task UpdateStatusAsync(string id, string status, CancellationToken ct = default);
     Task SetFailureReasonAsync(string id, string? reason, bool terminal, CancellationToken ct = default) => Task.CompletedTask;
     Task SetQuestionPendingAsync(string id, bool pending, CancellationToken ct = default);
+    /// <summary>Records whether a question dialog is open, and its question (#361).</summary>
+    Task SetQuestionDialogAsync(string id, bool open, string? title, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>
     /// Attaches the session to a provider account. A column update rather than an Upsert of the
     /// whole record: the caller is the pod's writeback, which runs while the owner may be editing
@@ -236,6 +248,8 @@ public sealed class PostgresSessionStore : ISessionStore
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS model_name TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cpu_limit TEXT;
             ALTER TABLE sessions ADD COLUMN IF NOT EXISTS memory_limit TEXT;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS question_open BOOLEAN NOT NULL DEFAULT FALSE;
+            ALTER TABLE sessions ADD COLUMN IF NOT EXISTS question_title TEXT;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -346,6 +360,15 @@ public sealed class PostgresSessionStore : ISessionStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task SetQuestionDialogAsync(string id, bool open, string? title, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET question_open=@o, question_title=@t, updated_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("o", open);
+        cmd.Parameters.AddWithValue("t", (object?)(open ? title ?? "" : null) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     public async Task SetCredentialIdAsync(string id, string? credentialId, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("UPDATE sessions SET credential_id=@c, updated_at=now() WHERE id=@id");
@@ -437,7 +460,7 @@ public sealed class PostgresSessionStore : ISessionStore
 
     // ---- helpers ----
     private const string SelectBase =
-        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling, model_endpoint_url, model_name, cpu_limit, memory_limit FROM sessions";
+        "SELECT id, owner, title, mode, repo_url, schedule, agent_session_id, agent, auth_mode, openclaw_api_key_source, agent_policy, status, question_pending, callback_token, created_at, updated_at, image, run_as_root, cpu, memory, mcp_config, repos, project_id, parent_session_id, prompt, allowed_tools, ui_mode, mcp_server_ids, auto_approve, description, system_prompt, credential_id, auto_delete_after_seconds, auto_delete_from, last_activity_at, converted_from, git_pat_ids, resolved_credential_id, account_failover, failure_reason, secret_ids, auto_update_runtime_images, secret_grant_ids, secret_ceiling, model_endpoint_url, model_name, cpu_limit, memory_limit, question_open, question_title FROM sessions";
 
     private async Task<SessionRecord?> QuerySingle(string where, CancellationToken ct, params object[] ps)
     {
@@ -547,6 +570,8 @@ public sealed class PostgresSessionStore : ISessionStore
         ModelEndpointUrl = r.IsDBNull(44) ? null : r.GetString(44),
         ModelName = r.IsDBNull(45) ? null : r.GetString(45),
         CpuLimit = r.IsDBNull(46) ? null : r.GetString(46),
-        MemoryLimit = r.IsDBNull(47) ? null : r.GetString(47)
+        MemoryLimit = r.IsDBNull(47) ? null : r.GetString(47),
+        QuestionOpen = r.GetBoolean(48),
+        QuestionTitle = r.IsDBNull(49) ? null : r.GetString(49)
     };
 }

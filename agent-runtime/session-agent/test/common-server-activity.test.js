@@ -195,3 +195,45 @@ test('a question tool sets the hub question with its text and clears it once ans
     { path: '/turn-started', body: null }
   ]);
 });
+
+test('an open question dialog goes to the hub as its own state, with a short masked title (#361)', async () => {
+  const calls = [];
+  const h = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'activity-token', AGENTHUB_CALLBACK_URL: 'https://example.com/internal/sessions/s1',
+    AGENTHUB_SECRET_ENV: 'RIG_TOKEN', RIG_TOKEN: 'sekrit-value-1234', AGENTHUB_RESUME: '1' },
+    { turnHooks: true, isTurnInterrupt: data => data === '\x1b', isMissingResume: () => true }, { fetchResponse: (url, options) => {
+      if (url.endsWith('/question-state')) calls.push(JSON.parse(options.body));
+      return undefined;
+    } });
+  const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/'); subscribe(socket);
+  const settle = () => new Promise(resolve => setTimeout(resolve, 20));
+  const ask = questions => requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'question', questions }), '127.0.0.1');
+  await settle();
+  // The agent's start clears whatever a previous session agent left open.
+  assert.deepEqual(calls.splice(0), [{ open: false }]);
+
+  await turn(h, 'prompt');
+  await ask([{ header: 'Mode', question: 'Use  sekrit-value-1234\nor ' + 'x'.repeat(400) + '?', options: [{ label: 'Yes' }, { label: 'No' }] },
+    { question: 'Second?', options: [] }]);
+  // A permission dialog is not a question; the same question reported twice is one report.
+  await ask([{ header: 'Mode', question: 'Use  sekrit-value-1234\nor ' + 'x'.repeat(400) + '?', options: [{ label: 'Yes' }, { label: 'No' }] }]);
+  await turn(h, 'answered');
+  await turn(h, 'permission');
+  await turn(h, 'stop');
+  await turn(h, 'prompt');
+  await settle();
+  const [opened, ...rest] = calls.splice(0);
+  assert.equal(opened.open, true);
+  assert.equal(opened.title.length, 200);
+  assert.match(opened.title, /^Use \S+ or x+$/);
+  assert.doesNotMatch(opened.title, /sekrit-value-1234/);
+  assert.deepEqual(rest, [{ open: false }]);
+
+  // Cancelled with the interruption key; a question without text is still an open dialog.
+  await ask([]);
+  socket.emit('message', JSON.stringify({ type: 'input', data: '\x1b' }));
+  // A CLI that goes away takes its dialog with it.
+  await ask([{ question: 'Again?', options: [] }]);
+  h.terminals[0].emitExit({ exitCode: 1, signal: 0 });
+  await settle();
+  assert.deepEqual(calls.splice(0), [{ open: true, title: '' }, { open: false }, { open: true, title: 'Again?' }, { open: false }]);
+});
