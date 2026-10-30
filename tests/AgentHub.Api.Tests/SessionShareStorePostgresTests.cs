@@ -324,6 +324,49 @@ public class SessionShareStorePostgresTests
         Assert.Null(storedClaude!.OpenClawApiKeySource);
     }
 
+    // #361: the open question dialog is written only through its own update, so an edit that
+    // writes back an older copy of the record cannot reopen an answered one; every share query
+    // reads it after the columns it appends (role, link id, token hash) moved behind it.
+    [PostgreSqlFact]
+    public async Task QuestionDialog_RoundTripsApartFromUpsertAndReachesEveryShareQuery()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync();
+        await database.AddSessionAsync("owner-a", "session-a");
+        await database.AddUserAsync("recipient");
+        var stale = await database.GetSessionAsync("owner-a", "session-a");
+        Assert.False(stale!.QuestionOpen);
+        Assert.Null(stale.QuestionTitle);
+
+        await database.Sessions.SetQuestionDialogAsync("session-a", true, "Which database?");
+        await database.UpsertSessionAsync(stale);
+        var open = await database.GetSessionAsync("owner-a", "session-a");
+        Assert.True(open!.QuestionOpen);
+        Assert.Equal("Which database?", open.QuestionTitle);
+        Assert.False(open.QuestionPending);
+
+        await database.Shares.UpsertDirectAsync("owner-a", "session-a", "recipient", ShareRole.Collaborator);
+        var link = await database.Shares.CreateLinkAsync("owner-a", "session-a", ShareRole.Viewer, null);
+        var shared = Assert.Single(await database.Shares.ListSharedWithAsync("recipient"));
+        Assert.Equal(ShareRole.Collaborator, shared.Role);
+        var direct = await database.Shares.FindUserAccessAsync("recipient", "session-a");
+        Assert.Equal(ShareRole.Collaborator, direct!.Role);
+        var byToken = await database.Shares.FindTokenAccessAsync(link.Token);
+        Assert.Equal(ShareRole.Viewer, byToken!.Role);
+        foreach (var session in new[] { shared.Session, direct.Session, byToken.Session })
+        {
+            Assert.True(session.QuestionOpen);
+            Assert.Equal("Which database?", session.QuestionTitle);
+            Assert.Equal("callback-session-a", session.CallbackToken);
+        }
+
+        await database.Sessions.SetQuestionDialogAsync("session-a", false, "ignored");
+        var closed = await database.GetSessionAsync("owner-a", "session-a");
+        Assert.False(closed!.QuestionOpen);
+        Assert.Null(closed.QuestionTitle);
+        await database.Sessions.SetQuestionDialogAsync("session-a", true, null);
+        Assert.Equal("", (await database.GetSessionAsync("owner-a", "session-a"))!.QuestionTitle);
+    }
+
     [PostgreSqlFact]
     public async Task OwnerAccess_MapsProviderNeutralSessionId_WhenLegacyClaudeIdIsNull()
     {
