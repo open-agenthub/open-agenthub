@@ -74,6 +74,18 @@ public sealed record SessionStartupFailure(string Step, string Message, bool Ter
             return detail + " Edit the session's repositories and check Git credentials.";
         var repo = repos[index - 1];
         var label = $"repository {repo.Url} (branch {repo.Branch ?? "default"})";
+        // The clone step marks a failure it has already retried as a network fault. Saying so
+        // keeps the user from editing a correct repository or credential when the cluster's DNS
+        // or egress was what failed.
+        if (Regex.IsMatch(detail, @"(?m)^failure: network\s*$"))
+        {
+            var attempts = Regex.Match(detail, @"(?m)^attempts: (\d+)");
+            var seconds = Regex.Match(detail, @"(?m)^elapsed-seconds: (\d+)");
+            var tried = attempts.Success && seconds.Success
+                ? $" after {attempts.Groups[1].Value} attempts over {seconds.Groups[1].Value} s" : "";
+            var git = Regex.Replace(detail, @"(?m)^(repository-index|failure|attempts|elapsed-seconds): .*\r?\n?", "").Trim();
+            return $"Network error: could not reach {label}{tried}. Check the cluster's DNS and outbound access, then start the session again. {git}";
+        }
         if (detail.Contains("Remote branch", StringComparison.OrdinalIgnoreCase) && detail.Contains("not found", StringComparison.OrdinalIgnoreCase))
         {
             var defaultBranch = Regex.Match(detail, @"(?m)^default-branch: (.+)$");

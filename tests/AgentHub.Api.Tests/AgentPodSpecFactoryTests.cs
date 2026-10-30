@@ -740,6 +740,93 @@ public class AgentPodSpecFactoryTests
         finally { Directory.Delete(scratch, recursive: true); }
     }
 
+    // The stand-in git fails each clone with the given stderr until the attempt named by
+    // SUCCEED_ON, so the factory's emitted script decides what to retry, not a copy of it.
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    private static async Task<(int Code, string Log, string Termination, int Attempts)> RunCloneScript(
+        string stderr, int succeedOn, string delays)
+    {
+        var scratch = Path.Join(Path.GetTempPath(), "clone-retry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Join(scratch, "workspace"));
+        try
+        {
+            var git = Path.Join(scratch, "git");
+            await File.WriteAllTextAsync(git, "#!/bin/sh\ncase \"$1\" in clone)\n" +
+                "  n=$(($(cat \"$SCRATCH/count\" 2>/dev/null || echo 0) + 1)); echo $n > \"$SCRATCH/count\"\n" +
+                "  if [ \"$n\" -ge \"$SUCCEED_ON\" ]; then for d; do :; done; mkdir -p \"$d\"; exit 0; fi\n" +
+                "  printf '%s\\n' \"$STDERR\" >&2; exit 128;;\n*) exit 0;; esac\n");
+            File.SetUnixFileMode(git, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var pod = Build(AgentKind.Claude, AgentAuthMode.Subscription, request => request with {
+                Repos = [new RepoRef { Url = "https://user:private-value@example.com/repo", Branch = "main" }]
+            });
+            var clone = Assert.Single(pod.InitContainers, c => c.Name == "git-clone");
+            var start = new System.Diagnostics.ProcessStartInfo("/bin/sh") { RedirectStandardOutput = true, RedirectStandardError = true };
+            start.ArgumentList.Add("-c"); start.ArgumentList.Add(clone.Command[2].Replace("/workspace/", scratch + "/workspace/"));
+            start.Environment["HOME"] = scratch;
+            start.Environment["SCRATCH"] = scratch;
+            start.Environment["PATH"] = scratch + ":" + Environment.GetEnvironmentVariable("PATH");
+            start.Environment["REPOS"] = "repo\tmain\thttps://user:private-value@example.com/repo";
+            start.Environment["TERMINATION_MESSAGE_PATH"] = Path.Join(scratch, "termination");
+            start.Environment["STDERR"] = stderr;
+            start.Environment["SUCCEED_ON"] = succeedOn.ToString();
+            start.Environment["CLONE_RETRY_DELAYS"] = delays;
+            using var process = System.Diagnostics.Process.Start(start)!;
+            var output = process.StandardOutput.ReadToEndAsync();
+            var error = process.StandardError.ReadToEndAsync();
+            await process.WaitForExitAsync();
+            var termination = Path.Join(scratch, "termination");
+            return (process.ExitCode, await output + await error,
+                File.Exists(termination) ? await File.ReadAllTextAsync(termination) : "",
+                int.Parse(await File.ReadAllTextAsync(Path.Join(scratch, "count"))));
+        }
+        finally { Directory.Delete(scratch, recursive: true); }
+    }
+
+    [Theory]
+    [InlineData("fatal: unable to access 'https://user:private-value@example.com/repo/': Could not resolve host: example.com")]
+    [InlineData("fatal: unable to access 'https://example.com/repo/': Failed to connect to example.com port 443 after 3 ms: Couldn't connect to server")]
+    [InlineData("ssh: Could not resolve hostname example.com: Temporary failure in name resolution")]
+    [InlineData("fatal: unable to access 'https://example.com/repo/': The requested URL returned error: 503")]
+    public async Task CloneScript_RetriesNetworkErrorsUntilTheCloneSucceeds(string stderr)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var run = await RunCloneScript(stderr, succeedOn: 3, delays: "0 0 0 0");
+        Assert.Equal(0, run.Code);
+        Assert.Equal(3, run.Attempts);
+        Assert.Contains("Repository 1: network error on attempt 2, retrying in 0s.", run.Log);
+        Assert.Contains("Clone finished.", run.Log);
+        Assert.DoesNotContain("private-value", run.Log);
+    }
+
+    [Fact]
+    public async Task CloneScript_ExhaustedNetworkRetriesSayNetworkWithoutCredentials()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var run = await RunCloneScript("fatal: unable to access 'https://user:private-value@example.com/repo/': Could not resolve host: example.com",
+            succeedOn: 99, delays: "0 0");
+        Assert.Equal(128, run.Code);
+        Assert.Equal(3, run.Attempts);
+        Assert.Contains("failure: network\nattempts: 3\n", run.Termination);
+        Assert.Contains("Could not resolve host: example.com", run.Termination);
+        Assert.DoesNotContain("private-value", run.Log + run.Termination);
+    }
+
+    [Theory]
+    [InlineData("remote: Repository not found.\nfatal: repository 'https://example.com/repo/' not found")]
+    [InlineData("fatal: Authentication failed for 'https://example.com/repo/'")]
+    [InlineData("fatal: Remote branch main not found in upstream origin")]
+    [InlineData("git@example.com: Permission denied (publickey).\nfatal: Could not read from remote repository.")]
+    [InlineData("fatal: unable to access 'https://example.com/repo/': The requested URL returned error: 403")]
+    public async Task CloneScript_PermanentErrorsFailOnTheFirstAttempt(string stderr)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var run = await RunCloneScript(stderr, succeedOn: 99, delays: "30 30");
+        Assert.Equal(128, run.Code);
+        Assert.Equal(1, run.Attempts);
+        Assert.DoesNotContain("failure: network", run.Termination);
+        Assert.DoesNotContain("retrying", run.Log);
+    }
+
     private static V1PodSpec Build(AgentKind agent, AgentAuthMode auth,
         Func<CreateSessionRequest, CreateSessionRequest>? customize = null,
         OpenClawApiKeySource? openClawApiKeySource = null,
