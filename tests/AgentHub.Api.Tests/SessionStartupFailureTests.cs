@@ -31,6 +31,17 @@ public class SessionStartupFailureTests
             "fatal: unable to access 'https://example.com/repo/': Could not resolve host: example.com", failure.Message);
     }
 
+    [Fact]
+    public void NetworkFailureReasonCarriesNoCredentialFromTheRepositoryUrl()
+    {
+        var repos = new List<RepoRef> { new() { Url = "https://agent:ghp_reasonsecret1@example.com/repo", Branch = "main" } };
+        var pod = FailedContainer("git-clone", "repository-index: 1\nfailure: network\nattempts: 8\nelapsed-seconds: 122\n" +
+            "fatal: unable to access 'https://agent:ghp_reasonsecret1@example.com/repo/': Could not resolve host: example.com", true);
+        var failure = SessionStartupFailure.FromPod(pod, repos)!;
+        Assert.StartsWith("clone: Network error: could not reach repository https://[redacted]@example.com/repo", failure.Message);
+        Assert.DoesNotContain("reasonsecret1", failure.Message);
+    }
+
     [Theory]
     [InlineData("https://user:arbitrary-secret@example.com/repo", "arbitrary-secret")]
     [InlineData("ssh://user:other-secret@example.com/repo", "other-secret")]
