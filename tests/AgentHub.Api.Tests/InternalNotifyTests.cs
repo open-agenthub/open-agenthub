@@ -243,7 +243,7 @@ public class InternalNotifyTests
     {
         var world = new NotifyWorld(AgentKind.Codex);
         await world.Controller().Status("s1", new InternalController.StatusBody(status), default);
-        Assert.Equal([("s1", false, (string?)null)], world.Store.QuestionDialog);
+        Assert.Equal(("s1", false, null), Assert.Single(world.Store.QuestionDialog));
     }
 
     private sealed class NotifyWorld
