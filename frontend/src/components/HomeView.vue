@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { api } from '../api.js'
-import { sessionStatus, statusStyle } from '../lib/status.js'
+import { needsYou, sessionStatus, statusStyle } from '../lib/status.js'
 import { formatCost, formatTokens, sessionBilling, totalTokens } from '../lib/usage.js'
 import { repoShortName } from '../lib/text.js'
 
@@ -17,9 +17,9 @@ onMounted(async () => {
   } catch { /* usage telemetry may be disabled — the dashboard still works */ }
 })
 
-const waiting = computed(() => props.sessions.filter(s => s.questionPending))
+const waiting = computed(() => props.sessions.filter(needsYou))
 const running = computed(() => props.sessions.filter(s => ['Running', 'Pending'].includes(s.phase)))
-const listed = computed(() => props.sessions.filter(s => !s.questionPending).slice(0, 6))
+const listed = computed(() => props.sessions.filter(s => !needsYou(s)).slice(0, 6))
 const paused = computed(() => props.sessions.filter(s => s.phase === 'Paused'))
 const headline = computed(() => {
   const n = waiting.value.length
@@ -59,7 +59,7 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
         <div class="ny-head"><span class="dot"></span>NEEDS YOU</div>
         <div v-for="s in waiting" :key="s.id" class="ny-card">
           <div class="ny-title">{{ s.title }}</div>
-          <div class="ny-sub">The agent is waiting for your reply<template v-if="repoLabel(s)"> · <code>{{ repoLabel(s) }}</code></template></div>
+          <div class="ny-sub" :title="s.questionOpen ? s.questionTitle : null"><template v-if="s.questionOpen">Question open<template v-if="s.questionTitle">: {{ s.questionTitle }}</template></template><template v-else>The agent is waiting for your reply</template><template v-if="repoLabel(s)"> · <code>{{ repoLabel(s) }}</code></template></div>
           <div class="ny-actions"><button class="primary sm" @click="$emit('select', s.id)">Reply</button></div>
         </div>
       </div>
@@ -112,7 +112,7 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
 .idle-text { color: var(--muted); font-size: 13px; margin: 0; }
 .ny-card { background: #161511; border: 1px solid var(--border-2); border-radius: 12px; padding: 12px 14px; }
 .ny-title { font-weight: 600; }
-.ny-sub { font-size: 13px; color: var(--muted); margin-top: 3px; }
+.ny-sub { font-size: 13px; color: var(--muted); margin-top: 3px; overflow-wrap: anywhere; }
 .ny-sub code { font-family: var(--mono); font-size: 12px; }
 .ny-actions { margin-top: 10px; }
 .sm { font-size: 12px; padding: 6px 13px; border-radius: 9px; }

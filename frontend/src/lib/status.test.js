@@ -38,11 +38,17 @@ describe('tabLabel', () => {
   it('passes through unknown kinds', () => expect(tabLabel('foo')).toBe('foo'))
 })
 
-import { sessionStatus, statusStyle, STATUS_STYLES } from './status.js'
+import { needsYou, questionTooltip, sessionStatus, statusStyle, STATUS_STYLES } from './status.js'
 
 describe('sessionStatus', () => {
   it('surfaces a pending question as Waiting', () =>
     expect(sessionStatus({ phase: 'Running', questionPending: true })).toBe('Waiting'))
+  // #361: an open question dialog is its own status, ahead of the #343 "your turn".
+  it('surfaces an open question dialog as Question open', () => {
+    expect(sessionStatus({ phase: 'Running', questionOpen: true })).toBe('Question open')
+    expect(sessionStatus({ phase: 'Running', questionOpen: true, questionPending: true })).toBe('Question open')
+    expect(sessionStatus({ phase: 'Running', questionOpen: false, questionPending: false })).toBe('Running')
+  })
   it('maps Succeeded to Done and Pending to Starting', () => {
     expect(sessionStatus({ phase: 'Succeeded' })).toBe('Done')
     expect(sessionStatus({ phase: 'Pending' })).toBe('Starting')
@@ -51,9 +57,22 @@ describe('sessionStatus', () => {
   it('handles null', () => expect(sessionStatus(null)).toBe('Unknown'))
 })
 
+describe('question dialog helpers', () => {
+  it('names the question in the tooltip, only while a dialog is open', () => {
+    expect(questionTooltip({ questionOpen: true, questionTitle: 'Which database?' })).toBe('Question open: Which database?')
+    expect(questionTooltip({ questionOpen: true })).toMatch(/^Question open: /)
+    expect(questionTooltip({ questionOpen: false, questionTitle: 'stale', questionPending: true })).toBe('')
+  })
+  it('counts an open dialog and a pending reply as needing the person', () => {
+    expect(needsYou({ questionOpen: true })).toBe(true)
+    expect(needsYou({ questionPending: true })).toBe(true)
+    expect(needsYou({ phase: 'Running' })).toBe(false)
+  })
+})
+
 describe('statusStyle', () => {
   it('has styles for every display status', () => {
-    for (const s of ['Running', 'Starting', 'Waiting', 'Scheduled', 'Paused', 'Done', 'Failed'])
+    for (const s of ['Running', 'Starting', 'Question open', 'Waiting', 'Scheduled', 'Paused', 'Done', 'Failed'])
       expect(STATUS_STYLES[s]).toBeTruthy()
   })
   it('falls back for unknown status', () =>

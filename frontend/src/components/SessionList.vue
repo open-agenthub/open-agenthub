@@ -1,6 +1,6 @@
 <script setup>
 import SessionIcon from './SessionIcon.vue'
-import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
+import { canPause, questionTooltip, sessionStatus, statusStyle } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { authLabel } from '../lib/agent.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
@@ -10,7 +10,9 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
 </script>
 <template>
   <ul class="list"><li v-for="s in sessions" :key="s.id" :class="{ active: s.id === active }" :data-session-row="s.id" :draggable="sessionCapabilities(s).canManage" @dragstart="$emit('drag-session', $event, s.id)" @dragover.prevent @drop.stop.prevent="$emit('drop-session', $event, s)" @click="$emit('select', s.id)">
-    <span class="dot" :class="{ ask: s.questionPending }" :style="{ background: statusStyle(s).color }"></span>
+    <!-- An open question dialog (#361) gets a marker of its own, not the blinking "your turn" dot. -->
+    <span v-if="s.questionOpen" class="question" :title="questionTooltip(s)" :aria-label="questionTooltip(s)" data-session-question>?</span>
+    <span v-else class="dot" :class="{ ask: s.questionPending }" :style="{ background: statusStyle(s).color }"></span>
     <div class="info">
       <div class="title">{{ s.title }}</div>
       <!-- Only a marker: the full diagnostic wrapped over a dozen lines here and pushed the other
@@ -20,7 +22,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
       <div v-if="s.scheduleSecretsOutdated" class="startup-failure" data-schedule-secrets-outdated>Schedule secrets outdated · open to update</div>
       <div v-if="s.scheduleMoveUnfinished" class="startup-failure" data-schedule-move-unfinished>Move unfinished · schedule paused</div>
       <div v-if="s.description" class="desc" data-session-description>{{ s.description }}</div>
-      <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · <SessionIcon name="expiry" /> {{ formatRemaining(s.expiresAt) }}</span></div>
+      <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }" :title="questionTooltip(s) || null">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · <SessionIcon name="expiry" /> {{ formatRemaining(s.expiresAt) }}</span></div>
     </div>
     <span v-if="sessionCapabilities(s).canManage" class="acts">
       <button class="act" title="Organize session" aria-label="Organize session" @click.stop="$emit('organize', s.id)">⋮</button>
@@ -42,6 +44,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
 .list li.active { --row-bg: var(--panel-2); background: var(--row-bg); }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; margin-top: 6px; }
 .dot.ask { animation: blink 1.1s steps(2, start) infinite; }
+.question { width: 14px; height: 14px; margin: 1px -3px 0 -4px; border-radius: 50%; flex: none; display: grid; place-items: center; background: var(--warn); color: var(--sidebar); font-size: 10px; font-weight: 800; line-height: 1; cursor: help; }
 @keyframes blink { 50% { opacity: .25; } }
 .info { flex: 1; min-width: 0; }
 .title { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

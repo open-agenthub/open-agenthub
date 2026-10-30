@@ -20,6 +20,7 @@ import { REPO_URL, versionLabel } from './lib/docs.js'
 import { SETTINGS_DEFAULT_TAB, settingsPath, settingsTabFromPath, sharedTokenFromPath } from './lib/routes.js'
 import { initials } from './lib/text.js'
 import { detectAlerts, showAlert } from './lib/desktop-notify.js'
+import { needsYou } from './lib/status.js'
 import { SIDEBAR_DEFAULT, SIDEBAR_MAX, SIDEBAR_MIN, clampSidebarWidth, loadSidebarLayout, saveSidebarLayout } from './lib/sidebar-layout.js'
 
 const sessions = ref([])
@@ -42,7 +43,7 @@ const editSession = computed(() => sessions.value.find(session => session.id ===
 const needsLogin = !sharedToken && auth.enabled && !auth.isAuthenticated
 // The app reads the login state once at setup; a reload starts it with the key in place.
 function reloadSignedIn() { location.reload() }
-const waitingCount = computed(() => sessions.value.filter(s => s.questionPending).length)
+const waitingCount = computed(() => sessions.value.filter(needsYou).length)
 let refreshTimer
 
 const savedSidebar = loadSidebarLayout()

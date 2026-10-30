@@ -2,7 +2,7 @@
 import SessionIcon from './SessionIcon.vue'
 import { computed, ref } from 'vue'
 import ConvertSessionCard from './ConvertSessionCard.vue'
-import { canPause, sessionStatus, statusStyle } from '../lib/status.js'
+import { QUESTION_OPEN, canPause, needsYou, questionTooltip, sessionStatus, statusStyle } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { repoShortName, sessionMatches } from '../lib/text.js'
 import { authLabel } from '../lib/agent.js'
@@ -23,7 +23,7 @@ function toggleConvert(id) { convertingId.value = convertingId.value === id ? nu
 function converted(id, surface) { convertingId.value = null; emit('converted', id, surface) }
 
 const GROUP_BYS = ['Project', 'Repository', 'Status', 'None']
-const FILTERS = ['All', 'Running', 'Waiting', 'Scheduled', 'Paused', 'Done', 'Failed']
+const FILTERS = ['All', 'Running', QUESTION_OPEN, 'Waiting', 'Scheduled', 'Paused', 'Done', 'Failed']
 const groupBy = ref('Project')
 const filter = ref('All')
 
@@ -52,7 +52,7 @@ const groups = computed(() => {
 const counts = computed(() => ({
   total: props.sessions.length,
   running: props.sessions.filter(s => ['Running', 'Pending'].includes(s.phase)).length,
-  waiting: props.sessions.filter(s => s.questionPending).length
+  waiting: props.sessions.filter(needsYou).length
 }))
 
 function repoLine(s) {
@@ -81,7 +81,7 @@ function repoLine(s) {
         <template v-for="s in grp.sessions" :key="s.id">
           <div class="row" @click="$emit('select', s.id)">
             <div class="row-status">
-              <span class="st" :style="{ color: statusStyle(s).color }">{{ sessionStatus(s) }}</span>
+              <span class="st" :style="{ color: statusStyle(s).color }" :title="questionTooltip(s) || null">{{ sessionStatus(s) }}</span>
               <span v-if="s.failureReason" class="startup-failure" data-session-failure-marker>Cannot start</span>
               <span class="mode">{{ s.mode }}<template v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></template></span>
             </div>

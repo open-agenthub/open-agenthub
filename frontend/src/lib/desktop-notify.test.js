@@ -14,6 +14,20 @@ describe('detectAlerts', () => {
     expect(detectAlerts(next, next)).toEqual([])
   })
 
+  // #361: an open question dialog alerts with its question, once, whether or not the hub also
+  // marked the session pending in the same poll.
+  it('fires once with the question when a question dialog opens', () => {
+    const prev = [s(1), s(2)]
+    const next = [s(1, { questionOpen: true, questionTitle: 'Which database?' }), s(2, { questionOpen: true, questionPending: true })]
+    expect(detectAlerts(prev, next)).toEqual([
+      { id: '1', title: 't1', kind: 'question', question: 'Which database?' },
+      { id: '2', title: 't2', kind: 'question' }
+    ])
+    expect(detectAlerts(next, next)).toEqual([])
+    // A pending reply that follows an alerted dialog is the same question.
+    expect(detectAlerts([s(1, { questionOpen: true })], [s(1, { questionOpen: true, questionPending: true })])).toEqual([])
+  })
+
   it('fires on transitions into Succeeded and Failed', () => {
     const prev = [s(1), s(2)]
     const next = [s(1, { phase: 'Succeeded' }), s(2, { phase: 'Failed' })]
@@ -69,6 +83,11 @@ describe('showAlert', () => {
   it('constructs a tagged notification when enabled, granted and hidden', () => {
     showAlert({ id: '7', title: 'deploy', kind: 'question' })
     expect(created).toEqual([{ title: 'Open AgentHub', body: 'Session deploy is waiting for your reply.', tag: 'agenthub-7' }])
+  })
+
+  it('says what an open question dialog asks (#361)', () => {
+    showAlert({ id: '7', title: 'deploy', kind: 'question', question: 'Which database?' })
+    expect(created[0].body).toBe('Session deploy asks: Which database?')
   })
 
   it('does nothing while the tab is visible', () => {

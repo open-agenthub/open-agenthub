@@ -13,7 +13,7 @@ import SessionStoppedNotice from './workspace/SessionStoppedNotice.vue'
 import WorkspaceActivity from './workspace/WorkspaceActivity.vue'
 import { CANCEL_KEYS, CONFIRM_KEYS, keysForAnswer, keysForOption, keysForStep, withQuestions } from '../lib/cli-menu.js'
 import ConvertSessionCard from './ConvertSessionCard.vue'
-import { canPause, isSessionStopped, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
+import { canPause, isSessionStopped, questionTooltip, sessionStatus, statusStyle, tabLabel } from '../lib/status.js'
 import { sessionCapabilities } from '../lib/access.js'
 import { canConvert, convertedLabel } from '../lib/conversion.js'
 import { api, getSharedConversation } from '../api.js'
@@ -577,7 +577,7 @@ function interruptWorkspaceAgent() {
       <div class="head-main">
         <div class="title">{{ session.title }}</div>
         <div class="meta">
-          <span class="st" :style="{ color: statusStyle(session).color }">{{ sessionStatus(session) }}</span>
+          <span class="st" :style="{ color: statusStyle(session).color }" :title="questionTooltip(session) || null" data-session-status>{{ sessionStatus(session) }}</span>
           <span class="mdot" :style="{ background: statusStyle(session).color }"></span>
           <span v-if="session.mode">{{ session.mode }}</span>
           <span v-if="converted" class="converted" data-converted-from>({{ converted }})</span>
