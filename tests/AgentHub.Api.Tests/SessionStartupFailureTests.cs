@@ -18,6 +18,19 @@ public class SessionStartupFailureTests
         Assert.Equal("clone: Branch main does not exist in https://example.com/repo5. The default branch is instagram. Edit the session's repositories.", failure.Message);
     }
 
+    [Fact]
+    public void RetriedNetworkFailureSaysNetworkAndNamesTheRepository()
+    {
+        var repos = new List<RepoRef> { new() { Url = "https://example.com/repo", Branch = "main" } };
+        var pod = FailedContainer("git-clone", "repository-index: 1\nfailure: network\nattempts: 8\nelapsed-seconds: 127\n" +
+            "fatal: unable to access 'https://example.com/repo/': Could not resolve host: example.com", true);
+        var failure = SessionStartupFailure.FromPod(pod, repos)!;
+        Assert.True(failure.Terminal);
+        Assert.Equal("clone: Network error: could not reach repository https://example.com/repo (branch main) after 8 attempts over 127 s. " +
+            "Check the cluster's DNS and outbound access, then start the session again. " +
+            "fatal: unable to access 'https://example.com/repo/': Could not resolve host: example.com", failure.Message);
+    }
+
     [Theory]
     [InlineData("https://user:arbitrary-secret@example.com/repo", "arbitrary-secret")]
     [InlineData("ssh://user:other-secret@example.com/repo", "other-secret")]

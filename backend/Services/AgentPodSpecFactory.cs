@@ -620,6 +620,10 @@ public static class AgentPodSpecFactory
                     -e 's/([a-zA-Z_]*(token|TOKEN|password|PASSWORD|secret|SECRET|api_key|API_KEY|signature)[a-zA-Z_]*[=:] *)[^ &;,]+/\1[redacted]/g' \
                     -e 's/(gh[pousr]_[a-zA-Z0-9_]+|github_pat_[a-zA-Z0-9_]+|glpat-[a-zA-Z0-9_-]+|sk-[a-zA-Z0-9_-]+)/[redacted]/g'
                 }
+                # What curl, git and ssh print when the host is unreachable or the connection
+                # drops, including a proxy's 502/503/504. Deliberately not "not found",
+                # "Authentication failed" or "Permission denied": those are permanent.
+                NETWORK_ERRORS='could not resolve host|could not resolve proxy|temporary failure in name resolution|name does not resolve|unable to look up|failed to connect to|connection refused|connection timed out|operation timed out|network is unreachable|no route to host|connection reset|early eof|unexpected disconnect|rpc failed|returned error: 50[234]|ssh: connect to host|connection closed by .* port|kex_exchange_identification|ssl_error_syscall|tls connect error'
                 TAB=$(printf '\t')
                 index=0
                 printf '%s\n' "$REPOS" | while IFS= read -r row; do
@@ -629,12 +633,38 @@ public static class AgentPodSpecFactory
                   branch=${rest%%"$TAB"*}; url=${rest#*"$TAB"}
                   [ -z "$url" ] && continue
                   index=$((index + 1))
-                  code=0
-                  if [ -n "$branch" ]; then output=$(git clone --branch "$branch" "$url" "/workspace/$dest" 2>&1) || code=$?
-                  else output=$(git clone "$url" "/workspace/$dest" 2>&1) || code=$?; fi
+                  # A fresh node can start the pod before its DNS and egress path work, so the
+                  # first lookups fail while a respawn a minute later succeeds. Retry only what
+                  # a network fault produces, for about two minutes; a 404, a refused login or a
+                  # missing branch fails on the first attempt, as retrying cannot change them.
+                  # CLONE_RETRY_DELAYS exists for tests, which cannot wait two minutes.
+                  delays=${CLONE_RETRY_DELAYS-2 4 8 16 30 30 30}
+                  attempt=0; started=$(date +%s); network=""
+                  while :; do
+                    attempt=$((attempt + 1)); code=0
+                    if [ -n "$branch" ]; then output=$(git clone --branch "$branch" "$url" "/workspace/$dest" 2>&1) || code=$?
+                    else output=$(git clone "$url" "/workspace/$dest" 2>&1) || code=$?; fi
+                    [ "$code" -eq 0 ] && break
+                    network=""
+                    printf '%s\n' "$output" | grep -qiE "$NETWORK_ERRORS" && network=1
+                    delay=${delays%% *}
+                    # The deadline bounds the case the delay list cannot: each attempt may itself
+                    # wait out a TCP connect timeout of about two minutes.
+                    if [ -z "$network" ] || [ -z "$delay" ] || [ $(($(date +%s) - started)) -ge 300 ]; then break; fi
+                    [ "$delays" = "${delays#* }" ] && delays="" || delays=${delays#* }
+                    echo "Repository $index: network error on attempt $attempt, retrying in ${delay}s."
+                    printf '%s\n' "$output" | redact
+                    # git removes a directory it created when the clone fails, but a killed
+                    # transfer can leave one behind, which the next attempt would refuse.
+                    rm -rf "/workspace/$dest"
+                    sleep "$delay"
+                  done
                   if [ "$code" -ne 0 ]; then
-                    default_branch=$(git ls-remote --symref "$url" HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\([^[:space:]]*\).*#\1#p') || true
+                    # ls-remote would only repeat the network failure, after its own timeout.
+                    default_branch=""
+                    [ -n "$network" ] || default_branch=$(git ls-remote --symref "$url" HEAD 2>/dev/null | sed -n 's#^ref: refs/heads/\([^[:space:]]*\).*#\1#p') || true
                     { printf 'repository-index: %s\n' "$index"
+                      [ -z "$network" ] || printf 'failure: network\nattempts: %s\nelapsed-seconds: %s\n' "$attempt" $(($(date +%s) - started))
                       [ -z "$default_branch" ] || printf 'default-branch: %s\n' "$default_branch"
                       printf '%s\n' "$output"
                     } | redact | head -c 3500 > "${TERMINATION_MESSAGE_PATH:-/dev/termination-log}"
