@@ -178,7 +178,7 @@ public class ChatFormattingTests
     [Theory]
     [InlineData(null, "#abcd")]
     [InlineData("  ", "#abcd")]
-    [InlineData("Build\n\tfix", "Build fix (#abcd)")]
+    [InlineData("Build\0\n\tfix", "Build fix (#abcd)")]
     [InlineData("<b>A&B</b>_*", "<b>A&B</b>_* (#abcd)")]
     public void SessionLabelIsPlainSingleLineWithFallback(string? title, string expected)
         => Assert.Equal(expected, ChatFormatting.SessionLabel("abcdef", title));

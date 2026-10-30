@@ -32,7 +32,8 @@ public static class ChatFormatting
 
     public static string SessionLabel(string sessionId, string? title)
     {
-        var name = string.Join(" ", (title ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        var singleLine = new string((title ?? "").Select(c => char.IsControl(c) ? ' ' : c).ToArray());
+        var name = string.Join(" ", singleLine.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
         if (name.Length == 0) return $"#{Tag(sessionId)}";
         if (name.Length > 80)
         {
@@ -52,7 +53,14 @@ public static class ChatFormatting
     }
 
     public static IReadOnlyList<string> BuildAnswerMessages(string sessionId, string? title, string message)
-        => SessionMessages(sessionId, title, "💬 The agent says:\n" + message.Trim());
+    {
+        var header = Header(sessionId, title) + "\n";
+        // Reserve room for continuation counters before splitting the content, so a long
+        // first line cannot leave the answer label in an otherwise empty message.
+        var chunks = Split(message.Trim(), 4000 - header.Length - 48);
+        return chunks.Select((chunk, i) => header +
+            (i == 0 ? "💬 The agent says:\n" : $"… ({i + 1}/{chunks.Count})\n") + chunk).ToList();
+    }
 
     /// <summary>
     /// Recognizes a "start a session" chat command ("/new &lt;prompt&gt;" or "!new &lt;prompt&gt;",

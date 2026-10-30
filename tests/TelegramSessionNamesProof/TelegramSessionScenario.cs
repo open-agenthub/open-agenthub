@@ -1,5 +1,7 @@
 using System.Net;
 using System.Net.Sockets;
+using System.Net.WebSockets;
+using AgentHub.Api.Browser;
 using System.Reflection;
 using System.Text.Json;
 using AgentHub.Api.Chat;
@@ -48,10 +50,16 @@ public sealed class LocalBotFactory(Uri address) : IHttpClientFactory
     public HttpClient CreateClient(string name) => new(new Redirect(address));
 }
 
+public sealed class LocalPod : IAgentPodIdentityResolver
+{
+    public Task<bool> IsLiveSessionPodAsync(string id, IPAddress ip, CancellationToken ct = default)
+        => Task.FromResult(true);
+}
+
 public static class TelegramSessionScenario
 {
     public static readonly string[] Paths = ["question", "finished", "failed", "session-expired", "permission",
-        "expired", "decided", "callback", "callback-expired", "sessions", "use", "status", "new", "delivery-error", "indicator", "fallback"];
+        "expired", "decided", "callback", "callback-expired", "sessions", "use", "status", "new", "delivery-error", "indicator", "fallback", "forum", "new-fallback", "use-unknown", "use-ambiguous", "use-other", "long-title"];
 
     public static async Task<List<WireMessage>> RunAsync(string path, string connectionString, bool verify = true)
     {
@@ -71,13 +79,30 @@ public static class TelegramSessionScenario
                 HttpListenerContext ctx;
                 try { ctx = await listener.GetContextAsync().WaitAsync(stop.Token); }
                 catch (OperationCanceledException) { break; }
+                if (ctx.Request.IsWebSocketRequest)
+                {
+                    var socket = (await ctx.AcceptWebSocketAsync("tty")).WebSocket;
+                    var buffer = new byte[4096];
+                    while (socket.State == WebSocketState.Open)
+                    {
+                        var frame = await socket.ReceiveAsync(buffer, stop.Token);
+                        if (frame.MessageType == WebSocketMessageType.Close)
+                        { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", stop.Token); break; }
+                    }
+                    socket.Dispose();
+                    continue;
+                }
                 var body = await JsonDocument.ParseAsync(ctx.Request.InputStream);
                 var method = ctx.Request.Url!.Segments.Last();
                 lock (wire) wire.Add(new(method, body.RootElement.Clone()));
                 var result = method == "createForumTopic" ? "{\"message_thread_id\":77}" : "{\"message_id\":42}";
+                if (path == "new-fallback")
+                {
+                    lock (wire) { if (wire.Count == 1) { ctx.Response.StatusCode = 500; result = "null"; } }
+                }
                 ctx.Response.ContentType = "application/json";
                 await using var output = ctx.Response.OutputStream;
-                await output.WriteAsync(System.Text.Encoding.UTF8.GetBytes("{\"ok\":true,\"result\":" + result + "}"));
+                await output.WriteAsync(System.Text.Encoding.UTF8.GetBytes("{\"ok\":" + (result == "null" ? "false" : "true") + ",\"result\":" + result + "}"));
             }
         });
         var schema = "tg_" + Guid.NewGuid().ToString("N");
@@ -88,10 +113,10 @@ public static class TelegramSessionScenario
         {
             var cs = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = schema }.ToString();
             var cfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
-                { ["ConnectionStrings:Postgres"] = cs, ["FrontendOrigin"] = "https://example.com" }).Build();
+                { ["ConnectionStrings:Postgres"] = cs, ["FrontendOrigin"] = "https://example.com", ["AgentHub:AgentPort"] = port.ToString() }).Build();
             var users = new UserDirectory(cfg); await users.InitializeAsync();
             await users.RecordLoginAsync("owner", null, null);
-            await users.SetTelegramLinkAsync("owner", "5", false);
+            await users.SetTelegramLinkAsync("owner", "5", path == "forum");
             var bindings = new ChatBindingStore(cfg); await bindings.InitializeAsync();
             await bindings.UpsertAsync(new("telegram", "abcd1234", "owner", "5", null, null, false));
             await bindings.SetActiveAsync("telegram", "5", "abcd1234");
@@ -102,12 +127,19 @@ public static class TelegramSessionScenario
             var sessions = DispatchProxy.Create<ISessionService, SessionLookup>();
             var lookup = (SessionLookup)sessions;
             if (path == "fallback") lookup.Title = " ";
+            if (path == "long-title") lookup.Title = "Title\0\n" + new string('x', 200) + "😀";
+            if (path == "use-ambiguous")
+                await bindings.UpsertAsync(new("telegram", "abcd9999", "owner", "5", null, null, false));
+            if (path == "use-other")
+            {
+                await bindings.UpsertAsync(new("telegram", "abcd1234", "previous-owner", "5", null, null, false));
+            }
             var indicator = new WorkingIndicator(TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(1));
             var notifier = new TelegramNotifier(opts, tg, bindings, users, conversations, indicator, NullLogger<TelegramNotifier>.Instance);
             var editor = new TelegramPermissionNotifier(opts, tg, bindings, users, permissions, sessions);
             var update = new TelegramUpdateService(opts, tg, bindings, new ChatLinkCodeStore(cfg), users,
                 permissions, sessions, conversations, new ChatRepoService(null!, NullLogger<ChatRepoService>.Instance),
-                indicator, null!, cfg, NullLogger<TelegramUpdateService>.Instance);
+                indicator, new AgentPodRequests(new HttpClient(), new LocalPod()), cfg, NullLogger<TelegramUpdateService>.Instance);
             var req = new PermissionRequest { Id = "request", SessionId = "abcd1234", Owner = "owner", Tool = "Read", Summary = "file", Channel = "5", MessageTs = "42" };
             await permissions.CreateAsync(req);
             async Task Dispatch(string text, bool callback = false)
@@ -124,21 +156,21 @@ public static class TelegramSessionScenario
                 case "question": case "finished": case "failed": case "session-expired":
                     await notifier.NotifyAsync(new SessionRecord { Id = "abcd1234", Owner = "owner", Title = lookup.Title!, CallbackToken = "unused" }, path,
                         path == "question" ? new string('z', 8100) : "complete"); break;
-                case "permission": case "fallback":
+                case "permission": case "fallback": case "long-title":
                     await PermissionRelay.TryPostAsync([editor], req, default); break;
                 case "expired": await editor.MarkExpiredAsync(req); break;
                 case "decided": await editor.MarkDecidedAsync(req, "allowAlways"); break;
                 case "callback": await Dispatch("", true); break;
                 case "callback-expired": await permissions.ResolveAsync(req.Id, "expired"); await Dispatch("", true); break;
-                case "sessions": case "use": case "status": case "new":
-                    await Dispatch(path switch { "use" => "/use abcd", "new" => "/new fix it", _ => "/" + path }); break;
+                case "use-unknown": case "use-ambiguous": case "use-other": case "forum": case "new-fallback": case "sessions": case "use": case "status": case "new":
+                    await Dispatch(path switch { "use" or "use-ambiguous" or "use-other" => "/use abcd", "use-unknown" => "/use ffff", "new" or "forum" or "new-fallback" => "/new fix it", _ => "/" + path }); break;
                 case "delivery-error": await Dispatch("hello"); break;
                 case "indicator":
-                    // The production animator calls the same edit closure used after a terminal reply.
-                    var frames = WorkingIndicator.FramesFor(null).Select(f => ChatFormatting.Header("abcd1234", lookup.Title) + "\n" + f).ToArray();
-                    await tg.SendMessageAsync("5", frames[0], null, null, default);
-                    indicator.Start("abcd1234", (t, c) => tg.EditMessageTextAsync("5", "42", t, null, c), frames);
-                    await Task.Delay(70); indicator.Stop("abcd1234"); break;
+                    lookup.Running = true;
+                    await Dispatch("hello");
+                    await Task.Delay(70);
+                    indicator.Stop("abcd1234");
+                    break;
                 default: throw new ArgumentException(path);
             }
             if (verify)
@@ -147,10 +179,19 @@ public static class TelegramSessionScenario
                 foreach (var item in wire.Where(w => w.Body.TryGetProperty("text", out _)))
                 {
                     var text = item.Body.GetProperty("text").GetString()!;
-                    var expected = path == "fallback" ? "#abcd" : lookup.Title!;
+                    var expected = path switch
+                    {
+                        "fallback" => "#abcd",
+                        "long-title" => ChatFormatting.SessionLabel("abcd1234", lookup.Title),
+                        "use-unknown" or "use-other" => "No session matches that tag.",
+                        "use-ambiguous" => "Ambiguous — be more specific.",
+                        _ => lookup.Title!
+                    };
                     if (!text.Contains(expected)) throw new Exception(path + " missing origin: " + text);
                     if (text.Length > 4096 || item.Body.TryGetProperty("parse_mode", out _)) throw new Exception("Unsafe wire formatting");
                 }
+                if (path == "long-title" && wire[0].Body.GetProperty("text").GetString()!.Split('\n')[0].Length > 95)
+                    throw new Exception("Uncapped title");
                 if (path == "question" && wire.Count < 3) throw new Exception("No continuation proof");
                 if (path == "indicator" && !wire.Any(w => w.Method == "editMessageText")) throw new Exception("No animation edit");
             }

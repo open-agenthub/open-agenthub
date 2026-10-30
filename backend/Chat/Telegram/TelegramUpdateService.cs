@@ -263,8 +263,14 @@ public sealed class TelegramUpdateService : BackgroundService
     /// <summary>Points the chat's plain replies at the session matching the tag.</summary>
     private async Task HandleUseAsync(TelegramUpdate u, string tag, CancellationToken ct)
     {
+        var linked = await _users.GetByTelegramChatAsync(u.ChatId, ct);
+        if (linked is null)
+        {
+            await ReplyAsync(u, "This chat is not linked.", ct);
+            return;
+        }
         var (match, count) = ChatFormatting.FindByTag(tag,
-            await _bindings.ListByChatAsync("telegram", u.ChatId, ct), b => b.SessionId);
+            (await _bindings.ListByChatAsync("telegram", u.ChatId, ct)).Where(b => b.Owner == linked.Owner), b => b.SessionId);
         if (count == 0)
         {
             await ReplyAsync(u, "No session matches that tag.", ct);
