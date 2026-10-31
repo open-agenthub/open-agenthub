@@ -29,6 +29,8 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         const string ddl = """
+            -- Take the parent lock first: replica startup and cascades must use the same lock order.
+            LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
             CREATE TABLE IF NOT EXISTS session_shares (
                 session_id       TEXT NOT NULL,
                 recipient_owner  TEXT NOT NULL,
@@ -62,8 +64,6 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
 
             DO $migration$
             BEGIN
-                -- Serialize replicas before checking whether another installed the constraint.
-                LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conrelid = 'session_shares'::regclass AND conname = 'session_shares_session_fk'
@@ -79,8 +79,6 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
 
             DO $migration$
             BEGIN
-                -- Serialize replicas before checking whether another installed the constraint.
-                LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conrelid = 'session_share_links'::regclass AND conname = 'session_share_links_session_fk'
@@ -96,8 +94,6 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
 
             DO $migration$
             BEGIN
-                -- Serialize replicas before checking whether another installed the constraint.
-                LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conrelid = 'session_mcp_policies'::regclass AND conname = 'session_mcp_policies_session_fk'

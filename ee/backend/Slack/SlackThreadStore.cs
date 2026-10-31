@@ -29,6 +29,8 @@ public sealed class SlackThreadStore
     public async Task InitializeAsync(CancellationToken ct = default)
     {
         const string ddl = """
+            -- Take the parent lock first: replica startup and cascades must use the same lock order.
+            LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
             CREATE TABLE IF NOT EXISTS slack_threads (
                 session_id  TEXT PRIMARY KEY,
                 owner       TEXT NOT NULL,
@@ -41,8 +43,6 @@ public sealed class SlackThreadStore
 
             DO $migration$
             BEGIN
-                -- Serialize replicas before checking whether another installed the constraint.
-                LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
                 IF NOT EXISTS (
                     SELECT 1 FROM pg_constraint
                     WHERE conrelid = 'slack_threads'::regclass AND conname = 'slack_threads_session_fk'

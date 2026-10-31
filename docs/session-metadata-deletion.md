@@ -19,9 +19,8 @@ check; table locks hold concurrent writes until pruning and constraint installat
 A failed migration rolls back its prune and is retried at the next start.
 
 The first upgrade scans these metadata tables and holds write-blocking locks until commit;
-reads remain available during pruning, but constraint installation may briefly block reads
-of the metadata table. Large installations should schedule the upgrade in a quiet period.
+the parent lock allows reads, while metadata DDL locks can also block reads until commit. Large installations should schedule the upgrade in a quiet period.
 The referencing columns already have leading indexes (primary keys or the link session index),
 so subsequent cascades use indexed lookups. A `NOT VALID` constraint followed by separate
 validation was rejected here: it adds migration states and would not make the initial orphan
-prune free of write coordination. Later startups skip pruning and validation.
+prune free of write coordination. Later startups briefly take the same parent lock but skip pruning and validation.

@@ -11,3 +11,16 @@ dotnet test tests/AgentHub.Api.Tests --filter FullyQualifiedName~SessionMetadata
 The migration proof starts from unconstrained legacy tables containing both live rows and
 orphans. It runs the production initializers twice, checks preservation and pruning, then
 checks cascades. A rolled-back delete preserves metadata; writes creating new orphans fail.
+
+The backend proof runs real controllers in a loopback web host, the real
+`KubernetesSessionService`, real access resolution and real Postgres stores. The cluster
+HTTP boundary answers as an empty namespace, browser operations and unrelated dependencies
+are stand-ins, and the host supplies an authenticated owner and an enabled license.
+It exercises web DELETE, remote token DELETE, internal child DELETE, the remote MCP tool,
+expiry with the real advisory lock, account deletion and direct account purge. An anonymous
+HTTP share request succeeds before each delete and returns 404 without detail afterward.
+A separate owner's metadata survives. This does not exercise a deployed cluster, a real
+identity provider, or MCP transport; the MCP production tool method executes directly.
+
+Additional database proofs run simultaneous replica initialization and race each metadata
+insert against an uncommitted registry delete, observing the real server lock before commit.
