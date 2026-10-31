@@ -43,7 +43,7 @@ public sealed class SignalNotifier : INotifier
 
             // Numbers get recycled and users opt out or verify a new number: the stored
             // binding is only a hint — the user row decides where (and whether) to send.
-            if (binding is not null && !await IsBindingCurrentAsync(binding, ct))
+            if (binding is not null && !await IsTargetCurrentAsync(binding.Owner, binding.ChatId, ct))
             {
                 if (eventType != "question") return; // never send to a stale/opted-out target
                 binding = null; // the create path re-validates and re-binds at the current number
@@ -64,6 +64,11 @@ public sealed class SignalNotifier : INotifier
                     if (ts is not null)
                         await _bindings.RecordMessageAsync("signal", binding.ChatId, ts, s.Id, ct);
                 }
+                // The expiry sweep notifies after the delete, which already removed the binding.
+                // No reply-routing row then: it would point at a session that no longer exists.
+                else if (await _bindings.GetDeletedAsync("signal", s.Id, ct) is { } gone
+                         && await IsTargetCurrentAsync(gone.Owner, gone.ChatId, ct))
+                    await _signal.SendAsync(gone.ChatId, $"🏁 {eventType} — {message}", ct);
                 return;
             }
             if (eventType != "question") return;
@@ -119,10 +124,10 @@ public sealed class SignalNotifier : INotifier
 
     /// <summary>True when the binding's target still is the owner's current, verified and
     /// enabled Signal number — a stale target must never receive session content.</summary>
-    private async Task<bool> IsBindingCurrentAsync(ChatBinding binding, CancellationToken ct)
+    private async Task<bool> IsTargetCurrentAsync(string owner, string chatId, CancellationToken ct)
     {
-        var user = await _users.GetAsync(binding.Owner, ct);
-        return user is { SignalEnabled: true, SignalVerified: true } && user.SignalNumber == binding.ChatId;
+        var user = await _users.GetAsync(owner, ct);
+        return user is { SignalEnabled: true, SignalVerified: true } && user.SignalNumber == chatId;
     }
 
     /// <summary>

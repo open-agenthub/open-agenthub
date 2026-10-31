@@ -36,7 +36,9 @@ public sealed class SignalReceiveService : BackgroundService
     private readonly string _frontendOrigin;
     private readonly ILogger<SignalReceiveService> _log;
 
-    private DateTime _lastPrune = DateTime.UtcNow;
+    // MinValue: the first message prunes before it is handled, so an install upgraded past #365
+    // drops the bindings of sessions deleted earlier before they could answer it.
+    private DateTime _lastPrune = DateTime.MinValue;
 
     public SignalReceiveService(SignalOptions opts, SignalClient signal, ChatBindingStore bindings,
         UserDirectory users, PermissionStore permissions, ISessionService sessions,
@@ -95,19 +97,21 @@ public sealed class SignalReceiveService : BackgroundService
             if (closed) break;
             if (text.Length == 0) continue;
 
+            // Daily cleanup of reply routing and deleted sessions' bindings (idempotent —
+            // harmless if Telegram prunes too).
+            if (DateTime.UtcNow - _lastPrune > TimeSpan.FromHours(24))
+            {
+                var stale = await _bindings.PruneAsync(ct);
+                if (stale > 0) _log.LogInformation("Removed {Count} chat bindings of deleted sessions", stale);
+                _lastPrune = DateTime.UtcNow;
+            }
+
             var envelope = SignalEnvelope.Parse(text);
             if (envelope is not null)
             {
                 try { await DispatchAsync(envelope, ct); }
                 catch (OperationCanceledException) { throw; }
                 catch (Exception ex) { _log.LogWarning(ex, "Handling a Signal message failed; continuing"); }
-            }
-
-            // Daily reply-routing cleanup (idempotent — harmless if Telegram prunes too).
-            if (DateTime.UtcNow - _lastPrune > TimeSpan.FromHours(24))
-            {
-                await _bindings.PruneMessagesAsync(ct);
-                _lastPrune = DateTime.UtcNow;
             }
         }
     }
@@ -212,13 +216,19 @@ public sealed class SignalReceiveService : BackgroundService
             return;
         }
 
-        var lines = new List<string>();
-        foreach (var b in bindings)
+        // One listing instead of a lookup per binding; a session missing from it was deleted
+        // and is left out rather than shown as "Unknown".
+        var live = (await _sessions.ListSessionsAsync(user.Owner, ct)).ToDictionary(s => s.Id);
+        var rows = bindings.Where(b => live.ContainsKey(b.SessionId))
+            .Select(b => new ChatSessionRow(b.SessionId, live[b.SessionId].Title, live[b.SessionId].Phase,
+                live[b.SessionId].LastActivityAt, b.Active))
+            .ToList();
+        if (rows.Count == 0)
         {
-            var live = await _sessions.GetSessionAsync(b.Owner, b.SessionId, ct);
-            lines.Add($"#{ChatFormatting.Tag(b.SessionId)} · {live?.Phase ?? "Unknown"}{(b.Active ? " · active" : "")}");
+            await _signal.SendAsync(e.Sender, "No sessions here yet.", ct);
+            return;
         }
-        await _signal.SendAsync(e.Sender, string.Join("\n", lines), ct);
+        await _signal.SendAsync(e.Sender, ChatFormatting.SessionList(rows, "!"), ct);
     }
 
     /// <summary>Points the chat's plain replies at the session matching the tag.</summary>
@@ -227,14 +237,15 @@ public sealed class SignalReceiveService : BackgroundService
         var (match, count) = ChatFormatting.FindByTag(tag,
             (await _bindings.ListByChatAsync("signal", e.Sender, ct)).Where(b => b.Owner == user.Owner),
             b => b.SessionId);
-        if (count == 0)
-        {
-            await _signal.SendAsync(e.Sender, "No session matches that tag.", ct);
-            return;
-        }
         if (count > 1)
         {
             await _signal.SendAsync(e.Sender, "Ambiguous — be more specific.", ct);
+            return;
+        }
+        // A binding the prune has not reached yet must not become the active session again.
+        if (match is null || await _sessions.GetSessionAsync(match.Owner, match.SessionId, ct) is null)
+        {
+            await _signal.SendAsync(e.Sender, "No session matches that tag.", ct);
             return;
         }
 
@@ -300,7 +311,7 @@ public sealed class SignalReceiveService : BackgroundService
         var binding = await ResolveBindingAsync(e, ct);
         if (binding is null || binding.Owner != user.Owner)
         {
-            await _signal.SendAsync(e.Sender, "No active session. !sessions lists them.", ct);
+            await _signal.SendAsync(e.Sender, await DeletedAnswerAsync(e, user, ct) ?? "No active session. !sessions lists them.", ct);
             return;
         }
 
@@ -319,7 +330,7 @@ public sealed class SignalReceiveService : BackgroundService
         var binding = await ResolveBindingAsync(e, ct);
         if (binding is null)
         {
-            await _signal.SendAsync(e.Sender, "No active session. !sessions lists them.", ct);
+            await _signal.SendAsync(e.Sender, await DeletedAnswerAsync(e, user, ct) ?? "No active session. !sessions lists them.", ct);
             return;
         }
 
@@ -374,6 +385,19 @@ public sealed class SignalReceiveService : BackgroundService
             return sessionId is null ? null : await _bindings.GetAsync("signal", sessionId, ct);
         }
         return await _bindings.GetActiveAsync("signal", e.Sender, ct);
+    }
+
+    /// <summary>
+    /// The answer when the chat's active session was deleted. A quote is not recognised: the
+    /// delete removed the session's reply-routing rows. Null when nothing was deleted or the
+    /// marker belongs to another account.
+    /// </summary>
+    private async Task<string?> DeletedAnswerAsync(SignalEnvelope e, AppUser user, CancellationToken ct)
+    {
+        if (e.QuotedTimestamp is not null) return null;
+        var gone = await _bindings.GetDeletedActiveAsync("signal", e.Sender, ct);
+        return gone is null || gone.Owner != user.Owner ? null
+            : ChatFormatting.DeletedSessionAnswer(gone.SessionId, gone.Title, topic: false, "!");
     }
 
     private async Task<(string text, bool closed)> ReceiveFullAsync(ClientWebSocket ws, byte[] buf, CancellationToken ct)

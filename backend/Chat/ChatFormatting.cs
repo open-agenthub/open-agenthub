@@ -43,6 +43,38 @@ public static class ChatFormatting
         return $"{name} (#{Tag(sessionId)})";
     }
 
+    /// <summary>
+    /// Longest /sessions answer. An account that drives many child sessions gathered about a
+    /// hundred lines (#365), which no one reads in a chat and Telegram splits into several messages.
+    /// </summary>
+    public const int MaxListedSessions = 15;
+
+    /// <summary>
+    /// The /sessions answer: sessions that still exist, most recently used first, the active one
+    /// marked and always shown. Callers drop deleted sessions before, so no row says "Unknown".
+    /// </summary>
+    public static string SessionList(IReadOnlyCollection<ChatSessionRow> rows, string usePrefix, int max = MaxListedSessions)
+    {
+        var ordered = rows.OrderByDescending(r => r.LastActivityAt).ThenBy(r => r.SessionId, StringComparer.Ordinal).ToList();
+        var shown = ordered.Take(max).ToList();
+        if (ordered.FirstOrDefault(r => r.Active) is { } active && !shown.Contains(active))
+            shown[^1] = active;
+        var lines = shown.Select(r => $"{SessionLabel(r.SessionId, r.Title)} · {r.Phase}{(r.Active ? " · active" : "")}").ToList();
+        if (ordered.Count > shown.Count)
+            lines.Add($"… and {ordered.Count - shown.Count} older. {usePrefix}use <tag> switches to any of them.");
+        return string.Join("\n", lines);
+    }
+
+    /// <summary>
+    /// Answer to a message aimed at a deleted session. Without it the reply was either dropped
+    /// with a generic "no active session" or, before #365, typed at a session that no longer exists.
+    /// </summary>
+    public static string DeletedSessionAnswer(string sessionId, string? title, bool topic, string commandPrefix)
+        => (topic
+            ? $"🗑 {SessionLabel(sessionId, title)} was deleted. This topic stays as its history."
+            : $"🗑 The active session {SessionLabel(sessionId, title)} was deleted.")
+           + $" {commandPrefix}sessions lists the remaining ones, {commandPrefix}use <tag> picks one.";
+
     public static string Header(string sessionId, string? title) => $"🤖 {SessionLabel(sessionId, title)}";
 
     // Repeat the origin after splitting: a forwarded continuation must stand on its own.
@@ -200,3 +232,6 @@ public static class ChatFormatting
         return string.Join("\n", lines);
     }
 }
+
+/// <summary>One line of the /sessions answer.</summary>
+public sealed record ChatSessionRow(string SessionId, string? Title, string Phase, DateTime LastActivityAt, bool Active);

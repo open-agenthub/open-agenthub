@@ -63,7 +63,9 @@ public sealed class TelegramUpdateService : BackgroundService
         await _tg.SetMyCommandsAsync(stoppingToken);
 
         long offset = 0;
-        var lastPrune = DateTime.UtcNow;
+        // The first pass prunes right away: an install upgraded past #365 still holds the
+        // bindings of every session deleted before, and /sessions should not wait a day for it.
+        var lastPrune = DateTime.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
             try
@@ -90,7 +92,8 @@ public sealed class TelegramUpdateService : BackgroundService
 
                 if (DateTime.UtcNow - lastPrune > TimeSpan.FromHours(24))
                 {
-                    await _bindings.PruneMessagesAsync(stoppingToken);
+                    var stale = await _bindings.PruneAsync(stoppingToken);
+                    if (stale > 0) _log.LogInformation("Removed {Count} chat bindings of deleted sessions", stale);
                     foreach (var (chat, bucket) in _linkAttempts)
                         if (DateTime.UtcNow - bucket.WindowStart >= LinkThrottleWindow)
                             _linkAttempts.TryRemove(new KeyValuePair<string, ThrottleBucket>(chat, bucket));
@@ -251,13 +254,19 @@ public sealed class TelegramUpdateService : BackgroundService
             return;
         }
 
-        var lines = new List<string>();
-        foreach (var b in bindings)
+        // One listing instead of a lookup per binding; a session missing from it was deleted
+        // and is left out rather than shown as "Unknown".
+        var live = (await _sessions.ListSessionsAsync(linked.Owner, ct)).ToDictionary(s => s.Id);
+        var rows = bindings.Where(b => live.ContainsKey(b.SessionId))
+            .Select(b => new ChatSessionRow(b.SessionId, live[b.SessionId].Title, live[b.SessionId].Phase,
+                live[b.SessionId].LastActivityAt, b.Active))
+            .ToList();
+        if (rows.Count == 0)
         {
-            var live = await _sessions.GetSessionAsync(b.Owner, b.SessionId, ct);
-            lines.Add($"{ChatFormatting.SessionLabel(b.SessionId, live?.Title)} · {live?.Phase ?? "Unknown"}{(b.Active ? " · active" : "")}");
+            await ReplyAsync(u, "No sessions in this chat yet.", ct);
+            return;
         }
-        await ReplyAsync(u, string.Join("\n", lines), ct);
+        await ReplyAsync(u, ChatFormatting.SessionList(rows, "/"), ct);
     }
 
     /// <summary>Points the chat's plain replies at the session matching the tag.</summary>
@@ -271,19 +280,20 @@ public sealed class TelegramUpdateService : BackgroundService
         }
         var (match, count) = ChatFormatting.FindByTag(tag,
             (await _bindings.ListByChatAsync("telegram", u.ChatId, ct)).Where(b => b.Owner == linked.Owner), b => b.SessionId);
-        if (count == 0)
-        {
-            await ReplyAsync(u, "No session matches that tag.", ct);
-            return;
-        }
         if (count > 1)
         {
             await ReplyAsync(u, "Ambiguous — be more specific.", ct);
             return;
         }
+        // A binding the prune has not reached yet must not become the active session again.
+        var live = match is null ? null : await _sessions.GetSessionAsync(match.Owner, match.SessionId, ct);
+        if (live is null)
+        {
+            await ReplyAsync(u, "No session matches that tag.", ct);
+            return;
+        }
 
         await _bindings.SetActiveAsync("telegram", u.ChatId, match!.SessionId, ct);
-        var live = await _sessions.GetSessionAsync(match.Owner, match.SessionId, ct);
         await ReplyAsync(u, $"✅ Plain replies now go to {ChatFormatting.SessionLabel(match.SessionId, live?.Title)}.", ct);
     }
 
@@ -374,7 +384,7 @@ public sealed class TelegramUpdateService : BackgroundService
         // another account's session state — treat it as absent.
         if (binding is null || binding.Owner != linked.Owner)
         {
-            await ReplyAsync(u, "No active session in this chat.", ct);
+            await ReplyAsync(u, await DeletedAnswerAsync(u, linked.Owner, ct) ?? "No active session in this chat.", ct);
             return;
         }
 
@@ -391,7 +401,9 @@ public sealed class TelegramUpdateService : BackgroundService
         var binding = await ResolveBindingAsync(u, ct);
         if (binding is null)
         {
-            await ReplyAsync(u, "No active session in this chat. Use /sessions to list.", ct);
+            var owner = (await _users.GetByTelegramChatAsync(u.ChatId, ct))?.Owner;
+            await ReplyAsync(u, (owner is null ? null : await DeletedAnswerAsync(u, owner, ct))
+                ?? "No active session in this chat. Use /sessions to list.", ct);
             return;
         }
 
@@ -454,6 +466,22 @@ public sealed class TelegramUpdateService : BackgroundService
             return sessionId is null ? null : await _bindings.GetAsync("telegram", sessionId, ct);
         }
         return await _bindings.GetActiveAsync("telegram", u.ChatId, ct);
+    }
+
+    /// <summary>
+    /// The answer when the message was meant for a deleted session: its forum topic, or the
+    /// chat's active session. A reply to one of its messages is not recognised — the delete
+    /// removed those reply-routing rows. Null when nothing points at a deleted session, or when
+    /// the marker belongs to another account than the one this chat is linked to now.
+    /// </summary>
+    private async Task<string?> DeletedAnswerAsync(TelegramUpdate u, string owner, CancellationToken ct)
+    {
+        if (u.ReplyToMessageId is not null && u.ThreadId is null) return null;
+        var gone = u.ThreadId is not null
+            ? await _bindings.GetDeletedByThreadAsync("telegram", u.ChatId, u.ThreadId, ct)
+            : await _bindings.GetDeletedActiveAsync("telegram", u.ChatId, ct);
+        return gone is null || gone.Owner != owner ? null
+            : ChatFormatting.DeletedSessionAnswer(gone.SessionId, gone.Title, u.ThreadId is not null, "/");
     }
 
     private async Task ReplySessionAsync(TelegramUpdate u, string sessionId, string? title, string text, CancellationToken ct)
