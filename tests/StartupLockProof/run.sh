@@ -46,6 +46,9 @@ while :; do
   sleep 0.5
 done
 for p in "${pids[@]}"; do kill "$p" 2>/dev/null; done
+# A deadlocked host does not finish its shutdown either.
+sleep 5
+for p in "${pids[@]}"; do kill -9 "$p" 2>/dev/null; done
 wait 2>/dev/null
 ok=0; for i in $(seq 1 "$N"); do [[ "${healthy[$i]:-}" =~ ^[0-9] ]] && ok=$((ok+1)); done
 echo "RESULT $ok/$N healthy"

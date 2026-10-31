@@ -43,7 +43,7 @@ public class StoredTitle : DispatchProxy
     public SessionLookup Lookup = null!;
     protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch
     {
-        nameof(ISessionStore.GetAsync) => Task.FromResult<SessionRecord?>(new SessionRecord { Id = "abcd1234", Owner = "owner", Title = Lookup.Title! }),
+        nameof(ISessionStore.GetAsync) => Task.FromResult<SessionRecord?>(new SessionRecord { Id = "abcd1234", Owner = "owner", Title = Lookup.Title!, CallbackToken = "unused" }),
         _ => throw new NotSupportedException(method.Name)
     };
 }
