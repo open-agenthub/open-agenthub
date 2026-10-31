@@ -388,7 +388,8 @@ if (mcpOptions.IsConfigured)
     // OpenIddict wants the certificates while services are still being registered, so these are
     // fetched synchronously here rather than in the post-build initialisation below.
     var mcpKeys = new McpSigningKeyStore(builder.Configuration);
-    mcpKeys.InitializeAsync().GetAwaiter().GetResult();
+    await using (await AgentHub.Api.Persistence.SchemaMigrationLock.AcquireAsync(builder.Configuration))
+        await mcpKeys.InitializeAsync();
     var mcpSigningCertificate = mcpKeys.GetSigningCertificateAsync().GetAwaiter().GetResult();
     var mcpEncryptionCertificate = mcpKeys.GetEncryptionCertificateAsync().GetAwaiter().GetResult();
 
@@ -513,7 +514,9 @@ if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.InsecureDev)
 else if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
     app.Logger.LogInformation("Authentication: API key, acting as owner {Owner}", hubAuth.ApiKeyOwner);
 
-// Create the Postgres schema idempotently.
+// Create the Postgres schema idempotently, one replica at a time (SchemaMigrationLock). Held until
+// the MCP schema below exists too; a failure exits the process, whose connection then releases it.
+var schemaLock = await AgentHub.Api.Persistence.SchemaMigrationLock.AcquireAsync(app.Configuration);
 using (var scope = app.Services.CreateScope())
 {
     var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
@@ -585,6 +588,7 @@ if (mcpOptions.IsConfigured)
         }
     }
 }
+await schemaLock.DisposeAsync();
 
 // Behind a TLS-terminating ingress (Traefik/HAProxy) the backend sees plain http, so
 // scheme-derived URLs — the checkout returnUrl same-origin check in particular — would

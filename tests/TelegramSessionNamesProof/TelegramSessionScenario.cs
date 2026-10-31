@@ -37,6 +37,17 @@ public class SessionLookup : DispatchProxy
     }
 }
 
+// The permission notifier reads the title from the store; it answers with the same title.
+public class StoredTitle : DispatchProxy
+{
+    public SessionLookup Lookup = null!;
+    protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch
+    {
+        nameof(ISessionStore.GetAsync) => Task.FromResult<SessionRecord?>(new SessionRecord { Id = "abcd1234", Owner = "owner", Title = Lookup.Title! }),
+        _ => throw new NotSupportedException(method.Name)
+    };
+}
+
 // Only the transport destination changes; the production client still serializes every Bot API request.
 public sealed class LocalBotFactory(Uri address) : IHttpClientFactory, IDisposable
 {
@@ -153,7 +164,9 @@ public static class TelegramSessionScenario
             }
             var indicator = new WorkingIndicator(TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30));
             var notifier = new TelegramNotifier(opts, tg, bindings, users, conversations, indicator, NullLogger<TelegramNotifier>.Instance);
-            var editor = new TelegramPermissionNotifier(opts, tg, bindings, users, permissions, sessions);
+            var store = DispatchProxy.Create<ISessionStore, StoredTitle>();
+            ((StoredTitle)store).Lookup = lookup;
+            var editor = new TelegramPermissionNotifier(opts, tg, bindings, users, permissions, store);
             var update = new TelegramUpdateService(opts, tg, bindings, new ChatLinkCodeStore(cfg), users,
                 permissions, sessions, conversations, new ChatRepoService(null!, NullLogger<ChatRepoService>.Instance),
                 indicator, new AgentPodRequests(new HttpClient(), new LocalPod()), cfg, NullLogger<TelegramUpdateService>.Instance);
