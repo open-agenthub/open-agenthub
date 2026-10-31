@@ -198,7 +198,7 @@ public class ChatSessionDeletionPostgresTests
             var sent = new List<string>();
             var client = new SignalClient(new RecordingFactory(sent), opts, NullLogger<SignalClient>.Instance);
             var sessions = DispatchProxy.Create<ISessionService, StoredSessions>();
-            ((StoredSessions)(object)sessions).Store = db.Sessions;
+            ((StoredSessions)sessions).Store = db.Sessions;
             var indicator = new WorkingIndicator();
             var receiver = new SignalReceiveService(opts, client, db.Bindings, db.Users, permissions, sessions,
                 new ChatRepoService(null!, NullLogger<ChatRepoService>.Instance), indicator, null!, db.Config,

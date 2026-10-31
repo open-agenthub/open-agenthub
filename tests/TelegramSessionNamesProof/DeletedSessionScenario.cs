@@ -98,7 +98,7 @@ public static class DeletedSessionScenario
             var bindings = new ChatBindingStore(cfg); await bindings.InitializeAsync();
             var permissions = new PermissionStore(cfg); await permissions.InitializeAsync();
             var codes = new ChatLinkCodeStore(cfg); await codes.InitializeAsync();
-            var raw = NpgsqlDataSource.Create(cs);
+            await using var raw = NpgsqlDataSource.Create(cs);
 
             var start = DateTime.UtcNow.AddHours(-30);
             async Task<SessionRecord> Session(string id, string title, int minutesOld, bool expiring = false)
