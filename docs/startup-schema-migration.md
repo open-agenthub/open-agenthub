@@ -71,6 +71,9 @@ against a fresh schema and once against one turned back into the 1.7.0 shape: wi
 foreign keys and the deleted-session table, and with rows of deleted sessions. Both runs require
 `/healthz` 200 from both processes within 60 seconds, and the upgrade run checks that the orphans
 are gone and the constraints exist. Starting the real process is the point, because the
-dependency cycle only exists in `Program.cs`'s container. `tests/StartupLockProof` is the
+dependency cycle only exists in `Program.cs`'s container. `ProgramContainerResolveTests` runs
+`Program`'s entry point up to `HostBuilt`, then resolves every singleton and hosted service with a
+timeout, with the chat relays on and off. That catches the next cycle behind a factory without a
+database. `ValidateOnBuild` cannot catch it, because it does not look inside factories. `tests/StartupLockProof` is the
 same check against a real 1.7.0 database, with `pg_locks` and `pg_stat_activity` captured while a
 replica hangs.
