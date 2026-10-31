@@ -1,0 +1,13 @@
+<!doctype html>
+<html><body style="margin:0"><div id="app" style="height:100vh;display:flex;flex-direction:column"></div><script type="module">
+import { createApp, h, ref } from 'vue'
+import SessionWorkspace from '/src/components/SessionWorkspace.vue'
+import '/src/style.css'
+createApp({ setup() {
+  const workspace = ref()
+  const session = ref({ id: 'layout-proof', title: 'Layout proof', browser: { phase: 'Running' } })
+  return () => [h('button', { onClick: () => { session.value.browser.phase = 'Stopped' } }, 'Stop browser'), h('button', { onClick: () => workspace.value.openFiles() }, 'Open Files'),
+    h(SessionWorkspace, { ref: workspace, session: session.value, canWrite: true },
+      { default: () => h('div', { 'data-conversation': '', style: 'flex:1;padding:24px' }, 'Conversation — browser workspace layout proof') })]
+}}).mount('#app')
+</script></body></html>

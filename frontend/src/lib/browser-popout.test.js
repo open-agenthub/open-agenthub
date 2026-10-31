@@ -30,3 +30,12 @@ it('handles a blocked pop-up without changing the embedded view', () => {
   expect(openBrowserPopout(() => ({}), restored)).toBeNull()
   expect(restored).not.toHaveBeenCalled()
 })
+
+it('uses drop coordinates as window features while leaving the URL credential-free', () => {
+  const child = { closed: false, postMessage: vi.fn(), close: vi.fn() }
+  const open = vi.spyOn(window, 'open').mockReturnValue(child)
+  const controller = openBrowserPopout(() => ({ sharedToken: 'private-share' }), vi.fn(),
+    { screenX: 401.4, screenY: 202.8 })
+  expect(open).toHaveBeenCalledWith('/browser-popout', '_blank', 'popup,width=1280,height=900,left=401,top=203')
+  controller.close()
+})
