@@ -442,7 +442,7 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
         .AddInMemoryCollection(new Dictionary<string, string?> { ["ConnectionStrings:Postgres"] = _connectionString })
         .Build();
 
-    public static async Task<PostgresSharingDatabase> CreateAsync()
+    public static async Task<PostgresSharingDatabase> CreateAsync(bool pooling = true)
     {
         var baseConnectionString = Environment.GetEnvironmentVariable(
             PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable);
@@ -462,7 +462,9 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
 
         var builder = new NpgsqlConnectionStringBuilder(baseConnectionString)
         {
-            SearchPath = schema
+            SearchPath = schema,
+            // Proof hosts create several stores per schema; retaining each pool exhausts CI connections.
+            Pooling = pooling
         };
         var connectionString = builder.ConnectionString;
         var configuration = new ConfigurationBuilder()

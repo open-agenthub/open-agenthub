@@ -55,7 +55,6 @@ public sealed class AccountPurgeStore : IAccountPurgeStore
         await DeleteAsync(conn, "projects", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "chat_link_codes", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "chat_session_bindings", "owner = @o", owner, sessions, ct);
-        await DeleteAsync(conn, "chat_deleted_sessions", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "permission_requests", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "secret_requests", "owner = @o OR session_id = ANY(@ids)", owner, sessions, ct);
         await DeleteAsync(conn, "session_usage", "owner = @o OR session_id = ANY(@ids)", owner, sessions, ct);
@@ -96,6 +95,8 @@ public sealed class AccountPurgeStore : IAccountPurgeStore
         // The sessions and the account row go last: everything above may still need them
         // as a reference point when the purge is retried after a partial failure.
         await DeleteAsync(conn, "sessions", "owner = @o", owner, sessions, ct);
+        // Cascades can create deleted-thread markers, so their purge must follow registry deletion.
+        await DeleteAsync(conn, "chat_deleted_sessions", "owner = @o OR session_id = ANY(@ids)", owner, sessions, ct);
         await DeleteAsync(conn, "app_users", "owner = @o", owner, sessions, ct);
 
         _log.LogInformation("Purged account data ({Sessions} sessions, {Skills} skills)", sessions.Length, skills.Count);

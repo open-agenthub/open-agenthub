@@ -17,7 +17,7 @@ namespace AgentHub.Api.Ee.Slack;
 /// whole conversation accumulates in one thread. Replies are handled by
 /// <see cref="SlackSocketModeService"/>. Requires a valid enterprise license.
 /// </summary>
-public sealed class SlackNotifier : INotifier
+public sealed class SlackNotifier : INotifier, ISessionExpiryNotifier
 {
     private readonly SlackOptions _opts;
     private readonly IEnterpriseLicense _license;
@@ -38,13 +38,38 @@ public sealed class SlackNotifier : INotifier
         _log = log;
     }
 
-    public async Task NotifyAsync(SessionRecord s, string eventType, string message, CancellationToken ct = default)
+    public async Task<INotifier> PrepareExpiryAsync(SessionRecord session, CancellationToken ct = default)
+    {
+        if (!_opts.CanPost || !_license.Enabled) return this;
+        try
+        {
+            return new ExpirySnapshot(this, await _threads.GetBySessionAsync(session.Id, ct));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            _log.LogWarning(ex, "Slack expiry destination lookup failed for session {Id}", session.Id);
+            return new ExpirySnapshot(this, null);
+        }
+    }
+
+    private sealed class ExpirySnapshot(SlackNotifier notifier, SlackThread? thread) : INotifier
+    {
+        public Task NotifyAsync(SessionRecord session, string eventType, string message, CancellationToken ct = default)
+            => notifier.NotifyAsync(session, eventType, message, ct, thread, useSnapshot: true);
+    }
+
+    public Task NotifyAsync(SessionRecord s, string eventType, string message, CancellationToken ct = default)
+        => NotifyAsync(s, eventType, message, ct, null, useSnapshot: false);
+
+    private async Task NotifyAsync(SessionRecord s, string eventType, string message, CancellationToken ct,
+        SlackThread? snapshot, bool useSnapshot)
     {
         if (!_opts.CanPost || !_license.Enabled) return;
 
         try
         {
-            var thread = await _threads.GetBySessionAsync(s.Id, ct);
+            var thread = useSnapshot ? snapshot : await _threads.GetBySessionAsync(s.Id, ct);
 
             // The session progressed — stop the "working…" animation and remove the
             // status message (cross-replica via the persisted ts).
@@ -52,7 +77,7 @@ public sealed class SlackNotifier : INotifier
             if (thread?.StatusTs is { } statusTs)
             {
                 await _slack.DeleteMessageAsync(thread.Channel, statusTs, ct);
-                await _threads.SetStatusTsAsync(s.Id, null, ct);
+                if (!useSnapshot) await _threads.SetStatusTsAsync(s.Id, null, ct);
             }
 
             // An expiry is terminal like the other two: the thread learns the session is gone.

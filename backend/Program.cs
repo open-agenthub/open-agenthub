@@ -240,6 +240,7 @@ builder.Services.AddSingleton<AgentHub.Api.Notifications.INotifier, AgentHub.Api
 var slackOpts = builder.Configuration.GetSection("Ee:Slack").Get<AgentHub.Api.Ee.Slack.SlackOptions>() ?? new();
 builder.Services.AddSingleton(slackOpts);
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackThreadStore>();
+builder.Services.AddHostedService<AgentHub.Api.Ee.Slack.SlackThreadPruneService>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackClient>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.UserDirectory>();
 builder.Services.AddSingleton<AgentHub.Api.Permissions.PermissionStore>();
@@ -532,8 +533,9 @@ using (var scope = app.Services.CreateScope())
     await tokenStore.InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IWebhookTriggerStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
+    // Thread deletion archives into the shared tombstone schema, so it must exist first.
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();
+    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatLinkCodeStore>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
     await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
