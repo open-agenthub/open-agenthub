@@ -11,7 +11,8 @@ The script mounts the real SessionWorkspace, BrowserPane and normal pop-out entr
 API listings are isolated fixtures; this proves frontend layout and window lifecycle,
 not provisioning or VNC transport. It uses real pointer dragging onto the visible target,
 measures conversation width, checks Files fallback and both return paths, rejects page
-errors and checks the child URL. Screenshots go only to SHOTS, never into Git.
+errors and checks the child URL. It also tears the tab off with a trusted native
+dragend beyond the viewport and checks its coordinates. Screenshots go only to SHOTS, never into Git.
 The temporary frontend harness is removed on exit. Run one proof process at a time.
 
 The window owner stays mounted under a hidden companion column: unmounting it would close
@@ -23,5 +24,5 @@ window manager does not deliver an outside-window drag end. Screen coordinates a
 window features only; the browser may clamp them or block the pop-up. The existing hint
 still handles blocked windows. Credential handoff and both message checks are unchanged.
 
-Physical monitor placement and dragging beyond an OS window boundary need a manual
-desktop check. The automated proof covers the native drag/drop target in Chromium.
+Physical monitor placement needs a manual desktop check. The automated proof covers
+both the native drag/drop target and a pointer release beyond the viewport in Chromium.

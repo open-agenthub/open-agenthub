@@ -85,6 +85,7 @@ const browserRunning = computed(() => (props.session?.browser?.phase || 'Stopped
 // than in TerminalView's tabs because this component wraps both surfaces, so switching between
 // Workspace and Terminal keeps the person's choice instead of popping the pane back open.
 const browserHidden = ref(false)
+// Keep the window owner mounted when its column collapses; unmounting closes the pop-out.
 const browserPane = ref(null)
 const browserPoppedOut = ref(false)
 const tabDragging = ref(false)

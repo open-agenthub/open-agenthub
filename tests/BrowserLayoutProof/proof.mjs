@@ -62,6 +62,27 @@ try {
   await popup.close()
   await page.locator('.companion-side').waitFor()
   assert.equal(await width(), before)
+  await page.evaluate(() => {
+    window.proofDragEnd = null
+    document.addEventListener('dragend', event => {
+      window.proofDragEnd = { trusted: event.isTrusted, x: event.clientX, width: innerWidth }
+    }, { once: true })
+  })
+  popup = await pop(async () => {
+    const box = await page.locator('[data-workspace-tab="browser"]').boundingBox()
+    await page.mouse.move(box.x + 15, box.y + 12)
+    await page.mouse.down()
+    await page.mouse.move(box.x + 90, box.y + 18, { steps: 10 })
+    await page.mouse.move(1480, box.y + 18, { steps: 20 })
+    await page.mouse.up()
+  })
+  assert.equal(await visible('.companion-side'), false)
+  await popup.close()
+  await page.locator('.companion-side').waitFor()
+  const dragEnd = await page.evaluate(() => window.proofDragEnd)
+  assert.equal(dragEnd.trusted, true)
+  assert.ok(dragEnd.x >= dragEnd.width)
+  console.log('PASS native pointer release beyond viewport:', JSON.stringify(dragEnd))
   await page.getByRole('button', { name: 'Open Files', exact: true }).click()
   await page.locator('[data-workspace-tab="browser"]').click()
   popup = await pop(() => page.getByRole('button', { name: 'Pop out', exact: true }).click())
