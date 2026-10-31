@@ -83,7 +83,9 @@ public static class DeletedSessionScenario
         await using (var cmd = new NpgsqlCommand($"CREATE SCHEMA {schema}", db)) await cmd.ExecuteNonQueryAsync();
         try
         {
-            var cs = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = schema }.ToString();
+            // Unpooled: the eight stores below each own a data source nobody disposes, and pooled
+            // idle connections pushed the shared test database past max_connections (53300).
+            var cs = new NpgsqlConnectionStringBuilder(connectionString) { SearchPath = schema, Pooling = false }.ToString();
             var cfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ConnectionStrings:Postgres"] = cs, ["FrontendOrigin"] = "https://example.com",
