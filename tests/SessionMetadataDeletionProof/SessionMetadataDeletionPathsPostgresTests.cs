@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Claims;
+using System.Text.Json;
+using AgentHub.Api.Chat;
 using AgentHub.Api.Agents;
 using AgentHub.Api.Browser;
 using AgentHub.Api.Controllers;
@@ -32,7 +34,8 @@ public class SessionMetadataDeletionPathsPostgresTests
     public async Task EveryDeleteEntryPoint_RemovesMetadata_AndShareLinkReturnsAnonymous404()
     {
         await using var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
-        await new SlackThreadStore(db.Configuration).InitializeAsync();
+        var threads = new SlackThreadStore(db.Configuration);
+        await threads.InitializeAsync();
         await using var clusterHost = EmptyHost();
         var clusterRequests = 0;
         // Only the cluster boundary is replaced: the production service and SQL execute below.
@@ -48,8 +51,10 @@ public class SessionMetadataDeletionPathsPostgresTests
         });
         await clusterHost.StartAsync();
         using var cluster = new Kubernetes(new KubernetesClientConfiguration { Host = clusterHost.Urls.Single() });
+        var failBrowserStop = false;
         var browsers = RuntimeProofProxy.Make<IBrowserService>((method, args) => method.Name switch
         {
+            "StopAsync" when failBrowserStop => Task.FromException(new IOException("browser cleanup unavailable")),
             "GetSummariesAsync" => Task.FromResult<IReadOnlyDictionary<string, BrowserSummary>>(
                 ((IEnumerable<string>)args![0]!).ToDictionary(id => id, _ => BrowserSummary.Stopped)),
             _ => null
@@ -64,6 +69,32 @@ public class SessionMetadataDeletionPathsPostgresTests
             new AllowAllAgentsProvider(), library, RuntimeProofProxy.Make<IMcpServerStore>(),
             new InMemoryEphemeralApiMcpStore(), RuntimeProofProxy.Make<IMcpGatewayTokenService>(),
             NullLogger<KubernetesSessionService>.Instance, runtimeUpdateLock: locks, cluster: cluster);
+        var expiryPosts = new List<JsonElement>();
+        var deletedStatus = new List<string>();
+        var rowsGoneAtDelivery = false;
+        await using var chatHost = EmptyHost();
+        chatHost.MapPost("/api/chat.postMessage", async (HttpRequest request) =>
+        {
+            rowsGoneAtDelivery = await db.Sessions.GetByIdAsync("expiry") is null &&
+                await threads.GetBySessionAsync("expiry") is null;
+            using var body = await JsonDocument.ParseAsync(request.Body);
+            expiryPosts.Add(body.RootElement.Clone());
+            return Results.Json(new { ok = true, ts = "expiry-notice" });
+        });
+        chatHost.MapPost("/api/chat.delete", async (HttpRequest request) =>
+        {
+            using var body = await JsonDocument.ParseAsync(request.Body);
+            deletedStatus.Add(body.RootElement.GetProperty("ts").GetString()!);
+            return Results.Json(new { ok = true });
+        });
+        await chatHost.StartAsync();
+        using var chatHttp = new HttpClient(new LoopbackChatHandler(new Uri(chatHost.Urls.Single())));
+        var factory = RuntimeProofProxy.Make<IHttpClientFactory>((_, _) => chatHttp);
+        var options = new SlackOptions { Enabled = true, BotToken = "proof-token" };
+        var notifier = new SlackNotifier(options, new EnabledLicense(),
+            new SlackClient(factory, options, NullLogger<SlackClient>.Instance), threads,
+            RuntimeProofProxy.Make<ISlackTargetResolver>(), new WorkingIndicator(), db.Configuration,
+            NullLogger<SlackNotifier>.Instance);
         var tokens = new ApiTokenStore(db.Configuration);
         await tokens.InitializeAsync();
         await tokens.CreateAsync("owner", "proof", "oah_proof_delete_token");
@@ -129,8 +160,22 @@ public class SessionMetadataDeletionPathsPostgresTests
                     Assert.Equal(path, await tools.DeleteSession(path));
                     break;
                 case "expiry":
-                    var sweep = new SessionExpirySweepService(db.Sessions, service, locks, [], NullLogger<SessionExpirySweepService>.Instance);
+                    await threads.SetStatusTsAsync(path, "working-status");
+                    var sweep = new SessionExpirySweepService(db.Sessions, service, locks, [notifier], NullLogger<SessionExpirySweepService>.Instance);
+                    failBrowserStop = true;
+                    Assert.Equal(0, await sweep.SweepOnceAsync(DateTime.UtcNow, default));
+                    Assert.NotNull(await threads.GetBySessionAsync(path));
+                    Assert.Empty(expiryPosts);
+                    failBrowserStop = false;
                     Assert.Equal(1, await sweep.SweepOnceAsync(DateTime.UtcNow, default));
+                    Assert.Equal(0, await sweep.SweepOnceAsync(DateTime.UtcNow, default));
+                    var posted = Assert.Single(expiryPosts);
+                    Assert.Equal("channel", posted.GetProperty("channel").GetString());
+                    Assert.Equal("expiry", posted.GetProperty("thread_ts").GetString());
+                    Assert.Contains("session-expired", posted.GetProperty("text").GetString());
+                    Assert.Equal(["working-status"], deletedStatus);
+                    Assert.True(rowsGoneAtDelivery);
+                    Assert.Null(await threads.GetBySessionAsync(path));
                     break;
                 case "account":
                     await new AccountDeletionService(service, new AccountPurgeStore(db.Configuration, NullLogger<AccountPurgeStore>.Instance),
@@ -153,6 +198,15 @@ public class SessionMetadataDeletionPathsPostgresTests
             Assert.Null(await db.Shares.FindTokenAccessAsync(link.Token));
             foreach (var table in SessionMetadataDeletionPostgresTests.Tables)
                 Assert.Equal(1L, await db.ScalarAsync<long>($"SELECT count(*) FROM {table} WHERE session_id = 'control'"));
+        }
+    }
+
+    private sealed class LoopbackChatHandler(Uri endpoint) : DelegatingHandler(new SocketsHttpHandler())
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+        {
+            request.RequestUri = new Uri(endpoint, request.RequestUri!.PathAndQuery);
+            return base.SendAsync(request, ct);
         }
     }
 

@@ -59,6 +59,13 @@ public sealed class SessionExpirySweepService(
         var current = await store.GetByIdAsync(candidate.Id, ct);
         if (current is null || !SessionExpiry.IsDue(current, now)) return false;
 
+        // Some destinations die with the registry row; capture them without sending a notice yet.
+        var expiryNotifiers = new List<INotifier>();
+        foreach (var notifier in notifiers)
+            expiryNotifiers.Add(notifier is ISessionExpiryNotifier prepared
+                ? await prepared.PrepareExpiryAsync(current, ct)
+                : notifier);
+
         // The expiry sweep already holds the same lock as runtime maintenance; reacquiring it
         // through the public delete would refuse every expiry on a real backend.
         if (sessions is KubernetesSessionService cluster)
@@ -71,7 +78,7 @@ public sealed class SessionExpirySweepService(
         var basis = current.AutoDeleteFrom == SessionExpiry.FromStart ? "its start" : "its last use";
         var message = $"The session was deleted automatically after {Describe(current.AutoDeleteAfterSeconds ?? 0)} since {basis}.";
         // Every notifier catches its own failures, as in InternalController.NotifyAllAsync.
-        await Task.WhenAll(notifiers.Select(n => n.NotifyAsync(current, NotifierEvent, message, ct)));
+        await Task.WhenAll(expiryNotifiers.Select(n => n.NotifyAsync(current, NotifierEvent, message, ct)));
         return true;
     }
 

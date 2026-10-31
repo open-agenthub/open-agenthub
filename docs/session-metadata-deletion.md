@@ -24,3 +24,16 @@ The referencing columns already have leading indexes (primary keys or the link s
 so subsequent cascades use indexed lookups. A `NOT VALID` constraint followed by separate
 validation was rejected here: it adds migration states and would not make the initial orphan
 prune free of write coordination. Later startups briefly take the same parent lock but skip pruning and validation.
+
+Expiry notifications are sent after successful deletion. A notifier whose destination is
+session metadata implements `ISessionExpiryNotifier`: the sweep captures an in-memory notifier
+under its session lock before deletion, then invokes it afterward. The thread notifier snapshots
+the channel, thread timestamp and transient status timestamp. It can remove the working status
+and send the expiry message even though the mapping has already cascaded away. A failed delete
+sends nothing and leaves the mapping available for retry. The snapshot is discarded after the
+sweep attempt; there is no retained destination table. A backend crash between deletion and
+notification can still lose the notice, as with the existing post-delete delivery semantics.
+
+Sending before deletion was rejected because storage or cluster cleanup can fail afterward;
+a notice must not claim that a session was deleted while it still exists. Looking up the thread
+only after deletion was rejected because the mapping is then correctly gone.

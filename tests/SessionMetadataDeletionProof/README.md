@@ -24,3 +24,9 @@ identity provider, or MCP transport; the MCP production tool method executes dir
 
 Additional database proofs run simultaneous replica initialization and race each metadata
 insert against an uncommitted registry delete, observing the real server lock before commit.
+
+The expiry path also uses the real thread notifier and API client against a loopback HTTP
+recorder. It snapshots the destination before deletion, posts exactly one expiry notice into
+the original thread after registry and mapping removal, and removes the transient status.
+An injected browser-cleanup failure produces no notice and preserves the mapping; a subsequent
+successful sweep notifies once, and another sweep sends nothing.
