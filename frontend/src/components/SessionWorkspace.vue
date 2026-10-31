@@ -85,6 +85,33 @@ const browserRunning = computed(() => (props.session?.browser?.phase || 'Stopped
 // than in TerminalView's tabs because this component wraps both surfaces, so switching between
 // Workspace and Terminal keeps the person's choice instead of popping the pane back open.
 const browserHidden = ref(false)
+// Keep the window owner mounted when its column collapses; unmounting closes the pop-out.
+const browserPane = ref(null)
+const browserPoppedOut = ref(false)
+const tabDragging = ref(false)
+const browserDocked = computed(() => browserVisible.value && !browserPoppedOut.value)
+function onPopoutChange(value) {
+  browserPoppedOut.value = value
+  const next = !value && browserVisible.value ? 'browser' : (filesVisible.value ? 'files' : 'agent')
+  activeCompanion.value = next === 'agent' ? 'files' : next
+  mobilePane.value = next
+}
+function startBrowserDrag(event) {
+  tabDragging.value = true
+  event.dataTransfer.effectAllowed = 'move'
+  event.dataTransfer.setData('text/plain', 'Browser')
+}
+function dropBrowser(event) {
+  if (!tabDragging.value) return
+  event.preventDefault()
+  tabDragging.value = false
+  browserPane.value?.popOut({ screenX: event.screenX, screenY: event.screenY })
+}
+function endBrowserDrag(event) {
+  if (tabDragging.value && (event.screenX !== 0 || event.screenY !== 0) && (event.clientX <= 0 || event.clientY <= 0 ||
+      event.clientX >= window.innerWidth || event.clientY >= window.innerHeight)) dropBrowser(event)
+  tabDragging.value = false
+}
 const browserVisible = computed(() => browserRunning.value && !browserHidden.value)
 let dragging = false
 const activeCompanion = ref(browserVisible.value ? 'browser' : 'files')
@@ -206,7 +233,7 @@ function closeFiles() {
   filesOpen.value = false
   selectedId.value = null
   filesView.value = 'files'
-  if (browserVisible.value) { activeCompanion.value = 'browser'; mobilePane.value = 'browser' } else mobilePane.value = 'agent'
+  if (browserDocked.value) { activeCompanion.value = 'browser'; mobilePane.value = 'browser' } else mobilePane.value = 'agent'
 }
 async function dismissPresentation() {
   if (!props.canWrite || props.sharedToken) return
@@ -222,6 +249,7 @@ function closeBrowser() {
 }
 function openBrowser() {
   if (!browserRunning.value) return
+  if (browserPoppedOut.value) { browserPane.value?.bringBack(); return }
   browserHidden.value = false
   activeCompanion.value = 'browser'; mobilePane.value = 'browser'
 }
@@ -307,13 +335,15 @@ onBeforeUnmount(() => {
   <GitSignInNote v-if="grantsEditable" :session="session" />
   <SessionStartupFailure v-if="session?.failureReason" :reason="session.failureReason" />
   <div v-if="companionVisible" class="workspace-shell">
+    <div v-if="browserPoppedOut" class="browser-return" role="status">Browser in separate window · <button type="button" @click="browserPane?.bringBack()">Bring back</button></div>
+    <div v-if="tabDragging" class="browser-drop" @dragover.prevent @drop="dropBrowser">Drop here to pop out Browser</div>
     <nav class="workspace-tabs" aria-label="Session view">
       <button v-if="filesVisible" data-mobile-workspace-tab="files" :class="{ active: mobilePane === 'files' }" @click="mobilePane = 'files'; activeCompanion = 'files'">Files</button>
-      <button v-if="browserVisible" data-mobile-workspace-tab="browser" :class="{ active: mobilePane === 'browser' }" @click="mobilePane = 'browser'; activeCompanion = 'browser'">Browser</button>
+      <button v-if="browserDocked" data-mobile-workspace-tab="browser" :class="{ active: mobilePane === 'browser' }" @click="mobilePane = 'browser'; activeCompanion = 'browser'">Browser</button>
       <button data-mobile-workspace-tab="agent" :class="{ active: mobilePane === 'agent' }" @click="mobilePane = 'agent'">Agent</button>
     </nav>
     <div data-session-split class="session-split" :style="{ '--browser-width': `${splitPercent}%` }">
-      <div class="companion-side" :class="{ 'mobile-hidden': mobilePane === 'agent' }" @keydown="onCompanionKey">
+      <div v-show="browserDocked || filesVisible" class="companion-side" :class="{ 'mobile-hidden': mobilePane === 'agent' }" @keydown="onCompanionKey">
         <!-- Each pane closes from its own tab, which is the one row present for both panes at every
              width; the phone tab strip above only switches between panes and the agent. -->
         <nav class="companion-tabs" aria-label="Companion view">
@@ -321,8 +351,8 @@ onBeforeUnmount(() => {
             <button data-workspace-tab="files" @click="activeCompanion = 'files'">Files</button>
             <button type="button" class="tab-close" data-files-close aria-label="Close files" title="Close files (Esc)" @click="closeFiles">×</button>
           </span>
-          <span v-if="browserVisible" class="companion-tab" :class="{ active: activeCompanion === 'browser' }">
-            <button data-workspace-tab="browser" @click="activeCompanion = 'browser'">Browser</button>
+          <span v-if="browserDocked" class="companion-tab" :class="{ active: activeCompanion === 'browser' }">
+            <button data-workspace-tab="browser" draggable="true" @dragstart="startBrowserDrag" @dragend="endBrowserDrag" @click="activeCompanion = 'browser'">Browser</button>
             <button type="button" class="tab-close" data-browser-close aria-label="Close browser" title="Close browser (Esc) — the agent keeps it" @click="closeBrowser">×</button>
           </span>
         </nav>
@@ -338,17 +368,20 @@ onBeforeUnmount(() => {
             :presented="isPresented" @select="selectFile" @dismiss="dismissPresentation"
             @uploaded="refreshFiles()" />
           </div>
-          <BrowserPane v-if="browserVisible" v-show="activeCompanion === 'browser'" :session="session" :can-write="canWrite" :shared-token="sharedToken" />
+          <BrowserPane ref="browserPane" v-if="browserVisible" v-show="browserDocked && activeCompanion === 'browser'" @popout-change="onPopoutChange" :session="session" :can-write="canWrite" :shared-token="sharedToken" />
         </div>
       </div>
-      <div class="split-seam" role="separator" tabindex="0" aria-label="Companion width" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75" :aria-valuenow="Math.round(splitPercent)" @keydown="onSeparatorKey" @pointerdown="startDragging"><span></span></div>
-      <div class="terminal-side" :class="{ 'mobile-hidden': mobilePane !== 'agent' }"><slot /></div>
+      <div v-show="browserDocked || filesVisible" class="split-seam" role="separator" tabindex="0" aria-label="Companion width" aria-orientation="vertical" aria-valuemin="25" aria-valuemax="75" :aria-valuenow="Math.round(splitPercent)" @keydown="onSeparatorKey" @pointerdown="startDragging"><span></span></div>
+      <div class="terminal-side" :class="{ 'mobile-hidden': (browserDocked || filesVisible) && mobilePane !== 'agent' }"><slot /></div>
     </div>
   </div>
   <div v-else class="terminal-only"><slot /></div>
 </template>
 
 <style scoped>
+.browser-return { padding: 4px 12px; font-size: 12px; color: var(--muted-3); }
+.browser-return button { font-size: 12px; }
+.browser-drop { padding: 18px; text-align: center; border: 2px dashed var(--accent); }
 .session-secret-access { padding: 6px 12px; color: var(--muted-3); font-size: 12px; border-bottom: 1px solid var(--border-2); }
 .session-secret-access summary { cursor: pointer; }
 .session-secret-access small { display: block; }
