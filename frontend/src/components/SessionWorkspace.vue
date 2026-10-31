@@ -92,8 +92,9 @@ const tabDragging = ref(false)
 const browserDocked = computed(() => browserVisible.value && !browserPoppedOut.value)
 function onPopoutChange(value) {
   browserPoppedOut.value = value
-  activeCompanion.value = value && filesVisible.value ? 'files' : 'browser'
-  mobilePane.value = value ? (filesVisible.value ? 'files' : 'agent') : 'browser'
+  const next = !value && browserVisible.value ? 'browser' : (filesVisible.value ? 'files' : 'agent')
+  activeCompanion.value = next === 'agent' ? 'files' : next
+  mobilePane.value = next
 }
 function startBrowserDrag(event) {
   tabDragging.value = true

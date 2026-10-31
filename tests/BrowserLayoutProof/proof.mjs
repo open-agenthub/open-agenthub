@@ -94,6 +94,13 @@ try {
   assert.equal(await visible('.companion-side'), false)
   await popup.close()
   await page.locator('.companion-side').waitFor()
+  await page.getByRole('button', { name: 'Open Files', exact: true }).click()
+  await page.locator('[data-workspace-tab="browser"]').click()
+  popup = await pop(() => page.getByRole('button', { name: 'Pop out', exact: true }).click())
+  await page.getByRole('button', { name: 'Stop browser', exact: true }).click()
+  await page.waitForFunction(() => !document.querySelector('.browser-return'))
+  assert.equal(popup.isClosed(), true)
+  assert.equal(await visible('.files-companion'), true)
   assert.deepEqual(errors, [])
   console.log('PASS button, real pointer drag/drop, compact return, OS close, Files fallback, conversation width, credential-free child URL; no page errors')
 } finally {
