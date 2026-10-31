@@ -13,20 +13,25 @@ const props = defineProps({
   sharedToken: { type: String, default: null },
   standalone: { type: Boolean, default: false }
 })
+const emit = defineEmits(['popout-change'])
 const host = ref(null)
 const poppedOut = ref(false)
 let popout
 function bringBack() { popout?.close() }
-function popOut() {
+defineExpose({ popOut, bringBack })
+function popOut(position) {
+  if (poppedOut.value) return
   popout = openBrowserPopout(() => ({
     session: { id: props.session.id, title: props.session.title, browser: { ...props.session.browser } },
     canWrite: props.canWrite, sharedToken: props.sharedToken
   }), () => {
     poppedOut.value = false
+    emit('popout-change', false)
     syncConnection()
-  })
+  }, position)
   if (!popout) { showClipboardNotice('Allow pop-ups to open the browser in another window.'); return }
   poppedOut.value = true
+  emit('popout-change', true)
   clearViewportTimer()
   closeRfb()
 }
@@ -230,7 +235,7 @@ onBeforeUnmount(() => {
       <span class="browser-mark"><i></i>Browser</span>
       <span v-if="clipboardNotice" class="browser-state is-notice" role="status">{{ clipboardNotice }}</span>
       <span v-else class="browser-state">{{ statusLabel }}</span>
-      <button v-if="!standalone && !poppedOut" type="button" @click="popOut">Pop out</button>
+      <button v-if="!standalone && !poppedOut" type="button" @click="popOut()">Pop out</button>
     </div>
     <div v-show="!poppedOut" ref="host" class="browser-canvas" data-browser-canvas></div>
     <div v-if="poppedOut" class="browser-overlay">
