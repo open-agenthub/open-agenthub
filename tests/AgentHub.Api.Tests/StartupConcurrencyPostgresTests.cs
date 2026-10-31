@@ -18,12 +18,14 @@ public sealed class StartupConcurrencyPostgresTests
 {
     private static readonly TimeSpan HealthyWithin = TimeSpan.FromSeconds(60);
 
-    [PostgreSqlFact]
-    public async Task Two_replicas_starting_together_on_a_fresh_database_both_become_healthy()
+    [PostgreSqlTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Two_replicas_starting_together_on_a_fresh_database_both_become_healthy(bool chatEnabled)
     {
         await using var db = await Schema.CreateAsync();
 
-        await StartTogetherAsync(db, replicas: 2);
+        await StartTogetherAsync(db, replicas: 2, chatEnabled);
 
         Assert.Equal(4, await db.CountAsync(
             "SELECT count(*) FROM pg_constraint WHERE connamespace = current_schema()::regnamespace AND conname LIKE '%_session_fk'"));
@@ -54,7 +56,7 @@ public sealed class StartupConcurrencyPostgresTests
             INSERT INTO slack_threads (session_id, owner, channel, thread_ts) VALUES ('gone0001', 'admin', 'C1', '1.1');
             """);
 
-        await StartTogetherAsync(db, replicas: 2);
+        await StartTogetherAsync(db, replicas: 2, chatEnabled: true);
 
         Assert.Equal(4, await db.CountAsync(
             "SELECT count(*) FROM pg_constraint WHERE connamespace = current_schema()::regnamespace AND conname LIKE '%_session_fk'"));
@@ -123,7 +125,7 @@ public sealed class StartupConcurrencyPostgresTests
         }
     }
 
-    private static async Task StartTogetherAsync(Schema db, int replicas)
+    private static async Task StartTogetherAsync(Schema db, int replicas, bool chatEnabled = false)
     {
         var dll = Path.Combine(AppContext.BaseDirectory, "AgentHub.Api.dll");
         // The backend builds a Kubernetes client from ~/.kube/config outside a cluster; /healthz
@@ -161,6 +163,19 @@ public sealed class StartupConcurrencyPostgresTests
                 info.Environment["AgentHub__Namespace"] = "agenthub-sessions";
                 info.Environment["AgentHub__CallbackBaseUrl"] = $"http://127.0.0.1:{port}";
                 info.Environment["Browser__Enabled"] = "false";
+                if (chatEnabled)
+                {
+                    // With the relays on, every notifier and poll service is built and started, the
+                    // Telegram permission notifier of #371 included. Their calls go to a closed
+                    // local port: the proxy for the fixed Telegram host, ApiUrl for Signal.
+                    info.Environment["Chat__Telegram__Enabled"] = "true";
+                    info.Environment["Chat__Telegram__BotToken"] = "0:stand-in";
+                    info.Environment["Chat__Signal__Enabled"] = "true";
+                    info.Environment["Chat__Signal__ApiUrl"] = "http://127.0.0.1:1";
+                    info.Environment["Chat__Signal__Number"] = "+10000000000";
+                    info.Environment["HTTPS_PROXY"] = "http://127.0.0.1:1";
+                    info.Environment["NO_PROXY"] = "127.0.0.1,localhost";
+                }
                 var log = new StringWriter();
                 var process = new Process { StartInfo = info };
                 process.OutputDataReceived += (_, e) => { lock (log) log.WriteLine(e.Data); };
@@ -262,5 +277,14 @@ public sealed class StartupConcurrencyPostgresTests
         }
 
         public ValueTask DisposeAsync() => new(ExecAsync($"DROP SCHEMA IF EXISTS \"{_name}\" CASCADE", onBase: true));
+    }
+}
+
+public sealed class PostgreSqlTheoryAttribute : TheoryAttribute
+{
+    public PostgreSqlTheoryAttribute()
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable)))
+            Skip = $"Set {PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable} to run PostgreSQL integration tests.";
     }
 }
