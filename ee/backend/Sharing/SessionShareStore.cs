@@ -59,10 +59,64 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
                 blocked_tools    TEXT NOT NULL,
                 updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
             );
+
+            DO $migration$
+            BEGIN
+                -- Serialize replicas before checking whether another installed the constraint.
+                LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'session_shares'::regclass AND conname = 'session_shares_session_fk'
+                ) THEN
+                    -- Block new orphan writes until the prune and constraint commit together.
+                    LOCK TABLE session_shares IN SHARE ROW EXCLUSIVE MODE;
+                    DELETE FROM session_shares metadata
+                    WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = metadata.session_id);
+                    ALTER TABLE session_shares ADD CONSTRAINT session_shares_session_fk
+                        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE;
+                END IF;
+            END $migration$;
+
+            DO $migration$
+            BEGIN
+                -- Serialize replicas before checking whether another installed the constraint.
+                LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'session_share_links'::regclass AND conname = 'session_share_links_session_fk'
+                ) THEN
+                    -- Block new orphan writes until the prune and constraint commit together.
+                    LOCK TABLE session_share_links IN SHARE ROW EXCLUSIVE MODE;
+                    DELETE FROM session_share_links metadata
+                    WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = metadata.session_id);
+                    ALTER TABLE session_share_links ADD CONSTRAINT session_share_links_session_fk
+                        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE;
+                END IF;
+            END $migration$;
+
+            DO $migration$
+            BEGIN
+                -- Serialize replicas before checking whether another installed the constraint.
+                LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'session_mcp_policies'::regclass AND conname = 'session_mcp_policies_session_fk'
+                ) THEN
+                    -- Block new orphan writes until the prune and constraint commit together.
+                    LOCK TABLE session_mcp_policies IN SHARE ROW EXCLUSIVE MODE;
+                    DELETE FROM session_mcp_policies metadata
+                    WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = metadata.session_id);
+                    ALTER TABLE session_mcp_policies ADD CONSTRAINT session_mcp_policies_session_fk
+                        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE;
+                END IF;
+            END $migration$;
             """;
 
-        await using var command = _db.CreateCommand(ddl);
+        await using var connection = await _db.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        await using var command = new NpgsqlCommand(ddl, connection, transaction);
         await command.ExecuteNonQueryAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<SessionSharingOverview> ListForOwnerAsync(

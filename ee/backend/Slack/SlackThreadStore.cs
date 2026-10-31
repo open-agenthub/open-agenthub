@@ -38,9 +38,29 @@ public sealed class SlackThreadStore
             );
             CREATE INDEX IF NOT EXISTS idx_slack_threads_ts ON slack_threads(thread_ts);
             ALTER TABLE slack_threads ADD COLUMN IF NOT EXISTS status_ts TEXT;
+
+            DO $migration$
+            BEGIN
+                -- Serialize replicas before checking whether another installed the constraint.
+                LOCK TABLE sessions IN SHARE ROW EXCLUSIVE MODE;
+                IF NOT EXISTS (
+                    SELECT 1 FROM pg_constraint
+                    WHERE conrelid = 'slack_threads'::regclass AND conname = 'slack_threads_session_fk'
+                ) THEN
+                    -- Block new orphan writes until the prune and constraint commit together.
+                    LOCK TABLE slack_threads IN SHARE ROW EXCLUSIVE MODE;
+                    DELETE FROM slack_threads metadata
+                    WHERE NOT EXISTS (SELECT 1 FROM sessions WHERE id = metadata.session_id);
+                    ALTER TABLE slack_threads ADD CONSTRAINT slack_threads_session_fk
+                        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE;
+                END IF;
+            END $migration$;
             """;
-        await using var cmd = _db.CreateCommand(ddl);
+        await using var connection = await _db.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        await using var cmd = new NpgsqlCommand(ddl, connection, transaction);
         await cmd.ExecuteNonQueryAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     public async Task<SlackThread?> GetBySessionAsync(string sessionId, CancellationToken ct = default)
