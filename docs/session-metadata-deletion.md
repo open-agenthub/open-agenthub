@@ -6,8 +6,8 @@ with `ON DELETE CASCADE`. The production `ISessionStore` registration is always
 runs after the sessions schema exists, even when the enterprise license is inactive.
 
 This makes the registry deletion the lifetime boundary for every caller: web DELETE,
-remote token API, child deletion, MCP, expiry and account purge. A failed delete preserves
-both the session and its metadata. A concurrent share or thread insert cannot recreate an
+remote token API, child deletion, MCP, expiry and account purge. A failed registry delete rolls back
+its cascade, preserving the session and its metadata. A concurrent share or thread insert cannot recreate an
 orphan after deletion. This deliberately replaces an application cleanup hook: hooks can
 race inserts and can leave metadata behind after a partial failure. No chat bindings are
 changed by this migration.
