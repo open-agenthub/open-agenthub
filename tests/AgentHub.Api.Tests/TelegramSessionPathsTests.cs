@@ -21,4 +21,10 @@ public class TelegramSessionPathsTests
     public async Task OutgoingSessionPathHasItsNameOnTheWire(string path)
         => await TelegramSessionScenario.RunAsync(path,
             Environment.GetEnvironmentVariable(PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable)!);
+
+    // #365: real delete and expiry paths, /sessions before and after, the answers to a deleted session.
+    [PostgreSqlFact]
+    public async Task DeletedSessionsLeaveTheChat()
+        => await DeletedSessionScenario.RunAsync(
+            Environment.GetEnvironmentVariable(PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable)!);
 }

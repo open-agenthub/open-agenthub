@@ -146,7 +146,14 @@ public sealed class SlackSocketModeService : BackgroundService
         }
 
         var info = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
-        if (info?.PodIp is not { Length: > 0 } podIp || info.Phase != "Running")
+        // The thread row outlives its session on purpose: it is what recognises a reply here as
+        // aimed at a deleted session, which "not running" would misdescribe (#365).
+        if (info is null)
+        {
+            await _slack.PostMessageAsync(thread.Channel, ":wastebasket: This session was deleted. The thread stays as its history.", threadTs, ct);
+            return;
+        }
+        if (info.PodIp is not { Length: > 0 } podIp || info.Phase != "Running")
         {
             await _slack.PostMessageAsync(thread.Channel, ":warning: Session is not running — cannot deliver the reply.", threadTs, ct);
             return;

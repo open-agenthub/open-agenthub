@@ -197,4 +197,27 @@ public class ChatFormattingTests
         });
         Assert.Equal(12000, messages.Sum(m => m.Count(c => c == 'z')));
     }
+
+    [Fact]
+    public void SessionList_NewestFirst_CappedWithHint_AndKeepsAnOlderActiveSession()
+    {
+        var now = DateTime.UtcNow;
+        var rows = Enumerable.Range(0, 20)
+            .Select(i => new ChatSessionRow($"s{i:00}xxxx", $"Task {i:00}", "Running", now.AddMinutes(-i), Active: i == 19))
+            .ToList();
+
+        var lines = ChatFormatting.SessionList(rows, "/", max: 5).Split('\n');
+
+        Assert.Equal(new[]
+        {
+            "Task 00 (#s00x) · Running", "Task 01 (#s01x) · Running", "Task 02 (#s02x) · Running",
+            "Task 03 (#s03x) · Running", "Task 19 (#s19x) · Running · active",
+            "… and 15 older. /use <tag> switches to any of them."
+        }, lines);
+    }
+
+    [Fact]
+    public void SessionList_WithinTheCap_HasNoHint()
+        => Assert.Equal("Only (#one) · Paused",
+            ChatFormatting.SessionList([new ChatSessionRow("one", "Only", "Paused", DateTime.UtcNow, false)], "!"));
 }
