@@ -41,6 +41,7 @@ public sealed class ProgramContainerResolveTests
         var (services, provider) = BuildProgramContainer(args.ToArray());
 
         var failures = new List<string>();
+        var constructorFailures = new List<string>();
         var types = services
             .Where(d => d.Lifetime == ServiceLifetime.Singleton && !d.ServiceType.IsGenericTypeDefinition)
             .Select(d => d.ServiceType)
@@ -63,15 +64,17 @@ public sealed class ProgramContainerResolveTests
             {
                 failures.Add($"{type.FullName}: {m}");
             }
-            catch (AggregateException)
+            catch (AggregateException e)
             {
                 // Some constructors reach for things this test does not provide (a database on a
                 // closed port). Their dependencies were resolved before the constructor ran, which
-                // is all a cycle needs to show up.
+                // is all a cycle needs to show up; the list only explains a failure below.
+                constructorFailures.Add($"{type.Name}: {e.InnerException?.GetType().Name}");
             }
         }
 
-        Assert.True(failures.Count == 0, string.Join("\n", failures));
+        Assert.True(failures.Count == 0, string.Join("\n", failures) +
+            "\nConstructors that threw (expected without a database): " + string.Join(", ", constructorFailures));
     }
 
     private static (IServiceCollection Services, IServiceProvider Provider) BuildProgramContainer(string[] args)
@@ -100,13 +103,17 @@ public sealed class ProgramContainerResolveTests
 
         var entry = typeof(AgentHub.Api.Persistence.SchemaMigrationLock).Assembly.EntryPoint!;
         Capturing.Value = true;
+        var stopped = false;
         try
         {
             entry.Invoke(null, [args]);
-            throw new InvalidOperationException("Program ran to completion without building its host.");
         }
-        catch (TargetInvocationException e) when (Unwrap(e) is StopProgram) { }
+        catch (TargetInvocationException e) when (Unwrap(e) is StopProgram)
+        {
+            stopped = true;
+        }
         finally { Capturing.Value = false; }
+        Assert.True(stopped, "Program ran to completion without building its host.");
 
         Assert.NotNull(services);
         Assert.NotNull(provider);

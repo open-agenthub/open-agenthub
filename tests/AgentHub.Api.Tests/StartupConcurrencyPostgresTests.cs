@@ -127,12 +127,11 @@ public sealed class StartupConcurrencyPostgresTests
 
     private static async Task StartTogetherAsync(Schema db, int replicas, bool chatEnabled = false)
     {
-        var dll = Path.Combine(AppContext.BaseDirectory, "AgentHub.Api.dll");
         // The backend builds a Kubernetes client from ~/.kube/config outside a cluster; /healthz
         // never needs to reach it.
         var home = Directory.CreateTempSubdirectory("agenthub-startup-");
-        Directory.CreateDirectory(Path.Combine(home.FullName, ".kube"));
-        await File.WriteAllTextAsync(Path.Combine(home.FullName, ".kube", "config"), """
+        Directory.CreateDirectory(Path.Join(home.FullName, ".kube"));
+        await File.WriteAllTextAsync(Path.Join(home.FullName, ".kube", "config"), """
             apiVersion: v1
             kind: Config
             clusters: [{name: none, cluster: {server: "http://127.0.0.1:1"}}]
@@ -141,53 +140,13 @@ public sealed class StartupConcurrencyPostgresTests
             current-context: none
             """);
         var apiKey = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
-        var started = new List<(Process Process, int Port, StringWriter Log)>();
+        var started = new List<Replica>();
         try
         {
+            // Created first and started together: the point is that their migrations overlap.
             for (var i = 0; i < replicas; i++)
-            {
-                var port = FreePort();
-                var info = new ProcessStartInfo(Environment.ProcessPath is { } host && Path.GetFileNameWithoutExtension(host) == "dotnet" ? host : "dotnet")
-                {
-                    WorkingDirectory = AppContext.BaseDirectory,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false
-                };
-                info.ArgumentList.Add(dll);
-                info.Environment["HOME"] = home.FullName;
-                info.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
-                info.Environment["Kestrel__Endpoints__Http__Url"] = $"http://127.0.0.1:{port}";
-                info.Environment["ConnectionStrings__Postgres"] = db.ConnectionString;
-                info.Environment["Auth__ApiKey"] = apiKey;
-                info.Environment["AgentHub__Namespace"] = "agenthub-sessions";
-                info.Environment["AgentHub__CallbackBaseUrl"] = $"http://127.0.0.1:{port}";
-                info.Environment["Browser__Enabled"] = "false";
-                if (chatEnabled)
-                {
-                    // With the relays on, every notifier and poll service is built and started, the
-                    // Telegram permission notifier of #371 included. Their calls go to a closed
-                    // local port: the proxy for the fixed Telegram host, ApiUrl for Signal.
-                    info.Environment["Chat__Telegram__Enabled"] = "true";
-                    info.Environment["Chat__Telegram__BotToken"] = "0:stand-in";
-                    info.Environment["Chat__Signal__Enabled"] = "true";
-                    info.Environment["Chat__Signal__ApiUrl"] = "http://127.0.0.1:1";
-                    info.Environment["Chat__Signal__Number"] = "+10000000000";
-                    info.Environment["HTTPS_PROXY"] = "http://127.0.0.1:1";
-                    info.Environment["NO_PROXY"] = "127.0.0.1,localhost";
-                }
-                var log = new StringWriter();
-                var process = new Process { StartInfo = info };
-                process.OutputDataReceived += (_, e) => { lock (log) log.WriteLine(e.Data); };
-                process.ErrorDataReceived += (_, e) => { lock (log) log.WriteLine(e.Data); };
-                started.Add((process, port, log));
-            }
-            foreach (var (process, _, _) in started)
-            {
-                process.Start();
-                process.BeginOutputReadLine();
-                process.BeginErrorReadLine();
-            }
+                started.Add(new Replica(db.ConnectionString, home.FullName, apiKey, chatEnabled));
+            foreach (var replica in started) replica.Start();
 
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(2) };
             var deadline = Stopwatch.StartNew();
@@ -195,34 +154,98 @@ public sealed class StartupConcurrencyPostgresTests
             while (!healthy.All(h => h) && deadline.Elapsed < HealthyWithin)
             {
                 for (var i = 0; i < replicas; i++)
-                {
-                    if (healthy[i] || started[i].Process.HasExited) continue;
-                    try { healthy[i] = (await http.GetAsync($"http://127.0.0.1:{started[i].Port}/healthz")).IsSuccessStatusCode; }
-                    catch (HttpRequestException) { }
-                    catch (TaskCanceledException) { }
-                }
-                if (started.Any(s => s.Process.HasExited)) break;
+                    if (!healthy[i] && !started[i].HasExited) healthy[i] = await started[i].IsHealthyAsync(http);
+                if (started.Any(r => r.HasExited)) break;
                 await Task.Delay(250);
             }
 
             for (var i = 0; i < replicas; i++)
-            {
-                string log;
-                lock (started[i].Log) log = started[i].Log.ToString();
                 Assert.True(healthy[i],
                     $"replica {i + 1} of {replicas} not healthy after {deadline.Elapsed.TotalSeconds:0}s " +
-                    $"(exited: {started[i].Process.HasExited}):\n{log}");
-            }
+                    $"(exited: {started[i].HasExited}):\n{started[i].Log}");
         }
         finally
         {
-            foreach (var (process, _, _) in started)
-            {
-                try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
-                await process.WaitForExitAsync();
-                process.Dispose();
-            }
+            foreach (var replica in started) await replica.DisposeAsync();
             home.Delete(recursive: true);
+        }
+    }
+
+    /// <summary>One backend process with the quickstart's configuration: API key, no OIDC.</summary>
+    private sealed class Replica : IAsyncDisposable
+    {
+        private readonly Process _process;
+        private readonly int _port = FreePort();
+        private readonly System.Text.StringBuilder _log = new();
+
+        public Replica(string connectionString, string home, string apiKey, bool chatEnabled)
+        {
+            var info = new ProcessStartInfo(Environment.ProcessPath is { } host && Path.GetFileNameWithoutExtension(host) == "dotnet" ? host : "dotnet")
+            {
+                WorkingDirectory = AppContext.BaseDirectory,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false
+            };
+            info.ArgumentList.Add(Path.Join(AppContext.BaseDirectory, "AgentHub.Api.dll"));
+            info.Environment["HOME"] = home;
+            info.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
+            info.Environment["Kestrel__Endpoints__Http__Url"] = $"http://127.0.0.1:{_port}";
+            info.Environment["ConnectionStrings__Postgres"] = connectionString;
+            info.Environment["Auth__ApiKey"] = apiKey;
+            info.Environment["AgentHub__Namespace"] = "agenthub-sessions";
+            info.Environment["AgentHub__CallbackBaseUrl"] = $"http://127.0.0.1:{_port}";
+            info.Environment["Browser__Enabled"] = "false";
+            if (chatEnabled)
+            {
+                // With the relays on, every notifier and poll service is built and started, the
+                // Telegram permission notifier of #371 included. Their calls go to a closed
+                // local port: the proxy for the fixed Telegram host, ApiUrl for Signal.
+                info.Environment["Chat__Telegram__Enabled"] = "true";
+                info.Environment["Chat__Telegram__BotToken"] = "0:stand-in";
+                info.Environment["Chat__Signal__Enabled"] = "true";
+                info.Environment["Chat__Signal__ApiUrl"] = "http://127.0.0.1:1";
+                info.Environment["Chat__Signal__Number"] = "+10000000000";
+                info.Environment["HTTPS_PROXY"] = "http://127.0.0.1:1";
+                info.Environment["NO_PROXY"] = "127.0.0.1,localhost";
+            }
+            _process = new Process { StartInfo = info };
+            _process.OutputDataReceived += (_, e) => Append(e.Data);
+            _process.ErrorDataReceived += (_, e) => Append(e.Data);
+        }
+
+        public bool HasExited => _process.HasExited;
+
+        public string Log { get { lock (_log) return _log.ToString(); } }
+
+        private void Append(string? line) { lock (_log) _log.AppendLine(line); }
+
+        private bool _started;
+
+        public void Start()
+        {
+            _process.Start();
+            _started = true;
+            _process.BeginOutputReadLine();
+            _process.BeginErrorReadLine();
+        }
+
+        public async Task<bool> IsHealthyAsync(HttpClient http)
+        {
+            try { return (await http.GetAsync($"http://127.0.0.1:{_port}/healthz")).IsSuccessStatusCode; }
+            catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+            {
+                // Not listening yet: the replica is still migrating or waiting for the lock.
+                return false;
+            }
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            // A deadlocked host does not finish a graceful shutdown, so kill it outright.
+            if (_started && !_process.HasExited) _process.Kill(entireProcessTree: true);
+            if (_started) await _process.WaitForExitAsync();
+            _process.Dispose();
         }
     }
 
