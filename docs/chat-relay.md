@@ -8,6 +8,9 @@ thread and dropped when there is none; a reply from chat is routed by thread, so
 it finds no session. The backend is provider-neutral about this — `InternalController.Notify`
 fans the event out for any session that authenticates with its callback token.
 
+What happens to a session's binding when the session is deleted is in
+`docs/chat-deleted-sessions.md`.
+
 The event itself, however, comes from one place only: an agent hook inside the session pod
 posting to `/internal/sessions/{id}/notify`. Until 0.12.0 the only such hook was Claude's
 `Notification` hook. Codex, Cursor and OpenClaw sessions therefore never appeared in chat at

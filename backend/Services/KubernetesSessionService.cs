@@ -44,6 +44,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     private readonly IAgentPodRequests? _podRequests;
     private readonly Containers.ISessionContainerCleanup? _containerCleanup;
     private readonly ISecretRequestStore? _secretRequests;
+    private readonly Chat.IChatSessionCleanup? _chatCleanup;
     private readonly ILogger<KubernetesSessionService> _log;
     private readonly AgentHubOptions _opts;
     private readonly string _callbackBaseUrl;
@@ -72,8 +73,10 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         ISessionExpiryLock? runtimeUpdateLock = null,
         ISecretRequestStore? secretRequests = null,
         Kubernetes? cluster = null,
-        IAgentPodRequests? podRequests = null)
+        IAgentPodRequests? podRequests = null,
+        Chat.IChatSessionCleanup? chatCleanup = null)
     {
+        _chatCleanup = chatCleanup;
         _podRequests = podRequests;
         _secretRequests = secretRequests;
         _log = log;
@@ -2575,6 +2578,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await DeleteSecretIfPresentAsync(SessionSecretDeliveryFactory.EnvSecretName(id), ct);
         if (_secretRequests is not null) await _secretRequests.DeleteBySessionAsync(id, ct);
         await _ephemeralApiMcps.DeleteBySessionAsync(id, ct);
+        // Every delete path (UI, API, MCP, child cleanup, expiry, account deletion) ends here.
+        // Left behind, the bindings listed every deleted session as "Unknown" in /sessions and
+        // kept a deleted session as the chat's active one (#365). Before the registry row goes,
+        // so a failed delete that is retried runs this again.
+        if (_chatCleanup is not null) await _chatCleanup.RemoveSessionAsync(id, rec.Title, ct);
         // Keep the registry row until storage confirms deletion: expiry retries it next pass,
         // and a failed manual delete can be retried without losing the owner/prefix mapping.
         await SessionStorageCleanup.DeleteAsync(_artifacts, owner, id, ct);

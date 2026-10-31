@@ -16,6 +16,7 @@
   <ItemGroup>
     <Compile Include="../SessionMetadataDeletionProof/*.cs" Link="%(Filename)%(Extension)" />
     <Compile Include="../TelegramSessionNamesProof/TelegramSessionScenario.cs" Link="TelegramSessionScenario.cs" />
+    <Compile Include="../TelegramSessionNamesProof/DeletedSessionScenario.cs" Link="DeletedSessionScenario.cs" />
     <ProjectReference Include="../../backend/AgentHub.Api.csproj" />
   </ItemGroup>
 

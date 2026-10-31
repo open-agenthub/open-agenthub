@@ -135,7 +135,10 @@ internal sealed class PostgresPurgeDatabase : IAsyncDisposable
             await command.ExecuteNonQueryAsync();
         }
 
-        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema };
+        // Every store opens its own data source and none is disposed, so pooled connections would
+        // stay open until the run ends; with the chat-deletion tests on this helper the suite hit
+        // CI's max_connections (53300 "too many clients"). Unpooled, each closes after its command.
+        var builder = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = schema, Pooling = false };
         var config = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
