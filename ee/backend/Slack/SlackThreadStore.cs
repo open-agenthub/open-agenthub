@@ -41,6 +41,23 @@ public sealed class SlackThreadStore
             CREATE INDEX IF NOT EXISTS idx_slack_threads_ts ON slack_threads(thread_ts);
             ALTER TABLE slack_threads ADD COLUMN IF NOT EXISTS status_ts TEXT;
 
+            CREATE OR REPLACE FUNCTION archive_deleted_slack_thread() RETURNS TRIGGER
+            LANGUAGE plpgsql SET search_path FROM CURRENT AS $archive$
+            BEGIN
+                -- A cascade has already removed the parent. Ordinary mapping edits must not
+                -- mark a still-live session deleted or extend a previous marker's lifetime.
+                IF NOT EXISTS (SELECT 1 FROM sessions WHERE id = OLD.session_id) THEN
+                    INSERT INTO chat_deleted_sessions
+                        (platform, session_id, owner, chat_id, thread_id)
+                    VALUES ('slack', OLD.session_id, OLD.owner, OLD.channel, OLD.thread_ts)
+                    ON CONFLICT (platform, session_id) DO NOTHING;
+                END IF;
+                RETURN OLD;
+            END $archive$;
+            CREATE OR REPLACE TRIGGER archive_deleted_slack_thread
+                AFTER DELETE ON slack_threads
+                FOR EACH ROW EXECUTE FUNCTION archive_deleted_slack_thread();
+
             DO $migration$
             BEGIN
                 IF NOT EXISTS (
@@ -61,6 +78,29 @@ public sealed class SlackThreadStore
         await using var cmd = new NpgsqlCommand(ddl, connection, transaction);
         await cmd.ExecuteNonQueryAsync(ct);
         await transaction.CommitAsync(ct);
+        await PruneDeletedAsync(ct);
+    }
+
+    public async Task<bool> IsDeletedThreadAsync(string channel, string threadTs, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("""
+            SELECT EXISTS (SELECT 1 FROM chat_deleted_sessions
+            WHERE platform = 'slack' AND chat_id = @channel AND thread_id = @thread
+              AND deleted_at > now() - interval '30 days')
+            """);
+        cmd.Parameters.AddWithValue("channel", channel);
+        cmd.Parameters.AddWithValue("thread", threadTs);
+        return await cmd.ExecuteScalarAsync(ct) is true;
+    }
+
+    public async Task PruneDeletedAsync(CancellationToken ct = default)
+    {
+        // Begin pruning before lookup expiry to leave scheduling margin for the 30-day limit.
+        await using var cmd = _db.CreateCommand("""
+            DELETE FROM chat_deleted_sessions
+            WHERE platform = 'slack' AND deleted_at <= now() - interval '29 days'
+            """);
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task<SlackThread?> GetBySessionAsync(string sessionId, CancellationToken ct = default)

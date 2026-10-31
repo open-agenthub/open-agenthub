@@ -33,7 +33,7 @@ public class SessionMetadataDeletionPathsPostgresTests
     [PostgreSqlFact]
     public async Task EveryDeleteEntryPoint_RemovesMetadata_AndShareLinkReturnsAnonymous404()
     {
-        await using var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await using var db = await SessionMetadataDeletionPostgresTests.CreateDatabaseAsync();
         var threads = new SlackThreadStore(db.Configuration);
         await threads.InitializeAsync();
         await using var clusterHost = EmptyHost();
@@ -188,6 +188,9 @@ public class SessionMetadataDeletionPathsPostgresTests
             }
             if (path != "purge") Assert.True(clusterRequests > requestsBefore);
             await SessionMetadataDeletionPostgresTests.AssertEmptyAsync(db, path);
+            Assert.Equal(path is "account" or "purge" ? 0L : 1L, await db.ScalarAsync<long>(
+                "SELECT count(*) FROM chat_deleted_sessions WHERE platform = 'slack' AND session_id = @id",
+                new Npgsql.NpgsqlParameter("id", path)));
             using var after = await http.GetAsync(linkUrl);
             Assert.Equal(HttpStatusCode.NotFound, after.StatusCode);
             var body = await after.Content.ReadAsStringAsync();

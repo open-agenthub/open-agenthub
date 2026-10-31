@@ -1,4 +1,5 @@
 using AgentHub.Api.Ee.Slack;
+using AgentHub.Api.Chat;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using AgentHub.Api.Models;
@@ -13,7 +14,7 @@ public class SessionMetadataDeletionPostgresTests
     [PostgreSqlFact]
     public async Task Migration_PrunesLegacyOrphans_PreservesLiveRows_AndIsRepeatable()
     {
-        await using var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await using var db = await CreateDatabaseAsync();
         var threads = new SlackThreadStore(db.Configuration);
         await threads.InitializeAsync();
         foreach (var table in Tables)
@@ -32,6 +33,9 @@ public class SessionMetadataDeletionPostgresTests
             Assert.Equal(1L, await db.ScalarAsync<long>($"SELECT count(*) FROM {table} WHERE session_id = 'live'"));
             Assert.Equal(0L, await db.ScalarAsync<long>($"SELECT count(*) FROM {table} WHERE session_id = 'gone'"));
         }
+        Assert.True(await threads.IsDeletedThreadAsync("channel", "gone"));
+        Assert.Equal("owner", await db.ScalarAsync<string>(
+            "SELECT owner FROM chat_deleted_sessions WHERE platform = 'slack' AND session_id = 'gone'"));
         await db.Sessions.DeleteAsync("live");
         await AssertEmptyAsync(db, "live");
     }
@@ -39,7 +43,7 @@ public class SessionMetadataDeletionPostgresTests
     [PostgreSqlFact]
     public async Task FailedMigration_RollsBackPruningAndConstraints_ThenRetries()
     {
-        await using var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await using var db = await CreateDatabaseAsync();
         await new SlackThreadStore(db.Configuration).InitializeAsync();
         foreach (var table in Tables)
             await db.ExecuteAsync($"ALTER TABLE {table} DROP CONSTRAINT {table}_session_fk");
@@ -66,7 +70,7 @@ public class SessionMetadataDeletionPostgresTests
     [PostgreSqlFact]
     public async Task ReplicaInitialization_SerializesLegacyMigration()
     {
-        await using var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await using var db = await CreateDatabaseAsync();
         var threads = new SlackThreadStore(db.Configuration);
         await threads.InitializeAsync();
         foreach (var table in Tables)
@@ -84,7 +88,7 @@ public class SessionMetadataDeletionPostgresTests
     [PostgreSqlFact]
     public async Task InsertRacingDelete_WaitsForRegistryCommit_ThenRejectsEveryMetadataKind()
     {
-        await using var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await using var db = await CreateDatabaseAsync();
         await new SlackThreadStore(db.Configuration).InitializeAsync();
         var inserts = new[]
         {
@@ -127,7 +131,7 @@ public class SessionMetadataDeletionPostgresTests
     [PostgreSqlFact]
     public async Task FailedSessionDelete_RollsBackMetadata_AndNewOrphansAreRejected()
     {
-        await using var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await using var db = await CreateDatabaseAsync();
         await new SlackThreadStore(db.Configuration).InitializeAsync();
         await db.AddSessionAsync("owner", "live");
         await SeedAsync(db, "live");
@@ -140,6 +144,13 @@ public class SessionMetadataDeletionPostgresTests
                 db.ExecuteAsync($"UPDATE {table} SET session_id = 'gone' WHERE session_id = 'live'"));
             Assert.Equal("23503", error.SqlState);
         }
+    }
+
+    internal static async Task<PostgresSharingDatabase> CreateDatabaseAsync()
+    {
+        var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await new ChatBindingStore(db.Configuration).InitializeAsync();
+        return db;
     }
 
     internal static Task SeedAsync(PostgresSharingDatabase db, string id) => db.ExecuteAsync("""

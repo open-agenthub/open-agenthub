@@ -30,3 +30,10 @@ recorder. It snapshots the destination before deletion, posts exactly one expiry
 the original thread after registry and mapping removal, and removes the transient status.
 An injected browser-cleanup failure produces no notice and preserves the mapping; a subsequent
 successful sweep notifies once, and another sweep sends nothing.
+
+The deleted-thread proofs use the production socket event handler with inbound message JSON,
+real Postgres and the real outgoing API client over loopback HTTP. Replies and status requests
+get an explicit deleted answer; another channel with the same timestamp does not. No session
+or pod operation is called. The trigger captures owner from the deleted mapping. An unconditional
+worker removes aged markers without a running relay; account purge removes fresh markers
+immediately and preserves another owner's markers. The shared tombstone schema comes from #365.

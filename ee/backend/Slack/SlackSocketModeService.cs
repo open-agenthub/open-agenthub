@@ -136,17 +136,30 @@ public sealed class SlackSocketModeService : BackgroundService
         }
 
         var thread = await _threads.GetByThreadTsAsync(threadTs, ct);
-        if (thread is null) return;
-
-        // "!status" is answered by the hub itself instead of being typed into the session.
-        if (textReply.Trim().Equals("!status", StringComparison.OrdinalIgnoreCase))
+        if (thread is null)
         {
-            await PostStatusAsync(thread, threadTs, ct);
+            if (ev.TryGetProperty("channel", out var channelValue) && channelValue.GetString() is { } channel &&
+                await _threads.IsDeletedThreadAsync(channel, threadTs, ct))
+                await _slack.PostMessageAsync(channel, DeletedThreadAnswer, threadTs, ct);
             return;
         }
 
         var info = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
-        if (info?.PodIp is not { Length: > 0 } podIp || info.Phase != "Running")
+        if (info is null)
+        {
+            // Deletion can race the lookup above; the captured thread still deserves a clear answer.
+            await _slack.PostMessageAsync(thread.Channel, DeletedThreadAnswer, threadTs, ct);
+            return;
+        }
+
+        // "!status" is answered by the hub itself instead of being typed into the session.
+        if (textReply.Trim().Equals("!status", StringComparison.OrdinalIgnoreCase))
+        {
+            await PostStatusAsync(thread, threadTs, info, ct);
+            return;
+        }
+
+        if (info.PodIp is not { Length: > 0 } podIp || info.Phase != "Running")
         {
             await _slack.PostMessageAsync(thread.Channel, ":warning: Session is not running — cannot deliver the reply.", threadTs, ct);
             return;
@@ -269,9 +282,8 @@ public sealed class SlackSocketModeService : BackgroundService
     }
 
     /// <summary>Answers a "!status" thread reply with the session's current state.</summary>
-    private async Task PostStatusAsync(SlackThread thread, string threadTs, CancellationToken ct)
+    private async Task PostStatusAsync(SlackThread thread, string threadTs, SessionInfo live, CancellationToken ct)
     {
-        var live = await _sessions.GetSessionAsync(thread.Owner, thread.SessionId, ct);
         var pendingTool = await _permissions.GetPendingBySessionAsync(thread.SessionId, ct);
         var link = _frontendOrigin.Length == 0 ? null : $"{_frontendOrigin}/s/{thread.SessionId}";
         var text = AgentHub.Api.Chat.ChatFormatting.StatusText(
@@ -318,6 +330,8 @@ public sealed class SlackSocketModeService : BackgroundService
             await _slack.UpdateMessageAsync(channel, ts,
                 $"{verb} — *{Escape(resolved.Tool)}*{suffix}" + (user is null ? "" : $" · by {user}"), null, ct);
     }
+
+    private const string DeletedThreadAnswer = ":wastebasket: This session was deleted. This thread remains as its history.";
 
     private static string Escape(string s) => s.Replace("&", "&amp;").Replace("<", "&lt;").Replace(">", "&gt;");
 
