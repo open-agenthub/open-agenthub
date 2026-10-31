@@ -118,17 +118,19 @@ public class ChatSessionDeletionPostgresTests
     }
 
     [PostgreSqlFact]
-    public async Task AccountPurge_RemovesTheMarkers()
+    public async Task AccountPurge_RemovesTheMarkersAndBindings()
     {
         await using var db = await PostgresPurgeDatabase.CreateAsync();
+        await db.Bindings.UpsertAsync(new("signal", "live", "alice", "+100", null, null, true));
         await db.Bindings.UpsertAsync(new("telegram", "gone", "alice", "chat-1", null, null, true));
         await db.Bindings.UpsertAsync(new("telegram", "other", "bob", "chat-2", null, null, true));
         await db.Bindings.RemoveSessionAsync("gone", "secret title");
         await db.Bindings.RemoveSessionAsync("other", null);
 
-        await db.CreatePurgeStore().PurgeAsync("alice", ["gone"]);
+        await db.CreatePurgeStore().PurgeAsync("alice", ["gone", "live"]);
 
         Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM chat_deleted_sessions WHERE owner = 'alice'"));
+        Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM chat_session_bindings WHERE owner = 'alice'"));
         Assert.Equal(1, await db.CountAsync("SELECT count(*) FROM chat_deleted_sessions WHERE owner = 'bob'"));
     }
 

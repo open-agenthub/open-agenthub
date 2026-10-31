@@ -67,12 +67,6 @@ reachable, and the bot keeping `can_manage_topics`, or it fails silently. A clos
 stops the user from writing into it, which is how they would learn what happened. The topic
 therefore stays open, keeps its name, and a message in it is answered with the marker.
 
-## Slack (Enterprise Edition)
-
-Slack has no session list and no active session; a thread is the only route to a session. The
-`slack_threads` row is kept after the delete because it is what recognises a reply in that
-thread, which now gets "This session was deleted" instead of "Session is not running".
-
 ## Proof
 
 `tests/TelegramSessionNamesProof` (`dotnet run -- --deleted-sessions`, and
