@@ -40,3 +40,23 @@ name. Long/control-character and missing-title cases test the title boundary.
 The session service is a deterministic lookup/creation stand-in, and the pod identity
 resolver confirms the loopback terminal peer. This proves chat behavior and real HTTP
 serialization, not external bot delivery, live cluster lifecycle, or messaging-client UI.
+
+## Deleted sessions (#365)
+
+`DeletedSessionScenario.cs` seeds seventeen sessions bound to one forum chat plus three bindings
+of sessions deleted before the fix, then drives `/sessions`, the prune, a delete through the
+real `KubernetesSessionService.DeleteSessionAsync` (the method the REST, MCP and internal paths
+call), `/sessions` again, a plain message, `/status` and `/use` for the deleted session, the real
+expiry sweep with the real notifier, a message in the expired session's topic, and a switch to
+another session. Session and binding stores are the production Postgres ones; the Bot API and
+the Kubernetes API are answered by one loopback stand-in, whose cluster has no pods left.
+
+```sh
+dotnet run --project tests/TelegramSessionNamesProof -- --deleted-sessions > /tmp/deleted-after.json
+bash tests/TelegramSessionNamesProof/record-deleted-baseline.sh /tmp/deleted-baseline /tmp/deleted-before.json
+```
+
+The first prints every step (what was sent, every `sendMessage`, the row counts) and then
+asserts; the second runs the same steps at the revision before the fix, where the assertions
+fail by design. The scenario also runs as `TelegramSessionPathsTests.DeletedSessionsLeaveTheChat`.
+

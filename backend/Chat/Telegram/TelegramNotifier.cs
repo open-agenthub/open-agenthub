@@ -40,7 +40,7 @@ public sealed class TelegramNotifier : INotifier
 
             // Chats get re-linked and users opt out: the stored binding is only a hint —
             // the user row decides where (and whether) to send.
-            if (binding is not null && !await IsBindingCurrentAsync(binding, ct))
+            if (binding is not null && !await IsTargetCurrentAsync(binding.Owner, binding.ChatId, ct))
             {
                 if (eventType != "question") return; // never send to a stale/opted-out target
                 binding = null; // the create path re-validates and re-binds at the current chat
@@ -55,9 +55,14 @@ public sealed class TelegramNotifier : INotifier
             // An expiry is terminal like the other two: the thread learns the session is gone.
             if (eventType is "finished" or "failed" or "session-expired")
             {
-                if (binding is not null)
+                var (chatId, threadId) = (binding?.ChatId, binding?.ThreadId);
+                // The expiry sweep notifies after the delete, which already removed the binding.
+                if (binding is null && await _bindings.GetDeletedAsync("telegram", s.Id, ct) is { } gone
+                    && await IsTargetCurrentAsync(gone.Owner, gone.ChatId, ct))
+                    (chatId, threadId) = (gone.ChatId, gone.ThreadId);
+                if (chatId is not null)
                     foreach (var chunk in ChatFormatting.SessionMessages(s.Id, s.Title, $"🏁 {eventType} — {message}"))
-                        await _tg.SendMessageAsync(binding.ChatId, chunk, binding.ThreadId, null, ct);
+                        await _tg.SendMessageAsync(chatId, chunk, threadId, null, ct);
                 return;
             }
             if (eventType != "question") return;
@@ -87,12 +92,12 @@ public sealed class TelegramNotifier : INotifier
         catch (Exception ex) { _log.LogWarning(ex, "Telegram notify failed for session {Id}", s.Id); }
     }
 
-    /// <summary>True when the binding's target still is the owner's currently linked,
-    /// enabled Telegram chat — a stale target must never receive session content.</summary>
-    private async Task<bool> IsBindingCurrentAsync(ChatBinding binding, CancellationToken ct)
+    /// <summary>True when the chat still is the owner's currently linked, enabled Telegram
+    /// chat — a stale target must never receive session content.</summary>
+    private async Task<bool> IsTargetCurrentAsync(string owner, string chatId, CancellationToken ct)
     {
-        var user = await _users.GetAsync(binding.Owner, ct);
-        return user is { TelegramEnabled: true } && user.TelegramChatId == binding.ChatId;
+        var user = await _users.GetAsync(owner, ct);
+        return user is { TelegramEnabled: true } && user.TelegramChatId == chatId;
     }
 
     /// <summary>

@@ -217,6 +217,7 @@ builder.Services.AddSingleton<AgentHub.Api.Services.AccountDeletionService>();
 
 // Community chat integrations (Telegram/Signal): session-to-conversation bindings.
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatBindingStore>();
+builder.Services.AddSingleton<AgentHub.Api.Chat.IChatSessionCleanup>(sp => sp.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>());
 builder.Services.AddSingleton<AgentHub.Api.Chat.WorkingIndicator>();
 // Git project listing/resolution for chat commands (/repos, /new +repo).
 builder.Services.AddSingleton<AgentHub.Api.Chat.ChatRepoService>();

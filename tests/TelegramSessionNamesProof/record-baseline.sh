@@ -8,6 +8,14 @@ baseline_branch="proof/363-baseline-$(date +%s)"
 git worktree add -b "$baseline_branch" "$baseline_dir" 562677b
 mkdir -p "$baseline_dir/tests/TelegramSessionNamesProof"
 cp "$source_root"/tests/TelegramSessionNamesProof/*.cs "$source_root"/tests/TelegramSessionNamesProof/*.csproj "$baseline_dir/tests/TelegramSessionNamesProof/"
+# The #365 scenario needs the delete hook, which this revision predates; it has its own
+# baseline runner (record-deleted-baseline.sh).
+rm "$baseline_dir/tests/TelegramSessionNamesProof/DeletedSessionScenario.cs"
+python3 - "$baseline_dir/tests/TelegramSessionNamesProof/Program.cs" <<'PY'
+import pathlib, re, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(re.sub(r'if \(args\.Contains\("--deleted-sessions"\)\)\n\{.*?\n\}\n', '', p.read_text(), flags=re.S))
+PY
 # The baseline notifier predates the session-lookup dependency.
 python3 - "$baseline_dir/tests/TelegramSessionNamesProof/TelegramSessionScenario.cs" <<'PY'
 import pathlib, sys

@@ -29,6 +29,7 @@ public class SessionLookup : DispatchProxy
         return method!.Name switch
         {
             nameof(ISessionService.GetSessionAsync) => Task.FromResult<SessionInfo?>(info),
+            nameof(ISessionService.ListSessionsAsync) => Task.FromResult<IReadOnlyList<SessionInfo>>([info]),
             nameof(ISessionService.CreateSessionAsync) => Task.FromResult(info),
             nameof(ISessionService.TouchActivityAsync) => Task.CompletedTask,
             _ => throw new NotSupportedException(method.Name)
