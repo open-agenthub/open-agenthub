@@ -14,10 +14,13 @@ not silently test another commit. Provider runtime and browser images are not
 started by the quickstart smoke and are outside this proof.
 
 For a negative control, dispatch this workflow on the branch with
-`broken_backend=true`. It replaces the built backend's entrypoint with an exit of
+`inject_startup_failure=true`. It replaces the built backend's entrypoint with an exit of
 1. The actual installer must fail its Helm readiness wait; diagnostics must show
 `deliberate-startup-failure`. This dispatch is intentionally red. Dispatch again
 with the default false for the healthy install and upgrade proof.
 
 Nightly runs use main's checkout; PR runs use the tested merge SHA, matching the
 container workflow's application version convention.
+
+Builds read the same per-component amd64 cache scopes as build-images.yml through
+the build action. They load locally and never publish images or use registry credentials.

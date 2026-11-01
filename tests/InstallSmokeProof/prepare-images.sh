@@ -6,16 +6,12 @@ tag="${GITHUB_SHA:0:7}"
 registry=ghcr.io/open-agenthub/open-agenthub
 images=()
 for component in backend frontend artifact-renderer; do
-  context=.
-  if [ "$component" = frontend ]; then context=./frontend; fi
   image="$registry/$component:$tag"
-  docker buildx build --load --platform linux/amd64 \
-    --build-arg "APP_VERSION=$tag" \
-    -f "$component/Dockerfile" -t "$image" "$context"
   images+=("$image")
 done
 
-if [ "${BROKEN_BACKEND:-false}" = true ]; then
+if [ "${INJECT_STARTUP_FAILURE:-false}" = true ]; then
+  echo "::warning::Injecting deliberate backend startup failure for workflow_dispatch proof"
   # Exercise the installer's real Helm readiness gate with an image that cannot start.
   printf 'FROM %s/backend:%s\nENTRYPOINT ["/bin/sh", "-c", "echo deliberate-startup-failure >&2; exit 1"]\n' "$registry" "$tag" |
     docker build -t "$registry/backend:$tag" -

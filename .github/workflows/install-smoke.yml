@@ -13,7 +13,7 @@ on:
     - cron: "23 3 * * *"
   workflow_dispatch:
     inputs:
-      broken_backend:
+      inject_startup_failure:
         description: "Proof only: replace the backend entrypoint with an immediate failure"
         type: boolean
         default: false
@@ -38,11 +38,47 @@ jobs:
 
       - uses: docker/setup-buildx-action@v4
 
-      # PR builds in build-images.yml are cache-only. Build locally rather than
-      # testing main's latest images while a PR's backend never starts.
-      - name: Build this checkout's install images
+      - name: Select checkout image tag
+        run: echo "IMAGE_TAG=${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+
+      # PR builds in build-images.yml are cache-only. Load the images locally
+      # rather than testing main while a PR's backend never starts.
+      - name: Build backend from this checkout
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/open-agenthub/open-agenthub/backend:${{ env.IMAGE_TAG }}
+          build-args: APP_VERSION=${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=backend-amd64
+
+      - name: Build frontend from this checkout
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/open-agenthub/open-agenthub/frontend:${{ env.IMAGE_TAG }}
+          build-args: APP_VERSION=${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=frontend-amd64
+
+      - name: Build artifact-renderer from this checkout
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./artifact-renderer/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/open-agenthub/open-agenthub/artifact-renderer:${{ env.IMAGE_TAG }}
+          build-args: APP_VERSION=${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=artifact-renderer-amd64
+
+      - name: Preload checkout images for the quickstart
         env:
-          BROKEN_BACKEND: ${{ inputs.broken_backend || false }}
+          INJECT_STARTUP_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.inject_startup_failure || false }}
         run: bash tests/InstallSmokeProof/prepare-images.sh
 
       - name: Install
