@@ -9,12 +9,12 @@ function Render([string[]]$Arguments) {
     return $rendered -join "`n"
 }
 
-# The backend's own defaults are also 20 and 5; the chart states them so an operator can see and size them.
+# The backend's own defaults are also 20 and 10; the chart states them so an operator can see and size them.
 $default = Render @()
 if ($default -notmatch 'Postgres__MaxPoolSize: "20"') {
     throw 'the Postgres pool size is missing from the backend config'
 }
-if ($default -notmatch 'Postgres__LockPoolSize: "5"') {
+if ($default -notmatch 'Postgres__LockPoolSize: "10"') {
     throw 'the Postgres lock pool size is missing from the backend config'
 }
 $sized = Render @('--set', 'backend.database.maxPoolSize=8', '--set', 'backend.database.lockPoolSize=3')
@@ -26,8 +26,8 @@ if ($sized -notmatch 'Postgres__LockPoolSize: "3"') {
 }
 # Values files from before the key existed must still render, with the default.
 $older = Render @('--set', 'backend.database=null')
-if ($older -notmatch 'Postgres__MaxPoolSize: "20"' -or $older -notmatch 'Postgres__LockPoolSize: "5"') {
-    throw 'a values file without backend.database must fall back to 20 and 5'
+if ($older -notmatch 'Postgres__MaxPoolSize: "20"' -or $older -notmatch 'Postgres__LockPoolSize: "10"') {
+    throw 'a values file without backend.database must fall back to 20 and 10'
 }
 
 Write-Output 'Postgres pool size Helm value assertions passed.'

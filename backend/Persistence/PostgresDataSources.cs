@@ -20,12 +20,14 @@ public static class PostgresDataSources
     public const string MaxPoolSizeKey = "Postgres:MaxPoolSize";
     public const int DefaultMaxPoolSize = 20;
     public const string LockPoolSizeKey = "Postgres:LockPoolSize";
-    // Few locks are held at once. Only the browser lock blocks in pg_advisory_lock, and a
-    // per-session semaphore lets one request per session and replica wait there. Every other user
-    // takes pg_try_advisory_lock and holds it briefly: one token refresh, or one session of a
-    // sweep at a time. 20 + 5 + 2 per replica keeps two replicas and a surge pod at 81, below the
-    // 100 of a managed plan.
-    public const int DefaultLockPoolSize = 5;
+    // Sized for browser starts. KubernetesBrowserService holds the session's browser lock while
+    // the pod is created and becomes ready, up to Browser:StartupTimeoutSeconds (90 s), so each
+    // browser starting at the same moment holds one lock connection for that long. A per-session
+    // semaphore lets only one request per session and replica wait for it. Every other user takes
+    // pg_try_advisory_lock and holds it briefly: one token refresh, or one session of a sweep at
+    // a time. 20 + 10 + 2 per replica keeps two replicas and a surge pod at 96, below the 100 of
+    // a managed plan.
+    public const int DefaultLockPoolSize = 10;
 
     // Keyed by the pool's role as well: with an Application Name in the operator's connection
     // string both roles build the same string, and the lock pool would silently be the shared one.

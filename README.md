@@ -238,9 +238,10 @@ redeploy.
 Each backend replica shares one Postgres pool across all of its stores, plus a small second
 pool for held advisory locks. A replica holds about 3 connections after startup and about 20
 under load. The ceiling is `backend.database.maxPoolSize + backend.database.lockPoolSize + 2`,
-which is 27 with the defaults (20 and 5). Size the database's `max_connections` for
+which is 32 with the defaults (20 and 10). Size the database's `max_connections` for
 `backend.replicas` times that, plus one surge pod during a rolling update and any other clients:
-81 for the default two replicas.
+96 for the default two replicas. `lockPoolSize` is also how many integrated browsers one replica
+can start at the same moment.
 [docs/postgres-connections.md](docs/postgres-connections.md) has the measurements.
 
 ### Configuring OAuth/OIDC login
