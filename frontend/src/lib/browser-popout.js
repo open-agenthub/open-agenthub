@@ -1,6 +1,8 @@
 // Keep the shared credential in memory: a URL would expose it to history and access logs.
-export function openBrowserPopout(state, restored) {
-  const child = window.open('/browser-popout', '_blank', 'popup,width=1280,height=900')
+export function openBrowserPopout(state, restored, position) {
+  const placement = Number.isFinite(position?.screenX) && Number.isFinite(position?.screenY)
+    ? `,left=${Math.round(position.screenX)},top=${Math.round(position.screenY)}` : ''
+  const child = window.open('/browser-popout', '_blank', 'popup,width=1280,height=900' + placement)
   if (!child) return null
   let finished = false
   const update = () => {

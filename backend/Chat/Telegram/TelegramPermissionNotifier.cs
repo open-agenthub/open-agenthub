@@ -20,10 +20,13 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
     private readonly ChatBindingStore _bindings;
     private readonly UserDirectory _users;
     private readonly PermissionStore _store;
-    private readonly Services.ISessionService _sessions;
+    // The store, not ISessionService: the session service reaches every IPermissionNotifier through
+    // NetworkPortService, and factory registrations hide that cycle from the container, which then
+    // deadlocks on its own singleton lock at startup instead of throwing (#371).
+    private readonly ISessionStore _sessions;
 
     public TelegramPermissionNotifier(TelegramOptions opts, TelegramClient tg,
-        ChatBindingStore bindings, UserDirectory users, PermissionStore store, Services.ISessionService sessions)
+        ChatBindingStore bindings, UserDirectory users, PermissionStore store, ISessionStore sessions)
     { _opts = opts; _tg = tg; _bindings = bindings; _users = users; _store = store; _sessions = sessions; }
 
     public async Task<bool> PostAsync(PermissionRequest req, CancellationToken ct = default)
@@ -99,7 +102,7 @@ public sealed class TelegramPermissionNotifier : IPermissionNotifier, IPermissio
         => $"⏰ Expired — {tool}. Please answer in the web terminal.";
 
     private async Task<string> OriginAsync(PermissionRequest req, CancellationToken ct)
-        => ChatFormatting.Header(req.SessionId, (await _sessions.GetSessionAsync(req.Owner, req.SessionId, ct))?.Title);
+        => ChatFormatting.Header(req.SessionId, (await _sessions.GetAsync(req.Owner, req.SessionId, ct))?.Title);
 
     private static string Trim(string s, int max) => s.Length <= max ? s : s[..max] + " …";
 }
