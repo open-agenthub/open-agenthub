@@ -115,7 +115,13 @@ public sealed partial class KubernetesBrowserServiceTests
 
     private static async Task ObserveAsync(Task[] tasks)
     {
-        try { await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(15)); } catch { }
+        // A failed assertion still releases and observes every start; cleanup failures must
+        // not replace the original regression failure.
+        try { await Task.WhenAll(tasks).WaitAsync(TimeSpan.FromSeconds(15)); }
+        catch (NpgsqlException error) { System.Diagnostics.Trace.WriteLine(error); }
+        catch (TimeoutException error) { System.Diagnostics.Trace.WriteLine(error); }
+        catch (InvalidOperationException error) { System.Diagnostics.Trace.WriteLine(error); }
+        catch (OperationCanceledException error) { System.Diagnostics.Trace.WriteLine(error); }
     }
 
     private sealed class DelayedBrowserCluster : IBrowserClusterClient
@@ -124,10 +130,10 @@ public sealed partial class KubernetesBrowserServiceTests
         public volatile bool Ready;
         public bool HoldRead, HoldDelete;
         public int Creates, Reads, Deletes;
-        public TaskCompletionSource ReadEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource DeleteEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource AllowRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public TaskCompletionSource AllowDelete = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource ReadEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource DeleteEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource AllowRead = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public readonly TaskCompletionSource AllowDelete = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public Task CreateAsync(BrowserPodResources resources, CancellationToken ct = default)
         {
             var labels = resources.Pod.Metadata.Labels;

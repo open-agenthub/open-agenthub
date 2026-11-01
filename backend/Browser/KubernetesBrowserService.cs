@@ -122,7 +122,6 @@ public sealed class KubernetesBrowserService : IBrowserService
             {
                 lease = existing;
             }
-
         }
         finally
         {
@@ -172,7 +171,7 @@ public sealed class KubernetesBrowserService : IBrowserService
     private async Task RequireStartingLeaseAsync(BrowserLease lease, CancellationToken ct)
     {
         var current = await _leases.GetBySessionAsync(lease.SessionId, ct);
-        if (current?.LeaseId != lease.LeaseId ||
+        if (current is null || current.LeaseId != lease.LeaseId ||
             current.Phase is not (BrowserPhase.Pending or BrowserPhase.Running))
             throw new InvalidOperationException("Browser start was stopped or superseded by another start.");
     }
@@ -188,7 +187,7 @@ public sealed class KubernetesBrowserService : IBrowserService
             if (ignoreSuperseded)
             {
                 var current = await _leases.GetBySessionAsync(lease.SessionId, ct);
-                if (current?.LeaseId != lease.LeaseId || current.Phase != BrowserPhase.Pending) return;
+                if (current is null || current.LeaseId != lease.LeaseId || current.Phase != BrowserPhase.Pending) return;
             }
             else await RequireStartingLeaseAsync(lease, ct);
             await finish();
