@@ -52,11 +52,16 @@ public static class PostgresDataSources
         {
             if (!int.TryParse(configured, out var size) || size < 1)
                 throw new InvalidOperationException($"{MaxPoolSizeKey} must be a positive number, not '{configured}'.");
+            if (size < builder.MinPoolSize)
+                throw new InvalidOperationException(
+                    $"{MaxPoolSizeKey} is {size}, below the connection string's Minimum Pool Size of {builder.MinPoolSize}.");
             builder.MaxPoolSize = size;
         }
         else if (!Names(connectionString, "maximumpoolsize", "maxpoolsize"))
         {
-            builder.MaxPoolSize = DefaultMaxPoolSize;
+            // A connection string that only raises the minimum used to get Npgsql's 100 as the
+            // maximum; a default below its minimum would make every connection attempt fail.
+            builder.MaxPoolSize = Math.Max(DefaultMaxPoolSize, builder.MinPoolSize);
         }
         if (!Names(connectionString, "applicationname")) builder.ApplicationName = applicationName;
         return builder.ConnectionString;

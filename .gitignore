@@ -17,3 +17,10 @@ deploy/
 
 # Local agent tooling state
 .superpowers/
+
+# Core dumps (kernel.core_pattern "core" or "core.<pid>"). A backend or pwsh aborted in a
+# checkout leaves several hundred MB here, and `git add -A` has nearly committed them twice
+# (#367, #377); GitHub then rejects the whole push. Directories named core stay trackable.
+core
+core.[0-9]*
+!core/

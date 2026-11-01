@@ -25,9 +25,14 @@ Measured with the real backend against Postgres 15 (`tests/PostgresConnectionsPr
 | after, default (20) | 3 | 21–22 | 3.8–4.0 s |
 | after, `Postgres:MaxPoolSize=5` | 3 | 6 | 3.98 s |
 
-The ceiling is `2 × MaxPoolSize + 2` per replica, which is 42 with the default. Size
-`max_connections` for `replicas × (2 × MaxPoolSize + 2)`, plus any other clients. The chart sets
-the value with `backend.database.maxPoolSize`.
+The ceiling per replica is `MaxPoolSize` (shared pool) + `MaxPoolSize` (lock pool) + 1
+(`LISTEN`) + 1 (migration at startup), so `2 × MaxPoolSize + 2`, or 42 with the default.
+For the whole install, multiply by `backend.replicas`, plus one surge pod while a rolling update
+runs: 84 with two replicas, and briefly 126. Many managed Postgres plans allow only
+`max_connections=100`, with a few of them reserved for the provider. On such a plan, lower
+`backend.database.maxPoolSize` or raise `max_connections` before you add replicas. The pools
+almost never reach their ceiling (about 20 at the load above), but the database has to allow for
+it.
 
 ## Decisions
 

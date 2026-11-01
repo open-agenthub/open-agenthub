@@ -57,6 +57,20 @@ public class PostgresDataSourcesTests
     }
 
     [Fact]
+    public void PoolSize_DefaultRisesToAMinimumFromConnectionString()
+    {
+        Assert.Equal(30, Built(Config("Host=db.example.com;Minimum Pool Size=30")).MaxPoolSize);
+    }
+
+    [Fact]
+    public void PoolSize_ConfiguredBelowMinimumFailsAtStartup()
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => PostgresDataSources.ConnectionString(Config("Host=db.example.com;Minimum Pool Size=30", "10"), "open-agenthub"));
+        Assert.Contains("Minimum Pool Size", error.Message);
+    }
+
+    [Fact]
     public void ApplicationName_FromConnectionStringIsKept()
     {
         Assert.Equal("mine", Built(Config("Host=db.example.com;Application Name=mine")).ApplicationName);

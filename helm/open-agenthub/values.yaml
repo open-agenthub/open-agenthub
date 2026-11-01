@@ -58,14 +58,20 @@ backend:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 512Mi }
-  # Postgres connections per replica (docs/postgres-connections.md). All stores share one pool
-  # of at most maxPoolSize connections, and held advisory locks use a second pool of the same
-  # size. Add one LISTEN connection for the event bus and one short-lived connection for the
-  # schema migration at startup. A replica uses about 3 right after startup and about 20 under
-  # load. The ceiling is 2 × maxPoolSize + 2, so the default can reach 42. Idle connections
-  # close after 5 minutes. Keep replicas × (2 × maxPoolSize + 2), plus anything else that
-  # connects, below the database's max_connections. A "Maximum Pool Size" in
-  # externalDatabase.connectionString loses to this value.
+  # Postgres connections (docs/postgres-connections.md). Per replica, at most:
+  #     maxPoolSize        shared pool, used by every store
+  #   + maxPoolSize        lock pool, connections holding an advisory lock
+  #   + 1                  event bus LISTEN
+  #   + 1                  schema migration lock, at startup only
+  # The total is backend.replicas × (2 × maxPoolSize + 2): 84 with 2 replicas and the default.
+  # A rolling update adds one surge pod (Kubernetes' default maxSurge of 25%, rounded up), so
+  # that is 126 for a short time.
+  # A replica actually holds about 3 after startup and about 20 under load. Idle connections
+  # close after 5 minutes.
+  # Managed Postgres often allows only max_connections=100, with a few reserved for the
+  # provider. Keep the total, plus migrations, backups and other clients, below that limit,
+  # and lower maxPoolSize or raise max_connections before adding replicas. This value
+  # overrides a "Maximum Pool Size" in externalDatabase.connectionString.
   database:
     maxPoolSize: 20
 
