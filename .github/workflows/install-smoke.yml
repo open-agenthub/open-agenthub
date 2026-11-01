@@ -5,11 +5,18 @@ name: Quickstart install
 # The scripts themselves are tested in the open-agenthub.github.io repository.
 on:
   pull_request:
-    paths: ["helm/**"]
+    paths: ["backend/**", "ee/backend/**", "helm/**", ".github/workflows/install-smoke.yml", "tests/InstallSmokeProof/**"]
   push:
     branches: [main]
-    paths: ["helm/**"]
+    paths: ["backend/**", "ee/backend/**", "helm/**", ".github/workflows/install-smoke.yml", "tests/InstallSmokeProof/**"]
+  schedule:
+    - cron: "23 3 * * *"
   workflow_dispatch:
+    inputs:
+      broken_backend:
+        description: "Proof only: replace the backend entrypoint with an immediate failure"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,7 +24,7 @@ permissions:
 jobs:
   install:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       AGENTHUB_CHART: ./helm/open-agenthub
       SCRIPTS: https://raw.githubusercontent.com/open-agenthub/open-agenthub.github.io/main
@@ -29,8 +36,29 @@ jobs:
           curl -fsSL https://open-agenthub.github.io/install.sh -o /tmp/install.sh
           curl -fsSL "$SCRIPTS/.github/scripts/install-smoke.sh" -o /tmp/install-smoke.sh
 
+      - uses: docker/setup-buildx-action@v4
+
+      # PR builds in build-images.yml are cache-only. Build locally rather than
+      # testing main's latest images while a PR's backend never starts.
+      - name: Build this checkout's install images
+        env:
+          BROKEN_BACKEND: ${{ inputs.broken_backend || false }}
+        run: bash tests/InstallSmokeProof/prepare-images.sh
+
       - name: Install
         run: sh /tmp/install.sh
+
+      - name: Verify running image identities
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: |
+          for component in backend frontend artifact-renderer; do
+            expected="ghcr.io/open-agenthub/open-agenthub/$component:${GITHUB_SHA:0:7}"
+            actual=$(kubectl -n agenthub get deployment "agenthub-$component" -o jsonpath='{.spec.template.spec.containers[0].image}')
+            echo "Installed $actual (expected $expected)"
+            test "$actual" = "$expected"
+          done
+          kubectl -n agenthub get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{end}'
 
       - name: Smoke test
         env:
