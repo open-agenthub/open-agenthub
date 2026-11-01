@@ -5,11 +5,18 @@ name: Quickstart install
 # The scripts themselves are tested in the open-agenthub.github.io repository.
 on:
   pull_request:
-    paths: ["helm/**"]
+    paths: ["backend/**", "ee/backend/**", "helm/**", ".github/workflows/install-smoke.yml", "tests/InstallSmokeProof/**"]
   push:
     branches: [main]
-    paths: ["helm/**"]
+    paths: ["backend/**", "ee/backend/**", "helm/**", ".github/workflows/install-smoke.yml", "tests/InstallSmokeProof/**"]
+  schedule:
+    - cron: "23 3 * * *"
   workflow_dispatch:
+    inputs:
+      inject_startup_failure:
+        description: "Proof only: replace the backend entrypoint with an immediate failure"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -17,7 +24,7 @@ permissions:
 jobs:
   install:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       AGENTHUB_CHART: ./helm/open-agenthub
       SCRIPTS: https://raw.githubusercontent.com/open-agenthub/open-agenthub.github.io/main
@@ -29,8 +36,70 @@ jobs:
           curl -fsSL https://open-agenthub.github.io/install.sh -o /tmp/install.sh
           curl -fsSL "$SCRIPTS/.github/scripts/install-smoke.sh" -o /tmp/install-smoke.sh
 
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Select checkout image tag
+        run: echo "IMAGE_TAG=${GITHUB_SHA:0:7}" >> "$GITHUB_ENV"
+
+      # PR builds in build-images.yml are cache-only. Load the images locally
+      # rather than testing main while a PR's backend never starts.
+      - name: Build backend from this checkout
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/open-agenthub/open-agenthub/backend:${{ env.IMAGE_TAG }}
+          build-args: APP_VERSION=${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=backend-amd64
+
+      - name: Build frontend from this checkout
+        uses: docker/build-push-action@v7
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/open-agenthub/open-agenthub/frontend:${{ env.IMAGE_TAG }}
+          build-args: APP_VERSION=${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=frontend-amd64
+
+      - name: Build artifact-renderer from this checkout
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./artifact-renderer/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: ghcr.io/open-agenthub/open-agenthub/artifact-renderer:${{ env.IMAGE_TAG }}
+          build-args: APP_VERSION=${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=artifact-renderer-amd64
+
+      - name: Preload checkout images for the quickstart
+        env:
+          INJECT_STARTUP_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.inject_startup_failure || false }}
+        run: bash tests/InstallSmokeProof/prepare-images.sh
+
       - name: Install
         run: sh /tmp/install.sh
+
+      - name: Verify running image identities
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: |
+          for component in backend frontend; do
+            expected="ghcr.io/open-agenthub/open-agenthub/$component:${GITHUB_SHA:0:7}"
+            actual=$(kubectl -n agenthub get deployment "agenthub-$component" -o jsonpath='{.spec.template.spec.containers[0].image}')
+            echo "Installed $actual (expected $expected)"
+            test "$actual" = "$expected"
+          done
+          # Optional chart components must use the checkout tag when enabled too.
+          kubectl -n agenthub get deployments -o json | jq -e --arg suffix ":${GITHUB_SHA:0:7}" '
+            [.items[].spec.template.spec.containers[].image
+             | select(startswith("ghcr.io/open-agenthub/open-agenthub/"))
+             | endswith($suffix)] | all'
+          kubectl -n agenthub get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{end}'
 
       - name: Smoke test
         env:
