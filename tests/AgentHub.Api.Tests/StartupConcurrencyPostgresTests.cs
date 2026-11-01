@@ -14,6 +14,7 @@ namespace AgentHub.Api.Tests;
 /// real backend twice, as the cluster does, because what broke is only visible in the real process:
 /// a dependency cycle that deadlocked the host's startup, and two migrations racing each other.
 /// </summary>
+[Collection(nameof(StartupConcurrencyPostgresTests))]
 public sealed class StartupConcurrencyPostgresTests
 {
     private static readonly TimeSpan HealthyWithin = TimeSpan.FromSeconds(60);
@@ -266,7 +267,10 @@ public sealed class StartupConcurrencyPostgresTests
         {
             _base = baseConnectionString;
             _name = name;
-            ConnectionString = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = name }.ConnectionString;
+            // Unpooled for the backend processes too: every store keeps its own pool, so one process
+            // holds about 30 idle connections (Maximum Pool Size does not lower that), and two of
+            // them next to the rest of the suite pushed CI's max_connections=500 into 53300.
+            ConnectionString = new NpgsqlConnectionStringBuilder(baseConnectionString) { SearchPath = name, Pooling = false }.ConnectionString;
         }
 
         private static string Base() => Environment.GetEnvironmentVariable(PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable)
@@ -311,3 +315,7 @@ public sealed class PostgreSqlTheoryAttribute : TheoryAttribute
             Skip = $"Set {PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable} to run PostgreSQL integration tests.";
     }
 }
+
+/// <summary>Runs the backend-process tests alone, not beside the parallel Postgres tests.</summary>
+[CollectionDefinition(nameof(StartupConcurrencyPostgresTests), DisableParallelization = true)]
+public sealed class StartupConcurrencyCollection;
