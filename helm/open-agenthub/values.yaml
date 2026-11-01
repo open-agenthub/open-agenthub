@@ -58,6 +58,16 @@ backend:
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { cpu: "1", memory: 512Mi }
+  # Postgres connections per replica (docs/postgres-connections.md). All stores share one pool
+  # of at most maxPoolSize connections, and held advisory locks use a second pool of the same
+  # size. Add one LISTEN connection for the event bus and one short-lived connection for the
+  # schema migration at startup. A replica uses about 3 right after startup and about 20 under
+  # load. The ceiling is 2 × maxPoolSize + 2, so the default can reach 42. Idle connections
+  # close after 5 minutes. Keep replicas × (2 × maxPoolSize + 2), plus anything else that
+  # connects, below the database's max_connections. A "Maximum Pool Size" in
+  # externalDatabase.connectionString loses to this value.
+  database:
+    maxPoolSize: 20
 
 frontend:
   replicas: 1

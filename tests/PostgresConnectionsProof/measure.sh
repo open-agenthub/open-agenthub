@@ -23,6 +23,10 @@ dropdb_() { sql "DROP DATABASE IF EXISTS $db WITH (FORCE)"; }
 count() { sql "SELECT count(*) FROM pg_stat_activity WHERE datname = '$db'"; }
 
 sql "CREATE DATABASE $db" >/dev/null
+# Stopping the backend with a signal must not leave a core dump of several hundred MB in the
+# current directory, where a later `git add -A` picks it up.
+ulimit -c 0
+cd "$work"
 
 out="$work/out"
 dotnet build "$repo/backend/AgentHub.Api.csproj" -c Release -o "$out" -v q -nologo >/dev/null
@@ -53,6 +57,8 @@ for _ in $(seq 1 240); do
 done
 sleep 5
 after_start=$(count)
+by_name() { sql "SELECT name || '=' || n FROM (SELECT coalesce(nullif(application_name, ''), '(none)') AS name, count(*) AS n FROM pg_stat_activity WHERE datname = '$db' GROUP BY 1) s ORDER BY 1" | tr '\n' ' '; }
+start_names=$(by_name)
 
 # 2000 requests, 64 in flight, over endpoints that each read a different store.
 paths=(api/projects api/usage/summary api/tokens api/mcp-servers api/session-organization/order api/webhook-triggers api/skills)
@@ -71,6 +77,6 @@ sleep 2
 after_load=$(count)
 
 echo "$label: after startup=$after_start peak under load=$peak after load=$after_load load took ${seconds}ms"
-echo "  by application_name:"
-sql "SELECT name || ' ' || n FROM (SELECT coalesce(nullif(application_name, ''), '(none)') AS name, count(*) AS n FROM pg_stat_activity WHERE datname = '$db' GROUP BY 1) s ORDER BY 1" | sed 's/^/    /'
+echo "  by application_name after startup: $start_names"
+echo "  by application_name after load: $(by_name)"
 echo "  http status codes: $(sort "$work/codes" | uniq -c | tr -s ' ' | tr '\n' ',')"
