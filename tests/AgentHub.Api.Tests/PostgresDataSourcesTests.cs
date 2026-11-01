@@ -76,16 +76,54 @@ public class PostgresDataSourcesTests
         Assert.Equal("mine", Built(Config("Host=db.example.com;Application Name=mine")).ApplicationName);
     }
 
-    [Fact]
-    public void Stores_ShareOnePool_LocksGetTheirOwn()
+    [Theory]
+    [InlineData("")]
+    [InlineData(";Application Name=mine")]
+    public void Stores_ShareOnePool_LocksGetTheirOwn(string extra)
     {
-        var configuration = Config($"Host=db.example.com;Database=pool_{Guid.NewGuid():N}");
+        var configuration = Config($"Host=db.example.com;Database=pool_{Guid.NewGuid():N}{extra}");
 
         var shared = PostgresDataSources.Shared(configuration);
 
         Assert.Same(shared, PostgresDataSources.Shared(Config(configuration.GetConnectionString("Postgres")!)));
         Assert.NotSame(shared, PostgresDataSources.Locks(configuration));
         Assert.Same(PostgresDataSources.Locks(configuration), PostgresDataSources.Locks(configuration));
+    }
+
+    [PostgreSqlFact]
+    public async Task LockWaiters_FillingTheirPool_DoNotBlockTheHoldersQueries()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable(PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable)!;
+        // Timeout bounds how long an exhausted pool makes a caller wait before it throws.
+        var configuration = Config(new NpgsqlConnectionStringBuilder(baseConnectionString)
+        {
+            ApplicationName = "locks_" + Guid.NewGuid().ToString("N")[..12],
+            Timeout = 3
+        }.ConnectionString, maxPoolSize: "3");
+        var locks = new AgentHub.Api.Browser.PostgresBrowserSessionLock(configuration);
+        var session = Guid.NewGuid().ToString("N");
+
+        var held = await locks.AcquireAsync(session);
+        // Two more requests for the same session wait in pg_advisory_lock, each on a connection:
+        // with the holder's, that is every connection a pool of 3 has.
+        var waiters = new[] { locks.AcquireAsync(session), locks.AcquireAsync(session) };
+        await Task.Delay(500);
+        Assert.All(waiters, waiter => Assert.False(waiter.IsCompleted));
+
+        // The holder's own work still gets a connection; in one shared pool of 3 it would wait
+        // for the waiters, who wait for the holder, until the timeout failed it.
+        await using (var query = PostgresDataSources.Shared(configuration).CreateCommand("SELECT 1"))
+            Assert.Equal(1, await query.ExecuteScalarAsync());
+
+        await held.DisposeAsync();
+        // Whichever waiter gets the lock next has to release it before the other can.
+        var pending = waiters.ToList();
+        while (pending.Count > 0)
+        {
+            var next = await Task.WhenAny(pending);
+            pending.Remove(next);
+            await (await next).DisposeAsync();
+        }
     }
 
     [PostgreSqlFact]

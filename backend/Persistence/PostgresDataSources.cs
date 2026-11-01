@@ -20,11 +20,13 @@ public static class PostgresDataSources
     public const string MaxPoolSizeKey = "Postgres:MaxPoolSize";
     public const int DefaultMaxPoolSize = 20;
 
-    private static readonly ConcurrentDictionary<string, Lazy<NpgsqlDataSource>> Pools = new(StringComparer.Ordinal);
+    // Keyed by the pool's role as well: with an Application Name in the operator's connection
+    // string both roles build the same string, and the lock pool would silently be the shared one.
+    private static readonly ConcurrentDictionary<(string Role, string ConnectionString), Lazy<NpgsqlDataSource>> Pools = new();
 
     /// <summary>The pool every store runs its queries on.</summary>
     public static NpgsqlDataSource Shared(IConfiguration configuration) =>
-        Get(ConnectionString(configuration, "open-agenthub"));
+        Get("shared", ConnectionString(configuration, "open-agenthub"));
 
     /// <summary>
     /// A second pool for connections held for the lifetime of a session-level advisory lock.
@@ -34,7 +36,7 @@ public static class PostgresDataSources
     /// Npgsql's acquire timeout fails them all.
     /// </summary>
     public static NpgsqlDataSource Locks(IConfiguration configuration) =>
-        Get(ConnectionString(configuration, "open-agenthub-locks"));
+        Get("locks", ConnectionString(configuration, "open-agenthub-locks"));
 
     /// <summary>
     /// <c>Postgres:MaxPoolSize</c> wins, then a pool size written into the connection string, then
@@ -67,8 +69,8 @@ public static class PostgresDataSources
         return builder.ConnectionString;
     }
 
-    private static NpgsqlDataSource Get(string connectionString) =>
-        Pools.GetOrAdd(connectionString, cs => new Lazy<NpgsqlDataSource>(() => NpgsqlDataSource.Create(cs))).Value;
+    private static NpgsqlDataSource Get(string role, string connectionString) =>
+        Pools.GetOrAdd((role, connectionString), key => new Lazy<NpgsqlDataSource>(() => NpgsqlDataSource.Create(key.ConnectionString))).Value;
 
     // NpgsqlConnectionStringBuilder cannot tell a value someone wrote from its default, so the
     // keys are read off the raw string, with Npgsql's spelling variants folded together.

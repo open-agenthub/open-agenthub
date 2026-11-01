@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Counts the Postgres connections one real backend process holds after startup, during a short
-# burst of DB-backed API requests, and once the burst is over (#377).
+# burst of DB-backed API requests, and once the burst is over (#377). Then stops it with SIGTERM
+# and reports how it exited.
 #
 # Usage: measure.sh <repo-checkout> <base-connection-string> [label]
 # Extra backend configuration passes through the environment, e.g. Postgres__MaxPoolSize=5.
@@ -72,11 +73,18 @@ while kill -0 "$load" 2>/dev/null; do
   sleep 0.2
 done
 wait "$load"
-seconds=$(( ($(date +%s%N) - started) / 1000000 ))
+elapsed_ms=$(( ($(date +%s%N) - started) / 1000000 ))
 sleep 2
 after_load=$(count)
 
-echo "$label: after startup=$after_start peak under load=$peak after load=$after_load load took ${seconds}ms"
+echo "$label: after startup=$after_start peak under load=$peak after load=$after_load load took ${elapsed_ms}ms"
 echo "  by application_name after startup: $start_names"
 echo "  by application_name after load: $(by_name)"
 echo "  http status codes: $(sort "$work/codes" | uniq -c | tr -s ' ' | tr '\n' ',')"
+
+# The pool is shared and never disposed by a store, so shutting down with connections still in
+# it has to stay clean (#378).
+kill -TERM "$pid"
+exit_code=0
+wait "$pid" || exit_code=$?
+echo "  SIGTERM: exit code $exit_code, ObjectDisposedException in log: $(grep -c ObjectDisposedException "$work/backend.log" || true)"
