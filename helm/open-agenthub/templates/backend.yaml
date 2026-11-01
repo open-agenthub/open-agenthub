@@ -51,6 +51,13 @@ spec:
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
           resources: {{ toYaml .Values.backend.resources | nindent 12 }}
+          # /healthz answers only after the schema migration, which one replica at a time runs and
+          # the others wait for (up to 10 min, SchemaMigrationLock). Without this the liveness
+          # probe kills a waiting replica after about 45 s and its restart waits again.
+          startupProbe:
+            httpGet: { path: /healthz, port: 8080 }
+            periodSeconds: 5
+            failureThreshold: 126
           readinessProbe:
             httpGet: { path: /healthz, port: 8080 }
             initialDelaySeconds: 5
