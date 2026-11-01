@@ -50,6 +50,7 @@ public sealed class KubernetesBrowserService : IBrowserService
             throw new InvalidOperationException("Scheduled sessions cannot start an interactive browser.");
 
         var gate = _sessionLocks.GetOrAdd(session.Id, _ => new SemaphoreSlim(1, 1));
+        BrowserLease lease;
         await gate.WaitAsync(ct);
         try
         {
@@ -81,7 +82,6 @@ public sealed class KubernetesBrowserService : IBrowserService
                 existing = null;
             }
 
-            BrowserLease lease;
             if (existing is null)
             {
                 var rawToken = RandomToken();
@@ -122,45 +122,77 @@ public sealed class KubernetesBrowserService : IBrowserService
             {
                 lease = existing;
             }
-
-            try
-            {
-                var deadline = DateTime.UtcNow.AddSeconds(_options.StartupTimeoutSeconds);
-                while (DateTime.UtcNow < deadline)
-                {
-                    ct.ThrowIfCancellationRequested();
-                    var pod = await _cluster.GetAsync(_namespace, session.Id, ct);
-                    if (pod?.FailureCode is { } failure)
-                    {
-                        await FailAndCleanAsync(lease, failure, CancellationToken.None);
-                        throw new InvalidOperationException($"Browser startup failed: {failure}.");
-                    }
-                    if (pod is not null && !string.Equals(pod.LeaseId, lease.LeaseId, StringComparison.Ordinal))
-                    {
-                        await FailAndCleanAsync(lease, "lease_conflict", CancellationToken.None);
-                        throw new InvalidOperationException("Browser pod belongs to a different lease generation.");
-                    }
-                    if (pod is { Ready: true, PodIp: not null })
-                    {
-                        await _leases.SetRunningAsync(lease.LeaseId, pod.PodIp, ct);
-                        return Connection(lease with { Phase = BrowserPhase.Running, PodIp = pod.PodIp });
-                    }
-                    await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
-                }
-
-                await FailAndCleanAsync(lease, "startup_timeout", ct);
-                throw new TimeoutException("Browser did not become ready before the startup timeout.");
-            }
-            catch (OperationCanceledException)
-            {
-                await CleanupCancelledAsync(lease);
-                throw;
-            }
         }
         finally
         {
             gate.Release();
         }
+
+        try
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(_options.StartupTimeoutSeconds);
+            while (DateTime.UtcNow < deadline)
+            {
+                ct.ThrowIfCancellationRequested();
+                await RequireStartingLeaseAsync(lease, ct);
+                // Readiness I/O and the delay must not occupy the advisory-lock pool. A stop
+                // may replace this generation while GetAsync is in flight; commit under the lock.
+                var pod = await _cluster.GetAsync(_namespace, session.Id, ct);
+                if (pod?.FailureCode is { } failure)
+                {
+                    await FinishStartupAsync(lease, () => FailAndCleanAsync(lease, failure, CancellationToken.None), ct);
+                    throw new InvalidOperationException($"Browser startup failed: {failure}.");
+                }
+                if (pod is not null && !string.Equals(pod.LeaseId, lease.LeaseId, StringComparison.Ordinal))
+                {
+                    await FinishStartupAsync(lease, () => FailAndCleanAsync(lease, "lease_conflict", CancellationToken.None), ct);
+                    throw new InvalidOperationException("Browser pod belongs to a different lease generation.");
+                }
+                if (pod is { Ready: true, PodIp: not null })
+                {
+                    await FinishStartupAsync(lease, () => _leases.SetRunningAsync(lease.LeaseId, pod.PodIp, ct), ct);
+                    return Connection(lease with { Phase = BrowserPhase.Running, PodIp = pod.PodIp });
+                }
+                await Task.Delay(TimeSpan.FromMilliseconds(250), ct);
+            }
+
+            await FinishStartupAsync(lease, () => FailAndCleanAsync(lease, "startup_timeout", CancellationToken.None), ct);
+            throw new TimeoutException("Browser did not become ready before the startup timeout.");
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancellation of an old waiter must never delete a newer start's pod by session name.
+            await FinishStartupAsync(lease, () => CleanupCancelledAsync(lease), CancellationToken.None,
+                ignoreSuperseded: true);
+            throw;
+        }
+    }
+
+    private async Task RequireStartingLeaseAsync(BrowserLease lease, CancellationToken ct)
+    {
+        var current = await _leases.GetBySessionAsync(lease.SessionId, ct);
+        if (current is null || current.LeaseId != lease.LeaseId ||
+            current.Phase is not (BrowserPhase.Pending or BrowserPhase.Running))
+            throw new InvalidOperationException("Browser start was stopped or superseded by another start.");
+    }
+
+    private async Task FinishStartupAsync(BrowserLease lease, Func<Task> finish, CancellationToken ct,
+        bool ignoreSuperseded = false)
+    {
+        var gate = _sessionLocks.GetOrAdd(lease.SessionId, _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(ct);
+        try
+        {
+            await using var distributedLock = await _sessionLock.AcquireAsync(lease.SessionId, ct);
+            if (ignoreSuperseded)
+            {
+                var current = await _leases.GetBySessionAsync(lease.SessionId, ct);
+                if (current is null || current.LeaseId != lease.LeaseId || current.Phase != BrowserPhase.Pending) return;
+            }
+            else await RequireStartingLeaseAsync(lease, ct);
+            await finish();
+        }
+        finally { gate.Release(); }
     }
 
     public async Task<BrowserSummary> GetSummaryAsync(

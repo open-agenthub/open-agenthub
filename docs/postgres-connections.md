@@ -48,19 +48,15 @@ it.
   session's browser lock would take every connection. The holder could then not get a
   connection for the queries it has to run before it releases, and everything would stall until
   Npgsql's 15-second acquire timeout failed it. Lock waiters can only exhaust their own pool.
-- **The lock pool is sized on its own: `Postgres:LockPoolSize`, default 10.** What holds lock
-  connections for long is browser starts. `KubernetesBrowserService.EnsureAsync` keeps the
-  session's browser lock while it creates the pod and polls until the pod is ready, up to
-  `Browser:StartupTimeoutSeconds` (90 s). An in-process semaphore lets only one request per
-  session and replica wait for that lock. Every other user takes `pg_try_advisory_lock` and holds
-  it briefly: a git or Claude token refresh, one session at a time in the expiry and cleanup
-  sweeps, a runtime update, a role change. So the size is the number of browsers one replica can
-  start at the same moment. One more waits for a lock connection and fails after the 15-second
-  `Timeout` with "The connection pool has been exhausted" (measured: 15.0 s), and that browser
-  start fails. Before this change the browser lock had a pool of 100 to itself.
+- **The lock pool is sized on its own: `Postgres:LockPoolSize`, default 10.** Browser
+  creation and stop cleanup hold a connection; readiness polling does not. The in-process gate
+  serializes critical sections per session and replica. Other users take `pg_try_advisory_lock`
+  briefly for token refresh, expiry and cleanup sweeps, runtime updates and role changes.
+  A request beyond the pool size waits up to the connection string's `Timeout` (15 seconds by
+  default). This limit bounds simultaneous critical sections, rather than browsers waiting to
+  become ready.
   - 10 keeps two replicas and a surge pod at 3 × (20 + 10 + 2) = 96, below a plan's 100.
-  - 5 would have brought that to 81, but only five browsers could start at the same moment per
-    replica.
+  - 5 would have brought that to 81, but would allow only five concurrent critical sections per replica.
   - A pool size or minimum in the connection string does not apply to this pool.
   - Measured in `PostgresDataSourcesTests.LockPool_AtCapacity_StarvesNeitherQueriesNorQueuedLocks`
     at the defaults: 10 locks held and 4 more queued, during 1000 queries with 64 in flight.
@@ -72,11 +68,11 @@ it.
 
     The queued locks were granted 4–11 ms after release. The burst got slower at the tail, but no
     query waited for a lock connection.
-- **The browser lock still spans the whole start.** It serializes start and stop of one
-  session's browser across replicas ([browser-security.md](browser-security.md)). Holding it only
-  around creating the lease and the pod, and not while waiting for readiness, would free the
-  lock connections much sooner. That needs its own design for a stop that arrives while a start
-  is still waiting, and a proof against a real cluster, so it is left as a follow-up.
+- **The browser lock protects creation and finalization, not readiness.** Lease check and
+  pod create/adopt remain serialized across replicas. Readiness requests and their 250 ms delay
+  use no lock connection. Before recording readiness or deleting a failed start, the waiter
+  reacquires the lock and verifies its lease generation. See
+  [browser-start-lock.md](browser-start-lock.md) for stop and replacement races.
 - **Default 20, not Npgsql's 100.** 100 per pool alone is the whole of `max_connections` on a
   small managed plan. 20 stayed at the same throughput as before in the load above. Npgsql queues
   a request that finds the pool exhausted, so a burst over the limit waits instead of failing.
