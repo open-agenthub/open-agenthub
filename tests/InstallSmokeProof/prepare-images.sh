@@ -23,6 +23,7 @@ sudo mkdir -p /var/lib/rancher/k3s/agent/images
 docker save "${images[@]}" | sudo tee /var/lib/rancher/k3s/agent/images/install-smoke.tar >/dev/null
 # The installer accepts a chart path but no image override. Pin only its local
 # chart copy; keep the same pin for the subsequent upgrade-in-place.
-sed -i "s/^  tag: latest$/  tag: $tag/" helm/open-agenthub/values.yaml
+# Quoted: a short SHA such as 4317158e6 is a float to YAML and became the tag "4.317158e+06".
+sed -i "s/^  tag: latest$/  tag: \"$tag\"/" helm/open-agenthub/values.yaml
 echo "Testing checkout $GITHUB_SHA with locally built images (no :latest fallback):"
 printf '  %s\n' "${images[@]}"
