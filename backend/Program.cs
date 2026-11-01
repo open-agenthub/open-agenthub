@@ -388,7 +388,9 @@ if (mcpOptions.IsConfigured)
     // OpenIddict wants the certificates while services are still being registered, so these are
     // fetched synchronously here rather than in the post-build initialisation below.
     var mcpKeys = new McpSigningKeyStore(builder.Configuration);
-    mcpKeys.InitializeAsync().GetAwaiter().GetResult();
+    using (var startupLog = LoggerFactory.Create(logging => logging.AddSimpleConsole()))
+        await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(builder.Configuration,
+            startupLog.CreateLogger("AgentHub.Api"), () => mcpKeys.InitializeAsync());
     var mcpSigningCertificate = mcpKeys.GetSigningCertificateAsync().GetAwaiter().GetResult();
     var mcpEncryptionCertificate = mcpKeys.GetEncryptionCertificateAsync().GetAwaiter().GetResult();
 
@@ -513,78 +515,82 @@ if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.InsecureDev)
 else if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
     app.Logger.LogInformation("Authentication: API key, acting as owner {Owner}", hubAuth.ApiKeyOwner);
 
-// Create the Postgres schema idempotently.
-using (var scope = app.Services.CreateScope())
+// Create the Postgres schema idempotently, one replica at a time (SchemaMigrationLock), the MCP
+// schema included.
+await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, app.Logger, async () =>
 {
-    var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
-    await store.InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionMessageStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Files.ISessionFileRegistry>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.PostgresSessionOrderStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IEphemeralApiMcpStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillEmbeddingStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
-    var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
-    await tokenStore.InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IWebhookTriggerStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
-    // Thread deletion archives into the shared tombstone schema, so it must exist first.
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatLinkCodeStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISecretRequestStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Network.IPortGrantStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Usage.UsageLimitStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Agents.AllowedAgentsStore>().InitializeAsync();
-    // License token lives in the DB — create its table, then load & verify it.
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.ILicenseStore>().InitializeAsync();
-    await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();
-}
-
-// Prime the OAuth server: create the schema for registered MCP clients, associate the "mcp"
-// scope with the resource, and replay the stored registrations into the in-memory store.
-if (mcpOptions.IsConfigured)
-{
-    using var mcpScope = app.Services.CreateScope();
-    var services = mcpScope.ServiceProvider;
-    services.GetRequiredService<McpOAuthDbContext>().Database.EnsureCreated();
-
-    var clientStore = services.GetRequiredService<McpClientStore>();
-    await clientStore.InitializeAsync();
-
-    // Associating the resource with the scope is what authorises a client that was granted the
-    // scope to use the resource; without it OpenIddict refuses the request (ID2192).
-    var scopeManager = services.GetRequiredService<IOpenIddictScopeManager>();
-    if (await scopeManager.FindByNameAsync(McpScopes.Mcp) is null)
+    using (var scope = app.Services.CreateScope())
     {
-        await scopeManager.CreateAsync(new OpenIddictScopeDescriptor
-        {
-            Name = McpScopes.Mcp,
-            Resources = { mcpOptions.McpResource }
-        });
+        var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
+        await store.InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionMessageStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Files.ISessionFileRegistry>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Browser.IBrowserLeaseStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IProjectStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.PostgresSessionOrderStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IMcpServerStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.IEphemeralApiMcpStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Library.ISkillEmbeddingStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Library.LibraryShareStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
+        var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
+        await tokenStore.InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IWebhookTriggerStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
+        // Thread deletion archives into the shared tombstone schema, so it must exist first.
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatBindingStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Slack.SlackThreadStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Chat.ChatLinkCodeStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.UserDirectory>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Permissions.PermissionStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISecretRequestStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Network.IPortGrantStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Admin.UserRoleStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Identity.UserGroupStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Usage.UsageLimitStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Ee.Agents.AllowedAgentsStore>().InitializeAsync();
+        // License token lives in the DB — create its table, then load & verify it.
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.ILicenseStore>().InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();
     }
 
-    // Without this replay every restart invalidates existing registrations, and clients fail
-    // their next silent reconnect with invalid_client instead of simply asking to sign in.
-    var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
-    foreach (var stored in await clientStore.ListAsync())
+    // Prime the OAuth server: create the schema for registered MCP clients, associate the "mcp"
+    // scope with the resource, and replay the stored registrations into the in-memory store.
+    if (mcpOptions.IsConfigured)
     {
-        if (await applications.FindByClientIdAsync(stored.ClientId) is null)
+        using var mcpScope = app.Services.CreateScope();
+        var services = mcpScope.ServiceProvider;
+        services.GetRequiredService<McpOAuthDbContext>().Database.EnsureCreated();
+
+        var clientStore = services.GetRequiredService<McpClientStore>();
+        await clientStore.InitializeAsync();
+
+        // Associating the resource with the scope is what authorises a client that was granted the
+        // scope to use the resource; without it OpenIddict refuses the request (ID2192).
+        var scopeManager = services.GetRequiredService<IOpenIddictScopeManager>();
+        if (await scopeManager.FindByNameAsync(McpScopes.Mcp) is null)
         {
-            await applications.CreateAsync(
-                McpClientDescriptor.Build(stored.ClientId, stored.DisplayName, stored.RedirectUris, mcpOptions));
+            await scopeManager.CreateAsync(new OpenIddictScopeDescriptor
+            {
+                Name = McpScopes.Mcp,
+                Resources = { mcpOptions.McpResource }
+            });
+        }
+
+        // Without this replay every restart invalidates existing registrations, and clients fail
+        // their next silent reconnect with invalid_client instead of simply asking to sign in.
+        var applications = services.GetRequiredService<IOpenIddictApplicationManager>();
+        foreach (var stored in await clientStore.ListAsync())
+        {
+            if (await applications.FindByClientIdAsync(stored.ClientId) is null)
+            {
+                await applications.CreateAsync(
+                    McpClientDescriptor.Build(stored.ClientId, stored.DisplayName, stored.RedirectUris, mcpOptions));
+            }
         }
     }
-}
+});
 
 // Behind a TLS-terminating ingress (Traefik/HAProxy) the backend sees plain http, so
 // scheme-derived URLs — the checkout returnUrl same-origin check in particular — would
