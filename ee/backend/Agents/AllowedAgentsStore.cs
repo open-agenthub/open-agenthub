@@ -5,6 +5,7 @@
 // (see ee/LICENSE); a valid subscription is required for production use.
 // -----------------------------------------------------------------------------
 using AgentHub.Api.Models;
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Ee.Agents;
@@ -20,9 +21,7 @@ public sealed class AllowedAgentsStore
 
     public AllowedAgentsStore(IConfiguration cfg)
     {
-        var cs = cfg.GetConnectionString("Postgres")
-                 ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(cs);
+        _db = PostgresDataSources.Shared(cfg);
     }
 
     /// <summary>In-memory store for unit tests (no Postgres).</summary>

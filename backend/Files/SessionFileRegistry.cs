@@ -1,3 +1,4 @@
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Files;
@@ -76,9 +77,7 @@ public sealed class PostgresSessionFileRegistry : ISessionFileRegistry
 
     public PostgresSessionFileRegistry(IConfiguration cfg)
     {
-        var connectionString = cfg.GetConnectionString("Postgres")
-            ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(connectionString);
+        _db = PostgresDataSources.Shared(cfg);
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)

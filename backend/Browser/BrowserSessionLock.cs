@@ -1,3 +1,4 @@
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Browser;
@@ -13,8 +14,7 @@ public sealed class PostgresBrowserSessionLock : IBrowserSessionLock
 
     public PostgresBrowserSessionLock(IConfiguration configuration)
     {
-        database = NpgsqlDataSource.Create(configuration.GetConnectionString("Postgres")
-            ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing."));
+        database = PostgresDataSources.Locks(configuration);
     }
 
     public async Task<IAsyncDisposable> AcquireAsync(string sessionId, CancellationToken ct = default)

@@ -1,3 +1,4 @@
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Browser;
@@ -19,9 +20,7 @@ public interface IBrowserLeaseStore
 
 public sealed class PostgresBrowserLeaseStore(IConfiguration configuration) : IBrowserLeaseStore
 {
-    private readonly NpgsqlDataSource _db = NpgsqlDataSource.Create(
-        configuration.GetConnectionString("Postgres")
-        ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing."));
+    private readonly NpgsqlDataSource _db = PostgresDataSources.Shared(configuration);
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {

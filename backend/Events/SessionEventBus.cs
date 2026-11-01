@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Events;
@@ -66,7 +67,7 @@ public sealed class PostgresSessionEventBus : ISessionEventBus, IHostedService, 
     {
         _connectionString = configuration.GetConnectionString("Postgres")
             ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(_connectionString);
+        _db = PostgresDataSources.Shared(configuration);
         _log = log;
     }
 
@@ -214,12 +215,12 @@ public sealed class PostgresSessionEventBus : ISessionEventBus, IHostedService, 
         if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
 
         // Stop first. Disposing a CancellationTokenSource does not cancel it, so a bus disposed
-        // without StopAsync would leave the listen loop waiting on a connection whose data
-        // source is being torn down underneath it — holding a database connection open for the
-        // rest of the process's life.
+        // without StopAsync would leave the listen loop waiting on its LISTEN connection —
+        // holding a database connection open for the rest of the process's life. _db is not
+        // disposed here: it is the process-wide pool every store shares (#377), and other hosted
+        // services still query through it while the host shuts down.
         await StopAsync(CancellationToken.None);
         _listening?.Dispose();
-        await _db.DisposeAsync();
     }
 
     private sealed class Subscription : ISessionEventSubscription

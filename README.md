@@ -233,6 +233,17 @@ kubectl -n agenthub rollout restart deployment/agenthub-backend
 `-WithObjectStorage`), generate the credentials, and skip whatever is already in place on a
 redeploy.
 
+### Database connections
+
+Each backend replica shares one Postgres pool across all of its stores, plus a small second
+pool for held advisory locks. A replica holds about 3 connections after startup and about 20
+under load. The ceiling is `backend.database.maxPoolSize + backend.database.lockPoolSize + 2`,
+which is 32 with the defaults (20 and 10). Size the database's `max_connections` for
+`backend.replicas` times that, plus one surge pod during a rolling update and any other clients:
+96 for the default two replicas. `lockPoolSize` is also how many integrated browsers one replica
+can start at the same moment.
+[docs/postgres-connections.md](docs/postgres-connections.md) has the measurements.
+
 ### Configuring OAuth/OIDC login
 
 Open AgentHub speaks standard OIDC: the frontend runs the Authorization Code Flow with

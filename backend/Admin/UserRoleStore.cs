@@ -1,3 +1,4 @@
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Admin;
@@ -44,12 +45,12 @@ public sealed class UserRoleStore : IUserRoleStore
     public const string UserRole = "user";
 
     private readonly NpgsqlDataSource _db;
+    private readonly NpgsqlDataSource _locks;
 
     public UserRoleStore(IConfiguration cfg)
     {
-        var cs = cfg.GetConnectionString("Postgres")
-                 ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(cs);
+        _db = PostgresDataSources.Shared(cfg);
+        _locks = PostgresDataSources.Locks(cfg);
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)
@@ -170,7 +171,7 @@ public sealed class UserRoleStore : IUserRoleStore
 
     public async Task<IAsyncDisposable> LockAsync(CancellationToken ct = default)
     {
-        var conn = await _db.OpenConnectionAsync(ct);
+        var conn = await _locks.OpenConnectionAsync(ct);
         try
         {
             await using var cmd = new NpgsqlCommand("SELECT pg_advisory_lock(@k)", conn);

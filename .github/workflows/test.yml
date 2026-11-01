@@ -151,6 +151,9 @@ jobs:
       - name: Verify session file and renderer values
         shell: pwsh
         run: ./tests/helm/files-values.ps1
+      - name: Verify the Postgres pool size value
+        shell: pwsh
+        run: ./tests/helm/database-values.ps1
       - name: Verify deployment parity
         shell: pwsh
         run: ./tests/helm/deployment-parity.ps1

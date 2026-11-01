@@ -49,8 +49,7 @@ public interface ISecretRequestStore
 /// </summary>
 public sealed class PostgresSecretRequestStore(IConfiguration cfg) : ISecretRequestStore
 {
-    private readonly NpgsqlDataSource _db = NpgsqlDataSource.Create(
-        cfg.GetConnectionString("Postgres") ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing."));
+    private readonly NpgsqlDataSource _db = PostgresDataSources.Shared(cfg);
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
