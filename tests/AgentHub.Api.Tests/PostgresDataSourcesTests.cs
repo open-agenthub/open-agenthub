@@ -2,18 +2,22 @@ using AgentHub.Api.Admin;
 using AgentHub.Api.Chat;
 using AgentHub.Api.Mcp;
 using AgentHub.Api.Persistence;
+using System.Diagnostics;
+using AgentHub.Api.Browser;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace AgentHub.Api.Tests;
 
-public class PostgresDataSourcesTests
+public class PostgresDataSourcesTests(ITestOutputHelper output)
 {
-    private static IConfiguration Config(string connectionString, string? maxPoolSize = null)
+    private static IConfiguration Config(string connectionString, string? maxPoolSize = null, string? lockPoolSize = null)
     {
         var values = new Dictionary<string, string?> { ["ConnectionStrings:Postgres"] = connectionString };
         if (maxPoolSize is not null) values[PostgresDataSources.MaxPoolSizeKey] = maxPoolSize;
+        if (lockPoolSize is not null) values[PostgresDataSources.LockPoolSizeKey] = lockPoolSize;
         return new ConfigurationBuilder().AddInMemoryCollection(values).Build();
     }
 
@@ -76,6 +80,30 @@ public class PostgresDataSourcesTests
         Assert.Equal("mine", Built(Config("Host=db.example.com;Application Name=mine")).ApplicationName);
     }
 
+    [Fact]
+    public void LockPool_IsSmallAndSizedOnItsOwn()
+    {
+        var defaults = new NpgsqlConnectionStringBuilder(PostgresDataSources.LockConnectionString(
+            Config("Host=db.example.com;Maximum Pool Size=50;Minimum Pool Size=10", maxPoolSize: "40")));
+        Assert.Equal(PostgresDataSources.DefaultLockPoolSize, defaults.MaxPoolSize);
+        Assert.Equal(0, defaults.MinPoolSize);
+        Assert.Equal("open-agenthub-locks", defaults.ApplicationName);
+
+        var sized = new NpgsqlConnectionStringBuilder(PostgresDataSources.LockConnectionString(
+            Config("Host=db.example.com", lockPoolSize: "8")));
+        Assert.Equal(8, sized.MaxPoolSize);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("few")]
+    public void LockPool_InvalidSizeFailsAtStartup(string value)
+    {
+        var error = Assert.Throws<InvalidOperationException>(
+            () => PostgresDataSources.LockConnectionString(Config("Host=db.example.com", lockPoolSize: value)));
+        Assert.Contains(PostgresDataSources.LockPoolSizeKey, error.Message);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData(";Application Name=mine")]
@@ -99,8 +127,8 @@ public class PostgresDataSourcesTests
         {
             ApplicationName = "locks_" + Guid.NewGuid().ToString("N")[..12],
             Timeout = 3
-        }.ConnectionString, maxPoolSize: "3");
-        var locks = new AgentHub.Api.Browser.PostgresBrowserSessionLock(configuration);
+        }.ConnectionString, maxPoolSize: "3", lockPoolSize: "3");
+        var locks = new PostgresBrowserSessionLock(configuration);
         var session = Guid.NewGuid().ToString("N");
 
         var held = await locks.AcquireAsync(session);
@@ -123,6 +151,91 @@ public class PostgresDataSourcesTests
             var next = await Task.WhenAny(pending);
             pending.Remove(next);
             await (await next).DisposeAsync();
+        }
+    }
+
+    /// <summary>
+    /// The lock pool at its defaults under a peak: every lock connection held, more lock requests
+    /// queued behind them, and a burst of queries at the same time. The queries must not notice.
+    /// </summary>
+    [PostgreSqlFact]
+    public async Task LockPool_AtCapacity_StarvesNeitherQueriesNorQueuedLocks()
+    {
+        var baseConnectionString = Environment.GetEnvironmentVariable(PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable)!;
+        // A database of its own, so the pools keep their default names and pg_stat_activity
+        // shows only this test's connections.
+        var database = "pool_peak_" + Guid.NewGuid().ToString("N")[..12];
+        await using var admin = NpgsqlDataSource.Create(new NpgsqlConnectionStringBuilder(baseConnectionString) { Pooling = false }.ConnectionString);
+        await using (var create = admin.CreateCommand($"CREATE DATABASE {database}")) await create.ExecuteNonQueryAsync();
+        try
+        {
+            var configuration = Config(new NpgsqlConnectionStringBuilder(baseConnectionString) { Database = database }.ConnectionString);
+            var locks = new PostgresBrowserSessionLock(configuration);
+            var shared = PostgresDataSources.Shared(configuration);
+            var lockPoolSize = PostgresDataSources.DefaultLockPoolSize;
+
+            var sessions = Enumerable.Range(0, lockPoolSize).Select(_ => Guid.NewGuid().ToString("N")).ToArray();
+            var held = new List<IAsyncDisposable>();
+            foreach (var session in sessions) held.Add(await locks.AcquireAsync(session));
+            // Beyond the pool: a second request for a held session and three for new ones.
+            var queued = new[] { locks.AcquireAsync(sessions[0]) }
+                .Concat(Enumerable.Range(0, 3).Select(_ => locks.AcquireAsync(Guid.NewGuid().ToString("N"))))
+                .ToArray();
+
+            var peak = new Dictionary<string, long>();
+            using var sampling = new CancellationTokenSource();
+            var sampler = Task.Run(async () =>
+            {
+                while (!sampling.IsCancellationRequested)
+                {
+                    await using var count = admin.CreateCommand(
+                        "SELECT application_name, count(*) FROM pg_stat_activity WHERE datname = @db GROUP BY 1");
+                    count.Parameters.AddWithValue("db", database);
+                    await using var reader = await count.ExecuteReaderAsync();
+                    while (await reader.ReadAsync())
+                        peak[reader.GetString(0)] = Math.Max(peak.GetValueOrDefault(reader.GetString(0)), reader.GetInt64(1));
+                    await Task.Delay(50);
+                }
+            });
+
+            var latencies = new List<double>();
+            var burst = Stopwatch.StartNew();
+            await Parallel.ForEachAsync(Enumerable.Range(0, 1000), new ParallelOptions { MaxDegreeOfParallelism = 64 }, async (_, ct) =>
+            {
+                var watch = Stopwatch.StartNew();
+                await using var query = shared.CreateCommand("SELECT pg_sleep(0.005)");
+                await query.ExecuteNonQueryAsync(ct);
+                lock (latencies) latencies.Add(watch.Elapsed.TotalMilliseconds);
+            });
+            burst.Stop();
+            Assert.All(queued, request => Assert.False(request.IsCompleted));
+
+            var release = Stopwatch.StartNew();
+            foreach (var lease in held) await lease.DisposeAsync();
+            var granted = new List<double>();
+            foreach (var request in queued)
+            {
+                await (await request).DisposeAsync();
+                granted.Add(release.Elapsed.TotalMilliseconds);
+            }
+            await sampling.CancelAsync();
+            await sampler;
+
+            latencies.Sort();
+            output.WriteLine($"1000 queries, 64 in flight, during a full lock pool: {burst.ElapsedMilliseconds} ms, " +
+                $"p50 {latencies[500]:0.0} ms, p99 {latencies[989]:0.0} ms, max {latencies[^1]:0.0} ms");
+            output.WriteLine("peak connections: " + string.Join(", ", peak.OrderBy(p => p.Key).Select(p => $"{p.Key}={p.Value}")));
+            output.WriteLine($"queued lock requests granted {string.Join(", ", granted.Select(ms => $"{ms:0} ms"))} after release");
+
+            Assert.True(peak.GetValueOrDefault("open-agenthub-locks") <= lockPoolSize);
+            Assert.True(peak.GetValueOrDefault("open-agenthub") <= PostgresDataSources.DefaultMaxPoolSize);
+            // Well inside Npgsql's 15 s acquire timeout: the queue drains as soon as locks are released.
+            Assert.All(granted, ms => Assert.True(ms < 5000));
+        }
+        finally
+        {
+            await using var drop = admin.CreateCommand($"DROP DATABASE {database} WITH (FORCE)");
+            await drop.ExecuteNonQueryAsync();
         }
     }
 

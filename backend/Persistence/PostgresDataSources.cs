@@ -19,6 +19,13 @@ public static class PostgresDataSources
 {
     public const string MaxPoolSizeKey = "Postgres:MaxPoolSize";
     public const int DefaultMaxPoolSize = 20;
+    public const string LockPoolSizeKey = "Postgres:LockPoolSize";
+    // Few locks are held at once. Only the browser lock blocks in pg_advisory_lock, and a
+    // per-session semaphore lets one request per session and replica wait there. Every other user
+    // takes pg_try_advisory_lock and holds it briefly: one token refresh, or one session of a
+    // sweep at a time. 20 + 5 + 2 per replica keeps two replicas and a surge pod at 81, below the
+    // 100 of a managed plan.
+    public const int DefaultLockPoolSize = 5;
 
     // Keyed by the pool's role as well: with an Application Name in the operator's connection
     // string both roles build the same string, and the lock pool would silently be the shared one.
@@ -29,14 +36,16 @@ public static class PostgresDataSources
         Get("shared", ConnectionString(configuration, "open-agenthub"));
 
     /// <summary>
-    /// A second pool for connections held for the lifetime of a session-level advisory lock.
+    /// A second, small pool for connections held for the lifetime of a session-level advisory lock.
     /// A waiter in <c>pg_advisory_lock</c> holds its connection while it waits. In the shared pool,
     /// enough waiters for one session's browser lock would take every connection, and the holder
     /// could not get one for the queries it has to run before it releases: nothing moves until
-    /// Npgsql's acquire timeout fails them all.
+    /// Npgsql's acquire timeout fails them all. Here, a lock request beyond the pool's size waits
+    /// for a lock connection (up to the connection string's Timeout, 15 s by default), and the
+    /// stores' queries are not affected.
     /// </summary>
     public static NpgsqlDataSource Locks(IConfiguration configuration) =>
-        Get("locks", ConnectionString(configuration, "open-agenthub-locks"));
+        Get("locks", LockConnectionString(configuration));
 
     /// <summary>
     /// <c>Postgres:MaxPoolSize</c> wins, then a pool size written into the connection string, then
@@ -46,14 +55,10 @@ public static class PostgresDataSources
     /// </summary>
     public static string ConnectionString(IConfiguration configuration, string applicationName)
     {
-        var connectionString = configuration.GetConnectionString("Postgres")
-            ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
+        var connectionString = Configured(configuration);
         var builder = new NpgsqlConnectionStringBuilder(connectionString);
-        var configured = configuration[MaxPoolSizeKey];
-        if (!string.IsNullOrWhiteSpace(configured))
+        if (Size(configuration, MaxPoolSizeKey) is { } size)
         {
-            if (!int.TryParse(configured, out var size) || size < 1)
-                throw new InvalidOperationException($"{MaxPoolSizeKey} must be a positive number, not '{configured}'.");
             if (size < builder.MinPoolSize)
                 throw new InvalidOperationException(
                     $"{MaxPoolSizeKey} is {size}, below the connection string's Minimum Pool Size of {builder.MinPoolSize}.");
@@ -67,6 +72,36 @@ public static class PostgresDataSources
         }
         if (!Names(connectionString, "applicationname")) builder.ApplicationName = applicationName;
         return builder.ConnectionString;
+    }
+
+    /// <summary>
+    /// <c>Postgres:LockPoolSize</c>, else <see cref="DefaultLockPoolSize"/>. A pool size in the
+    /// connection string is meant for the queries and does not apply here, and neither does a
+    /// minimum: lock connections open on demand and need not stay idle.
+    /// </summary>
+    public static string LockConnectionString(IConfiguration configuration)
+    {
+        var connectionString = Configured(configuration);
+        var builder = new NpgsqlConnectionStringBuilder(connectionString)
+        {
+            MinPoolSize = 0,
+            MaxPoolSize = Size(configuration, LockPoolSizeKey) ?? DefaultLockPoolSize
+        };
+        if (!Names(connectionString, "applicationname")) builder.ApplicationName = "open-agenthub-locks";
+        return builder.ConnectionString;
+    }
+
+    private static string Configured(IConfiguration configuration) =>
+        configuration.GetConnectionString("Postgres")
+        ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
+
+    private static int? Size(IConfiguration configuration, string key)
+    {
+        var configured = configuration[key];
+        if (string.IsNullOrWhiteSpace(configured)) return null;
+        if (!int.TryParse(configured, out var size) || size < 1)
+            throw new InvalidOperationException($"{key} must be a positive number, not '{configured}'.");
+        return size;
     }
 
     private static NpgsqlDataSource Get(string role, string connectionString) =>

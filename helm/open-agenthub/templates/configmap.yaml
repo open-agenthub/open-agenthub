@@ -10,6 +10,7 @@ data:
   Sharing__UserSuggestionsEnabled: {{ dig "sharing" "userSuggestionsEnabled" true .Values.AsMap | quote }}
   Kestrel__Limits__MaxRequestBodySize: "57671680"
   Postgres__MaxPoolSize: {{ dig "backend" "database" "maxPoolSize" 20 .Values.AsMap | quote }}
+  Postgres__LockPoolSize: {{ dig "backend" "database" "lockPoolSize" 5 .Values.AsMap | quote }}
   ASPNETCORE_ENVIRONMENT: {{ .Values.backend.environment | default "Production" | quote }}
   DevelopmentAuth__Enabled: {{ .Values.backend.developmentAuth.enabled | default false | quote }}
   DevelopmentAuth__HeaderName: {{ .Values.backend.developmentAuth.headerName | default "X-AgentHub-Test-User" | quote }}

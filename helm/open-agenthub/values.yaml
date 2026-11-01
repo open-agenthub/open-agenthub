@@ -62,20 +62,23 @@ backend:
     limits: { cpu: "1", memory: 512Mi }
   # Postgres connections (docs/postgres-connections.md). Per replica, at most:
   #     maxPoolSize        shared pool, used by every store
-  #   + maxPoolSize        lock pool, connections holding an advisory lock
+  #   + lockPoolSize       connections holding an advisory lock (browser start/stop, token
+  #                        refresh, expiry sweep); few are held at once
   #   + 1                  event bus LISTEN
   #   + 1                  schema migration lock, at startup only
-  # The total is backend.replicas × (2 × maxPoolSize + 2): 84 with 2 replicas and the default.
-  # A rolling update adds one surge pod (Kubernetes' default maxSurge of 25%, rounded up), so
-  # that is 126 for a short time.
-  # A replica actually holds about 3 after startup and about 20 under load. Idle connections
-  # close after 5 minutes.
+  # The total is backend.replicas × (maxPoolSize + lockPoolSize + 2): 54 with 2 replicas and the
+  # defaults. A rolling update adds one surge pod (Kubernetes' default maxSurge of 25%, rounded
+  # up), so that is 81 for a short time. A replica actually holds about 3 after startup and about
+  # 20 under load. Idle connections close after 5 minutes.
   # Managed Postgres often allows only max_connections=100, with a few reserved for the
-  # provider. Keep the total, plus migrations, backups and other clients, below that limit,
-  # and lower maxPoolSize or raise max_connections before adding replicas. This value
-  # overrides a "Maximum Pool Size" in externalDatabase.connectionString.
+  # provider. Keep the total, plus migrations, backups and other clients, below that limit, and
+  # lower maxPoolSize or raise max_connections before adding replicas. maxPoolSize overrides a
+  # "Maximum Pool Size" in externalDatabase.connectionString. Raise lockPoolSize only if many
+  # integrated browsers start at the same moment: a lock request beyond it waits up to 15 s for
+  # a lock connection, then fails. It never takes connections from the stores.
   database:
     maxPoolSize: 20
+    lockPoolSize: 5
 
 frontend:
   replicas: 1
