@@ -61,6 +61,7 @@ public sealed class PostgresSessionEventBus : ISessionEventBus, IHostedService, 
     private CancellationTokenSource? _listening;
     private Task? _listener;
     private int _connects;
+    private int _disposed;
 
     public PostgresSessionEventBus(IConfiguration configuration, ILogger<PostgresSessionEventBus> log)
     {
@@ -209,6 +210,10 @@ public sealed class PostgresSessionEventBus : ISessionEventBus, IHostedService, 
 
     public async ValueTask DisposeAsync()
     {
+        // The container tracks this singleton through its concrete, event-bus and hosted-service
+        // registrations. Repeated disposal must not cancel an already disposed source (#378).
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+
         // Stop first. Disposing a CancellationTokenSource does not cancel it, so a bus disposed
         // without StopAsync would leave the listen loop waiting on a connection whose data
         // source is being torn down underneath it — holding a database connection open for the

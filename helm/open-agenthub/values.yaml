@@ -16,6 +16,8 @@ image:
   # names are agent-runtime-claude, agent-runtime-codex, agent-runtime-cursor,
   # agent-runtime-openclaw, and agent-runtime-opencode unless overridden below.
   registry: ghcr.io/open-agenthub/open-agenthub
+  # Quote a commit-SHA tag (tag: "4317158e6") or pass it with --set-string: YAML reads an
+  # unquoted SHA made of digits and one "e" as a number, and the image becomes "4.317158e+06".
   tag: latest
   pullPolicy: IfNotPresent
   # Name of an existing dockerconfigjson secret (empty = none). Must exist in the release
