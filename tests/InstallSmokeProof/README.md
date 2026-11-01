@@ -4,7 +4,8 @@ The Quickstart install workflow builds the backend, frontend and artifact render
 from its checkout, tags them with the seven-character workflow SHA, and places a
 Docker archive in k3s's startup import directory before running the published
 installer. Its identity step prints deployment image references and pod image IDs.
-The existing smoke and upgrade-in-place checks then exercise that checkout.
+Backend and frontend deployments are required; the renderer is disabled by default,
+but its image is available if chart changes enable it. The existing smoke and upgrade-in-place checks then exercise that checkout.
 
 The container workflow publishes SHA tags on pushes, but its PR builds are
 cache-only. Building locally was chosen over polling for PR tags that never appear

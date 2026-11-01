@@ -88,12 +88,17 @@ jobs:
         env:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: |
-          for component in backend frontend artifact-renderer; do
+          for component in backend frontend; do
             expected="ghcr.io/open-agenthub/open-agenthub/$component:${GITHUB_SHA:0:7}"
             actual=$(kubectl -n agenthub get deployment "agenthub-$component" -o jsonpath='{.spec.template.spec.containers[0].image}')
             echo "Installed $actual (expected $expected)"
             test "$actual" = "$expected"
           done
+          # Optional chart components must use the checkout tag when enabled too.
+          kubectl -n agenthub get deployments -o json | jq -e --arg suffix ":${GITHUB_SHA:0:7}" '
+            [.items[].spec.template.spec.containers[].image
+             | select(startswith("ghcr.io/open-agenthub/open-agenthub/"))
+             | endswith($suffix)] | all'
           kubectl -n agenthub get pods -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{range .status.containerStatuses[*]}{.image}{" "}{.imageID}{"\n"}{end}{end}'
 
       - name: Smoke test
