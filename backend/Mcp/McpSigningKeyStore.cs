@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Mcp;
@@ -23,9 +24,7 @@ public sealed class McpSigningKeyStore
 
     public McpSigningKeyStore(IConfiguration cfg)
     {
-        var cs = cfg.GetConnectionString("Postgres")
-                 ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(cs);
+        _db = PostgresDataSources.Shared(cfg);
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)

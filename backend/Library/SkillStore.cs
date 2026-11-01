@@ -1,4 +1,5 @@
 using AgentHub.Api.Storage;
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Library;
@@ -51,9 +52,7 @@ public sealed class SkillStore : ISkillStore
 
     public SkillStore(IConfiguration cfg, IArtifactStore artifacts, ILogger<SkillStore> log)
     {
-        var cs = cfg.GetConnectionString("Postgres")
-                 ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(cs);
+        _db = PostgresDataSources.Shared(cfg);
         _artifacts = artifacts;
         _log = log;
     }

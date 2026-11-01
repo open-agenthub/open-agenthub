@@ -1,3 +1,4 @@
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Chat;
@@ -35,9 +36,7 @@ public sealed class ChatBindingStore : IChatSessionCleanup
 
     public ChatBindingStore(IConfiguration cfg)
     {
-        var cs = cfg.GetConnectionString("Postgres")
-                 ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(cs);
+        _db = PostgresDataSources.Shared(cfg);
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)

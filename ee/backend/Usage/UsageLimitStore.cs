@@ -4,6 +4,7 @@
 // open-core. Source-available under the Open AgentHub Enterprise License
 // (see ee/LICENSE); a valid subscription is required for production use.
 // -----------------------------------------------------------------------------
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Ee.Usage;
@@ -26,9 +27,7 @@ public sealed class UsageLimitStore
 
     public UsageLimitStore(IConfiguration cfg)
     {
-        var cs = cfg.GetConnectionString("Postgres")
-                 ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(cs);
+        _db = PostgresDataSources.Shared(cfg);
     }
 
     public async Task InitializeAsync(CancellationToken ct = default)

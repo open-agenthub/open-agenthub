@@ -4,8 +4,7 @@ namespace AgentHub.Api.Persistence;
 
 public sealed class PostgresSessionOrderStore(IConfiguration configuration)
 {
-    private readonly NpgsqlDataSource _db = NpgsqlDataSource.Create(configuration.GetConnectionString("Postgres")
-        ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing."));
+    private readonly NpgsqlDataSource _db = PostgresDataSources.Shared(configuration);
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {

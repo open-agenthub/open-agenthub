@@ -20,9 +20,7 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
 
     public SessionShareStore(IConfiguration configuration, ILogger<SessionShareStore> logger)
     {
-        var connectionString = configuration.GetConnectionString("Postgres")
-            ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(connectionString);
+        _db = PostgresDataSources.Shared(configuration);
         _logger = logger;
     }
 

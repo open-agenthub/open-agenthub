@@ -1,3 +1,4 @@
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Services;
@@ -19,8 +20,7 @@ public sealed class PostgresSessionExpiryLock : ISessionExpiryLock
 
     public PostgresSessionExpiryLock(IConfiguration configuration)
     {
-        _database = NpgsqlDataSource.Create(configuration.GetConnectionString("Postgres")
-            ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing."));
+        _database = PostgresDataSources.Locks(configuration);
     }
 
     public async Task<IAsyncDisposable?> TryAcquireAsync(string sessionId, CancellationToken ct = default)

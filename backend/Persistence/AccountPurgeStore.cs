@@ -27,9 +27,7 @@ public sealed class AccountPurgeStore : IAccountPurgeStore
 
     public AccountPurgeStore(IConfiguration cfg, ILogger<AccountPurgeStore> log)
     {
-        var cs = cfg.GetConnectionString("Postgres")
-                 ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(cs);
+        _db = PostgresDataSources.Shared(cfg);
         _log = log;
     }
 

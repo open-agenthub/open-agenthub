@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading.Channels;
+using AgentHub.Api.Persistence;
 using Npgsql;
 
 namespace AgentHub.Api.Events;
@@ -65,7 +66,7 @@ public sealed class PostgresSessionEventBus : ISessionEventBus, IHostedService, 
     {
         _connectionString = configuration.GetConnectionString("Postgres")
             ?? throw new InvalidOperationException("ConnectionStrings:Postgres is missing.");
-        _db = NpgsqlDataSource.Create(_connectionString);
+        _db = PostgresDataSources.Shared(configuration);
         _log = log;
     }
 
@@ -214,7 +215,6 @@ public sealed class PostgresSessionEventBus : ISessionEventBus, IHostedService, 
         // rest of the process's life.
         await StopAsync(CancellationToken.None);
         _listening?.Dispose();
-        await _db.DisposeAsync();
     }
 
     private sealed class Subscription : ISessionEventSubscription
