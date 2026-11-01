@@ -67,6 +67,13 @@ public sealed class StartupConcurrencyPostgresTests
     }
 
     [PostgreSqlFact]
+    public async Task A_healthy_backend_exits_cleanly_on_sigterm()
+    {
+        await using var db = await Schema.CreateAsync();
+        await StartTogetherAsync(db, replicas: 1, stopGracefully: true);
+    }
+
+    [PostgreSqlFact]
     public async Task The_lock_admits_one_migration_at_a_time()
     {
         var config = Schema.BaseConfig();
@@ -126,7 +133,7 @@ public sealed class StartupConcurrencyPostgresTests
         }
     }
 
-    private static async Task StartTogetherAsync(Schema db, int replicas, bool chatEnabled = false)
+    private static async Task StartTogetherAsync(Schema db, int replicas, bool chatEnabled = false, bool stopGracefully = false)
     {
         // The backend builds a Kubernetes client from ~/.kube/config outside a cluster; /healthz
         // never needs to reach it.
@@ -164,6 +171,8 @@ public sealed class StartupConcurrencyPostgresTests
                 Assert.True(healthy[i],
                     $"replica {i + 1} of {replicas} not healthy after {deadline.Elapsed.TotalSeconds:0}s " +
                     $"(exited: {started[i].HasExited}):\n{started[i].Log}");
+            if (stopGracefully)
+                foreach (var replica in started) await replica.StopCleanlyAsync();
         }
         finally
         {
@@ -239,6 +248,22 @@ public sealed class StartupConcurrencyPostgresTests
                 // Not listening yet: the replica is still migrating or waiting for the lock.
                 return false;
             }
+        }
+
+        public async Task StopCleanlyAsync()
+        {
+            using var signal = Process.Start(new ProcessStartInfo("kill")
+            {
+                ArgumentList = { "-TERM", _process.Id.ToString(System.Globalization.CultureInfo.InvariantCulture) },
+                UseShellExecute = false
+            }) ?? throw new InvalidOperationException("Could not send SIGTERM");
+            await signal.WaitForExitAsync();
+            Assert.Equal(0, signal.ExitCode);
+            await _process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+            // Flush asynchronous output callbacks before checking the complete shutdown log.
+            _process.WaitForExit();
+            Assert.DoesNotContain("ObjectDisposedException", Log);
+            Assert.True(_process.ExitCode == 0, $"Backend exited with {_process.ExitCode}:\n{Log}");
         }
 
         public async ValueTask DisposeAsync()
