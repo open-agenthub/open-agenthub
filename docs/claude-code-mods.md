@@ -46,8 +46,14 @@ both work under `-p`. That is the whole case.
 The mod is small on purpose. It polls `http://127.0.0.1:7681/agenthub/mod/inbox` every three
 seconds with the token the entrypoint minted (`AGENTHUB_MOD_TOKEN`); the poll is also the
 heartbeat that tells the session agent a mod is alive, so it queues there instead of typing.
-Priority messages are submitted as prompts, after `$.turn.abort` when an interrupt was asked
-for and a turn is running (the id comes from `turn.start`, cleared by `turn.complete`). Plain
+A priority message that arrives during a turn is appended to the running conversation with
+`$.session.append`, so the turn's next model request carries it (#390). `$.prompt.submit` would
+run it only once the session is idle (`docs/priority-messages.md` has the reasons). With no turn
+running it is submitted as a prompt, and with an interrupt it is submitted after `$.turn.abort`.
+The turn id comes from the main loop's `turn.start` and is cleared by its `turn.complete`. A
+subagent's turns fire the same events and are ignored. A passthrough `turn.step` observer counts
+the main loop's model requests. It is the only way to tell that a message appended while the
+last answer streamed was never read. Plain
 messages are submitted as a prompt too, but only once no turn runs; until then they set a
 status line, are printed by `/inbox`, and ride along as `context` with a prompt the person
 sends first (`docs/priority-messages.md` explains why they no longer wait for that prompt).

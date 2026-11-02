@@ -9,9 +9,13 @@ What it does:
 - Polls the session agent's loopback inbox (`GET http://127.0.0.1:7681/agenthub/mod/inbox`,
   bearer `AGENTHUB_MOD_TOKEN`) every 3 seconds; the poll doubles as the heartbeat that
   makes the session agent route messages here instead of typing them into the terminal.
-- A **priority** message is submitted as the next prompt, headed
-  `[AgentHub message from agent "<title>" (<id>)]`. With **interrupt**, the running turn is
-  aborted first.
+- A **priority** message is headed `[AgentHub message from agent "<title>" (<id>)]`. While a
+  turn runs it is appended to the running conversation (`$.session.append`), and the model
+  reads it with the turn's next request. If no request follows it, the turn's end starts one
+  that points at it. With no turn running it is submitted as the next prompt. With
+  **interrupt**, the running turn is aborted first and the message is submitted. The mod reports
+  each priority message to `POST http://127.0.0.1:7681/agenthub/mod/ack`. One it could not
+  append stays in the hub inbox for `agent_inbox`.
 - A plain message is submitted as a prompt of its own as soon as no turn runs, so an idle
   agent gets it without anyone typing. During a turn it sets a status line
   (`📨 1 fleet message — /inbox`), is printed by `/inbox`, and rides along as context with a
@@ -35,7 +39,7 @@ pieces fit: `docs/claude-code-mods.md`, `docs/priority-messages.md` and
 agenthub-fleet/
 ├── .claude-plugin/plugin.json   manifest
 ├── hooks/hooks.json             points at the hooks module
-├── hooks/register.js            the hooks: session.start, turn.start/complete, session.measure, prompt.submit, /inbox
+├── hooks/register.js            the hooks: session.start, turn.start/step/complete, session.measure, prompt.submit, /inbox
 ├── hooks/lib.mjs                the logic without the mods API (also tested by the session-agent suite)
 └── tests/agenthub-fleet.test.ts `claude plugin test`
 ```
