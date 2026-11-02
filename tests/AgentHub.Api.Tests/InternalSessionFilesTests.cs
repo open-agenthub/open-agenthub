@@ -177,6 +177,7 @@ public sealed class InternalSessionFilesTests
                 new MemoryStream([1, 2, 3]), null, "image/png", "out.png", 3));
         }
         public Task DeleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task CancelUploadAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionFilePresentation?> GetPresentationAsync(SessionFileActor actor, CancellationToken ct = default) => Task.FromResult<SessionFilePresentation?>(null);
         public Task<SessionFilePresentation> SetPresentationAsync(SessionFileActor actor, string? fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task DeleteSessionFilesAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();

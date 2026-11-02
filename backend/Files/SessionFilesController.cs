@@ -212,6 +212,11 @@ public sealed class SessionFilesController(
         }
     }
 
+    /// <summary>
+    /// Deletes a completed file. Anyone who may add files to the session may remove them: a
+    /// collaborator uploads, presents and dismisses files already, and an owner-only delete left
+    /// them able to fill the session's quota but not to clear a wrong upload out of it.
+    /// </summary>
     [HttpDelete("{fileId}")]
     public async Task<IActionResult> Delete(
         string id,
@@ -220,10 +225,31 @@ public sealed class SessionFilesController(
     {
         var actor = await ResolveActorAsync(id, ct);
         if (actor is null) return NotFound();
-        if (!actor.CanManage) return Forbid();
+        if (!actor.CanWrite) return Forbid();
         try
         {
             await files.DeleteAsync(actor, fileId, ct);
+            return NoContent();
+        }
+        catch (SessionFileException exception)
+        {
+            return SessionFileApi.Error(this, exception);
+        }
+    }
+
+    /// <summary>Abandons an upload that has not completed (see <see cref="ISessionFileService.CancelUploadAsync"/>).</summary>
+    [HttpDelete("{fileId}/upload")]
+    public async Task<IActionResult> CancelUpload(
+        string id,
+        string fileId,
+        CancellationToken ct)
+    {
+        var actor = await ResolveActorAsync(id, ct);
+        if (actor is null) return NotFound();
+        if (!actor.CanWrite) return Forbid();
+        try
+        {
+            await files.CancelUploadAsync(actor, fileId, ct);
             return NoContent();
         }
         catch (SessionFileException exception)
@@ -397,7 +423,8 @@ public static class SessionFileApi
                 controller.StatusCode(StatusCodes.Status413PayloadTooLarge, response),
             "temporary_storage_unavailable" or "storage_verification_failed"
                 or "file_state_conflict" or "session_file_count_exceeded"
-                or "session_file_bytes_exceeded" => controller.Conflict(response),
+                or "session_file_bytes_exceeded" or "file_upload_pending"
+                or "file_upload_complete" or "file_is_preview" => controller.Conflict(response),
             _ => controller.BadRequest(response),
         };
     }

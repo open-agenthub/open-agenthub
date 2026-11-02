@@ -99,11 +99,24 @@ export function createAttachmentQueue({ sessionId, api, onChange = () => {} }) {
   const items = []
   const changed = () => onChange(items)
 
+  // The backend keeps cancelling an upload apart from deleting a file. A composer row removed
+  // after its upload finished is an attachment the user chose not to send, so its file goes;
+  // one removed earlier only gives up the reservation. Complete can land after the user's click
+  // and before the cancel, which then answers file_upload_complete: the file exists after all and
+  // is deleted as the user asked.
   async function cleanup(item) {
     if (!item.id || item.cleanupStarted) return
     item.cleanupStarted = true
     try {
-      await api.deleteSessionFile(sessionId, item.id)
+      if (item.completed) await api.deleteSessionFile(sessionId, item.id)
+      else {
+        try {
+          await api.cancelSessionFileUpload(sessionId, item.id)
+        } catch (error) {
+          if (error?.code !== 'file_upload_complete') throw error
+          await api.deleteSessionFile(sessionId, item.id)
+        }
+      }
     } catch { /* a reserved file also expires server-side */ }
   }
 
@@ -132,6 +145,7 @@ export function createAttachmentQueue({ sessionId, api, onChange = () => {} }) {
       item.progress = 85
       changed()
       const ready = await api.completeSessionFile(sessionId, item.id)
+      item.completed = true
       if (item.state === 'cancelled') return await cleanup(item)
       Object.assign(item, {
         id: ready.id,

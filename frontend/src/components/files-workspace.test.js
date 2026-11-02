@@ -70,6 +70,35 @@ describe('files workspace', () => {
     expect(mocks.remove).not.toHaveBeenCalled()
   })
 
+  it('drops a deleted file from the list, keeps the pane open and re-reads the presentation', async () => {
+    mocks.list.mockResolvedValue([
+      { id: 'f1', name: 'shot.png', mimeType: 'image/png', size: 12, state: 'Ready' },
+      { id: 'f2', name: 'notes.txt', mimeType: 'text/plain', size: 4, state: 'Ready' }
+    ])
+    const wrapper = mount(SessionWorkspace, {
+      props: { session: { id: 's1', projectId: 'p1', browser: { phase: 'Stopped' } }, canWrite: true },
+      slots: { default: '<div data-terminal>terminal</div>' },
+      global: { stubs: { BrowserPane: true, FilePreview: true } }
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-file="f1"]').classes()).toContain('active')
+    mocks.list.mockResolvedValue([{ id: 'f2', name: 'notes.txt', mimeType: 'text/plain', size: 4, state: 'Ready' }])
+    mocks.presentation.mockResolvedValue({ revision: 8, fileId: null })
+    const presentationReads = mocks.presentation.mock.calls.length
+
+    await wrapper.get('[data-file-delete="f1"]').trigger('click')
+    expect(wrapper.get('[data-file-delete-presented]').exists()).toBe(true)
+    expect(wrapper.get('[data-file-delete-project]').exists()).toBe(true)
+    await wrapper.get('[data-file-delete-confirm-button]').trigger('click')
+    await flushPromises()
+
+    expect(mocks.remove).toHaveBeenCalledWith('s1', 'f1')
+    expect(wrapper.find('[data-file="f1"]').exists()).toBe(false)
+    expect(wrapper.find('[data-file="f2"]').exists()).toBe(true)
+    expect(wrapper.find('[data-files-pane]').exists()).toBe(true)
+    expect(mocks.presentation.mock.calls.length).toBeGreaterThan(presentationReads)
+  })
+
   it('dismisses a shared presentation without conflating local close', async () => {
     const wrapper = mount(SessionWorkspace, {
       props: { session: { id: 's1', browser: { phase: 'Stopped' } }, canWrite: true },

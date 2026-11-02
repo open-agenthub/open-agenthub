@@ -25,14 +25,15 @@ describe('chat attachments', () => {
     expect(validateAttachmentBatch([big]).errors[0].code).toBe('message_too_large')
   })
 
-  it('uploads, completes, retries, and deletes reserved files on removal', async () => {
+  it('uploads, completes, retries, and deletes the completed file on removal', async () => {
     let fail = true
     const calls = []
     const api = {
       reserveSessionFile: async () => ({ file: { id: 'f1' }, upload: { kind: 'proxy', url: '/upload' } }),
       uploadSessionFile: async () => { if (fail) throw Object.assign(new Error('failed'), { code: 'upload_failed' }) },
       completeSessionFile: async () => ({ id: 'f1', name: 'shot.png', mimeType: 'image/png', size: 12, state: 'Ready' }),
-      deleteSessionFile: async (...args) => calls.push(args)
+      deleteSessionFile: async (...args) => calls.push(args),
+      cancelSessionFileUpload: async () => { throw new Error('a completed file is deleted, not cancelled') }
     }
     const queue = createAttachmentQueue({ sessionId: 's1', api })
     const [item] = queue.add([png()])
@@ -52,7 +53,8 @@ describe('chat attachments', () => {
       reserveSessionFile: () => new Promise(resolve => { finishReservation = resolve }),
       uploadSessionFile: async () => { throw new Error('must not upload') },
       completeSessionFile: async () => { throw new Error('must not complete') },
-      deleteSessionFile: async (...args) => deleted.push(args)
+      deleteSessionFile: async () => { throw new Error('a reservation is cancelled, not deleted') },
+      cancelSessionFileUpload: async (...args) => deleted.push(args)
     }
     const queue = createAttachmentQueue({ sessionId: 's1', api })
     const [item] = queue.add([png()])
@@ -78,7 +80,8 @@ describe('chat attachments', () => {
       },
       completeSessionFile: async (_session, id) =>
         ({ id, name: 'done.png', mimeType: 'image/png', size: 12, state: 'Ready' }),
-      deleteSessionFile: async (...args) => deleted.push(args)
+      deleteSessionFile: async () => { throw new Error('a finished upload must stay') },
+      cancelSessionFileUpload: async (...args) => deleted.push(args)
     }
     const queue = createAttachmentQueue({ sessionId: 's1', api })
     const [done] = queue.add([png('done.png')])
@@ -93,6 +96,28 @@ describe('chat attachments', () => {
     expect(deleted).toEqual([['s1', 'f-slow.png']])
     finishUpload?.()
     await slow.promise
+  })
+
+  it('deletes the file when its upload completed between the removal and the cancel', async () => {
+    let finishComplete
+    const calls = []
+    const api = {
+      reserveSessionFile: async () => ({ file: { id: 'f1' }, upload: { kind: 'proxy', url: '/upload' } }),
+      uploadSessionFile: async () => {},
+      completeSessionFile: () => new Promise(resolve => { finishComplete = resolve }),
+      cancelSessionFileUpload: async (...args) => {
+        calls.push(['cancel', ...args])
+        throw Object.assign(new Error('409'), { status: 409, code: 'file_upload_complete' })
+      },
+      deleteSessionFile: async (...args) => calls.push(['delete', ...args])
+    }
+    const queue = createAttachmentQueue({ sessionId: 's1', api })
+    const [item] = queue.add([png()])
+    await new Promise(resolve => setTimeout(resolve, 0))
+    const removal = queue.remove(item.key)
+    finishComplete({ id: 'f1', name: 'shot.png', state: 'Ready' })
+    await Promise.all([item.promise, removal])
+    expect(calls).toEqual([['cancel', 's1', 'f1'], ['delete', 's1', 'f1']])
   })
 
   it('maps stable backend errors to useful copy', () => {

@@ -213,4 +213,98 @@ describe('FilesPane', () => {
       expect(saved).toHaveLength(1)
     })
   })
+
+  describe('deleting a file', () => {
+    const doc = { id: 'doc', name: 'report.docx', mimeType: 'application/msword', size: 10, state: 'Ready', previewFileId: 'pdf' }
+    const preview = { id: 'pdf', name: 'report.preview.pdf', mimeType: 'application/pdf', size: 5, state: 'Ready' }
+    const shot = { id: 'img', name: 'shot.png', mimeType: 'image/png', size: 12, state: 'Ready' }
+    const mountDelete = (props = {}) => mount(FilesPane, {
+      props: { sessionId: 's1', files: [doc, preview, shot], capabilities: {}, canWrite: true, ...props },
+      global: { stubs: { FilePreview: true } }
+    })
+    let confirmSpy
+
+    beforeEach(() => {
+      mocks.api.deleteSessionFile.mockReset().mockResolvedValue(null)
+      confirmSpy = vi.fn(() => true)
+      globalThis.confirm = confirmSpy
+    })
+
+    it('is offered to writers, never on a share link, and not on a preview that belongs to a document', () => {
+      const writer = mountDelete()
+      expect(writer.find('[data-file-delete="img"]').exists()).toBe(true)
+      expect(writer.find('[data-file-delete="doc"]').exists()).toBe(true)
+      expect(writer.find('[data-file-delete="pdf"]').exists()).toBe(false)
+
+      expect(mountDelete({ canWrite: false }).find('[data-file-delete]').exists()).toBe(false)
+      expect(mountDelete({ sharedToken: 'tok' }).find('[data-file-delete]').exists()).toBe(false)
+    })
+
+    it('asks inside the row and deletes only on the second click', async () => {
+      const wrapper = mountDelete({ presentedId: 'doc', inProject: true })
+      await wrapper.get('[data-file-delete="doc"]').trigger('click')
+
+      const confirmation = wrapper.get('[data-file-delete-confirm]')
+      expect(confirmation.text()).toContain('Delete report.docx?')
+      expect(confirmation.find('[data-file-delete-presented]').exists()).toBe(true)
+      expect(confirmation.find('[data-file-delete-preview]').exists()).toBe(true)
+      expect(confirmation.find('[data-file-delete-project]').exists()).toBe(true)
+      expect(mocks.api.deleteSessionFile).not.toHaveBeenCalled()
+
+      await wrapper.get('[data-file-delete-confirm-button]').trigger('click')
+      await flushPromises()
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      expect(mocks.api.deleteSessionFile).toHaveBeenCalledWith('s1', 'doc')
+      expect(wrapper.emitted('deleted')).toEqual([['doc']])
+      expect(wrapper.find('[data-file-delete-confirm]').exists()).toBe(false)
+    })
+
+    it('mentions neither presentation nor project when they do not apply', async () => {
+      const wrapper = mountDelete({ presentedId: 'doc' })
+      await wrapper.get('[data-file-delete="img"]').trigger('click')
+      const confirmation = wrapper.get('[data-file-delete-confirm]')
+      expect(confirmation.find('[data-file-delete-presented]').exists()).toBe(false)
+      expect(confirmation.find('[data-file-delete-preview]').exists()).toBe(false)
+      expect(confirmation.find('[data-file-delete-project]').exists()).toBe(false)
+    })
+
+    it('keeps the file when the user says Keep or presses Escape', async () => {
+      const wrapper = mountDelete()
+      await wrapper.get('[data-file-delete="img"]').trigger('click')
+      await wrapper.get('[data-file-delete-keep]').trigger('click')
+      expect(wrapper.find('[data-file-delete-confirm]').exists()).toBe(false)
+
+      await wrapper.get('[data-file-delete="img"]').trigger('click')
+      await wrapper.get('[data-file-delete-confirm]').trigger('keydown', { key: 'Escape' })
+      expect(wrapper.find('[data-file-delete-confirm]').exists()).toBe(false)
+      expect(mocks.api.deleteSessionFile).not.toHaveBeenCalled()
+      expect(wrapper.emitted('deleted')).toBeUndefined()
+    })
+
+    it('says why a delete was refused and keeps the question open', async () => {
+      mocks.api.deleteSessionFile.mockRejectedValueOnce(Object.assign(new Error('409'), { status: 409, code: 'file_upload_pending' }))
+      const wrapper = mountDelete()
+      await wrapper.get('[data-file-delete="img"]').trigger('click')
+      await wrapper.get('[data-file-delete-confirm-button]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.get('[data-file-delete-error]').text()).toBe('shot.png is still uploading.')
+      expect(wrapper.emitted('deleted')).toBeUndefined()
+
+      mocks.api.deleteSessionFile.mockRejectedValueOnce(Object.assign(new Error('403'), { status: 403 }))
+      await wrapper.get('[data-file-delete-confirm-button]').trigger('click')
+      await flushPromises()
+      expect(wrapper.get('[data-file-delete-error]').text()).toBe('You cannot delete files in this session.')
+    })
+
+    it('treats a file someone else already deleted as deleted', async () => {
+      mocks.api.deleteSessionFile.mockRejectedValueOnce(Object.assign(new Error('404'), { status: 404 }))
+      const wrapper = mountDelete()
+      await wrapper.get('[data-file-delete="img"]').trigger('click')
+      await wrapper.get('[data-file-delete-confirm-button]').trigger('click')
+      await flushPromises()
+      expect(wrapper.emitted('deleted')).toEqual([['img']])
+    })
+  })
 })

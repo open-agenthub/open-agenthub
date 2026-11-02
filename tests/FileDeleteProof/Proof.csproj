@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><Backend Condition="'$(Backend)' == ''">../../backend/AgentHub.Api.csproj</Backend></PropertyGroup>
+  <ItemGroup><ProjectReference Include="$(Backend)" /></ItemGroup>
+</Project>

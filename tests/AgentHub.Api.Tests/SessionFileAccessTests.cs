@@ -7,6 +7,7 @@ using AgentHub.Api.Storage;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
+using Microsoft.AspNetCore.Mvc.Infrastructure;
 using Microsoft.AspNetCore.Mvc.Routing;
 
 namespace AgentHub.Api.Tests;
@@ -42,6 +43,45 @@ public sealed class SessionFileAccessTests
         Assert.False(files.LastActor!.CanWrite);
         Assert.False(files.LastActor.CanManage);
     }
+
+    [Theory]
+    [InlineData(SessionAccessLevel.Owner, 204)]
+    [InlineData(SessionAccessLevel.Collaborator, 204)]
+    [InlineData(SessionAccessLevel.Viewer, 403)]
+    [InlineData(SessionAccessLevel.None, 404)]
+    public async Task Deleting_a_file_and_cancelling_an_upload_need_write_access(
+        SessionAccessLevel level, int expected)
+    {
+        var files = new RecordingFileService();
+
+        var deleted = await UserController(level, files).Delete("s1", "f1", default);
+        var cancelled = await UserController(level, files).CancelUpload("s1", "f1", default);
+
+        Assert.Equal(expected, StatusOf(deleted));
+        Assert.Equal(expected, StatusOf(cancelled));
+        Assert.Equal(expected == 204 ? ["delete:f1", "cancel:f1"] : [], files.Removed);
+    }
+
+    [Theory]
+    [InlineData("file_upload_pending")]
+    [InlineData("file_upload_complete")]
+    [InlineData("file_is_preview")]
+    public async Task A_delete_of_the_wrong_kind_is_a_conflict_with_its_reason(string code)
+    {
+        var files = new RecordingFileService { RemoveError = new SessionFileException(code) };
+
+        var result = Assert.IsType<ConflictObjectResult>(
+            await UserController(SessionAccessLevel.Owner, files).Delete("s1", "f1", default));
+
+        Assert.Equal(code, Assert.IsType<FileApiError>(result.Value).Code);
+    }
+
+    private static int StatusOf(IActionResult result) => result switch
+    {
+        IStatusCodeActionResult { StatusCode: { } status } => status,
+        ForbidResult => 403,
+        _ => throw new InvalidOperationException(result.GetType().Name),
+    };
 
     [Fact]
     public async Task Missing_user_access_is_hidden_as_not_found()
@@ -263,7 +303,20 @@ public sealed class SessionFileAccessTests
         }
         public Task PutPodContentAsync(SessionFileActor actor, string fileId, Stream content, long? contentLength = null, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionFileRecord> CompleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task DeleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
+        public List<string> Removed { get; } = [];
+        public SessionFileException? RemoveError { get; init; }
+        public Task DeleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default)
+        {
+            if (RemoveError is not null) throw RemoveError;
+            Removed.Add("delete:" + fileId);
+            return Task.CompletedTask;
+        }
+        public Task CancelUploadAsync(SessionFileActor actor, string fileId, CancellationToken ct = default)
+        {
+            if (RemoveError is not null) throw RemoveError;
+            Removed.Add("cancel:" + fileId);
+            return Task.CompletedTask;
+        }
         public Task<SessionFilePresentation> SetPresentationAsync(SessionFileActor actor, string? fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task DeleteSessionFilesAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
 

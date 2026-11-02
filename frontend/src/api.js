@@ -129,6 +129,7 @@ export const api = {
   issueSessionFileStream: (id, fileId) => req('POST', `/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/stream`),
   sessionFileContentUrl: (id, fileId) => `/api/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/content`,
   deleteSessionFile: (id, fileId) => req('DELETE', `/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}`),
+  cancelSessionFileUpload: (id, fileId) => req('DELETE', `/sessions/${encodeURIComponent(id)}/files/${encodeURIComponent(fileId)}/upload`),
   getFilePresentation: (id) => req('GET', `/sessions/${encodeURIComponent(id)}/files/presentation`),
   setFilePresentation: (id, fileId) => req('PUT', `/sessions/${encodeURIComponent(id)}/files/presentation`, { fileId }),
   createSession: (data) => req('POST', '/sessions', data),
