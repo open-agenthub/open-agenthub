@@ -558,7 +558,7 @@ the agent depends on the runtime ([`docs/priority-messages.md`](docs/priority-me
 
 | Runtime | Priority delivery |
 |---|---|
-| Claude | the `agenthub-fleet` mod inside Claude Code submits it as the next prompt (also in chat UI and `-p` runs); a chat-UI session without the mod gets it over the stream-json pipe |
+| Claude | the `agenthub-fleet` mod inside Claude Code adds it to the running turn, which reads it with its next model request, or submits it as the next prompt when the agent is idle (also in chat UI and `-p` runs); a chat-UI session without the mod gets it over the stream-json pipe |
 | Codex, Cursor, OpenClaw | typed into the interactive terminal as a queued prompt; autonomous runs: inbox only |
 
 What could not be pushed stays in the inbox, and the sender is told (`deliveredVia: inbox`).
