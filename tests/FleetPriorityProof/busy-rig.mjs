@@ -50,7 +50,7 @@ http.createServer((req, res) => {
     }
     // Side requests (title, prompt suggestion) carry no tools; answer them plainly.
     const side = !Array.isArray(json.tools) || !json.tools.length || /Reply with ONLY the suggestion/.test(text)
-    requests.push(text); fs.writeFileSync('req-' + requests.length + '.json', body)
+    requests.push(text)
     const has = text.includes(MARK)
     log('model: request #' + requests.length + (side ? ' (side)' : '') + (has ? ' CONTAINS ' + MARK : ''))
     if (side) return stream(res, msg, [{ type: 'text', text: 'ok' }], 'end_turn')

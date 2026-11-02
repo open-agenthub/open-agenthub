@@ -25,7 +25,8 @@ const OPENCODE = process.env.AGENT === 'opencode';
 const AGENT = HUB + 1000;
 const log = fs.createWriteStream(R + '/rig.log');
 const t0 = Date.now();
-const say = (...a) => { const line = `[${((Date.now() - t0) / 1000).toFixed(1)}s] ` + a.join(' '); console.log(line); log.write(line + '\n'); };
+// Control characters are stripped: the lines quote what the CLI sent the mock model.
+const say = (...a) => { const line = `[${((Date.now() - t0) / 1000).toFixed(1)}s] ` + a.join(' ').replace(/[\x00-\x1f\x7f]/g, ' '); console.log(line); log.write(line + '\n'); };
 
 // ---- stub hub + model --------------------------------------------------------------------
 const inbox = [];          // undelivered rows
@@ -65,7 +66,6 @@ http.createServer((req, res) => {
         const has = body.includes('MSG-B');
         const outs = msgs.filter(m => m.role === 'tool').length;
         busyReqs.push({ at: Date.now(), has, outs });
-        fs.writeFileSync(R + '/busy-req-' + busyReqs.length + '.json', body);
         say('BUSY main request #' + busyReqs.length + ' has MSG-B=' + has + ' tool_results=' + outs + (busyReqs.length === 1 ? ' tools=' + (json.tools || []).map(t => t.function && t.function.name).join(',') : ''));
         res.writeHead(200, { 'content-type': 'text/event-stream' });
         const b = { id: 'c' + busyReqs.length, object: 'chat.completion.chunk', created: 1, model: 'm1' };
@@ -107,7 +107,6 @@ http.createServer((req, res) => {
       const msgs = json.messages || [];
       const lastUser = [...msgs].reverse().find(m => m.role === 'user');
       const text = lastUser ? (typeof lastUser.content === 'string' ? lastUser.content : lastUser.content.map(c => c.text || '').join('')) : '';
-      const isTitle = /suggestion|title/i.test(JSON.stringify(json.system || '')) && !/SLOW/.test(text) ;
       modelRequests.push({ at: Date.now(), last: { role: 'user', text }, isTitle: /Reply with ONLY the suggestion/.test(text) });
       say('MODEL request #' + modelRequests.length + ' last user: ' + JSON.stringify(text.slice(-300)));
       const slow = /SLOW/.test(text) && !/AgentHub/.test(text);
@@ -130,13 +129,11 @@ http.createServer((req, res) => {
       const isTitle = /^Generate a concise, single-line task title/.test(last.text);
       modelRequests.push({ at: Date.now(), last, isTitle });
       say('MODEL request #' + modelRequests.length + (isTitle ? ' (title helper)' : '') + ' last ' + last.role + ': ' + JSON.stringify(last.text.slice(0, 400)));
-      fs.appendFileSync(R + '/model.log', JSON.stringify({ n: modelRequests.length, last, isTitle }) + '\n');
       if (!isTitle && body.includes('LONGJOB')) {
         const has = body.includes('MSG-B');
         const tools = (parsed.tools || []).map(t => t.name || t.type);
         const outs = (parsed.input || []).filter(i => i.type === 'function_call_output').length;
         busyReqs.push({ at: Date.now(), has, outs });
-        fs.writeFileSync(R + '/busy-req-' + busyReqs.length + '.json', body);
         say('BUSY main request #' + busyReqs.length + ' has MSG-B=' + has + ' function_call_outputs=' + outs + (busyReqs.length === 1 ? ' tools=' + tools.join(',') : ''));
         res.writeHead(200, { 'Content-Type': 'text/event-stream' });
         res.write(sse([{ type: 'response.created', response: { id: 'r' + modelRequests.length } }]));
@@ -495,7 +492,6 @@ async function main() {
     for (const n of sizes) for (const v of variants) {
       const id = 'MSG-V' + v + n;
       const text = make(id, n);
-      const t = Date.now();
       if (v === 'bracketed') sendInput('\x1b[200~' + text + '\x1b[201~');
       else if (v === 'chunked') { for (let i = 0; i < text.length; i += 512) { sendInput(text.slice(i, i + 512)); await sleep(30); } }
       else sendInput(text);
@@ -550,7 +546,7 @@ async function main() {
     await sleep(2500);
     dump('menu');
     fs.writeFileSync(R + '/menu-raw.bin', globalThis.rawOut());
-    const b = await push('MSG-M', 'MSG-M: during a menu.');
+    await push('MSG-M', 'MSG-M: during a menu.');
     await sleep(5000);
     dump('menu-after-send');
     say('M RESULT: model saw MSG-M=' + Boolean(modelSaw('MSG-M')) + ' inbox=' + inbox.map(m=>m.id));

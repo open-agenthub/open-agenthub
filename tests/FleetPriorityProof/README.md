@@ -5,7 +5,7 @@ through its task is in one long turn. Before #390 the fleet mod submitted the me
 plugin prompt, which Claude Code runs only once the session is idle. It arrived after the
 whole task, and the hub had already marked the row delivered, so `agent_inbox` was empty.
 
-Generated output (`rig.log`, `req-*.json`) is not committed. Run the rigs in a scratch directory.
+Generated output (`rig.log`, screens) is not committed. Run the rigs in a scratch directory.
 
 ## `server-rig.mjs`: the real session agent
 

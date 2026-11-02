@@ -13,7 +13,7 @@
 //   policy mod could: the message must then stay in the hub inbox.
 // Needs proot at $PROOT (default: <rig dir>/../proot) and session-agent node_modules built.
 import http from 'node:http';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -100,8 +100,9 @@ http.createServer((req, res) => {
       if (!Array.isArray(json.tools) || !json.tools.length || /Reply with ONLY the suggestion/.test(text)) return stream(res, msg, [{ type: 'text', text: 'ok' }], 'end_turn');
       const has = text.includes(MARK);
       requests.push({ at: Date.now(), has });
-      fs.writeFileSync(path.join(R, 'req-' + requests.length + '.json'), body);
-      say('MODEL main request #' + requests.length + (has ? ' CONTAINS ' + MARK : ''));
+      // Counted, not dumped: how often the body and the pointer of the turn-end notice occur.
+      const bodies = text.split(MARK + ': priority').length - 1, pointers = text.split('arrived while your last answer').length - 1;
+      say('MODEL main request #' + requests.length + (has ? ' CONTAINS ' + MARK + ' (body x' + bodies + ', pointer x' + pointers + ')' : ''));
       if (has && turnEnded) return stream(res, msg, [{ type: 'text', text: 'Read ' + MARK + '.' }], 'end_turn');
       mainCalls++;
       if (mainCalls <= STEPS && !has || mainCalls <= STEPS && CASE === 'busy') {
