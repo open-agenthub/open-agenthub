@@ -13,6 +13,14 @@ on:
     - cron: "23 3 * * *"
   workflow_dispatch:
     inputs:
+      installer_ref:
+        description: "Website revision to test (empty uses the published installer)"
+        type: string
+        default: ""
+      block_k3s_channel:
+        description: "Proof: block update.k3s.io during installation"
+        type: boolean
+        default: false
       inject_startup_failure:
         description: "Proof only: replace the backend entrypoint with an immediate failure"
         type: boolean
@@ -32,8 +40,14 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Fetch the quickstart and its smoke test
+        env:
+          INSTALLER_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.installer_ref || '' }}
         run: |
-          curl -fsSL https://open-agenthub.github.io/install.sh -o /tmp/install.sh
+          if [ -n "$INSTALLER_REF" ]; then
+            curl -fsSL "https://raw.githubusercontent.com/open-agenthub/open-agenthub.github.io/$INSTALLER_REF/install.sh" -o /tmp/install.sh
+          else
+            curl -fsSL https://open-agenthub.github.io/install.sh -o /tmp/install.sh
+          fi
           curl -fsSL "$SCRIPTS/.github/scripts/install-smoke.sh" -o /tmp/install-smoke.sh
 
       - uses: docker/setup-buildx-action@v4
@@ -80,6 +94,15 @@ jobs:
         env:
           INJECT_STARTUP_FAILURE: ${{ github.event_name == 'workflow_dispatch' && inputs.inject_startup_failure || false }}
         run: bash tests/InstallSmokeProof/prepare-images.sh
+
+      - name: Block k3s channel for outage proof
+        if: github.event_name == 'workflow_dispatch' && inputs.block_k3s_channel
+        run: |
+          echo "127.0.0.1 update.k3s.io" | sudo tee -a /etc/hosts
+          if curl --noproxy '*' --connect-timeout 5 -fsSL https://update.k3s.io/v1-release/channels/stable; then
+            echo "Channel unexpectedly reachable" >&2
+            exit 1
+          fi
 
       - name: Install
         run: sh /tmp/install.sh
