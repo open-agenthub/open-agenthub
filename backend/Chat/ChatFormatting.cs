@@ -8,8 +8,18 @@ public static class ChatFormatting
     /// <summary>Short session tag shown in chat (first 4 chars of the session id).</summary>
     public static string Tag(string sessionId) => sessionId.Length <= 4 ? sessionId : sessionId[..4];
 
+    /// <summary>Accept the tag as displayed in chat, or its bare session-id prefix.</summary>
+    public static string NormalizeTag(string tag)
+    {
+        var trimmed = tag.Trim();
+        return trimmed.StartsWith('#') ? trimmed[1..].Trim() : trimmed;
+    }
+
     /// <summary>True when <paramref name="tag"/> is a non-empty prefix of the session id.</summary>
     public static bool MatchesTag(string tag, string sessionId)
+        => MatchesNormalizedTag(NormalizeTag(tag), sessionId);
+
+    private static bool MatchesNormalizedTag(string tag, string sessionId)
         => tag.Length > 0 && sessionId.StartsWith(tag, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -19,11 +29,12 @@ public static class ChatFormatting
     /// </summary>
     public static (T? Match, int Count) FindByTag<T>(string tag, IEnumerable<T> items, Func<T, string> sessionId)
     {
+        tag = NormalizeTag(tag);
         T? match = default;
         var count = 0;
         foreach (var item in items)
         {
-            if (!MatchesTag(tag, sessionId(item))) continue;
+            if (!MatchesNormalizedTag(tag, sessionId(item))) continue;
             count++;
             match = item;
         }

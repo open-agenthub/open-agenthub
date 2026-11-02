@@ -178,6 +178,31 @@ public class ChatSessionDeletionPostgresTests
         Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM chat_messages"));
     }
 
+    [PostgreSqlFact]
+    public async Task Signal_UseAcceptsDisplayedTagsAndRejectsEmptyTags()
+    {
+        await using var db = await PostgresPurgeDatabase.CreateAsync();
+        var signal = await SignalRig.CreateAsync(db);
+        await AddSession(db, "ab121111");
+        await AddSession(db, "bbbb2222");
+        foreach (var id in new[] { "ab121111", "bbbb2222" })
+            await db.Bindings.UpsertAsync(new("signal", id, "alice", SignalRig.Number, null, null, false));
+        foreach (var tag in new[] { "ab12", "#ab12", "  #AB12  " })
+        {
+            await db.Bindings.SetActiveAsync("signal", SignalRig.Number, "bbbb2222");
+            await signal.SendAsync("!use " + tag);
+            Assert.Equal("ab121111", (await db.Bindings.GetActiveAsync("signal", SignalRig.Number))?.SessionId);
+            Assert.Equal("✅ Plain replies now go to #ab12.", signal.Sent.Last());
+        }
+        foreach (var tag in new[] { "", "#", " #  " })
+        {
+            await db.Bindings.SetActiveAsync("signal", SignalRig.Number, "bbbb2222");
+            await signal.SendAsync("!use " + tag);
+            Assert.Equal("Usage: !use #ab12 or !use ab12.", signal.Sent.Last());
+            Assert.Equal("bbbb2222", (await db.Bindings.GetActiveAsync("signal", SignalRig.Number))?.SessionId);
+        }
+    }
+
     private sealed class SignalRig
     {
         public const string Number = "+15550100";

@@ -24,7 +24,7 @@ public class SessionLookup : DispatchProxy
     public bool Running;
     protected override object? Invoke(MethodInfo? method, object?[]? args)
     {
-        var info = new SessionInfo { Id = "abcd1234", Owner = "owner", Title = Title!,
+        var info = new SessionInfo { Id = "ab121234", Owner = "owner", Title = Title!,
             Mode = SessionMode.Interactive, Phase = Running ? "Running" : "Stopped", PodIp = Running ? "127.0.0.1" : null };
         return method!.Name switch
         {
@@ -43,7 +43,7 @@ public class StoredTitle : DispatchProxy
     public SessionLookup Lookup = null!;
     protected override object? Invoke(MethodInfo? method, object?[]? args) => method!.Name switch
     {
-        nameof(ISessionStore.GetAsync) => Task.FromResult<SessionRecord?>(new SessionRecord { Id = "abcd1234", Owner = "owner", Title = Lookup.Title!, CallbackToken = "unused" }),
+        nameof(ISessionStore.GetAsync) => Task.FromResult<SessionRecord?>(new SessionRecord { Id = "ab121234", Owner = "owner", Title = Lookup.Title!, CallbackToken = "unused" }),
         _ => throw new NotSupportedException(method.Name)
     };
 }
@@ -86,7 +86,7 @@ public sealed class LocalPod : IAgentPodIdentityResolver
 public static class TelegramSessionScenario
 {
     public static readonly string[] Paths = ["question", "finished", "failed", "session-expired", "permission",
-        "expired", "decided", "callback", "callback-expired", "sessions", "use", "status", "new", "delivery-error", "indicator", "fallback", "forum", "new-fallback", "use-unknown", "use-ambiguous", "use-other", "long-title"];
+        "expired", "decided", "callback", "callback-expired", "sessions", "use-hash", "use-bang-hash", "use-empty", "use-bang-empty", "use", "status", "new", "delivery-error", "indicator", "fallback", "forum", "new-fallback", "use-unknown", "use-ambiguous", "use-other", "long-title"];
 
     public static async Task<List<WireMessage>> RunAsync(string path, string connectionString, bool verify = true)
     {
@@ -145,8 +145,13 @@ public static class TelegramSessionScenario
             await users.RecordLoginAsync("owner", null, null);
             await users.SetTelegramLinkAsync("owner", "5", path == "forum");
             var bindings = new ChatBindingStore(cfg); await bindings.InitializeAsync();
-            await bindings.UpsertAsync(new("telegram", "abcd1234", "owner", "5", null, null, false));
-            await bindings.SetActiveAsync("telegram", "5", "abcd1234");
+            await bindings.UpsertAsync(new("telegram", "ab121234", "owner", "5", null, null, false));
+            await bindings.SetActiveAsync("telegram", "5", "ab121234");
+            if (path is "use-hash" or "use-bang-hash" or "use-empty" or "use-bang-empty")
+            {
+                await bindings.UpsertAsync(new("telegram", "bbbb1234", "owner", "5", null, null, false));
+                await bindings.SetActiveAsync("telegram", "5", "bbbb1234");
+            }
             var permissions = new PermissionStore(cfg); await permissions.InitializeAsync();
             var opts = new TelegramOptions { Enabled = true, BotToken = "stand-in" };
             using var factory = new LocalBotFactory(new Uri($"http://127.0.0.1:{port}/"));
@@ -157,10 +162,10 @@ public static class TelegramSessionScenario
             if (path == "fallback") lookup.Title = " ";
             if (path == "long-title") lookup.Title = "Title\0\n" + new string('x', 200) + "😀";
             if (path == "use-ambiguous")
-                await bindings.UpsertAsync(new("telegram", "abcd9999", "owner", "5", null, null, false));
+                await bindings.UpsertAsync(new("telegram", "ab129999", "owner", "5", null, null, false));
             if (path == "use-other")
             {
-                await bindings.UpsertAsync(new("telegram", "abcd1234", "previous-owner", "5", null, null, false));
+                await bindings.UpsertAsync(new("telegram", "ab121234", "previous-owner", "5", null, null, false));
             }
             var indicator = new WorkingIndicator(TimeSpan.FromMilliseconds(10), TimeSpan.FromSeconds(30));
             var notifier = new TelegramNotifier(opts, tg, bindings, users, conversations, indicator, NullLogger<TelegramNotifier>.Instance);
@@ -170,7 +175,7 @@ public static class TelegramSessionScenario
             var update = new TelegramUpdateService(opts, tg, bindings, new ChatLinkCodeStore(cfg), users,
                 permissions, sessions, conversations, new ChatRepoService(null!, NullLogger<ChatRepoService>.Instance),
                 indicator, new AgentPodRequests(new HttpClient(), new LocalPod()), cfg, NullLogger<TelegramUpdateService>.Instance);
-            var req = new PermissionRequest { Id = "request", SessionId = "abcd1234", Owner = "owner", Tool = "Read", Summary = "file", Channel = "5", MessageTs = "42" };
+            var req = new PermissionRequest { Id = "request", SessionId = "ab121234", Owner = "owner", Tool = "Read", Summary = "file", Channel = "5", MessageTs = "42" };
             await permissions.CreateAsync(req);
             async Task Dispatch(string text, bool callback = false)
             {
@@ -184,7 +189,7 @@ public static class TelegramSessionScenario
             switch (path)
             {
                 case "question": case "finished": case "failed": case "session-expired":
-                    await notifier.NotifyAsync(new SessionRecord { Id = "abcd1234", Owner = "owner", Title = lookup.Title!, CallbackToken = "unused" }, path,
+                    await notifier.NotifyAsync(new SessionRecord { Id = "ab121234", Owner = "owner", Title = lookup.Title!, CallbackToken = "unused" }, path,
                         path == "question" ? new string('z', 8100) : "complete"); break;
                 case "permission": case "fallback": case "long-title":
                     await PermissionRelay.TryPostAsync([editor], req, default); break;
@@ -192,8 +197,9 @@ public static class TelegramSessionScenario
                 case "decided": await editor.MarkDecidedAsync(req, "allowAlways"); break;
                 case "callback": await Dispatch("", true); break;
                 case "callback-expired": await permissions.ResolveAsync(req.Id, "expired"); await Dispatch("", true); break;
+                case "use-hash": case "use-bang-hash": case "use-empty": case "use-bang-empty":
                 case "use-unknown": case "use-ambiguous": case "use-other": case "forum": case "new-fallback": case "sessions": case "use": case "status": case "new":
-                    await Dispatch(path switch { "use" or "use-ambiguous" or "use-other" => "/use abcd", "use-unknown" => "/use ffff", "new" or "forum" or "new-fallback" => "/new fix it", _ => "/" + path }); break;
+                    await Dispatch(path switch { "use-hash" => "/use  #AB12  ", "use-bang-hash" => "!use #ab12", "use-empty" => "/use #", "use-bang-empty" => "!use #", "use" or "use-ambiguous" or "use-other" => "/use ab12", "use-unknown" => "/use ffff", "new" or "forum" or "new-fallback" => "/new fix it", _ => "/" + path }); break;
                 case "delivery-error": await Dispatch("hello"); break;
                 case "indicator":
                     lookup.Running = true;
@@ -204,20 +210,27 @@ public static class TelegramSessionScenario
                         lock (wire) { if (wire.Any(w => w.Method == "editMessageText")) break; }
                         await Task.Delay(10);
                     }
-                    indicator.Stop("abcd1234");
+                    indicator.Stop("ab121234");
                     break;
                 default: throw new ArgumentException(path);
             }
             if (verify)
             {
+                if (path is "use-hash" or "use-bang-hash" &&
+                    (await bindings.GetActiveAsync("telegram", "5"))?.SessionId != "ab121234")
+                    throw new Exception("Hash tag did not select the session");
+                if (path is "use-empty" or "use-bang-empty" &&
+                    (await bindings.GetActiveAsync("telegram", "5"))?.SessionId != "bbbb1234")
+                    throw new Exception("Empty tag changed the active session");
                 if (wire.Count == 0) throw new Exception("No Bot API calls for " + path);
                 foreach (var item in wire.Where(w => w.Body.TryGetProperty("text", out _)))
                 {
                     var text = item.Body.GetProperty("text").GetString()!;
                     var expected = path switch
                     {
-                        "fallback" => "#abcd",
-                        "long-title" => ChatFormatting.SessionLabel("abcd1234", lookup.Title),
+                        "fallback" => "#ab12",
+                        "long-title" => ChatFormatting.SessionLabel("ab121234", lookup.Title),
+                        "use-empty" or "use-bang-empty" => "Usage: /use #ab12 or /use ab12.",
                         "use-unknown" or "use-other" => "No session matches that tag.",
                         "use-ambiguous" => "Ambiguous — be more specific.",
                         _ => lookup.Title!

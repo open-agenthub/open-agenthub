@@ -60,3 +60,15 @@ The first prints every step (what was sent, every `sendMessage`, the row counts)
 asserts; the second runs the same steps at the revision before the fix, where the assertions
 fail by design. The scenario also runs as `TelegramSessionPathsTests.DeletedSessionsLeaveTheChat`.
 
+
+## Displayed tag input (#396)
+
+The `use-hash` and `use-bang-hash` paths send `/use #AB12` and `!use #ab12`
+through the real router; `use-empty` and `use-bang-empty` assert the usage hint.
+Run the same proof sources against the parent revision with `--record-baseline`
+to record the previous “No session matches that tag.” response without assertions.
+Only the shared formatting and relay production files differ for that comparison.
+
+`bash tests/TelegramSessionNamesProof/record-tag-baseline.sh /tmp/tag-baseline /tmp/tag-before.json`
+creates an isolated worktree at the parent revision and copies only the scenario sources.
+Set the database connection string and put the .NET SDK on PATH as above.

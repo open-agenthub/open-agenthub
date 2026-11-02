@@ -5,6 +5,15 @@ namespace AgentHub.Api.Tests;
 
 public class ChatFormattingTests
 {
+    [Theory]
+    [InlineData(" #Ab12 ", "Ab12")]
+    [InlineData(" ab12 ", "ab12")]
+    [InlineData(" # ", "")]
+    [InlineData("", "")]
+    [InlineData("##ab12", "#ab12")]
+    public void NormalizeTag_StripsOneDisplayPrefix(string tag, string expected)
+        => Assert.Equal(expected, ChatFormatting.NormalizeTag(tag));
+
     [Fact]
     public void Tag_IsFirstFourChars() => Assert.Equal("a3f2", ChatFormatting.Tag("a3f2941be0c1"));
 
@@ -12,15 +21,21 @@ public class ChatFormattingTests
     [InlineData("a3f2", "a3f2941be0c1", true)]   // exact tag
     [InlineData("a3f29", "a3f2941be0c1", true)]  // longer prefix
     [InlineData("a3", "a3f2941be0c1", true)]     // shorter prefix (caller ensures uniqueness)
+    [InlineData("  #A3F2  ", "a3f2941be0c1", true)]
+    [InlineData("  a3f2  ", "a3f2941be0c1", true)]
+    [InlineData(" # ", "a3f2941be0c1", false)]
+    [InlineData("   ", "a3f2941be0c1", false)]
     [InlineData("b7c1", "a3f2941be0c1", false)]
     [InlineData("", "a3f2941be0c1", false)]
     public void MatchesTag(string tag, string sessionId, bool expected)
         => Assert.Equal(expected, ChatFormatting.MatchesTag(tag, sessionId));
 
-    [Fact]
-    public void FindByTag_UniquePrefix_ReturnsMatch()
+    [Theory]
+    [InlineData("a3")]
+    [InlineData(" #A3 ")]
+    public void FindByTag_UniquePrefix_ReturnsMatch(string tag)
     {
-        var (match, count) = ChatFormatting.FindByTag("a3",
+        var (match, count) = ChatFormatting.FindByTag(tag,
             new[] { "a3f2941be0c1", "b7c1550d2e9f" }, s => s);
         Assert.Equal(1, count);
         Assert.Equal("a3f2941be0c1", match);
@@ -29,16 +44,19 @@ public class ChatFormattingTests
     [Fact]
     public void FindByTag_AmbiguousPrefix_CountsButNoMatch()
     {
-        var (match, count) = ChatFormatting.FindByTag("a3f2",
+        var (match, count) = ChatFormatting.FindByTag(" #A3F2 ",
             new[] { "a3f2941be0c1", "a3f2000d2e9f", "b7c1550d2e9f" }, s => s);
         Assert.Equal(2, count);
         Assert.Null(match);
     }
 
-    [Fact]
-    public void FindByTag_NoMatch_CountZero()
+    [Theory]
+    [InlineData("zz")]
+    [InlineData(" # ")]
+    [InlineData("")]
+    public void FindByTag_NoMatch_CountZero(string tag)
     {
-        var (match, count) = ChatFormatting.FindByTag("zz",
+        var (match, count) = ChatFormatting.FindByTag(tag,
             new[] { "a3f2941be0c1" }, s => s);
         Assert.Equal(0, count);
         Assert.Null(match);
