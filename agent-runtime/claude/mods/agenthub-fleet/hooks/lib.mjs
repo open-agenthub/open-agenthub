@@ -51,27 +51,27 @@ export function planDelivery(messages, turnRunning, held = []) {
 }
 
 /**
- * Which of the priority messages appended into a running turn the model has not read (#390).
- * `apiMessages` is the main conversation in the Messages API form, `items` the messages with
- * the text their row carries. A row is read once an assistant message follows it; one appended
- * while the turn's last answer streamed has none after it, and nothing would read it until
- * someone starts another turn. A row that cannot be found counts as unread: submitting it once
- * more costs a repeated message, losing it costs the message.
+ * The priority messages appended into a running turn that no model request read (#390):
+ * `appended` holds each with the main loop's request count at its append, `steps` is the count
+ * at the turn's end. One appended while the turn's last answer streamed has no request after
+ * it, and nothing would read it until someone starts another turn. Its row does have an
+ * assistant message after it in the transcript, the answer that was already streaming, so the
+ * transcript cannot tell; the request count can.
  */
-export function unreadAppends(apiMessages, items) {
-  const list = Array.isArray(apiMessages) ? apiMessages : [];
-  return items.filter(item => {
-    let at = -1;
-    list.forEach((message, index) => { if (carriesText(message, item.text)) at = index; });
-    return at < 0 || !list.slice(at + 1).some(message => message && message.role === 'assistant');
-  });
+export function unreadAppends(appended, steps) {
+  return appended.filter(item => item.step >= steps).map(item => item.message);
 }
 
-function carriesText(message, text) {
-  if (!message || message.role !== 'user') return false;
-  if (typeof message.content === 'string') return message.content.includes(text);
-  return Array.isArray(message.content) &&
-    message.content.some(block => block && block.type === 'text' && typeof block.text === 'string' && block.text.includes(text));
+/** The prompt that starts a turn for unread appended messages. Their rows are already in the
+ * conversation, and the request carries them; the prompt only points there, so the model does
+ * not read each message twice. */
+export function unreadNotice(messages) {
+  const senders = messages.map(message => message.from
+    ? 'agent "' + (message.fromTitle || message.from) + '" (' + message.from + ')'
+    : 'outside the fleet');
+  return messages.length === 1
+    ? 'The AgentHub message from ' + senders[0] + ' above arrived while your last answer was being written.'
+    : 'The ' + messages.length + ' AgentHub messages above (from ' + senders.join(', ') + ') arrived while your last answer was being written.';
 }
 
 // ---- usage limits (docs/account-limits.md) ---------------------------------------------------

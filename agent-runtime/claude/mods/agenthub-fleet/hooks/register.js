@@ -6,7 +6,7 @@
 // once no turn runs. It also
 // watches the rate-limit windows Claude Code reports and tells the session agent when one is
 // used up; the hub, not the mod, decides what to do about it.
-import { formatFleetMessage, inboxStatus, inboxText, limitKey, parseInbox, parseThreshold, planDelivery, planLimitReports, unreadAppends } from './lib.mjs'
+import { formatFleetMessage, inboxStatus, inboxText, limitKey, parseInbox, parseThreshold, planDelivery, planLimitReports, unreadAppends, unreadNotice } from './lib.mjs'
 
 const POLL_MS = 3000
 const INBOX_URL = 'http://127.0.0.1:7681/agenthub/mod/inbox'
@@ -19,8 +19,9 @@ const ACK_URL = 'http://127.0.0.1:7681/agenthub/mod/ack'
 let waiting = []
 // The id the main loop's turn.start handed us, while that turn runs; what $.turn.abort needs.
 let runningTurn = null
-// Priority messages appended into the running turn, with the text their row carries; checked
-// at its end for one the model never read.
+// Model requests of the main loop so far, and the priority messages appended into the running
+// turn with the count at their append; a message no request followed was never read.
+let mainSteps = 0
 let appended = []
 let modToken = ''
 // Percent of a window at which it is reported, and the windows already reported this session.
@@ -58,13 +59,19 @@ export function register(on) {
     return next(e)
   })
 
+  // Observes only: passes the request and its streamed answer through unchanged.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined) mainSteps++
+    return yield* next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
     if (e.agentId !== undefined) return next(e)
     if (runningTurn === e.turnId) runningTurn = null
     if (appended.length) {
-      const items = appended
+      const unread = unreadAppends(appended, mainSteps)
       appended = []
-      await submitUnread($, items)
+      if (unread.length) submit($, unreadNotice(unread), unread)
     }
     // A turn that died on an API error is the one a person would have noticed. The windows
     // may not have moved a whole point since the last measurement, so they are read afresh
@@ -187,7 +194,7 @@ async function append($, message) {
       $.ui.log('fleet append refused: ' + result.deny, { to: 'debug' })
       return false
     }
-    appended.push({ message, text })
+    appended.push({ message, step: mainSteps })
     return true
   } catch (error) {
     $.ui.log('fleet append failed: ' + describe(error), { to: 'debug' })
@@ -218,21 +225,6 @@ async function acknowledge($, outcomes) {
   }
   for (const { message, outcome } of outcomes) {
     if (outcome === 'failed' && !accepted.includes(message.id)) submit($, formatFleetMessage(message), [message])
-  }
-}
-
-// At the end of a turn: a message appended while its last answer streamed is in the
-// conversation, but no request read it, and none will until another turn starts.
-async function submitUnread($, items) {
-  let unread = items
-  try {
-    unread = unreadAppends(await $.session.messages({ as: 'api' }), items)
-  } catch (error) {
-    $.ui.log('fleet transcript read failed: ' + describe(error), { to: 'debug' })
-  }
-  if (unread.length) {
-    const messages = unread.map(item => item.message)
-    submit($, inboxText(messages), messages)
   }
 }
 

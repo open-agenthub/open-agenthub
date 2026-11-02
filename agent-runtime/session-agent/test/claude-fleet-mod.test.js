@@ -121,20 +121,24 @@ test('status line and /inbox text', async () => {
 });
 
 // #390: a priority message appended while the turn's last answer streamed is in the
-// conversation, but no request read it; the turn's end has to start one.
-test('an appended message is unread until an assistant message follows it', async () => {
+// conversation, followed by that answer's row, but no request read it.
+test('an appended message is unread unless a model request started after its append', async () => {
   const { unreadAppends } = await lib();
-  const early = { message: { id: 'a' }, text: 'MSG-A' };
-  const late = { message: { id: 'b' }, text: 'MSG-B' };
-  const gone = { message: { id: 'c' }, text: 'MSG-C' };
-  const transcript = [
-    { role: 'user', content: 'start' },
-    { role: 'assistant', content: [{ type: 'tool_use', id: 't1' }] },
-    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1' }, { type: 'text', text: 'MSG-A' }] },
-    { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
-    { role: 'user', content: [{ type: 'text', text: 'MSG-B' }] }
-  ];
+  const early = { message: { id: 'a' }, step: 1 };
+  const late = { message: { id: 'b' }, step: 3 };
 
-  assert.deepEqual(unreadAppends(transcript, [early, late, gone]), [late, gone]);
-  assert.deepEqual(unreadAppends(null, [early]), [early]);
+  assert.deepEqual(unreadAppends([early, late], 3), [{ id: 'b' }]);
+  assert.deepEqual(unreadAppends([early, late], 4), []);
+  assert.deepEqual(unreadAppends([], 0), []);
+});
+
+test('the notice for unread appended messages names their senders and repeats no body', async () => {
+  const { unreadNotice } = await lib();
+  const peer = { id: 'a', from: 'rev-1', fromTitle: 'Code Reviewer', body: 'secret plan' };
+  const owner = { id: 'b', from: null, fromTitle: null, body: 'hi' };
+
+  assert.equal(unreadNotice([peer]),
+    'The AgentHub message from agent "Code Reviewer" (rev-1) above arrived while your last answer was being written.');
+  assert.equal(unreadNotice([peer, owner]),
+    'The 2 AgentHub messages above (from agent "Code Reviewer" (rev-1), outside the fleet) arrived while your last answer was being written.');
 });
