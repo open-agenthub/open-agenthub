@@ -83,12 +83,7 @@ class AttachmentMaterializer {
       return existing.path;
     }
 
-    if (record.storageKind !== 'S3' || typeof record.downloadUrl !== 'string')
-      throw new Error('attachment_batch_invalid');
-    let url;
-    try { url = new URL(record.downloadUrl); } catch { throw new Error('attachment_download_invalid'); }
-    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
-      throw new Error('attachment_download_invalid');
+    if (record.storageKind !== 'S3') throw new Error('attachment_batch_invalid');
 
     const existing = await this.store.head(record.id);
     if (existing) {
@@ -97,8 +92,9 @@ class AttachmentMaterializer {
       return existing.path;
     }
 
-    const response = await this.fetch(url.toString(), {
-      method: 'GET', signal: AbortSignal.timeout(300_000)
+    const response = await this.fetch(`${this.baseUrl}/files/${encodeURIComponent(record.id)}/content`, {
+      // Keep the callback token on the backend route even if a proxy returns a redirect.
+      method: 'GET', headers: { 'X-Agent-Token': this.token }, redirect: 'error', signal: AbortSignal.timeout(300_000)
     });
     if (!response.ok || !response.body) throw new Error('attachment_download_failed');
     const declared = Number(response.headers.get('content-length'));

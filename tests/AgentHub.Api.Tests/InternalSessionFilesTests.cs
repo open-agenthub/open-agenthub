@@ -77,6 +77,34 @@ public sealed class InternalSessionFilesTests
         Assert.IsType<UnauthorizedResult>(await controller.Content("s1", "f1", default));
     }
 
+    [Theory]
+    [InlineData("s1", "secret", true)]
+    [InlineData("other", "secret", false)]
+    [InlineData("s1", "wrong", false)]
+    [InlineData("s1", "", false)]
+    public async Task Attachment_content_checks_the_real_callback_authorizer(
+        string requestedSession, string token, bool allowed)
+    {
+        var files = new RecordingFiles();
+        var controller = Controller(new AgentCallbackAuthorizer(new NoSessions()), files);
+        controller.Request.Headers["X-Agent-Token"] = token;
+
+        var result = await controller.Content(requestedSession, "f1", default);
+
+        if (allowed)
+        {
+            var content = Assert.IsType<FileStreamResult>(result);
+            await content.FileStream.DisposeAsync();
+            Assert.Equal("s1", files.LastActor!.SessionId);
+            Assert.False(files.LastAllowRedirect);
+        }
+        else
+        {
+            Assert.IsType<UnauthorizedResult>(result);
+            Assert.Null(files.LastActor);
+        }
+    }
+
     private static InternalSessionFilesController Controller(
         IAgentCallbackAuthorizer authorizer,
         RecordingFiles files) => new(
@@ -105,7 +133,7 @@ public sealed class InternalSessionFilesTests
         public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task UpsertAsync(SessionRecord r, CancellationToken ct = default) => Task.CompletedTask;
         public Task<SessionRecord?> GetAsync(string owner, string id, CancellationToken ct = default) => Task.FromResult<SessionRecord?>(null);
-        public Task<SessionRecord?> GetByCallbackTokenAsync(string token, CancellationToken ct = default) => Task.FromResult<SessionRecord?>(null);
+        public Task<SessionRecord?> GetByCallbackTokenAsync(string token, CancellationToken ct = default) => Task.FromResult<SessionRecord?>(token == "secret" ? Session() : null);
         public Task<IReadOnlyList<SessionRecord>> ListAsync(string owner, CancellationToken ct = default) => Task.FromResult<IReadOnlyList<SessionRecord>>([]);
         public Task UpdateStatusAsync(string id, string status, CancellationToken ct = default) => Task.CompletedTask;
         public Task SetQuestionPendingAsync(string id, bool pending, CancellationToken ct = default) => Task.CompletedTask;
