@@ -1,3 +1,7 @@
+// #390 check for Codex and OpenCode: the fleet-delivery-real-cli-rig skill's rig.mjs with a 'busy'
+// scenario. Lay out <S>/rig (this file + the skill's build.sh), <S>/clis (npm i @openai/codex@<pin>),
+// <S>/proot; R=<S>/rig WT=<worktree>/agent-runtime ./build.sh; SCENARIO=busy node rig.mjs. The mock
+// keeps a LONGJOB turn busy for three 10 s model calls; a priority message is pushed during the first.
 // AGENT=opencode SCENARIO=busy does the same for OpenCode (npm i opencode-ai@<pin> into <S>/clis): the
 // /v1/chat/completions mock answers three todowrite tool calls, each after 10 s.
 // #173 rig: real pinned Codex TUI in the real common/server.js PTY (under proot, so the branch's
