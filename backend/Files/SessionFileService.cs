@@ -80,7 +80,13 @@ public interface ISessionFileService
         bool allowRedirect = true,
         CancellationToken ct = default) =>
         OpenContentAsync(actor, fileId, allowRedirect, ct);
+    /// <summary>Destroys a completed file: its record, its bytes and its Office preview.</summary>
     Task DeleteAsync(
+        SessionFileActor actor,
+        string fileId,
+        CancellationToken ct = default);
+    /// <summary>Abandons an upload that never completed, releasing its reservation.</summary>
+    Task CancelUploadAsync(
         SessionFileActor actor,
         string fileId,
         CancellationToken ct = default);
@@ -451,18 +457,94 @@ public sealed class SessionFileService : ISessionFileService
         await _registry.ClearPresentationIfFileAsync(file.SessionId, file.Id, "system", ct);
     }
 
+    /// <summary>
+    /// Deleting a file and cancelling an upload used to be one request that accepted any state.
+    /// Apart, each says what it may touch: this one only a Ready file, so a stale "cancel" from a
+    /// composer can never take a file that has since become part of the session by accident, and
+    /// a delete from the Files pane cannot pull the reservation out from under an upload another
+    /// collaborator — or the agent — still has in flight.
+    /// </summary>
     public async Task DeleteAsync(
         SessionFileActor actor,
         string fileId,
         CancellationToken ct = default)
     {
-        if (!actor.CanManage)
+        RequireWrite(actor);
+        var file = await RequireFileAsync(actor.SessionId, fileId, ct);
+        switch (file.State)
+        {
+            case SessionFileState.Ready:
+                break;
+            case SessionFileState.Reserved or SessionFileState.Uploading or SessionFileState.Failed:
+                throw new SessionFileException("file_upload_pending");
+            default:
+                throw new SessionFileException("file_not_found");
+        }
+
+        // A converted Office preview is listed like any file but belongs to its document: the
+        // document's preview pane fetches it by id. Deleting it alone would leave the document
+        // pointing at a file that is gone, so it goes with the document instead.
+        var listed = await _registry.ListAsync(actor.SessionId, ct);
+        if (listed.Any(source => source.State == SessionFileState.Ready &&
+                                 string.Equals(source.PreviewFileId, file.Id, StringComparison.Ordinal)))
+        {
+            throw new SessionFileException("file_is_preview");
+        }
+
+        await RemoveAsync(actor, file, SessionFileState.Ready, ct);
+        if (file.PreviewFileId is { Length: > 0 } previewId &&
+            listed.FirstOrDefault(candidate => candidate.Id == previewId) is
+                { State: SessionFileState.Ready } preview)
+        {
+            try
+            {
+                await RemoveAsync(actor, preview, SessionFileState.Ready, ct);
+            }
+            catch (SessionFileException exception) when (exception.Code == "file_state_conflict")
+            {
+                // Removed concurrently; nothing of it is left to delete.
+            }
+        }
+    }
+
+    public async Task CancelUploadAsync(
+        SessionFileActor actor,
+        string fileId,
+        CancellationToken ct = default)
+    {
+        RequireWrite(actor);
+        var file = await RequireFileAsync(actor.SessionId, fileId, ct);
+        // Only the reservation's own uploader (or the session owner) may give it up. A
+        // collaborator sees no pending row of anyone else's in the UI, so a cancel for one is
+        // either a guess or a stale id, and honouring it would break that upload mid-flight.
+        if (!actor.CanManage && !string.Equals(file.Creator, actor.Principal, StringComparison.Ordinal))
         {
             throw new SessionFileException("file_access_denied");
         }
+        if (file.State == SessionFileState.Ready)
+        {
+            throw new SessionFileException("file_upload_complete");
+        }
+        if (file.State is not (SessionFileState.Reserved or SessionFileState.Uploading or SessionFileState.Failed))
+        {
+            throw new SessionFileException("file_not_found");
+        }
 
-        var file = await RequireFileAsync(actor.SessionId, fileId, ct);
-        if (!await _registry.TransitionAsync(actor.SessionId, file.Id, file.State,
+        await RemoveAsync(actor, file, file.State, ct);
+    }
+
+    /// <summary>
+    /// Marks the record first, then drops the bytes. The transition is the commit point: once it
+    /// lands nothing lists or serves the file, so a storage error afterwards only leaves bytes
+    /// behind, never a listed file whose content is gone.
+    /// </summary>
+    private async Task RemoveAsync(
+        SessionFileActor actor,
+        SessionFileRecord file,
+        SessionFileState expected,
+        CancellationToken ct)
+    {
+        if (!await _registry.TransitionAsync(actor.SessionId, file.Id, expected,
                 SessionFileState.Deleted, null, null, ct))
         {
             throw new SessionFileException("file_state_conflict");

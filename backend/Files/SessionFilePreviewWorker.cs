@@ -37,6 +37,13 @@ public sealed class SessionFilePreviewWorker(
             await UploadAsync(actor, reserved, pdf, ct);
             var completed = await files.CompleteAsync(actor, reserved.File.Id, ct);
             await registry.LinkPreviewAsync(source.Id, completed.Id, succeeded: true, ct);
+            // The document can be deleted while it converts; its delete then found no preview to
+            // take along, and this one would stay listed as a file of its own with nothing left
+            // that it previews.
+            if ((await registry.GetAsync(source.SessionId, source.Id, ct))?.State != SessionFileState.Ready)
+            {
+                await files.DeleteAsync(actor, completed.Id, ct);
+            }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception exception)

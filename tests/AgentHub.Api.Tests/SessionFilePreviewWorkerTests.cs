@@ -42,6 +42,29 @@ public sealed class SessionFilePreviewWorkerTests
         Assert.Equal(SessionFileState.Ready, source.State);
     }
 
+    [Fact]
+    public async Task A_preview_finished_after_its_document_was_deleted_is_deleted_too()
+    {
+        var registry = new FakeRegistry(Source()) { SourceStateAfterLink = SessionFileState.Deleted };
+        var files = new FakeFiles();
+        var worker = Worker(registry, files, new FakeRenderer([0x25, 0x50]));
+
+        Assert.True(await worker.ProcessNextAsync());
+
+        Assert.Equal(["preview"], files.Deleted);
+    }
+
+    [Fact]
+    public async Task A_preview_of_a_document_that_is_still_there_is_kept()
+    {
+        var files = new FakeFiles();
+        var worker = Worker(new FakeRegistry(Source()), files, new FakeRenderer([0x25, 0x50]));
+
+        Assert.True(await worker.ProcessNextAsync());
+
+        Assert.Empty(files.Deleted);
+    }
+
     private static SessionFilePreviewWorker Worker(
         FakeRegistry registry, FakeFiles files, FakeRenderer renderer, bool enabled = true) =>
         new(registry, files, renderer, new FakeHttpFactory(), new SessionFileOptions
@@ -89,7 +112,10 @@ public sealed class SessionFilePreviewWorkerTests
             SessionFileStorageKind.Pod, "preview/report.preview.pdf", SessionFileState.Reserved,
             SessionFilePreviewState.None, null, "alice", "office-preview", DateTime.UtcNow, null, null);
         public Task<IReadOnlyList<SessionFileRecord>> ListAsync(SessionFileActor actor, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task DeleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
+        public List<string> Deleted { get; } = [];
+        public Task DeleteAsync(SessionFileActor actor, string fileId, CancellationToken ct = default)
+        { Deleted.Add(fileId); return Task.CompletedTask; }
+        public Task CancelUploadAsync(SessionFileActor actor, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionFilePresentation?> GetPresentationAsync(SessionFileActor actor, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionFilePresentation> SetPresentationAsync(SessionFileActor actor, string? fileId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task DeleteSessionFilesAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
@@ -97,7 +123,9 @@ public sealed class SessionFilePreviewWorkerTests
 
     private sealed class FakeRegistry(SessionFileRecord? source) : ISessionFileRegistry
     {
+        private readonly SessionFileRecord? _claimed = source;
         public int Claims { get; private set; }
+        public SessionFileState SourceStateAfterLink { get; init; } = SessionFileState.Ready;
         public (string Source, string Preview, bool Succeeded)? Linked { get; private set; }
         public Task<SessionFileRecord?> ClaimPreviewAsync(CancellationToken ct = default)
         {
@@ -110,7 +138,10 @@ public sealed class SessionFilePreviewWorkerTests
         { Linked = (sourceId, previewId, succeeded); return Task.CompletedTask; }
         public Task InitializeAsync(CancellationToken ct = default) => throw new NotSupportedException();
         public Task InsertAsync(SessionFileRecord file, CancellationToken ct = default) => throw new NotSupportedException();
-        public Task<SessionFileRecord?> GetAsync(string sessionId, string fileId, CancellationToken ct = default) => throw new NotSupportedException();
+        public Task<SessionFileRecord?> GetAsync(string sessionId, string fileId, CancellationToken ct = default) =>
+            Task.FromResult(_claimed is not null && fileId == _claimed.Id
+                ? _claimed with { State = SourceStateAfterLink }
+                : null);
         public Task<IReadOnlyList<SessionFileRecord>> ListAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<SessionFileUsage> GetUsageAsync(string sessionId, CancellationToken ct = default) => throw new NotSupportedException();
         public Task<bool> TransitionAsync(string sessionId, string fileId, SessionFileState expected, SessionFileState next, string? detectedMime, long? actualSize, CancellationToken ct = default) => throw new NotSupportedException();

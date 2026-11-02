@@ -11,6 +11,8 @@ public sealed class SessionFileServiceTests
 {
     private static readonly SessionFileActor Actor =
         new("s1", "alice", "alice", CanWrite: true, CanManage: true);
+    private static readonly SessionFileActor Collaborator =
+        new("s1", "alice", "bob", CanWrite: true, CanManage: false);
 
     [Fact]
     public async Task Reserve_uses_pod_only_when_s3_is_not_configured_and_pod_is_live()
@@ -289,6 +291,128 @@ public sealed class SessionFileServiceTests
 
         Assert.Equal(SessionFileState.Deleted, harness.Registry.Files["f1"].State);
         Assert.Null((await harness.Registry.GetPresentationAsync("s1"))!.FileId);
+    }
+
+    [Fact]
+    public async Task A_collaborator_deletes_a_completed_pod_file_from_the_live_pod()
+    {
+        var harness = Harness(s3Configured: false, podPhase: "Running");
+        var file = Reserved("f1", SessionFileStorageKind.Pod) with { State = SessionFileState.Ready };
+        await harness.Registry.InsertAsync(file);
+        harness.Agent.Uploads["f1"] = [1];
+
+        await harness.Service.DeleteAsync(Collaborator, "f1");
+
+        Assert.Equal(SessionFileState.Deleted, harness.Registry.Files["f1"].State);
+        Assert.Empty(harness.Agent.Uploads);
+    }
+
+    [Theory]
+    [InlineData(SessionFileState.Reserved, "file_upload_pending")]
+    [InlineData(SessionFileState.Uploading, "file_upload_pending")]
+    [InlineData(SessionFileState.Failed, "file_upload_pending")]
+    [InlineData(SessionFileState.Expired, "file_not_found")]
+    [InlineData(SessionFileState.Deleted, "file_not_found")]
+    public async Task Delete_takes_only_a_completed_file(SessionFileState state, string code)
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        await harness.Registry.InsertAsync(Reserved("f1", SessionFileStorageKind.S3) with { State = state });
+
+        var error = await Assert.ThrowsAsync<SessionFileException>(() => harness.Service.DeleteAsync(Actor, "f1"));
+
+        Assert.Equal(code, error.Code);
+        Assert.Equal(state, harness.Registry.Files["f1"].State);
+        Assert.Empty(harness.Artifacts.Deleted);
+    }
+
+    [Theory]
+    [InlineData(SessionFileState.Reserved)]
+    [InlineData(SessionFileState.Uploading)]
+    [InlineData(SessionFileState.Failed)]
+    public async Task The_uploader_cancels_an_upload_that_has_not_completed(SessionFileState state)
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        var file = Reserved("f1", SessionFileStorageKind.S3) with { State = state, Creator = "bob" };
+        await harness.Registry.InsertAsync(file);
+
+        await harness.Service.CancelUploadAsync(Collaborator, "f1");
+
+        Assert.Equal(SessionFileState.Deleted, harness.Registry.Files["f1"].State);
+        Assert.Contains(file.StorageLocator, harness.Artifacts.Deleted);
+    }
+
+    [Fact]
+    public async Task Cancel_refuses_a_completed_file_and_someone_else_s_reservation()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        await harness.Registry.InsertAsync(Reserved("done", SessionFileStorageKind.S3) with
+        {
+            State = SessionFileState.Ready, Creator = "bob",
+        });
+        await harness.Registry.InsertAsync(Reserved("alices", SessionFileStorageKind.S3));
+
+        var complete = await Assert.ThrowsAsync<SessionFileException>(() =>
+            harness.Service.CancelUploadAsync(Collaborator, "done"));
+        var foreign = await Assert.ThrowsAsync<SessionFileException>(() =>
+            harness.Service.CancelUploadAsync(Collaborator, "alices"));
+
+        Assert.Equal("file_upload_complete", complete.Code);
+        Assert.Equal("file_access_denied", foreign.Code);
+        Assert.Equal(SessionFileState.Ready, harness.Registry.Files["done"].State);
+        Assert.Equal(SessionFileState.Reserved, harness.Registry.Files["alices"].State);
+    }
+
+    [Fact]
+    public async Task A_viewer_can_neither_delete_nor_cancel()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        await harness.Registry.InsertAsync(Reserved("ready", SessionFileStorageKind.S3) with { State = SessionFileState.Ready });
+        await harness.Registry.InsertAsync(Reserved("pending", SessionFileStorageKind.S3) with { Creator = "carol" });
+        var viewer = new SessionFileActor("s1", "alice", "carol", CanWrite: false, CanManage: false);
+
+        Assert.Equal("file_access_denied", (await Assert.ThrowsAsync<SessionFileException>(() =>
+            harness.Service.DeleteAsync(viewer, "ready"))).Code);
+        Assert.Equal("file_access_denied", (await Assert.ThrowsAsync<SessionFileException>(() =>
+            harness.Service.CancelUploadAsync(viewer, "pending"))).Code);
+    }
+
+    [Fact]
+    public async Task Deleting_a_document_takes_its_preview_and_the_preview_alone_is_refused()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        var preview = Ready("p1", "report.preview.pdf", "application/pdf") with { Source = "office-preview" };
+        var document = Ready("d1", "report.docx",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document") with
+        {
+            PreviewState = SessionFilePreviewState.Ready, PreviewFileId = "p1",
+        };
+        await harness.Registry.InsertAsync(document);
+        await harness.Registry.InsertAsync(preview);
+
+        var refused = await Assert.ThrowsAsync<SessionFileException>(() => harness.Service.DeleteAsync(Actor, "p1"));
+        Assert.Equal("file_is_preview", refused.Code);
+        Assert.Equal(SessionFileState.Ready, harness.Registry.Files["p1"].State);
+
+        await harness.Service.DeleteAsync(Actor, "d1");
+
+        Assert.Equal(SessionFileState.Deleted, harness.Registry.Files["d1"].State);
+        Assert.Equal(SessionFileState.Deleted, harness.Registry.Files["p1"].State);
+        Assert.Equal([document.StorageLocator, preview.StorageLocator], harness.Artifacts.Deleted);
+    }
+
+    [Fact]
+    public async Task A_preview_whose_document_is_gone_can_be_deleted_on_its_own()
+    {
+        var harness = Harness(s3Configured: true, podPhase: "Paused");
+        await harness.Registry.InsertAsync(Ready("d1", "report.docx", "application/pdf") with
+        {
+            State = SessionFileState.Deleted, PreviewFileId = "p1",
+        });
+        await harness.Registry.InsertAsync(Ready("p1", "report.preview.pdf", "application/pdf"));
+
+        await harness.Service.DeleteAsync(Actor, "p1");
+
+        Assert.Equal(SessionFileState.Deleted, harness.Registry.Files["p1"].State);
     }
 
     [Fact]
