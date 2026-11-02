@@ -257,6 +257,34 @@ public class ChatSessionDeletionPostgresTests
         Assert.Equal("new1", (await db.Bindings.GetActiveAsync("telegram", "chat-1"))?.SessionId);
     }
 
+    // A notification whose update waits on a /use still in flight must not overwrite that /use.
+    [PostgreSqlFact]
+    public async Task Follow_WaitingOnAConcurrentPin_DoesNotOverwriteIt()
+    {
+        await using var db = await PostgresPurgeDatabase.CreateAsync();
+        foreach (var id in new[] { "pinned", "other" })
+            await db.Bindings.UpsertAsync(new("telegram", id, "alice", "chat-1", null, null, false));
+
+        // The /use, held open mid-transaction: PinAsync's statements, uncommitted.
+        await using var source = Npgsql.NpgsqlDataSource.Create(db.Config["ConnectionStrings:Postgres"]!);
+        await using var conn = await source.OpenConnectionAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        await using (var cmd = new Npgsql.NpgsqlCommand("""
+            SELECT pg_advisory_xact_lock(hashtext('chat-active:telegram:chat-1'));
+            UPDATE chat_session_bindings SET active = (session_id = 'pinned') WHERE platform = 'telegram' AND chat_id = 'chat-1';
+            INSERT INTO chat_pins (platform, chat_id, session_id, owner) VALUES ('telegram', 'chat-1', 'pinned', 'alice');
+            """, conn, tx))
+            await cmd.ExecuteNonQueryAsync();
+
+        var follow = db.Bindings.FollowAsync("telegram", "chat-1", "other", "alice");
+        await Task.Delay(500);
+        Assert.False(follow.IsCompleted); // it waits for the /use
+        await tx.CommitAsync();
+        await follow;
+
+        Assert.Equal("pinned", (await db.Bindings.GetActiveAsync("telegram", "chat-1"))?.SessionId);
+    }
+
     // /new moves an existing pin to the session it started; it does not create one.
     [PostgreSqlFact]
     public async Task Choose_MovesAPin_ButDoesNotCreateOne()

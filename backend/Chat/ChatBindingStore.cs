@@ -150,6 +150,7 @@ public sealed class ChatBindingStore : IChatSessionCleanup
     public async Task PinAsync(string platform, string chatId, string sessionId, string owner, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("""
+            SELECT pg_advisory_xact_lock(hashtext('chat-active:' || @p || ':' || @c));
             UPDATE chat_session_bindings SET active = (session_id = @sid) WHERE platform = @p AND chat_id = @c;
             UPDATE chat_deleted_sessions SET was_active = FALSE WHERE platform = @p AND chat_id = @c AND was_active;
             INSERT INTO chat_pins (platform, chat_id, session_id, owner) VALUES (@p, @c, @sid, @o)
@@ -171,6 +172,7 @@ public sealed class ChatBindingStore : IChatSessionCleanup
     public async Task ChooseAsync(string platform, string chatId, string sessionId, CancellationToken ct = default)
     {
         await using var cmd = _db.CreateCommand("""
+            SELECT pg_advisory_xact_lock(hashtext('chat-active:' || @p || ':' || @c));
             UPDATE chat_session_bindings SET active = (session_id = @sid) WHERE platform = @p AND chat_id = @c;
             UPDATE chat_deleted_sessions SET was_active = FALSE WHERE platform = @p AND chat_id = @c AND was_active;
             UPDATE chat_pins SET session_id = @sid, pinned_at = now() WHERE platform = @p AND chat_id = @c;
@@ -189,9 +191,11 @@ public sealed class ChatBindingStore : IChatSessionCleanup
     /// </summary>
     public async Task FollowAsync(string platform, string chatId, string sessionId, string owner, CancellationToken ct = default)
     {
-        // One statement each, in one round trip: checking the pin and setting the flag
-        // separately would let a /use landing in between be overwritten.
+        // The statements of one command run in one implicit transaction, each with a snapshot
+        // taken when it starts. The lock, which PinAsync and ChooseAsync take too, makes the pin
+        // check below see a /use that committed while this waited, instead of overwriting it.
         await using var cmd = _db.CreateCommand("""
+            SELECT pg_advisory_xact_lock(hashtext('chat-active:' || @p || ':' || @c));
             DELETE FROM chat_pins WHERE platform = @p AND chat_id = @c AND owner <> @o;
             WITH free AS (SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM chat_pins WHERE platform = @p AND chat_id = @c)),
                  retired AS (UPDATE chat_deleted_sessions SET was_active = FALSE

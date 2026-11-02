@@ -32,9 +32,10 @@ A pin could have been a second boolean beside `active` in `chat_session_bindings
 for two reasons. The delete removes the session's binding (#365), and the pin has to outlive it:
 the pinned session's deletion is exactly the case where the chat must not fall back to another
 session. A flag would also be one more value the notifier has to leave alone in a row it
-rewrites, while a separate row is one `NOT EXISTS` in the notifier's update. That check and the
-update are one statement, so a `/use` arriving at the same time as a notification cannot be
-overwritten by it.
+rewrites, while a separate row is one `NOT EXISTS` in the notifier's update. That update, `/use`
+and `/new` take a transaction-scoped advisory lock per chat first. Without it, a `/use` that
+commits while a notification's update waits for the same binding rows is overwritten, because
+the update re-checks the rows but not its own `NOT EXISTS`.
 
 ## When the pinned session is gone
 
