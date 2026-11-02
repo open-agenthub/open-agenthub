@@ -229,6 +229,14 @@ async function initializeFiles() {
 function selectFile(id) {
   selectedId.value = id; filesOpen.value = true; filesView.value = 'files'; activeCompanion.value = 'files'; mobilePane.value = 'files'
 }
+// The pane stays open on the list: closing it as well would make the delete look like a crash.
+// The row goes at once rather than at the next listing, and the presentation is re-read because
+// the backend dismissed it if this was the file being presented.
+async function onFileDeleted(id) {
+  files.value = files.value.filter(file => file.id !== id)
+  if (selectedId.value === id) { selectedId.value = null; filesOpen.value = true }
+  await Promise.all([refreshFiles(), refreshPresentation()])
+}
 function closeFiles() {
   filesOpen.value = false
   selectedId.value = null
@@ -365,8 +373,9 @@ onBeforeUnmount(() => {
             <WorkspaceDiffPane v-if="diffOpen" :session-id="session.id" :shared-token="sharedToken" :active="activeCompanion === 'files' && mobilePane !== 'agent'" />
             <FilesPane v-show="filesView === 'files'" :session-id="session.id" :files="files" :selected-id="selectedId"
             :capabilities="fileCapabilities" :can-write="canWrite && !sharedToken" :shared-token="sharedToken"
-            :presented="isPresented" @select="selectFile" @dismiss="dismissPresentation"
-            @uploaded="refreshFiles()" />
+            :presented="isPresented" :presented-id="presentation?.fileId || null" :in-project="inProject"
+            @select="selectFile" @dismiss="dismissPresentation"
+            @uploaded="refreshFiles()" @deleted="onFileDeleted" />
           </div>
           <BrowserPane ref="browserPane" v-if="browserVisible" v-show="browserDocked && activeCompanion === 'browser'" @popout-change="onPopoutChange" :session="session" :can-write="canWrite" :shared-token="sharedToken" />
         </div>

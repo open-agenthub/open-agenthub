@@ -13,9 +13,11 @@ const props = defineProps({
   capabilities: { type: Object, default: () => ({}) },
   canWrite: { type: Boolean, default: false },
   sharedToken: { type: String, default: null },
-  presented: { type: Boolean, default: false }
+  presented: { type: Boolean, default: false },
+  presentedId: { type: String, default: null },
+  inProject: { type: Boolean, default: false }
 })
-const emit = defineEmits(['select', 'dismiss', 'uploaded'])
+const emit = defineEmits(['select', 'dismiss', 'uploaded', 'deleted'])
 const selected = computed(() => props.files.find(file => file.id === props.selectedId) || null)
 
 // Uploading is the same reserve/upload/complete flow the chat pane uses; the difference
@@ -77,6 +79,60 @@ watch(() => props.sessionId, () => {
 })
 onBeforeUnmount(() => { void queue.cancelAll() })
 
+// Deleting is asked for in the row itself rather than with confirm(): a native dialog blocks the
+// whole tab, the session's live updates included, and an embedding frame can refuse it outright,
+// in which case confirm() answers false and the button silently does nothing.
+const canDelete = computed(() => props.canWrite && !props.sharedToken)
+const confirmingId = ref(null)
+const deletingId = ref(null)
+const deleteError = ref('')
+// A converted Office preview belongs to its document and the backend refuses to delete it alone;
+// offering the button would only lead to that refusal.
+const previewIds = computed(() => new Set(props.files.map(file => file.previewFileId).filter(Boolean)))
+
+function deletable(file) {
+  return canDelete.value && file.state === 'Ready' && !previewIds.value.has(file.id)
+}
+
+function askDelete(file) {
+  deleteError.value = ''
+  confirmingId.value = file.id
+}
+
+function keep() {
+  confirmingId.value = null
+}
+
+const DELETE_COPY = Object.freeze({
+  file_is_preview: 'is the preview of a document. Delete the document instead.',
+  file_upload_pending: 'is still uploading.',
+})
+
+async function confirmDelete(file) {
+  if (deletingId.value) return
+  deletingId.value = file.id
+  deleteError.value = ''
+  try {
+    await api.deleteSessionFile(props.sessionId, file.id)
+    confirmingId.value = null
+    emit('deleted', file.id)
+  } catch (error) {
+    // A file someone else deleted first is gone either way, which is what was asked for.
+    if (error?.status === 404) {
+      confirmingId.value = null
+      emit('deleted', file.id)
+    } else if (error?.status === 403) {
+      deleteError.value = `You cannot delete files in this session.`
+    } else {
+      deleteError.value = `${file.name} ${DELETE_COPY[error?.code] || 'could not be deleted.'}`
+    }
+  } finally {
+    deletingId.value = null
+  }
+}
+
+watch(() => props.sessionId, () => { confirmingId.value = null; deleteError.value = '' })
+
 const downloading = ref(new Set())
 const downloadError = ref('')
 
@@ -134,9 +190,27 @@ async function download(file) {
           <span class="file-icon">{{ fileIcon(file) }}</span>
           <span class="file-name"><strong>{{ file.name }}</strong><small>{{ fileSize(file.size) }}</small></span>
         </button>
-        <button v-if="file.state !== 'Expired'" type="button" class="file-download" :data-file-download="file.id"
-          :disabled="downloading.has(file.id)" :title="`Download ${file.name}`"
-          :aria-label="`Download ${file.name}`" @click="download(file)">↓</button>
+        <span class="row-actions">
+          <button v-if="file.state !== 'Expired'" type="button" class="file-download" :data-file-download="file.id"
+            :disabled="downloading.has(file.id)" :title="`Download ${file.name}`"
+            :aria-label="`Download ${file.name}`" @click="download(file)">↓</button>
+          <button v-if="deletable(file)" type="button" class="file-delete" :data-file-delete="file.id"
+            :disabled="deletingId === file.id" :aria-expanded="confirmingId === file.id"
+            :title="`Delete ${file.name}`" :aria-label="`Delete ${file.name}`" @click="askDelete(file)">×</button>
+        </span>
+        <div v-if="confirmingId === file.id" class="delete-confirm" role="group"
+          :aria-label="`Delete ${file.name}?`" data-file-delete-confirm @keydown.esc="keep">
+          <p><strong>Delete {{ file.name }}?</strong> It is removed for everyone with access to this session.</p>
+          <p v-if="file.id === presentedId" data-file-delete-presented>It is being presented and the presentation closes.</p>
+          <p v-if="file.previewFileId" data-file-delete-preview>Its PDF preview is deleted with it.</p>
+          <p v-if="inProject" data-file-delete-project>Other sessions in this project stop seeing it. Copies they already fetched stay.</p>
+          <p v-if="deleteError" class="delete-error" role="alert" data-file-delete-error>{{ deleteError }}</p>
+          <span class="confirm-actions">
+            <button type="button" class="ghost" data-file-delete-keep @click="keep">Keep</button>
+            <button type="button" class="danger" data-file-delete-confirm-button :disabled="deletingId === file.id"
+              @click="confirmDelete(file)">{{ deletingId === file.id ? 'Deleting…' : 'Delete' }}</button>
+          </span>
+        </div>
       </div>
     </aside>
     <div class="file-main">
@@ -173,6 +247,19 @@ async function download(file) {
 .file-download { margin-right: 6px; padding: 4px 8px; border: 1px solid transparent; border-radius: 6px; color: #8e9bad; background: transparent; font-size: 12px; }
 .file-download:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .file-download:disabled { opacity: .45; }
+.row-actions { display: flex; align-items: center; }
+.file-delete { margin-right: 6px; padding: 4px 8px; border: 1px solid transparent; border-radius: 6px; color: #8e9bad; background: transparent; font-size: 12px; }
+.file-delete:hover:not(:disabled), .file-delete[aria-expanded="true"] { border-color: var(--danger); color: var(--danger); }
+.file-delete:disabled { opacity: .45; }
+.delete-confirm { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 4px; margin: 0 8px 8px; padding: 8px 10px; border: 1px solid var(--danger); border-radius: 7px; background: #1a1418; font-size: 11px; line-height: 1.45; }
+.delete-confirm p { margin: 0; color: #aeb8c8; }
+.delete-confirm strong { color: white; overflow-wrap: anywhere; }
+.delete-error { color: var(--danger) !important; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 4px; }
+.confirm-actions button { padding: 3px 10px; border-radius: 6px; font-size: 11px; }
+.confirm-actions .ghost { border: 1px solid #29303a; color: #dce5f1; background: none; }
+.confirm-actions .danger { border: 1px solid var(--danger); color: white; background: var(--danger); }
+.confirm-actions .danger:disabled { opacity: .6; }
 .file-row.active { color: white; background: #1c2938; box-shadow: inset 2px 0 var(--accent); }
 .file-icon { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #354255; border-radius: 6px; color: var(--accent); font: 700 8px var(--mono); }
 .file-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
