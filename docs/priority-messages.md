@@ -216,6 +216,15 @@ them as the main turn's, and a subagent finishing cleared the running turn while
 was still working. Messages then counted as idle and were queued behind the turn. The mod now
 follows the main loop only (`agentId` absent).
 
+**Other runtimes.** These take a priority message through the PTY, and their CLIs read text
+typed during a turn into the running turn. They did not have this gap. With the same busy turn
+(`tests/FleetPriorityProof/tui-busy-rig.mjs`):
+- Codex 0.166.0 restarted the request in flight with the message, 0.4 s after the send;
+- OpenCode 1.18.35 sent it with the request after the running tool call, 7.1 s after the send.
+
+Cursor (no login in the rig) and OpenClaw (no hooks) were not measured. Both take the plain
+typing path, which ends in the CLI's own prompt box as before.
+
 Rejected:
 
 - **Aborting the turn for every priority message** (what interrupt does). It reaches the model at

@@ -37,6 +37,20 @@ send), when the turn ended, and what is left in the hub inbox. Results with Clau
 | sent while the last answer streams | — | seen 6.3 s, at the turn's end; body once plus a pointer |
 | append refused (`DENY_APPEND=1`) | — | `unavailable`/`mod_not_injected`; row stays in the inbox |
 
+## `tui-busy-rig.mjs`: Codex and OpenCode have no such gap
+
+This is the `fleet-delivery-real-cli-rig` skill's `rig.mjs` with a `busy` scenario: the pinned TUI
+runs in the real `common/server.js` PTY, and a mock model keeps a LONGJOB turn busy for three 10 s
+model calls. A priority message is pasted 3 s into the first one. Layout and commands are in the
+file header (`SCENARIO=busy`, plus `AGENT=opencode` for OpenCode). Measured:
+
+- Codex 0.166.0: answered `pty`. The message was in request #2, 0.4 s after the send: Codex
+  dropped the sampling in flight and sent it again with the message, in the same turn.
+- OpenCode 1.18.35: answered `pty`. The message was in request #2, 7.1 s after the send: the
+  request right after the first tool result, in the same turn.
+
+Not measured: a send while a long *tool* runs, since exec needs a sandbox the pod cannot provide.
+
 ## `busy-rig.mjs`: the mod alone
 
 No session agent: a stand-in mod inbox and the real CLI via `script(1)`, with `--plugin-dir`.
