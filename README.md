@@ -423,7 +423,7 @@ reply to sessions and approve permission prompts.
 
 Commands: `/new [+repo …] <prompt>` (start an autonomous session right from the chat —
 leading `+name`, `+group/name`, `+name#branch` or `+https://…` tokens attach repositories),
-`/repos [query]` (list your GitHub/GitLab projects), `/sessions` (list), `/use <tag>`
+`/repos [query]` (list your GitHub/GitLab projects), `/sessions` (list), `/use #ab12` (or `/use ab12`)
 (route plain replies), `!status`. Plain messages are typed into the active session's
 terminal. Only **one backend replica** may run Telegram long-polling (a second poller
 conflicts on `getUpdates`).
@@ -451,7 +451,7 @@ Reply routing: **quote** a session message to answer that session; plain replies
 the newest session (or the one picked with `!use`). React 👍/👎 on a permission prompt to
 allow/deny; quote-reply `always` for allow-always. Commands: `!new [+repo …] <prompt>`
 (start an autonomous session — leading `+name` tokens attach repositories),
-`!repos [query]` (list your GitHub/GitLab projects), `!sessions`, `!use <tag>`, `!status`.
+`!repos [query]` (list your GitHub/GitLab projects), `!sessions`, `!use #ab12` (or `!use ab12`), `!status`.
 </details>
 
 **Desktop notifications** (browser): a notification when a session waits for input or

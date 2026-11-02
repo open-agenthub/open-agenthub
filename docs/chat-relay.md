@@ -113,3 +113,12 @@ Not verified: Cursor's stop hook end to end. Its CLI is unpinned and needs a log
 Cursor branch is covered by the payload shape in Cursor's hook documentation
 (`conversation_id`, `generation_id`, `status`, `loop_count`, nullable `transcript_path`) and
 by unit tests only.
+
+### Session tag input (#396)
+
+Tags displayed as `#ab12` can be used directly: `/use #ab12` or `/use ab12`
+(Telegram also accepts `!use`; Signal uses `!use`). Surrounding whitespace and case
+do not affect matching. A bare `#` gives a usage hint and leaves the active session alone.
+Normalization lives in `ChatFormatting` rather than each relay, so displayed tags and
+bare prefixes follow the same uniqueness and owner checks. Status and reply routing use
+bindings or message context, not typed tags; the thread-based relay has no tag command.

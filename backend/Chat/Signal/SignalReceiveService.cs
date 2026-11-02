@@ -234,6 +234,11 @@ public sealed class SignalReceiveService : BackgroundService
     /// <summary>Points the chat's plain replies at the session matching the tag.</summary>
     private async Task HandleUseAsync(SignalEnvelope e, AppUser user, string tag, CancellationToken ct)
     {
+        if (ChatFormatting.NormalizeTag(tag).Length == 0)
+        {
+            await _signal.SendAsync(e.Sender, "Usage: !use #ab12 or !use ab12.", ct);
+            return;
+        }
         var (match, count) = ChatFormatting.FindByTag(tag,
             (await _bindings.ListByChatAsync("signal", e.Sender, ct)).Where(b => b.Owner == user.Owner),
             b => b.SessionId);

@@ -278,6 +278,11 @@ public sealed class TelegramUpdateService : BackgroundService
             await ReplyAsync(u, "This chat is not linked.", ct);
             return;
         }
+        if (ChatFormatting.NormalizeTag(tag).Length == 0)
+        {
+            await ReplyAsync(u, "Usage: /use #ab12 or /use ab12.", ct);
+            return;
+        }
         var (match, count) = ChatFormatting.FindByTag(tag,
             (await _bindings.ListByChatAsync("telegram", u.ChatId, ct)).Where(b => b.Owner == linked.Owner), b => b.SessionId);
         if (count > 1)

@@ -49,7 +49,7 @@ public sealed class TelegramConversationFactory
                      (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"{_frontendOrigin}/s/{sessionId}\n") +
                      (threadId is not null
                          ? "Reply in this topic to answer. !status shows progress."
-                         : $"Reply to a message of this session (or /use {ChatFormatting.Tag(sessionId)}) to answer. !status shows progress.") +
+                         : $"Reply to a message of this session (or /use #{ChatFormatting.Tag(sessionId)}) to answer. !status shows progress.") +
                      // Group chats carry chat-level authority (like Slack threads): make that visible.
                      (user.TelegramForum ? "\nNote: everyone in this group can reply and approve permissions." : "");
 
