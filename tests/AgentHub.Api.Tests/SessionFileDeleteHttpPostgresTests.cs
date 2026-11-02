@@ -261,12 +261,12 @@ public sealed class SessionFileDeleteHttpPostgresTests
             return (response.StatusCode, json.RootElement.GetProperty("code").GetString());
         }
 
-        private Task<HttpResponseMessage> Send(string? user, HttpMethod method, string path, object? body = null)
+        private async Task<HttpResponseMessage> Send(string? user, HttpMethod method, string path, object? body = null)
         {
-            var request = new HttpRequestMessage(method, path);
+            using var request = new HttpRequestMessage(method, path);
             if (user is not null) request.Headers.Add(HeaderUser.Header, user);
             if (body is not null) request.Content = JsonContent.Create(body);
-            return _http.SendAsync(request);
+            return await _http.SendAsync(request);
         }
 
         public async ValueTask DisposeAsync()

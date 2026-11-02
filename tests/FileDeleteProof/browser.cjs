@@ -31,7 +31,7 @@ const stored = async name => (await (await fetch(`${host}/__objects`)).json()).f
   await row.locator('[data-file-delete]').click();
   const confirmation = page.locator('[data-file-delete-confirm]');
   await confirmation.waitFor();
-  assert.match(await confirmation.innerText(), new RegExp(`Delete ${name.replace(/\./g, '\\.')}\\?`));
+  assert.ok((await confirmation.innerText()).includes(`Delete ${name}?`), 'the question names the file');
   assert.equal(await confirmation.locator('[data-file-delete-project]').count(), 1, 'project note shown');
   await page.screenshot({ path: path.join(shots, '2-confirm.png') });
   assert.deepEqual(deletes, [], 'nothing deleted before confirming');

@@ -75,7 +75,7 @@ app.MapPost("/__direct/{user}/{role}", async (string user, string role, SessionS
     return Results.Ok(await shares.UpsertDirectAsync("alice", "s1", user, Enum.Parse<ShareRole>(role, true)));
 }).AllowAnonymous();
 // Who the next requests are signed in as; the browser and http.mjs switch it between steps.
-app.MapPost("/__as/{user}", (string user) => { As.User = user; return Results.Ok(new { user }); }).AllowAnonymous();
+app.MapPost("/__as/{user}", (string user) => { As.SignIn(user); return Results.Ok(new { user }); }).AllowAnonymous();
 // The bucket's keys, read with a client of its own rather than through S3ArtifactStore, so a
 // "gone from storage" is the server's answer and not the store under test agreeing with itself.
 app.MapGet("/__objects", async (IConfiguration cfg) =>
@@ -128,7 +128,9 @@ public class Unused : DispatchProxy
 sealed class As(IOptionsMonitor<AuthenticationSchemeOptions> o, ILoggerFactory l, UrlEncoder e)
     : AuthenticationHandler<AuthenticationSchemeOptions>(o, l, e)
 {
-    public static volatile string User = "alice";
+    private static string _user = "alice";
+    public static void SignIn(string user) => Volatile.Write(ref _user, user);
+    private static string User => Volatile.Read(ref _user);
     protected override Task<AuthenticateResult> HandleAuthenticateAsync()
         => Task.FromResult(AuthenticateResult.Success(new AuthenticationTicket(
             new ClaimsPrincipal(new ClaimsIdentity(new[] { new Claim("preferred_username", User) }, "t")), "t")));
