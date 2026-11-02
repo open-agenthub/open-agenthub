@@ -92,7 +92,10 @@ app.MapDelete("/__direct/{user}", async (string user, SessionShareStore shares) 
 app.MapGet("/api/config", () => Results.Json(new { authority = "" })).AllowAnonymous();
 app.MapGet("/api/sessions", () => Results.Json(new[] { Info() })).AllowAnonymous();
 app.MapGet("/api/sessions/s1", () => Results.Json(Info())).AllowAnonymous();
-app.MapGet("/api/projects", () => Results.Json(Array.Empty<object>())).AllowAnonymous();
+// s1 belongs to a project so the Files pane shows its project note; the sidebar hides a session
+// whose project it cannot find.
+app.MapGet("/api/projects", () => Results.Json(new[] { new { id = "project-proof", name = "Proof project", secretIds = Array.Empty<string>() } })).AllowAnonymous();
+app.MapGet("/api/sessions/shared", () => Results.Json(Array.Empty<object>())).AllowAnonymous();
 app.MapGet("/api/usage/summary", () => Results.Json(new { })).AllowAnonymous();
 app.MapGet("/api/usage/sessions", () => Results.Json(Array.Empty<object>())).AllowAnonymous();
 app.MapGet("/api/admin/access", () => Results.Json(new { })).AllowAnonymous();

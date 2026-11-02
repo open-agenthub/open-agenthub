@@ -58,6 +58,26 @@ public sealed class SessionFileDeleteHttpPostgresTests
         Assert.Equal(HttpStatusCode.NotFound, await rig.DeleteAsync("alice", first));
     }
 
+    /// <summary>
+    /// Without an Enterprise licence shares do not resolve, so the session owner is the only one
+    /// left who can delete; a collaborator's share still in the table does not reach the route.
+    /// </summary>
+    [PostgreSqlFact]
+    public async Task Without_a_licence_the_owner_deletes_and_a_shared_collaborator_finds_nothing()
+    {
+        await using var rig = await Rig.StartAsync(licensed: false);
+        var file = await rig.UploadAsync("alice", "owner.txt");
+        var other = await rig.UploadAsync("alice", "other.txt");
+
+        Assert.Equal(HttpStatusCode.NotFound, await rig.DeleteAsync("bob", file));
+        Assert.Equal(HttpStatusCode.NotFound, await rig.DeleteAsync("carol", file));
+        Assert.Equal(HttpStatusCode.NoContent, await rig.DeleteAsync("alice", file));
+
+        Assert.Equal(["other.txt"], await rig.ListAsync("alice"));
+        Assert.True(rig.Artifacts.Objects.ContainsKey(rig.Locator(other)));
+        Assert.Single(rig.Artifacts.Objects);
+    }
+
     [PostgreSqlFact]
     public async Task Delete_refuses_an_upload_in_flight_and_cancel_refuses_a_completed_file()
     {
@@ -148,7 +168,7 @@ public sealed class SessionFileDeleteHttpPostgresTests
         public string ViewerLink { get; }
         public string CollaboratorLink { get; }
 
-        public static async Task<Rig> StartAsync(int maxSessionFiles = 200)
+        public static async Task<Rig> StartAsync(int maxSessionFiles = 200, bool licensed = true)
         {
             var database = await PostgresSharingDatabase.CreateAsync(pooling: false);
             foreach (var user in new[] { "alice", "bob", "carol", "dave" }) await database.AddUserAsync(user);
@@ -169,7 +189,7 @@ public sealed class SessionFileDeleteHttpPostgresTests
                 .AddScheme<AuthenticationSchemeOptions, HeaderUser>(HeaderUser.Scheme, null);
             builder.Services.AddAuthorization();
             builder.Services.AddSingleton<ISessionAccessService>(
-                new SessionAccessService(database.Shares, new FakeEnterpriseLicense(true)));
+                new SessionAccessService(database.Shares, new FakeEnterpriseLicense(licensed)));
             builder.Services.AddSingleton<IArtifactStore>(artifacts);
             builder.Services.AddSingleton(options);
             builder.Services.AddSingleton<ISessionFileService>(new SessionFileService(
