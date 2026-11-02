@@ -76,17 +76,15 @@ public static class PinnedSessionScenario
         bot.Start();
         var pods = new Dictionary<string, string> { [A] = "127.0.0.2", [B] = "127.0.0.3", [C] = "127.0.0.4" };
         var typed = pods.Keys.ToDictionary(id => id, _ => new List<string>());
-        var podListeners = pods.Select(p =>
-        {
-            var l = new HttpListener();
-            l.Prefixes.Add($"http://{p.Value}:{agentPort}/");
-            l.Start();
-            return (Id: p.Key, Listener: l);
-        }).ToList();
+        // One listener for all pods: the address a connection arrived on says whose terminal it is.
+        using var podListener = new HttpListener();
+        foreach (var ip in pods.Values) podListener.Prefixes.Add($"http://{ip}:{agentPort}/");
+        podListener.Start();
+        var byIp = pods.ToDictionary(p => p.Value, p => typed[p.Key]);
         var wire = new List<string>();
         using var stop = new CancellationTokenSource();
         var servers = new List<Task> { Task.Run(() => ServeBotAsync(bot, wire, stop.Token)) };
-        servers.AddRange(podListeners.Select(p => Task.Run(() => ServePodAsync(p.Listener, typed[p.Id], stop.Token))));
+        servers.Add(Task.Run(() => ServePodsAsync(podListener, byIp, stop.Token)));
 
         var schema = "tgpin_" + Guid.NewGuid().ToString("N");
         await using var db = new NpgsqlConnection(connectionString);
@@ -194,7 +192,6 @@ public static class PinnedSessionScenario
         {
             stop.Cancel();
             await Task.WhenAll(servers);
-            foreach (var p in podListeners) p.Listener.Close();
             await using var cmd = new NpgsqlCommand($"DROP SCHEMA {schema} CASCADE", db);
             await cmd.ExecuteNonQueryAsync();
         }
@@ -252,8 +249,8 @@ public static class PinnedSessionScenario
             .Invoke(update, [TelegramUpdate.Parse(json)!, CancellationToken.None])!;
     }
 
-    /// <summary>A session pod's terminal: records each typed input frame.</summary>
-    private static async Task ServePodAsync(HttpListener listener, List<string> typed, CancellationToken stop)
+    /// <summary>The session pods' terminals: records each typed input frame under the pod it reached.</summary>
+    private static async Task ServePodsAsync(HttpListener listener, Dictionary<string, List<string>> byIp, CancellationToken stop)
     {
         while (!stop.IsCancellationRequested)
         {
@@ -261,6 +258,7 @@ public static class PinnedSessionScenario
             try { ctx = await listener.GetContextAsync().WaitAsync(stop); }
             catch (OperationCanceledException) { break; }
             if (!ctx.Request.IsWebSocketRequest) { ctx.Response.StatusCode = 404; ctx.Response.Close(); continue; }
+            var typed = byIp[ctx.Request.LocalEndPoint.Address.ToString()];
             using var socket = (await ctx.AcceptWebSocketAsync("tty")).WebSocket;
             var buffer = new byte[8192];
             while (socket.State == WebSocketState.Open)
