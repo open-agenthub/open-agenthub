@@ -50,6 +50,30 @@ export function planDelivery(messages, turnRunning, held = []) {
     : { submit, release: plain, waiting: [], abort };
 }
 
+/**
+ * Which of the priority messages appended into a running turn the model has not read (#390).
+ * `apiMessages` is the main conversation in the Messages API form, `items` the messages with
+ * the text their row carries. A row is read once an assistant message follows it; one appended
+ * while the turn's last answer streamed has none after it, and nothing would read it until
+ * someone starts another turn. A row that cannot be found counts as unread: submitting it once
+ * more costs a repeated message, losing it costs the message.
+ */
+export function unreadAppends(apiMessages, items) {
+  const list = Array.isArray(apiMessages) ? apiMessages : [];
+  return items.filter(item => {
+    let at = -1;
+    list.forEach((message, index) => { if (carriesText(message, item.text)) at = index; });
+    return at < 0 || !list.slice(at + 1).some(message => message && message.role === 'assistant');
+  });
+}
+
+function carriesText(message, text) {
+  if (!message || message.role !== 'user') return false;
+  if (typeof message.content === 'string') return message.content.includes(text);
+  return Array.isArray(message.content) &&
+    message.content.some(block => block && block.type === 'text' && typeof block.text === 'string' && block.text.includes(text));
+}
+
 // ---- usage limits (docs/account-limits.md) ---------------------------------------------------
 
 export const DEFAULT_LIMIT_THRESHOLD = 100;

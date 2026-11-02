@@ -47,8 +47,12 @@ const MAX_MESSAGE_BYTES = 64 * 1024;
 // How long after its last poll the provider's in-process mod counts as alive. It polls every 3 s; a
 // window of five polls survives a slow turn without handing a message to a mod that is gone.
 const MOD_HEARTBEAT_TTL_MS = 15_000;
+// How long a priority message waits for the mod to say what became of it: two poll periods of
+// three seconds, inside the 15 s the hub waits for this answer (docs/priority-messages.md).
+const MOD_ACK_MS = 7_000;
 // A mod's limit report: kind, percent, reset time — small by construction.
 const MAX_LIMIT_REPORT_BYTES = 4 * 1024;
+const MAX_MOD_ACK_BYTES = 16 * 1024;
 // A turn report can carry a question tool's input (agent-questions.js bounds it to about 200 KB).
 const MAX_TURN_REPORT_BYTES = 256 * 1024;
 // How long a restarted TUI gets to draw its prompt box before a message held back during the
@@ -248,6 +252,8 @@ function createCommonServer(options = {}) {
   const modToken = env.AGENTHUB_MOD_TOKEN || '';
   let modQueue = [];
   let lastModHeartbeat = 0;
+  // Priority messages whose answer to the hub waits for the mod's acknowledgement, by id.
+  const modAcks = new Map();
   // The CLI's own usage-limit notice, read off its output (docs/account-limits.md). Armed once
   // per agent start; the hub hears the first hit and nothing more until the next start.
   const limitDetector = createLimitDetector({
@@ -1744,8 +1750,7 @@ function createCommonServer(options = {}) {
     // prompt; in an autonomous run nobody types a next prompt, so a plain message stays in the
     // inbox for agent_inbox. Writing to the terminal as well would deliver it twice.
     if (modAlive() && (message.priority || mode === 'interactive')) {
-      modQueue.push(message);
-      sendJson(response, 200, { delivered: 'queued-for-mod' });
+      sendJson(response, 200, await queueForMod(message));
       return;
     }
     if (!message.priority) {
@@ -1900,13 +1905,47 @@ function createCommonServer(options = {}) {
     };
   }
 
+  /**
+   * Hands a message to the mod. A plain one is answered at once: it waits for the turn's end
+   * by design. A priority one is answered once the mod reports whether it reached the running
+   * conversation (#390): the hub marks the row delivered on this answer, and a message the mod
+   * could not place would otherwise be gone from agent_inbox too. Not taken in time, it leaves
+   * the queue and stays in the inbox; taken but not acknowledged, it is the mod's.
+   */
+  function queueForMod(message) {
+    const queued = { delivered: 'queued-for-mod' };
+    if (!message.priority || !message.id) {
+      modQueue.push(message);
+      return Promise.resolve(queued);
+    }
+    return new Promise(resolve => {
+      let settled = false;
+      const settle = answer => {
+        if (settled) return;
+        settled = true;
+        if (modAcks.get(message.id) === ack) modAcks.delete(message.id);
+        resolve(answer);
+      };
+      const ack = outcome => settle(outcome === 'failed' ? { delivered: 'unavailable', reason: 'mod_not_injected' } : queued);
+      modAcks.set(message.id, ack);
+      modQueue.push(message);
+      setTimeoutImpl(() => {
+        const index = modQueue.indexOf(message);
+        if (index < 0) return settle(queued);
+        modQueue.splice(index, 1);
+        settle({ delivered: 'unavailable', reason: 'mod_not_polling' });
+      }, MOD_ACK_MS);
+    });
+  }
+
   function modAlive() {
     return Boolean(modToken) && now() - lastModHeartbeat < MOD_HEARTBEAT_TTL_MS;
   }
 
   /**
    * The in-process mod's side: GET /agenthub/mod/inbox hands over and clears the queue, POST
-   * /agenthub/mod/heartbeat only says "still here", POST /agenthub/mod/limit relays a rate-limit
+   * /agenthub/mod/heartbeat only says "still here", POST /agenthub/mod/ack reports what became
+   * of priority messages, POST /agenthub/mod/limit relays a rate-limit
    * reading to the hub (docs/account-limits.md). All are loopback-only and carry the mod
    * token, not the callback token: the hub's token never reaches the agent process, and the
    * mod's token never leaves the pod.
@@ -1932,6 +1971,30 @@ function createCommonServer(options = {}) {
       }
       response.statusCode = 204;
       response.end();
+      return;
+    }
+    if (requestPath === '/agenthub/mod/ack') {
+      if (request.method !== 'POST') {
+        response.setHeader('Allow', 'POST');
+        fileError(response, 405, 'method_not_allowed');
+        return;
+      }
+      const raw = await readBoundedBody(request, MAX_MOD_ACK_BYTES);
+      let parsed = null;
+      try { parsed = raw && JSON.parse(raw.toString('utf8')); } catch {}
+      if (!parsed || !Array.isArray(parsed.results)) {
+        fileError(response, raw ? 400 : 413, raw ? 'invalid_ack' : 'ack_too_large');
+        return;
+      }
+      // Only ids an answer still waits for are accepted; the mod keeps the rest.
+      const accepted = [];
+      for (const entry of parsed.results) {
+        const ack = entry && typeof entry.id === 'string' ? modAcks.get(entry.id) : undefined;
+        if (!ack) continue;
+        ack(entry.outcome === 'failed' ? 'failed' : 'taken');
+        accepted.push(entry.id);
+      }
+      sendJson(response, 200, { accepted });
       return;
     }
     if (requestPath === '/agenthub/mod/limit') {
@@ -2021,7 +2084,7 @@ function createCommonServer(options = {}) {
     if (requestPath === '/agenthub/context-clear') return handleContextClearRequest(request, response);
     if (requestPath === '/agenthub/turn') return handleTurnRequest(request, response);
     if (requestPath === '/agenthub/mod/inbox' || requestPath === '/agenthub/mod/heartbeat' ||
-        requestPath === '/agenthub/mod/limit') {
+        requestPath === '/agenthub/mod/ack' || requestPath === '/agenthub/mod/limit') {
       return handleModRequest(request, response, requestPath);
     }
     return handleFileRequest(request, response);

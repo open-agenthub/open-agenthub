@@ -119,3 +119,22 @@ test('status line and /inbox text', async () => {
   assert.equal(inboxText([{ from: 'a', body: 'x' }, { from: null, body: 'y' }]),
     '[AgentHub message from agent "a" (a)]\nx\n\n[AgentHub message from outside the fleet]\ny');
 });
+
+// #390: a priority message appended while the turn's last answer streamed is in the
+// conversation, but no request read it; the turn's end has to start one.
+test('an appended message is unread until an assistant message follows it', async () => {
+  const { unreadAppends } = await lib();
+  const early = { message: { id: 'a' }, text: 'MSG-A' };
+  const late = { message: { id: 'b' }, text: 'MSG-B' };
+  const gone = { message: { id: 'c' }, text: 'MSG-C' };
+  const transcript = [
+    { role: 'user', content: 'start' },
+    { role: 'assistant', content: [{ type: 'tool_use', id: 't1' }] },
+    { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1' }, { type: 'text', text: 'MSG-A' }] },
+    { role: 'assistant', content: [{ type: 'text', text: 'done' }] },
+    { role: 'user', content: [{ type: 'text', text: 'MSG-B' }] }
+  ];
+
+  assert.deepEqual(unreadAppends(transcript, [early, late, gone]), [late, gone]);
+  assert.deepEqual(unreadAppends(null, [early]), [early]);
+});

@@ -120,13 +120,36 @@ test('chat transport feeds a priority message into the pipe as a user turn, inte
 
 const modHeaders = { Authorization: 'Bearer mod-secret' };
 
+// Timers wait for the test: a priority message's answer waits for the mod's acknowledgement,
+// and the harness's default timer would end that wait at once.
 function modHarness(environment = {}, harnessOptions = {}) {
   let clock = 1000;
-  const time = { advance(ms) { clock += ms; } };
+  const timers = [];
+  const time = {
+    advance(ms) { clock += ms; },
+    timers,
+    fire() { for (const timer of timers.splice(0)) timer.callback(); }
+  };
   const harness = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token', AGENTHUB_MOD_TOKEN: 'mod-secret', ...environment },
-    {}, { now: () => clock, ...harnessOptions });
+    {}, { now: () => clock, setTimeout(callback, ms) { timers.push({ callback, ms }); return timers.length; }, ...harnessOptions });
   return { harness, time };
 }
+
+// The handler reads its body over several ticks; its ack timer is set once the message is queued.
+async function queuedFor(time, count = 1) {
+  for (let i = 0; i < 200 && time.timers.length < count; i++) await tick();
+}
+
+// Runs the typing pauses of the terminal path as they come, until the answer is there.
+async function settled(time, request) {
+  let done = false;
+  const answer = request.finally(() => { done = true; });
+  for (let i = 0; i < 400 && !done; i++) { time.fire(); await tick(); }
+  return answer;
+}
+
+const modAck = (harness, results) => requestHttp(harness, 'POST', '/agenthub/mod/ack',
+  { ...modHeaders, 'Content-Type': 'application/json' }, JSON.stringify({ results }), '127.0.0.1');
 
 test('mod routes exist only with a mod token and answer loopback callers with the right bearer', async () => {
   const without = createHarness({ AGENTHUB_CALLBACK_TOKEN: 'correct-token' });
@@ -146,13 +169,17 @@ test('mod routes exist only with a mod token and answer loopback callers with th
 });
 
 test('a live mod takes priority messages instead of the terminal, and the inbox hands them over once', async () => {
-  const { harness } = modHarness();
+  const { harness, time } = modHarness();
   await requestHttp(harness, 'POST', '/agenthub/mod/heartbeat', modHeaders, '', '127.0.0.1');
 
-  const queued = await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ interrupt: true }));
+  const pending = requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ interrupt: true }));
+  await queuedFor(time);
   const first = await requestHttp(harness, 'GET', '/agenthub/mod/inbox', modHeaders, '', '127.0.0.1');
   const second = await requestHttp(harness, 'GET', '/agenthub/mod/inbox', modHeaders, '', '127.0.0.1');
+  const ack = await modAck(harness, [{ id: 'm-1', outcome: 'submitted' }]);
+  const queued = await pending;
 
+  assert.deepEqual(JSON.parse(ack.body), { accepted: ['m-1'] });
   assert.deepEqual(JSON.parse(queued.body), { delivered: 'queued-for-mod' });
   assert.deepEqual(harness.terminals[0].writes, []);
   assert.deepEqual(JSON.parse(first.body), { messages: [
@@ -165,9 +192,13 @@ test('a mod that stopped polling loses the queue to the terminal after 15 second
   const { harness, time } = modHarness();
   await requestHttp(harness, 'GET', '/agenthub/mod/inbox', modHeaders, '', '127.0.0.1');
   time.advance(14_000);
-  const fresh = await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage());
-  time.advance(1_500);
-  const stale = await requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ id: 'm-2' }));
+  const pending = requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage());
+  await queuedFor(time);
+  await requestHttp(harness, 'GET', '/agenthub/mod/inbox', modHeaders, '', '127.0.0.1');
+  await modAck(harness, [{ id: 'm-1', outcome: 'appended' }]);
+  const fresh = await pending;
+  time.advance(15_001);
+  const stale = await settled(time, requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ id: 'm-2' })));
 
   assert.deepEqual(JSON.parse(fresh.body), { delivered: 'queued-for-mod' });
   assert.deepEqual(JSON.parse(stale.body), { delivered: 'pty' });
@@ -182,11 +213,64 @@ test('a live mod takes plain messages in an interactive session only', async () 
 
   const shown = await requestHttp(interactive.harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ priority: false }));
   const kept = await requestHttp(autonomous.harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ priority: false }));
-  const pushed = await requestHttp(autonomous.harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ id: 'm-2' }));
+  const pushing = requestHttp(autonomous.harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ id: 'm-2' }));
+  await queuedFor(autonomous.time);
+  await requestHttp(autonomous.harness, 'GET', '/agenthub/mod/inbox', modHeaders, '', '127.0.0.1');
+  await modAck(autonomous.harness, [{ id: 'm-2', outcome: 'appended' }]);
+  const pushed = await pushing;
 
   assert.deepEqual(JSON.parse(shown.body), { delivered: 'queued-for-mod' });
   assert.deepEqual(JSON.parse(kept.body), { delivered: 'unavailable', reason: 'not_priority' });
   assert.deepEqual(JSON.parse(pushed.body), { delivered: 'queued-for-mod' });
+});
+
+// #390: the hub marks a row delivered on the pod's answer. A priority message the mod could not
+// put into the running conversation must stay in the inbox instead of vanishing from both.
+test('a priority message is answered with what the mod made of it', async () => {
+  const { harness, time } = modHarness();
+  await requestHttp(harness, 'POST', '/agenthub/mod/heartbeat', modHeaders, '', '127.0.0.1');
+
+  const refused = requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage());
+  await queuedFor(time);
+  await requestHttp(harness, 'GET', '/agenthub/mod/inbox', modHeaders, '', '127.0.0.1');
+  const ack = await modAck(harness, [{ id: 'm-1', outcome: 'failed' }, { id: 'unknown', outcome: 'appended' }]);
+
+  assert.deepEqual(JSON.parse(ack.body), { accepted: ['m-1'] });
+  assert.deepEqual(JSON.parse((await refused).body), { delivered: 'unavailable', reason: 'mod_not_injected' });
+  assert.deepEqual(time.timers.map(timer => timer.ms), [7000]);
+  time.fire();
+  assert.deepEqual(harness.terminals[0].writes, []);
+});
+
+test('a priority message the mod does not take in time stays in the inbox; one it took is the mod\'s', async () => {
+  const { harness, time } = modHarness();
+  await requestHttp(harness, 'POST', '/agenthub/mod/heartbeat', modHeaders, '', '127.0.0.1');
+
+  const untaken = requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage());
+  await queuedFor(time);
+  time.fire();
+  const leftover = await requestHttp(harness, 'GET', '/agenthub/mod/inbox', modHeaders, '', '127.0.0.1');
+
+  const taken = requestHttp(harness, 'POST', '/agenthub/messages', messageHeaders, fleetMessage({ id: 'm-2' }));
+  await queuedFor(time);
+  await requestHttp(harness, 'GET', '/agenthub/mod/inbox', modHeaders, '', '127.0.0.1');
+  time.fire();
+  const late = await modAck(harness, [{ id: 'm-2', outcome: 'failed' }]);
+
+  assert.deepEqual(JSON.parse((await untaken).body), { delivered: 'unavailable', reason: 'mod_not_polling' });
+  assert.deepEqual(JSON.parse(leftover.body), { messages: [] });
+  assert.deepEqual(JSON.parse((await taken).body), { delivered: 'queued-for-mod' });
+  assert.deepEqual(JSON.parse(late.body), { accepted: [] });
+});
+
+test('the ack route checks method, token and body', async () => {
+  const { harness } = modHarness();
+  const get = await requestHttp(harness, 'GET', '/agenthub/mod/ack', modHeaders, '', '127.0.0.1');
+  const remote = await requestHttp(harness, 'POST', '/agenthub/mod/ack', modHeaders, '{"results":[]}', '10.0.0.9');
+  const junk = await requestHttp(harness, 'POST', '/agenthub/mod/ack', modHeaders, '{"results":1}', '127.0.0.1');
+  const empty = await modAck(harness, []);
+
+  assert.deepEqual([get.status, remote.status, junk.status, empty.status], [405, 401, 400, 200]);
 });
 
 // ---- Plain messages as the next turn, for runtimes whose hooks report turns (#173) ------------
