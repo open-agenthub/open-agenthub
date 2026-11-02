@@ -53,6 +53,7 @@ public sealed class AccountPurgeStore : IAccountPurgeStore
         await DeleteAsync(conn, "projects", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "chat_link_codes", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "chat_session_bindings", "owner = @o", owner, sessions, ct);
+        await DeleteAsync(conn, "chat_pins", "owner = @o OR session_id = ANY(@ids)", owner, sessions, ct);
         await DeleteAsync(conn, "permission_requests", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "secret_requests", "owner = @o OR session_id = ANY(@ids)", owner, sessions, ct);
         await DeleteAsync(conn, "session_usage", "owner = @o OR session_id = ANY(@ids)", owner, sessions, ct);

@@ -192,15 +192,116 @@ public class ChatSessionDeletionPostgresTests
             await db.Bindings.SetActiveAsync("signal", SignalRig.Number, "bbbb2222");
             await signal.SendAsync("!use " + tag);
             Assert.Equal("ab121111", (await db.Bindings.GetActiveAsync("signal", SignalRig.Number))?.SessionId);
-            Assert.Equal("✅ Plain replies now go to #ab12.", signal.Sent.Last());
+            Assert.StartsWith("✅ Plain replies now go to Title ab121111 (#ab12) until you choose another.", signal.Sent.Last());
         }
         foreach (var tag in new[] { "", "#", " #  " })
         {
             await db.Bindings.SetActiveAsync("signal", SignalRig.Number, "bbbb2222");
             await signal.SendAsync("!use " + tag);
-            Assert.Equal("Usage: !use #ab12 or !use ab12.", signal.Sent.Last());
+            Assert.Equal("Usage: !use #ab12 or !use ab12. !use auto (or !unpin) follows the newest session.", signal.Sent.Last());
             Assert.Equal("bbbb2222", (await db.Bindings.GetActiveAsync("signal", SignalRig.Number))?.SessionId);
         }
+    }
+
+    // #398: !use pins the chat; a question from another session is posted but takes nothing over.
+    [PostgreSqlFact]
+    public async Task Signal_UsePinsTheChat_UntilUnpin_AndADeletedPinIsAnErrorNotAFallback()
+    {
+        await using var db = await PostgresPurgeDatabase.CreateAsync();
+        var signal = await SignalRig.CreateAsync(db);
+        var a = new SessionRecord { Id = "aaaa1111", Owner = "alice", Title = "Release notes", CallbackToken = "cb-a" };
+        var b = new SessionRecord { Id = "bbbb2222", Owner = "alice", Title = "Nightly", CallbackToken = "cb-b" };
+        await db.Sessions.UpsertAsync(a);
+        await db.Sessions.UpsertAsync(b);
+        async Task<string?> Active() => (await db.Bindings.GetActiveAsync("signal", SignalRig.Number))?.SessionId;
+
+        await signal.Notifier.NotifyAsync(a, "question", "first?");
+        await signal.Notifier.NotifyAsync(b, "question", "second?");
+        Assert.Equal("bbbb2222", await Active()); // no pin: the newest session to speak
+
+        await signal.SendAsync("!use aaaa");
+        Assert.Equal("aaaa1111", (await db.Bindings.GetPinAsync("signal", SignalRig.Number))?.SessionId);
+        await signal.Notifier.NotifyAsync(b, "question", "still there?");
+        Assert.Contains("still there?", signal.Sent.Last());
+        Assert.Equal("aaaa1111", await Active());
+
+        await db.Bindings.RemoveSessionAsync("aaaa1111", "Release notes");
+        await db.Sessions.DeleteAsync("aaaa1111");
+        await signal.Notifier.NotifyAsync(b, "question", "anyone?");
+        Assert.Null(await Active());
+        await signal.SendAsync("please continue");
+        Assert.Equal("🗑 The session you selected with !use, Release notes (#aaaa), was deleted. !sessions lists the remaining ones,"
+            + " !use <tag> picks one, !unpin follows the newest session again.", signal.Sent.Last());
+
+        await signal.SendAsync("!use auto");
+        Assert.StartsWith("✅ Plain replies follow the newest session again", signal.Sent.Last());
+        Assert.Null(await db.Bindings.GetPinAsync("signal", SignalRig.Number));
+        await signal.Notifier.NotifyAsync(b, "question", "now?");
+        Assert.Equal("bbbb2222", await Active());
+        await signal.SendAsync("!unpin");
+        Assert.Equal("Plain replies already follow the newest session.", signal.Sent.Last());
+    }
+
+    // A pin made under an account the chat is no longer linked to must not freeze the new owner's chat.
+    [PostgreSqlFact]
+    public async Task Follow_DropsAPinOfAnotherOwner()
+    {
+        await using var db = await PostgresPurgeDatabase.CreateAsync();
+        await db.Bindings.UpsertAsync(new("telegram", "old1", "mallory", "chat-1", null, null, false));
+        await db.Bindings.UpsertAsync(new("telegram", "new1", "alice", "chat-1", null, null, false));
+        await db.Bindings.PinAsync("telegram", "chat-1", "old1", "mallory");
+
+        await db.Bindings.FollowAsync("telegram", "chat-1", "new1", "alice");
+
+        Assert.Null(await db.Bindings.GetPinAsync("telegram", "chat-1"));
+        Assert.Equal("new1", (await db.Bindings.GetActiveAsync("telegram", "chat-1"))?.SessionId);
+    }
+
+    // A notification whose update waits on a /use still in flight must not overwrite that /use.
+    [PostgreSqlFact]
+    public async Task Follow_WaitingOnAConcurrentPin_DoesNotOverwriteIt()
+    {
+        await using var db = await PostgresPurgeDatabase.CreateAsync();
+        foreach (var id in new[] { "pinned", "other" })
+            await db.Bindings.UpsertAsync(new("telegram", id, "alice", "chat-1", null, null, false));
+
+        // The /use, held open mid-transaction: PinAsync's statements, uncommitted.
+        await using var source = Npgsql.NpgsqlDataSource.Create(db.Config["ConnectionStrings:Postgres"]!);
+        await using var conn = await source.OpenConnectionAsync();
+        await using var tx = await conn.BeginTransactionAsync();
+        await using (var cmd = new Npgsql.NpgsqlCommand("""
+            SELECT pg_advisory_xact_lock(hashtext('chat-active:telegram:chat-1'));
+            UPDATE chat_session_bindings SET active = (session_id = 'pinned') WHERE platform = 'telegram' AND chat_id = 'chat-1';
+            INSERT INTO chat_pins (platform, chat_id, session_id, owner) VALUES ('telegram', 'chat-1', 'pinned', 'alice');
+            """, conn, tx))
+            await cmd.ExecuteNonQueryAsync();
+
+        var follow = db.Bindings.FollowAsync("telegram", "chat-1", "other", "alice");
+        await Task.Delay(500);
+        Assert.False(follow.IsCompleted); // it waits for the /use
+        await tx.CommitAsync();
+        await follow;
+
+        Assert.Equal("pinned", (await db.Bindings.GetActiveAsync("telegram", "chat-1"))?.SessionId);
+    }
+
+    // /new moves an existing pin to the session it started; it does not create one.
+    [PostgreSqlFact]
+    public async Task Choose_MovesAPin_ButDoesNotCreateOne()
+    {
+        await using var db = await PostgresPurgeDatabase.CreateAsync();
+        foreach (var id in new[] { "s1", "s2", "s3" })
+            await db.Bindings.UpsertAsync(new("telegram", id, "alice", "chat-1", null, null, false));
+
+        await db.Bindings.ChooseAsync("telegram", "chat-1", "s1");
+        Assert.Null(await db.Bindings.GetPinAsync("telegram", "chat-1"));
+        await db.Bindings.PinAsync("telegram", "chat-1", "s2", "alice");
+        await db.Bindings.ChooseAsync("telegram", "chat-1", "s3");
+
+        Assert.Equal("s3", (await db.Bindings.GetPinAsync("telegram", "chat-1"))?.SessionId);
+        Assert.Equal("s3", (await db.Bindings.GetActiveAsync("telegram", "chat-1"))?.SessionId);
+        await db.Bindings.FollowAsync("telegram", "chat-1", "s1", "alice");
+        Assert.Equal("s3", (await db.Bindings.GetActiveAsync("telegram", "chat-1"))?.SessionId);
     }
 
     private sealed class SignalRig

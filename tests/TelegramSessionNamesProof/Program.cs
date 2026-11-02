@@ -17,6 +17,21 @@ if (args.Contains("--deleted-sessions"))
     return;
 }
 var verify = !args.Contains("--record-baseline");
+if (args.Contains("--pinned-session"))
+{
+    var json = new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
+    var runs = new Dictionary<string, List<PinnedStep>>();
+    foreach (var forum in new[] { false, true })
+        runs[forum ? "forum" : "private"] = await PinnedSessionScenario.RunAsync(cs, forum, verify: false);
+    Console.WriteLine(System.Text.Json.JsonSerializer.Serialize(runs, json));
+    if (verify)
+    {
+        PinnedSessionScenario.Verify(runs["private"], forum: false);
+        PinnedSessionScenario.Verify(runs["forum"], forum: true);
+        Console.WriteLine("PASS pinned-session proof");
+    }
+    return;
+}
 app.MapPost("/proof/{path}", (string path) => TelegramSessionScenario.RunAsync(path, cs, verify));
 await app.StartAsync();
 using var client = new HttpClient();

@@ -79,8 +79,9 @@ public sealed class SignalNotifier : INotifier
                 if (binding is null) return; // user not linked/verified or opted out
             }
 
-            // The most recent question owns the chat's plain replies (reply-routing mode).
-            await _bindings.SetActiveAsync("signal", binding.ChatId, s.Id, ct);
+            // The most recent question owns the chat's plain replies (reply-routing mode) —
+            // unless the user chose a session with !use, which a notification must not undo.
+            await _bindings.FollowAsync("signal", binding.ChatId, s.Id, s.Owner, ct);
 
             var messages = ChatFormatting.BuildAnswerMessages(s.Id, s.Title, message);
             for (var i = 0; i < messages.Count; i++)
@@ -110,12 +111,12 @@ public sealed class SignalNotifier : INotifier
 
         var header = ChatFormatting.Header(s.Id, s.Title) + $" ({s.Mode})\n" +
                      (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"{_frontendOrigin}/s/{s.Id}\n") +
-                     "Quote a message of this session to answer it; plain replies go to the newest session. !status shows progress.";
+                     "Quote a message of this session to answer it; plain replies go to the newest session unless you chose one with !use. !status shows progress.";
 
         var headerTs = await _signal.SendAsync(user.SignalNumber, header, ct);
         if (headerTs is null) return null;
 
-        // Active=false per the store contract — SetActiveAsync flips it right after.
+        // Active=false per the store contract — FollowAsync flips it right after unless pinned.
         var binding = new ChatBinding("signal", s.Id, s.Owner, user.SignalNumber, null, null, false);
         await _bindings.UpsertAsync(binding, ct);
         await _bindings.RecordMessageAsync("signal", binding.ChatId, headerTs, s.Id, ct);

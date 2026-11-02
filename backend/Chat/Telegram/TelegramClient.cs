@@ -152,7 +152,8 @@ public sealed class TelegramClient
                 new { command = "new", description = "Start a new session: /new [+repo] <prompt>" },
                 new { command = "repos", description = "List your GitHub/GitLab projects" },
                 new { command = "sessions", description = "List sessions in this chat" },
-                new { command = "use", description = "Choose the session for plain replies" },
+                new { command = "use", description = "Choose the session for plain replies; it stays chosen" },
+                new { command = "unpin", description = "Plain replies follow the newest session again" },
                 new { command = "status", description = "Show session status" }
             }
         };

@@ -157,6 +157,9 @@ public sealed class SignalReceiveService : BackgroundService
             case "!use":
                 await HandleUseAsync(e, user, parts.Length > 1 ? parts[1] : "", ct);
                 return;
+            case "!unpin":
+                await _signal.SendAsync(e.Sender, ChatFormatting.UnpinnedAnswer(await _bindings.UnpinAsync("signal", e.Sender, ct)), ct);
+                return;
             case "!status":
                 await HandleStatusAsync(e, user, ct);
                 return;
@@ -234,9 +237,14 @@ public sealed class SignalReceiveService : BackgroundService
     /// <summary>Points the chat's plain replies at the session matching the tag.</summary>
     private async Task HandleUseAsync(SignalEnvelope e, AppUser user, string tag, CancellationToken ct)
     {
+        if (ChatFormatting.IsUnpinArgument(tag))
+        {
+            await _signal.SendAsync(e.Sender, ChatFormatting.UnpinnedAnswer(await _bindings.UnpinAsync("signal", e.Sender, ct)), ct);
+            return;
+        }
         if (ChatFormatting.NormalizeTag(tag).Length == 0)
         {
-            await _signal.SendAsync(e.Sender, "Usage: !use #ab12 or !use ab12.", ct);
+            await _signal.SendAsync(e.Sender, "Usage: !use #ab12 or !use ab12. !use auto (or !unpin) follows the newest session.", ct);
             return;
         }
         var (match, count) = ChatFormatting.FindByTag(tag,
@@ -248,14 +256,15 @@ public sealed class SignalReceiveService : BackgroundService
             return;
         }
         // A binding the prune has not reached yet must not become the active session again.
-        if (match is null || await _sessions.GetSessionAsync(match.Owner, match.SessionId, ct) is null)
+        var live = match is null ? null : await _sessions.GetSessionAsync(match.Owner, match.SessionId, ct);
+        if (live is null)
         {
             await _signal.SendAsync(e.Sender, "No session matches that tag.", ct);
             return;
         }
 
-        await _bindings.SetActiveAsync("signal", e.Sender, match!.SessionId, ct);
-        await _signal.SendAsync(e.Sender, $"✅ Plain replies now go to #{ChatFormatting.Tag(match.SessionId)}.", ct);
+        await _bindings.PinAsync("signal", e.Sender, match!.SessionId, user.Owner, ct);
+        await _signal.SendAsync(e.Sender, ChatFormatting.PinnedAnswer(match.SessionId, live.Title, "!"), ct);
     }
 
     /// <summary>
@@ -302,12 +311,12 @@ public sealed class SignalReceiveService : BackgroundService
         // first contact) and point plain replies at it.
         var header = ChatFormatting.Header(info.Id, info.Title) + $" ({info.Mode})\n" +
                      (string.IsNullOrEmpty(_frontendOrigin) ? "" : $"{_frontendOrigin}/s/{info.Id}\n") +
-                     "Quote a message of this session to answer it; plain replies go to the newest session. !status shows progress.";
+                     "Quote a message of this session to answer it; plain replies go to the newest session unless you chose one with !use. !status shows progress.";
         var headerTs = await _signal.SendAsync(e.Sender, header, ct);
         var binding = new ChatBinding("signal", info.Id, user.Owner, e.Sender, null, null, false);
         await _bindings.UpsertAsync(binding, ct);
         if (headerTs is not null) await _bindings.RecordMessageAsync("signal", e.Sender, headerTs, info.Id, ct);
-        await _bindings.SetActiveAsync("signal", e.Sender, info.Id, ct);
+        await _bindings.ChooseAsync("signal", e.Sender, info.Id, ct);
     }
 
     /// <summary>Answers with the target session's current state.</summary>
@@ -378,7 +387,8 @@ public sealed class SignalReceiveService : BackgroundService
 
     /// <summary>
     /// The session a message is meant for: (1) the quoted message's session, else
-    /// (2) the chat's active session. A quote of an unknown message resolves to
+    /// (2) the session pinned with !use, else (3) the chat's active session. A pinned session
+    /// that was deleted resolves to nothing, so the message gets an error, not another session. A quote of an unknown message resolves to
     /// nothing on purpose — silently redirecting it to the active session would
     /// deliver the reply somewhere the user did not aim at.
     /// </summary>
@@ -389,6 +399,8 @@ public sealed class SignalReceiveService : BackgroundService
             var sessionId = await _bindings.GetSessionByMessageAsync("signal", e.Sender, e.QuotedTimestamp, ct);
             return sessionId is null ? null : await _bindings.GetAsync("signal", sessionId, ct);
         }
+        if (await _bindings.GetPinAsync("signal", e.Sender, ct) is { } pin)
+            return await _bindings.GetAsync("signal", pin.SessionId, ct);
         return await _bindings.GetActiveAsync("signal", e.Sender, ct);
     }
 
@@ -400,6 +412,9 @@ public sealed class SignalReceiveService : BackgroundService
     private async Task<string?> DeletedAnswerAsync(SignalEnvelope e, AppUser user, CancellationToken ct)
     {
         if (e.QuotedTimestamp is not null) return null;
+        if (await _bindings.GetPinAsync("signal", e.Sender, ct) is { } pin && pin.Owner == user.Owner)
+            return ChatFormatting.PinnedSessionGoneAnswer(pin.SessionId,
+                (await _bindings.GetDeletedAsync("signal", pin.SessionId, ct))?.Title, "!");
         var gone = await _bindings.GetDeletedActiveAsync("signal", e.Sender, ct);
         return gone is null || gone.Owner != user.Owner ? null
             : ChatFormatting.DeletedSessionAnswer(gone.SessionId, gone.Title, topic: false, "!");

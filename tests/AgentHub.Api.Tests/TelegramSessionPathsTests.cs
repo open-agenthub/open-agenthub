@@ -27,4 +27,12 @@ public class TelegramSessionPathsTests
     public async Task DeletedSessionsLeaveTheChat()
         => await DeletedSessionScenario.RunAsync(
             Environment.GetEnvironmentVariable(PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable)!);
+
+    // #398: /use pins the chat; other sessions' notifications no longer take the plain replies.
+    [DatabaseTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task UseKeepsTheChosenSessionWhileOthersPost(bool forum)
+        => await PinnedSessionScenario.RunAsync(
+            Environment.GetEnvironmentVariable(PostgreSqlFactAttribute.ConnectionStringEnvironmentVariable)!, forum);
 }

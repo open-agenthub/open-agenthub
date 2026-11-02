@@ -9,7 +9,7 @@ public sealed record ChatBinding(
     string? ThreadId,      // Telegram forum topic id; null for DMs/Signal
     string? StatusRef,     // message id/timestamp of the "working…" indicator
     bool Active);          // the chat's current default session (plain replies go here). Callers must upsert
-                           // with Active=false and flip via SetActiveAsync — UpsertAsync does not clear other rows' flags.
+                           // with Active=false and flip via FollowAsync/ChooseAsync/PinAsync — UpsertAsync does not clear other rows' flags.
 
 /// <summary>
 /// What a chat still knows about a deleted session: where its conversation was and whether
@@ -18,6 +18,12 @@ public sealed record ChatBinding(
 /// </summary>
 public sealed record DeletedChatSession(
     string Platform, string SessionId, string Owner, string ChatId, string? ThreadId, string? Title, bool WasActive);
+
+/// <summary>
+/// A chat's explicit /use choice. While it exists, notifications from other sessions no longer
+/// move the chat's active session; without it the chat follows whichever session spoke last.
+/// </summary>
+public sealed record ChatPin(string Platform, string ChatId, string SessionId, string Owner);
 
 /// <summary>Drops a deleted session's chat state. Implemented by <see cref="ChatBindingStore"/>.</summary>
 public interface IChatSessionCleanup
@@ -74,6 +80,18 @@ public sealed class ChatBindingStore : IChatSessionCleanup
                 PRIMARY KEY (platform, session_id)
             );
             CREATE INDEX IF NOT EXISTS idx_chat_deleted_chat ON chat_deleted_sessions(platform, chat_id);
+            -- A row of its own rather than a flag on the binding: the delete removes the binding,
+            -- and the pin has to outlive it so the chat is told its choice is gone instead of
+            -- being handed to whichever session posts next.
+            CREATE TABLE IF NOT EXISTS chat_pins (
+                platform    TEXT NOT NULL,
+                chat_id     TEXT NOT NULL,
+                session_id  TEXT NOT NULL,
+                owner       TEXT NOT NULL,
+                pinned_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (platform, chat_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_pins_owner ON chat_pins(owner);
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -123,6 +141,93 @@ public sealed class ChatBindingStore : IChatSessionCleanup
         cmd.Parameters.AddWithValue("p", platform);
         cmd.Parameters.AddWithValue("c", chatId);
         await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// An explicit /use: makes the session active and pins the chat to it, so later
+    /// notifications from other sessions leave the choice alone.
+    /// </summary>
+    public async Task PinAsync(string platform, string chatId, string sessionId, string owner, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("""
+            SELECT pg_advisory_xact_lock(hashtext('chat-active:' || @p || ':' || @c));
+            UPDATE chat_session_bindings SET active = (session_id = @sid) WHERE platform = @p AND chat_id = @c;
+            UPDATE chat_deleted_sessions SET was_active = FALSE WHERE platform = @p AND chat_id = @c AND was_active;
+            INSERT INTO chat_pins (platform, chat_id, session_id, owner) VALUES (@p, @c, @sid, @o)
+            ON CONFLICT (platform, chat_id) DO UPDATE SET
+                session_id = EXCLUDED.session_id, owner = EXCLUDED.owner, pinned_at = now();
+            """);
+        cmd.Parameters.AddWithValue("sid", sessionId);
+        cmd.Parameters.AddWithValue("p", platform);
+        cmd.Parameters.AddWithValue("c", chatId);
+        cmd.Parameters.AddWithValue("o", owner);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// A session the chat itself just started (/new): it becomes active, and a pin moves with it.
+    /// Leaving the pin on the old session would make the new one's conversation unreachable by
+    /// plain message right after the user asked for it.
+    /// </summary>
+    public async Task ChooseAsync(string platform, string chatId, string sessionId, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("""
+            SELECT pg_advisory_xact_lock(hashtext('chat-active:' || @p || ':' || @c));
+            UPDATE chat_session_bindings SET active = (session_id = @sid) WHERE platform = @p AND chat_id = @c;
+            UPDATE chat_deleted_sessions SET was_active = FALSE WHERE platform = @p AND chat_id = @c AND was_active;
+            UPDATE chat_pins SET session_id = @sid, pinned_at = now() WHERE platform = @p AND chat_id = @c;
+            """);
+        cmd.Parameters.AddWithValue("sid", sessionId);
+        cmd.Parameters.AddWithValue("p", platform);
+        cmd.Parameters.AddWithValue("c", chatId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>
+    /// A notification from the session: it becomes active only while the chat has no pin of
+    /// the session's owner. A pin left by another account (the chat
+    /// was linked anew) is dropped first; kept, it would freeze the new owner's chat on a
+    /// session they cannot reach.
+    /// </summary>
+    public async Task FollowAsync(string platform, string chatId, string sessionId, string owner, CancellationToken ct = default)
+    {
+        // The statements of one command run in one implicit transaction, each with a snapshot
+        // taken when it starts. The lock, which PinAsync and ChooseAsync take too, makes the pin
+        // check below see a /use that committed while this waited, instead of overwriting it.
+        await using var cmd = _db.CreateCommand("""
+            SELECT pg_advisory_xact_lock(hashtext('chat-active:' || @p || ':' || @c));
+            DELETE FROM chat_pins WHERE platform = @p AND chat_id = @c AND owner <> @o;
+            WITH free AS (SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM chat_pins WHERE platform = @p AND chat_id = @c)),
+                 retired AS (UPDATE chat_deleted_sessions SET was_active = FALSE
+                             WHERE platform = @p AND chat_id = @c AND was_active AND EXISTS (SELECT 1 FROM free))
+            UPDATE chat_session_bindings SET active = (session_id = @sid)
+            WHERE platform = @p AND chat_id = @c AND EXISTS (SELECT 1 FROM free);
+            """);
+        cmd.Parameters.AddWithValue("sid", sessionId);
+        cmd.Parameters.AddWithValue("p", platform);
+        cmd.Parameters.AddWithValue("c", chatId);
+        cmd.Parameters.AddWithValue("o", owner);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    /// <summary>The chat's /use choice, if any. It may name a session that no longer exists.</summary>
+    public async Task<ChatPin?> GetPinAsync(string platform, string chatId, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand(
+            "SELECT platform, chat_id, session_id, owner FROM chat_pins WHERE platform = @p AND chat_id = @c");
+        cmd.Parameters.AddWithValue("p", platform);
+        cmd.Parameters.AddWithValue("c", chatId);
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        return await r.ReadAsync(ct) ? new(r.GetString(0), r.GetString(1), r.GetString(2), r.GetString(3)) : null;
+    }
+
+    /// <summary>Back to following the latest session. Returns whether a pin existed.</summary>
+    public async Task<bool> UnpinAsync(string platform, string chatId, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("DELETE FROM chat_pins WHERE platform = @p AND chat_id = @c");
+        cmd.Parameters.AddWithValue("p", platform);
+        cmd.Parameters.AddWithValue("c", chatId);
+        return await cmd.ExecuteNonQueryAsync(ct) > 0;
     }
 
     /// <summary>All bindings of a chat (for !sessions), most recently created session first. The caller enriches with live session data.</summary>

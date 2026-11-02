@@ -61,6 +61,23 @@ asserts; the second runs the same steps at the revision before the fix, where th
 fail by design. The scenario also runs as `TelegramSessionPathsTests.DeletedSessionsLeaveTheChat`.
 
 
+## Pinned session (#398)
+
+`PinnedSessionScenario.cs` runs `/use A`, questions from B and from a new session C, a plain
+message, a message in B's forum topic, the real `KubernetesSessionService.DeleteSessionAsync` of
+A, another question from B, a plain message and `/status`, then `/unpin`. It runs once in a
+private chat and once in a forum supergroup. Each session has its own stand-in pod on its own
+loopback address (127.0.0.2/.3/.4), and the production `AgentTerminal` WebSocket types into it,
+so every step records which session's terminal received the plain message.
+
+```sh
+dotnet run --project tests/TelegramSessionNamesProof -- --pinned-session > /tmp/pinned-after.json
+bash tests/TelegramSessionNamesProof/record-pinned-baseline.sh /tmp/pinned-baseline /tmp/pinned-before.json
+```
+
+The baseline runs the same steps at `680f9e1` without assertions. It also runs as
+`TelegramSessionPathsTests.UseKeepsTheChosenSessionWhileOthersPost`.
+
 ## Displayed tag input (#396)
 
 The `use-hash` and `use-bang-hash` paths send `/use #AB12` and `!use #ab12`

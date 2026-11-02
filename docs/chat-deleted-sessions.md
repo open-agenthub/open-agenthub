@@ -36,6 +36,8 @@ reply-routing row for it. The router answers a message in the topic, or a plain 
 the deleted session was the active one, with `🗑 … was deleted. /sessions lists the remaining
 ones, /use <tag> picks one.` Choosing another session (`/use`, `/new`, a new question) clears
 the active flag on the markers, so the answer stops once it would contradict the new choice.
+A chat pinned with `/use` gets its own answer instead, naming the session it chose; see
+`docs/chat-session-pin.md`.
 A reply to one of the deleted session's old messages gets the generic answer: its
 reply-routing rows are gone, and keeping them only to recognise that case was not worth a
 second kind of retained row.
