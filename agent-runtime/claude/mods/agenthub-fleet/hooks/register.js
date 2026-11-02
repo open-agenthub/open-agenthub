@@ -3,9 +3,8 @@
 // limits to the hub (docs/account-limits.md). The session agent beside the CLI queues pushed
 // messages at a loopback endpoint; this mod polls it, puts a priority message into the running
 // turn (or submits it as a prompt, aborting the running turn when asked), and submits plain ones
-// once no turn runs. It also
-// watches the rate-limit windows Claude Code reports and tells the session agent when one is
-// used up; the hub, not the mod, decides what to do about it.
+// once no turn runs. It also watches the rate-limit windows Claude Code reports and tells the
+// session agent when one is used up; the hub, not the mod, decides what to do about it.
 import { formatFleetMessage, inboxStatus, inboxText, limitKey, parseInbox, parseThreshold, planDelivery, planLimitReports, unreadAppends, unreadNotice } from './lib.mjs'
 
 const POLL_MS = 3000
