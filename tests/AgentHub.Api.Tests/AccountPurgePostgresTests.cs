@@ -22,6 +22,7 @@ public class AccountPurgePostgresTests
             """);
         await db.Bindings.UpsertAsync(new ChatBinding("telegram", "sess-a", "alice", "chat-1", null, null, true));
         await db.Bindings.RecordMessageAsync("telegram", "chat-1", "42", "sess-a");
+        await db.Bindings.PinAsync("telegram", "chat-1", "sess-a", "alice");
         await db.Tokens.CreateAsync("alice", "cli", "oah_secret_alice");
         await db.ExecAsync("INSERT INTO projects (id, owner, name) VALUES ('p1', 'alice', 'Tools')");
         await db.ExecAsync("""
@@ -51,6 +52,7 @@ public class AccountPurgePostgresTests
         Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM sessions WHERE owner = 'alice'"));
         Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM chat_session_bindings WHERE owner = 'alice'"));
         Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM chat_messages WHERE session_id = 'sess-a'"));
+        Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM chat_pins WHERE owner = 'alice'"));
         Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM api_tokens WHERE owner = 'alice'"));
         Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM projects WHERE owner = 'alice'"));
         Assert.Equal(0, await db.CountAsync("SELECT count(*) FROM session_usage WHERE owner = 'alice'"));

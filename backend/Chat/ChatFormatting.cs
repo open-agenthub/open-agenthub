@@ -86,6 +86,29 @@ public static class ChatFormatting
             : $"🗑 The active session {SessionLabel(sessionId, title)} was deleted.")
            + $" {commandPrefix}sessions lists the remaining ones, {commandPrefix}use <tag> picks one.";
 
+    /// <summary>
+    /// Answer to a plain message while the chat is pinned to a session that no longer exists.
+    /// No fallback to another session: the user picked this one on purpose, and typing their
+    /// message into whichever session spoke last is exactly what the pin is there to prevent.
+    /// </summary>
+    public static string PinnedSessionGoneAnswer(string sessionId, string? title, string commandPrefix)
+        => $"🗑 The session you selected with {commandPrefix}use, {SessionLabel(sessionId, title)}, was deleted."
+           + $" {commandPrefix}sessions lists the remaining ones, {commandPrefix}use <tag> picks one,"
+           + $" {commandPrefix}unpin follows the newest session again.";
+
+    /// <summary>Confirmation of /use: says that the choice now holds, and how to undo it.</summary>
+    public static string PinnedAnswer(string sessionId, string? title, string commandPrefix)
+        => $"✅ Plain replies now go to {SessionLabel(sessionId, title)} until you choose another."
+           + $" Other sessions' messages no longer change this; {commandPrefix}unpin follows the newest session again.";
+
+    /// <summary>True for the argument of "/use auto", the spelled-out form of /unpin.</summary>
+    public static bool IsUnpinArgument(string arg) => arg.Trim().Equals("auto", StringComparison.OrdinalIgnoreCase);
+
+    public static string UnpinnedAnswer(bool wasPinned)
+        => wasPinned
+            ? "✅ Plain replies follow the newest session again: the next session to send a message becomes the active one."
+            : "Plain replies already follow the newest session.";
+
     public static string Header(string sessionId, string? title) => $"🤖 {SessionLabel(sessionId, title)}";
 
     // Repeat the origin after splitting: a forwarded continuation must stand on its own.

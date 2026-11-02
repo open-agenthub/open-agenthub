@@ -114,6 +114,13 @@ Cursor branch is covered by the payload shape in Cursor's hook documentation
 (`conversation_id`, `generation_id`, `status`, `loop_count`, nullable `transcript_path`) and
 by unit tests only.
 
+### Which session a plain message goes to (#398)
+
+A topic message goes to the topic's session, a reply to the replied-to message's session; a
+plain message goes to the session chosen with `/use` (`!use`), or, without a choice, to the last
+session that posted. `/unpin` or `/use auto` returns to the latter. `docs/chat-session-pin.md`
+has the reasoning.
+
 ### Session tag input (#396)
 
 Tags displayed as `#ab12` can be used directly: `/use #ab12` or `/use ab12`

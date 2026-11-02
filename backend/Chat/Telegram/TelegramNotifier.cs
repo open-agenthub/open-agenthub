@@ -73,8 +73,10 @@ public sealed class TelegramNotifier : INotifier
                 if (binding is null) return; // user not linked / opted out
             }
 
-            // The most recent question owns the chat's plain replies (DM reply-routing mode).
-            await _bindings.SetActiveAsync("telegram", binding.ChatId, s.Id, ct);
+            // The most recent question owns the chat's plain replies (DM reply-routing mode) —
+            // unless the user chose a session with /use: then a notification from another
+            // session must not take over, or the next plain message lands somewhere unchosen.
+            await _bindings.FollowAsync("telegram", binding.ChatId, s.Id, s.Owner, ct);
 
             var messages = ChatFormatting.BuildAnswerMessages(s.Id, s.Title, message);
             for (var i = 0; i < messages.Count; i++)

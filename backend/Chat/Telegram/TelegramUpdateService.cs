@@ -176,6 +176,9 @@ public sealed class TelegramUpdateService : BackgroundService
             case "/use" or "!use":
                 await HandleUseAsync(u, arg ?? "", ct);
                 return;
+            case "/unpin" or "!unpin":
+                await HandleUnpinAsync(u, ct);
+                return;
             case "/status" or "!status":
                 await HandleStatusAsync(u, ct);
                 return;
@@ -278,9 +281,14 @@ public sealed class TelegramUpdateService : BackgroundService
             await ReplyAsync(u, "This chat is not linked.", ct);
             return;
         }
+        if (ChatFormatting.IsUnpinArgument(tag))
+        {
+            await HandleUnpinAsync(u, ct);
+            return;
+        }
         if (ChatFormatting.NormalizeTag(tag).Length == 0)
         {
-            await ReplyAsync(u, "Usage: /use #ab12 or /use ab12.", ct);
+            await ReplyAsync(u, "Usage: /use #ab12 or /use ab12. /use auto (or /unpin) follows the newest session.", ct);
             return;
         }
         var (match, count) = ChatFormatting.FindByTag(tag,
@@ -298,8 +306,19 @@ public sealed class TelegramUpdateService : BackgroundService
             return;
         }
 
-        await _bindings.SetActiveAsync("telegram", u.ChatId, match!.SessionId, ct);
-        await ReplyAsync(u, $"✅ Plain replies now go to {ChatFormatting.SessionLabel(match.SessionId, live?.Title)}.", ct);
+        await _bindings.PinAsync("telegram", u.ChatId, match!.SessionId, linked.Owner, ct);
+        await ReplyAsync(u, ChatFormatting.PinnedAnswer(match.SessionId, live.Title, "/"), ct);
+    }
+
+    /// <summary>"/unpin" or "/use auto": plain replies follow the newest session again.</summary>
+    private async Task HandleUnpinAsync(TelegramUpdate u, CancellationToken ct)
+    {
+        if (await _users.GetByTelegramChatAsync(u.ChatId, ct) is null)
+        {
+            await ReplyAsync(u, "This chat is not linked.", ct);
+            return;
+        }
+        await ReplyAsync(u, ChatFormatting.UnpinnedAnswer(await _bindings.UnpinAsync("telegram", u.ChatId, ct)), ct);
     }
 
     /// <summary>Lists the linked account's git projects: "/repos [query]".</summary>
@@ -365,7 +384,7 @@ public sealed class TelegramUpdateService : BackgroundService
         var binding = await _conversations.CreateBindingAsync(info.Id, info.Title, linked.Owner, info.Mode, ct);
         if (binding is not null)
         {
-            await _bindings.SetActiveAsync("telegram", binding.ChatId, info.Id, ct);
+            await _bindings.ChooseAsync("telegram", binding.ChatId, info.Id, ct);
         }
         else
         {
@@ -459,7 +478,9 @@ public sealed class TelegramUpdateService : BackgroundService
 
     /// <summary>
     /// The session a message is meant for: (1) its forum topic, else (2) the message
-    /// it replies to, else (3) the chat's active session.
+    /// it replies to, else (3) the session pinned with /use, else (4) the chat's active session.
+    /// A pinned session that was deleted resolves to nothing rather than to the active
+    /// flag, so the message is answered with an error instead of going elsewhere.
     /// </summary>
     private async Task<ChatBinding?> ResolveBindingAsync(TelegramUpdate u, CancellationToken ct)
     {
@@ -470,6 +491,8 @@ public sealed class TelegramUpdateService : BackgroundService
             var sessionId = await _bindings.GetSessionByMessageAsync("telegram", u.ChatId, u.ReplyToMessageId, ct);
             return sessionId is null ? null : await _bindings.GetAsync("telegram", sessionId, ct);
         }
+        if (await _bindings.GetPinAsync("telegram", u.ChatId, ct) is { } pin)
+            return await _bindings.GetAsync("telegram", pin.SessionId, ct);
         return await _bindings.GetActiveAsync("telegram", u.ChatId, ct);
     }
 
@@ -482,6 +505,9 @@ public sealed class TelegramUpdateService : BackgroundService
     private async Task<string?> DeletedAnswerAsync(TelegramUpdate u, string owner, CancellationToken ct)
     {
         if (u.ReplyToMessageId is not null && u.ThreadId is null) return null;
+        if (u.ThreadId is null && await _bindings.GetPinAsync("telegram", u.ChatId, ct) is { } pin && pin.Owner == owner)
+            return ChatFormatting.PinnedSessionGoneAnswer(pin.SessionId,
+                (await _bindings.GetDeletedAsync("telegram", pin.SessionId, ct))?.Title, "/");
         var gone = u.ThreadId is not null
             ? await _bindings.GetDeletedByThreadAsync("telegram", u.ChatId, u.ThreadId, ct)
             : await _bindings.GetDeletedActiveAsync("telegram", u.ChatId, ct);

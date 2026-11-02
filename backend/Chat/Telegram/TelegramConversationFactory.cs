@@ -29,7 +29,7 @@ public sealed class TelegramConversationFactory
     /// <summary>
     /// Null when the owner is not linked or opted out, or the header could not be sent.
     /// The binding is stored with Active=false (store contract) — callers flip it via
-    /// <see cref="ChatBindingStore.SetActiveAsync"/> when appropriate.
+    /// <see cref="ChatBindingStore.FollowAsync"/> or <see cref="ChatBindingStore.ChooseAsync"/>.
     /// </summary>
     public async Task<ChatBinding?> CreateBindingAsync(string sessionId, string title, string owner,
         SessionMode mode, CancellationToken ct)
