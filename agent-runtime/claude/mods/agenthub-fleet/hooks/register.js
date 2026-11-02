@@ -1,22 +1,27 @@
 // agenthub-fleet: delivers Open AgentHub fleet messages into this Claude Code session
 // (docs/priority-messages.md, docs/claude-code-mods.md) and reports the account's usage
 // limits to the hub (docs/account-limits.md). The session agent beside the CLI queues pushed
-// messages at a loopback endpoint; this mod polls it, submits priority messages as prompts
-// (aborting the running turn when asked), and submits plain ones once no turn runs. It also
-// watches the rate-limit windows Claude Code reports and tells the session agent when one is
-// used up; the hub, not the mod, decides what to do about it.
-import { formatFleetMessage, inboxStatus, inboxText, limitKey, parseInbox, parseThreshold, planDelivery, planLimitReports } from './lib.mjs'
+// messages at a loopback endpoint; this mod polls it, puts a priority message into the running
+// turn (or submits it as a prompt, aborting the running turn when asked), and submits plain ones
+// once no turn runs. It also watches the rate-limit windows Claude Code reports and tells the
+// session agent when one is used up; the hub, not the mod, decides what to do about it.
+import { formatFleetMessage, inboxStatus, inboxText, limitKey, parseInbox, parseThreshold, planDelivery, planLimitReports, unreadAppends, unreadNotice } from './lib.mjs'
 
 const POLL_MS = 3000
 const INBOX_URL = 'http://127.0.0.1:7681/agenthub/mod/inbox'
 const HEARTBEAT_URL = 'http://127.0.0.1:7681/agenthub/mod/heartbeat'
 const LIMIT_URL = 'http://127.0.0.1:7681/agenthub/mod/limit'
+const ACK_URL = 'http://127.0.0.1:7681/agenthub/mod/ack'
 
 // Plain messages that arrived during a turn and are not yet shown to Claude; the first idle
 // poll releases them as a prompt, unless a prompt.submit hook or /inbox drained them first.
 let waiting = []
-// The id turn.start handed us, while that turn runs; what $.turn.abort needs.
+// The id the main loop's turn.start handed us, while that turn runs; what $.turn.abort needs.
 let runningTurn = null
+// Model requests of the main loop so far, and the priority messages appended into the running
+// turn with the count at their append; a message no request followed was never read.
+let mainSteps = 0
+let appended = []
 let modToken = ''
 // Percent of a window at which it is reported, and the windows already reported this session.
 let limitThreshold = 100
@@ -46,13 +51,27 @@ export function register(on) {
     return next(e)
   })
 
+  // The main loop's turns only. A subagent's start and end fire here too, and taking them for
+  // the main turn's cleared it while the main turn still ran: a message then counted as idle.
   on('turn.start', async ($, e, next) => {
-    runningTurn = e.turnId
+    if (e.agentId === undefined) runningTurn = e.turnId
     return next(e)
   })
 
+  // Observes only: passes the request and its streamed answer through unchanged.
+  on('turn.step', async function* ($, e, next) {
+    if (e.agentId === undefined) mainSteps++
+    return yield* next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
     if (runningTurn === e.turnId) runningTurn = null
+    if (appended.length) {
+      const unread = unreadAppends(appended, mainSteps)
+      appended = []
+      if (unread.length) submit($, unreadNotice(unread), unread)
+    }
     // A turn that died on an API error is the one a person would have noticed. The windows
     // may not have moved a whole point since the last measurement, so they are read afresh
     // rather than waited for; the dedupe keeps a window already reported from going twice.
@@ -141,15 +160,70 @@ async function poll($) {
         $.ui.log('fleet interrupt failed: ' + describe(error), { to: 'debug' })
       }
     }
+    const outcomes = []
     for (const message of plan.submit) {
+      // A plugin's prompt runs once the session is idle, and a busy session's turn can be its
+      // whole task: submitted during it, a priority message reached the model hours later,
+      // while agent_inbox had nothing because the hub had marked it delivered (#390). Appended
+      // to the conversation it rides with the next model request, after the running tool call.
+      if (runningTurn !== null && !plan.abort) {
+        outcomes.push({ message, outcome: (await append($, message)) ? 'appended' : 'failed' })
+        continue
+      }
       // Not awaited: the call resolves when the turn starts, which is after the running one
       // ends, and a poll that waited for it would hold the timer and every later message.
       submit($, formatFleetMessage(message), [message])
+      outcomes.push({ message, outcome: 'submitted' })
     }
+    if (outcomes.length) await acknowledge($, outcomes)
     if (plan.release.length) release($, plan.release)
     else if (waiting.length) $.ui.status(inboxStatus(waiting.length))
   } catch (error) {
     $.ui.log('fleet poll failed: ' + describe(error), { to: 'debug' })
+  }
+}
+
+// A user-role row of the main conversation, as the engine keeps a reminder: the model reads it
+// with the next request of the running turn, and the person does not see it as typed.
+async function append($, message) {
+  const text = formatFleetMessage(message)
+  try {
+    const result = await $.session.append({ message: { type: 'user', content: [{ type: 'text', text }] } })
+    if (result && typeof result.deny === 'string') {
+      $.ui.log('fleet append refused: ' + result.deny, { to: 'debug' })
+      return false
+    }
+    appended.push({ message, step: mainSteps })
+    return true
+  } catch (error) {
+    $.ui.log('fleet append failed: ' + describe(error), { to: 'debug' })
+    return false
+  }
+}
+
+// Tells the session agent what became of each priority message, so the hub records the
+// channel that took it. A message the session agent no longer waits for — its answer to the
+// hub already went out — is the mod's alone: one that could not be appended is then submitted
+// as a prompt for when the turn ends, late rather than lost.
+async function acknowledge($, outcomes) {
+  let accepted = []
+  try {
+    const response = await $.http.fetch(ACK_URL, {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + modToken, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ results: outcomes.map(({ message, outcome }) => ({ id: message.id, outcome })) })
+    })
+    if (response.ok) {
+      const parsed = JSON.parse(response.text)
+      if (parsed && Array.isArray(parsed.accepted)) accepted = parsed.accepted
+    } else {
+      $.ui.log('fleet ack answered HTTP ' + response.status, { to: 'debug' })
+    }
+  } catch (error) {
+    $.ui.log('fleet ack failed: ' + describe(error), { to: 'debug' })
+  }
+  for (const { message, outcome } of outcomes) {
+    if (outcome === 'failed' && !accepted.includes(message.id)) submit($, formatFleetMessage(message), [message])
   }
 }
 

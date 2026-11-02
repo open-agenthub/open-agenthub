@@ -50,6 +50,30 @@ export function planDelivery(messages, turnRunning, held = []) {
     : { submit, release: plain, waiting: [], abort };
 }
 
+/**
+ * The priority messages appended into a running turn that no model request read (#390):
+ * `appended` holds each with the main loop's request count at its append, `steps` is the count
+ * at the turn's end. One appended while the turn's last answer streamed has no request after
+ * it, and nothing would read it until someone starts another turn. Its row does have an
+ * assistant message after it in the transcript, the answer that was already streaming, so the
+ * transcript cannot tell; the request count can.
+ */
+export function unreadAppends(appended, steps) {
+  return appended.filter(item => item.step >= steps).map(item => item.message);
+}
+
+/** The prompt that starts a turn for unread appended messages. Their rows are already in the
+ * conversation, and the request carries them; the prompt only points there, so the model does
+ * not read each message twice. */
+export function unreadNotice(messages) {
+  const senders = messages.map(message => message.from
+    ? 'agent "' + (message.fromTitle || message.from) + '" (' + message.from + ')'
+    : 'outside the fleet');
+  return messages.length === 1
+    ? 'The AgentHub message from ' + senders[0] + ' above arrived while your last answer was being written.'
+    : 'The ' + messages.length + ' AgentHub messages above (from ' + senders.join(', ') + ') arrived while your last answer was being written.';
+}
+
 // ---- usage limits (docs/account-limits.md) ---------------------------------------------------
 
 export const DEFAULT_LIMIT_THRESHOLD = 100;

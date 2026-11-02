@@ -71,7 +71,7 @@ runs. The hub reads one word back:
 
 | Agent runs as | Priority message | Plain message |
 |---|---|---|
-| Claude with the fleet mod alive (`docs/claude-code-mods.md`) | queued for the mod, which submits it as the next prompt (aborting the running turn on interrupt) | interactive: queued for the mod, which submits it as a prompt of its own once no turn runs; during a turn it waits on the status line and goes with the person's prompt if one comes first; autonomous: inbox |
+| Claude with the fleet mod alive (`docs/claude-code-mods.md`) | queued for the mod, which appends it to the running turn, where the next model request reads it (#390), or submits it as the next prompt when no turn runs (aborting the running turn on interrupt). The hub hears the answer only after the mod confirms; one it could not place stays in the inbox | interactive: queued for the mod, which submits it as a prompt of its own once no turn runs; during a turn it waits on the status line and goes with the person's prompt if one comes first; autonomous: inbox |
 | Chat UI (`claude -p --input-format stream-json`) | written as a `user` event, after a `control_request interrupt` when asked | inbox |
 | Interactive Codex or OpenCode terminal (turn hooks, below) | pasted into the PTY like an idle message (optional Escape first); "unavailable" if the CLI does not take it (#222) | its next turn: the end-of-turn hook hands it over when the running turn ends, or it is typed in while the agent waits at its prompt |
 | Interactive terminal, other runtimes | typed into the PTY: optional Escape, 300 ms, text, 300 ms, Enter | inbox |
@@ -114,8 +114,10 @@ Claude session would get the message twice — once typed into its prompt box by
 agent and once submitted by the mod — and an interrupt twice. The 15 s window is five polls,
 long enough that a slow turn does not demote the mod, short enough that a crashed CLI does
 not swallow messages: once the heartbeat is stale the session agent types into the PTY again,
-and anything still in the mod queue was already answered `queued-for-mod` and marked
-delivered, which is the one window where a message can be lost. It is the same window the
+and a plain message still in the mod queue was already answered `queued-for-mod` and marked
+delivered, which is the one window where a message can be lost. A priority message is
+answered only once the mod has confirmed it (#390, above), and one the mod never took stays in
+the inbox. It is the same window the
 PTY has (text written into a process that dies before reading it), so it is accepted rather
 than fenced with acknowledgements.
 
@@ -159,6 +161,89 @@ Rejected on the way:
   the window this would close — the CLI dying between the poll and the submit — is the one
   the section above accepts for every channel. It would add a second round trip and a backend
   state for no case this issue saw.
+
+## A priority message reaches a busy Claude turn (#390)
+
+The mod used to submit every priority message with `$.prompt.submit`. Claude Code runs a
+plugin's prompt only once the session is idle: the mods contract says so (`wait` is false for a
+plugin's prompt), and the runtime behaved that way. The turn of a working session can be its
+whole task, because a child started with a prompt works through dozens of tool calls in a single
+turn. A coordinator's priority message therefore reached the child when it had finished, or never,
+if it was deleted first. The session agent had already answered `queued-for-mod`, so the hub had
+marked the row delivered and `agent_inbox` returned nothing. An interrupt did arrive, because it
+aborts the turn and the session is idle at once.
+
+Measured with Claude Code 2.1.316 through the real `common/server.js`
+(`tests/FleetPriorityProof/server-rig.mjs`). A task of three 12-second Bash calls had a priority
+message sent while its first call ran:
+
+| | main | this change |
+|---|---|---|
+| interactive session | model saw it 33.2 s after the send, after the whole turn | 6.2 s, in the request right after the running call |
+| autonomous `-p` run | 33.2 s, after the whole turn | 6.1 s |
+| row in the hub inbox meanwhile | gone (marked delivered at once) | gone once the mod confirmed the append |
+
+**Into the running turn.** During a main-loop turn the mod appends the message to the
+conversation as a user-role row (`$.session.append`). The engine sends it with the next request
+of the turn, joined to the user message that carries the running tool call's result. The model
+reads it as soon as that call returns, without an abort or a new turn. A plain message still waits
+for the turn to end, as described above. Priority is the sender saying "now".
+
+**A message that no request read.** An append that lands while the turn's last answer streams is
+in the conversation, but the turn ends without another request, and nothing would read it until
+someone starts a turn. The mod counts the main loop's model requests with a passthrough
+`turn.step` observer and remembers the count at each append. At `turn.complete`, a message with
+no request after it starts a turn whose prompt only points at it (*The AgentHub message from … above
+arrived while your last answer was being written*). Its row is already in the request, so the body
+is not repeated. Measured: the model read it 6.3 s after the send, with the body once.
+
+**What the hub is told.** For a priority message the session agent answers the hub only once the
+mod says what it did (`POST /agenthub/mod/ack`: `appended`, `submitted` or `failed`), or after
+7 s. The mod polls every 3 s, so the answer takes up to one poll, well inside the hub's 15 s.
+- appended or submitted: `queued-for-mod`, recorded as `mod` as before;
+- `failed` (Claude Code or another plugin refused the append): `unavailable` /
+  `mod_not_injected`, so the row stays in the inbox and the sender is told `inbox`. Measured with a
+  second plugin that refuses every plugin append: the sender got `inbox`, the row stayed for
+  `agent_inbox`, and the model never got the text;
+- not taken within 7 s (the mod stopped polling, the runtime is updating, a context clear is
+  running): it leaves the mod queue, and the answer is `unavailable` / `mod_not_polling`;
+- taken but not confirmed in time: `queued-for-mod`, since the mod has it. A `failed` that comes
+  too late is answered without the id, and the mod then submits the message as a prompt for the
+  turn's end. It arrives late, but it is not lost.
+
+**Subagents.** `turn.start` and `turn.complete` fire for a subagent's turns too. The mod took
+them as the main turn's, and a subagent finishing cleared the running turn while the main loop
+was still working. Messages then counted as idle and were queued behind the turn. The mod now
+follows the main loop only (`agentId` absent).
+
+**Other runtimes.** These take a priority message through the PTY, and their CLIs read text
+typed during a turn into the running turn. They did not have this gap. With the same busy turn
+(`tests/FleetPriorityProof/tui-busy-rig.mjs`):
+- Codex 0.166.0 restarted the request in flight with the message, 0.4 s after the send;
+- OpenCode 1.18.35 sent it with the request after the running tool call, 7.1 s after the send.
+
+Cursor (no login in the rig) and OpenClaw (no hooks) were not measured. Both take the plain
+typing path, which ends in the CLI's own prompt box as before.
+
+Rejected:
+
+- **Aborting the turn for every priority message** (what interrupt does). It reaches the model at
+  once, but it throws away the running tool call and the turn the agent was in. Priority without
+  interrupt means "read this now", not "stop".
+- **Typing it into the PTY.** Claude Code queues text typed during a turn into the same idle
+  queue, and the mod would no longer be the one channel per message (see *One channel per
+  message*).
+- **A `tool.call` hook adding the message as `context` to the next tool result.** It reaches the
+  model at the same point, but subscribing to `tool.call` puts the mod on the permission path
+  (`docs/claude-code-mods.md`, "No `tool.call` hooks at all"). `session.append` lands at the same
+  point without touching that path.
+- **Reading the transcript at the turn's end to see whether the row was read.** The answer that
+  was streaming is stored after the appended row, so the row always looked read. The first
+  version did this, and the real CLI lost the message in the last-answer race. Counting
+  requests is exact.
+- **Leaving priority messages undelivered until the mod confirms, as the Codex next-turn path
+  does.** `agent_inbox` could then take a row that the mod has already appended, and the agent
+  would read it twice. The answer waits for the confirmation instead.
 
 ## Plain messages as the next turn (#173)
 
@@ -380,7 +465,7 @@ environment, which is fine — that user already owns the process the mod runs i
 `deliveredVia` is `injected` for the PTY and chat channels, `mod` for the mod queue,
 `next_turn` when the agent gets it once its running turn ends (above; the row stays undelivered
 until then), and `inbox` otherwise, with `reason` naming why (`session_not_running`, `pod_unreachable`,
-`non_interactive`, `not_priority`, `agent_exited`, …). The row's `delivered_via` is set the
+`non_interactive`, `not_priority`, `agent_exited`, `mod_not_injected`, `mod_not_polling`, …). The row's `delivered_via` is set the
 same way by the push, and to `inbox` by `agent_inbox` when it takes the row; whichever
 happens first keeps the row (`MarkDeliveredAsync` only touches an undelivered row), so a
 push racing a poll never reports a delivery that did not happen.

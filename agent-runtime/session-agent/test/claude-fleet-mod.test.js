@@ -119,3 +119,26 @@ test('status line and /inbox text', async () => {
   assert.equal(inboxText([{ from: 'a', body: 'x' }, { from: null, body: 'y' }]),
     '[AgentHub message from agent "a" (a)]\nx\n\n[AgentHub message from outside the fleet]\ny');
 });
+
+// #390: a priority message appended while the turn's last answer streamed is in the
+// conversation, followed by that answer's row, but no request read it.
+test('an appended message is unread unless a model request started after its append', async () => {
+  const { unreadAppends } = await lib();
+  const early = { message: { id: 'a' }, step: 1 };
+  const late = { message: { id: 'b' }, step: 3 };
+
+  assert.deepEqual(unreadAppends([early, late], 3), [{ id: 'b' }]);
+  assert.deepEqual(unreadAppends([early, late], 4), []);
+  assert.deepEqual(unreadAppends([], 0), []);
+});
+
+test('the notice for unread appended messages names their senders and repeats no body', async () => {
+  const { unreadNotice } = await lib();
+  const peer = { id: 'a', from: 'rev-1', fromTitle: 'Code Reviewer', body: 'secret plan' };
+  const owner = { id: 'b', from: null, fromTitle: null, body: 'hi' };
+
+  assert.equal(unreadNotice([peer]),
+    'The AgentHub message from agent "Code Reviewer" (rev-1) above arrived while your last answer was being written.');
+  assert.equal(unreadNotice([peer, owner]),
+    'The 2 AgentHub messages above (from agent "Code Reviewer" (rev-1), outside the fleet) arrived while your last answer was being written.');
+});

@@ -5,6 +5,7 @@ import { expect, mock, test } from 'claude-code/testing'
 const INBOX_URL = 'http://127.0.0.1:7681/agenthub/mod/inbox'
 const HEARTBEAT_URL = 'http://127.0.0.1:7681/agenthub/mod/heartbeat'
 const LIMIT_URL = 'http://127.0.0.1:7681/agenthub/mod/limit'
+const ACK_URL = 'http://127.0.0.1:7681/agenthub/mod/ack'
 
 type Reply = { messages?: unknown[]; status?: number; down?: boolean }
 
@@ -22,7 +23,12 @@ function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MO
     logs: [] as string[],
     usage: { context: { window: 200000, tokens: 1000, percent: 1 }, rateLimits: [] as unknown[] },
     limitStatus: 202,
-    refuseSubmit: undefined as 'drop' | 'fail' | undefined
+    refuseSubmit: undefined as 'drop' | 'fail' | undefined,
+    appends: [] as string[],
+    refuseAppend: false,
+    acks: [] as { id: string; outcome: string }[][],
+    // Whether the session agent still waits for the acknowledged ids (it answered the hub late).
+    ackWaiting: true
   }
   on('session.start', () => ({ cwd: '/work' }))
   on('command.register', () => ({ value: undefined }))
@@ -33,6 +39,12 @@ function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MO
     const init = e.init ?? {}
     calls.fetches.push({ url: e.url, method: init.method ?? 'GET', auth: String(init.headers?.Authorization ?? '') })
     if (e.url === HEARTBEAT_URL) return { value: { status: 204, ok: true, headers: {}, text: '' } }
+    if (e.url === ACK_URL) {
+      const results = JSON.parse(String(init.body)).results
+      calls.acks.push(results)
+      const accepted = calls.ackWaiting ? results.map(entry => entry.id) : []
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ accepted }) } }
+    }
     if (e.url === LIMIT_URL) {
       calls.limits.push(JSON.parse(String(init.body)))
       return { value: { status: calls.limitStatus, ok: calls.limitStatus < 300, headers: {}, text: '' } }
@@ -64,6 +76,17 @@ function world(on, replies: Reply[], env: Record<string, string> = { AGENTHUB_MO
   on('ui.log', ($, e) => {
     calls.logs.push(e.text)
     return { value: undefined }
+  })
+  // The kit keeps the row beneath this hook; an answer without next would be refused.
+  on('session.append', ($, e, next) => {
+    if (calls.refuseAppend) return { deny: 'refused by policy' }
+    const text = e.message.content.map(block => block.text).join('')
+    calls.appends.push(text)
+    return next(e)
+  })
+  // The engine's model request, answered at once with a text-only response.
+  on('turn.step', async function* ($, e) {
+    return { turnId: e.turnId, index: e.index, answer: 'ok', toolUses: [], stopReason: 'end_turn', usage: null }
   })
   on('turn.start', ($, e) => ({ turnId: e.turnId }))
   on('turn.complete', () => ({ text: '' }))
@@ -314,4 +337,84 @@ test('without a mod token the mod stays inert', async ($, on) => {
   await $.session.measure({ context: { window: 200000, percent: 1 }, rateLimits: [{ kind: 'five_hour', percentUsed: 100 }], changed: ['rateLimits'] })
 
   expect(fetches).toEqual([])
+})
+
+/** One model request of a turn, read to its end as the engine reads it. */
+async function step($, turnId: string, agentId?: string) {
+  const stream = $.turn.step({ turnId, index: 0, model: 'm', messageCount: 1, ...(agentId ? { agentId } : {}) })
+  for await (const chunk of stream) void chunk
+  return stream.result
+}
+
+const priorityText = '[AgentHub message from agent "Code Reviewer" (rev-1)]\nPlease fix MR 42'
+const unreadText = 'The AgentHub message from agent "Code Reviewer" (rev-1) above arrived while your last answer was being written.'
+
+// #390: a plugin's prompt runs only once the session is idle, and a busy session's turn can be
+// its whole task. The message has to reach the running turn instead.
+test('a priority message during a turn is appended to it, not queued behind it', async ($, on) => {
+  const { clock, calls } = world(on, [{ messages: [priority] }])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'refactor everything', turnId: 'turn-7' })
+  await clock.advance(3000)
+
+  expect(calls.appends).toEqual([priorityText])
+  expect(calls.submits).toEqual([])
+  expect(calls.aborts).toEqual([])
+  expect(calls.acks).toEqual([[{ id: 'm-1', outcome: 'appended' }]])
+
+  // A later request of the turn read it: the turn's end submits nothing.
+  await step($, 'turn-7')
+  await $.turn.complete({ turnId: 'turn-7', answer: 'done', durationMs: 10, isAborted: false, reason: 'answer' })
+  await clock.advance(3000)
+  expect(calls.submits).toEqual([])
+})
+
+// The answer that was streaming is stored after the appended row, so only a request that started
+// after the append shows that the model read it.
+test('a message appended while the last answer streamed is submitted when the turn ends', async ($, on) => {
+  const { clock, calls } = world(on, [{ messages: [priority] }])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'refactor everything', turnId: 'turn-7' })
+  await clock.advance(3000)
+  await $.turn.complete({ turnId: 'turn-7', answer: 'done', durationMs: 10, isAborted: false, reason: 'answer' })
+
+  // The row is in the conversation already; the prompt only points at it.
+  expect(calls.submits).toEqual([unreadText])
+})
+
+test('an append that is refused is reported, and left to the inbox while the session agent waits', async ($, on) => {
+  const { clock, calls } = world(on, [{ messages: [priority] }, { messages: [{ ...priority, id: 'm-9' }] }])
+  calls.refuseAppend = true
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'refactor everything', turnId: 'turn-7' })
+  await clock.advance(3000)
+  expect(calls.acks).toEqual([[{ id: 'm-1', outcome: 'failed' }]])
+  expect(calls.submits).toEqual([])
+
+  // Too late for the session agent's answer: the mod keeps it as a prompt for the turn's end.
+  calls.ackWaiting = false
+  await clock.advance(3000)
+  expect(calls.acks[1]).toEqual([{ id: 'm-9', outcome: 'failed' }])
+  expect(calls.submits).toEqual([priorityText])
+})
+
+test('a subagent\'s turn does not end the main turn', async ($, on) => {
+  const { clock, calls } = world(on, [{ messages: [priority] }])
+
+  await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
+  await $.turn.start({ text: 'refactor everything', turnId: 'turn-7' })
+  await $.turn.start({ text: 'look around', turnId: 'turn-8', agentId: 'agent-1' })
+  await $.turn.complete({ turnId: 'turn-8', agentId: 'agent-1', answer: 'found it', durationMs: 10, isAborted: false, reason: 'answer' })
+  await clock.advance(3000)
+
+  expect(calls.appends).toEqual([priorityText])
+  expect(calls.submits).toEqual([])
+
+  // A subagent's request does not read the main conversation; only the main loop's does.
+  await step($, 'turn-9', 'agent-2')
+  await $.turn.complete({ turnId: 'turn-7', answer: 'done', durationMs: 10, isAborted: false, reason: 'answer' })
+  expect(calls.submits).toEqual([unreadText])
 })
