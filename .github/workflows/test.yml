@@ -130,8 +130,9 @@ jobs:
             image="open-agenthub-dev/agent-runtime-$agent:test"
             docker image inspect "$image" --format '{{.Size}}'
             glab_version="$(sed -n 's/^ARG GLAB_VERSION=//p' "agent-runtime/$agent/Dockerfile")"
+            # glab initializes config even for --version; sessions mount a writable home.
             docker run --rm --network none --read-only --user 1000:1000 \
-              --entrypoint glab "$image" --version | grep -F "glab $glab_version "
+              --tmpfs /home/agent:rw,mode=0700,uid=1000,gid=1000 --entrypoint glab "$image" --version | grep -F "glab $glab_version "
             docker run --rm -i --network none --read-only --user 1000:1000 \
               --tmpfs /tmp:rw,mode=1777 --entrypoint sh "$image" -s < agent-runtime/tests/python-smoke.sh
           done
