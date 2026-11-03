@@ -1,6 +1,7 @@
 # Account-email privacy contract
 
-Run this proof for **every pinned CLI bump**, alongside the runtime suite and fleet mod tests.
+Image CI runs this proof with `--network none`, synthetic credentials and local stand-ins,
+in roughly 40 seconds. Failures say `privacy predicate drift`. Run this proof for **every pinned CLI bump**, alongside the runtime suite and fleet mod tests.
 It intentionally fails if the native account-email prompt disappears, changes shape, our
 matching predicate drifts, the unattended turn stalls, or an email reaches either callback.
 

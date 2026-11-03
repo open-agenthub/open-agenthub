@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+trap 'echo "privacy predicate drift: synthetic account-email contract failed" >&2' ERR
 HERE="$(cd -- "$(dirname -- "$0")" && pwd)"
 : "${RIG_HOME:?scratch directory with clis/node_modules/.bin/claude}"
 export RUNTIME="${PROOF_RUNTIME:-$(cd "$HERE/../../agent-runtime" && pwd)}"
