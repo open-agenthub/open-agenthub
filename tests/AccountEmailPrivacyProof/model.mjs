@@ -116,7 +116,7 @@ proxy.on('connect', (req, socket, head) => {
 proxy.listen(PROXY_PORT, '127.0.0.1');
 
 http.createServer(async (req, res) => {
-  const u = new URL(req.url, 'http://x');
+  const u = new URL(req.url, 'http://example.com');
   if (u.pathname === '/email-proof') log({ev:'email-receiver-called'});
   if (u.pathname === '/reset') {
     state.n = 1; state.validRefresh = new Set(['rt-1']); state.validAccess = new Set(['at-1']); state.revokedAccess = new Set();
