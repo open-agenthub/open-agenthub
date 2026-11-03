@@ -52,12 +52,63 @@ spec:
         # Extra egress ports (e.g. self-hosted object storage on a non-standard port)
         - { protocol: TCP, port: {{ . }} }
         {{- end }}
-        {{- if and .Values.objectStorage.enabled (not (has 3900 .Values.agent.extraEgressPorts)) }}
-        # The in-cluster store's S3 port. A session restores its state by fetching the
-        # presigned url itself, so without this every resumed session starts empty — and
-        # the entrypoint reports that as "no saved state" rather than as a blocked egress.
+
+{{- $storageUrl := include "agenthub.s3ServiceUrl" . | trim }}
+{{- if $storageUrl }}
+{{- $url := urlParse $storageUrl }}
+{{- $host := regexReplaceAll ":[0-9]+$" $url.host "" | trimPrefix "[" | trimSuffix "]" }}
+{{- $port := regexFind ":[0-9]+$" $url.host | trimPrefix ":" }}
+{{- if not $port }}
+{{- $port = ternary "443" "80" (eq $url.scheme "https") }}
+{{- end }}
+{{- $bundled := and .Values.objectStorage.enabled (not .Values.s3.serviceUrl) }}
+{{- $literal := or (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host) (contains ":" $host) }}
+{{- $cidrs := dig "storageEgress" "cidrs" (list) .Values.agent }}
+{{- if and (not (has $port (list "80" "443"))) (or $bundled $literal $cidrs) }}
+---
+# State restore and state/transcript/file uploads still use presigned storage URLs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-agent-to-object-storage
+  namespace: {{ .Values.sessionsNamespace }}
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: { agenthub.dev/component: agent }
+  policyTypes: [Egress]
+  egress:
+    {{- if $bundled }}
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: {{ .Release.Namespace | quote }} }
+          podSelector:
+            matchLabels: { app: garage }
+      ports:
         - { protocol: TCP, port: 3900 }
+    {{- else }}
+    # DNS destinations require operator-maintained CIDRs; resolving at render time goes stale.
+    {{- if regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host }}
+    - to:
+        - ipBlock:
+            cidr: {{ printf "%s/32" $host | quote }}
+    {{- else if contains ":" $host }}
+    - to:
+        - ipBlock:
+            cidr: {{ printf "%s/128" $host | quote }}
+    {{- else }}
+    - to:
+        {{- range $cidrs }}
+        - ipBlock:
+            cidr: {{ . | quote }}
         {{- end }}
+    {{- end }}
+      ports:
+        - { protocol: TCP, port: {{ $port | int }} }
+    {{- end }}
+{{- end }}
+{{- end }}
+
 ---
 # Agent -> backend (status/notify/artifact URL callbacks).
 # Scoped to the backend PODS (namespaceSelector AND podSelector), not the whole

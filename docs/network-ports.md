@@ -113,3 +113,38 @@ create-conflict no-op instead of duplicates.
   per-IP scoping of dynamic external services is not practical here.
 - Grants last for the lifetime of the session; there is no per-grant revoke UI yet
   (delete the session to remove them).
+
+
+## Automatic object-storage egress
+
+The chart opens session-pod egress for the effective storage endpoint. State restore
+and state, scrollback, transcript and `upload_file` uploads still use presigned URLs
+from the pod. Blocking that path can silently leave resumed sessions without saved
+state even though attachment reads through the backend succeed.
+
+With `objectStorage.enabled: true` and no `s3.serviceUrl` override, the additional
+policy permits TCP 3900 only to `app: garage` pods in the release namespace. An
+explicit `s3.serviceUrl` takes precedence, even while bundled storage is enabled.
+Its explicit port is used, or 443 for HTTPS and 80 for HTTP. Literal IP endpoints
+use a /32 or /128 `ipBlock`; DNS endpoints on non-standard ports require an explicit
+`agent.storageEgress.cidrs` list; otherwise no extra policy is added and install notes
+warn that session storage needs configuration. Standard NetworkPolicy cannot select
+a hostname. `agent.extraEgressPorts` remains a deliberate opt-in to allow a port to
+every destination. Keep configured CIDRs current when storage addresses change. Resolving DNS during chart rendering
+was rejected because addresses can change after installation.
+
+With bundled storage disabled and an empty service URL, no storage policy is added;
+the existing HTTPS allowance covers the default storage endpoint. URLs on 80/443
+also need no additional policy. Existing 80/443
+allowances remain additive, so a new policy cannot narrow those ports. The
+`agent.extraEgressPorts` override remains available, including when a Service translates
+the URL's port to a different destination container port. Standard NetworkPolicy
+matches pod ports after Service translation; automatic inference cannot discover an
+external Service's target port.
+
+### Rejected
+
+Routing state restore and all uploads through the backend would remove direct storage
+egress but increase backend bandwidth and memory pressure. Keep direct presigned
+transfers for now and open the required storage path automatically. Opening bundled
+Garage's port globally was rejected because its namespace and pod labels are known.

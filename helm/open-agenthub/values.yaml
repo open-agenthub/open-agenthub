@@ -135,8 +135,14 @@ agent:
   # Requires PSA "baseline" (instead of "restricted") on the sessionsNamespace.
   allowRootSessions: true
   # Extra TCP egress ports allowed from session pods (besides 53/80/443/22),
-  # e.g. [3900] for self-hosted object storage on a non-standard port.
+  # Bundled storage and literal IP endpoint ports are opened automatically; use this for additional
+  # ports, including a destination container port that differs from its Service port.
   extraEgressPorts: []
+  # Standard NetworkPolicy cannot select a storage DNS name. For s3.serviceUrl on a
+  # non-standard port, list its destination networks here (e.g. ["192.0.2.10/32"]).
+  # Keep these current when the endpoint changes; empty never opens a DNS port globally.
+  storageEgress:
+    cidrs: []
   # In-cluster model servers that sessions with "Own endpoint" billing may reach
   # (docs/custom-model-endpoints.md). An endpoint on the internet over 443/80 needs nothing here.
   # NetworkPolicy matches the destination pod's port after the Service has translated it, so list

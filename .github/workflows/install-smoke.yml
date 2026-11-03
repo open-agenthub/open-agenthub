@@ -13,6 +13,10 @@ on:
     - cron: "23 3 * * *"
   workflow_dispatch:
     inputs:
+      prove_storage_egress:
+        description: "Prove session storage egress isolation under real NetworkPolicy"
+        type: boolean
+        default: false
       installer_ref:
         description: "Website revision to test (empty uses the published installer)"
         type: string
@@ -128,6 +132,14 @@ jobs:
         env:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: bash /tmp/install-smoke.sh default
+
+      - name: Prove object-storage egress isolation
+        if: github.event_name == 'workflow_dispatch' && inputs.prove_storage_egress
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+          RELEASE_NAMESPACE: agenthub
+          SESSIONS_NAMESPACE: agenthub-sessions
+        run: bash tests/ObjectStorageEgressProof/prove.sh
 
       - name: Upgrade in place keeps the release healthy
         env:

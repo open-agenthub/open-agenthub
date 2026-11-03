@@ -36,3 +36,18 @@ WARNING: INSECURE DEVELOPMENT MODE (auth.insecureDevMode=true). There is no logi
 is admin user "dev", so anyone who can reach this instance controls every session and secret.
 Use it only on a machine nobody else can reach.
 {{- end }}
+
+{{- if .Values.s3.serviceUrl }}
+{{- $url := urlParse .Values.s3.serviceUrl }}
+{{- $host := regexReplaceAll ":[0-9]+$" $url.host "" | trimPrefix "[" | trimSuffix "]" }}
+{{- $port := regexFind ":[0-9]+$" $url.host | trimPrefix ":" }}
+{{- if not $port }}{{- $port = ternary "443" "80" (eq $url.scheme "https") }}{{- end }}
+{{- $literal := or (regexMatch "^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$" $host) (contains ":" $host) }}
+{{- if and (not $literal) (not (has $port (list "80" "443"))) (not (dig "storageEgress" "cidrs" (list) .Values.agent)) (not (has $port (toStrings .Values.agent.extraEgressPorts))) }}
+
+WARNING: Storage endpoint {{ $host }} uses TCP {{ $port }}. Standard NetworkPolicy cannot
+select a DNS name. Set agent.storageEgress.cidrs to its destination networks to allow
+session state restore and state/scrollback/transcript/file uploads. Alternatively,
+agent.extraEgressPorts explicitly opens the port to every destination.
+{{- end }}
+{{- end }}
