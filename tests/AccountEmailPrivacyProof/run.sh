@@ -2,8 +2,8 @@
 set -euo pipefail
 HERE="$(cd -- "$(dirname -- "$0")" && pwd)"
 : "${RIG_HOME:?scratch directory with clis/node_modules/.bin/claude}"
-export RUNTIME="$(cd "$HERE/../../agent-runtime" && pwd)"
-export NODE_MODULES="$RUNTIME/session-agent/node_modules"
+export RUNTIME="${PROOF_RUNTIME:-$(cd "$HERE/../../agent-runtime" && pwd)}"
+export NODE_MODULES="${PROOF_NODE_MODULES:-$RUNTIME/session-agent/node_modules}"
 mkdir -p "$RIG_HOME/model"
 cp "$HERE/model.mjs" "$RIG_HOME/model/"
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$RIG_HOME/model/ca.key" -out "$RIG_HOME/model/ca.pem" -days 3 -subj /CN=rig-ca 2>/dev/null

@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 const root = process.env.RIG_HOME;
-const require = createRequire(import.meta.url);
-const { detectMenu } = require('../../agent-runtime/common/cli-menu');
+const require = createRequire(process.env.RUNTIME + '/package.json');
+const { detectMenu } = require('./common/cli-menu');
 const interactive = fs.readFileSync(path.join(root, 'interactive/screen.txt'), 'utf8');
 assert.match(interactive, /account email address/);
 const menu = detectMenu(interactive.split('\n'));
@@ -20,11 +20,11 @@ scan(path.join(home, '.claude/projects'));
 assert.equal(refused, true);
 assert.match(fs.readFileSync(path.join(root, 'autonomous/screen.txt'), 'utf8'), /ok/);
 for (const name of ['auto', 'autonomous']) {
- const callbacks = fs.readFileSync(path.join(root, name, 'model.log'), 'utf8');
- assert.doesNotMatch(callbacks, /someone@example\.com|someone%40example\.com/);
- assert.match(callbacks, /"kind":"account-email"/);
- assert.match(callbacks, /curl --max-time 3/);
- assert.match(callbacks, /\[account email\]/);
+ const callbacks = fs.readFileSync(path.join(root, name, 'model.log'), 'utf8').trim().split('\n').map(JSON.parse);
+ assert.ok(callbacks.length >= 2);
+ assert.ok(callbacks.every(event => event.emailLeaked === false));
+ assert.ok(callbacks.some(event => event.privacy));
+ assert.ok(callbacks.some(event => event.commandRetained && event.redacted));
 }
 const events=fs.readFileSync(path.join(root,'model/events.jsonl'),'utf8');
 assert.doesNotMatch(events,/email-receiver-called/);

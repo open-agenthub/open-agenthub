@@ -22,8 +22,8 @@ was called, without storing model request bodies. Only synthetic identities belo
 
 `check.mjs` requires the native privacy reason and complete Yes/No menu in interactive mode,
 a refusal followed by a final answer with autoApprove, and an autonomous process that exits
-successfully with the refusal in its native transcript. Both callback logs must contain no
-synthetic account address. The email receiver must never be called. A native prompt missing
+successfully with the refusal in its native transcript. Callback evidence records only boolean assertions: no address leaked, the command
+remained, the replacement marker was present, and the dedicated privacy callback ran. The email receiver must never be called. A native prompt missing
 from a future version is a failure to investigate, rather than a reason to silently loosen
 our local predicate.
 

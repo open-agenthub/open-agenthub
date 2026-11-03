@@ -28,7 +28,7 @@ http.createServer((req, res) => {
   let body = ''
   req.on('data', c => body += c)
   req.on('end', () => {
-    fs.appendFileSync(log, req.method + ' ' + req.url + ' ' + body.slice(-1500) + '\n\n')
+    if (req.url.endsWith('/permission')) fs.appendFileSync(log, JSON.stringify({ callback: true, privacy: body.includes('account-email'), emailLeaked: /someone(?:@|%40)example\.com/i.test(body), commandRetained: body.includes('curl --max-time 3'), redacted: body.includes('[account email]') }) + '\n')
     let json = {}; try { json = JSON.parse(body) } catch {}
     if (req.url.endsWith('/permission')) { res.writeHead(200, {'content-type':'application/json'}); return res.end(JSON.stringify({decision:JSON.parse(body).kind === 'account-email' ? (process.env.AUTO === '1' ? 'deny' : 'ask') : (process.env.AUTO === '1' || process.env.PREALLOW === '1' ? 'allow' : 'ask')})) }
     if (req.url.includes('/models')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ object: 'list', data: [{ id: 'mock-model', object: 'model' }], models: [] })) }
@@ -155,7 +155,7 @@ const dump = name => {
   console.log('==== ' + name + (exited ? ' (exited ' + JSON.stringify(exited) + ')' : '') + '\n' + screen().split('\n').filter(l => l.trim()).join('\n'))
 }
 for (const step of steps) {
-  if (step.ready) { const end = Date.now() + (step.ms || 90000); while (!new RegExp(step.ready).test(screen()) && Date.now() < end && !exited) await wait(250); await wait(1500) }
+  if (step.ready) { const end = Date.now() + (step.ms || 90000); while (!screen().includes(step.ready) && Date.now() < end && !exited) await wait(250); await wait(1500) }
   else if (step.paste !== undefined) { p.write('\x1b[200~' + step.paste + '\x1b[201~'); await wait(150); p.write('\r') }
   else if (step.pasteOnly !== undefined) { p.write('\x1b[200~' + step.pasteOnly + '\x1b[201~') }
   else if (step.type !== undefined) { for (const ch of step.type) { p.write(ch); await wait(40) } }
