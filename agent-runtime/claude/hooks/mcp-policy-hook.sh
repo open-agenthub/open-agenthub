@@ -36,6 +36,7 @@ render_settings() {
       { "hooks": [ { "type": "command", "command": "$FLEET_TURN", "timeout": 10 } ] }
     ],
     "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "'$NODE_BIN' '${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/privacy-permission-hook.mjs'", "timeout": 10 } ] },
       { "hooks": [ { "type": "command", "command": "$FLEET_TURN", "timeout": 10 } ] }
     ],
     "StopFailure": [

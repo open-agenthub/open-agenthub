@@ -96,6 +96,17 @@ jobs:
         run: docker build --file agent-runtime/claude/Dockerfile --tag open-agenthub-dev/agent-runtime-claude:test agent-runtime
       - name: Smoke Claude CLI
         run: docker run --rm --entrypoint claude open-agenthub-dev/agent-runtime-claude:test --version
+      - name: Verify real Claude account-email privacy contract
+        run: |
+          docker run --rm --network none --read-only --user 1000:1000 \
+            --tmpfs /tmp:rw,mode=1777 -v "$PWD/tests/AccountEmailPrivacyProof:/proof:ro" \
+            -e RIG_HOME=/tmp/privacy-proof -e PROOF_RUNTIME=/opt/session-agent \
+            -e PROOF_NODE_MODULES=/opt/session-agent/node_modules --entrypoint bash \
+            open-agenthub-dev/agent-runtime-claude:test -c '
+              mkdir -p "$RIG_HOME/clis/node_modules/.bin"
+              ln -s /usr/local/bin/claude "$RIG_HOME/clis/node_modules/.bin/claude"
+              bash /proof/run.sh
+            '
       - name: Build Codex runtime
         run: docker build --file agent-runtime/codex/Dockerfile --tag open-agenthub-dev/agent-runtime-codex:test agent-runtime
       - name: Smoke Codex runtime
@@ -113,11 +124,15 @@ jobs:
         run: docker build --file agent-runtime/opencode/Dockerfile --tag open-agenthub-dev/agent-runtime-opencode:test agent-runtime
       - name: Smoke OpenCode CLI
         run: docker run --rm --entrypoint opencode open-agenthub-dev/agent-runtime-opencode:test --version
-      - name: Verify Python in every runtime with a read-only root
+      - name: Verify Python and glab in every runtime with a read-only root
         run: |
           for agent in claude codex cursor openclaw opencode; do
             image="open-agenthub-dev/agent-runtime-$agent:test"
             docker image inspect "$image" --format '{{.Size}}'
+            glab_version="$(sed -n 's/^ARG GLAB_VERSION=//p' "agent-runtime/$agent/Dockerfile")"
+            # glab initializes config even for --version; sessions mount a writable home.
+            docker run --rm --network none --read-only --user 1000:1000 \
+              --tmpfs /home/agent:rw,mode=0700,uid=1000,gid=1000 --entrypoint glab "$image" --version | grep -F "glab $glab_version "
             docker run --rm -i --network none --read-only --user 1000:1000 \
               --tmpfs /tmp:rw,mode=1777 --entrypoint sh "$image" -s < agent-runtime/tests/python-smoke.sh
           done

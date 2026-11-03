@@ -245,3 +245,28 @@ been passing for the wrong reason (#340, `docs/priority-messages.md`).
 
 Trivy is non-blocking on purpose: base images routinely carry an unfixed CVE, and a gate
 there stops unrelated deploys. Set `exit-code: 1` in the scan step to make it a gate.
+
+## Account-email disclosure after 2.1.317
+
+The native privacy plugin can ask after PreToolUse has allowed a tool. Leaving that second
+approval unanswered stalls an autoApprove terminal session. Treating autoApprove as consent
+to disclose the owner's account email was rejected: permission to work unattended does not
+authorize publishing an identity. Disabling the native plugin or denying every native
+PermissionRequest would also change unrelated interactive approvals.
+
+The dedicated privacy hook mirrors only the account-email predicate for the plugin's web
+and network-capable shell tools. The CLI's PermissionRequest payload includes neither plugin
+identity nor its reason, so matching that predicate is necessary. Interactive sessions retain
+the native question. Autonomous sessions and sessions with the live autoApprove flag decline
+with an explicit tool error, allowing the model to continue without sending the address.
+The authenticated callback receives only the tool name and `kind=account-email`. The earlier
+ordinary approval callback replaces only the matching address with `[account email]`, including
+percent encoding, retaining the rest of the command for review; otherwise it would send the address
+before the privacy question could be answered. No address is added to our refusal log.
+
+The backend reads the live session mode and flag rather than trusting an approval cached by
+the hook. If the callback is unavailable, the initial unattended mode/flag still causes a
+refusal. Interactive fallback preserves the native question. A future CLI can change its
+predicate, so every bump must run the real synthetic-identity
+[privacy contract](../tests/AccountEmailPrivacyProof/README.md), in addition to the unit suite.
+A detected mismatch must be reviewed before shipping the new pin.

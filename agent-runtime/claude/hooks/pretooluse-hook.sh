@@ -23,12 +23,22 @@ field() { # extract a top-level string field from JSON on stdin
 # any tool whose input happens to contain "tool_name":"AskUserQuestion", without approval.
 [ "$(printf '%s' "$payload" | field tool_name)" = AskUserQuestion ] && emit allow
 
-req="$(printf '%s' "$payload" | node -e '
+privacy_module="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)/privacy-permission-hook.mjs"
+req="$(printf '%s' "$payload" | node --input-type=module -e '
+  import fs from "node:fs";
+  import path from "node:path";
+  import { pathToFileURL } from "node:url";
+  const { isAccountEmailRequest, redactAccountEmail } = await import(pathToFileURL(process.argv[2]).href);
   let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
     let p={}; try{p=JSON.parse(d)}catch{}
     let s=""; try{ s = typeof p.tool_input==="string" ? p.tool_input : JSON.stringify(p.tool_input); }catch{}
+    // The normal approval callback precedes the native privacy plugin. Redact the address,
+    // so the account address does not reach the callback before disclosure is decided.
+    let email;
+    try { email = JSON.parse(fs.readFileSync(path.join(process.env.HOME, ".claude.json"), "utf8")).oauthAccount?.emailAddress; } catch {}
+    if (isAccountEmailRequest({ ...p, hook_event_name: "PermissionRequest" }, email)) s = redactAccountEmail(s, email);
     process.stdout.write(JSON.stringify({ tool: p.tool_name||"a tool", input: (s||"").slice(0,800) }));
-  });')"
+  });' approval-input "$privacy_module")"
 
 resp="$(curl -fsS --connect-timeout 2 --max-time 5 -X POST -H "X-Agent-Token: $AGENTHUB_CALLBACK_TOKEN" \
   -H "Content-Type: application/json" -d "$req" "$AGENTHUB_CALLBACK_URL/permission" 2>/dev/null)"

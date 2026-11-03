@@ -18,6 +18,17 @@ namespace AgentHub.Api.Tests;
 /// </summary>
 public class PermissionFlowControllerTests
 {
+    [Theory]
+    [InlineData(SessionMode.Interactive, false, "ask")]
+    [InlineData(SessionMode.Interactive, true, "deny")]
+    [InlineData(SessionMode.Autonomous, false, "deny")]
+    public async Task AccountEmailPrivacy_IsNeverAutoAllowed(SessionMode mode, bool autoApprove, string decision)
+    {
+        var result = await Internal(null!, mode, autoApprove).RequestPermission("session-1",
+            new InternalController.PermissionBody("Bash", null, "account-email"), CancellationToken.None);
+        Assert.Equal(decision, Json(result).GetProperty("decision").GetString());
+    }
+
     [PostgreSqlFact]
     public async Task RequestPermission_StaysPendingWithoutMessengerTarget()
     {
@@ -121,12 +132,12 @@ public class PermissionFlowControllerTests
         return JsonDocument.Parse(JsonSerializer.Serialize(ok.Value)).RootElement;
     }
 
-    private static InternalController Internal(PermissionStore store)
+    private static InternalController Internal(PermissionStore store, SessionMode mode = SessionMode.Interactive, bool autoApprove = false)
     {
         var session = new SessionRecord
         {
             Id = "session-1", Owner = "alice", CallbackToken = "callback-token",
-            Mode = SessionMode.Interactive, Agent = AgentKind.Claude, AuthMode = AgentAuthMode.ApiKey
+            Mode = mode, AutoApprove = autoApprove, Agent = AgentKind.Claude, AuthMode = AgentAuthMode.ApiKey
         };
         var controller = new InternalController(
             new SingleSessionStore(session), [], null!, store, [], [], null!, null!)
