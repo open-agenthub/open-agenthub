@@ -109,7 +109,8 @@ $egress = Render @('--set', 'agent.extraEgressPorts[0]=8443', '--set', 'objectSt
     '--set-string', 'objectStorage.rpcSecret=rpc-only', '--set-string', 'objectStorage.adminToken=admin-only')
 Assert-Contains $egress 'SessionContainers__EgressPorts: "443,22,80,8443,3900"'
 $agentEgress = Document $egress 'NetworkPolicy' 'allow-agent-egress'
-foreach ($port in @(443, 22, 80, 8443, 3900)) { Assert-Contains $agentEgress "port: $port }" }
+foreach ($port in @(443, 22, 80, 8443)) { Assert-Contains $agentEgress "port: $port }" }
+Assert-Contains (Document $egress 'NetworkPolicy' 'allow-agent-to-object-storage') 'port: 3900 }'
 
 $custom = Render @(
     '--set', 'sessionContainers.allowedRegistries[0]=docker.io',

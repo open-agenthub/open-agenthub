@@ -92,4 +92,71 @@ foreach ($missing in @('objectStorage.accessKey', 'objectStorage.rpcSecret', 'ob
     if (-not $failed) { throw "Chart rendered without $missing" }
 }
 
+# Inspect the storage policy separately so another resource cannot satisfy an assertion.
+function Storage-Policy([string]$Text) {
+    return (($Text -split '(?m)^---$' | Where-Object { $_.Contains('name: allow-agent-to-object-storage') }) -join "`n")
+}
+Assert-NotContains $default 'name: allow-agent-to-object-storage'
+$bundledPolicy = Storage-Policy $enabled
+Assert-Contains $bundledPolicy 'kubernetes.io/metadata.name: "agenthub-test"'
+Assert-Contains $bundledPolicy 'matchLabels: { app: garage }'
+Assert-Contains $bundledPolicy 'port: 3900'
+Assert-NotContains $bundledPolicy 'to: []'
+$generalPolicy = ($enabled -split '(?m)^---$' | Where-Object { $_.Contains('name: allow-agent-egress') }) -join "`n"
+Assert-NotContains $generalPolicy 'port: 3900'
+
+foreach ($endpoint in @(
+    @('http://192.0.2.10:9000', '9000', 'cidr: "192.0.2.10/32"'),
+    @('http://[2001:db8::1]:9000', '9000', 'cidr: "2001:db8::1/128"'),
+    @('http://[2001:db8::1]:9100', '9100', 'cidr: "2001:db8::1/128"')
+)) {
+    $policy = Storage-Policy (Render @('--set-string', "s3.serviceUrl=$($endpoint[0])"))
+    Assert-Contains $policy "port: $($endpoint[1])"
+    Assert-Contains $policy $endpoint[2]
+    Assert-NotContains $policy 'app: garage'
+}
+# An explicit endpoint wins over the bundled default in configuration and egress alike.
+Assert-NotContains $overridden 'name: allow-agent-to-object-storage'
+Assert-NotContains (Storage-Policy $overridden) 'app: garage'
+$extra = Render @('--set', 'agent.extraEgressPorts[0]=9001')
+Assert-Contains $extra 'port: 9001'
+Assert-NotContains $extra 'name: allow-agent-to-object-storage'
+
+foreach ($endpoint in @('http://storage.example.com:9000', 'https://storage.example.com', 'http://storage.example.com', 'https://[2001:db8::1]')) {
+    Assert-NotContains (Render @('--set-string', "s3.serviceUrl=$endpoint")) 'name: allow-agent-to-object-storage'
+}
+$scoped = Storage-Policy (Render @('--set-string', 's3.serviceUrl=http://storage.example.com:9000', '--set-string', 'agent.storageEgress.cidrs[0]=192.0.2.0/24'))
+Assert-Contains $scoped 'port: 9000'
+Assert-Contains $scoped 'cidr: "192.0.2.0/24"'
+Assert-NotContains $scoped 'to: []'
+# NOTES is hidden by helm template; wrap the real template in a ConfigMap in a
+# temporary chart so warning behavior is verified without needing a cluster.
+$temporaryChart = Join-Path ([System.IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString())
+try {
+    Copy-Item $chartPath $temporaryChart -Recurse
+    $notes = Get-Content (Join-Path $temporaryChart 'templates/NOTES.txt') -Raw
+    $wrapper = '{{ define "storage-proof-notes" }}' + $notes + '{{ end }}' + "`n" + @'
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: storage-proof-notes
+data:
+  notes: {{ include "storage-proof-notes" . | quote }}
+'@
+    Set-Content (Join-Path $temporaryChart 'templates/storage-proof-notes.yaml') $wrapper
+    function Render-Notes([string[]]$Arguments = @()) {
+        $output = & helm template agenthub-test $temporaryChart --set-string postgres.password=test-only --show-only templates/storage-proof-notes.yaml @Arguments
+        if ($LASTEXITCODE -ne 0) { throw 'Notes rendering failed' }
+        return $output -join "`n"
+    }
+    $endpointArgs = @('--set-string', 's3.serviceUrl=http://storage.example.com:9000')
+    Assert-Contains (Render-Notes $endpointArgs) 'WARNING: Storage endpoint storage.example.com uses TCP 9000'
+    Assert-NotContains (Render-Notes ($endpointArgs + @('--set-string', 'agent.storageEgress.cidrs[0]=192.0.2.10/32'))) 'WARNING: Storage endpoint'
+    Assert-NotContains (Render-Notes ($endpointArgs + @('--set', 'agent.extraEgressPorts[0]=9000'))) 'WARNING: Storage endpoint'
+    Assert-NotContains (Render-Notes @('--set-string', 's3.serviceUrl=https://storage.example.com')) 'WARNING: Storage endpoint'
+    Assert-NotContains (Render-Notes @('--set-string', 's3.serviceUrl=http://192.0.2.10:9000')) 'WARNING: Storage endpoint'
+    Assert-NotContains (Render-Notes) 'WARNING: Storage endpoint'
+} finally {
+    Remove-Item $temporaryChart -Recurse -Force
+}
 Write-Host 'object storage chart assertions passed'
