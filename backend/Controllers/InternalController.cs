@@ -372,7 +372,7 @@ public sealed class InternalController : ControllerBase
         return Content(await _svc.GetTranscriptFileAsync(rec.Owner, id, ct) ?? "", "application/x-ndjson");
     }
 
-    public record PermissionBody(string Tool, string? Input);
+    public record PermissionBody(string Tool, string? Input, string? Kind = null);
     public record AgentPolicyBody(string Tool, JsonElement Input);
 
     /// <summary>
@@ -386,6 +386,11 @@ public sealed class InternalController : ControllerBase
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
+
+        // Account-email disclosure is never covered by unattended tool approval. Reading the
+        // live flag keeps this guard effective when auto-approve changes during a session.
+        if (body.Kind == "account-email")
+            return Ok(new { decision = rec.AutoApprove || rec.Mode != SessionMode.Interactive ? "deny" : "ask" });
 
         var tool = string.IsNullOrWhiteSpace(body.Tool) ? "a tool" : body.Tool.Trim();
         // Auto-approve is read off the session record on every request, so switching it on
