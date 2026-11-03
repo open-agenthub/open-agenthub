@@ -260,7 +260,8 @@ identity nor its reason, so matching that predicate is necessary. Interactive se
 the native question. Autonomous sessions and sessions with the live autoApprove flag decline
 with an explicit tool error, allowing the model to continue without sending the address.
 The authenticated callback receives only the tool name and `kind=account-email`. The earlier
-ordinary approval callback omits matching tool input too; otherwise it would send the address
+ordinary approval callback replaces only the matching address with `[account email]`, including
+percent encoding, retaining the rest of the command for review; otherwise it would send the address
 before the privacy question could be answered. No address is added to our refusal log.
 
 The backend reads the live session mode and flag rather than trusting an approval cached by

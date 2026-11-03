@@ -18,6 +18,18 @@ export function isAccountEmailRequest(payload, email) {
   return text.includes(account) && (WEB.has(payload.tool_name) || NETWORK.test(text.replaceAll(account, ' ').replace(/\\(?:\\|[nrt])/g, ' ')));
 }
 
+// Match mixed percent encoding too, while retaining the command a person must approve.
+export function redactAccountEmail(text, email) {
+  if (typeof email !== 'string' || !email.includes('@')) return text;
+  const escape = value => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = [...email].map(char => {
+    const encoded = [...new Set([char.toLowerCase(), char.toUpperCase()])]
+      .map(value => '%' + value.charCodeAt(0).toString(16).padStart(2, '0'));
+    return '(?:' + [escape(char), ...encoded].join('|') + ')';
+  }).join('');
+  return text.replace(new RegExp(pattern, 'gi'), '[account email]');
+}
+
 export async function run(payload, env = process.env, fetchImpl = fetch) {
   let email;
   try { email = JSON.parse(fs.readFileSync(path.join(env.HOME, '.claude.json'), 'utf8')).oauthAccount?.emailAddress; } catch { return null; }

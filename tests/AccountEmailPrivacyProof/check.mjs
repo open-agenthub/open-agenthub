@@ -23,6 +23,8 @@ for (const name of ['auto', 'autonomous']) {
  const callbacks = fs.readFileSync(path.join(root, name, 'model.log'), 'utf8');
  assert.doesNotMatch(callbacks, /someone@example\.com|someone%40example\.com/);
  assert.match(callbacks, /"kind":"account-email"/);
+ assert.match(callbacks, /curl --max-time 3/);
+ assert.match(callbacks, /\[account email\]/);
 }
 const events=fs.readFileSync(path.join(root,'model/events.jsonl'),'utf8');
 assert.doesNotMatch(events,/email-receiver-called/);
