@@ -44,6 +44,8 @@ public sealed class InternalController : ControllerBase
     private readonly ISecretRequestStore? _secretRequests;
     private readonly string? _frontendOrigin;
     private readonly ISessionContextClear? _contextClear;
+    private readonly ISessionAccessService? _access;
+    private readonly ISessionSharingService? _sharing;
 
     public InternalController(ISessionStore store, IEnumerable<INotifier> notifiers, ISessionService svc,
         PermissionStore permissions, IEnumerable<IPermissionNotifier> permNotifiers,
@@ -53,9 +55,11 @@ public sealed class InternalController : ControllerBase
         IUsageStore? usage = null, ISessionMessageStore? messages = null,
         ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null,
         IClaudeLoginSync? loginSync = null, ISecretRequestStore? secretRequests = null,
-        ISessionContextClear? contextClear = null)
+        ISessionContextClear? contextClear = null, ISessionAccessService? access = null, ISessionSharingService? sharing = null)
     {
         _contextClear = contextClear;
+        _access = access;
+        _sharing = sharing;
         _loginSync = loginSync;
         _secretRequests = secretRequests;
         _frontendOrigin = configuration?["FrontendOrigin"]?.TrimEnd('/');
@@ -739,12 +743,15 @@ public sealed class InternalController : ControllerBase
         return Ok(all.Where(s => s.ParentSessionId == id).ToList());
     }
 
-    /// <summary>Gets a peer session if it is a descendant of this session (same owner).</summary>
+    /// <summary>Reads descendant status or sanitized status granted by named sharing.</summary>
     [HttpGet("peer/{childId}")]
     public async Task<IActionResult> GetPeer(string id, string childId, CancellationToken ct)
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
+        var shared = _access is null ? null : await _access.ResolveUserAsync(rec.Owner, childId, ct);
+        if (shared is not null && shared.Session.Owner != rec.Owner)
+            return Ok(SharedSessionSanitizer.Sanitize(shared));
         if (!await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
 
         var info = await _svc.GetSessionAsync(rec.Owner, childId, ct);
@@ -861,10 +868,25 @@ public sealed class InternalController : ControllerBase
         var all = await _svc.ListSessionsAsync(rec.Owner, ct);
         var parentOf = ParentLookup(rec, all);
         var scope = all.Where(s => s.Id == rec.Id || IsFleetPeer(rec, s.Id, s.ProjectId, parentOf));
-        return Ok(scope
-            .Select(s => new ProjectAgentInfo(s.Id, s.Title, s.Description, s.Phase, s.Mode,
-                s.Agent, s.QuestionPending, s.CreatedAt, Self: s.Id == rec.Id))
-            .ToList());
+        var result = scope.Select(s => new ProjectAgentInfo(s.Id, s.Title, s.Description, s.Phase, s.Mode,
+            s.Agent, s.QuestionPending, s.CreatedAt, Self: s.Id == rec.Id)).ToList();
+        if (_sharing is not null && _access is not null)
+        {
+            IReadOnlyList<SharedSessionInfo> candidates;
+            try { candidates = await _sharing.ListSharedWithAsync(rec.Owner, ct); }
+            catch (LicenseRequiredException) { candidates = []; }
+            foreach (var candidate in candidates)
+            {
+                // Resolve again so a revoked grant cannot survive a stale directory snapshot.
+                var shared = await _access.ResolveUserAsync(rec.Owner, candidate.Id, ct);
+                if (shared is null || shared.Session.Owner == rec.Owner) continue;
+                var session = shared.Session;
+                result.Add(new ProjectAgentInfo(session.Id, session.Title, null, session.Status, session.Mode,
+                    session.Agent, session.QuestionPending, session.CreatedAt, Self: false,
+                    Owner: session.Owner, AccessRole: shared.Level.ToString()));
+            }
+        }
+        return Ok(result);
     }
 
     // Peers are the sessions of the same project plus the session's own line: its ancestors and
@@ -945,9 +967,8 @@ public sealed class InternalController : ControllerBase
     }
 
     /// <summary>
-    /// Sends a message/task from this session to a peer agent: same owner, and either the same
-    /// (non-null) project or the session's own ancestor/descendant line — anything else answers
-    /// 404 so nothing about foreign sessions leaks.
+    /// Sends to the owned fleet or a named collaborator target. Denied targets answer 404 so
+    /// a session cannot distinguish an inaccessible target from a missing one.
     /// </summary>
     [HttpPost("messages")]
     public async Task<IActionResult> SendMessage(string id, [FromBody] SendAgentMessageRequest body, CancellationToken ct)
@@ -962,20 +983,32 @@ public sealed class InternalController : ControllerBase
         var to = body.To?.Trim();
         if (string.IsNullOrEmpty(to)) return BadRequest("A target session id is required.");
         if (to == id) return BadRequest("A session cannot message itself.");
-        var target = await _store.GetAsync(rec.Owner, to, ct);
+        var access = _access is null ? null : await _access.ResolveUserAsync(rec.Owner, to, ct);
+        var target = access?.Session ?? await _store.GetAsync(rec.Owner, to, ct);
         if (target is null) return NotFound();
-        var all = await _svc.ListSessionsAsync(rec.Owner, ct);
-        var parentOf = ParentLookup(rec, all);
-        if (!IsFleetPeer(rec, target.Id, target.ProjectId, parentOf)) return NotFound();
+        var crossOwner = target.Owner != rec.Owner;
+        if (crossOwner && (access is null || !SessionAccessRules.CanWriteTerminal(access.Level)))
+            return NotFound();
+        // A collaborator may queue work, but must not interrupt another owner's running turn.
+        if (crossOwner && (body.Priority == true || body.Interrupt == true))
+            return BadRequest("Shared sessions accept normal-priority messages only.");
+        IReadOnlyList<SessionInfo> all = [];
+        if (!crossOwner)
+        {
+            all = await _svc.ListSessionsAsync(rec.Owner, ct);
+            if (!IsFleetPeer(rec, target.Id, target.ProjectId, ParentLookup(rec, all))) return NotFound();
+        }
 
         var (priority, interrupt) = AgentMessaging.ResolveFlags(body.Priority, body.Interrupt);
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
-            ProjectId = rec.ProjectId,
+            ProjectId = crossOwner ? target.ProjectId : rec.ProjectId,
             FromSessionId = rec.Id,
             ToSessionId = target.Id,
-            Owner = rec.Owner,
+            Owner = target.Owner,
+            FromOwner = crossOwner ? rec.Owner : null,
+            FromTitle = crossOwner ? $"{rec.Title} (owner: {rec.Owner})" : null,
             Body = text,
             Priority = priority,
             Interrupt = interrupt
@@ -985,9 +1018,9 @@ public sealed class InternalController : ControllerBase
         // question/finished events to Slack/Telegram/n8n. The web app reads the message
         // itself from the public messages endpoint.
         await NotifyAllAsync(target, "agent-message",
-            $"Agent \"{rec.Title}\" sent a message to \"{target.Title}\": {Truncate(text, 300)}", ct);
+            $"Agent \"{message.FromTitle ?? rec.Title}\" sent a message to \"{target.Title}\": {Truncate(text, 300)}", ct);
         var delivery = await AgentMessageDispatch.PushAsync(_delivery,
-            all.FirstOrDefault(s => s.Id == target.Id), message, rec.Title, ct);
+            crossOwner ? null : all.FirstOrDefault(s => s.Id == target.Id), message, rec.Title, ct);
         return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));
     }
 
@@ -1021,8 +1054,8 @@ public sealed class InternalController : ControllerBase
             : new Dictionary<string, string>();
         var messages = taken.Select(m => new AgentMessageInfo(
             m.Id, m.FromSessionId,
-            m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId),
-            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia)).ToList();
+            m.FromTitle ?? (m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId)),
+            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia, m.FromOwner)).ToList();
         return Ok(new { messages });
     }
 
