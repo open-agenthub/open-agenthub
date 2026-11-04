@@ -9,6 +9,7 @@ import { authLabel } from '../lib/agent.js'
 import { formatRemaining, isExpiringSoon } from '../lib/expiry.js'
 import { canConvert } from '../lib/conversion.js'
 import { resourceSummary } from '../lib/resources.js'
+import { nestShared } from '../lib/projects.js'
 
 const props = defineProps({
   sessions: { type: Array, default: () => [] },
@@ -22,6 +23,7 @@ const convertingId = ref(null)
 function toggleConvert(id) { convertingId.value = convertingId.value === id ? null : id }
 function converted(id, surface) { convertingId.value = null; emit('converted', id, surface) }
 
+const SHARED_GROUP = 'Shared with me'
 const GROUP_BYS = ['Project', 'Repository', 'Status', 'None']
 const FILTERS = ['All', 'Running', QUESTION_OPEN, 'Waiting', 'Scheduled', 'Paused', 'Done', 'Failed']
 const groupBy = ref('Project')
@@ -35,7 +37,7 @@ function groupKey(s) {
     case 'Status': return sessionStatus(s)
     case 'None': return 'All sessions'
     default:
-      if (s.accessRole && s.accessRole !== 'Owner') return 'Shared with me'
+      if (s.accessRole && s.accessRole !== 'Owner') return SHARED_GROUP
       return projectName.value[s.projectId] || 'No project'
   }
 }
@@ -46,7 +48,10 @@ const filtered = computed(() => props.sessions
 
 const groups = computed(() => {
   const names = [...new Set(filtered.value.map(groupKey))]
-  return names.map(name => ({ name, sessions: filtered.value.filter(s => groupKey(s) === name) }))
+  return names.map(name => {
+    const sessions = filtered.value.filter(s => groupKey(s) === name)
+    return { name, sessions: name === SHARED_GROUP ? nestShared(sessions) : sessions }
+  })
 })
 
 const counts = computed(() => ({
@@ -79,7 +84,7 @@ function repoLine(s) {
       <div class="group-name">{{ grp.name.toUpperCase() }}</div>
       <div class="card rows">
         <template v-for="s in grp.sessions" :key="s.id">
-          <div class="row" @click="$emit('select', s.id)">
+          <div class="row" :class="{ nested: s.nestDepth > 0 }" :style="s.nestDepth ? { '--nest': s.nestDepth } : null" @click="$emit('select', s.id)">
             <div class="row-status">
               <span class="st" :style="{ color: statusStyle(s).color }" :title="questionTooltip(s) || null">{{ sessionStatus(s) }}</span>
               <span v-if="s.failureReason" class="startup-failure" data-session-failure-marker>Cannot start</span>
@@ -88,7 +93,7 @@ function repoLine(s) {
             <div class="row-main">
               <div class="row-title">{{ s.title }}</div>
               <div v-if="s.description" class="row-desc" data-session-description>{{ s.description }}</div>
-              <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by"> · by {{ s.sharedBy }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at>{{ repoLine(s) || s.sharedBy ? ' · ' : '' }}<SessionIcon name="expiry" /> expires in {{ formatRemaining(s.expiresAt) }}</span></div>
+              <div class="row-repo">{{ repoLine(s) }}<span v-if="s.sharedBy" class="shared-by" data-shared-role> · {{ s.accessRole }} · by {{ s.sharedBy }}</span><span v-if="s.parentTitle" class="shared-by" data-child-marker> · child of {{ s.parentTitle }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at>{{ repoLine(s) || s.sharedBy ? ' · ' : '' }}<SessionIcon name="expiry" /> expires in {{ formatRemaining(s.expiresAt) }}</span></div>
               <div v-if="s.secretsPendingRestart" class="row-resources" data-secrets-pending><span class="pending">secret variables change at the next restart</span></div>
               <div v-if="s.resources" class="row-resources" data-session-resources title="Request / limit">{{ resourceSummary(s.resources) }}<span v-if="s.resourcesPendingRestart" class="pending" data-resources-pending> · applies at the next restart</span></div>
             </div>
@@ -133,6 +138,7 @@ h2 { font-size: 28px; font-weight: 700; margin: 0; }
 .row { padding: 12px 18px; display: flex; align-items: center; gap: 12px; cursor: pointer; }
 .row + .row { border-top: 1px solid var(--border); }
 .row:hover { background: var(--hover); }
+.row.nested { padding-left: calc(18px + min(var(--nest), 4) * 16px); }
 .row-status { width: 150px; flex-shrink: 0; display: flex; flex-direction: column; gap: 2px; }
 .st { font-size: 11px; font-weight: 700; }
 .mode { font-size: 11px; color: var(--muted-3); font-weight: 600; }

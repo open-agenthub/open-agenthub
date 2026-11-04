@@ -7,6 +7,7 @@
 using System.Text.Json;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
+using AgentHub.Api.Services;
 using Npgsql;
 using NpgsqlTypes;
 
@@ -163,26 +164,60 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         return new SessionSharingOverview(users, links, policy);
     }
 
+    /// <summary>
+    /// Every session a direct share opens for <paramref name="recipient"/>: the shared sessions
+    /// and, live, all their descendants of the same owner (#410). Links never contribute — they
+    /// are link-only and add nothing to anybody's list. One row per session, carrying every grant
+    /// that reaches it, so the rules rather than this query pick the role.
+    /// </summary>
     public async Task<IReadOnlyList<StoredSessionAccess>> ListSharedWithAsync(
         string recipient,
         CancellationToken ct = default)
     {
-        var result = new List<StoredSessionAccess>();
+        // The descent follows parent_session_id only between sessions of the same owner. A
+        // parent id is whatever the creating request said, so without the owner check anybody
+        // could hang a session of their own under a shared one and show it to its recipients.
+        // The depth bound is SessionDescent.MaxHops, which also stops a corrupt cycle.
         const string sql = $"""
-            SELECT {SessionColumns}, shares.role
-            FROM sessions
-            JOIN session_shares shares ON shares.session_id = sessions.id
-            WHERE shares.recipient_owner = @recipient
-              AND sessions.owner <> @recipient
-            ORDER BY sessions.created_at DESC
+            WITH RECURSIVE reach(id, owner, role, source, depth) AS (
+                SELECT sessions.id, sessions.owner, shares.role, sessions.id, 0
+                FROM session_shares shares
+                JOIN sessions ON sessions.id = shares.session_id
+                WHERE shares.recipient_owner = @recipient
+                  AND sessions.owner <> @recipient
+                UNION
+                SELECT child.id, child.owner, reach.role, reach.source, reach.depth + 1
+                FROM reach
+                JOIN sessions child
+                  ON child.owner = reach.owner
+                 AND child.parent_session_id = reach.id
+                WHERE reach.depth < @maxDepth
+            )
+            SELECT {SessionColumns}, reach.role, reach.source, reach.depth
+            FROM reach
+            JOIN sessions ON sessions.id = reach.id
+            ORDER BY sessions.created_at DESC, sessions.id, reach.depth
             """;
 
+        var sessions = new Dictionary<string, SessionRecord>(StringComparer.Ordinal);
+        var grants = new Dictionary<string, List<ShareGrant>>(StringComparer.Ordinal);
+        var order = new List<string>();
         await using var command = _db.CreateCommand(sql);
         command.Parameters.AddWithValue("recipient", recipient);
+        command.Parameters.AddWithValue("maxDepth", SessionDescent.MaxHops);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
-            result.Add(new StoredSessionAccess(MapSession(reader), ParseRole(reader.GetString(AfterSession))));
-        return result;
+        {
+            var id = reader.GetString(0);
+            if (!sessions.ContainsKey(id))
+            {
+                sessions[id] = MapSession(reader);
+                grants[id] = [];
+                order.Add(id);
+            }
+            grants[id].Add(ReadGrant(reader, AfterSession));
+        }
+        return order.Select(id => new StoredSessionAccess(sessions[id], grants[id])).ToArray();
     }
 
     public async Task<DirectSessionShare> UpsertDirectAsync(
@@ -362,25 +397,80 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
     /// count; a share that the missing licence makes inert does, because the licence can come
     /// back without anyone looking at this session again.
     /// </summary>
+    /// <remarks>A direct share on an ancestor counts too: it opens this session as well (#410).
+    /// An ancestor's link does not, because links are link-only.</remarks>
     public async Task<bool> IsSharedAsync(string sessionId, CancellationToken ct = default)
     {
-        await using var command = _db.CreateCommand("""
-            SELECT EXISTS (SELECT 1 FROM session_shares WHERE session_id = @session)
+        await using var command = _db.CreateCommand($"""
+            WITH RECURSIVE {AncestorChain}
+            SELECT EXISTS (
+                    SELECT 1 FROM session_shares JOIN chain ON chain.id = session_shares.session_id)
                 OR EXISTS (
                     SELECT 1 FROM session_share_links
                     WHERE session_id = @session
                       AND (expires_at IS NULL OR expires_at > now()))
             """);
         command.Parameters.AddWithValue("session", sessionId);
+        command.Parameters.AddWithValue("maxDepth", SessionDescent.MaxHops);
         return await command.ExecuteScalarAsync(ct) is true;
     }
 
+    /// <summary>
+    /// The session and its ancestors, as CTE <c>chain(id, parent, owner, depth)</c>. The walk
+    /// stays within one owner: a parent id is whatever the creating request named, and a grant
+    /// must never flow into a session somebody else hung under a shared one. The bound is
+    /// <see cref="SessionDescent.MaxHops"/>, which also ends a corrupt cycle.
+    /// </summary>
+    private const string AncestorChain = """
+        chain(id, parent, owner, depth) AS (
+            SELECT id, parent_session_id, owner, 0 FROM sessions WHERE id = @session
+            UNION
+            SELECT parent.id, parent.parent_session_id, parent.owner, chain.depth + 1
+            FROM chain
+            JOIN sessions parent
+              ON parent.id = chain.parent
+             AND parent.owner = chain.owner
+            WHERE chain.depth < @maxDepth
+        )
+        """;
+
+    /// <summary>
+    /// The policy the session's pod is held to: its own blocks plus those of every ancestor.
+    /// A child of a shared session is shared with the same people (#410), and a collaborator
+    /// could otherwise ask the parent's agent to start a child and use there the servers the
+    /// owner blocked on the parent. Blocks only add up; a child cannot lift its parent's.
+    /// The owner's sharing dialog still shows and edits the session's own policy only.
+    /// </summary>
     public async Task<SessionMcpPolicy?> GetMcpPolicyAsync(
         string sessionId,
         CancellationToken ct = default)
     {
-        await using var connection = await _db.OpenConnectionAsync(ct);
-        return await GetMcpPolicyAsync(connection, null, sessionId, ct);
+        await using var command = _db.CreateCommand($"""
+            WITH RECURSIVE {AncestorChain}
+            SELECT policies.blocked_servers, policies.blocked_tools, policies.updated_at
+            FROM session_mcp_policies policies
+            JOIN chain ON chain.id = policies.session_id
+            ORDER BY chain.depth
+            """);
+        command.Parameters.AddWithValue("session", sessionId);
+        command.Parameters.AddWithValue("maxDepth", SessionDescent.MaxHops);
+        await using var reader = await command.ExecuteReaderAsync(ct);
+        var servers = new List<string>();
+        var tools = new List<string>();
+        DateTime? updatedAt = null;
+        while (await reader.ReadAsync(ct))
+        {
+            servers.AddRange(JsonSerializer.Deserialize<string[]>(reader.GetString(0)) ?? []);
+            tools.AddRange(JsonSerializer.Deserialize<string[]>(reader.GetString(1)) ?? []);
+            var updated = reader.GetDateTime(2);
+            if (updatedAt is null || updated > updatedAt) updatedAt = updated;
+        }
+        return updatedAt is { } at
+            ? new SessionMcpPolicy(
+                servers.Distinct(StringComparer.Ordinal).ToArray(),
+                tools.Distinct(StringComparer.Ordinal).ToArray(),
+                at)
+            : null;
     }
 
     public async Task<SessionMcpPolicy?> SetMcpPolicyAsync(
@@ -454,30 +544,57 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         await transaction.CommitAsync(ct);
     }
 
+    /// <summary>
+    /// The session and the principal's direct shares on it and on its ancestors of the same
+    /// owner. Null when the principal neither owns it nor holds any such share. Read live on
+    /// every call, so revoking a parent's share closes its children on the next request.
+    /// </summary>
     public async Task<StoredSessionAccess?> FindUserAccessAsync(
         string principal,
         string sessionId,
         CancellationToken ct = default)
     {
         const string sql = $"""
-            SELECT {SessionColumns}, shares.role
+            WITH RECURSIVE {AncestorChain}
+            SELECT {SessionColumns}, shares.role, shares.session_id, chain.depth
             FROM sessions
+            LEFT JOIN chain ON true
             LEFT JOIN session_shares shares
-              ON shares.session_id = sessions.id
+              ON shares.session_id = chain.id
              AND shares.recipient_owner = @principal
             WHERE sessions.id = @session
-              AND (sessions.owner = @principal OR shares.recipient_owner IS NOT NULL)
+            ORDER BY chain.depth
             """;
 
         await using var command = _db.CreateCommand(sql);
         command.Parameters.AddWithValue("principal", principal);
         command.Parameters.AddWithValue("session", sessionId);
+        command.Parameters.AddWithValue("maxDepth", SessionDescent.MaxHops);
         await using var reader = await command.ExecuteReaderAsync(ct);
-        if (!await reader.ReadAsync(ct))
-            return null;
+        SessionRecord? session = null;
+        var grants = new List<ShareGrant>();
+        while (await reader.ReadAsync(ct))
+        {
+            session ??= MapSession(reader);
+            if (!reader.IsDBNull(AfterSession))
+                grants.Add(ReadGrant(reader, AfterSession));
+        }
 
-        ShareRole? role = reader.IsDBNull(AfterSession) ? null : ParseRole(reader.GetString(AfterSession));
-        return new StoredSessionAccess(MapSession(reader), role);
+        if (session is null)
+            return null;
+        if (!string.Equals(session.Owner, principal, StringComparison.Ordinal) && grants.Count == 0)
+            return null;
+        return new StoredSessionAccess(session, grants);
+    }
+
+    private static ShareGrant ReadGrant(NpgsqlDataReader reader, int first)
+    {
+        var depth = reader.GetInt32(first + 2);
+        return new ShareGrant(
+            ParseRole(reader.GetString(first)),
+            depth == 0 ? ShareGrantScope.Session : ShareGrantScope.Ancestor,
+            reader.GetString(first + 1),
+            depth);
     }
 
     public Task<StoredSessionAccess?> FindTokenAccessAsync(
@@ -691,10 +808,10 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         sessions.question_pending, sessions.callback_token, sessions.created_at,
         sessions.updated_at, sessions.image, sessions.run_as_root, sessions.cpu,
         sessions.memory, sessions.mcp_config, sessions.repos, sessions.question_open,
-        sessions.question_title
+        sessions.question_title, sessions.parent_session_id
         """;
     // The first column a query adds after SessionColumns.
-    private const int AfterSession = 20;
+    private const int AfterSession = 21;
 
     private static SessionRecord MapSession(NpgsqlDataReader reader) => new()
     {
@@ -717,6 +834,7 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         McpConfigJson = reader.IsDBNull(16) ? null : reader.GetString(16),
         ReposJson = reader.IsDBNull(17) ? null : reader.GetString(17),
         QuestionOpen = reader.GetBoolean(18),
-        QuestionTitle = reader.IsDBNull(19) ? null : reader.GetString(19)
+        QuestionTitle = reader.IsDBNull(19) ? null : reader.GetString(19),
+        ParentSessionId = reader.IsDBNull(20) ? null : reader.GetString(20)
     };
 }
