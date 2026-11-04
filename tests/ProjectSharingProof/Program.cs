@@ -66,8 +66,11 @@ builder.Services.AddSingleton<PostgresSessionStore>();
 builder.Services.AddSingleton<SessionShareStore>();
 builder.Services.AddSingleton<ISessionShareStore>(s => s.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessStore>(s => s.GetRequiredService<SessionShareStore>());
+// BASELINE builds the same host against origin/main, which has no project sharing types.
+#if !BASELINE
 builder.Services.AddSingleton<IProjectShareStore>(s => s.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<IProjectSharingService, ProjectSharingService>();
+#endif
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
 builder.Services.AddSingleton<ISessionSharingService>(s => new SessionSharingService(
     s.GetRequiredService<ISessionShareStore>(), s.GetRequiredService<IEnterpriseLicense>(), "https://hub.example.com"));
@@ -155,7 +158,10 @@ sealed class OnlySharing : IApplicationFeatureProvider<ControllerFeature>
         foreach (var controller in feature.Controllers.Where(controller =>
             controller.AsType() != typeof(SharingController) && controller.AsType() != typeof(SharedSessionsController)
                 && controller.AsType() != typeof(SessionsController) && controller.AsType() != typeof(ProjectsController)
-                && controller.AsType() != typeof(ProjectSharingController)).ToArray())
+#if !BASELINE
+                && controller.AsType() != typeof(ProjectSharingController)
+#endif
+                ).ToArray())
             feature.Controllers.Remove(controller);
     }
 }
