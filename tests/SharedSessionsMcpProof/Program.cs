@@ -32,7 +32,7 @@ var users = new UserDirectory(builder.Configuration);
 await users.InitializeAsync();
 await users.RecordLoginAsync("alice", "alice@example.com", "Alice");
 await users.RecordLoginAsync("bob", "bob@example.com", "Bob");
-((EmptyService)(object)service).Store = sessions;
+((EmptyService)service).Store = sessions;
 await new PostgresProjectStore(builder.Configuration).InitializeAsync();
 await new AgentHub.Api.Ee.Identity.UserGroupStore(builder.Configuration).InitializeAsync();
 var shares = app.Services.GetRequiredService<SessionShareStore>();

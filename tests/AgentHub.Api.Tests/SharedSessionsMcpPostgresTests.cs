@@ -272,7 +272,7 @@ public class SharedSessionsMcpPostgresTests
     private static InternalController Controller(PostgresSharingDatabase db, string id, bool licensed = true, bool ownedFleet = false)
     {
         var service = DispatchProxy.Create<ISessionService, EmptySessionService>();
-        if (ownedFleet) ((EmptySessionService)(object)service).Store = db.Sessions;
+        if (ownedFleet) ((EmptySessionService)service).Store = db.Sessions;
         var controller = new InternalController(db.Sessions, [], service, null!, [], [], null!, null!,
             messages: new PostgresSessionMessageStore(db.Configuration),
             secretRequests: new PostgresSecretRequestStore(db.Configuration),
