@@ -9,7 +9,7 @@ defineProps({ sessions: Array, active: String })
 defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share', 'organize', 'drag-session', 'drop-session'])
 </script>
 <template>
-  <ul class="list"><li v-for="s in sessions" :key="s.id" :class="{ active: s.id === active }" :data-session-row="s.id" :draggable="sessionCapabilities(s).canManage" @dragstart="$emit('drag-session', $event, s.id)" @dragover.prevent @drop.stop.prevent="$emit('drop-session', $event, s)" @click="$emit('select', s.id)">
+  <ul class="list"><li v-for="s in sessions" :key="s.id" :class="{ active: s.id === active, nested: s.nestDepth > 0 }" :style="s.nestDepth ? { '--nest': s.nestDepth } : null" :data-session-row="s.id" :data-child-of="s.nestDepth ? s.parentSessionId : null" :draggable="sessionCapabilities(s).canManage" @dragstart="$emit('drag-session', $event, s.id)" @dragover.prevent @drop.stop.prevent="$emit('drop-session', $event, s)" @click="$emit('select', s.id)">
     <!-- An open question dialog (#361) gets a marker of its own, not the blinking "your turn" dot. -->
     <span v-if="s.questionOpen" class="question" :title="questionTooltip(s)" :aria-label="questionTooltip(s)" data-session-question>?</span>
     <span v-else class="dot" :class="{ ask: s.questionPending }" :style="{ background: statusStyle(s).color }"></span>
@@ -22,7 +22,7 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
       <div v-if="s.scheduleSecretsOutdated" class="startup-failure" data-schedule-secrets-outdated>Schedule secrets outdated · open to update</div>
       <div v-if="s.scheduleMoveUnfinished" class="startup-failure" data-schedule-move-unfinished>Move unfinished · schedule paused</div>
       <div v-if="s.description" class="desc" data-session-description>{{ s.description }}</div>
-      <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }" :title="questionTooltip(s) || null">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · <SessionIcon name="expiry" /> {{ formatRemaining(s.expiresAt) }}</span></div>
+      <div class="meta"><span class="st" :style="{ color: statusStyle(s).color }" :title="questionTooltip(s) || null">{{ sessionStatus(s) }}</span><span v-if="s.mode && s.mode !== sessionStatus(s)"> · {{ s.mode }}</span><span v-if="s.agent"> · {{ s.agent }}<template v-if="s.authMode"> / {{ authLabel(s.authMode) }}</template></span><span v-if="s.accessRole && s.accessRole !== 'Owner'" class="role"> · {{ s.accessRole }}</span><span v-if="s.sharedBy" class="owner"> · by {{ s.sharedBy }}</span><span v-if="s.parentTitle" class="child" :title="'Child of ' + s.parentTitle" data-child-marker> · child of {{ s.parentTitle }}</span><span v-if="s.schedule" class="cron"> · ▶ {{ s.schedule }}</span><span v-if="s.expiresAt" class="expires" :class="{ soon: isExpiringSoon(s.expiresAt) }" data-expires-at> · <SessionIcon name="expiry" /> {{ formatRemaining(s.expiresAt) }}</span></div>
     </div>
     <span v-if="sessionCapabilities(s).canManage" class="acts">
       <button class="act" title="Organize session" aria-label="Organize session" @click.stop="$emit('organize', s.id)">⋮</button>
@@ -52,6 +52,9 @@ defineEmits(['select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share'
 .meta { font-size: 11px; color: var(--muted-3); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .st { font-weight: 700; }
 .role, .owner { color: var(--accent); }
+.child { color: var(--muted-2); }
+/* Children of a shared session sit under it (#410); capped so a deep chain keeps its title. */
+.list li.nested { padding-left: calc(8px + min(var(--nest), 4) * 12px); }
 .cron { color: var(--sched); }
 .expires { color: var(--muted); }
 .expires.soon { color: var(--warn); font-weight: 700; }

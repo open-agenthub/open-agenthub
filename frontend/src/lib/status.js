@@ -40,8 +40,11 @@ export function sessionStatus(session) {
 
 export const QUESTION_OPEN = 'Question open'
 
-/** Whether the session waits for the person: an open question dialog or a pending reply. */
+/** Whether the session waits for the person: an open question dialog or a pending reply. A
+ *  viewer of a shared session cannot answer either, so it never waits on them; its row still
+ *  shows the status and the status filters still find it. */
 export function needsYou(session) {
+  if (session?.accessRole === 'Viewer') return false
   return Boolean(session?.questionOpen || session?.questionPending)
 }
 
