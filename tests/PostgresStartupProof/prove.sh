@@ -26,9 +26,15 @@ for attempt in $(seq 1 5); do
   kubectl -n "$name" logs postgres-0 -c postgres --timestamps
   kubectl -n "$name" exec postgres-0 -c postgres -- \
     psql -U agenthub -d agenthub -v ON_ERROR_STOP=1 -c 'CHECKPOINT'
-  # Prove the generated password/HBA setup over TCP, not only trusted local sockets.
+  # The pod IP bypasses initdb's loopback trust rule and exercises the appended password HBA rule.
+  pod_ip=$(kubectl -n "$name" get pod postgres-0 -o jsonpath='{.status.podIP}')
   kubectl -n "$name" exec postgres-0 -c postgres -- bash -ec \
-    'PGPASSWORD="$POSTGRES_PASSWORD" psql -h 127.0.0.1 -U agenthub -d agenthub -v ON_ERROR_STOP=1 -c "SELECT current_user, current_database()"'
+    'PGPASSWORD="$POSTGRES_PASSWORD" psql -h "$1" -U agenthub -d agenthub -v ON_ERROR_STOP=1 -c "SELECT current_user, current_database()"' _ "$pod_ip"
+  if kubectl -n "$name" exec postgres-0 -c postgres -- bash -ec \
+    'PGPASSWORD=incorrect psql -h "$1" -U agenthub -d agenthub -c "SELECT 1"' _ "$pod_ip"; then
+    echo "Incorrect password was accepted" >&2
+    exit 1
+  fi
   kubectl delete namespace "$name" --wait=false
   echo "Single-user chart startup $attempt: zero restarts, TCP authentication and CHECKPOINT succeeded"
 done
