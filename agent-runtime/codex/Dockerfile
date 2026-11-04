@@ -12,7 +12,7 @@ FROM node:26-bookworm-slim
 # opens a PR when a newer version ships.
 ARG CODEX_VERSION=0.166.0
 ARG GH_VERSION=2.103.3
-ARG GLAB_VERSION=1.127.0
+ARG GLAB_VERSION=1.128.0
 # Set by BuildKit per target platform (amd64, arm64); gh and glab use the same names.
 ARG TARGETARCH
 ENV CODEX_VERSION=${CODEX_VERSION}
