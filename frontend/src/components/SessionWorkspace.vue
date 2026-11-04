@@ -397,7 +397,12 @@ onBeforeUnmount(() => {
 .session-secret-access .grant-error { color: var(--danger); }
 .workspace-shell, .terminal-only { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .session-split { flex: 1; display: flex; min-width: 0; min-height: 0; }
-.companion-side { flex: 0 0 var(--browser-width); display: grid; grid-template-rows: 34px minmax(0, 1fr); min-width: 0; min-height: 0; background: #111721; }
+/* A grid without grid-template-columns gets an implicit auto column, and Chromium sizes that to
+   its content's min-content width even when the item says min-width: 0. A Files preview with a
+   table then came out wider than this column and painted under the conversation (#420).
+   minmax(0, 1fr) pins every pane to the column, and the clip keeps anything a pane still
+   overflows inside it rather than on the conversation side of the seam. */
+.companion-side { flex: 0 0 var(--browser-width); display: grid; grid-template-rows: 34px minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; background: #111721; }
 .companion-tabs { display: flex; align-items: end; gap: 2px; padding: 4px 8px 0; border-bottom: 1px solid #29303a; background: #171c24; }
 .companion-tab { display: inline-flex; align-items: center; height: 29px; border-radius: 6px 6px 0 0; }
 .companion-tab.active { background: #222b37; box-shadow: inset 0 -2px var(--accent); }
@@ -405,13 +410,16 @@ onBeforeUnmount(() => {
 .companion-tab.active button { color: #eef5ff; }
 .companion-tab .tab-close { min-width: 26px; padding: 0 8px 0 4px; font: 15px/1 var(--ui); text-transform: none; }
 .companion-tab .tab-close:hover, .companion-tab .tab-close:focus-visible { color: var(--accent); }
-.companion-body { min-width: 0; min-height: 0; }
-.files-companion { display: grid; grid-template-rows: auto minmax(0, 1fr); height: 100%; min-height: 0; }
+/* A size container, so the Files pane can lay out for the column it gets (the split goes down to
+   25 %) rather than for the window. */
+.companion-body { min-width: 0; min-height: 0; overflow: hidden; container-type: inline-size; }
+.files-companion { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); height: 100%; min-height: 0; }
 .files-views { display: flex; gap: 2px; padding: 4px 8px; border-bottom: 1px solid #29303a; background: #111721; }
 .files-views button { padding: 3px 10px; border: 0; border-radius: 6px; color: #738094; background: transparent; font-size: 12px; font-weight: 600; }
 .files-views button:hover { color: #eef5ff; background: #1b222c; }
 .files-views button[aria-selected="true"] { color: #eef5ff; background: #222b37; }
-.terminal-side { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; }
+/* Opaque, so nothing painted beside the column can show through the conversation. */
+.terminal-side { flex: 1 1 auto; display: flex; min-width: 0; min-height: 0; background: var(--bg); }
 .split-seam { position: relative; flex: 0 0 9px; cursor: col-resize; background: #151719; border-inline: 1px solid #292a29; outline: none; touch-action: none; }
 .split-seam span { position: absolute; inset: 50% 2px auto; height: 42px; transform: translateY(-50%); border-radius: 6px; background: #353a40; transition: background .15s, box-shadow .15s; }
 .split-seam:hover span, .split-seam:focus-visible span { background: var(--accent); box-shadow: 0 0 0 3px rgba(90,169,245,.13); }
