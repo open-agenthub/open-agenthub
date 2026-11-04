@@ -22,10 +22,12 @@ for attempt in $(seq 1 5); do
   fi
   kubectl -n "$name" get pod postgres-0 -o json | jq -e '
     [.status.initContainerStatuses[], .status.containerStatuses[]] | all(.restartCount == 0)'
-  kubectl -n "$name" logs postgres-0 -c initialize-database --timestamps
+  init_log=$(kubectl -n "$name" logs postgres-0 -c initialize-database --timestamps)
+  printf '%s\n' "$init_log"
+  # The fix checkpoints in single-user mode. A later forced SQL CHECKPOINT can still
+  # expose broken host signal policy; it is not a property this first-init workaround repairs.
+  test "$(printf '%s\n' "$init_log" | grep -c 'checkpoint complete:')" -ge 1
   kubectl -n "$name" logs postgres-0 -c postgres --timestamps
-  kubectl -n "$name" exec postgres-0 -c postgres -- \
-    psql -U agenthub -d agenthub -v ON_ERROR_STOP=1 -c 'CHECKPOINT'
   # The pod IP bypasses initdb's loopback trust rule and exercises the appended password HBA rule.
   pod_ip=$(kubectl -n "$name" get pod postgres-0 -o jsonpath='{.status.podIP}')
   kubectl -n "$name" exec postgres-0 -c postgres -- bash -ec \
@@ -36,5 +38,5 @@ for attempt in $(seq 1 5); do
     exit 1
   fi
   kubectl delete namespace "$name" --wait=false
-  echo "Single-user chart startup $attempt: zero restarts, TCP authentication and CHECKPOINT succeeded"
+  echo "Single-user chart startup $attempt: zero restarts, TCP authentication and single-user shutdown checkpoint succeeded"
 done

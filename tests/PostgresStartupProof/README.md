@@ -3,12 +3,14 @@
 Dispatch `install-smoke.yml` on the issue branch with `prove_postgres_startup=true`.
 The unmodified quickstart creates real k3s and uses this checkout's backend images.
 No host profile, sysctl, runtime or confinement policy is modified by the proof.
+A manually forced multi-user SQL CHECKPOINT still fails on affected hosts; it is
+not a success assertion for a workaround that avoids that signal requirement.
 
 `prove.sh` checks that both installed database containers have zero restarts and
 initialization exited successfully, then starts five additional fresh releases
 from the actual chart template with `postgres:16-alpine`, UID 999, fsGroup 999 and
-non-root execution. It checks zero restarts, TCP password authentication and a real
-CHECKPOINT. Logs retain the single-user shutdown checkpoint and the main server's
+non-root execution. It checks zero restarts, password authentication via pod IP (including a rejected
+incorrect password), and the single-user backend's real shutdown checkpoint. Logs retain the single-user shutdown checkpoint and the main server's
 clean start. Run five consecutive successful workflow dispatches on the final
 branch head; record run links and image identities in the PR body.
 

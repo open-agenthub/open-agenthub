@@ -36,7 +36,11 @@ failure could repeat destructive work. Logs say `waiting for database to accept
 connections` while retrying.
 
 The init change avoids the first-start signal failure; it does not repair the
-host policy for future crashes, shutdowns or recovery. Prefer updating the host
+host policy for future crashes, shutdowns or recovery. On an affected host, manual
+`CHECKPOINT`, `pg_basebackup` and other backups that request a checkpoint can fail,
+and recovery after a database crash can stall on the same denied signal. For
+production, use `externalDatabase.connectionString` with `postgres.enabled=false`
+instead of relying on this bundled development database. Prefer updating the host
 runtime/profile to allow signals between its own stacked peers. As a last resort,
 `postgres.appArmorUnconfined=true` disables AppArmor for the bundled database's
 init and server containers only. It defaults to false. This removes that layer of
