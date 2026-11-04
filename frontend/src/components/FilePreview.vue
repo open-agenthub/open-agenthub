@@ -181,7 +181,7 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
 </template>
 
 <style scoped>
-.preview { height: 100%; min-width: 0; min-height: 0; display: flex; overflow: auto; background: #0c1118; }
+.preview { height: 100%; min-width: 0; min-height: 0; display: flex; overflow: auto; background: #0c1118; container-type: inline-size; }
 .preview > img { max-width: 100%; max-height: 100%; margin: auto; padding: 24px; object-fit: contain; }
 .preview > video { max-width: 100%; max-height: 100%; margin: auto; padding: 24px; background: #000; }
 .preview > iframe { width: 100%; height: 100%; border: 0; background: white; }
@@ -192,6 +192,8 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
 /* min-width: 0 lets the document narrow below a table's min-content, so the table's own
    .md-table wrapper scrolls instead of the whole preview. */
 .document { min-width: 0; width: 100%; max-width: 860px; margin: 0 auto; padding: 30px 36px 60px; color: #d6deea; }
+/* 36 px a side is most of a preview in a narrow companion column. */
+@container (max-width: 420px) { .document { padding: 18px 14px 40px; } }
 .document pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.65 var(--mono); }
 .md :deep(p), .md :deep(ul), .md :deep(ol) { margin: 0 0 10px; }
 .md :deep(h3), .md :deep(h4), .md :deep(h5) { margin: 20px 0 10px; color: #f2f6fb; }

@@ -15,7 +15,10 @@ minimum from 387 to 416 px.
 Change: every one of these grids gets `grid-template-columns: minmax(0, 1fr)`. The companion
 column and its body clip (`overflow: hidden`). The conversation column paints `var(--bg)`.
 The preview document has `min-width: 0`, so a wide table scrolls inside its own `.md-table`
-wrapper rather than widening the document.
+wrapper rather than widening the document. The companion body is a size container: the Files
+pane uses its compact 110 px file list and the preview trims its padding when the column is
+narrow, not only when the window is. Without that, a 25 % split at 1280 px left the preview
+about 100 px and broke headings letter by letter.
 
 Rejected alternatives: only giving the conversation an opaque background hides the symptom while
 the preview stays cut off at the seam with no way to scroll to it. Only clipping the column
@@ -46,6 +49,7 @@ table, long prose, a long link and inline code, at 1280, 1440, 1920 and 900 px w
 `PHASE=before` records without asserting. Screenshots and JSON go to OUTPUT_DIR (a fresh
 temporary directory when unset); never commit them.
 
-Not covered: with a 900 px window and the split at 25 %, the 150 px file list leaves the preview
-a few pixels wide. In a narrow conversation column the composer can still widen the page; that
+Not covered: with a 900 px window and the split at 25 %, the column is 163 px, so the preview
+is still only about 40 px wide. The Browser pane is measured separately in the PR; this script
+only opens Files. In a narrow conversation column the composer can still widen the page; that
 happens on v1.12.1 as well and is outside the companion column.

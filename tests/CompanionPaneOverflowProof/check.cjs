@@ -89,7 +89,7 @@ const file = { id: 'f1', name: 'Beratungsgespräch Gründungsservice Halle (04.1
       assert(Object.values(r.boxes).every(right => right <= r.boxes['.companion-side'] + 1), `${r.width}/${r.split}: a pane box is wider than the companion column`);
       assert.deepEqual(r.leaks, [], `${r.width}/${r.split}: companion content is hit inside the conversation column or seam`);
       assert.notEqual(r.terminalBackground, 'rgba(0, 0, 0, 0)', `${r.width}: conversation column is transparent`);
-      // At a 25% split of a 900 px window the 150 px file list leaves the preview a few pixels;
+      // At a 25% split of a 900 px window the column leaves the preview a few dozen pixels;
       // only its padding can overflow there, which is not what this check is about.
       if (r.preview.client >= 120) assert(r.preview.scroll <= r.preview.client, `${r.width}/${r.split}: the preview itself scrolls sideways`);
       assert.equal(r.table.overflow, 'auto');

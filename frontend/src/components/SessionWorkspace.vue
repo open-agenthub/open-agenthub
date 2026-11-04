@@ -410,7 +410,9 @@ onBeforeUnmount(() => {
 .companion-tab.active button { color: #eef5ff; }
 .companion-tab .tab-close { min-width: 26px; padding: 0 8px 0 4px; font: 15px/1 var(--ui); text-transform: none; }
 .companion-tab .tab-close:hover, .companion-tab .tab-close:focus-visible { color: var(--accent); }
-.companion-body { min-width: 0; min-height: 0; overflow: hidden; }
+/* A size container, so the Files pane can lay out for the column it gets (the split goes down to
+   25 %) rather than for the window. */
+.companion-body { min-width: 0; min-height: 0; overflow: hidden; container-type: inline-size; }
 .files-companion { display: grid; grid-template-rows: auto minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); height: 100%; min-height: 0; }
 .files-views { display: flex; gap: 2px; padding: 4px 8px; border-bottom: 1px solid #29303a; background: #111721; }
 .files-views button { padding: 3px 10px; border: 0; border-radius: 6px; color: #738094; background: transparent; font-size: 12px; font-weight: 600; }

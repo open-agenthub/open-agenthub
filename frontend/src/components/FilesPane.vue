@@ -274,4 +274,7 @@ async function download(file) {
 .file-toolbar button { padding: 3px 7px; border: 0; color: #8e9bad; background: transparent; font-size: 10px; }
 .file-toolbar button:hover { color: white; background: #252e3a; }
 @media (max-width: 520px) { .files-pane { grid-template-columns: 110px minmax(0, 1fr); } .file-icon { display: none; } .file-select { grid-template-columns: 1fr; } }
+/* The same compact rail when the companion column, not the window, is narrow: at a 25 % split the
+   150 px rail otherwise leaves the preview about 100 px. */
+@container (max-width: 520px) { .files-pane { grid-template-columns: 110px minmax(0, 1fr); } .file-icon { display: none; } .file-select { grid-template-columns: 1fr; } }
 </style>
