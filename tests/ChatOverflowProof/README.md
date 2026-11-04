@@ -27,4 +27,4 @@ It checks workspace and shared-session views at 1280, 1440, 1920 and 390 px, exp
 output, asserts document and conversation scrollWidth <= clientWidth, and verifies both
 messages' code/table wrappers remain horizontally scrollable. Browser page errors fail it.
 `PHASE=before` records measurements without enforcing the corrected layout, for use with
-unchanged source. Screenshots and JSON go only to OUTPUT_DIR; never commit them.
+unchanged source. Screenshots and JSON go only to OUTPUT_DIR (or a uniquely created temporary directory when unset); never commit them.
