@@ -158,7 +158,7 @@ register('session_list', {
 }, async () => text(sanitizeSession(await client.listChildren())));
 
 register('session_wait', {
-  description: 'Poll a descendant session until Succeeded or Failed, or until timeout.',
+  description: 'Poll a descendant or a session shared with this session owner until Succeeded or Failed, or timeout.',
   inputSchema: z.object({
     id: z.string().min(1).max(128),
     timeoutMs: z.number().int().min(1).max(86_400_000).optional(),

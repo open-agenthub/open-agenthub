@@ -743,7 +743,7 @@ public sealed class InternalController : ControllerBase
         return Ok(all.Where(s => s.ParentSessionId == id).ToList());
     }
 
-    /// <summary>Gets a peer session if it is a descendant of this session (same owner).</summary>
+    /// <summary>Reads descendant status or sanitized status granted by named sharing.</summary>
     [HttpGet("peer/{childId}")]
     public async Task<IActionResult> GetPeer(string id, string childId, CancellationToken ct)
     {
@@ -967,9 +967,8 @@ public sealed class InternalController : ControllerBase
     }
 
     /// <summary>
-    /// Sends a message/task from this session to a peer agent: same owner, and either the same
-    /// (non-null) project or the session's own ancestor/descendant line — anything else answers
-    /// 404 so nothing about foreign sessions leaks.
+    /// Sends to the owned fleet or a named collaborator target. Denied targets answer 404 so
+    /// a session cannot distinguish an inaccessible target from a missing one.
     /// </summary>
     [HttpPost("messages")]
     public async Task<IActionResult> SendMessage(string id, [FromBody] SendAgentMessageRequest body, CancellationToken ct)
@@ -1001,7 +1000,7 @@ public sealed class InternalController : ControllerBase
         var message = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
-            ProjectId = rec.ProjectId,
+            ProjectId = crossOwner ? target.ProjectId : rec.ProjectId,
             FromSessionId = rec.Id,
             ToSessionId = target.Id,
             Owner = target.Owner,
@@ -1016,7 +1015,7 @@ public sealed class InternalController : ControllerBase
         // question/finished events to Slack/Telegram/n8n. The web app reads the message
         // itself from the public messages endpoint.
         await NotifyAllAsync(target, "agent-message",
-            $"Agent \"{rec.Title}\" sent a message to \"{target.Title}\": {Truncate(text, 300)}", ct);
+            $"Agent \"{message.FromTitle ?? rec.Title}\" sent a message to \"{target.Title}\": {Truncate(text, 300)}", ct);
         var delivery = await AgentMessageDispatch.PushAsync(_delivery,
             crossOwner ? null : all.FirstOrDefault(s => s.Id == target.Id), message, rec.Title, ct);
         return Ok(new AgentMessageSendResult(message.Id, target.Id, delivery.Via, delivery.Reason));

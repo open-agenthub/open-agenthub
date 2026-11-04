@@ -2,15 +2,22 @@ import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
+import os from 'node:os';
+import fs from 'node:fs';
 const require = createRequire(path.resolve(process.env.RUNTIME ?? '/opt/session-agent', 'package.json'));
 const sdk = name => import(pathToFileURL(require.resolve(`@modelcontextprotocol/sdk/${name}`)).href);
 const { Client } = await sdk('client/index.js');
 const { StdioClientTransport } = await sdk('client/stdio.js');
+const base = process.env.PROOF_URL ?? 'http://127.0.0.1:8408';
 const root = path.resolve(import.meta.dirname, '../..');
+// Match the runtime image's sibling layout without changing the checkout's dependency paths.
+const runtime = fs.mkdtempSync(path.join(os.tmpdir(), 'shared-sessions-proof-'));
+fs.cpSync(path.join(root, 'agent-runtime/sessions'), path.join(runtime, 'sessions'), { recursive: true });
+fs.symlinkSync(path.resolve(process.env.RUNTIME ?? '/opt/session-agent', 'node_modules'), path.join(runtime, 'node_modules'));
 async function connect(id) {
-  const transport = new StdioClientTransport({ command: 'node', args: [path.join(root, 'agent-runtime/sessions/server.mjs')],
+  const transport = new StdioClientTransport({ command: 'node', args: [path.join(runtime, 'sessions/server.mjs')],
     env: { ...process.env, AGENTHUB_SESSION_ID: id, AGENTHUB_CALLBACK_TOKEN: `proof-${id}`,
-      AGENTHUB_CALLBACK_URL: `http://127.0.0.1:8408/internal/sessions/${id}` }, stderr: 'inherit' });
+      AGENTHUB_CALLBACK_URL: `${base}/internal/sessions/${id}` }, stderr: 'inherit' });
   const client = new Client({name:'shared-session-proof',version:'1'});
   await client.connect(transport);
   return client;
@@ -21,9 +28,17 @@ const call = async (client, name, args = {}) => {
   const response = await client.callTool({ name, arguments: args });
   return { error: response.isError === true, value: JSON.parse(response.content[0].text) };
 };
-const role = async value => assert.equal((await fetch(`http://127.0.0.1:8408/__role/${value}`,{method:'POST'})).status,200);
+const role = async value => assert.equal((await fetch(`${base}/__role/${value}`,{method:'POST'})).status,200);
 try {
   await role('Viewer');
+  if (process.env.BASELINE === '1') {
+    assert(!(await call(a,'agents_list')).value.some(s=>s.id==='b'));
+    assert.equal((await call(a,'session_get',{id:'b'})).error,true);
+    await role('Collaborator');
+    assert.equal((await call(a,'agent_send',{to:'b',message:'baseline'})).error,true);
+    console.log('PASS baseline reproduces missing shared directory/status/message access');
+    process.exitCode = 0;
+  } else {
   const listed = await call(a,'agents_list');
   assert(listed.value.some(s=>s.id==='b'));
   const read = await call(a,'session_get',{id:'b'});
@@ -58,4 +73,5 @@ try {
   assert.equal((await call(a,'session_get',{id:'b'})).error,true);
   assert.equal((await call(a,'agent_send',{to:'b',message:'link'})).error,true);
   console.log('PASS bearer link grants no MCP access');
-} finally { await a.close(); await b.close(); }
+  }
+} finally { await a.close(); await b.close(); fs.rmSync(runtime, { recursive: true, force: true }); }

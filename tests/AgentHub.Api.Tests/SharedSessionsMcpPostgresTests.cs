@@ -1,3 +1,4 @@
+using AgentHub.Api.Files;
 using System.Reflection;
 using System.Text.Json;
 using AgentHub.Api.Controllers;
@@ -72,6 +73,43 @@ public class SharedSessionsMcpPostgresTests
         Assert.IsType<NotFoundResult>(await controller.SendMessage("a", new("b", "unlicensed"), default));
     }
 
+    [PostgreSqlFact]
+    public async Task NamedRolesNeverAuthorizeForeignCallbackTools()
+    {
+        await using var db = await Setup();
+        foreach (var role in new[] { ShareRole.Viewer, ShareRole.Collaborator })
+        {
+            await db.Shares.UpsertDirectAsync("bob", "b", "alice", role);
+            var caller = Controller(db, "a");
+            Assert.IsType<UnauthorizedResult>(await caller.Spawn("b", new(), default));
+            Assert.IsType<UnauthorizedResult>((await caller.ClearContext("b", new("continue"), default)).Result);
+            Assert.IsType<UnauthorizedResult>(await caller.Secrets("b", default));
+            Assert.IsType<UnauthorizedResult>(await caller.CreateSecretRequest("b", new("key", "file", "proof"), default));
+            Assert.IsType<UnauthorizedResult>(await caller.GetSecretRequest("b", "request", default));
+            Assert.IsType<UnauthorizedResult>(await caller.ExpireSecretRequest("b", "request", default));
+            Assert.IsType<UnauthorizedResult>(await caller.InboxMessages("b", default));
+            var containers = new SessionContainersController(new AgentCallbackAuthorizer(db.Sessions), null!)
+            { ControllerContext = caller.ControllerContext };
+            Assert.IsType<UnauthorizedResult>(await containers.List("b", default));
+            Assert.IsType<UnauthorizedResult>(await containers.Run("b", new("db", "example.com/image", null, null,
+                null, null, null, null, null, null), default));
+            Assert.IsType<UnauthorizedResult>(await containers.Logs("b", "db", null, null, default));
+            Assert.IsType<UnauthorizedResult>(await containers.Stop("b", "db", default));
+        }
+    }
+
+    [PostgreSqlFact]
+    public async Task AuditFailureRollsBackTheMessage()
+    {
+        await using var db = await Setup();
+        await db.Shares.UpsertDirectAsync("bob", "b", "alice", ShareRole.Collaborator);
+        await db.ExecuteAsync("ALTER TABLE cross_owner_message_audit ADD CONSTRAINT proof_reject CHECK (sender_owner <> 'alice')");
+        await Assert.ThrowsAsync<Npgsql.PostgresException>(() =>
+            Controller(db, "a").SendMessage("a", new("b", "must roll back"), default));
+        Assert.Equal(0L, await db.ScalarAsync<long>("SELECT count(*) FROM session_messages"));
+        Assert.Equal(0L, await db.ScalarAsync<long>("SELECT count(*) FROM cross_owner_message_audit"));
+    }
+
     private static async Task AssertManagementDenied(InternalController controller)
     {
         Assert.IsType<NotFoundResult>(await controller.DeletePeer("a", "b", default));
@@ -88,6 +126,7 @@ public class SharedSessionsMcpPostgresTests
         await db.AddUserAsync("alice");
         await db.AddUserAsync("bob");
         await new PostgresSessionMessageStore(db.Configuration).InitializeAsync();
+        await new PostgresSecretRequestStore(db.Configuration).InitializeAsync();
         return db;
     }
 
@@ -96,6 +135,7 @@ public class SharedSessionsMcpPostgresTests
         var service = DispatchProxy.Create<ISessionService, EmptySessionService>();
         var controller = new InternalController(db.Sessions, [], service, null!, [], [], null!, null!,
             messages: new PostgresSessionMessageStore(db.Configuration),
+            secretRequests: new PostgresSecretRequestStore(db.Configuration),
             access: new SessionAccessService(db.Shares, new FakeEnterpriseLicense(licensed)),
             sharing: new SessionSharingService(db.Shares, new FakeEnterpriseLicense(licensed), null))
         { ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() } };

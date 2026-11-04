@@ -98,6 +98,7 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
 
     public async Task AddAsync(SessionMessageRecord m, CancellationToken ct = default)
     {
+        // One statement makes an audit failure roll back the message instead of delivering unaudited work.
         const string sql = """
             WITH inserted AS (
                 INSERT INTO session_messages (id, project_id, from_session_id, to_session_id, owner, body, created_at, delivered_at, priority, interrupt, delivered_via, from_owner, from_title)
