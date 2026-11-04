@@ -187,7 +187,7 @@ public class SessionAccessTests
     {
         var source = new FakeAccessStore
         {
-            UserAccess = new StoredSessionAccess(Session("owner-1"), null)
+            UserAccess = new StoredSessionAccess(Session("owner-1"), (ShareRole?)null)
         };
         var service = new SessionAccessService(source, new FakeLicense(enabled: false));
 

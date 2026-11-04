@@ -95,18 +95,26 @@ public sealed class SessionSharingService(
     {
         RequireLicense();
         var stored = await store.ListSharedWithAsync(recipient, ct);
-        var result = new List<SharedSessionInfo>(stored.Count);
+        var resolved = new List<SessionAccessResult>(stored.Count);
         foreach (var access in stored)
         {
-            // The query already excludes the recipient's own sessions, so "owns" is false here;
-            // the level comes from the stored role alone, exactly as SessionAccessService resolves
-            // a single session.
-            var level = SessionAccessRules.Resolve(owns: false, access.Role);
-            if (level == SessionAccessLevel.None) continue;
-            result.Add(SharedSessionSanitizer.Sanitize(
-                new SessionAccessResult(access.Session, level, access.Session.Owner)));
+            // The query already excludes the recipient's own sessions, so this is the recipient
+            // half of exactly the decision SessionAccessService makes for a single session.
+            if (SessionAccessRules.ForRecipient(access.Session, access.Grants) is { } result)
+                resolved.Add(result);
         }
-        return result;
+
+        var visible = resolved.Select(access => access.Session.Id).ToHashSet(StringComparer.Ordinal);
+        return resolved
+            .Select(access => SharedSessionSanitizer.Sanitize(access) with
+            {
+                // A child that is shared on its own can still be nested under a parent that is
+                // shared too; one whose parent the recipient cannot open shows no parent id.
+                ParentSessionId = access.Session.ParentSessionId is { } parent && visible.Contains(parent)
+                    ? parent
+                    : null
+            })
+            .ToArray();
     }
 
     public Task<DirectSessionShare> ShareWithUserAsync(string owner, string sessionId, string recipient, ShareRole role, CancellationToken ct = default)

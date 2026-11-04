@@ -9,7 +9,22 @@ using AgentHub.Api.Persistence;
 
 namespace AgentHub.Api.Ee.Sharing;
 
-public sealed record StoredSessionAccess(SessionRecord Session, ShareRole? Role);
+/// <summary>A session and every grant the store found for one principal on it — its own share or
+/// link and, for a principal, the direct shares up its parentSessionId chain. Which grant wins is
+/// decided by <see cref="SessionAccessRules"/>, not here.</summary>
+public sealed record StoredSessionAccess(SessionRecord Session, IReadOnlyList<ShareGrant> Grants)
+{
+    /// <summary>A session with at most one grant, on the session itself.</summary>
+    public StoredSessionAccess(SessionRecord session, ShareRole? role)
+        : this(session, role is { } value
+            ? [new ShareGrant(value, ShareGrantScope.Session, session.Id)]
+            : Array.Empty<ShareGrant>())
+    {
+    }
+
+    /// <summary>The grant on the session itself, ignoring inherited ones; not the effective role.</summary>
+    public ShareRole? Role => Grants.FirstOrDefault(grant => grant.Scope == ShareGrantScope.Session)?.Role;
+}
 
 public interface ISessionAccessStore
 {
@@ -59,13 +74,12 @@ public sealed class SessionAccessService(ISessionAccessStore store, IEnterpriseL
             return null;
 
         var owns = string.Equals(stored.Session.Owner, principal, StringComparison.Ordinal);
-        if (!owns && !license.Enabled)
+        if (owns)
+            return new SessionAccessResult(stored.Session, SessionAccessLevel.Owner, null);
+        if (!license.Enabled)
             return null;
 
-        var level = SessionAccessRules.Resolve(owns, stored.Role);
-        return level == SessionAccessLevel.None
-            ? null
-            : new SessionAccessResult(stored.Session, level, owns ? null : stored.Session.Owner);
+        return SessionAccessRules.ForRecipient(stored.Session, stored.Grants);
     }
 
     public async Task<SessionAccessResult?> ResolveTokenAsync(
@@ -78,13 +92,7 @@ public sealed class SessionAccessService(ISessionAccessStore store, IEnterpriseL
             return null;
 
         var stored = await store.FindTokenAccessAsync(token, ct);
-        if (stored is null)
-            return null;
-
-        var level = SessionAccessRules.Resolve(false, stored.Role);
-        return level == SessionAccessLevel.None
-            ? null
-            : new SessionAccessResult(stored.Session, level, stored.Session.Owner);
+        return stored is null ? null : SessionAccessRules.ForRecipient(stored.Session, stored.Grants);
     }
 
     public async Task<SessionAccessResult?> ResolveTokenReadOnlyAsync(
@@ -94,11 +102,6 @@ public sealed class SessionAccessService(ISessionAccessStore store, IEnterpriseL
         if (string.IsNullOrWhiteSpace(token) || !license.Enabled)
             return null;
         var stored = await store.FindTokenAccessReadOnlyAsync(token, ct);
-        if (stored is null)
-            return null;
-        var level = SessionAccessRules.Resolve(false, stored.Role);
-        return level == SessionAccessLevel.None
-            ? null
-            : new SessionAccessResult(stored.Session, level, stored.Session.Owner);
+        return stored is null ? null : SessionAccessRules.ForRecipient(stored.Session, stored.Grants);
     }
 }
