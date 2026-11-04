@@ -13,6 +13,10 @@ on:
     - cron: "23 3 * * *"
   workflow_dispatch:
     inputs:
+      prove_postgres_startup:
+        description: "Capture bundled database first-start termination and signal permissions"
+        type: boolean
+        default: false
       prove_storage_egress:
         description: "Prove session storage egress isolation under real NetworkPolicy"
         type: boolean
@@ -111,6 +115,12 @@ jobs:
       - name: Install
         run: sh /tmp/install.sh
 
+      - name: Prove bundled database first startup
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.prove_postgres_startup
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: bash tests/PostgresStartupProof/prove.sh
+
       - name: Verify running image identities
         env:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
@@ -154,6 +164,9 @@ jobs:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: |
           kubectl -n agenthub get all,pvc,events || true
+          kubectl -n agenthub get pods -o json || true
+          kubectl -n agenthub logs postgres-0 --previous --timestamps || true
+          sudo journalctl -k --no-pager | tail -200 || true
           for p in $(kubectl -n agenthub get pods -o name 2>/dev/null); do
             echo "::group::$p"; kubectl -n agenthub describe "$p" | tail -30
             kubectl -n agenthub logs "$p" --all-containers --tail=100 || true; echo "::endgroup::"
