@@ -46,6 +46,10 @@ try {
   assert.equal(read.value.owner,'bob');
   assert.equal(read.value.accessRole,'Viewer');
   assert.equal(read.value.mcpConfigJson,undefined);
+  const waited = await call(a,'session_wait',{id:'b',timeoutMs:1,intervalMs:1});
+  assert.equal(waited.error,false);
+  assert.equal(waited.value.id,'b');
+  assert.equal(waited.value.phase,'Paused');
   assert.equal((await call(a,'agent_send',{to:'b',message:'viewer denied'})).error,true);
   for (const [name,args] of [['session_delete',{id:'b'}],['session_convert',{sessionId:'b'}],['account_status',{sessionId:'b'}]])
     assert.equal((await call(a,name,args)).error,true);

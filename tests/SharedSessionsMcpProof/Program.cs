@@ -19,7 +19,7 @@ builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
 builder.Services.AddSingleton<ISessionMessageStore, PostgresSessionMessageStore>();
 builder.Services.AddSingleton<ISessionSharingService>(s => new SessionSharingService(
     s.GetRequiredService<SessionShareStore>(), s.GetRequiredService<IEnterpriseLicense>(), null));
-builder.Services.AddSingleton<InternalController>(s => new InternalController(
+builder.Services.AddTransient<InternalController>(s => new InternalController(
     s.GetRequiredService<PostgresSessionStore>(), [], DispatchProxy.Create<ISessionService, EmptyService>(),
     null!, [], [], null!, null!, messages: s.GetRequiredService<ISessionMessageStore>(),
     access: s.GetRequiredService<ISessionAccessService>(), sharing: s.GetRequiredService<ISessionSharingService>()));

@@ -992,9 +992,12 @@ public sealed class InternalController : ControllerBase
         // A collaborator may queue work, but must not interrupt another owner's running turn.
         if (crossOwner && (body.Priority == true || body.Interrupt == true))
             return BadRequest("Shared sessions accept normal-priority messages only.");
-        var all = await _svc.ListSessionsAsync(rec.Owner, ct);
-        var parentOf = ParentLookup(rec, all);
-        if (!crossOwner && !IsFleetPeer(rec, target.Id, target.ProjectId, parentOf)) return NotFound();
+        IReadOnlyList<SessionInfo> all = [];
+        if (!crossOwner)
+        {
+            all = await _svc.ListSessionsAsync(rec.Owner, ct);
+            if (!IsFleetPeer(rec, target.Id, target.ProjectId, ParentLookup(rec, all))) return NotFound();
+        }
 
         var (priority, interrupt) = AgentMessaging.ResolveFlags(body.Priority, body.Interrupt);
         var message = new SessionMessageRecord
