@@ -5,6 +5,10 @@ through the existing sharing service and resolves each through ISessionAccessSer
 Reads and sends resolve user access on every request, so revocation applies to the next call.
 Bearer links are never consulted. Inherited access uses the same access service as the web UI.
 The owned project/ancestor/descendant scope continues to govern same-owner orchestration.
+Project shares (#409) arrive the same way, with no MCP-specific code: a session in a project
+shared with the caller's owner, or with one of their groups, is listed, read and messaged with the
+role the project share gives, and leaves the directory on the next call once the share is removed
+(`ProjectGrants_ReachTheMcpTools_ThroughTheSameDecision`).
 
 Viewers may discover sessions and read sanitized status. Collaborators may also queue normal
 messages. Cross-owner priority and interrupt are rejected: a grant to collaborate should not
