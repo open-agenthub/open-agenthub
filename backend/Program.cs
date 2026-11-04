@@ -119,6 +119,8 @@ builder.Services.AddSingleton<ISessionSharingService>(sp => new SessionSharingSe
     sp.GetRequiredService<ISessionShareStore>(),
     sp.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>(),
     builder.Configuration["FrontendOrigin"]));
+builder.Services.AddSingleton<IProjectShareStore>(sp => sp.GetRequiredService<SessionShareStore>());
+builder.Services.AddSingleton<IProjectSharingService, ProjectSharingService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
