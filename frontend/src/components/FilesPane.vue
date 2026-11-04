@@ -266,7 +266,7 @@ async function download(file) {
 .file-name strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .file-name small { color: #738094; font: 9px var(--mono); }
 .empty { padding: 18px 12px; color: #738094; font-size: 11px; line-height: 1.5; }
-.file-main { min-width: 0; min-height: 0; display: grid; grid-template-rows: 34px minmax(0, 1fr); }
+.file-main { min-width: 0; min-height: 0; display: grid; grid-template-rows: 34px minmax(0, 1fr); grid-template-columns: minmax(0, 1fr); }
 .file-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 0 10px; border-bottom: 1px solid #29303a; background: #171c24; color: #aeb8c8; font: 10px var(--mono); }
 .toolbar-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .download-error { min-width: 0; margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--danger); }

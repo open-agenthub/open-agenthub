@@ -189,7 +189,9 @@ onBeforeUnmount(() => { generation += 1; releaseUrl() })
 .preview-state strong { color: #dce5f1; font-size: 13px; }
 .preview-state a { margin-top: 6px; padding: 8px 12px; border: 1px solid #354255; border-radius: 8px; color: var(--accent); text-decoration: none; }
 .preview-state.error { color: var(--danger); }
-.document { width: 100%; max-width: 860px; margin: 0 auto; padding: 30px 36px 60px; color: #d6deea; }
+/* min-width: 0 lets the document narrow below a table's min-content, so the table's own
+   .md-table wrapper scrolls instead of the whole preview. */
+.document { min-width: 0; width: 100%; max-width: 860px; margin: 0 auto; padding: 30px 36px 60px; color: #d6deea; }
 .document pre { margin: 0; white-space: pre-wrap; word-break: break-word; font: 12.5px/1.65 var(--mono); }
 .md :deep(p), .md :deep(ul), .md :deep(ol) { margin: 0 0 10px; }
 .md :deep(h3), .md :deep(h4), .md :deep(h5) { margin: 20px 0 10px; color: #f2f6fb; }
