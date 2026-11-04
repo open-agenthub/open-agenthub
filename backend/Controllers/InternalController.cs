@@ -743,19 +743,22 @@ public sealed class InternalController : ControllerBase
         return Ok(all.Where(s => s.ParentSessionId == id).ToList());
     }
 
-    /// <summary>Reads descendant status or sanitized status granted by named sharing.</summary>
+    /// <summary>Reads owned fleet status or sanitized status granted by named sharing.</summary>
     [HttpGet("peer/{childId}")]
     public async Task<IActionResult> GetPeer(string id, string childId, CancellationToken ct)
     {
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
+        var fleet = await OwnedFleetAsync(rec, ct);
+        if (fleet.Any(s => s.Id == childId))
+        {
+            var info = await _svc.GetSessionAsync(rec.Owner, childId, ct);
+            return info is null ? NotFound() : Ok(info);
+        }
+        if (await _store.GetAsync(rec.Owner, childId, ct) is not null) return NotFound();
         var shared = _access is null ? null : await _access.ResolveUserAsync(rec.Owner, childId, ct);
-        if (shared is not null && shared.Session.Owner != rec.Owner)
-            return Ok(SharedSessionSanitizer.Sanitize(shared));
-        if (!await IsDescendantPeerAsync(rec, childId, ct)) return NotFound();
-
-        var info = await _svc.GetSessionAsync(rec.Owner, childId, ct);
-        return info is null ? NotFound() : Ok(info);
+        return shared is not null && shared.Session.Owner != rec.Owner
+            ? Ok(SharedSessionSanitizer.Sanitize(shared)) : NotFound();
     }
 
     /// <summary>Deletes a peer session if it is a descendant of this session (same owner).</summary>
@@ -865,11 +868,9 @@ public sealed class InternalController : ControllerBase
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
 
-        var all = await _svc.ListSessionsAsync(rec.Owner, ct);
-        var parentOf = ParentLookup(rec, all);
-        var scope = all.Where(s => s.Id == rec.Id || IsFleetPeer(rec, s.Id, s.ProjectId, parentOf));
+        var scope = await OwnedFleetAsync(rec, ct);
         var result = scope.Select(s => new ProjectAgentInfo(s.Id, s.Title, s.Description, s.Phase, s.Mode,
-            s.Agent, s.QuestionPending, s.CreatedAt, Self: s.Id == rec.Id)).ToList();
+            s.Agent, s.QuestionPending, s.CreatedAt, Self: s.Id == rec.Id, Owner: rec.Owner)).ToList();
         if (_sharing is not null && _access is not null)
         {
             IReadOnlyList<SharedSessionInfo> candidates;
@@ -887,6 +888,15 @@ public sealed class InternalController : ControllerBase
             }
         }
         return Ok(result);
+    }
+
+    // Read, send and discovery must use the same owned records: the sharing projection omits
+    // ProjectId, which made a listed project peer fail authorization while children still worked.
+    private async Task<IReadOnlyList<SessionInfo>> OwnedFleetAsync(SessionRecord self, CancellationToken ct)
+    {
+        var all = await _svc.ListSessionsAsync(self.Owner, ct);
+        var parentOf = ParentLookup(self, all);
+        return all.Where(s => s.Id == self.Id || IsFleetPeer(self, s.Id, s.ProjectId, parentOf)).ToList();
     }
 
     // Peers are the sessions of the same project plus the session's own line: its ancestors and
@@ -983,8 +993,10 @@ public sealed class InternalController : ControllerBase
         var to = body.To?.Trim();
         if (string.IsNullOrEmpty(to)) return BadRequest("A target session id is required.");
         if (to == id) return BadRequest("A session cannot message itself.");
-        var access = _access is null ? null : await _access.ResolveUserAsync(rec.Owner, to, ct);
-        var target = access?.Session ?? await _store.GetAsync(rec.Owner, to, ct);
+        var owned = await _store.GetAsync(rec.Owner, to, ct);
+        var access = owned is null && _access is not null
+            ? await _access.ResolveUserAsync(rec.Owner, to, ct) : null;
+        var target = owned ?? access?.Session;
         if (target is null) return NotFound();
         var crossOwner = target.Owner != rec.Owner;
         if (crossOwner && (access is null || !SessionAccessRules.CanWriteTerminal(access.Level)))
@@ -995,8 +1007,8 @@ public sealed class InternalController : ControllerBase
         IReadOnlyList<SessionInfo> all = [];
         if (!crossOwner)
         {
-            all = await _svc.ListSessionsAsync(rec.Owner, ct);
-            if (!IsFleetPeer(rec, target.Id, target.ProjectId, ParentLookup(rec, all))) return NotFound();
+            all = await OwnedFleetAsync(rec, ct);
+            if (!all.Any(s => s.Id == target.Id)) return NotFound();
         }
 
         var (priority, interrupt) = AgentMessaging.ResolveFlags(body.Priority, body.Interrupt);

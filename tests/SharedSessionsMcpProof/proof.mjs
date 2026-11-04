@@ -31,6 +31,25 @@ const call = async (client, name, args = {}) => {
 };
 const role = async value => assert.equal((await fetch(`${base}/__role/${value}`,{method:'POST'})).status,200);
 try {
+  if (process.env.BASELINE !== '1') {
+    await role('none');
+    const listed = (await call(a, 'agents_list')).value.filter(s => !s.self);
+    assert.deepEqual(listed.map(s => s.id).sort(), ['child', 'parent', 'peer', 'sibling']);
+    for (const target of listed) {
+      assert.equal(target.owner, 'alice');
+      assert.equal((await call(a, 'agent_send', { to: target.id, message: `fleet-${target.id}` })).error, false, `send ${target.id}`);
+      assert.equal((await call(a, 'session_get', { id: target.id })).error, false, `read ${target.id}`);
+      const recipient = await connect(target.id);
+      try {
+        assert((await call(recipient, 'agent_inbox')).value.messages.some(m => m.body === `fleet-${target.id}`));
+      } finally { await recipient.close(); }
+    }
+    for (const id of ['outside', 'missing']) {
+      assert.equal((await call(a, 'agent_send', { to: id, message: 'denied' })).error, true);
+      assert.equal((await call(a, 'session_get', { id })).error, true);
+    }
+    console.log('PASS every listed owned peer/parent/child/sibling is sendable/readable; outside and missing denied; real inbox delivery');
+  }
   await role('Viewer');
   if (process.env.BASELINE === '1') {
     assert(!(await call(a,'agents_list')).value.some(s=>s.id==='b'));
