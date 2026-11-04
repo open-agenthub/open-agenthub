@@ -143,7 +143,7 @@ watch([() => props.items, () => props.pending, query], async () => {
 .pending-actions button { padding: 3px 9px; border-radius: 8px; font-size: 11px; }
 .pending-note { color: var(--muted-3); font-size: 11px; }
 .message-time { margin-left: 8px; font-weight: 400; color: var(--muted-3); cursor: default; }
-.message pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
+.message > pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }
 .message-terminal pre { font: 12px/1.6 var(--mono); }
 .empty { text-align: center; color: var(--muted-3); padding: 36px 16px; font-size: 13px; }
 .empty-symbol { display: block; color: var(--accent); font-size: 36px; margin: 24px 0 16px; }

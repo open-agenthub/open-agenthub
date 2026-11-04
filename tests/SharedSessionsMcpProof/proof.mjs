@@ -24,6 +24,7 @@ async function connect(id) {
 }
 const a = await connect('a');
 const b = await connect('b');
+const child = process.env.BASELINE === '1' ? null : await connect('b-child');
 const call = async (client, name, args = {}) => {
   const response = await client.callTool({ name, arguments: args });
   return { error: response.isError === true, value: JSON.parse(response.content[0].text) };
@@ -53,6 +54,13 @@ try {
   assert.equal((await call(a,'agent_send',{to:'b',message:'viewer denied'})).error,true);
   for (const [name,args] of [['session_delete',{id:'b'}],['session_convert',{sessionId:'b'}],['account_status',{sessionId:'b'}]])
     assert.equal((await call(a,name,args)).error,true);
+  if (child) {
+    assert(listed.value.some(s=>s.id==='b-child'));
+    const status = await call(a,'session_get',{id:'b-child'});
+    assert.equal(status.error,false);
+    assert.equal(status.value.accessRole,'Viewer');
+    assert.equal((await call(a,'agent_send',{to:'b-child',message:'viewer denied'})).error,true);
+  }
   console.log('PASS viewer list/read; send and management denied');
   await role('Collaborator');
   for(const flag of ['priority','interrupt']) assert.equal((await call(a,'agent_send',{to:'b',message:'flag denied',[flag]:true})).error,true);
@@ -67,15 +75,31 @@ try {
   assert.equal(received.fromTitle,'Agent A (owner: alice)');
   assert.equal(received.from,'a');
   console.log('PASS collaborator A -> B real stdio/HTTP/Postgres inbox with sender owner/title');
+  if (child) {
+    assert.equal((await call(a,'agent_send',{to:'b-child',message})).error,false);
+    const childInbox = await call(child,'agent_inbox');
+    assert(childInbox.value.messages.some(m=>m.body===message && m.fromOwner==='alice'));
+    console.log('PASS inherited child directory/read/viewer denial/collaborator message');
+  }
   await role('none');
   assert(!(await call(a,'agents_list')).value.some(s=>s.id==='b'));
   assert.equal((await call(a,'session_get',{id:'b'})).error,true);
   assert.equal((await call(a,'agent_send',{to:'b',message:'revoked'})).error,true);
+  if (child) {
+    assert(!(await call(a,'agents_list')).value.some(s=>s.id==='b-child'));
+    assert.equal((await call(a,'session_get',{id:'b-child'})).error,true);
+    assert.equal((await call(a,'agent_send',{to:'b-child',message:'revoked'})).error,true);
+  }
   console.log('PASS revoked share immediately denies list/read/send');
   await role('link');
   assert(!(await call(a,'agents_list')).value.some(s=>s.id==='b'));
   assert.equal((await call(a,'session_get',{id:'b'})).error,true);
   assert.equal((await call(a,'agent_send',{to:'b',message:'link'})).error,true);
+  if (child) {
+    assert(!(await call(a,'agents_list')).value.some(s=>s.id==='b-child'));
+    assert.equal((await call(a,'session_get',{id:'b-child'})).error,true);
+    assert.equal((await call(a,'agent_send',{to:'b-child',message:'link'})).error,true);
+  }
   console.log('PASS bearer link grants no MCP access');
   }
-} finally { await a.close(); await b.close(); fs.rmSync(runtime, { recursive: true, force: true }); }
+} finally { await a.close(); await b.close(); await child?.close(); fs.rmSync(runtime, { recursive: true, force: true }); }

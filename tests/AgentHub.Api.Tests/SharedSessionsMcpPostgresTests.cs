@@ -133,6 +133,45 @@ public class SharedSessionsMcpPostgresTests
         }
     }
 
+    [PostgreSqlFact]
+    public async Task InheritedChildRolesUseTheSameDecisionForDirectoryReadSendAndLiveRevocation()
+    {
+        await using var db = await Setup();
+        await db.AddSessionAsync("bob", "c");
+        var child = (await db.GetSessionAsync("bob", "c"))!;
+        child.ParentSessionId = "b";
+        await db.UpsertSessionAsync(child);
+        var caller = Controller(db, "a");
+        await db.Shares.UpsertDirectAsync("bob", "b", "alice", ShareRole.Viewer);
+        var directory = Assert.IsType<OkObjectResult>(await caller.ProjectAgents("a", default));
+        Assert.Contains(Assert.IsAssignableFrom<IEnumerable<ProjectAgentInfo>>(directory.Value),
+            s => s.Id == "c" && s.AccessRole == "Viewer");
+        var status = Assert.IsType<SharedSessionInfo>(Assert.IsType<OkObjectResult>(
+            await caller.GetPeer("a", "c", default)).Value);
+        Assert.Equal("Viewer", status.AccessRole);
+        Assert.IsType<NotFoundResult>(await caller.SendMessage("a", new("c", "viewer"), default));
+        Assert.IsType<NotFoundResult>(await caller.DeletePeer("a", "c", default));
+        Assert.IsType<NotFoundResult>(await caller.ConvertPeer("a", "c", new(), default));
+
+        // A direct viewer grant must not mask the stronger collaborator grant inherited live.
+        await db.Shares.UpsertDirectAsync("bob", "c", "alice", ShareRole.Viewer);
+        await db.Shares.UpsertDirectAsync("bob", "b", "alice", ShareRole.Collaborator);
+        Assert.IsType<OkObjectResult>(await caller.SendMessage("a", new("c", "collaborator"), default));
+        Assert.Equal(1L, await db.ScalarAsync<long>("SELECT count(*) FROM cross_owner_message_audit WHERE recipient_session_id='c'"));
+        await db.Shares.DeleteDirectAsync("bob", "b", "alice");
+        status = Assert.IsType<SharedSessionInfo>(Assert.IsType<OkObjectResult>(
+            await caller.GetPeer("a", "c", default)).Value);
+        Assert.Equal("Viewer", status.AccessRole);
+        Assert.IsType<NotFoundResult>(await caller.SendMessage("a", new("c", "downgraded"), default));
+        await db.Shares.DeleteDirectAsync("bob", "c", "alice");
+        Assert.IsType<NotFoundResult>(await caller.GetPeer("a", "c", default));
+        directory = Assert.IsType<OkObjectResult>(await caller.ProjectAgents("a", default));
+        Assert.DoesNotContain(Assert.IsAssignableFrom<IEnumerable<ProjectAgentInfo>>(directory.Value), s => s.Id == "c");
+        await db.Shares.CreateLinkAsync("bob", "b", ShareRole.Collaborator, null);
+        Assert.IsType<NotFoundResult>(await caller.GetPeer("a", "c", default));
+        Assert.IsType<NotFoundResult>(await caller.SendMessage("a", new("c", "link"), default));
+    }
+
     private static async Task AssertManagementDenied(InternalController controller)
     {
         Assert.IsType<NotFoundResult>(await controller.DeletePeer("a", "b", default));

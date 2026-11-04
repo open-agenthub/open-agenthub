@@ -18,6 +18,8 @@ export function detectAlerts(prev, next) {
   for (const s of next) {
     const old = before.get(s.id)
     if (!old) continue
+    // A viewer cannot answer, so a question alert would ask them for something they cannot do.
+    if (s.accessRole === 'Viewer' && !(old.phase !== s.phase && Object.hasOwn(TERMINAL, s.phase))) continue
     if (!old.questionOpen && s.questionOpen) alerts.push({ id: s.id, title: s.title, kind: 'question', ...(s.questionTitle ? { question: s.questionTitle } : {}) })
     else if (!old.questionPending && s.questionPending && !s.questionOpen) alerts.push({ id: s.id, title: s.title, kind: 'question' })
     else if (old.phase !== s.phase && Object.hasOwn(TERMINAL, s.phase)) alerts.push({ id: s.id, title: s.title, kind: TERMINAL[s.phase] })

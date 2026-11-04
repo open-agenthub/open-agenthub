@@ -4,7 +4,9 @@ This host runs the production InternalController, callback-token authorizer, acc
 services and Postgres stores. Two synthetic owners each have a session. The Node driver starts
 two copies of the real sessions stdio MCP and sends A's message to B's inbox. It checks viewer
 reads, collaborator sends and attribution, priority/interrupt denial, management denials,
-revocation and link-only denial. The Postgres suite additionally checks the atomic audit row.
+revocation and link-only denial, for both the named target and its inherited child. The Postgres
+suite additionally checks atomic auditing, audit cleanup, strongest-grant precedence and live
+downgrade from inherited collaborator to direct viewer.
 
 The ISessionService fixture returns an empty owned-session list and rejects other operations.
 This isolates foreign-session authorization: it does not establish a running CLI, Kubernetes

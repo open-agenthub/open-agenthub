@@ -54,11 +54,39 @@ public enum SessionAccessLevel
     Owner
 }
 
+/// <summary>What a principal may do with a session, and on whose behalf.</summary>
+/// <param name="InheritedFrom">The ancestor whose share grants this access, when no grant on the
+/// session itself is at least as strong; null for the owner, a direct share and a link.</param>
 public sealed record SessionAccessResult(
     SessionRecord Session,
     SessionAccessLevel Level,
-    string? SharedBy);
+    string? SharedBy,
+    string? InheritedFrom = null);
 
+/// <summary>What a grant is attached to. Ordered from the most to the least specific: when two
+/// grants give the same role, the more specific one is reported as the reason.</summary>
+public enum ShareGrantScope
+{
+    /// <summary>A direct share or a link on the session itself.</summary>
+    Session,
+    /// <summary>A direct share on a session up the parentSessionId chain (#410).</summary>
+    Ancestor
+}
+
+/// <summary>One grant that could open a session for a principal; see <see cref="SessionAccessRules.Decide"/>.</summary>
+/// <param name="SessionId">The session the grant is stored on: the session itself, or the
+/// ancestor it is inherited from.</param>
+/// <param name="Depth">Steps up the chain to <paramref name="SessionId"/>; 0 on the session.</param>
+public sealed record ShareGrant(ShareRole Role, ShareGrantScope Scope, string SessionId, int Depth = 0);
+
+public sealed record SessionAccessDecision(SessionAccessLevel Level, ShareGrant? Via);
+
+/// <summary>
+/// The one place that turns grants into an access level. Every surface — the web API, the
+/// terminal and file proxies, the token API and the MCP tools — reaches it through
+/// <see cref="SessionAccessService"/> or <see cref="SessionSharingService"/>; the store only
+/// collects the candidate grants. Precedence is documented in <c>docs/session-sharing.md</c>.
+/// </summary>
 public static class SessionAccessRules
 {
     public static SessionAccessLevel Resolve(bool owns, ShareRole? role) => owns
@@ -69,6 +97,45 @@ public static class SessionAccessRules
             ShareRole.Viewer => SessionAccessLevel.Viewer,
             _ => SessionAccessLevel.None
         };
+
+    /// <summary>
+    /// Ownership wins outright. Otherwise the strongest role among all grants applies, wherever it
+    /// is attached: a child shared as Viewer under a parent shared as Collaborator is opened as
+    /// Collaborator, and a child shared as Collaborator under a Viewer parent likewise. A grant
+    /// can widen access but never narrow it, so no grant anywhere has to be checked for a
+    /// "deny" — revoking is removing a grant. Among equally strong grants the most specific
+    /// (own session before an ancestor, the nearer ancestor first) is reported as <c>Via</c>.
+    /// </summary>
+    public static SessionAccessDecision Decide(bool owns, IEnumerable<ShareGrant> grants)
+    {
+        if (owns)
+            return new SessionAccessDecision(SessionAccessLevel.Owner, null);
+
+        ShareGrant? best = null;
+        var bestLevel = SessionAccessLevel.None;
+        foreach (var grant in grants
+                     .OrderBy(grant => grant.Scope)
+                     .ThenBy(grant => grant.Depth))
+        {
+            var level = Resolve(false, grant.Role);
+            if (level > bestLevel)
+            {
+                best = grant;
+                bestLevel = level;
+            }
+        }
+        return new SessionAccessDecision(bestLevel, best);
+    }
+
+    /// <summary>The access result for a non-owner, or null when no grant opens the session.</summary>
+    public static SessionAccessResult? ForRecipient(SessionRecord session, IEnumerable<ShareGrant> grants)
+    {
+        var decision = Decide(false, grants);
+        if (decision.Level == SessionAccessLevel.None)
+            return null;
+        var inheritedFrom = decision.Via is { Scope: not ShareGrantScope.Session } via ? via.SessionId : null;
+        return new SessionAccessResult(session, decision.Level, session.Owner, inheritedFrom);
+    }
 
     public static bool CanWriteTerminal(SessionAccessLevel level)
         => level is SessionAccessLevel.Collaborator or SessionAccessLevel.Owner;
@@ -212,6 +279,11 @@ public sealed record SharedSessionInfo
     public IReadOnlyList<string> RepositoryUrls { get; init; } = [];
     public required string AccessRole { get; init; }
     public string? SharedBy { get; init; }
+    /// <summary>Set only when the recipient can open the parent as well, so a child is nested
+    /// under it in the recipient's list without naming a session they cannot see.</summary>
+    public string? ParentSessionId { get; init; }
+    /// <summary>The ancestor whose share opens this session (#410); null for a direct share.</summary>
+    public string? InheritedFrom { get; init; }
     public bool CanWrite { get; init; }
     public bool CanManage { get; init; }
     public bool CanShell { get; init; }
@@ -240,6 +312,10 @@ public static class SharedSessionSanitizer
             RepositoryUrls = RepositoryUrls(session),
             AccessRole = access.Level.ToString(),
             SharedBy = access.SharedBy,
+            // Every session between the granting ancestor and this one is opened by the same
+            // grant, so for inherited access the parent is always visible to the recipient.
+            ParentSessionId = access.InheritedFrom is null ? null : session.ParentSessionId,
+            InheritedFrom = access.InheritedFrom,
             CanWrite = SessionAccessRules.CanWriteTerminal(access.Level),
             CanManage = access.Level == SessionAccessLevel.Owner,
             CanShell = access.Level == SessionAccessLevel.Owner,

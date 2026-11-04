@@ -36,6 +36,7 @@ await shares.InitializeAsync();
 await app.Services.GetRequiredService<ISessionMessageStore>().InitializeAsync();
 await sessions.UpsertAsync(new SessionRecord { Id = "a", Owner = "alice", Title = "Agent A", CallbackToken = "proof-a", Status = "Paused" });
 await sessions.UpsertAsync(new SessionRecord { Id = "b", Owner = "bob", Title = "Agent B", CallbackToken = "proof-b", Status = "Paused", McpConfigJson = "private" });
+await sessions.UpsertAsync(new SessionRecord { Id = "b-child", Owner = "bob", Title = "Agent B child", ParentSessionId = "b", CallbackToken = "proof-b-child", Status = "Paused" });
 app.MapControllers();
 // The fixture changes real grants; all MCP requests still use production callback authentication.
 app.MapPost("/__role/{role}", async (string role) => {
