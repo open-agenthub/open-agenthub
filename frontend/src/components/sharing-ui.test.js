@@ -4,6 +4,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import ProjectSidebar from './ProjectSidebar.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import SharedSessionView from './SharedSessionView.vue'
+import ProjectShareDialog from './ProjectShareDialog.vue'
 
 const apiMocks = vi.hoisted(() => ({
   getSharedSession: vi.fn(),
@@ -14,7 +15,8 @@ const apiMocks = vi.hoisted(() => ({
     updateShareLink: vi.fn(),
     createShareUser: vi.fn(), updateShareUser: vi.fn(), deleteShareUser: vi.fn(),
     createShareLink: vi.fn(), deleteShareLink: vi.fn(), updateMcpPolicy: vi.fn(),
-    createProject: vi.fn(), updateProject: vi.fn(), deleteProject: vi.fn()
+    createProject: vi.fn(), updateProject: vi.fn(), deleteProject: vi.fn(),
+    listProjectShares: vi.fn(), upsertProjectShare: vi.fn(), deleteProjectShare: vi.fn(), findProjectShareRecipients: vi.fn()
   }
 }))
 
@@ -76,5 +78,66 @@ describe('shared-session UI', () => {
     expect(wrapper.find('.session-stub').exists()).toBe(false)
     await wrapper.get('[data-toggle-group="p1"]').trigger('click')
     expect(wrapper.find('.session-stub').exists()).toBe(true)
+  })
+})
+
+describe('project sharing (#409)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMocks.api.listProjectShares.mockResolvedValue([
+      { subjectType: 'user', subject: 'bob', role: 'Viewer' },
+      { subjectType: 'group', subject: 'release-team', role: 'Collaborator' }
+    ])
+    apiMocks.api.findProjectShareRecipients.mockResolvedValue({ users: [], groups: ['release-team', 'ops'] })
+    apiMocks.api.upsertProjectShare.mockResolvedValue({})
+    apiMocks.api.deleteProjectShare.mockResolvedValue(null)
+  })
+
+  it('opens from the project controls and lists who has access', async () => {
+    const wrapper = mount(ProjectSidebar, {
+      props: { projects: [{ id: 'p1', name: 'Core', sortOrder: 0 }], sessions: [], active: null },
+      global: { stubs: { SessionList: true } }
+    })
+    await wrapper.get('[data-project-share-open="p1"]').trigger('click')
+    await flushPromises()
+
+    expect(apiMocks.api.listProjectShares).toHaveBeenCalledWith('p1')
+    expect(wrapper.get('[data-project-share-entry="user:bob"]').text()).toContain('bob')
+    expect(wrapper.get('[data-project-share-entry="group:release-team"]').text()).toContain('group')
+  })
+
+  it('adds one of the owner\'s groups, changes a role and removes a person', async () => {
+    const wrapper = mount(ProjectShareDialog, { props: { project: { id: 'p1', name: 'Core' } } })
+    await flushPromises()
+    expect(apiMocks.api.findProjectShareRecipients).toHaveBeenCalledWith('p1', '')
+
+    await wrapper.get('[data-project-share-kind]').setValue('group')
+    const ops = wrapper.findAll('[aria-label="Your groups"] button').find(button => button.text() === 'ops')
+    await ops.trigger('click')
+    await wrapper.get('[data-project-share-role]').setValue('Collaborator')
+    await wrapper.get('[data-project-share-add]').trigger('click')
+    await flushPromises()
+    expect(apiMocks.api.upsertProjectShare).toHaveBeenCalledWith('p1', { subjectType: 'group', subject: 'ops', role: 'Collaborator' })
+
+    await wrapper.get('[data-project-share-entry-role="user:bob"]').setValue('Collaborator')
+    await flushPromises()
+    expect(apiMocks.api.upsertProjectShare).toHaveBeenCalledWith('p1', { subjectType: 'user', subject: 'bob', role: 'Collaborator' })
+
+    await wrapper.get('[data-project-share-entry-role="user:bob"]').setValue('Remove')
+    await flushPromises()
+    expect(apiMocks.api.deleteProjectShare).toHaveBeenCalledWith('p1', 'user', 'bob')
+  })
+
+  it('shows the project\'s shares in the session dialog, read-only', async () => {
+    apiMocks.api.listSessionShares.mockResolvedValue({
+      users: [], links: [], mcpPolicy: null,
+      projectShares: [{ subjectType: 'group', subject: 'release-team', role: 'Viewer' }]
+    })
+    const wrapper = mount(ShareSessionDialog, { props: { session: { id: 's1', title: 'Owner session' } } })
+    await flushPromises()
+    const inherited = wrapper.get('[data-share-project-shares]')
+    expect(inherited.text()).toContain('release-team')
+    expect(inherited.text()).toContain('Viewer · via project')
+    expect(inherited.find('select').exists()).toBe(false)
   })
 })

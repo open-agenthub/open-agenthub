@@ -55,13 +55,17 @@ public enum SessionAccessLevel
 }
 
 /// <summary>What a principal may do with a session, and on whose behalf.</summary>
-/// <param name="InheritedFrom">The ancestor whose share grants this access, when no grant on the
-/// session itself is at least as strong; null for the owner, a direct share and a link.</param>
+/// <param name="InheritedFrom">The ancestor whose share — or whose project's share — grants this
+/// access, when no grant on the session itself is at least as strong; null for the owner, a direct
+/// share, a link and a share on the session's own project.</param>
+/// <param name="SharedViaProject">The name of the project whose share grants this access (#409);
+/// null when a share on a session does.</param>
 public sealed record SessionAccessResult(
     SessionRecord Session,
     SessionAccessLevel Level,
     string? SharedBy,
-    string? InheritedFrom = null);
+    string? InheritedFrom = null,
+    string? SharedViaProject = null);
 
 /// <summary>What a grant is attached to. Ordered from the most to the least specific: when two
 /// grants give the same role, the more specific one is reported as the reason.</summary>
@@ -70,14 +74,26 @@ public enum ShareGrantScope
     /// <summary>A direct share or a link on the session itself.</summary>
     Session,
     /// <summary>A direct share on a session up the parentSessionId chain (#410).</summary>
-    Ancestor
+    Ancestor,
+    /// <summary>A share on the project of the session or of one of its ancestors (#409). Least
+    /// specific: it names no session at all.</summary>
+    Project
 }
 
 /// <summary>One grant that could open a session for a principal; see <see cref="SessionAccessRules.Decide"/>.</summary>
 /// <param name="SessionId">The session the grant is stored on: the session itself, or the
 /// ancestor it is inherited from.</param>
 /// <param name="Depth">Steps up the chain to <paramref name="SessionId"/>; 0 on the session.</param>
-public sealed record ShareGrant(ShareRole Role, ShareGrantScope Scope, string SessionId, int Depth = 0);
+/// <param name="ProjectId">For <see cref="ShareGrantScope.Project"/>: the project the grant is
+/// stored on, which is the project of <paramref name="SessionId"/>.</param>
+/// <param name="ProjectName">That project's name, so a recipient can be told where access comes from.</param>
+public sealed record ShareGrant(
+    ShareRole Role,
+    ShareGrantScope Scope,
+    string SessionId,
+    int Depth = 0,
+    string? ProjectId = null,
+    string? ProjectName = null);
 
 public sealed record SessionAccessDecision(SessionAccessLevel Level, ShareGrant? Via);
 
@@ -104,7 +120,9 @@ public static class SessionAccessRules
     /// Collaborator, and a child shared as Collaborator under a Viewer parent likewise. A grant
     /// can widen access but never narrow it, so no grant anywhere has to be checked for a
     /// "deny" — revoking is removing a grant. Among equally strong grants the most specific
-    /// (own session before an ancestor, the nearer ancestor first) is reported as <c>Via</c>.
+    /// (own session before an ancestor, an ancestor before a project, the nearer one first) is
+    /// reported as <c>Via</c>. A project grant (#409) is one more candidate in the same contest,
+    /// so an explicit session share can add to a project's role but never take it away.
     /// </summary>
     public static SessionAccessDecision Decide(bool owns, IEnumerable<ShareGrant> grants)
     {
@@ -133,8 +151,12 @@ public static class SessionAccessRules
         var decision = Decide(false, grants);
         if (decision.Level == SessionAccessLevel.None)
             return null;
-        var inheritedFrom = decision.Via is { Scope: not ShareGrantScope.Session } via ? via.SessionId : null;
-        return new SessionAccessResult(session, decision.Level, session.Owner, inheritedFrom);
+        var via = decision.Via!;
+        // A project grant found on an ancestor reaches this session through that ancestor, as a
+        // session share on it would; one found on the session itself is inherited from nobody.
+        var inheritedFrom = via.Scope != ShareGrantScope.Session && via.Depth > 0 ? via.SessionId : null;
+        var project = via.Scope == ShareGrantScope.Project ? via.ProjectName : null;
+        return new SessionAccessResult(session, decision.Level, session.Owner, inheritedFrom, project);
     }
 
     public static bool CanWriteTerminal(SessionAccessLevel level)
@@ -242,10 +264,86 @@ public interface ISessionShareStatus
     Task<bool> IsSharedAsync(string sessionId, CancellationToken ct = default);
 }
 
+/// <summary>What the owner's sharing dialog shows for one session.</summary>
+/// <param name="ProjectShares">The shares on the session's project (#409). They open the session
+/// as well, and a share on the session can only add to them, so the dialog lists them beside its
+/// own.</param>
 public sealed record SessionSharingOverview(
     IReadOnlyList<DirectSessionShare> Users,
     IReadOnlyList<SessionShareLink> Links,
-    SessionMcpPolicy? McpPolicy);
+    SessionMcpPolicy? McpPolicy,
+    IReadOnlyList<ProjectShare>? ProjectShares = null);
+
+/// <summary>Who a project share is for: one signed-in user, or every member of an IdP group.</summary>
+public enum ProjectShareSubjectType
+{
+    User,
+    Group
+}
+
+public sealed class ProjectShareSubjectTypeJsonConverter : JsonConverter<ProjectShareSubjectType>
+{
+    public override ProjectShareSubjectType Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType == JsonTokenType.String
+            && ProjectShareSubjects.TryParse(reader.GetString(), out var type))
+        {
+            return type;
+        }
+        throw new JsonException("Subject type must be user or group.");
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        ProjectShareSubjectType value,
+        JsonSerializerOptions options)
+        => writer.WriteStringValue(ProjectShareSubjects.Format(value));
+}
+
+public static class ProjectShareSubjects
+{
+    /// <summary>The spelling stored in <c>project_shares.subject_type</c> and used on the wire,
+    /// the same as <c>library_shares</c> uses for its subjects.</summary>
+    public static string Format(ProjectShareSubjectType type) => type switch
+    {
+        ProjectShareSubjectType.User => "user",
+        ProjectShareSubjectType.Group => "group",
+        _ => throw new ArgumentOutOfRangeException(nameof(type))
+    };
+
+    public static bool TryParse(string? value, out ProjectShareSubjectType type)
+    {
+        if (string.Equals(value, "user", StringComparison.OrdinalIgnoreCase))
+        {
+            type = ProjectShareSubjectType.User;
+            return true;
+        }
+        if (string.Equals(value, "group", StringComparison.OrdinalIgnoreCase))
+        {
+            type = ProjectShareSubjectType.Group;
+            return true;
+        }
+        type = default;
+        return false;
+    }
+}
+
+/// <summary>One share on a project: every session in it, existing and future, opens for the
+/// subject with this role.</summary>
+public sealed record ProjectShare(
+    [property: JsonConverter(typeof(ProjectShareSubjectTypeJsonConverter))] ProjectShareSubjectType SubjectType,
+    string Subject,
+    [property: JsonConverter(typeof(ShareRoleJsonConverter))] ShareRole Role,
+    DateTime CreatedAt,
+    DateTime UpdatedAt);
+
+public sealed record UpsertProjectShareRequest(
+    [property: JsonConverter(typeof(ProjectShareSubjectTypeJsonConverter))] ProjectShareSubjectType SubjectType,
+    string Subject,
+    [property: JsonConverter(typeof(ShareRoleJsonConverter))] ShareRole Role);
 
 public sealed record CreateUserShareRequest(
     string Recipient,
@@ -284,6 +382,8 @@ public sealed record SharedSessionInfo
     public string? ParentSessionId { get; init; }
     /// <summary>The ancestor whose share opens this session (#410); null for a direct share.</summary>
     public string? InheritedFrom { get; init; }
+    /// <summary>The project whose share opens this session (#409); null when a session share does.</summary>
+    public string? SharedViaProject { get; init; }
     public bool CanWrite { get; init; }
     public bool CanManage { get; init; }
     public bool CanShell { get; init; }
@@ -316,6 +416,7 @@ public static class SharedSessionSanitizer
             // grant, so for inherited access the parent is always visible to the recipient.
             ParentSessionId = access.InheritedFrom is null ? null : session.ParentSessionId,
             InheritedFrom = access.InheritedFrom,
+            SharedViaProject = access.SharedViaProject,
             CanWrite = SessionAccessRules.CanWriteTerminal(access.Level),
             CanManage = access.Level == SessionAccessLevel.Owner,
             CanShell = access.Level == SessionAccessLevel.Owner,

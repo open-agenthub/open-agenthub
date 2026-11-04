@@ -172,6 +172,49 @@ public class SharedSessionsMcpPostgresTests
         Assert.IsType<NotFoundResult>(await caller.SendMessage("a", new("c", "link"), default));
     }
 
+    [PostgreSqlFact]
+    public async Task ProjectGrants_ReachTheMcpTools_ThroughTheSameDecision()
+    {
+        // #409: alice's agent in "a" reaches bob's project sessions as soon as bob shares the
+        // project, a session bob starts there later included, and loses them when he revokes it.
+        await using var db = await Setup();
+        var project = (await db.Projects.CreateAsync("bob", new CreateProjectRequest("Release", null))).Id;
+        var b = (await db.GetSessionAsync("bob", "b"))!;
+        b.ProjectId = project;
+        await db.UpsertSessionAsync(b);
+        var projects = new ProjectSharingService(db.Shares, new FakeEnterpriseLicense(true));
+        var caller = Controller(db, "a");
+
+        IEnumerable<ProjectAgentInfo> Listed(IActionResult result)
+            => Assert.IsAssignableFrom<IEnumerable<ProjectAgentInfo>>(Assert.IsType<OkObjectResult>(result).Value);
+
+        Assert.DoesNotContain(Listed(await caller.ProjectAgents("a", default)), s => s.Id == "b");
+        await projects.ShareAsync("bob", project, ProjectShareSubjectType.User, "alice", ShareRole.Viewer);
+        Assert.Contains(Listed(await caller.ProjectAgents("a", default)), s => s.Id == "b" && s.AccessRole == "Viewer");
+        var status = Assert.IsType<SharedSessionInfo>(Assert.IsType<OkObjectResult>(await caller.GetPeer("a", "b", default)).Value);
+        Assert.Equal("Release", status.SharedViaProject);
+        Assert.IsType<NotFoundResult>(await caller.SendMessage("a", new("b", "viewer"), default));
+        await AssertManagementDenied(caller);
+
+        await projects.ShareAsync("bob", project, ProjectShareSubjectType.User, "alice", ShareRole.Collaborator);
+        Assert.IsType<OkObjectResult>(await caller.SendMessage("a", new("b", "via project"), default));
+        Assert.Equal(1L, await db.ScalarAsync<long>(
+            "SELECT count(*) FROM cross_owner_message_audit WHERE recipient_session_id = 'b'"));
+
+        await db.UpsertSessionAsync(new SessionRecord
+        {
+            Id = "later", Owner = "bob", Title = "later", Mode = SessionMode.Interactive,
+            ClaudeSessionId = "claude-later", CallbackToken = "callback-later", ProjectId = project
+        });
+        Assert.Contains(Listed(await caller.ProjectAgents("a", default)), s => s.Id == "later" && s.AccessRole == "Collaborator");
+        Assert.IsType<OkObjectResult>(await caller.SendMessage("a", new("later", "new session"), default));
+
+        await projects.UnshareAsync("bob", project, ProjectShareSubjectType.User, "alice");
+        Assert.IsType<NotFoundResult>(await caller.GetPeer("a", "b", default));
+        Assert.IsType<NotFoundResult>(await caller.SendMessage("a", new("later", "after revocation"), default));
+        Assert.DoesNotContain(Listed(await caller.ProjectAgents("a", default)), s => s.Id is "b" or "later");
+    }
+
     private static async Task AssertManagementDenied(InternalController controller)
     {
         Assert.IsType<NotFoundResult>(await controller.DeletePeer("a", "b", default));

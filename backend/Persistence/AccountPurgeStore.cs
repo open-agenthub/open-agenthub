@@ -50,6 +50,11 @@ public sealed class AccountPurgeStore : IAccountPurgeStore
 
         // Owner-keyed tables.
         await DeleteAsync(conn, "api_tokens", "owner = @o", owner, sessions, ct);
+        // Before projects: the owner's project shares go with them by cascade, but a share that
+        // names the owner as recipient sits on somebody else's project and would survive.
+        await DeleteAsync(conn, "project_shares",
+            "(subject_type = 'user' AND subject = @o) OR project_id IN (SELECT id FROM projects WHERE owner = @o)",
+            owner, sessions, ct);
         await DeleteAsync(conn, "projects", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "chat_link_codes", "owner = @o", owner, sessions, ct);
         await DeleteAsync(conn, "chat_session_bindings", "owner = @o", owner, sessions, ct);

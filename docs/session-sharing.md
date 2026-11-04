@@ -26,9 +26,10 @@ shown as Viewer in the list and opened as Collaborator, or the other way round. 
 1. **Owner** beats everything. An owner never needs a grant and none can narrow theirs.
 2. Otherwise **the strongest role among all grants that reach the session** applies:
    Collaborator over Viewer. A grant can only widen access, never narrow it.
-3. Among equally strong grants, the most specific is reported as the reason (`inheritedFrom`):
-   a grant on the session itself before an inherited one, a nearer ancestor before a farther one.
-   This changes the label, never the level.
+3. Among equally strong grants, the most specific is reported as the reason (`inheritedFrom`,
+   `sharedViaProject`): a grant on the session itself before an inherited one, a share on an
+   ancestor before a project share, a nearer session before a farther one. This changes the
+   label, never the level.
 
 Grants that reach a session today:
 
@@ -37,6 +38,7 @@ Grants that reach a session today:
 | `Session` | direct share on the session | that session |
 | `Session` | link on the session (token holder only) | that session, and nothing else |
 | `Ancestor` | direct share on a session up the `parentSessionId` chain | every descendant |
+| `Project` | share on a project, for a user or an IdP group (#409) | every session in the project, and their descendants |
 
 **The alternative to "strongest wins" was "nearest wins"**: a child shared as Viewer under a parent
 shared as Collaborator would open as Viewer. It was rejected because it makes a grant a deny. To
@@ -45,8 +47,59 @@ revoking that share would silently give it back. With "strongest wins" every gra
 and the only way to take access away is to remove a grant — which is what the share dialog
 already shows.
 
-Project-wide sharing (#409) plugs in as one more scope: the store adds the project's grants for
-the principal to the list it hands to `Decide`, and the precedence above stays as it is.
+## Sharing a whole project (#409)
+
+The owner shares a project from its controls in the sidebar (⇪) with a user or a group, as Viewer
+or Collaborator. The share opens every session in the project for that subject, including the
+sessions started there later and the children of all of them. The dialog lists who has access,
+and the session's own sharing dialog shows the project's shares beside its own, read-only.
+
+It is one more scope, not a second mechanism: the store adds the project's grants for the
+principal to the list it hands to `Decide`, and the precedence above applies unchanged. So **an
+explicit share on one session can add to a project share, never reduce it**. Bob, Collaborator on
+the project, stays Collaborator on a session shared with him as Viewer; Carol, Viewer on the
+project, is Collaborator on the one session shared with her as Collaborator. The alternative, a
+session share that overrides the project's role, was rejected for the reason "nearest wins" was:
+it turns a share into a deny that silently lifts when it is revoked. Keeping someone out of one
+session of a shared project means moving that session out of the project.
+
+**Live, like the children.** Nothing is copied onto the sessions. Each access check looks up the
+project of the session and of every ancestor in the same walk, so a new session opens on its
+first request, a role change on the project reaches every session at once, and revoking the
+share, moving a session to another project or deleting the project closes the session on the
+next request. The alternative, writing a session share into every session of the project, has
+all the faults of copying a parent's shares (see below), and it would also need a hook on every
+way a session enters a project — creation, `session_create`, moving, the webhook trigger.
+
+**Children inherit it through the ancestor rule.** A project grant found on an ancestor is
+reported with `inheritedFrom` naming that ancestor, as a share on the ancestor would be. A child
+started outside the project still opens; a child in the project is opened by the project share on
+itself, which is the more specific reason. The list query does not follow a project grant into a
+child of the same project, because that child is already listed in its own right.
+
+**Within one owner.** A session's `project_id`, like its parent id, is whatever the creating
+request named. A project grant therefore reaches only sessions whose owner owns the project, so
+nobody can put a session into someone else's shared project and so show it to its recipients
+(`OnlyTheOwnersSessionsInTheProject_AreReached`).
+
+**Groups are the owner's own.** A group share names an IdP group (`user_groups`, refreshed at each
+sign-in), and the owner can name only a group they belong to. The alternative, any group the IdP
+has reported for anybody, would let every user test group names one by one and hand sessions to
+groups they have no relation to. The dialog therefore offers the owner's groups and nothing else.
+Membership is read on every request, so somebody who leaves the group loses access at their next
+sign-in; a share stays in place if the owner leaves the group, because it was the owner's
+decision when it was made.
+
+**Rows go with their project and their people.** `project_shares.project_id` references
+`projects(id) ON DELETE CASCADE`, as the session tables do since #368: deleting a project removes
+its shares in the same statement, and a project id that is ever reused starts with none. The
+account purge removes the shares on the account's projects and the shares naming the account as
+recipient.
+
+The same walk feeds `IsSharedAsync`, so a session in a shared project counts as shared for the
+sibling-file rule (`project-files.md`). Every caller that asks `ISessionAccessService` — web,
+proxies, token API and the MCP tools (#413) — gets project access with no change of its own. The
+token API and the MCP tools cannot manage project shares yet; only the web app can.
 
 ## Children inherit live, not by copy (#410)
 
@@ -95,9 +148,10 @@ link does not make a child "shared" for the sibling-file rule either.
 
 ## Where a shared session shows up (#407)
 
-`GET /api/sessions/shared` returns every session a direct share opens for the caller, including
-inherited children, in the sanitised shape of `SharedSessionInfo` with `accessRole`, `sharedBy`,
-`inheritedFrom` and — only when the caller can open the parent too — `parentSessionId`. The web
+`GET /api/sessions/shared` returns every session a direct share or a project share opens for the
+caller, including inherited children, in the sanitised shape of `SharedSessionInfo` with
+`accessRole`, `sharedBy`, `inheritedFrom`, `sharedViaProject` (the project's name, shown as
+"via project …") and — only when the caller can open the parent too — `parentSessionId`. The web
 app merges it into the owner's list on every poll (every five seconds), so a new share appears
 without a reload and a revoked one disappears on the next poll. In the sidebar and on the
 Sessions page shared sessions form the group "Shared with me", children nested under their

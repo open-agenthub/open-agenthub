@@ -14,7 +14,7 @@ using NpgsqlTypes;
 namespace AgentHub.Api.Ee.Sharing;
 
 public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyReader, ISessionShareStore,
-    ISessionShareStatus
+    ISessionShareStatus, IProjectShareStore
 {
     private readonly NpgsqlDataSource _db;
     private readonly ILogger<SessionShareStore> _logger;
@@ -60,6 +60,21 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
                 blocked_tools    TEXT NOT NULL,
                 updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
             );
+
+            -- Project shares (#409). The foreign key removes them with their project, so a project
+            -- deleted and later recreated under the same id never inherits the old grants. The
+            -- projects table is created by PostgresProjectStore, which initialises first.
+            CREATE TABLE IF NOT EXISTS project_shares (
+                project_id    TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+                subject_type  TEXT NOT NULL CHECK (subject_type IN ('user', 'group')),
+                subject       TEXT NOT NULL,
+                role          TEXT NOT NULL CHECK (role IN ('Viewer', 'Collaborator')),
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+                PRIMARY KEY (project_id, subject_type, subject)
+            );
+            CREATE INDEX IF NOT EXISTS idx_project_shares_subject
+                ON project_shares(subject_type, subject);
 
             DO $migration$
             BEGIN
@@ -160,15 +175,32 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         }
 
         var policy = await GetMcpPolicyAsync(connection, transaction, sessionId, ct);
+        var projectShares = new List<ProjectShare>();
+        const string projectSql = """
+            SELECT shares.subject_type, shares.subject, shares.role, shares.created_at, shares.updated_at
+            FROM sessions
+            JOIN projects ON projects.id = sessions.project_id AND projects.owner = sessions.owner
+            JOIN project_shares shares ON shares.project_id = projects.id
+            WHERE sessions.id = @session
+            ORDER BY shares.subject_type DESC, shares.subject
+            """;
+        await using (var command = new NpgsqlCommand(projectSql, connection, transaction))
+        {
+            command.Parameters.AddWithValue("session", sessionId);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                projectShares.Add(MapProjectShare(reader));
+        }
         await transaction.CommitAsync(ct);
-        return new SessionSharingOverview(users, links, policy);
+        return new SessionSharingOverview(users, links, policy, projectShares);
     }
 
     /// <summary>
-    /// Every session a direct share opens for <paramref name="recipient"/>: the shared sessions
-    /// and, live, all their descendants of the same owner (#410). Links never contribute — they
-    /// are link-only and add nothing to anybody's list. One row per session, carrying every grant
-    /// that reaches it, so the rules rather than this query pick the role.
+    /// Every session a direct share or a project share opens for <paramref name="recipient"/>:
+    /// the shared sessions, every session in a shared project (#409) and, live, all their
+    /// descendants of the same owner (#410). Links never contribute — they are link-only and add
+    /// nothing to anybody's list. One row per session, carrying every grant that reaches it, so
+    /// the rules rather than this query pick the role.
     /// </summary>
     public async Task<IReadOnlyList<StoredSessionAccess>> ListSharedWithAsync(
         string recipient,
@@ -177,23 +209,38 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         // The descent follows parent_session_id only between sessions of the same owner. A
         // parent id is whatever the creating request said, so without the owner check anybody
         // could hang a session of their own under a shared one and show it to its recipients.
-        // The depth bound is SessionDescent.MaxHops, which also stops a corrupt cycle.
+        // The depth bound is SessionDescent.MaxHops, which also stops a corrupt cycle. A project
+        // grant does not descend into a child in the same project: that child is a seed of its
+        // own at depth 0, and following it again would only repeat the grant once per ancestor.
         const string sql = $"""
-            WITH RECURSIVE reach(id, owner, role, source, depth) AS (
-                SELECT sessions.id, sessions.owner, shares.role, sessions.id, 0
+            WITH RECURSIVE seeds(id, owner, role, source, depth, project, project_name) AS (
+                SELECT sessions.id, sessions.owner, shares.role, sessions.id, 0, NULL::text, NULL::text
                 FROM session_shares shares
                 JOIN sessions ON sessions.id = shares.session_id
-                WHERE shares.recipient_owner = @recipient
-                  AND sessions.owner <> @recipient
+                WHERE shares.recipient_owner = @principal
+                  AND sessions.owner <> @principal
+                UNION ALL
+                SELECT sessions.id, sessions.owner, granted.role, sessions.id, 0,
+                       granted.project_id, granted.name
+                FROM ({ProjectGrants}) granted
+                JOIN sessions
+                  ON sessions.project_id = granted.project_id
+                 AND sessions.owner = granted.owner
+                WHERE sessions.owner <> @principal
+            ),
+            reach(id, owner, role, source, depth, project, project_name) AS (
+                SELECT * FROM seeds
                 UNION
-                SELECT child.id, child.owner, reach.role, reach.source, reach.depth + 1
+                SELECT child.id, child.owner, reach.role, reach.source, reach.depth + 1,
+                       reach.project, reach.project_name
                 FROM reach
                 JOIN sessions child
                   ON child.owner = reach.owner
                  AND child.parent_session_id = reach.id
                 WHERE reach.depth < @maxDepth
+                  AND (reach.project IS NULL OR child.project_id IS DISTINCT FROM reach.project)
             )
-            SELECT {SessionColumns}, reach.role, reach.source, reach.depth
+            SELECT {SessionColumns}, reach.role, reach.source, reach.depth, reach.project, reach.project_name
             FROM reach
             JOIN sessions ON sessions.id = reach.id
             ORDER BY sessions.created_at DESC, sessions.id, reach.depth
@@ -203,7 +250,7 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         var grants = new Dictionary<string, List<ShareGrant>>(StringComparer.Ordinal);
         var order = new List<string>();
         await using var command = _db.CreateCommand(sql);
-        command.Parameters.AddWithValue("recipient", recipient);
+        command.Parameters.AddWithValue("principal", recipient);
         command.Parameters.AddWithValue("maxDepth", SessionDescent.MaxHops);
         await using var reader = await command.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
@@ -398,13 +445,18 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
     /// back without anyone looking at this session again.
     /// </summary>
     /// <remarks>A direct share on an ancestor counts too: it opens this session as well (#410).
-    /// An ancestor's link does not, because links are link-only.</remarks>
+    /// So does a share on the project of the session or of an ancestor (#409). An ancestor's link
+    /// does not, because links are link-only.</remarks>
     public async Task<bool> IsSharedAsync(string sessionId, CancellationToken ct = default)
     {
         await using var command = _db.CreateCommand($"""
             WITH RECURSIVE {AncestorChain}
             SELECT EXISTS (
                     SELECT 1 FROM session_shares JOIN chain ON chain.id = session_shares.session_id)
+                OR EXISTS (
+                    SELECT 1 FROM project_shares
+                    JOIN projects ON projects.id = project_shares.project_id
+                    JOIN chain ON chain.project = projects.id AND chain.owner = projects.owner)
                 OR EXISTS (
                     SELECT 1 FROM session_share_links
                     WHERE session_id = @session
@@ -416,22 +468,39 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
     }
 
     /// <summary>
-    /// The session and its ancestors, as CTE <c>chain(id, parent, owner, depth)</c>. The walk
+    /// The session and its ancestors, as CTE <c>chain(id, parent, owner, project, depth)</c>. The walk
     /// stays within one owner: a parent id is whatever the creating request named, and a grant
     /// must never flow into a session somebody else hung under a shared one. The bound is
     /// <see cref="SessionDescent.MaxHops"/>, which also ends a corrupt cycle.
     /// </summary>
     private const string AncestorChain = """
-        chain(id, parent, owner, depth) AS (
-            SELECT id, parent_session_id, owner, 0 FROM sessions WHERE id = @session
+        chain(id, parent, owner, project, depth) AS (
+            SELECT id, parent_session_id, owner, project_id, 0 FROM sessions WHERE id = @session
             UNION
-            SELECT parent.id, parent.parent_session_id, parent.owner, chain.depth + 1
+            SELECT parent.id, parent.parent_session_id, parent.owner, parent.project_id, chain.depth + 1
             FROM chain
             JOIN sessions parent
               ON parent.id = chain.parent
              AND parent.owner = chain.owner
             WHERE chain.depth < @maxDepth
         )
+        """;
+
+    /// <summary>
+    /// The project shares that name <c>@principal</c>, directly or through one of its IdP groups,
+    /// as rows <c>(project_id, role, name, owner)</c>. Group memberships are those of the
+    /// principal's last sign-in (<c>user_groups</c>), read on every request, so leaving a group
+    /// in the IdP closes the project at the next sign-in. A grant only reaches sessions whose
+    /// owner is the project's owner: <c>project_id</c> on a session is whatever the creating
+    /// request named, exactly like a parent id.
+    /// </summary>
+    private const string ProjectGrants = """
+        SELECT project_shares.project_id, project_shares.role, projects.name, projects.owner
+        FROM project_shares
+        JOIN projects ON projects.id = project_shares.project_id
+        WHERE (project_shares.subject_type = 'user' AND project_shares.subject = @principal)
+           OR (project_shares.subject_type = 'group' AND project_shares.subject IN (
+                SELECT group_name FROM user_groups WHERE owner = @principal))
         """;
 
     /// <summary>
@@ -546,8 +615,10 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
 
     /// <summary>
     /// The session and the principal's direct shares on it and on its ancestors of the same
-    /// owner. Null when the principal neither owns it nor holds any such share. Read live on
-    /// every call, so revoking a parent's share closes its children on the next request.
+    /// owner, plus the shares on the projects of those sessions (#409). Null when the principal
+    /// neither owns it nor holds any such grant. Read live on every call, so revoking a parent's
+    /// or a project's share closes its sessions on the next request, and a session created in a
+    /// shared project opens on the first one.
     /// </summary>
     public async Task<StoredSessionAccess?> FindUserAccessAsync(
         string principal,
@@ -555,15 +626,25 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         CancellationToken ct = default)
     {
         const string sql = $"""
-            WITH RECURSIVE {AncestorChain}
-            SELECT {SessionColumns}, shares.role, shares.session_id, chain.depth
+            WITH RECURSIVE {AncestorChain},
+            grants(role, source, depth, project, project_name) AS (
+                SELECT shares.role, shares.session_id, chain.depth, NULL::text, NULL::text
+                FROM chain
+                JOIN session_shares shares
+                  ON shares.session_id = chain.id
+                 AND shares.recipient_owner = @principal
+                UNION ALL
+                SELECT granted.role, chain.id, chain.depth, granted.project_id, granted.name
+                FROM chain
+                JOIN ({ProjectGrants}) granted
+                  ON granted.project_id = chain.project
+                 AND granted.owner = chain.owner
+            )
+            SELECT {SessionColumns}, grants.role, grants.source, grants.depth, grants.project, grants.project_name
             FROM sessions
-            LEFT JOIN chain ON true
-            LEFT JOIN session_shares shares
-              ON shares.session_id = chain.id
-             AND shares.recipient_owner = @principal
+            LEFT JOIN grants ON true
             WHERE sessions.id = @session
-            ORDER BY chain.depth
+            ORDER BY grants.depth
             """;
 
         await using var command = _db.CreateCommand(sql);
@@ -587,14 +668,22 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         return new StoredSessionAccess(session, grants);
     }
 
+    /// <summary>Reads <c>role, source, depth, project, project_name</c>; a row with a project is a
+    /// project grant, any other a session share on the session (depth 0) or an ancestor.</summary>
     private static ShareGrant ReadGrant(NpgsqlDataReader reader, int first)
     {
         var depth = reader.GetInt32(first + 2);
+        var project = reader.IsDBNull(first + 3) ? null : reader.GetString(first + 3);
+        var scope = project is not null
+            ? ShareGrantScope.Project
+            : depth == 0 ? ShareGrantScope.Session : ShareGrantScope.Ancestor;
         return new ShareGrant(
             ParseRole(reader.GetString(first)),
-            depth == 0 ? ShareGrantScope.Session : ShareGrantScope.Ancestor,
+            scope,
             reader.GetString(first + 1),
-            depth);
+            depth,
+            project,
+            project is null ? null : reader.GetString(first + 4));
     }
 
     public Task<StoredSessionAccess?> FindTokenAccessAsync(
@@ -661,6 +750,156 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
 
         return new StoredSessionAccess(session, role);
     }
+
+    public async Task<IReadOnlyList<ProjectShare>> ListProjectSharesAsync(
+        string owner,
+        string projectId,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        await EnsureProjectOwnerAsync(connection, transaction, owner, projectId, ct);
+
+        var shares = new List<ProjectShare>();
+        await using (var command = new NpgsqlCommand("""
+            SELECT subject_type, subject, role, created_at, updated_at
+            FROM project_shares
+            WHERE project_id = @project
+            ORDER BY subject_type DESC, subject
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("project", projectId);
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            while (await reader.ReadAsync(ct))
+                shares.Add(MapProjectShare(reader));
+        }
+        await transaction.CommitAsync(ct);
+        return shares;
+    }
+
+    /// <summary>
+    /// Adds a share on the project, or changes its role. A user must have signed in here, as for a
+    /// session share. A group must be one the owner belongs to: the alternative, any group the IdP
+    /// has ever reported, would let every user test group names one by one and hand sessions to
+    /// groups they have nothing to do with.
+    /// </summary>
+    public async Task<ProjectShare> UpsertProjectShareAsync(
+        string owner,
+        string projectId,
+        ProjectShareSubjectType subjectType,
+        string subject,
+        ShareRole role,
+        CancellationToken ct = default)
+    {
+        ValidateRole(role);
+        if (!Enum.IsDefined(subjectType))
+            throw new ArgumentException("Subject type must be user or group.", nameof(subjectType));
+        subject = subject?.Trim() ?? "";
+        if (subject.Length == 0)
+            throw new ArgumentException("Subject is required.", nameof(subject));
+
+        await using var connection = await _db.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        await EnsureProjectOwnerAsync(connection, transaction, owner, projectId, ct);
+        if (subjectType == ProjectShareSubjectType.User)
+        {
+            if (string.Equals(owner, subject, StringComparison.Ordinal))
+                throw new ArgumentException("A project owner cannot share with themselves.", nameof(subject));
+            await EnsureRecipientAsync(connection, transaction, subject, ct);
+        }
+        else
+        {
+            await EnsureOwnGroupAsync(connection, transaction, owner, subject, ct);
+        }
+
+        ProjectShare result;
+        await using (var command = new NpgsqlCommand("""
+            INSERT INTO project_shares (project_id, subject_type, subject, role)
+            VALUES (@project, @type, @subject, @role)
+            ON CONFLICT (project_id, subject_type, subject) DO UPDATE SET
+                role = EXCLUDED.role,
+                updated_at = now()
+            RETURNING subject_type, subject, role, created_at, updated_at
+            """, connection, transaction))
+        {
+            command.Parameters.AddWithValue("project", projectId);
+            command.Parameters.AddWithValue("type", ProjectShareSubjects.Format(subjectType));
+            command.Parameters.AddWithValue("subject", subject);
+            command.Parameters.AddWithValue("role", role.ToString());
+            await using var reader = await command.ExecuteReaderAsync(ct);
+            await reader.ReadAsync(ct);
+            result = MapProjectShare(reader);
+        }
+        await transaction.CommitAsync(ct);
+        return result;
+    }
+
+    public async Task DeleteProjectShareAsync(
+        string owner,
+        string projectId,
+        ProjectShareSubjectType subjectType,
+        string subject,
+        CancellationToken ct = default)
+    {
+        await using var connection = await _db.OpenConnectionAsync(ct);
+        await using var transaction = await connection.BeginTransactionAsync(ct);
+        await EnsureProjectOwnerAsync(connection, transaction, owner, projectId, ct);
+
+        await using var command = new NpgsqlCommand("""
+            DELETE FROM project_shares
+            WHERE project_id = @project AND subject_type = @type AND subject = @subject
+            """, connection, transaction);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("type", ProjectShareSubjects.Format(subjectType));
+        command.Parameters.AddWithValue("subject", subject);
+        if (await command.ExecuteNonQueryAsync(ct) == 0)
+            throw new KeyNotFoundException();
+
+        await transaction.CommitAsync(ct);
+    }
+
+    private static async Task EnsureProjectOwnerAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string owner,
+        string projectId,
+        CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT 1 FROM projects WHERE id = @project AND owner = @owner",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("project", projectId);
+        command.Parameters.AddWithValue("owner", owner);
+        if (await command.ExecuteScalarAsync(ct) is null)
+            throw new KeyNotFoundException();
+    }
+
+    private static async Task EnsureOwnGroupAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string owner,
+        string group,
+        CancellationToken ct)
+    {
+        await using var command = new NpgsqlCommand(
+            "SELECT 1 FROM user_groups WHERE owner = @owner AND group_name = @group",
+            connection,
+            transaction);
+        command.Parameters.AddWithValue("owner", owner);
+        command.Parameters.AddWithValue("group", group);
+        if (await command.ExecuteScalarAsync(ct) is null)
+            throw new ArgumentException("You can share a project only with a group you belong to.", nameof(group));
+    }
+
+    private static ProjectShare MapProjectShare(NpgsqlDataReader reader) => new(
+        ProjectShareSubjects.TryParse(reader.GetString(0), out var type)
+            ? type
+            : throw new InvalidOperationException("Stored subject type is invalid."),
+        reader.GetString(1),
+        ParseRole(reader.GetString(2)),
+        reader.GetDateTime(3),
+        reader.GetDateTime(4));
 
     private static async Task EnsureOwnerAsync(
         NpgsqlConnection connection,

@@ -422,8 +422,12 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
         string connectionString,
         SessionShareStore shares,
         PostgresSessionStore sessions,
-        UserDirectory users)
+        UserDirectory users,
+        PostgresProjectStore projects,
+        AgentHub.Api.Ee.Identity.UserGroupStore groups)
     {
+        Projects = projects;
+        Groups = groups;
         _baseConnectionString = baseConnectionString;
         _schema = schema;
         _connectionString = connectionString;
@@ -433,6 +437,10 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
     }
 
     public SessionShareStore Shares { get; }
+
+    public PostgresProjectStore Projects { get; }
+
+    public AgentHub.Api.Ee.Identity.UserGroupStore Groups { get; }
 
     /// <summary>The session store itself, for tests of its own operations (touch, expiry listing).</summary>
     public PostgresSessionStore Sessions => _sessions;
@@ -475,6 +483,10 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
             .Build();
         var sessions = new PostgresSessionStore(configuration);
         var users = new UserDirectory(configuration);
+        // Project shares (#409) reference projects and read group memberships; in the backend
+        // both stores initialise before SessionShareStore.
+        var projects = new PostgresProjectStore(configuration);
+        var groups = new AgentHub.Api.Ee.Identity.UserGroupStore(configuration);
         var shares = new SessionShareStore(
             configuration,
             NullLogger<SessionShareStore>.Instance);
@@ -483,6 +495,8 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
         {
             await sessions.InitializeAsync();
             await users.InitializeAsync();
+            await projects.InitializeAsync();
+            await groups.InitializeAsync();
             await shares.InitializeAsync();
             return new PostgresSharingDatabase(
                 baseConnectionString,
@@ -490,7 +504,9 @@ internal sealed class PostgresSharingDatabase : IAsyncDisposable
                 connectionString,
                 shares,
                 sessions,
-                users);
+                users,
+                projects,
+                groups);
         }
         catch
         {
