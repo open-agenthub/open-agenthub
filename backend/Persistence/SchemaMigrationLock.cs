@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Net.Sockets;
 using Npgsql;
 
 namespace AgentHub.Api.Persistence;
@@ -39,8 +41,21 @@ public static class SchemaMigrationLock
         // Unpooled: a pooled connection keeps a session-level lock until it is handed out again.
         await using var conn = new NpgsqlConnection(
             new NpgsqlConnectionStringBuilder(connectionString) { Pooling = false }.ConnectionString);
-        await conn.OpenAsync(ct);
-        await WaitAsync(conn, logger, timeout ?? DefaultTimeout, ct);
+        var budget = timeout ?? DefaultTimeout;
+        var started = Stopwatch.StartNew();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        deadline.CancelAfter(budget);
+        try
+        {
+            await OpenWhenReadyAsync(conn, logger, deadline.Token);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested && deadline.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Waited {budget.TotalSeconds:0} seconds for database to accept connections.");
+        }
+        // Connection recovery and lock contention share one budget: two independent ten-minute
+        // waits would let the startup probe kill a replica that is making progress.
+        await WaitAsync(conn, logger, budget - started.Elapsed, ct);
         try
         {
             await migrate();
@@ -52,6 +67,29 @@ public static class SchemaMigrationLock
             await unlock.ExecuteNonQueryAsync(CancellationToken.None);
         }
     }
+
+    private static async Task OpenWhenReadyAsync(NpgsqlConnection conn, ILogger logger, CancellationToken ct)
+    {
+        var delay = TimeSpan.FromMilliseconds(250);
+        while (true)
+        {
+            try
+            {
+                await conn.OpenAsync(ct);
+                return;
+            }
+            catch (Exception ex) when (IsStartupUnavailable(ex))
+            {
+                logger.LogInformation("waiting for database to accept connections; retrying in {DelayMs}ms", delay.TotalMilliseconds);
+                await Task.Delay(delay, ct);
+                delay = TimeSpan.FromMilliseconds(Math.Min(delay.TotalMilliseconds * 2, 5000));
+            }
+        }
+    }
+
+    private static bool IsStartupUnavailable(Exception ex) =>
+        ex is PostgresException { SqlState: PostgresErrorCodes.CannotConnectNow } ||
+        ex is NpgsqlException { InnerException: SocketException { SocketErrorCode: SocketError.ConnectionRefused } };
 
     // Polls rather than blocking in pg_advisory_lock: a blocked call says nothing in the log, and
     // an operator looking at a replica that does not come up needs to see what it waits for.

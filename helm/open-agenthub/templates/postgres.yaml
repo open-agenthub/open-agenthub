@@ -13,17 +13,44 @@ spec:
     metadata: { labels: { app: postgres } }
     spec:
       securityContext: { fsGroup: 999, runAsNonRoot: true, runAsUser: 999 }
+      initContainers:
+        - name: initialize-database
+          image: {{ .Values.postgres.image }}
+          command: [bash, /etc/agenthub/init-postgres.sh]
+{{- if .Values.postgres.appArmorUnconfined }}
+          securityContext:
+            appArmorProfile: { type: Unconfined }
+{{- end }}
+          env: {{ include "agenthub.postgresEnv" . | nindent 12 }}
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/postgresql/data }
+            - { name: init, mountPath: /etc/agenthub, readOnly: true }
       containers:
         - name: postgres
           image: {{ .Values.postgres.image }}
           ports: [{ containerPort: 5432 }]
-          env:
-            - { name: POSTGRES_DB,   value: agenthub }
-            - { name: POSTGRES_USER, value: agenthub }
-            - name: POSTGRES_PASSWORD
-              valueFrom: { secretKeyRef: { name: postgres-secret, key: password } }
-            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          env: {{ include "agenthub.postgresEnv" . | nindent 12 }}
+          # TCP excludes the image's socket-only temporary init server from readiness.
+          startupProbe:
+            exec: { command: [pg_isready, -h, "127.0.0.1", -U, agenthub, -d, agenthub] }
+            periodSeconds: 5
+            failureThreshold: 120
+          readinessProbe:
+            exec: { command: [pg_isready, -h, "127.0.0.1", -U, agenthub, -d, agenthub] }
+            periodSeconds: 5
+{{- if .Values.postgres.appArmorUnconfined }}
+          # Last resort for hosts whose default profile denies signals between database processes.
+          securityContext:
+            appArmorProfile: { type: Unconfined }
+{{- end }}
           volumeMounts: [{ name: data, mountPath: /var/lib/postgresql/data }]
+      volumes:
+        - name: init
+          configMap: { name: postgres-init }
+{{- if not .Values.postgres.persistence }}
+        - name: data
+          emptyDir: {}
+{{- end }}
 {{- if .Values.postgres.persistence }}
   volumeClaimTemplates:
     - metadata: { name: data }
@@ -33,11 +60,16 @@ spec:
         storageClassName: {{ . }}
         {{- end }}
         resources: { requests: { storage: {{ .Values.postgres.storage }} } }
-{{- else }}
-      volumes:
-        - name: data
-          emptyDir: {}
 {{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-init
+  labels: {{ include "agenthub.labels" . | nindent 4 }}
+data:
+  init-postgres.sh: |
+{{ .Files.Get "files/init-postgres.sh" | indent 4 }}
 ---
 apiVersion: v1
 kind: Service
@@ -57,3 +89,11 @@ type: Opaque
 stringData:
   password: {{ required "postgres.password is required when postgres.enabled=true" .Values.postgres.password | quote }}
 {{- end }}
+
+{{- define "agenthub.postgresEnv" -}}
+- { name: POSTGRES_DB, value: agenthub }
+- { name: POSTGRES_USER, value: agenthub }
+- name: POSTGRES_PASSWORD
+  valueFrom: { secretKeyRef: { name: postgres-secret, key: password } }
+- { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+{{- end -}}
