@@ -14,7 +14,7 @@ FROM node:26-bookworm-slim
 # docs/agent-runtime-updates.md for what to check by hand.
 ARG OPENCODE_VERSION=1.18.35
 ARG GH_VERSION=2.103.3
-ARG GLAB_VERSION=1.127.0
+ARG GLAB_VERSION=1.128.0
 # Set by BuildKit per target platform (amd64, arm64); gh and glab use the same names.
 ARG TARGETARCH
 ENV OPENCODE_VERSION=${OPENCODE_VERSION}
