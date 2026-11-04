@@ -337,8 +337,8 @@ public sealed class SessionsController : ControllerBase
             : new Dictionary<string, string>();
         return Ok(recent.Select(m => new AgentMessageInfo(
             m.Id, m.FromSessionId,
-            m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId),
-            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia)).ToList());
+            m.FromTitle ?? (m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId)),
+            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia, m.FromOwner)).ToList());
     }
 
     /// <summary>

@@ -14,7 +14,9 @@ public sealed record ProjectAgentInfo(
     AgentKind Agent,
     bool QuestionPending,
     DateTime CreatedAt,
-    bool Self);
+    bool Self,
+    string? Owner = null,
+    string? AccessRole = null);
 
 /// <summary>
 /// A delivered inbox message. <c>From</c> is null for messages sent from outside a session.
@@ -30,7 +32,8 @@ public sealed record AgentMessageInfo(
     DateTime? DeliveredAt,
     bool Priority = false,
     bool Interrupt = false,
-    string? DeliveredVia = null);
+    string? DeliveredVia = null,
+    string? FromOwner = null);
 
 /// <summary>Body of the internal send endpoint: target session id + message text. A priority
 /// message is pushed into the target's running agent instead of waiting in its inbox; interrupt

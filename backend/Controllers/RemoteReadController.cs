@@ -109,8 +109,8 @@ public sealed class RemoteReadController : ControllerBase
             ? (await _sessions.ListSessionsAsync(caller.Owner, ct)).ToDictionary(s => s.Id, s => s.Title)
             : new Dictionary<string, string>();
         var messages = recent.Select(m => new AgentMessageInfo(m.Id, m.FromSessionId,
-            m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId),
-            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia)).ToList();
+            m.FromTitle ?? (m.FromSessionId is null ? null : titles.GetValueOrDefault(m.FromSessionId)),
+            m.Body, m.CreatedAt, m.DeliveredAt, m.Priority, m.Interrupt, m.DeliveredVia, m.FromOwner)).ToList();
         return Ok(new RemoteMessagePage(messages, rows.Count > size
             ? MessagePageCursor.Encode(recent[^1]) : null));
     }
