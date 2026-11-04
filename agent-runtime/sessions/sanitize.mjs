@@ -2,6 +2,7 @@
 const SAFE_KEYS = [
   // What the pod requests and is limited to, so a caller can read back the cpu/memory it asked for.
   'resources',
+  'accessRole', 'sharedBy', 'canWrite', 'canManage',
   'id', 'title', 'description', 'owner', 'mode', 'agent', 'authMode', 'phase', 'status', 'failureReason',
   'parentSessionId', 'projectId', 'prompt', 'schedule', 'questionPending',
   'createdAt', 'hasMcp', 'autoApprove', 'nextRunAt',

@@ -148,7 +148,7 @@ register('context_clear', {
 }, async ({ followUp }) => text(await client.clearContext(followUp)));
 
 register('session_get', {
-  description: 'Get a descendant session by id.',
+  description: 'Get a descendant or a session shared with this session owner by id.',
   inputSchema: z.object({ id: z.string().min(1).max(128) })
 }, async ({ id }) => text(sanitizeSession(await client.get(id))));
 
@@ -158,7 +158,7 @@ register('session_list', {
 }, async () => text(sanitizeSession(await client.listChildren())));
 
 register('session_wait', {
-  description: 'Poll a descendant session until Succeeded or Failed, or until timeout.',
+  description: 'Poll a descendant or a session shared with this session owner until Succeeded or Failed, or timeout.',
   inputSchema: z.object({
     id: z.string().min(1).max(128),
     timeoutMs: z.number().int().min(1).max(86_400_000).optional(),
@@ -189,13 +189,14 @@ register('session_convert', {
 register('agents_list', {
   description: 'List the agents (sessions) of this session\'s project: id, title (= agent name), '
     + 'description (what the agent is for), phase. Also lists this session\'s parent chain and the '
-    + 'children it created, whatever their project.',
+    + 'children it created, whatever their project, and named sessions shared with its owner.',
   inputSchema: z.object({})
 }, async () => text(await client.listProjectAgents()));
 
 register('agent_send', {
   description: 'Send a message/task to a peer agent (anyone in agents_list). "to" is a session id or a '
     + 'unique agent title (see agents_list); an ambiguous title fails with the candidate list. '
+    + 'Shared sessions require collaborator access and accept normal priority only. '
     + 'By default the peer reads it via its agent_inbox tool. priority pushes it straight into the '
     + 'peer\'s running prompt; interrupt also stops the peer\'s current work first (implies priority). '
     + 'The result\'s deliveredVia says where it went: inbox, injected, mod or next_turn (handed over when its current turn ends).',

@@ -16,8 +16,10 @@ public sealed class SessionMessageRecord
     public string? ProjectId { get; init; }
     public string? FromSessionId { get; init; }
     public required string ToSessionId { get; init; }
-    /// <summary>Owner of both sessions — denormalized so reads never need a join.</summary>
+    /// <summary>Recipient owner, so owner-bound history includes shared-session messages.</summary>
     public required string Owner { get; init; }
+    public string? FromOwner { get; init; }
+    public string? FromTitle { get; init; }
     public required string Body { get; init; }
     /// <summary>Pushed straight into the running agent instead of waiting for its inbox poll.</summary>
     public bool Priority { get; init; }
@@ -79,6 +81,16 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
             ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS priority BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS interrupt BOOLEAN NOT NULL DEFAULT FALSE;
             ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS delivered_via TEXT;
+            ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS from_owner TEXT;
+            ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS from_title TEXT;
+            CREATE TABLE IF NOT EXISTS cross_owner_message_audit (
+                message_id TEXT PRIMARY KEY,
+                sender_owner TEXT NOT NULL,
+                sender_session_id TEXT NOT NULL,
+                recipient_owner TEXT NOT NULL,
+                recipient_session_id TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL
+            );
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -86,9 +98,17 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
 
     public async Task AddAsync(SessionMessageRecord m, CancellationToken ct = default)
     {
+        // One statement makes an audit failure roll back the message instead of delivering unaudited work.
         const string sql = """
-            INSERT INTO session_messages (id, project_id, from_session_id, to_session_id, owner, body, created_at, delivered_at, priority, interrupt, delivered_via)
-            VALUES (@id, @project, @from, @to, @owner, @body, @created, @delivered, @priority, @interrupt, @via);
+            WITH inserted AS (
+                INSERT INTO session_messages (id, project_id, from_session_id, to_session_id, owner, body, created_at, delivered_at, priority, interrupt, delivered_via, from_owner, from_title)
+                VALUES (@id, @project, @from, @to, @owner, @body, @created, @delivered, @priority, @interrupt, @via, @from_owner, @from_title)
+                RETURNING *
+            )
+            INSERT INTO cross_owner_message_audit
+                (message_id, sender_owner, sender_session_id, recipient_owner, recipient_session_id, created_at)
+            SELECT id, from_owner, from_session_id, owner, to_session_id, created_at
+            FROM inserted WHERE from_owner IS NOT NULL AND from_owner <> owner;
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("id", m.Id);
@@ -97,6 +117,8 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
         cmd.Parameters.AddWithValue("to", m.ToSessionId);
         cmd.Parameters.AddWithValue("owner", m.Owner);
         cmd.Parameters.AddWithValue("body", m.Body);
+        cmd.Parameters.AddWithValue("from_owner", (object?)m.FromOwner ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("from_title", (object?)m.FromTitle ?? DBNull.Value);
         cmd.Parameters.AddWithValue("created", m.CreatedAt);
         cmd.Parameters.AddWithValue("delivered", (object?)m.DeliveredAt ?? DBNull.Value);
         cmd.Parameters.AddWithValue("priority", m.Priority);
@@ -170,7 +192,7 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
     }
 
     // ---- helpers ----
-    private const string Columns = "id, project_id, from_session_id, to_session_id, owner, body, created_at, delivered_at, priority, interrupt, delivered_via";
+    private const string Columns = "id, project_id, from_session_id, to_session_id, owner, body, created_at, delivered_at, priority, interrupt, delivered_via, from_owner, from_title";
 
     private static async Task<List<SessionMessageRecord>> ReadAllAsync(NpgsqlCommand cmd, CancellationToken ct)
     {
@@ -190,7 +212,9 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
                 DeliveredAt = r.IsDBNull(7) ? null : r.GetDateTime(7),
                 Priority = r.GetBoolean(8),
                 Interrupt = r.GetBoolean(9),
-                DeliveredVia = r.IsDBNull(10) ? null : r.GetString(10)
+                DeliveredVia = r.IsDBNull(10) ? null : r.GetString(10),
+                FromOwner = r.IsDBNull(11) ? null : r.GetString(11),
+                FromTitle = r.IsDBNull(12) ? null : r.GetString(12)
             });
         }
         return list;
