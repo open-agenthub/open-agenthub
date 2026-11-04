@@ -445,6 +445,9 @@ git:
 postgres:
   enabled: true
   image: postgres:16-alpine
+  # Last resort for broken host signal confinement; see docs/postgres-startup.md.
+  # Disables AppArmor only for the bundled database, never by default.
+  appArmorUnconfined: false
   # false = emptyDir instead of a PVC (data is lost on pod restart). Only for testing,
   # when no storage provisioner is available.
   persistence: true

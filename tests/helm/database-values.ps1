@@ -30,4 +30,20 @@ if ($older -notmatch 'Postgres__MaxPoolSize: "20"' -or $older -notmatch 'Postgre
     throw 'a values file without backend.database must fall back to 20 and 10'
 }
 
-Write-Output 'Postgres pool size Helm value assertions passed.'
+# Initialization must not start or signal the image's temporary multi-process server.
+if ($default -notmatch 'name: initialize-database' -or $default -notmatch 'postgres --single') {
+    throw 'bundled database must initialize in single-user mode'
+}
+if ($default -match 'docker_temp_server_start|docker_temp_server_stop') {
+    throw 'bundled initialization must not depend on temporary-server signals'
+}
+if ($default -match 'type: Unconfined') { throw 'database confinement must remain enabled by default' }
+$unconfined = Render @('--set', 'postgres.appArmorUnconfined=true')
+if (([regex]::Matches($unconfined, 'appArmorProfile: \{ type: Unconfined \}')).Count -ne 2) {
+    throw 'explicit confinement workaround must apply to init and server containers only'
+}
+$ephemeral = Render @('--set', 'postgres.persistence=false')
+if ($ephemeral -notmatch 'name: init' -or $ephemeral -notmatch 'emptyDir: \{\}') {
+    throw 'ephemeral database must retain its initialization script and writable data volume'
+}
+Write-Output 'Postgres startup and pool size Helm value assertions passed.'
