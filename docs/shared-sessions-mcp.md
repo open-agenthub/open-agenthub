@@ -29,3 +29,7 @@ session ids, and timestamp. The message and audit insert share one database stat
 audit failure prevents message creation. No message body is copied into the audit table.
 A generic role-change audit was rejected because its old/new-role columns cannot accurately
 represent message delivery.
+
+Account purge includes both parties' audit rows and sender snapshots, even if the sender's
+session was already deleted. Relying only on the current session-id list would leave the new
+owner/title metadata behind after the source session disappeared.

@@ -110,6 +110,29 @@ public class SharedSessionsMcpPostgresTests
         Assert.Equal(0L, await db.ScalarAsync<long>("SELECT count(*) FROM cross_owner_message_audit"));
     }
 
+    [PostgreSqlFact]
+    public async Task AccountPurgeRemovesCrossOwnerMetadataForEitherPartyEvenAfterSenderSessionDeletion()
+    {
+        foreach (var principal in new[] { "alice", "bob" })
+        {
+            await using var db = await Setup();
+            await db.Shares.UpsertDirectAsync("bob", "b", "alice", ShareRole.Collaborator);
+            Assert.IsType<OkObjectResult>(await Controller(db, "a").SendMessage("a", new("b", "purge proof"), default));
+            await new PostgresSessionMessageStore(db.Configuration).AddAsync(new SessionMessageRecord
+            {
+                Id = "unrelated", FromSessionId = "c", ToSessionId = "d", Owner = "dave",
+                FromOwner = "carol", FromTitle = "control", Body = "keep"
+            });
+            await db.Sessions.DeleteAsync("a");
+            var purge = new AccountPurgeStore(db.Configuration,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<AccountPurgeStore>.Instance);
+            await purge.PurgeAsync(principal, await purge.ListSessionIdsAsync(principal));
+            Assert.Equal(1L, await db.ScalarAsync<long>("SELECT count(*) FROM session_messages"));
+            Assert.Equal(1L, await db.ScalarAsync<long>("SELECT count(*) FROM cross_owner_message_audit"));
+            Assert.Equal("unrelated", await db.ScalarAsync<string>("SELECT message_id FROM cross_owner_message_audit"));
+        }
+    }
+
     private static async Task AssertManagementDenied(InternalController controller)
     {
         Assert.IsType<NotFoundResult>(await controller.DeletePeer("a", "b", default));
