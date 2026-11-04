@@ -86,6 +86,7 @@ const licenseLock = ref(null)
 const people = computed(() => data.value.users || data.value.directShares || [])
 let loadGeneration = 0
 const links = computed(() => data.value.links || [])
+const projectShares = computed(() => data.value.projectShares || [])
 const serverNames = computed(() => { try { return Object.keys(JSON.parse(props.session.mcpConfigJson || '{}').mcpServers || {}) } catch { return [] } })
 function list(value) { return value.split(/[\n,]/).map(item => item.trim()).filter(Boolean) }
 async function load() {
@@ -178,6 +179,14 @@ onUnmounted(() => { ++recipientGeneration; clearTimeout(recipientTimer) })
         <li v-for="person in recipientOptions" :key="person.username"><button type="button" @click="chooseRecipient(person)">{{ person.displayName || person.username }} · Username: {{ person.username }}</button></li>
       </ul>
       <p v-else-if="recipientChecked" class="sub" role="status">No matching user. Try the exact sign-in username or email; the person must have signed in here before.</p>
+      <div v-if="projectShares.length" class="project-shares" data-share-project-shares>
+        <p class="sub">Also open to everyone the session's project is shared with. A role here can add to theirs, never take it away; change it in the project's settings.</p>
+        <div v-for="share in projectShares" :key="share.subjectType + ':' + share.subject" class="person inherited">
+          <span class="avatar">{{ share.subjectType === 'group' ? '#' : initials(share.subject) }}</span>
+          <span class="pname">{{ share.subject }}<small v-if="share.subjectType === 'group'"> · group</small></span>
+          <span class="via">{{ share.role }} · via project</span>
+        </div>
+      </div>
       <div v-for="person in people" :key="person.recipient || person.owner" class="person">
         <span class="avatar">{{ initials(person.recipient || person.owner) }}</span>
         <span class="pname">{{ person.recipient || person.owner }}</span>
@@ -252,6 +261,7 @@ section.bordered { border-top: 1px solid var(--border); margin-top: 14px; paddin
 .person { display: flex; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; }
 .avatar { width: 26px; height: 26px; border-radius: 50%; background: #3d3a33; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: #d6d1c8; font-weight: 700; flex-shrink: 0; }
 .pname { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
+.inherited .pname small, .via { color: var(--faint); font-weight: 400; font-size: 12px; }
 .mono { font-family: var(--mono); font-size: 12px; font-weight: 400; }
 .link-intro { display: flex; gap: 12px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
 .one-time { border: 1px solid var(--accent); border-radius: 10px; padding: 10px 12px; font-size: 12px; margin: 10px 0 0; }

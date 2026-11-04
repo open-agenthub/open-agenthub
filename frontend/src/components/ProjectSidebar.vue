@@ -6,6 +6,7 @@ import MoveSessionDialog from './MoveSessionDialog.vue'
 import { reorderSessions } from '../lib/session-order.js'
 import SessionList from './SessionList.vue'
 import ProjectSecretsDialog from './ProjectSecretsDialog.vue'
+import ProjectShareDialog from './ProjectShareDialog.vue'
 
 const props = defineProps({ projects: Array, sessions: Array, active: String, query: { type: String, default: '' } })
 const emit = defineEmits(['new', 'select', 'remove', 'resume', 'pause', 'edit', 'duplicate', 'share', 'projects-changed'])
@@ -15,6 +16,9 @@ const secretsFor = ref(null)
 async function secretsSaved() { secretsFor.value = null; await changed() }
 // The sidebar group is a projection without the selection; the dialog needs the project itself.
 function openSecrets(group) { secretsFor.value = (props.projects || []).find(project => project.id === group.id) || null }
+// The project whose shares are open (#409), or null.
+const shareFor = ref(null)
+function openShare(group) { shareFor.value = (props.projects || []).find(project => project.id === group.id) || null }
 const groups = computed(() => {
   const result = groupSessions(props.projects, props.sessions, props.query)
   if (!props.query && !result.some(g => g.id === 'ungrouped')) result.push({ id: 'ungrouped', name: 'Ungrouped', sessions: [] })
@@ -91,7 +95,7 @@ async function removeProject(project) {
     <section v-for="group in groups" :key="group.id" class="project-group">
       <header class="group-head" :data-project-drop="group.id" @dragover.prevent @drop.prevent="dropSession($event, group.id)">
         <button class="group-title" :data-toggle-group="group.id" :aria-expanded="!isCollapsed(group.id)" @click="toggleGroup(group.id)"><span class="chevron">{{ isCollapsed(group.id) ? '▸' : '▾' }}</span><i v-if="group.color" :style="{ background: group.color }"></i>{{ group.name }} <small>{{ group.sessions.length }}</small></button>
-        <span v-if="group.id !== 'shared' && group.id !== 'ungrouped'" class="group-controls"><button title="Move up" @click="reorder(group, -1)">↑</button><button title="Move down" @click="reorder(group, 1)">↓</button><button title="Rename" @click="rename(group)">✎</button><button title="Color" @click="recolor(group)">●</button><button title="Secrets" :data-project-secrets-open="group.id" @click="openSecrets(group)">⚿</button><button title="Delete project" @click="removeProject(group)">×</button></span>
+        <span v-if="group.id !== 'shared' && group.id !== 'ungrouped'" class="group-controls"><button title="Move up" @click="reorder(group, -1)">↑</button><button title="Move down" @click="reorder(group, 1)">↓</button><button title="Rename" @click="rename(group)">✎</button><button title="Color" @click="recolor(group)">●</button><button title="Secrets" :data-project-secrets-open="group.id" @click="openSecrets(group)">⚿</button><button title="Share project" :data-project-share-open="group.id" @click="openShare(group)">⇪</button><button title="Delete project" @click="removeProject(group)">×</button></span>
       </header>
       <SessionList v-if="!isCollapsed(group.id) && group.sessions.length" :sessions="group.sessions" :active="active" @organize="organize" @drag-session="dragSession" @drop-session="(event, session) => dropSession(event, group.id, session.id)" @select="$emit('select', $event)" @remove="$emit('remove', $event)" @resume="$emit('resume', $event)" @pause="$emit('pause', $event)" @edit="$emit('edit', $event)" @duplicate="$emit('duplicate', $event)" @share="$emit('share', $event)" />
     </section>
@@ -100,6 +104,7 @@ async function removeProject(project) {
     <p v-if="!groups.length" class="none">No matching sessions.</p>
     <button class="new-project" @click="createProject">+ New project</button>
     <ProjectSecretsDialog v-if="secretsFor" :project="secretsFor" @close="secretsFor = null" @saved="secretsSaved" />
+    <ProjectShareDialog v-if="shareFor" :project="shareFor" @close="shareFor = null" />
   </div>
 </template>
 

@@ -142,6 +142,11 @@ export const api = {
   createProject: (data) => req('POST', '/projects', data),
   updateProject: (id, data) => req('PATCH', `/projects/${encodeURIComponent(id)}`, data),
   deleteProject: (id) => req('DELETE', `/projects/${encodeURIComponent(id)}`),
+  // Project shares (#409): one PUT adds or re-roles a subject, keyed by subjectType + subject.
+  listProjectShares: (id) => req('GET', `/ee/projects/${encodeURIComponent(id)}/shares`),
+  upsertProjectShare: (id, data) => req('PUT', `/ee/projects/${encodeURIComponent(id)}/shares`, data),
+  deleteProjectShare: (id, subjectType, subject) => req('DELETE', `/ee/projects/${encodeURIComponent(id)}/shares/${encodeURIComponent(subjectType)}/${encodeURIComponent(subject)}`),
+  findProjectShareRecipients: (id, query) => req('GET', `/ee/projects/${encodeURIComponent(id)}/shares/recipients?query=${encodeURIComponent(query)}`),
   listSessionShares: (id) => req('GET', `/ee/sessions/${encodeURIComponent(id)}/shares`),
   createShareUser: (id, data) => req('POST', `/ee/sessions/${encodeURIComponent(id)}/shares/users`, data),
   updateShareUser: (id, recipient, data) => req('PATCH', `/ee/sessions/${encodeURIComponent(id)}/shares/users/${encodeURIComponent(recipient)}`, data),

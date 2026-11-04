@@ -152,3 +152,26 @@ condition applied. Malformed URL escapes also reach this state instead of aborti
 
 The repeatable real-service/Chromium proof and its limitations are in
 `tests/SessionSharingProof/README.md`.
+
+## Project shares (#409)
+
+The web app manages them under `/api/ee/projects/{projectId}/shares`:
+
+| Method | Path | Body / answer |
+|---|---|---|
+| `GET` | `…/shares` | `ProjectShare[]`: `subjectType` (`user` or `group`), `subject`, `role`, timestamps |
+| `PUT` | `…/shares` | `{ subjectType, subject, role }` — adds the share or changes its role |
+| `DELETE` | `…/shares/{subjectType}/{subject}` | 204; 404 when there is no such share |
+| `GET` | `…/shares/recipients?query=` | `{ users, groups }` — matching signed-in users, and the caller's own groups |
+
+One `PUT` for both adding and re-roling, keyed by subject, instead of the session surface's
+`POST` plus `PATCH`: a project share has no id of its own, and a client that wants "bob is
+Collaborator" should not have to know whether bob was already there. The errors are those of the
+session surface: 402 without a licence, 404 for a project that is not the caller's, 400 with
+`code: unknown_recipient` for a user who has never signed in, and 400 for a group the caller does
+not belong to. `session-sharing.md` explains the group rule and the precedence.
+
+`SessionSharingOverview` carries `projectShares`, the shares on the session's project, so the
+session's dialog can show who else opens it. The token API and the MCP tools do not manage
+project shares yet. Access through them already works, because both resolve through
+`ISessionAccessService`.
