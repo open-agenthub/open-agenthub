@@ -15,6 +15,40 @@ namespace AgentHub.Api.Tests;
 public class SharedSessionsMcpPostgresTests
 {
     [PostgreSqlFact]
+    public async Task EveryListedOwnedFleetTargetIsReadableAndSendable()
+    {
+        await using var db = await Setup();
+        foreach (var (id, project, parent) in new (string, string?, string?)[]
+        {
+            ("a", "fleet", "parent"), ("peer", "fleet", null), ("parent", null, null),
+            ("child", null, "a"), ("sibling", "fleet", "parent"), ("outside", "other", null)
+        })
+            await db.UpsertSessionAsync(new SessionRecord
+            {
+                Id = id, Owner = "alice", Title = id, Mode = SessionMode.Interactive,
+                CallbackToken = $"callback-{id}", ProjectId = project, ParentSessionId = parent
+            });
+        var caller = Controller(db, "a", ownedFleet: true);
+        var listed = Assert.IsAssignableFrom<IEnumerable<ProjectAgentInfo>>(
+            Assert.IsType<OkObjectResult>(await caller.ProjectAgents("a", default)).Value);
+        Assert.All(listed, s => Assert.Equal("alice", s.Owner));
+        var targets = listed.Where(s => !s.Self).Select(s => s.Id).Order().ToArray();
+        Assert.Equal(new[] { "child", "parent", "peer", "sibling" }, targets);
+        foreach (var target in targets)
+        {
+            Assert.IsType<OkObjectResult>(await caller.SendMessage("a", new(target, "fleet"), default));
+            Assert.IsType<OkObjectResult>(await caller.GetPeer("a", target, default));
+            Assert.Single(await new PostgresSessionMessageStore(db.Configuration)
+                .ListPageAsync("alice", target, null, 10));
+        }
+        foreach (var target in new[] { "outside", "missing", "b" })
+        {
+            Assert.IsType<NotFoundResult>(await caller.SendMessage("a", new(target, "denied"), default));
+            Assert.IsType<NotFoundResult>(await caller.GetPeer("a", target, default));
+        }
+    }
+
+    [PostgreSqlFact]
     public async Task ViewerCanReadButCannotSendOrManageAndRevocationIsImmediate()
     {
         await using var db = await Setup();
@@ -235,9 +269,10 @@ public class SharedSessionsMcpPostgresTests
         return db;
     }
 
-    private static InternalController Controller(PostgresSharingDatabase db, string id, bool licensed = true)
+    private static InternalController Controller(PostgresSharingDatabase db, string id, bool licensed = true, bool ownedFleet = false)
     {
         var service = DispatchProxy.Create<ISessionService, EmptySessionService>();
+        if (ownedFleet) ((EmptySessionService)service).Store = db.Sessions;
         var controller = new InternalController(db.Sessions, [], service, null!, [], [], null!, null!,
             messages: new PostgresSessionMessageStore(db.Configuration),
             secretRequests: new PostgresSecretRequestStore(db.Configuration),
@@ -250,9 +285,21 @@ public class SharedSessionsMcpPostgresTests
 
     public class EmptySessionService : DispatchProxy
     {
-        protected override object? Invoke(MethodInfo? method, object?[]? args)
-            => method?.Name == nameof(ISessionService.ListSessionsAsync)
-                ? Task.FromResult<IReadOnlyList<SessionInfo>>([])
-                : throw new InvalidOperationException($"Unexpected service operation: {method?.Name}");
+        public PostgresSessionStore? Store { get; set; }
+        protected override object? Invoke(MethodInfo? method, object?[]? args) => method?.Name switch
+        {
+            nameof(ISessionService.ListSessionsAsync) => List((string)args![0]!),
+            nameof(ISessionService.GetSessionAsync) when Store is not null => Get((string)args![0]!, (string)args[1]!),
+            _ => throw new InvalidOperationException($"Unexpected service operation: {method?.Name}")
+        };
+        private async Task<IReadOnlyList<SessionInfo>> List(string owner)
+            => Store is null ? [] : (await Store.ListAsync(owner)).Select(Info).ToList();
+        private async Task<SessionInfo?> Get(string owner, string id)
+            => await Store!.GetAsync(owner, id) is { } record ? Info(record) : null;
+        private static SessionInfo Info(SessionRecord record) => new()
+        {
+            Id = record.Id, Owner = record.Owner, Title = record.Title, Mode = record.Mode,
+            Phase = record.Status, ProjectId = record.ProjectId, ParentSessionId = record.ParentSessionId
+        };
     }
 }

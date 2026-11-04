@@ -9,6 +9,7 @@ using Microsoft.AspNetCore.Mvc.ApplicationParts;
 using Microsoft.AspNetCore.Mvc.Controllers;
 
 var builder = WebApplication.CreateBuilder(args);
+var service = DispatchProxy.Create<ISessionService, EmptyService>();
 builder.Services.AddControllers().AddApplicationPart(typeof(InternalController).Assembly)
     .ConfigureApplicationPartManager(m => m.FeatureProviders.Add(new OnlyInternal()));
 builder.Services.AddSingleton<PostgresSessionStore>();
@@ -20,7 +21,7 @@ builder.Services.AddSingleton<ISessionMessageStore, PostgresSessionMessageStore>
 builder.Services.AddSingleton<ISessionSharingService>(s => new SessionSharingService(
     s.GetRequiredService<SessionShareStore>(), s.GetRequiredService<IEnterpriseLicense>(), null));
 builder.Services.AddTransient<InternalController>(s => new InternalController(
-    s.GetRequiredService<PostgresSessionStore>(), [], DispatchProxy.Create<ISessionService, EmptyService>(),
+    s.GetRequiredService<PostgresSessionStore>(), [], service,
     null!, [], [], null!, null!, messages: s.GetRequiredService<ISessionMessageStore>(),
     access: s.GetRequiredService<ISessionAccessService>(), sharing: s.GetRequiredService<ISessionSharingService>()));
 builder.Services.AddControllers().AddControllersAsServices();
@@ -31,10 +32,15 @@ var users = new UserDirectory(builder.Configuration);
 await users.InitializeAsync();
 await users.RecordLoginAsync("alice", "alice@example.com", "Alice");
 await users.RecordLoginAsync("bob", "bob@example.com", "Bob");
+((EmptyService)service).Store = sessions;
+await new PostgresProjectStore(builder.Configuration).InitializeAsync();
+await new AgentHub.Api.Ee.Identity.UserGroupStore(builder.Configuration).InitializeAsync();
 var shares = app.Services.GetRequiredService<SessionShareStore>();
 await shares.InitializeAsync();
 await app.Services.GetRequiredService<ISessionMessageStore>().InitializeAsync();
-await sessions.UpsertAsync(new SessionRecord { Id = "a", Owner = "alice", Title = "Agent A", CallbackToken = "proof-a", Status = "Paused" });
+await sessions.UpsertAsync(new SessionRecord { Id = "a", Owner = "alice", Title = "Agent A", CallbackToken = "proof-a", Status = "Paused", ProjectId = "fleet", ParentSessionId = "parent" });
+foreach (var (id, project, parent) in new (string, string?, string?)[] { ("peer", "fleet", null), ("parent", null, null), ("child", null, "a"), ("sibling", "fleet", "parent"), ("outside", "other", null) })
+    await sessions.UpsertAsync(new SessionRecord { Id = id, Owner = "alice", Title = id, CallbackToken = $"proof-{id}", Status = "Paused", ProjectId = project, ParentSessionId = parent });
 await sessions.UpsertAsync(new SessionRecord { Id = "b", Owner = "bob", Title = "Agent B", CallbackToken = "proof-b", Status = "Paused", McpConfigJson = "private" });
 await sessions.UpsertAsync(new SessionRecord { Id = "b-child", Owner = "bob", Title = "Agent B child", ParentSessionId = "b", CallbackToken = "proof-b-child", Status = "Paused" });
 app.MapControllers();
@@ -50,10 +56,22 @@ app.Run("http://127.0.0.1:8408");
 
 public class EmptyService : DispatchProxy
 {
-    protected override object? Invoke(MethodInfo? method, object?[]? args)
-        => method?.Name == nameof(ISessionService.ListSessionsAsync)
-            ? Task.FromResult<IReadOnlyList<SessionInfo>>([])
-            : throw new InvalidOperationException($"Unexpected service call: {method?.Name}");
+    public PostgresSessionStore Store { get; set; } = null!;
+    protected override object? Invoke(MethodInfo? method, object?[]? args) => method?.Name switch
+    {
+        nameof(ISessionService.ListSessionsAsync) => List((string)args![0]!),
+        nameof(ISessionService.GetSessionAsync) => Get((string)args![0]!, (string)args[1]!),
+        _ => throw new InvalidOperationException($"Unexpected service call: {method?.Name}")
+    };
+    private async Task<IReadOnlyList<SessionInfo>> List(string owner)
+        => (await Store.ListAsync(owner)).Select(Info).ToList();
+    private async Task<SessionInfo?> Get(string owner, string id)
+        => await Store.GetAsync(owner, id) is { } record ? Info(record) : null;
+    private static SessionInfo Info(SessionRecord record) => new()
+    {
+        Id = record.Id, Owner = record.Owner, Title = record.Title, Mode = record.Mode,
+        Phase = record.Status, ProjectId = record.ProjectId, ParentSessionId = record.ParentSessionId
+    };
 }
 sealed class ProofLicense : IEnterpriseLicense
 {
