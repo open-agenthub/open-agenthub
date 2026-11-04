@@ -54,6 +54,7 @@ public enum SessionAccessLevel
     Owner
 }
 
+/// <summary>What a principal may do with a session, and on whose behalf.</summary>
 /// <param name="InheritedFrom">The ancestor whose share grants this access, when no grant on the
 /// session itself is at least as strong; null for the owner, a direct share and a link.</param>
 public sealed record SessionAccessResult(
@@ -72,6 +73,7 @@ public enum ShareGrantScope
     Ancestor
 }
 
+/// <summary>One grant that could open a session for a principal; see <see cref="SessionAccessRules.Decide"/>.</summary>
 /// <param name="SessionId">The session the grant is stored on: the session itself, or the
 /// ancestor it is inherited from.</param>
 /// <param name="Depth">Steps up the chain to <paramref name="SessionId"/>; 0 on the session.</param>
