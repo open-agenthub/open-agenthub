@@ -4,8 +4,15 @@ using Microsoft.AspNetCore.Mvc;
 
 namespace AgentHub.Api.Controllers;
 
-public sealed record ShareLinkReadRequest(string Link, int? Offset = null, int? Max = null);
-public sealed record ShareLinkSendRequest(string Link, string Message);
+public sealed record ShareLinkReadRequest(string Link, int? Offset = null, int? Max = null)
+{
+    // MVC trace logging formats action arguments with ToString, including record properties.
+    public override string ToString() => "ShareLinkReadRequest { Link = [redacted] }";
+}
+public sealed record ShareLinkSendRequest(string Link, string Message)
+{
+    public override string ToString() => "ShareLinkSendRequest { Link = [redacted], Message = [redacted] }";
+}
 
 // POST bodies keep the bearer capability out of access-log URLs and route values.
 [ApiController]

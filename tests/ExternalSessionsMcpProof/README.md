@@ -15,9 +15,8 @@ Generated output belongs outside Git. This proof uses synthetic owners and a dis
 The driver also starts anonymous stdio and Streamable HTTP clients on `/mcp/shared`, checks that
 only the two link tools are exposed, and exercises Viewer/Collaborator status/history/send,
 revocation and expiration. Link history passes through the real shared-history sanitizer.
-Inspect the host log for every token recorded by the driver in
-`/tmp/external-mcp-proof-tokens.txt`; no token may appear. Tokens are fixture capabilities and
-are never committed. Expiry uses a loopback fixture database update to avoid a timing-based test.
+The driver checks the host log (`PROOF_LOG`, default `/tmp/external-mcp-host.log`) for every
+exercised token; none may appear. Tokens stay in memory and are never written to files. Expiry uses a loopback fixture database update to avoid a timing-based test.
 
 ## Unchanged-main comparison
 

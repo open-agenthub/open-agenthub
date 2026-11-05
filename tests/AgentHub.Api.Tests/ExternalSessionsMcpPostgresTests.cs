@@ -16,6 +16,15 @@ namespace AgentHub.Api.Tests;
 
 public class ExternalSessionsMcpPostgresTests
 {
+    [Fact]
+    public void FrameworkArgumentFormattingDoesNotRevealLinkOrMessage()
+    {
+        Assert.DoesNotContain("bearer-secret", new ShareLinkReadRequest("bearer-secret").ToString());
+        var send = new ShareLinkSendRequest("bearer-secret", "private body").ToString();
+        Assert.DoesNotContain("bearer-secret", send);
+        Assert.DoesNotContain("private body", send);
+    }
+
     [PostgreSqlTheory]
     [InlineData(ShareRole.Viewer)]
     [InlineData(ShareRole.Collaborator)]

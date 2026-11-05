@@ -92,6 +92,7 @@ try {
   const exposed = (await anonymousRemote.listTools()).tools.map(t=>t.name).sort();
   assert.deepEqual(exposed,['share_link_read','share_link_send']);
   await assert.rejects(()=>anonymousRemote.callTool({name:'session_list',arguments:{}}));
+  const testedTokens = [];
   for (const client of [anonymousStdio,anonymousRemote]) {
     for (const grant of ['Viewer','Collaborator']) {
       const issued = await (await fetch(`${base}/__link/${grant}`,{method:'POST'})).json();
@@ -108,8 +109,11 @@ try {
       assert.equal((await call(client,'share_link_read',{link:token})).error,true);
       assert.equal((await call(client,'share_link_send',{link:token,message:'denied'})).error,true);
       // A token must never enter a URL request; the host log is inspected after the run.
-      fs.appendFileSync(process.env.PROOF_TOKENS ?? '/tmp/external-mcp-proof-tokens.txt',token+'\n');
+      testedTokens.push(token);
     }
   }
+  const hostLog = fs.readFileSync(process.env.PROOF_LOG ?? '/tmp/external-mcp-host.log', 'utf8');
+  assert(testedTokens.every(token => !hostLog.includes(token)), 'Link token appeared in backend logs');
+  console.log(`PASS ${testedTokens.length} exercised link tokens absent from backend request/tool logs`);
   console.log('PASS anonymous stdio and isolated remote MCP link status/history, collaborator send, viewer denial, revocation and expiry');
 } finally { for (const c of clients) await c.close(); }
