@@ -251,8 +251,9 @@ module.exports = {
   // ships) and app-server-daemon/ its pid and lock files: neither belongs to a conversation.
   // config.toml is rewritten from scratch at every start (entrypoint.sh), and holds the MCP
   // servers' literal header values; archiving it only persisted those values in object storage.
+  // The glob also covers any copy of it, should a CLI version start keeping backups.
   stateExcludes: ['.codex/log', '.codex/tmp', '.codex/.tmp', '.codex/packages', '.codex/app-server-daemon', '.codex/agenthub-active',
-    '.codex/config.toml'],
+    '.codex/config.toml*'],
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand, isResumeCommand, isMissingResume, findTranscript, prepare, readUsage,

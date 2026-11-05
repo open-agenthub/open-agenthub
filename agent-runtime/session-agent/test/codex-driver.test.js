@@ -34,7 +34,7 @@ test('Codex state archive leaves out the growing TUI log and scratch dirs, but k
   const { validateDriver } = require('../../common/driver-contract');
   assert.doesNotThrow(() => validateDriver(driver));
   assert.deepEqual(driver.stateExcludes, ['.codex/log', '.codex/tmp', '.codex/.tmp',
-    '.codex/packages', '.codex/app-server-daemon', '.codex/agenthub-active', '.codex/config.toml']);
+    '.codex/packages', '.codex/app-server-daemon', '.codex/agenthub-active', '.codex/config.toml*']);
   assert.ok(!driver.stateExcludes.some(entry => entry.startsWith('.codex/sessions')));
 });
 

@@ -108,8 +108,8 @@ module.exports = {
   name: 'Cursor', stateDir: '.cursor', authFilename: 'auth.json',
   // mcp.json is rewritten at every start (the shared entrypoint always enables the files server,
   // so entrypoint.sh always writes it), and holds the MCP servers' literal header values;
-  // archiving it only persisted those values in object storage.
-  stateExcludes: ['.cursor/mcp.json'],
+  // archiving it only persisted those values in object storage. The glob also covers any copy.
+  stateExcludes: ['.cursor/mcp.json*'],
   limitPatterns,
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),

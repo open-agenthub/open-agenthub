@@ -113,14 +113,22 @@ write outside their state directories and were not affected.
 
 | Runtime | File | Treatment |
 |---|---|---|
-| Codex | `.codex/config.toml` | `stateExcludes` |
-| Cursor | `.cursor/mcp.json` | `stateExcludes` |
-| OpenClaw | `.openclaw/openclaw.json` | archived, but holds references instead of values |
+| Codex | `.codex/config.toml` | `stateExcludes` (`config.toml*`) |
+| Cursor | `.cursor/mcp.json` | `stateExcludes` (`mcp.json*`) |
+| OpenClaw | `.openclaw/openclaw.json` | archived, but holds references instead of values; its rotated `.bak*` copies are excluded |
 
 **Codex and Cursor: excluded.** Both files are rewritten at every start (`config.toml` with `>`;
 `mcp.json` whenever any MCP server or builtin is on, which is always, because the shared
 entrypoint always enables the files server), so nothing written into them during a session ever
-survived a restart. Excluding them loses nothing a resume used.
+survived a restart. Excluding them loses nothing a resume used. The globs and a matching `rm` at start also cover
+copies of either file: the pinned Codex keeps none (checked by having it rewrite its config with
+`codex mcp add`), Cursor's CLI was not checked, and an archive written before this change could
+carry one either way.
+
+**OpenClaw keeps backups.** The real CLI rotates `openclaw.json.bak` through `.bak.4` on every
+config write, and the entrypoint alone writes the config several times per start, so on `main` a
+fresh session's archive held the callback-protected header four times and a resumed one six. The
+copies are excluded and deleted at start; nothing reads them on a resume.
 
 **OpenClaw: references, not an exclude.** `openclaw.json` also holds what a resume has to bring
 back: the servers the agent added itself with `openclaw mcp add` (kept on purpose, see

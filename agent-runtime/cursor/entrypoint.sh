@@ -20,6 +20,9 @@ fi
 export CURSOR_CONFIG_DIR="${CURSOR_CONFIG_DIR:-$HOME/.cursor}"
 mkdir -p "$CURSOR_CONFIG_DIR"
 chmod 700 "$CURSOR_CONFIG_DIR"
+# Copies of mcp.json from an archive written before #446 would hold the MCP servers' literal header
+# values; mcp.json itself is rewritten below.
+rm -f "$CURSOR_CONFIG_DIR"/mcp.json?*
 umask 077
 
 # File-store auth path discovered from Cursor Agent CLI 2026.07.23-e383d2b:

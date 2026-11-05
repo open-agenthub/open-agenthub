@@ -58,6 +58,7 @@ test('Codex: config.toml with MCP header values stays out of the archive', t => 
     { env: { ...process.env, AGENTHUB_SKILLS_MCP_ENABLED: '0' }, encoding: 'utf8' });
   fs.mkdirSync(path.join(home, '.codex'));
   fs.writeFileSync(path.join(home, '.codex', 'config.toml'), toml);
+  fs.writeFileSync(path.join(home, '.codex', 'config.toml.bak'), toml);
   fs.writeFileSync(path.join(home, '.codex', 'history.jsonl'), '{"text":"kept"}\n');
   // The precondition, so the test cannot pass by the converter dropping the values.
   assert.ok(toml.includes(HEADER_VALUE));
@@ -74,6 +75,7 @@ test('Cursor: mcp.json with MCP header values stays out of the archive', t => {
     { encoding: 'utf8' });
   fs.mkdirSync(path.join(home, '.cursor'));
   fs.writeFileSync(path.join(home, '.cursor', 'mcp.json'), json);
+  fs.writeFileSync(path.join(home, '.cursor', 'mcp.json.bak'), json);
   fs.writeFileSync(path.join(home, '.cursor', 'cli-config.json'), '{"kept":true}');
   assert.ok(json.includes(HEADER_VALUE));
 
@@ -110,4 +112,23 @@ test('OpenClaw: openclaw.json is archived but holds references, not values', t =
   assert.equal(variable(written.remote.headers['X-Api-Key'].slice(2, -1)), HEADER_VALUE);
   assert.equal(variable(written.local.env.API_TOKEN.slice(2, -1)), ENV_VALUE);
   assert.equal(fs.statSync(envFile).mode & 0o777, 0o600);
+});
+
+test('each entrypoint deletes restored copies of its MCP config, but not the config itself', t => {
+  // An archive written before #446 brings those copies back with literal values in them.
+  const cases = [
+    ['codex', /^rm -f "\$CODEX_HOME"\/config\.toml\?\*$/m, 'CODEX_HOME', 'config.toml', ['config.toml.bak', 'config.toml.1']],
+    ['cursor', /^rm -f "\$CURSOR_CONFIG_DIR"\/mcp\.json\?\*$/m, 'CURSOR_CONFIG_DIR', 'mcp.json', ['mcp.json.bak', 'mcp.json~']],
+    ['openclaw', /^rm -f "\$OPENCLAW_STATE_DIR"\/openclaw\.json\.bak\*$/m, 'OPENCLAW_STATE_DIR', 'openclaw.json', ['openclaw.json.bak', 'openclaw.json.bak.4']]
+  ];
+  for (const [runtime, pattern, variable, file, copies] of cases) {
+    const entrypoint = fs.readFileSync(path.join(runtimeDir, runtime, 'entrypoint.sh'), 'utf8');
+    const line = pattern.exec(entrypoint)?.[0];
+    assert.ok(line, runtime);
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), `agenthub-${runtime}-copies-`));
+    t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+    for (const name of [file, ...copies]) fs.writeFileSync(path.join(dir, name), HEADER_VALUE);
+    execFileSync('/bin/bash', ['-c', line], { env: { ...process.env, [variable]: dir } });
+    assert.deepEqual(fs.readdirSync(dir), [file], runtime);
+  }
 });
