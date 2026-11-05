@@ -13,7 +13,10 @@ const usage = require('../common/usage');
 // daemon buys nothing, and a state archive that caught the package half-installed restored a
 // `current` link without its binary — every later start then failed with "daemon executable
 // not found". In-process, the TUI needs neither the package nor the daemon's pid bookkeeping.
-const TUI_FLAGS = ['--no-alt-screen', '--no-daemon'];
+// The pod is the sandbox; the managed PreToolUse hook owns every approval. A native
+// approval dialog would race the Workspace prompt and can leave the TUI waiting after approval.
+const TUI_FLAGS = ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access',
+  '--ask-for-approval', 'never'];
 // Session pods already isolate the process and forbid the namespaces bubblewrap needs.
 // Keep managed hooks active: they enforce policy and route unattended approvals before tools run.
 const EXEC_FLAGS = ['--sandbox', 'danger-full-access', '--json', '--dangerously-bypass-hook-trust'];

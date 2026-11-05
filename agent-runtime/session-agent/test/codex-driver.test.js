@@ -39,33 +39,33 @@ test('Codex state archive leaves out the growing TUI log and scratch dirs, but k
 });
 
 test('Codex interactive fresh and restored commands use only explicit resume shapes', () => {
-  assert.deepEqual(driver.buildCommand(environment(), true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon'] });
+  assert.deepEqual(driver.buildCommand(environment(), true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
-  }), true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
+  }), true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', '--last'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
-  }), false), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon'] });
+  }), false), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never'] });
 });
 
 test('Codex interactive session starts on its prompt, except when resuming', () => {
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_PROMPT: 'triage the failing build'
-  }), true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'triage the failing build'] });
+  }), true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'triage the failing build'] });
 
   // `resume` is a subcommand, so a trailing prompt there would not parse — and the restored
   // thread already contains the task.
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_PROMPT: 'triage the failing build',
     AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
-  }), true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
+  }), true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', '--last'] });
 
   const deviceLogin = path.join(runtimeDir, 'codex', 'device-login.sh');
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CODEX_DEVICE_AUTH: '1', AGENTHUB_PROMPT: 'triage the failing build'
-  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', 'triage the failing build'] });
+  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'triage the failing build'] });
   assert.equal(driver.isResumeCommand({
-    cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', 'triage the failing build']
+    cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'triage the failing build']
   }), false);
 });
 
@@ -73,14 +73,14 @@ test('Codex device login runs inside the agent PTY before the interactive CLI', 
   const deviceLogin = path.join(runtimeDir, 'codex', 'device-login.sh');
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CODEX_DEVICE_AUTH: '1'
-  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon'] });
+  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never'] });
   assert.deepEqual(driver.buildCommand(environment({
     AGENTHUB_CODEX_DEVICE_AUTH: '1',
     AGENTHUB_RESUME: '1',
     AGENTHUB_STATE_RESTORED: '1'
-  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', 'resume', '--last'] });
+  }), true), { cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', '--last'] });
   assert.equal(driver.isResumeCommand({
-    cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', 'resume', '--last']
+    cmd: 'bash', args: [deviceLogin, '--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', '--last']
   }), true);
 
   const script = fs.readFileSync(deviceLogin, 'utf8');
@@ -114,8 +114,8 @@ test('Codex interactive commands run the TUI in-process, without the app-server 
 });
 
 test('Codex resume recognition rejects fresh and merely resume-like commands', () => {
-  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] }), true);
-  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume later'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', '--last'] }), true);
+  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume later'] }), false);
   assert.equal(driver.isResumeCommand({
     cmd: 'codex', args: ['exec', '--sandbox', 'danger-full-access', '--json',
       '--dangerously-bypass-hook-trust', 'resume', '--last', 'prompt']
@@ -124,8 +124,8 @@ test('Codex resume recognition rejects fresh and merely resume-like commands', (
   assert.equal(driver.isResumeCommand({
     cmd: 'bash', args: [path.join(runtimeDir, 'codex', 'device-login.sh')]
   }), false);
-  assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] }), false);
-  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'other', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', '--last'] }), false);
+  assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never'] }), false);
 });
 
 function codexHomeFixture() {
@@ -173,10 +173,10 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
   const { home, cleanup } = codexHomeFixture();
   try {
     const env = environment({ CODEX_HOME: home, AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1' });
-    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', '--last'] });
 
     fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), THREAD_A + '\n');
-    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] });
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', THREAD_A] });
     assert.deepEqual(driver.buildCommand(environment({
       CODEX_HOME: home, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'go',
       AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
@@ -185,7 +185,7 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
       args: ['exec', '--sandbox', 'danger-full-access', '--json', '--dangerously-bypass-hook-trust',
         'resume', THREAD_A, 'go']
     });
-    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] }), true);
+    assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', THREAD_A] }), true);
     assert.equal(driver.isResumeCommand({ cmd: 'codex', args: ['resume', 'not-an-id'] }), false);
 
     // The remembered id wins over anything newer: that is the whole point of recording it.
@@ -195,7 +195,7 @@ test('Codex resumes by the remembered thread id and finds that rollout again, ne
 
     // A corrupt id file is ignored rather than passed to the CLI.
     fs.writeFileSync(path.join(home, driver.THREAD_ID_FILE), 'garbage; rm -rf /\n');
-    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', '--last'] });
+    assert.deepEqual(driver.buildCommand(env, true), { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', '--last'] });
   } finally {
     cleanup();
   }
@@ -244,7 +244,7 @@ test('Codex continues a converted autonomous run as the same thread in the TUI',
       CODEX_HOME: home, AGENTHUB_MODE: 'interactive', AGENTHUB_PROMPT: 'triage the failing build',
       AGENTHUB_RESUME: '1', AGENTHUB_STATE_RESTORED: '1'
     }), true);
-    assert.deepEqual(converted, { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', 'resume', THREAD_A] });
+    assert.deepEqual(converted, { cmd: 'codex', args: ['--no-alt-screen', '--no-daemon', '--sandbox', 'danger-full-access', '--ask-for-approval', 'never', 'resume', THREAD_A] });
     assert.ok(!converted.args.includes('triage the failing build'));
     assert.equal(driver.isResumeCommand(converted), true);
   } finally {
