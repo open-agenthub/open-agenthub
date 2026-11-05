@@ -213,7 +213,7 @@ test('maps http errors to stable codes and never includes the token', async () =
   });
 });
 
-test('requires AGENTHUB_URL and AGENTHUB_TOKEN', async () => {
+test('requires AGENTHUB_URL and permits anonymous link clients', async () => {
   const { AgentHubClient } = await import('../client.mjs');
   assert.throws(() => new AgentHubClient({}), /agenthub_not_configured/);
   assert.throws(
@@ -333,4 +333,20 @@ test('token read routes preserve page cursors and encode identifiers', async () 
     '/api/remote/sessions/s%2Fid/conversation?offset=8&max=1',
     '/api/remote/projects', '/api/remote/projects/p%2Fid', '/api/remote/mcp-servers'
   ]);
+});
+
+ test('share links use POST bodies without an account token or secret in the URL', async () => {
+  const { AgentHubClient } = await import('../client.mjs');
+  const calls = [];
+  const client = new AgentHubClient({ AGENTHUB_URL: 'https://example.com' }, async (url, init) => {
+    calls.push({ url, init }); return new Response('{}', { headers: { 'Content-Type': 'application/json' } });
+  });
+  await client.readShareLink('bearer-secret', { offset: 5, max: 20 });
+  await client.sendShareLink('bearer-secret', 'hello');
+  assert.equal(calls.length, 2);
+  for (const { url, init } of calls) {
+    assert(!url.includes('bearer-secret')); assert.equal(init.method, 'POST');
+    assert.equal(init.headers.Authorization, undefined);
+    assert.equal(JSON.parse(init.body).link, 'bearer-secret');
+  }
 });

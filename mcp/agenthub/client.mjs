@@ -10,13 +10,21 @@ export class AgentHubClient {
   constructor(env = process.env, fetchImpl = globalThis.fetch) {
     const baseUrl = env.AGENTHUB_URL;
     const token = env.AGENTHUB_TOKEN;
-    if (!baseUrl || !token) throw new Error('agenthub_not_configured');
+    if (!baseUrl) throw new Error('agenthub_not_configured');
     let parsed;
     try { parsed = new URL(baseUrl); } catch { throw new Error('agenthub_invalid_url'); }
     if (!['http:', 'https:'].includes(parsed.protocol)) throw new Error('agenthub_invalid_url');
     this.baseUrl = parsed.toString().replace(/\/$/, '');
     this.token = token;
     this.fetchImpl = fetchImpl;
+  }
+
+  readShareLink(link, { offset, max } = {}) {
+    return this.#request('POST', '/api/remote/share-link/read', { link, offset, max }, MAX_TRANSCRIPT_BYTES);
+  }
+
+  sendShareLink(link, message) {
+    return this.#request('POST', '/api/remote/share-link/send', { link, message });
   }
 
   update(id, body = {}) {
@@ -189,7 +197,7 @@ export class AgentHubClient {
 
   async #request(method, path, body, maxBytes = MAX_RESPONSE_BYTES) {
     const headers = {
-      Authorization: `Bearer ${this.token}`,
+      ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}),
       Accept: 'application/json'
     };
     const init = { method, headers, signal: AbortSignal.timeout(300_000) };

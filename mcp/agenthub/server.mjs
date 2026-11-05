@@ -236,6 +236,16 @@ register('agents_list', {
   inputSchema: z.object({ projectId: z.string().max(128).optional() })
 }, async ({ projectId }) => text(sanitizeSession(await client.listAgents(projectId))));
 
+register('share_link_read', {
+  description: 'Read sanitized status, role and paginated history using a share link or token. No account token required. The link is a bearer secret.',
+  inputSchema: z.object({ link: z.string().min(1).max(4096), offset: z.number().int().optional(), max: z.number().int().optional() })
+}, async ({ link, offset, max }) => text(await client.readShareLink(link, { offset, max })));
+
+register('share_link_send', {
+  description: 'Queue a normal message through a Collaborator share link or token, attributed and audited as via share link. Viewer links are read only.',
+  inputSchema: z.object({ link: z.string().min(1).max(4096), message: z.string().min(1).max(4000) })
+}, async ({ link, message }) => text(await client.sendShareLink(link, message)));
+
 register('agent_send', {
   description: 'Send a message/task to one of your agents. "to" is a session id or a unique title '
     + '(scope the lookup with projectId); an ambiguous title fails with the candidate list. By default '

@@ -37,3 +37,41 @@ represent message delivery.
 Account purge includes both parties' audit rows and sender snapshots, even if the sender's
 session was already deleted. Relying only on the current session-id list would leave the new
 owner/title metadata behind after the source session disappeared.
+
+
+## External clients and explicit links
+
+The remote `/mcp` tools and personal-token stdio server use the same named-share decision for
+session and agent lists, status and collaborator messaging. Owned records are selected first;
+using sharing-store projections for owned targets was rejected because those projections omit
+fleet metadata. Entries carry `owner`, `accessRole` and `canWrite`; Viewer entries are readable
+but cannot receive messages. Foreign priority and interrupt requests are rejected, never silently
+downgraded. Management, credentials, context and container authority stay owner-scoped.
+
+`share_link_read(link, offset?, max?)` and `share_link_send(link, message)` explicitly exercise a
+bearer capability. `link` accepts the issued URL, `/shared/<token>` or the token itself. The
+stdio server needs `AGENTHUB_URL` but no personal token for these tools. Remote clients without
+an account connect to `/mcp/shared`, which exposes only these two tools. The authenticated
+`/mcp` surface also includes them. Both routes use stateless transport: reusing a privileged MCP
+session initialized on another route was rejected because endpoint authorization must not widen
+an anonymous link request's tool collection.
+
+The API bridge uses POST bodies on `/api/remote/share-link/read` and `/send`; a token never
+becomes a route value or query parameter. Do not enable request-body/argument logging for these
+bearer-secret calls. The tools neither fetch the supplied URL nor return the token. Invalid,
+revoked, expired and unauthorized links answer not found. Access is resolved on each call;
+redeeming a link never adds it to named discovery.
+
+Read results contain `session` (sanitized status and link role) and `history` (the common
+`ISharedSessionHistory` page used by the shared web view). Pass its `nextOffset` back as `offset`;
+`-1` reads the latest window. `max` counts native entries or scrollback characters, according to
+`history.source`. Reimplementing history in a tool was rejected because it would bypass live
+history reads and masking from #427.
+
+A Collaborator link can queue normal messages, with immutable `via share link` attribution and
+an atomic cross-owner audit. Viewer links read only. There is no priority/interrupt parameter and
+no management tool on the anonymous endpoint. The link is as powerful here as in the browser,
+no more. An account identity is not inferred from a bearer link: that would falsely attribute an
+anonymous holder to its issuer. The audit's nullable sender-session field represents external
+clients, which have no originating session; user sends retain their owner, while link sends use
+the anonymous attribution. Message bodies and tokens are absent from audit rows.
