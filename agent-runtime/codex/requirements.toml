@@ -17,8 +17,9 @@ matcher = "*"
 [[hooks.PreToolUse.hooks]]
 type = "command"
 command = "node /opt/session-agent/codex/policy-hook.js"
-# Full-access exec resolves backend approvals here because no PermissionRequest is raised.
-timeout = 250
+# Interactive approvals can wait 30 minutes; leave another minute for policy and callback retries.
+# Full-access sessions resolve backend approvals here because no PermissionRequest is raised.
+timeout = 1860
 statusMessage = "Checking session policy"
 
 [[hooks.PermissionRequest]]
@@ -27,7 +28,7 @@ matcher = "*"
 [[hooks.PermissionRequest.hooks]]
 type = "command"
 command = "node /opt/session-agent/codex/policy-hook.js"
-timeout = 250
+timeout = 1860
 statusMessage = "Waiting for session approval"
 
 # An approval dialog is open: the session agent must not type a fleet message into it

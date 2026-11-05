@@ -8,6 +8,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+const timedOutReason = 'Nobody answered the AgentHub approval in time; tool call denied. Ask the agent to try again.';
+const unavailableReason = 'AgentHub approval unavailable; tool call denied. Retry when approval is available.';
 const hookPath = path.join(__dirname, '..', '..', 'codex', 'policy-hook.js');
 const requirementsPath = path.join(__dirname, '..', '..', 'codex', 'requirements.toml');
 
@@ -22,7 +24,7 @@ function runHook(input, environment = {}) {
     const timeout = setTimeout(() => {
       child.kill();
       reject(new Error('hook timed out'));
-    }, 5000);
+    }, 12000);
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('error', reject);
@@ -98,18 +100,24 @@ test('allowed PreToolUse exits silently so Codex continues', async () => {
   }
 });
 
-test('interactive ask and callback failure preserve normal Codex permission flow', async () => {
-  const server = await startServer([{ body: '{"decision":"ask","reason":"interactive"}' }]);
+test('interactive PreToolUse resolves approval and callback failures deny', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"ask"}' }
+  ]);
   try {
     const ask = await runHook(preTool(), { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive' });
     assert.equal(ask.stdout, '');
+    assert.deepEqual(server.requests.map(request => request.path),
+      ['/agent-policy', '/permission', '/agent-policy']);
   } finally {
     await server.close();
   }
   const failed = await runHook(preTool(), {
     AGENTHUB_CALLBACK_URL: 'http://127.0.0.1:1', AGENTHUB_MODE: 'interactive'
   });
-  assert.equal(failed.stdout, '');
+  assert.equal(failed.output.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(failed.stderr, '');
 });
 
@@ -124,7 +132,7 @@ test('interactive MCP initial policy callback failure fails closed for every hoo
       assert.deepEqual(result.output, {
         hookSpecificOutput: {
           hookEventName: 'PermissionRequest',
-          decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+          decision: { behavior: 'deny', message: unavailableReason }
         }
       });
     }
@@ -151,7 +159,7 @@ test('interactive MCP invalid tool input denies before any callback or approval'
         assert.deepEqual(result.output, {
           hookSpecificOutput: {
             hookEventName: 'PermissionRequest',
-            decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+            decision: { behavior: 'deny', message: unavailableReason }
           }
         });
       } else {
@@ -165,13 +173,13 @@ test('interactive MCP invalid tool input denies before any callback or approval'
   }
 });
 
-test('interactive non-MCP missing tool input retains normal permission flow', async () => {
+test('interactive non-MCP missing tool input denies without native fallback', async () => {
   const server = await startServer([]);
   try {
     const result = await runHook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' }, {
       AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive'
     });
-    assert.equal(result.stdout, '');
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
     assert.equal(result.stderr, '');
     assert.deepEqual(server.requests, []);
   } finally {
@@ -297,8 +305,8 @@ test('an uncovered unattended call is auto-approved through the permission endpo
   }
 });
 
-test('unattended PreToolUse resolves approval before full-access execution', async () => {
-  for (const decision of ['allow', 'deny']) {
+test('PreToolUse in every mode resolves approval before full-access execution', async () => {
+  for (const [mode, decision] of ['interactive', 'autonomous'].flatMap(mode => ['allow', 'deny'].map(decision => [mode, decision]))) {
     const server = await startServer([
       { body: '{"decision":"ask"}' },
       { body: JSON.stringify({ decision }) },
@@ -306,7 +314,7 @@ test('unattended PreToolUse resolves approval before full-access execution', asy
     ]);
     try {
       const result = await runHook(preTool(), {
-        AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous'
+        AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: mode
       });
       if (decision === 'allow') assert.equal(result.stdout, '');
       else assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
@@ -364,7 +372,7 @@ test('an unanswered unattended approval fails closed instead of running', async 
       assert.deepEqual(result.output, {
         hookSpecificOutput: {
           hookEventName: 'PermissionRequest',
-          decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+          decision: { behavior: 'deny', message: name === 'poll budget' ? timedOutReason : unavailableReason }
         }
       }, name);
     } finally {
@@ -379,7 +387,7 @@ test('an unanswered unattended approval fails closed instead of running', async 
   assert.equal(unreachable.output.hookSpecificOutput.decision.behavior, 'deny');
 });
 
-test('an unanswered interactive approval leaves the Codex prompt in place', async () => {
+test('an unanswered interactive approval denies without a native prompt', async () => {
   const server = await startServer([
     { body: '{"decision":"ask"}' },
     { body: '{"id":"request-8"}' },
@@ -396,7 +404,8 @@ test('an unanswered interactive approval leaves the Codex prompt in place', asyn
       AGENTHUB_APPROVAL_POLLS: '2',
       AGENTHUB_APPROVAL_INTERVAL_MS: '10'
     });
-    assert.equal(result.stdout, '');
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
+    assert.equal(result.output.hookSpecificOutput.decision.message, timedOutReason);
     assert.equal(result.stderr, '');
   } finally {
     await server.close();
@@ -488,7 +497,7 @@ test('MCP policy recheck failure after approval fails closed', async () => {
   }
 });
 
-test('non-MCP policy recheck failure after approval preserves normal flow', async () => {
+test('non-MCP policy recheck failure after approval denies', async () => {
   const server = await startServer([
     { body: '{"decision":"ask"}' },
     { body: '{"decision":"allow"}' },
@@ -499,7 +508,7 @@ test('non-MCP policy recheck failure after approval preserves normal flow', asyn
       hook_event_name: 'PermissionRequest', tool_name: 'Bash',
       tool_input: { command: 'git status' }
     }, { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive' });
-    assert.equal(result.stdout, '');
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
     assert.equal(result.stderr, '');
     assert.deepEqual(server.requests.map(request => request.path), [
       '/agent-policy', '/permission', '/agent-policy'
@@ -515,7 +524,7 @@ test('system requirements own all tool hooks and exclude repository hooks', () =
   assert.match(requirements, /^hooks = true/m);
   assert.match(requirements, /^managed_dir = "\/opt\/session-agent\/codex"/m);
   assert.match(requirements, /\[\[hooks\.PreToolUse\]\][\s\S]*matcher = "\*"/m);
-  assert.match(requirements, /\[\[hooks\.PreToolUse\.hooks\]\][\s\S]*?timeout = 250/m);
+  assert.match(requirements, /\[\[hooks\.PreToolUse\.hooks\]\][\s\S]*?timeout = 1860/m);
   assert.match(requirements, /\[\[hooks\.PermissionRequest\]\][\s\S]*matcher = "\*"/m);
 });
 
@@ -540,4 +549,114 @@ test('runtime-owned requirements projector emits only approved standard and cust
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+for (const mode of ['interactive', 'autonomous']) {
+  test(`${mode} policy reads recover across a brief backend restart`, async () => {
+    const server = await startServer([
+      { status: 503, body: '{}' },
+      { body: '{"decision":"ask"}' },
+      { body: '{"decision":"allow"}' },
+      { body: '{"decision":"ask"}' }
+    ]);
+    try {
+      const result = await runHook(preTool(), { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: mode });
+      assert.equal(result.stdout, '');
+      assert.deepEqual(server.requests.map(request => request.path),
+        ['/agent-policy', '/agent-policy', '/permission', '/agent-policy']);
+    } finally { await server.close(); }
+  });
+}
+
+test('approval polling recovers after backend restart without creating a second card', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"id":"request-retry"}' },
+    { status: 503, body: '{}' },
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"ask"}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive', AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.stdout, '');
+    assert.deepEqual(server.requests.map(request => request.path), [
+      '/agent-policy', '/permission', '/permission/request-retry', '/permission/request-retry', '/agent-policy'
+    ]);
+  } finally { await server.close(); }
+});
+
+test('unavailable approval gives the agent an actionable reason without duplicate cards', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { status: 503, body: '{}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive' });
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(result.output.hookSpecificOutput.permissionDecisionReason, /AgentHub approval unavailable.*tool call denied.*Retry/);
+    assert.deepEqual(server.requests.map(request => request.path), ['/agent-policy', '/permission']);
+  } finally { await server.close(); }
+});
+
+test('interactive approval accepts a late answer beyond the old 120-poll cap', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { body: '{"id":"late-answer"}' },
+    ...Array.from({ length: 121 }, () => ({ body: '{"decision":"pending"}' })),
+    { body: '{"decision":"allow"}' }, { body: '{"decision":"ask"}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive',
+      AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.stdout, '');
+    assert.equal(server.requests.filter(request => request.path === '/permission/late-answer').length, 122);
+  } finally { await server.close(); }
+});
+
+test('configured interactive deadline denies with a timeout reason, not an unavailable-service reason', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { body: '{"id":"short-budget"}' },
+    ...Array.from({ length: 200 }, () => ({ body: '{"decision":"pending"}' }))
+  ]);
+  try {
+    const started = Date.now();
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive',
+      AGENTHUB_CODEX_INTERACTIVE_APPROVAL_SECONDS: '1', AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.output.hookSpecificOutput.permissionDecisionReason, timedOutReason);
+    assert.ok(Date.now() - started >= 1000);
+    assert.ok(server.requests.filter(request => request.path === '/permission/short-budget').length < 200);
+  } finally { await server.close(); }
+});
+
+test('interactive setting does not shorten unattended approval', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { body: '{"id":"unattended-window"}' },
+    ...Array.from({ length: 121 }, () => ({ body: '{"decision":"pending"}' })),
+    { body: '{"decision":"allow"}' }, { body: '{"decision":"ask"}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous',
+      AGENTHUB_CODEX_INTERACTIVE_APPROVAL_SECONDS: '1', AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.stdout, '');
+    assert.equal(server.requests.filter(request => request.path === '/permission/unattended-window').length, 122);
+  } finally { await server.close(); }
+});
+
+test('backend expiry reports nobody answered rather than approval unavailable', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { body: '{"id":"expired-request"}' },
+    { body: '{"decision":"expired"}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive', AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.output.hookSpecificOutput.permissionDecisionReason, timedOutReason);
+  } finally { await server.close(); }
 });
