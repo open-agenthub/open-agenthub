@@ -1,11 +1,15 @@
 // Starts the real backend (dev auth) with the rig's Postgres, object storage and kube-apiserver.
 // The storage key is read from a file so it never appears in a command line or tool output.
 // Run: node backend.mjs <AgentHub.Api.dll>
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 const [dll] = process.argv.slice(2)
 const RIG = process.env.RIG || process.env.HOME + '/rig'
 const key = fs.readFileSync(RIG + '/s3/key.txt', 'utf8')
+// A throwaway key-encryption certificate for Data Protection (#458 requires one at startup).
+const certFile = RIG + '/dp-cert.pem', keyFile = RIG + '/dp-key.pem'
+if (!fs.existsSync(certFile)) execFileSync('openssl', ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', keyFile,
+  '-out', certFile, '-days', '2', '-subj', '/CN=agenthub-proof'], { stdio: 'ignore' })
 const id = key.match(/Key ID:\s*(\S+)/)[1], secret = key.match(/Secret key:\s*(\S+)/)[1]
 const env = {
   ...process.env,
@@ -21,6 +25,7 @@ const env = {
   // Not 7681: that is the proof pod's own session agent (see the real-backend rig skill).
   AgentHub__AgentPort: '7699',
   Browser__Enabled: 'false',
+  DataProtection__CertificatePem: fs.readFileSync(certFile, 'utf8'), DataProtection__PrivateKeyPem: fs.readFileSync(keyFile, 'utf8'),
   S3__ServiceUrl: 'http://127.0.0.1:3910', S3__Region: 'local', S3__Bucket: 'agenthub-proof', S3__AccessKey: id, S3__SecretKey: secret
 }
 const child = spawn(process.env.DOTNET || 'dotnet', [dll], { env, stdio: ['ignore', 'inherit', 'inherit'] })
