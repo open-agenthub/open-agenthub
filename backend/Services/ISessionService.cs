@@ -156,6 +156,12 @@ public interface ISessionService
     /// A paused session is resumable via the normal resume path.</summary>
     Task<SessionInfo> PauseSessionAsync(string owner, string id, CancellationToken ct = default);
     /// <summary>
+    /// Waits until the session's pod is gone, so the state archive it uploads while stopping is
+    /// final. A pause returns as soon as the pod is told to stop. Default: nothing to wait for,
+    /// for test doubles without pods.
+    /// </summary>
+    Task WaitForPodGoneAsync(string owner, string id, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>
     /// Continues a finished or paused autonomous session as an interactive one, by rewriting the
     /// record and resuming it (docs/session-mode-conversion.md). Throws
     /// <see cref="KeyNotFoundException"/> (no such session), <see cref="ArgumentException"/>
