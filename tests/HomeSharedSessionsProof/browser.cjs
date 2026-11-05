@@ -42,6 +42,7 @@ const output = process.env.OUT || '/tmp'
     assert(!(await alice.locator('[data-home-shared]').count()))
     const geometry = await bob.locator('[data-home-session="qa"]').evaluate(row => ({ badge: row.querySelector('.pill').getBoundingClientRect().right, title: row.querySelector('.row-title').getBoundingClientRect().left }))
     assert(geometry.badge <= geometry.title, 'question status must not overlap the title')
+    assert(await bob.locator('[data-home-session="qa"] .pill').evaluate(badge => badge.scrollWidth <= badge.clientWidth), 'question label must fit inside its badge')
     await bob.screenshot({ path: `${output}/home-shared-bob.png`, fullPage: true })
     await bob.locator('[data-home-session="notes"]').click()
     await bob.waitForURL('**/s/notes')
