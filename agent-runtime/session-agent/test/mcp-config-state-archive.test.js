@@ -89,6 +89,11 @@ test('OpenClaw: openclaw.json is archived but holds references, not values', t =
   const envFile = path.join(home, 'tmp', 'openclaw-mcp.env');
   mcp.writeConfig(configPath, mcpPath, [], { RUNTIME: path.join(home, 'none') }, envFile);
 
+  // OpenClaw rotates copies of the config on every write; one restored from an archive written
+  // before the fix still holds the literal values.
+  fs.writeFileSync(configPath + '.bak', JSON.stringify(MCP_DOCUMENT));
+  fs.writeFileSync(configPath + '.bak.3', JSON.stringify(MCP_DOCUMENT));
+
   // openclaw.json stays in the archive: it also carries the agent's own settings and the servers
   // it added with `openclaw mcp add`, which a resume has to bring back.
   const raw = archived(home, require('../../openclaw/driver'));

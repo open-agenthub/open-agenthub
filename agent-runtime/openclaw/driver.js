@@ -171,7 +171,10 @@ module.exports = {
     '.openclaw/agents/*/agent/openclaw-agent.sqlite-wal',
     '.openclaw/agents/*/agent/openclaw-agent.sqlite-shm',
     // Copies of session files (terminalAttachmentPath); the originals stay in session storage.
-    '.openclaw/media/agenthub'
+    '.openclaw/media/agenthub',
+    // OpenClaw rotates up to five copies of openclaw.json on every config write. Copies written
+    // before #446 hold literal MCP header values, and none is read on a resume.
+    '.openclaw/openclaw.json.bak*'
   ],
   terminalAttachmentPath,
   buildCommand, isResumeCommand, isMissingResume, prepare,

@@ -46,6 +46,9 @@ export OPENCLAW_CONFIG_PATH="${OPENCLAW_CONFIG_PATH:-$OPENCLAW_STATE_DIR/opencla
 # directory is archived (#446). /tmp, not the state directory; exported before any `openclaw` call
 # below so the config's ${AGENTHUB_MCP_VALUE_n} references resolve.
 export AGENTHUB_OPENCLAW_MCP_ENV_FILE=/tmp/agenthub-openclaw-mcp.env
+# OpenClaw's own rotated copies of the config, restored from an archive written before #446 with
+# literal values in them. Nothing reads them on a resume.
+rm -f "$OPENCLAW_STATE_DIR"/openclaw.json.bak*
 node "$RUNTIME/openclaw/mcp-config.js" "$OPENCLAW_CONFIG_PATH" "${AGENTHUB_MCP_CONFIG:-}" \
   agenthub_browser agenthub_sessions agenthub_files agenthub_network
 set -a
