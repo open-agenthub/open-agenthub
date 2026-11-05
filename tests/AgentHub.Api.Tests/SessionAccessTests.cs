@@ -259,7 +259,7 @@ public class SessionAccessTests
         ]);
         var controller = new SharedSessionsController(access);
 
-        var response = await controller.GetConversation("secret-token", null, null, sessions, CancellationToken.None);
+        var response = await controller.GetConversation("secret-token", null, null, new SharedSessionHistory(sessions), CancellationToken.None);
 
         var page = Assert.IsType<AgentHub.Api.Services.ConversationPage>(Assert.IsType<OkObjectResult>(response.Result).Value);
         Assert.Equal("native", page.Source);
@@ -269,7 +269,7 @@ public class SessionAccessTests
 
         var unknown = new FakeAccessService { TokenResult = null };
         Assert.IsType<NotFoundResult>((await new SharedSessionsController(unknown)
-            .GetConversation("nope", null, null, sessions, CancellationToken.None)).Result);
+            .GetConversation("nope", null, null, new SharedSessionHistory(sessions), CancellationToken.None)).Result);
     }
 
     // #241: a valid link to a session that has written nothing yet gets an empty page; an invalid
@@ -285,7 +285,7 @@ public class SessionAccessTests
             TokenResult = new SessionAccessResult(session, SessionAccessLevel.Viewer, session.Owner)
         };
 
-        var response = await new SharedSessionsController(valid).GetConversation("secret-token", -1, null, sessions, CancellationToken.None);
+        var response = await new SharedSessionsController(valid).GetConversation("secret-token", -1, null, new SharedSessionHistory(sessions), CancellationToken.None);
 
         var page = Assert.IsType<AgentHub.Api.Services.ConversationPage>(Assert.IsType<OkObjectResult>(response.Result).Value);
         Assert.Equal(("scrollback", ""), (page.Source, page.Text));
@@ -294,7 +294,7 @@ public class SessionAccessTests
 
         var invalidOrExpired = new FakeAccessService { TokenResult = null };
         Assert.IsType<NotFoundResult>((await new SharedSessionsController(invalidOrExpired)
-            .GetConversation("expired-token", -1, null, sessions, CancellationToken.None)).Result);
+            .GetConversation("expired-token", -1, null, new SharedSessionHistory(sessions), CancellationToken.None)).Result);
         Assert.Equal(1, sessions.Reads);
     }
 

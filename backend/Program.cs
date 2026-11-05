@@ -111,6 +111,7 @@ builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<S
 builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionShareStatus>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
+builder.Services.AddSingleton<ISharedSessionHistory, SharedSessionHistory>();
 // Every sharing surface (web, token API, MCP) goes through this one service, which holds the
 // licence check — see docs/session-sharing-api.md. FrontendOrigin is what share-link URLs are
 // built from, for the same reason SessionInfo.Url is (never the request host).
@@ -744,6 +745,9 @@ app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptio
     scope = oidc["Scope"] ?? "openid profile email",
     // Lets the UI show the "Connect GitHub/GitLab" account section only when configured.
     gitEnabled = git.AnyConfigured,
+    // Use the configured issuer so copied client URLs agree with token audiences behind ingress.
+    mcpEnabled = mcpOptions.IsConfigured,
+    mcpUrl = mcpOptions.IsConfigured ? mcpOptions.McpResource : "",
     // Lets the UI show the per-user Slack settings section only when Slack is enabled.
     slackEnabled = slack.Enabled,
     // Same for the community Telegram/Signal integrations.

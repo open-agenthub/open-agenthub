@@ -45,7 +45,7 @@ public sealed class SharedSessionsController(ISessionAccessService access, IBrow
             ct);
         return transcript is null
             ? NotFound()
-            : Content(transcript, "text/plain");
+            : Content(SharedSessionHistory.SanitizeText(transcript, resolved.Session), "text/plain");
     }
 
     /// <summary>Same page the owner's Workspace reads, for a shared link's viewer.</summary>
@@ -54,15 +54,11 @@ public sealed class SharedSessionsController(ISessionAccessService access, IBrow
         string token,
         [FromQuery] int? offset,
         [FromQuery] int? max,
-        [FromServices] ISessionService sessions,
+        [FromServices] ISharedSessionHistory history,
         CancellationToken ct)
     {
         var resolved = await access.ResolveTokenAsync(token, ct);
         if (resolved is null) return NotFound();
-        var session = resolved.Session;
-        // The stored status rather than the live pod phase: a viewer polling a page is not
-        // worth a Kubernetes read per poll, and the agent itself posts the terminal status.
-        var page = await SessionTranscripts.PageAsync(sessions, session.Owner, session.Id, session.Status, offset, max, ct);
-        return Ok(page);
+        return Ok(await history.ReadAsync(resolved, offset, max, ct));
     }
 }

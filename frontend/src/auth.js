@@ -25,6 +25,7 @@ let apiKeyUser = null
 // /api/config answers; the backend's version replaces it, since image.tag moves every
 // component together and the backend is the one that actually runs the deployment.
 export const config = reactive({
+  mcpEnabled: false, mcpUrl: '', mcpAuthMode: '',
   gitEnabled: false, slackEnabled: false, telegramEnabled: false, signalEnabled: false,
   version: import.meta.env.VITE_APP_VERSION || DEV_VERSION,
   repoUrl: REPO_URL
@@ -34,6 +35,9 @@ export async function initAuth() {
   let cfg = { authority: '' }
   try { cfg = await (await fetch('/api/config')).json() }
   catch (e) { console.error('Could not load auth config (/api/config) – auth disabled', e) }
+  config.mcpEnabled = !!cfg.mcpEnabled
+  config.mcpUrl = typeof cfg.mcpUrl === 'string' ? cfg.mcpUrl : ''
+  config.mcpAuthMode = cfg.authMode || (cfg.authority ? 'oidc' : 'insecureDev')
   config.gitEnabled = !!cfg.gitEnabled
   config.slackEnabled = !!cfg.slackEnabled
   config.telegramEnabled = !!cfg.telegramEnabled
