@@ -29,6 +29,9 @@ Setup (skills `rootless-kube-apiserver-admission-proof`, `rootless-postgres-back
    `KUBECTL=~/k8s/kubectl node proof.mjs <repo>`. Restart the mock model before a second run; the
    proof counts its recorded requests from one.
 
+5. Optional, with the release tarball of PowerShell 7 unpacked: `node powershell.mjs <pwsh> <sessionId>`
+   runs the PowerShell variants unmodified (curl.exe is a shim for curl on Linux).
+
 What it checks: the unconfirmed call changes nothing; the confirmed one pauses and writes the
 transcript under the local folder with every `cwd` rewritten and mode 0600; the laptop's real CLI
 replays the pod's turns; a hand-back next to a live pod is refused and a second take-local does
@@ -39,4 +42,4 @@ once.
 
 What it cannot show: a kubelet's graceful termination (pods without a node are deleted at once,
 so the final upload on SIGTERM is not exercised), the remote `/mcp` over its OAuth transport (its
-two tools call the same service and are covered by `SessionLocalTransferTests`), and Windows.
+two tools call the same service and are covered by `SessionLocalTransferTests`), and Windows itself (the PowerShell commands run under real pwsh on Linux only).

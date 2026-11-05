@@ -131,6 +131,8 @@ The same surface as the stdio server:
 | `session_wait` | Poll until a session reaches Succeeded or Failed |
 | `session_delete` | Delete a session; does not cascade to children |
 | `session_convert` | Continue a finished or paused Autonomous session as an Interactive one, in the same conversation where the runtime can (`docs/session-mode-conversion.md`) |
+| `session_take_local` | Continue a Claude Code session on your computer: pauses it (only with `confirm`) and returns a single-use link plus a `curl \| tar` command (`docs/session-transfer.md`) |
+| `session_hand_back` | Hand a locally continued session back: a single-use upload link plus the command that packs and uploads the conversation, then resumes the session |
 | `agents_list` | Your agents with title, description and phase |
 | `agent_send` | Send a message/task to an agent by id or unique title. `priority` pushes it into the running agent's prompt, `interrupt` stops its current work first; the result's `deliveredVia` says `inbox`, `injected` or `mod` (`docs/priority-messages.md`) |
 | `credentials_list` | Provider accounts, git PATs (ids, never tokens), stored session secrets (id, name, delivery, never values) and API-key presence a session may use; an account at its usage limit carries `isExhausted` |
@@ -181,6 +183,14 @@ Claude and Codex continue the same conversation; Cursor and OpenClaw start a new
 workspace. `autoApprove` is off after conversion unless asked for, because somebody is now there
 to answer. The in-pod server has the same tool, limited to the calling session's descendants like
 `session_get`. Running or non-Autonomous sessions fail with `session_not_convertible`.
+
+`session_take_local {sessionId, directory, confirm?}` and `session_hand_back {sessionId, directory, resume?}`
+move a Claude Code conversation to a workstation and back. This server runs in the hub and cannot
+write the caller's `~/.claude`, so both answer with a single-use link valid for 15 minutes and a
+bash and a PowerShell command that use it; the agent behind the MCP client can run that command in
+its own shell. The stdio server has the same two tools and writes the files itself. A live session
+is only paused with `confirm`; without it the answer lists the steps and `confirmationRequired`.
+Decisions in `session-transfer.md`.
 
 Every call runs as the user who approved the client, and the session service enforces that
 user's ownership exactly as it does for the REST API.
