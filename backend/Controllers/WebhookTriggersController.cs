@@ -42,8 +42,19 @@ public sealed class WebhookTriggersController : ControllerBase
 
     [HttpGet]
     public async Task<IReadOnlyList<WebhookTriggerInfo>> List(CancellationToken ct)
-        => (await _store.ListAsync(Owner, ct))
-            .Select(t => t with { Url = DeliveryUrl(t.Id) }).ToList();
+    {
+        var result = new List<WebhookTriggerInfo>();
+        foreach (var trigger in await _store.ListAsync(Owner, ct))
+        {
+            var record = await _store.GetByIdAsync(trigger.Id, ct);
+            var needsReentry = false;
+            if (record is not null)
+                try { _secrets.Unprotect(record.SecretProtected); }
+                catch (CryptographicException) { needsReentry = true; }
+            result.Add(trigger with { Url = DeliveryUrl(trigger.Id), NeedsReentry = needsReentry });
+        }
+        return result;
+    }
 
     /// <summary>Creates a trigger; the response carries the plaintext secret exactly once.</summary>
     [HttpPost]

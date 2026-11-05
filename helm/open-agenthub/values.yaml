@@ -459,3 +459,11 @@ postgres:
 externalDatabase:
   # Only relevant when postgres.enabled=false, e.g. "Host=...;Database=...;Username=...;Password=..."
   connectionString: ""
+
+# Shared backend Data Protection ring: the database holds encrypted keys; this Secret
+# holds the matching RSA PEM wrapping certificate/private key (tls.crt and tls.key).
+# Empty = generate once and retain agenthub-data-protection across upgrades/uninstall.
+# Back it up with Postgres. Losing/replacing it makes existing protected values unreadable.
+# Set an existing Secret for declarative/offline rendering; restart backends after changes.
+dataProtection:
+  existingSecret: ""

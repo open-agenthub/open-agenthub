@@ -23,10 +23,13 @@ public sealed class ProgramContainerResolveTests
     [InlineData(true)]
     public void Every_singleton_and_hosted_service_resolves(bool chatEnabled)
     {
+        var certificate = DataProtectionProof.Scenario.Certificate();
         var args = new List<string>
         {
             "--ConnectionStrings:Postgres=Host=127.0.0.1;Port=1;Username=unused;Database=unused",
             "--Auth:ApiKey=" + Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(24)),
+            "--DataProtection:CertificatePem=" + certificate.Certificate,
+            "--DataProtection:PrivateKeyPem=" + certificate.Key,
             "--AgentHub:Namespace=agenthub-sessions",
             "--Browser:Enabled=false",
             "--environment=Production"
