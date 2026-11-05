@@ -1,6 +1,7 @@
 <script setup>
 import { computed, ref, onMounted } from 'vue'
 import { api } from '../api.js'
+import { hasLiteralMcpValues } from '../lib/mcp-literals.js'
 import LibraryShareControls from './LibraryShareControls.vue'
 
 // Personal MCP library (mode=personal) or admin org catalog (mode=org).
@@ -33,6 +34,7 @@ const formTab = ref('api')
 const form = ref(emptyForm())
 const formError = ref('')
 const saving = ref(false)
+const literalWarning = 'This raw entry contains literal header or environment values. When shared, it is delivered as written: recipients cannot see these values in the UI, but their agents can read them from the session MCP config. Use an API entry or a secret reference supported by your agent instead.'
 
 function emptyForm() {
   return {
@@ -251,6 +253,7 @@ const note = computed(() => isOrg.value
           </div>
         </template>
 
+        <p v-if="formTab === 'raw' && hasLiteralMcpValues(form.configJson)" class="literal-warning" role="note" data-mcp-literal-warning>{{ literalWarning }}</p>
         <p v-if="formError" class="err" data-mcp-form-error>{{ formError }}</p>
         <div class="row">
           <button @click="formOpen = false">Cancel</button>
@@ -280,6 +283,7 @@ const note = computed(() => isOrg.value
             </div>
           </div>
           <div v-if="canShare(item) && shareOpenId === item.id" data-mcp-share-controls>
+            <p v-if="item.kind !== 'api' && hasLiteralMcpValues(item.configJson)" class="literal-warning" role="note" data-mcp-literal-warning>{{ literalWarning }}</p>
             <LibraryShareControls kind="mcp-servers" :item-id="item.id" />
           </div>
         </div>
@@ -289,6 +293,7 @@ const note = computed(() => isOrg.value
 </template>
 
 <style scoped>
+.literal-warning { padding: 12px; border: 1px solid var(--border); border-radius: 8px; color: var(--strong); background: var(--panel-2); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
 .pane-head { font-size: 22px; margin: 0 0 16px; }
 .note { color: var(--muted); font-size: 12px; line-height: 1.5; margin: 0 0 16px; }
 .row { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
