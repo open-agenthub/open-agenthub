@@ -37,8 +37,7 @@ public static class LegacySecretMigration
             var protector = current.CreateProtector(purpose);
             foreach (var (id, payload) in rows)
             {
-                try { protector.Unprotect(payload); continue; }
-                catch (CryptographicException) { }
+                if (CanRead(protector, payload)) continue;
                 string plaintext;
                 try
                 {
@@ -58,5 +57,11 @@ public static class LegacySecretMigration
             if (unreadable > 0) logger.LogWarning(
                 "{Count} stored secrets in {Table} need re-entry. Restore the original keys or re-enter MCP secrets / recreate webhook triggers. Stored values have been retained.", unreadable, table);
         }
+    }
+
+    private static bool CanRead(IDataProtector protector, string payload)
+    {
+        try { protector.Unprotect(payload); return true; }
+        catch (CryptographicException) { return false; }
     }
 }

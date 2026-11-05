@@ -79,7 +79,7 @@ public static class Scenario
             var triggers = await b.Get("api/webhook-triggers");
             Require(triggers[0].GetProperty("needsReentry").GetBoolean(), "webhook recovery state missing");
             Require((string)(await Scalar(cs, "SELECT secret_json FROM mcp_servers"))! == "lost-key-payload", "unreadable value changed");
-            await b.Put("api/mcp-servers/" + id, new { name = "shared", kind = "raw", configJson = "{\"command\":\"node\"}", secretJson = (string?)null });
+            await b.Put("api/mcp-servers/" + id, new { name = "shared", kind = "raw", configJson = "{\"command\":\"node\"}", secretJson = default(string) });
             await CheckCatalog(b, true);
             await b.Put("api/mcp-servers/" + id, new { name = "shared", kind = "raw", configJson = "{\"command\":\"node\"}", secretJson = "replacement" });
             await CheckCatalog(replacement, false);
@@ -206,7 +206,12 @@ public static class Scenario
             for (var i = 0; i < 120; i++) {
                 if (_process!.HasExited) throw new InvalidOperationException("Replica exited: " + _log);
                 try { if ((await Http.GetAsync("healthz")).IsSuccessStatusCode) return; }
-                catch (Exception e) when (e is HttpRequestException or TaskCanceledException) { }
+                catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+                {
+                    // Before Kestrel listens a connection failure is expected; keep it to
+                    // diagnose a readiness timeout without hiding the process's startup log.
+                    lock (_log) _log.AppendLine("Readiness probe: " + e.GetType().Name);
+                }
                 await Task.Delay(250);
             }
             throw new TimeoutException("Replica not healthy: " + _log);

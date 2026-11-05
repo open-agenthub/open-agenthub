@@ -47,7 +47,7 @@ public sealed class GitWebhooksController : ControllerBase
         try { secret = _secrets.Unprotect(trigger.SecretProtected); }
         catch (System.Security.Cryptography.CryptographicException)
         {
-            _log.LogWarning("Webhook trigger {Id} needs secret recovery; its owner must recreate it or an administrator must restore the original keys", triggerId);
+            _log.LogWarning("Webhook delivery needs secret recovery; its owner must recreate the trigger or an administrator must restore the original keys");
             return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "stored_secret_unavailable" });
         }
         var githubSignature = Request.Headers[WebhookSignatureVerifier.GitHubSignatureHeader].FirstOrDefault();
