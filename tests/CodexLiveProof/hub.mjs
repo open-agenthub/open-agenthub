@@ -18,7 +18,7 @@ const stats = { conversation: 0, stalled: 0 }
 const server = http.createServer((req, res) => {
   const [url, query = ''] = req.url.split('?')
   const json = v => { res.writeHead(200, { 'content-type': 'application/json' }); res.end(JSON.stringify(v)) }
-  if (!globalThis.seen) globalThis.seen = new Set(); if (!globalThis.seen.has(url)) { globalThis.seen.add(url); console.log('api', req.method, url) }
+  if (!globalThis.seen) globalThis.seen = new Set(); if (!globalThis.seen.has(url)) { globalThis.seen.add(url); console.log('api', JSON.stringify(req.method), JSON.stringify(url)) }
   if (url === '/__drop') { const n = sockets.size; for (const s of sockets) s.destroy(); sockets.clear(); return json({ dropped: n }) }
   if (url === '/__stall') { stall = Number(new URLSearchParams(query).get('n') || 1); return json({ stall }) }
   if (url === '/__stats') return json(stats)
