@@ -43,7 +43,13 @@ public sealed class GitWebhooksController : ControllerBase
 
         // Signature/token check comes before any payload parsing. GitHub signs the raw
         // body; GitLab echoes the secret — either proof of the shared secret is accepted.
-        var secret = _secrets.Unprotect(trigger.SecretProtected);
+        string secret;
+        try { secret = _secrets.Unprotect(trigger.SecretProtected); }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            _log.LogWarning("Webhook delivery needs secret recovery; its owner must recreate the trigger or an administrator must restore the original keys");
+            return StatusCode(StatusCodes.Status503ServiceUnavailable, new { error = "stored_secret_unavailable" });
+        }
         var githubSignature = Request.Headers[WebhookSignatureVerifier.GitHubSignatureHeader].FirstOrDefault();
         var authentic = githubSignature is not null
             ? WebhookSignatureVerifier.VerifyGitHubSignature(githubSignature, body, secret)

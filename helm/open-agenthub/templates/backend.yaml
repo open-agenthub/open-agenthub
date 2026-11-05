@@ -36,8 +36,18 @@ spec:
           envFrom:
             - configMapRef: { name: agenthub-config }
             - secretRef:    { name: agenthub-secrets }
-          {{- if eq (include "agenthub.authMode" .) "apiKey" }}
           env:
+            - name: DataProtection__CertificatePem
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dataProtection.existingSecret | default "agenthub-data-protection" | quote }}
+                  key: tls.crt
+            - name: DataProtection__PrivateKeyPem
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.dataProtection.existingSecret | default "agenthub-data-protection" | quote }}
+                  key: tls.key
+          {{- if eq (include "agenthub.authMode" .) "apiKey" }}
             # Referenced, not copied into agenthub-secrets: the key's Secret may be one the
             # chart does not own (auth.apiKey.existingSecret).
             - name: Auth__ApiKey

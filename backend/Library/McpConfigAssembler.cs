@@ -77,6 +77,8 @@ public static class McpConfigAssembler
             {
                 if (inlineServers.ContainsKey(entry.Name))
                     continue; // inline definition wins
+                if (entry.NeedsReentry)
+                    throw new ArgumentException($"Session API source '{entry.Name}' needs its secret registered again.");
                 inlineServers[entry.Name] = BuildEphemeralEntry(entry, gateway);
             }
         }
@@ -96,6 +98,8 @@ public static class McpConfigAssembler
 
     private static JsonNode BuildServerEntry(McpServerRecord server, McpGatewayAssembleOptions? gateway)
     {
+        if (server.NeedsReentry)
+            throw new ArgumentException($"MCP server '{server.Name}' needs its secret re-entered; ask an administrator to check the shared key ring.");
         if (string.Equals(server.Kind, "api", StringComparison.OrdinalIgnoreCase))
         {
             var baseUrl = string.IsNullOrWhiteSpace(gateway?.BaseUrl)

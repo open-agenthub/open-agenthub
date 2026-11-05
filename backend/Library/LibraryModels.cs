@@ -19,6 +19,7 @@ public sealed class McpServerRecord
     public string ConfigJson { get; set; } = "{}";
     /// <summary>Plaintext secrets in memory; null when none. Never return to non-owners.</summary>
     public string? SecretJson { get; set; }
+    public bool NeedsReentry { get; set; }
     public DateTime CreatedAt { get; init; } = DateTime.UtcNow;
     public DateTime UpdatedAt { get; set; } = DateTime.UtcNow;
 }
@@ -101,7 +102,8 @@ public sealed record McpServerInfo(
     string? ConfigJson,
     bool HasSecret,
     DateTime CreatedAt,
-    DateTime UpdatedAt);
+    DateTime UpdatedAt,
+    bool NeedsReentry = false);
 
 public sealed record SkillInfo(
     string Id,

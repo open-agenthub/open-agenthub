@@ -274,6 +274,7 @@ const note = computed(() => isOrg.value
                 <span v-if="item.hasSecret" class="pill secret" data-mcp-has-secret>has secret</span>
                 <span v-if="!isOrg && !item.mine" class="pill shared" data-mcp-shared>shared · {{ item.owner }}</span>
               </div>
+              <p v-if="item.needsReentry" class="err" data-mcp-needs-reentry>Secret unavailable. Edit this server and re-enter its secret, or ask an administrator to restore the original keys.</p>
               <div v-if="item.description" class="item-desc">{{ item.description }}</div>
             </div>
             <div v-if="isOrg || item.mine" class="item-actions">

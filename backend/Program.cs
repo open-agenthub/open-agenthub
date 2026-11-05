@@ -1,4 +1,5 @@
 using AgentHub.Api.Auth;
+using AgentHub.Api.DataProtection;
 using System.Security.Claims;
 using System.Text.Encodings.Web;
 using AgentHub.Api.Mcp;
@@ -29,6 +30,7 @@ catch (AgentHub.Api.Auth.HubAuthConfigurationException e)
     Console.Error.WriteLine($"FATAL: {e.Message}");
     return 1;
 }
+builder.Services.AddSharedDataProtection(builder.Configuration);
 builder.Services.AddSingleton(hubAuth);
 if (hubAuth.Mode == HubAuthMode.ApiKey)
 {
@@ -531,6 +533,11 @@ else if (hubAuth.Mode == AgentHub.Api.Auth.HubAuthMode.ApiKey)
 // schema included.
 await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, app.Logger, async () =>
 {
+    await app.Services.GetRequiredService<PostgresKeyRepository>().InitializeAsync();
+    // Validate the persisted ring before accepting traffic; a missing wrapping certificate must
+    // stop startup rather than generate a second ring and strand readable stored values.
+    var keyManager = app.Services.GetRequiredService<Microsoft.AspNetCore.DataProtection.KeyManagement.IKeyManager>();
+    foreach (var key in keyManager.GetAllKeys()) key.CreateEncryptor();
     using (var scope = app.Services.CreateScope())
     {
         var store = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ISessionStore>();
@@ -567,6 +574,8 @@ await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, a
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.ILicenseStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Licensing.IEnterpriseLicense>().ReloadAsync();
     }
+
+    await LegacySecretMigration.RunAsync(app.Services, app.Configuration, app.Environment, app.Logger);
 
     // Prime the OAuth server: create the schema for registered MCP clients, associate the "mcp"
     // scope with the resource, and replay the stored registrations into the in-memory store.

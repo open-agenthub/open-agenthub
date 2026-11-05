@@ -178,6 +178,7 @@ function providerName(id) {
         <div v-for="t in triggers" :key="t.id" class="trigger" data-webhook-row>
           <div class="trigger-main">
             <span class="trigger-name">{{ t.name }}</span>
+            <p v-if="t.needsReentry" class="err" data-webhook-needs-reentry>Secret unavailable. Recreate this trigger and update the webhook URL and secret, or ask an administrator to restore the original keys.</p>
             <code class="trigger-url">{{ t.url }}</code>
             <div class="trigger-meta">
               <span>{{ t.events.join(', ') }}</span>
