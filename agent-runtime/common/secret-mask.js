@@ -20,6 +20,39 @@ function needles(value) {
   return candidates.filter(c => c.trim().length >= MIN_LENGTH);
 }
 
+// Collect values rather than credential-looking keys: custom headers and env names are valid.
+function mcpCredentials(config, add, credential = false) {
+  if (Array.isArray(config)) {
+    for (const item of config) mcpCredentials(item, add, credential);
+  } else if (config && typeof config === 'object') {
+    for (const [name, value] of Object.entries(config)) {
+      const key = name.toLowerCase();
+      mcpCredentials(value, add, credential || ['headers', 'env', 'url'].includes(key));
+      if (key === 'url' && typeof value === 'string') {
+        try {
+          const url = new URL(value);
+          for (const pair of url.search.slice(1).split('&')) {
+            const equals = pair.indexOf('=');
+            if (equals < 0) continue;
+            const raw = pair.slice(equals + 1);
+            add(raw);
+            try { add(decodeURIComponent(raw.replace(/\+/g, ' '))); } catch {}
+          }
+          for (const part of [url.username, url.password]) {
+            add(part);
+            try { add(decodeURIComponent(part)); } catch {}
+          }
+        } catch {}
+      }
+    }
+  } else if (credential && typeof config === 'string') {
+    add(config);
+    // Authorization schemes are often omitted when an agent prints just the token.
+    const space = config.lastIndexOf(' ');
+    if (space > 0) add(config.slice(space + 1));
+  }
+}
+
 function createSecretMask({ env = process.env, fs = require('node:fs') } = {}) {
   let patterns = [];
 
@@ -39,6 +72,14 @@ function createSecretMask({ env = process.env, fs = require('node:fs') } = {}) {
     }
     for (const name of String(env.AGENTHUB_SECRET_ENV || '').split(',').map(n => n.trim()).filter(Boolean)) {
       if (typeof env[name] === 'string') values.push([name, env[name]]);
+    }
+    if (typeof env.AGENTHUB_CALLBACK_TOKEN === 'string')
+      values.push(['AGENTHUB_CALLBACK_TOKEN', env.AGENTHUB_CALLBACK_TOKEN]);
+    // The entrypoint exports the effective config path; reread projected config on refresh too.
+    for (const file of new Set([env.AGENTHUB_MCP_CONFIG].filter(Boolean))) {
+      try {
+        mcpCredentials(JSON.parse(fs.readFileSync(file, 'utf8')), value => values.push(['MCP', value]));
+      } catch {}
     }
     const seen = new Set();
     patterns = [];

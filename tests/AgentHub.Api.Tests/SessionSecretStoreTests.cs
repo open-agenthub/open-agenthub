@@ -357,6 +357,30 @@ public class SecretMaskTests
     private static KeyValuePair<string, byte[]> S(string name, string value) => new(name, Encoding.UTF8.GetBytes(value));
 
     [Fact]
+    public void MasksCallbackAndInlineMcpCredentials()
+    {
+        const string config = """
+            {"mcpServers":{"custom":{"command":"ordinary-command","args":["ordinary-argument"],
+            "headers":{"Authorization":"Bearer header-token-434","Custom":"custom-header-434"},
+            "env":{"CUSTOM":"quoted-\"credential-434","SHORT":"1234"},
+            "url":"https://username-434:password%2F434@example.com/mcp?key=query%2Fvalue434&next=query+space434"}}}
+            """;
+        var credentials = SecretMask.SessionCredentials("callback-token-434", config);
+        foreach (var value in new[] { "callback-token-434", "header-token-434", "custom-header-434",
+            "quoted-\"credential-434", "username-434", "password%2F434", "password/434", "query%2Fvalue434", "query/value434", "query+space434", "query space434" })
+        {
+            Assert.DoesNotContain(value, SecretMask.Apply(value, credentials));
+            var escaped = System.Text.Json.JsonSerializer.Serialize(value,
+                new System.Text.Json.JsonSerializerOptions { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+            Assert.DoesNotContain(escaped[1..^1], SecretMask.Apply(escaped, credentials));
+        }
+        Assert.Equal("ordinary-command ordinary-argument 1234",
+            SecretMask.Apply("ordinary-command ordinary-argument 1234", credentials));
+        Assert.Equal("[secret:AGENTHUB_CALLBACK_TOKEN]", SecretMask.Apply("callback-token-434",
+            SecretMask.SessionCredentials("callback-token-434", "{invalid")));
+    }
+
+    [Fact]
     public void MasksRawJsonEscapedAndMultiLineForms()
     {
         var pem = "-----BEGIN KEY-----\nMIIEvQIBADANBgkqhkiG9w0B\n-----END KEY-----\n";

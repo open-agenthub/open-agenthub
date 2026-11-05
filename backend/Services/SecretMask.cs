@@ -23,7 +23,7 @@ public static class SecretMask
 
     /// <summary>Text with every occurrence of a value, its JSON-escaped form, and each long enough
     /// line of a multi-line value replaced by <c>[secret:NAME]</c>.</summary>
-    public static string Apply(string text, IEnumerable<KeyValuePair<string, byte[]>> secrets)
+    public static string Apply(string text, IEnumerable<KeyValuePair<string, byte[]>> secrets, string? replacement = null)
     {
         if (string.IsNullOrEmpty(text)) return text;
         var patterns = new List<(string Needle, string Name)>();
@@ -35,8 +35,66 @@ public static class SecretMask
         // Longest first, so a value that contains another one is replaced whole rather than
         // leaving its remainder in the text.
         foreach (var (needle, name) in patterns.DistinctBy(p => p.Needle).OrderByDescending(p => p.Needle.Length))
-            text = text.Replace(needle, $"[secret:{name}]", StringComparison.Ordinal);
+            text = text.Replace(needle, replacement ?? $"[secret:{name}]", StringComparison.Ordinal);
         return text;
+    }
+
+    /// <summary>Values known to the session independently of its user-managed secret copies.</summary>
+    public static IEnumerable<KeyValuePair<string, byte[]>> SessionCredentials(string? callbackToken, string? mcpConfig)
+    {
+        var values = new List<KeyValuePair<string, byte[]>>();
+        void Add(string name, string value) => values.Add(new(name, Encoding.UTF8.GetBytes(value)));
+        if (!string.IsNullOrEmpty(callbackToken)) Add("AGENTHUB_CALLBACK_TOKEN", callbackToken);
+        if (!string.IsNullOrWhiteSpace(mcpConfig))
+        {
+            try
+            {
+                using var document = JsonDocument.Parse(mcpConfig);
+                Collect(document.RootElement, false);
+            }
+            catch (JsonException) { }
+        }
+        return values;
+
+        void Collect(JsonElement element, bool credential)
+        {
+            if (element.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in element.EnumerateObject())
+                {
+                    var key = property.Name.ToLowerInvariant();
+                    Collect(property.Value, credential || key is "headers" or "env" or "url");
+                    if (key == "url" && property.Value.ValueKind == JsonValueKind.String
+                        && Uri.TryCreate(property.Value.GetString(), UriKind.Absolute, out var uri))
+                    {
+                        foreach (var pair in uri.Query.TrimStart('?').Split('&'))
+                        {
+                            var equals = pair.IndexOf('=');
+                            if (equals < 0) continue;
+                            var raw = pair[(equals + 1)..];
+                            Add("MCP", raw);
+                            Add("MCP", Uri.UnescapeDataString(raw.Replace("+", " ")));
+                        }
+                        // Mask each userinfo component even when printed separately from its URL.
+                        foreach (var part in uri.UserInfo.Split(':', 2))
+                        {
+                            Add("MCP", part);
+                            Add("MCP", Uri.UnescapeDataString(part));
+                        }
+                    }
+                }
+            }
+            else if (element.ValueKind == JsonValueKind.Array)
+                foreach (var item in element.EnumerateArray()) Collect(item, credential);
+            else if (credential && element.ValueKind == JsonValueKind.String)
+            {
+                var value = element.GetString()!;
+                Add("MCP", value);
+                // A printed token need not include its authorization scheme.
+                var space = value.LastIndexOf(' ');
+                if (space > 0) Add("MCP", value[(space + 1)..]);
+            }
+        }
     }
 
     private static IEnumerable<string> Needles(string value)

@@ -605,3 +605,30 @@ Regranting the parent does not resurrect revoked children; disabling inheritance
 The rig has no kubelet, so projected-file timing and the running process environment are not
 established by this proof. Files follow within the kubelet sync period; variables still require
 restarting or pausing the process to revoke immediately.
+
+### Callback token and inline MCP credential masking
+
+The output masker also collects `AGENTHUB_CALLBACK_TOKEN` and credential values from the
+session's effective MCP config (`AGENTHUB_MCP_CONFIG`): header values, environment values,
+complete URL values, authorization token suffixes, and URL username, password and query values
+in encoded and decoded forms. Custom header and environment names work without an allow list.
+These use the existing eight-character minimum, raw/JSON-escaped/multiline matching and
+`[secret:AGENTHUB_CALLBACK_TOKEN]` / `[secret:MCP]` markers. Commands and arguments remain readable.
+
+The pod refreshes the config when it refreshes secret patterns, so transcript reads, transcript
+and scrollback uploads, and reconnect replay use the same values. The relay backend reads the
+delivered MCP Secret, falling back to the stored inline config, and uses one extractor shared
+with shared-history sanitization. Shared history retains its `[redacted]` marker. Owner/editor
+live terminal input echo keeps its existing behavior; altering PTY bytes would break terminal
+interaction. This applies to all runtime images and relay providers; shared history is an
+Enterprise feature.
+
+Decision: collect credential values where they are supplied rather than guess from header or
+environment names. Rejected: masking the complete config as a single string, which misses
+separately printed values; masking only complete URLs, which misses their separately printed
+userinfo and query values; regenerating gateway config during relay reads, which produces new
+tokens instead of masking the values delivered to the session. Existing stored transcripts are
+not rewritten. Values transformed into other encodings are outside literal-value masking.
+
+`tests/RuntimeCredentialMaskProof/` exercises the real session transport, upload, replay,
+unchanged owner input echo, and the concrete backend hook relay boundary against a stand-in hub.
