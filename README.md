@@ -116,7 +116,7 @@ shift.
   hook for it. [Setup and per-runtime details below.](#chat-integrations)
 - **Auto approve** — let a session run its tools without asking, set when you create the
   session or flipped on a running one. [Details below.](#auto-approve)
-- **OIDC login** with any provider (Keycloak, Entra ID, …), Authorization Code Flow + PKCE.
+- **OIDC login** with any compatible provider, Authorization Code Flow + PKCE.
 - **Account deletion (GDPR)** — every user can irreversibly delete their account under
   **Settings → Profile**: all sessions, files, credentials, git connections, skills,
   MCP servers, usage history and chat links are purged from the database, Kubernetes
@@ -262,67 +262,21 @@ key. Register the following in your provider:
 - **Post-logout redirect URI:** `https://<host>`
 - **Allowed web origins / CORS:** `https://<host>`
 
-<details>
-<summary><b>Keycloak</b></summary>
-
-1. In your realm: **Clients → Create client** — Client ID `agenthub`, client type
-   *OpenID Connect*, **Client authentication: Off** (public), Standard Flow enabled,
-   PKCE method `S256` (Advanced → Proof Key for Code Exchange).
-2. Set redirect URI / post-logout URI / web origins as above.
-3. So the access token carries `aud=agenthub`: **Client scopes →
-   agenthub-dedicated → Add mapper → Audience**, included client audience: `agenthub`.
+Register a public OIDC client with Authorization Code Flow and PKCE method `S256`.
+Configure the provider to issue JWT access tokens for this application's audience and to
+include a stable `preferred_username` claim. If it requires a dedicated API scope, add
+that scope to `oidc.scope` alongside `openid profile email`.
 
 ```bash
 helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
-  --set oidc.authority=https://keycloak.example.com/realms/myrealm \
+  --set oidc.authority=https://identity.example.com \
   --set oidc.clientId=agenthub \
   --set oidc.audience=agenthub
 ```
-</details>
 
-<details>
-<summary><b>Microsoft Entra ID (Azure AD)</b></summary>
-
-1. **App registrations → New registration** — name `agenthub`, supported account types
-   as needed. Platform **Single-page application** with redirect URI
-   `https://<host>/auth/callback` (SPA platform = PKCE without secret).
-2. **Expose an API → Add a scope**: Application ID URI `api://<application-client-id>`,
-   scope name e.g. `access`. (Without your own scope, Entra issues access tokens for
-   Microsoft Graph, which Open AgentHub cannot validate.)
-3. The frontend must request that scope:
-
-```bash
-helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
-  --set oidc.authority=https://login.microsoftonline.com/<tenant-id>/v2.0 \
-  --set oidc.clientId=<application-client-id> \
-  --set oidc.audience=api://<application-client-id> \
-  --set oidc.scope="openid profile email api://<application-client-id>/access"
-```
-
-Note: Entra ID puts the username into `preferred_username` (usually the UPN) — works
-out of the box as the tenant key.
-</details>
-
-<details>
-<summary><b>Google</b></summary>
-
-1. **Google Cloud Console → APIs & Services → Credentials → Create OAuth client ID** —
-   application type *Web application*, authorized JavaScript origin `https://<host>`,
-   authorized redirect URI `https://<host>/auth/callback`.
-
-```bash
-helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
-  --set oidc.authority=https://accounts.google.com \
-  --set oidc.clientId=<client-id>.apps.googleusercontent.com \
-  --set oidc.audience=<client-id>.apps.googleusercontent.com
-```
-
-⚠️ **Caveat:** Google issues *opaque* access tokens (not JWTs); only its **ID tokens**
-are verifiable JWTs. Open AgentHub currently validates the access token, so Google login
-requires the backend to validate the ID token instead — tracked as an open issue. Use
-Keycloak or Entra ID for production today, or put Google behind Keycloak/Dex as an
-identity broker (Keycloak's "Identity Providers → Google" works out of the box).
-</details>
+Opaque access tokens are not supported. An identity broker can supply compatible JWT
+access tokens when an upstream provider cannot. An ID token alone does not satisfy the
+backend's access-token validation.
 
 <details>
 <summary><b>Build your own images / deploy without Helm</b></summary>
@@ -336,14 +290,15 @@ docker build -f agent-runtime/claude/Dockerfile -t $REG/agent-runtime-claude:$TA
 docker build -f agent-runtime/codex/Dockerfile -t $REG/agent-runtime-codex:$TAG ./agent-runtime
 docker build -f agent-runtime/cursor/Dockerfile -t $REG/agent-runtime-cursor:$TAG ./agent-runtime
 docker build -f agent-runtime/openclaw/Dockerfile -t $REG/agent-runtime-openclaw:$TAG ./agent-runtime
+docker build -f agent-runtime/opencode/Dockerfile -t $REG/agent-runtime-opencode:$TAG ./agent-runtime
 docker build -t $REG/browser:$TAG ./browser-runtime
 docker push $REG/backend:$TAG && docker push $REG/frontend:$TAG
 docker push $REG/agent-runtime-claude:$TAG && docker push $REG/agent-runtime-codex:$TAG
-docker push $REG/agent-runtime-cursor:$TAG && docker push $REG/agent-runtime-openclaw:$TAG
+docker push $REG/agent-runtime-cursor:$TAG && docker push $REG/agent-runtime-openclaw:$TAG && docker push $REG/agent-runtime-opencode:$TAG
 docker push $REG/browser:$TAG
 
-# image.registry/image.tag select all six defaults. Full runtime overrides are
-# agent.images.claude, agent.images.codex, agent.images.cursor, and agent.images.openclaw. Browser uses its
+# image.registry/image.tag select all seven defaults. Full runtime overrides are
+# agent.images.claude, agent.images.codex, agent.images.cursor, agent.images.openclaw, and agent.images.opencode. Browser uses its
 # explicit repository override. For a private registry, create the pull secret in BOTH
 # namespaces and set image.pullSecret.
 helm upgrade --install agenthub helm/open-agenthub -n agenthub --create-namespace \

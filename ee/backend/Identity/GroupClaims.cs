@@ -11,7 +11,7 @@ namespace AgentHub.Api.Ee.Identity;
 
 /// <summary>
 /// Reads the user's groups from the OIDC/OAuth token. The claim name is configurable via
-/// <c>Ee:Groups:Claim</c> (default "groups", which Keycloak/Entra/Okta emit with the right
+/// <c>Ee:Groups:Claim</c> (default "groups", which providers emit with the right
 /// mapper). Handles both wire shapes: one claim per group (ASP.NET splits JSON arrays this
 /// way) and a single claim whose value is a JSON array string.
 /// </summary>
@@ -47,7 +47,7 @@ public static class GroupClaims
             .ToList();
     }
 
-    /// <summary>Keycloak group paths come as "/team/sub"; store them without the leading slash. Also
+    /// <summary>Some providers emit group paths as "/team/sub"; store them without the leading slash. Also
     /// applied to names an admin types in, or "/team" would be mapped and never match a member.</summary>
     public static string Normalize(string group)
     {
