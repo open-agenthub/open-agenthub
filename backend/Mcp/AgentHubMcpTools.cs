@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Security.Claims;
 using System.Text.Json;
 using AgentHub.Api.Models;
+using AgentHub.Api.Ee.Sharing;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
 using ModelContextProtocol;
@@ -22,9 +23,12 @@ public sealed class AgentHubMcpTools(
     ILogger<AgentHubMcpTools> logger,
     ISessionMessageStore? messages = null,
     ISessionMessageDelivery? delivery = null,
-    ISessionContextClear? contextClear = null)
+    ISessionContextClear? contextClear = null,
+    ISessionAccessService? access = null, ISessionSharingService? sharing = null)
 {
     /// <summary>The calling user; see <see cref="McpCallerIdentity"/>.</summary>
+    private readonly ExternalSessionAccess external = new(sessions, access, sharing);
+
     private string Owner => McpCallerIdentity.Owner(http);
 
     [McpServerTool(Name = "session_update")]
@@ -211,7 +215,7 @@ public sealed class AgentHubMcpTools(
     [McpServerTool(Name = "session_get")]
     [Description("Get one of your sessions by id.")]
     public async Task<SessionInfo> GetSession([Description("Session id.")] string id, CancellationToken ct = default)
-        => await sessions.GetSessionAsync(Owner, id, ct) ?? throw new McpException("session_not_found");
+        => await external.GetAsync(Owner, id, ct) ?? throw new McpException("session_not_found");
 
     [McpServerTool(Name = "session_logs")]
     [Description("Read a session's transcript: the conversation as the agent recorded it (user, "
@@ -269,7 +273,7 @@ public sealed class AgentHubMcpTools(
         [Description("Pending, Running, Paused, Succeeded, Failed or Scheduled.")] string? phase = null,
         CancellationToken ct = default)
     {
-        var all = await sessions.ListSessionsAsync(Owner, ct);
+        var all = await external.ListAsync(Owner, ct);
         return all.Where(s =>
                 (parentSessionId is null || s.ParentSessionId == parentSessionId) &&
                 (phase is null || string.Equals(s.Phase, phase, StringComparison.OrdinalIgnoreCase)))
@@ -360,9 +364,9 @@ public sealed class AgentHubMcpTools(
     public async Task<IReadOnlyList<AgentSummary>> ListAgents(
         [Description("Only agents in this project.")] string? projectId = null, CancellationToken ct = default)
     {
-        var all = await sessions.ListSessionsAsync(Owner, ct);
+        var all = await external.ListAsync(Owner, ct);
         return all.Where(s => projectId is null || s.ProjectId == projectId)
-            .Select(s => new AgentSummary(s.Id, s.Title, s.Description, s.Phase, s.ProjectId))
+            .Select(s => new AgentSummary(s.Id, s.Title, s.Description, s.Phase, s.ProjectId, s.Owner, s.AccessRole ?? "Owner", s.CanWrite ?? true))
             .ToList();
     }
 
@@ -387,7 +391,7 @@ public sealed class AgentHubMcpTools(
                    ?? throw new McpException("message_body_invalid");
 
         var owner = Owner;
-        var candidates = (await sessions.ListSessionsAsync(owner, ct))
+        var candidates = (await external.ListAsync(owner, ct))
             .Where(s => projectId is null || s.ProjectId == projectId)
             .ToList();
 
@@ -405,6 +409,17 @@ public sealed class AgentHubMcpTools(
         }
 
         var (isPriority, isInterrupt) = AgentMessaging.ResolveFlags(ParseFlag(priority), ParseFlag(interrupt));
+        if (target.Owner != owner)
+        {
+            try
+            {
+                var shared = await external.QueueSharedAsync(owner, target.Id, body,
+                    isPriority, isInterrupt, messages, ct);
+                return new AgentMessageResult(shared.Id, target.Id, target.Title);
+            }
+            catch (KeyNotFoundException) { throw new McpException("agent_not_found"); }
+            catch (ArgumentException error) { throw new McpException(error.Message); }
+        }
         var record = new SessionMessageRecord
         {
             Id = Guid.NewGuid().ToString("n")[..12],
@@ -495,7 +510,8 @@ public sealed class AgentHubMcpTools(
     }
 }
 
-public record AgentSummary(string Id, string Title, string? Description, string Phase, string? ProjectId);
+public record AgentSummary(string Id, string Title, string? Description, string Phase, string? ProjectId,
+    string? Owner = null, string? AccessRole = null, bool? CanWrite = null);
 
 public record AgentMessageResult(string Id, string To, string Title, string DeliveredVia = MessageDeliveryVia.Inbox,
     string? Reason = null);

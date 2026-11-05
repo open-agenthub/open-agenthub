@@ -763,6 +763,8 @@ public static class SessionDuplication
 /// <summary>View of a running or scheduled session.</summary>
 public record SessionInfo
 {
+    public string? AccessRole { get; init; }
+    public bool? CanWrite { get; init; }
     public bool? AutoUpdateRuntimeImages { get; init; }
     public required string Id { get; init; }
     public required string Title { get; init; }

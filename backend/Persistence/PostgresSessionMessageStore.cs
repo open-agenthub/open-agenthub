@@ -86,13 +86,13 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
             CREATE TABLE IF NOT EXISTS cross_owner_message_audit (
                 message_id TEXT PRIMARY KEY,
                 sender_owner TEXT NOT NULL,
-                sender_session_id TEXT NOT NULL,
+                sender_session_id TEXT,
                 recipient_owner TEXT NOT NULL,
                 recipient_session_id TEXT NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
+        await using var cmd = _db.CreateCommand(ddl + "ALTER TABLE cross_owner_message_audit ALTER COLUMN sender_session_id DROP NOT NULL;");
         await cmd.ExecuteNonQueryAsync(ct);
     }
 

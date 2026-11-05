@@ -1,4 +1,5 @@
 using AgentHub.Api.Agents;
+using AgentHub.Api.Ee.Sharing;
 using AgentHub.Api.Models;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
@@ -24,6 +25,7 @@ public sealed class RemoteController : ControllerBase
     private readonly ISessionMessageStore? _messages;
     private readonly ISessionMessageDelivery? _delivery;
     private readonly ISessionContextClear? _contextClear;
+    private readonly ExternalSessionAccess _external;
 
     /// <remarks>
     /// Marked as the one to construct from the container. MVC builds a controller through
@@ -34,13 +36,16 @@ public sealed class RemoteController : ControllerBase
     /// </remarks>
     [ActivatorUtilitiesConstructor]
     public RemoteController(ApiTokenStore tokens, ISessionService svc, ISessionMessageStore? messages = null,
-        ISessionMessageDelivery? delivery = null, ISessionContextClear? contextClear = null)
-        : this(tokens.FindCallerByTokenAsync, svc, messages, delivery, contextClear) { }
+        ISessionMessageDelivery? delivery = null, ISessionContextClear? contextClear = null,
+        ISessionAccessService? access = null, ISessionSharingService? sharing = null)
+        : this(tokens.FindCallerByTokenAsync, svc, messages, delivery, contextClear, access, sharing) { }
 
     /// <summary>Test seam: resolve the caller (owner and scope) from a plaintext token without Postgres.</summary>
     public RemoteController(Func<string, CancellationToken, Task<RemoteCaller?>> findCallerByToken, ISessionService svc,
-        ISessionMessageStore? messages = null, ISessionMessageDelivery? delivery = null, ISessionContextClear? contextClear = null)
+        ISessionMessageStore? messages = null, ISessionMessageDelivery? delivery = null, ISessionContextClear? contextClear = null,
+        ISessionAccessService? access = null, ISessionSharingService? sharing = null)
     {
+        _external = new(svc, access, sharing);
         _findCaller = findCallerByToken;
         _svc = svc;
         _messages = messages;
@@ -112,7 +117,7 @@ public sealed class RemoteController : ControllerBase
     {
         var owner = await ResolveOwnerAsync(ct);
         if (owner is null) return Unauthorized();
-        return await _svc.GetSessionAsync(owner, id, ct) is { } s ? Ok(s) : NotFound();
+        return await _external.GetAsync(owner, id, ct) is { } s ? Ok(s) : NotFound();
     }
 
     /// <summary>
@@ -165,7 +170,7 @@ public sealed class RemoteController : ControllerBase
     {
         var owner = await ResolveOwnerAsync(ct);
         if (owner is null) return Unauthorized();
-        return Ok(await _svc.ListSessionsAsync(owner, ct));
+        return Ok(await _external.ListAsync(owner, ct));
     }
 
     /// <summary>
@@ -242,7 +247,17 @@ public sealed class RemoteController : ControllerBase
         if (text is null)
             return BadRequest($"A message body of 1..{AgentMessaging.MaxBodyChars} characters is required.");
         var target = await _svc.GetSessionAsync(owner, id, ct);
-        if (target is null) return NotFound();
+        if (target is null)
+        {
+            try
+            {
+                var shared = await _external.QueueSharedAsync(owner, id, text,
+                    req.Priority == true, req.Interrupt == true, _messages, ct);
+                return Ok(new AgentMessageSendResult(shared.Id, id, MessageDeliveryVia.Inbox, null));
+            }
+            catch (KeyNotFoundException) { return NotFound(); }
+            catch (ArgumentException error) { return BadRequest(error.Message); }
+        }
 
         var (priority, interrupt) = AgentMessaging.ResolveFlags(req.Priority, req.Interrupt);
         var message = new SessionMessageRecord
