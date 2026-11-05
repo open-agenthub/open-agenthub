@@ -69,8 +69,8 @@ shift.
 - **Bring your tools via MCP** — attach any MCP server (issue tracker, database,
   observability) per session and turn the agent into a teammate.
 - **Remote MCP session orchestration** — external AIs (Cursor, Claude Desktop, …) create,
-  list, wait on, and delete sessions via the `mcp/agenthub` stdio server and a personal
-  API token; when enabled, in-session agents also get the built-in `agenthub_sessions` MCP.
+  list, wait on, and delete sessions via the built-in HTTP `/mcp` endpoint with browser
+  login (opt in with `mcp.enabled`), or the `mcp/agenthub` stdio server with a personal API token; when enabled, in-session agents also get the built-in `agenthub_sessions` MCP.
 - **Versioned skill library with a built-in MCP server** — save reusable skills
   (SKILL.md plus helper scripts and other files) personally or per project; every
   save keeps the previous versions restorable. Sessions materialize the matching
@@ -197,6 +197,13 @@ storage can be skipped with `AGENTHUB_OBJECT_STORAGE=0` — not recommended.
    login in its terminal; Codex uses `codex login --device-auth`, Cursor uses
    `agent login`, OpenClaw uses `openclaw models auth add`, and OpenCode uses
    `opencode auth login` (choose OpenCode Go and paste the console key).
+
+6. **Connect an external MCP client (optional).** Prefer the HTTP endpoint over cloning a
+   local stdio server: configure HTTPS and opt in with `mcp.enabled: true`, then copy setup
+   from **Settings → Connect to AgentHub**. With OIDC, allow the
+   `<public_url>/connect/oidc-callback` redirect. The endpoint stays off by default; see
+   [the safety decision](docs/mcp-server.md#default-off-decision). A local stdio server
+   with a personal API token remains available when HTTP is unsuitable.
 
 All configuration values (host, TLS issuer, images, S3, OIDC, resource limits) live in
 [`helm/open-agenthub/values.yaml`](helm/open-agenthub/values.yaml).
@@ -541,12 +548,17 @@ as user `dev`.
 
 ### Remote MCP session orchestration
 
-External clients (Cursor Desktop, Claude Desktop, and similar) can orchestrate sessions
-through the stdio MCP under `mcp/agenthub/`: create, get, list, wait, and delete, authenticated
-with a personal API token from **Settings → API tokens**. Configure `AGENTHUB_URL` (your
-hub origin) and `AGENTHUB_TOKEN`, and until the package is published to npm run
-`node <path-to-repo>/mcp/agenthub/server.mjs`. The Settings dialog shows a ready-to-paste
-`mcpServers` snippet next to the remote `curl` examples.
+Prefer the built-in **HTTP endpoint**: enable Helm `mcp.enabled: true`, set the public
+HTTPS origin (`mcp.publicUrl`, or derived from `ingress.host`), and open **Settings →
+Connect to AgentHub** for ready-to-paste Claude Code, Claude Desktop and Cursor setup.
+Clients register automatically and open a browser for instance login and consent. For OIDC,
+allow `<public_url>/connect/oidc-callback` at the identity provider. See
+[Remote MCP server](docs/mcp-server.md) for prerequisites and the default-off decision.
+
+For clients that need a local process, the secondary option is the stdio MCP under
+`mcp/agenthub/`, authenticated with a personal API token from **Settings → API tokens**.
+Configure `AGENTHUB_URL` (your hub origin) and `AGENTHUB_TOKEN`, and run
+`node <path-to-repo>/mcp/agenthub/server.mjs`. The API tokens page includes its JSON snippet.
 
 When `spawnMcpEnabled` is true (Helm / `AgentHub:SpawnMcpEnabled`, default on), live agent
 pods also receive the runtime-owned `agenthub_sessions` MCP so an in-session agent can spawn

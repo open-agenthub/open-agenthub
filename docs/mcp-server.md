@@ -28,6 +28,22 @@ Without it, `/mcp` answers `503 MCP endpoint disabled` instead of accepting conn
 is deliberate: an unauthenticated open endpoint would let a client *appear* connected while
 every tool call failed.
 
+## Default-off decision
+
+Keep `mcp.enabled: false`. Enabling it by default was considered because OAuth requires PKCE,
+resource-bound tokens and consent, but it also exposes anonymous dynamic registration and an
+additional authorization server on every upgraded instance. The missing-OIDC case does **not**
+fail closed by itself: API-key mode requires the key on the consent screen, while explicit
+insecure development mode skips login and can issue a token for `dev`. Only an unconfigured
+public URL disables the endpoint. Operators must choose this exposure, configure HTTPS and,
+with OIDC, allow the callback URI before connecting clients.
+
+The Settings setup uses the configured issuer's resource URL from `/api/config`, rather than
+constructing it from the browser's host. That avoids copying an internal proxy address that
+does not match the token audience. The disabled hint appears only to administrators. The
+HTTP instructions come first because browser login avoids distributing personal tokens and
+requires no repository clone; stdio remains the alternative for a local process.
+
 ## Connecting a client
 
 Clients register themselves through OAuth 2.0 Dynamic Client Registration (RFC 7591) — there is
@@ -50,7 +66,26 @@ scope `mcp`.
 claude mcp add --transport http agenthub https://agenthub.example.com/mcp
 ```
 
-Then run `/mcp` and authenticate — a browser opens, you sign in, and the client stores the
+**Claude Desktop:** in Settings → Connectors → Add custom connector, name it AgentHub and
+paste `https://agenthub.example.com/mcp` as the remote MCP server URL. The connector service
+must be able to reach the instance. A remote `url` entry in the local stdio configuration file
+is not the same setup.
+
+**Cursor:** add to `~/.cursor/mcp.json` or the project's `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "agenthub": { "url": "https://agenthub.example.com/mcp" }
+  }
+}
+```
+
+Connect in MCP settings and authenticate in the browser. The instance's **Settings → Connect
+to AgentHub** supplies these values for your deployment, with copy buttons. No personal API
+token is embedded in the snippets.
+
+For Claude Code, run `/mcp` and authenticate — a browser opens, you sign in, and the client stores the
 token. Any MCP client with remote/HTTP transport and OAuth support works the same way.
 
 ### Prerequisite on the identity provider
@@ -64,10 +99,10 @@ AgentHub ever sees the request.
 
 ### Instances without authentication
 
-When `Oidc:Authority` is empty the backend already treats every caller as the single `dev` user.
-The MCP login then has nowhere to federate to and is skipped — the flow goes straight to the
-consent screen and issues a token for `dev`, matching how the rest of the API behaves in that
-mode.
+Without OIDC, API-key mode asks for the instance key on the consent screen and issues tokens
+for its configured owner. Only explicit insecure development mode skips login and issues a
+token for `dev`. A production backend refuses to start without OIDC or a configured API key;
+absence of OIDC alone does not disable MCP.
 
 ## Consent
 
