@@ -88,9 +88,7 @@ public sealed class RemoteReadController : ControllerBase
         // a share-link token, and a revoked grant or lapsed licence must fail as on the web path.
         var shared = await _access.ResolveUserAsync(caller.Owner, id, ct);
         if (shared is null) return NotFound();
-        var sharedPage = await SessionTranscripts.PageAsync(_sessions, shared.Session.Owner, id,
-            shared.Session.Status, offset, max, ct);
-        return Ok(sharedPage);
+        return Ok(await new SharedSessionHistory(_sessions, _live).ReadAsync(shared, offset, max, ct));
     }
 
     [HttpGet("sessions/{id}/messages")]

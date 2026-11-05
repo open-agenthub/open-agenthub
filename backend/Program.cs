@@ -111,6 +111,7 @@ builder.Services.AddSingleton<ISessionAccessStore>(sp => sp.GetRequiredService<S
 builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionShareStatus>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
+builder.Services.AddSingleton<ISharedSessionHistory, SharedSessionHistory>();
 // Every sharing surface (web, token API, MCP) goes through this one service, which holds the
 // licence check — see docs/session-sharing-api.md. FrontendOrigin is what share-link URLs are
 // built from, for the same reason SessionInfo.Url is (never the request host).
