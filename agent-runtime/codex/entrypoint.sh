@@ -15,6 +15,9 @@ rm -rf "$CODEX_HOME/packages" "$CODEX_HOME/app-server-daemon"
 mkdir -p "$CODEX_HOME"
 chmod 700 "$CODEX_HOME"
 umask 077
+# Copies of config.toml restored from an archive written before #446. The pinned CLI keeps none
+# itself (checked with `codex mcp add`), but one would hold the MCP servers' literal header values.
+rm -f "$CODEX_HOME"/config.toml?*
 printf '%s\n' 'cli_auth_credentials_store = "file"' > "$CODEX_HOME/config.toml"
 # Straight after the first line: the provider selection is top-level keys, which have to come
 # before the first table header below (docs/custom-model-endpoints.md).

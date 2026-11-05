@@ -34,7 +34,8 @@ test('OpenClaw driver exposes the provider state contract', () => {
     '.openclaw/agents/*/agent/openclaw-agent.sqlite',
     '.openclaw/agents/*/agent/openclaw-agent.sqlite-wal',
     '.openclaw/agents/*/agent/openclaw-agent.sqlite-shm',
-    '.openclaw/media/agenthub'
+    '.openclaw/media/agenthub',
+    '.openclaw/openclaw.json.bak*'
   ]);
   assert.equal(typeof driver.prepare, 'function');
 });

@@ -101,3 +101,59 @@ process tree, including about 0.1 s of start-up:
 One run at a time, so archives cannot pile up; the side file, so an aborted run never replaces
 the last good archive; tar's exit status 1 counting as success; the credential file staying out
 of the archive (and now out of the digest, so a token refresh alone does not cause an upload).
+
+## Generated MCP client configs stay out of the archive (#446)
+
+Three runtimes wrote the session's generated MCP client configuration into their own state
+directory, so every archive carried the MCP servers' literal header and env values — API keys,
+gateway tokens, and with the skills proxy switched off the hub's `X-Agent-Token` — into object
+storage, although the next start regenerates the configuration from the session's MCP document
+anyway. Claude (`~/.claude.json`, `/tmp/agenthub-mcp.json`) and OpenCode (`~/.config/opencode`)
+write outside their state directories and were not affected.
+
+| Runtime | File | Treatment |
+|---|---|---|
+| Codex | `.codex/config.toml` | `stateExcludes` (`config.toml*`) |
+| Cursor | `.cursor/mcp.json` | `stateExcludes` (`mcp.json*`) |
+| OpenClaw | `.openclaw/openclaw.json` | archived, but holds references instead of values; its rotated `.bak*` copies are excluded |
+
+**Codex and Cursor: excluded.** Both files are rewritten at every start (`config.toml` with `>`;
+`mcp.json` whenever any MCP server or builtin is on, which is always, because the shared
+entrypoint always enables the files server), so nothing written into them during a session ever
+survived a restart. Excluding them loses nothing a resume used. The globs and a matching `rm` at start also cover
+copies of either file: the pinned Codex keeps none (checked by having it rewrite its config with
+`codex mcp add`), Cursor's CLI was not checked, and an archive written before this change could
+carry one either way.
+
+**OpenClaw keeps backups.** The real CLI rotates `openclaw.json.bak` through `.bak.4` on every
+config write, and the entrypoint alone writes the config several times per start, so before this
+change a fresh session's archive held the header value four times and a resumed one six. The
+copies are excluded and deleted at start; nothing reads them on a resume.
+
+**OpenClaw: references, not an exclude.** `openclaw.json` also holds what a resume has to bring
+back: the servers the agent added itself with `openclaw mcp add` (kept on purpose, see
+`docs/api-created-sessions.md`) and the agent's own settings. Excluding the file would drop those;
+stripping only the MCP part at archive time would mean rewriting a file the CLI may be writing at
+that moment. Instead `openclaw/mcp-config.js` writes each literal env and header value of the
+session's servers as a `${AGENTHUB_MCP_VALUE_<n>}` reference — OpenClaw interpolates those from its
+environment, as it already did for the callback token — and the values into
+`/tmp/agenthub-openclaw-mcp.env`, which the entrypoint exports before the first `openclaw` call.
+Verified with the pinned CLI: the hub's `X-Agent-Token` reached a stand-in that refuses requests
+without it, the archive contained the value zero times, and after a resume from that archive the
+agent's own server was still listed (`tests/McpConfigStateProof`).
+
+Limits:
+
+- A server the agent or a person adds inside the session with `openclaw mcp add`/`set` is written
+  by OpenClaw itself, as given. A literal value in it is archived like any other file content.
+- A secret in a server's URL (a query parameter) is not moved; OpenClaw is not known to
+  interpolate URLs. Use a header or `bearerTokenEnvVar` for credentials.
+- An `openclaw` command run without the session agent's environment (for example from a shell that
+  did not inherit it) warns `missing env var "AGENTHUB_MCP_VALUE_<n>"` and leaves that header out.
+
+The values are still masked in uploads (#434): they are in `AGENTHUB_MCP_CONFIG`, which the mask
+reads, and the mask now also takes every `AGENTHUB_MCP_VALUE_*` variable.
+
+Existing archives still hold the old files until the session next saves: the restore brings them
+back, the entrypoint rewrites them (Codex, Cursor) or replaces the managed entries with references
+(OpenClaw), and the next archive contains no value.

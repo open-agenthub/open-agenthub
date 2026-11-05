@@ -249,7 +249,11 @@ module.exports = {
   // resume, and every byte of them is re-compressed on each state archive.
   // packages/ is the TUI's app-server daemon install (~400 MB of binaries the image already
   // ships) and app-server-daemon/ its pid and lock files: neither belongs to a conversation.
-  stateExcludes: ['.codex/log', '.codex/tmp', '.codex/.tmp', '.codex/packages', '.codex/app-server-daemon', '.codex/agenthub-active'],
+  // config.toml is rewritten from scratch at every start (entrypoint.sh), and holds the MCP
+  // servers' literal header values; archiving it only persisted those values in object storage.
+  // The glob also covers any copy of it, should a CLI version start keeping backups.
+  stateExcludes: ['.codex/log', '.codex/tmp', '.codex/.tmp', '.codex/packages', '.codex/app-server-daemon', '.codex/agenthub-active',
+    '.codex/config.toml*'],
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
   buildCommand, isResumeCommand, isMissingResume, findTranscript, prepare, readUsage,
