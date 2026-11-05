@@ -18,6 +18,7 @@ public interface ISlackUserEmails
 
 public enum SlackSenderVerdict { Allowed, Unlinked, Refused }
 
+/// <summary>Whether a Slack sender may drive a session, and what to tell them if not.</summary>
 /// <param name="Notice">What to tell the sender, or null when they were told already.</param>
 public sealed record SlackSenderDecision(SlackSenderVerdict Verdict, string? Principal, string? Notice)
 {

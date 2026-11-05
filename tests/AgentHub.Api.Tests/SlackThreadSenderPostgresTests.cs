@@ -291,7 +291,7 @@ public class SlackThreadSenderPostgresTests
             var license = new FakeEnterpriseLicense(licensed);
             var gate = new SlackSenderGate(client, users, new SessionAccessService(db.Shares, license));
             var sessions = DispatchProxy.Create<ISessionService, RunningSessions>();
-            ((RunningSessions)(object)sessions).Store = db.Sessions;
+            ((RunningSessions)sessions).Store = db.Sessions;
             var pods = new RecordingPods();
             var service = new SlackSocketModeService(opts, license, client, threads, permissions, sessions, users,
                 new ChatRepoService(null!, NullLogger<ChatRepoService>.Instance), new WorkingIndicator(),

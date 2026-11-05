@@ -142,12 +142,12 @@ try
 
     // --- The real service, wired as Program.cs wires it -----------------------------------
     var opts = new SlackOptions { Enabled = true, BotToken = "xoxb-proof", AppToken = "xapp-proof" };
-    var http = new LoopbackFactory(new Uri(slackOrigin));
+    using var http = new LoopbackFactory(new Uri(slackOrigin));
     var client = new SlackClient(http, opts, NullLogger<SlackClient>.Instance);
     var license = new Licensed();
     var gate = new SlackSenderGate(client, users, new SessionAccessService(shares, license));
     var sessionService = DispatchProxy.Create<ISessionService, RunningSessions>();
-    ((RunningSessions)(object)sessionService).Store = sessionsStore;
+    ((RunningSessions)sessionService).Store = sessionsStore;
     var pods = new AgentPodRequests(new HttpClient(), new AlwaysLive());
     var serviceCfg = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
     {
@@ -284,9 +284,11 @@ finally
 Console.WriteLine(failures.Count == 0 ? "\nPROOF PASSED" : $"\nPROOF FAILED: {failures.Count}");
 return failures.Count == 0 ? 0 : 1;
 
-sealed class LoopbackFactory(Uri origin) : IHttpClientFactory
+sealed class LoopbackFactory(Uri origin) : IHttpClientFactory, IDisposable
 {
-    public HttpClient CreateClient(string name) => new(new Rewrite(origin));
+    private readonly Rewrite _handler = new(origin);
+    public HttpClient CreateClient(string name) => new(_handler, disposeHandler: false);
+    public void Dispose() => _handler.Dispose();
 
     private sealed class Rewrite(Uri origin) : DelegatingHandler(new SocketsHttpHandler())
     {
