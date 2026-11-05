@@ -5,6 +5,8 @@ const MAX_SESSION_LIST_BYTES = 4 * 1024 * 1024;
 // A transcript page is sized by the caller (maxChars, up to 1M characters); UTF-8 needs headroom
 // above that before the guard would reject a page that was asked for.
 const MAX_TRANSCRIPT_BYTES = 4 * 1024 * 1024;
+// A conversation archive: the hub accepts state up to 200 MB (SessionStateTransfer.MaxArchiveBytes).
+const MAX_ARCHIVE_BYTES = 200 * 1024 * 1024;
 
 export class AgentHubClient {
   constructor(env = process.env, fetchImpl = globalThis.fetch) {
@@ -179,6 +181,43 @@ export class AgentHubClient {
     return this.#request('GET', '/api/remote/sessions/shared', undefined, MAX_SESSION_LIST_BYTES);
   }
 
+  // ------------------------------------------------------------- continue locally (#453)
+
+  transferStatus(id) {
+    return this.#request('GET', `/api/remote/sessions/${encodeURIComponent(id)}/transfer`);
+  }
+
+  /** Pauses a live session when confirmed and waits for its final state; see docs/session-transfer.md. */
+  takeLocal(id, { directory, confirm }) {
+    return this.#request('POST', `/api/remote/sessions/${encodeURIComponent(id)}/transfer/take-local`,
+      { directory, confirm: Boolean(confirm), link: false });
+  }
+
+  /** The conversation retargeted at `directory`, as a tar.gz relative to the home directory. */
+  async localArchive(id, directory) {
+    const query = new URLSearchParams({ directory });
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/api/remote/sessions/${encodeURIComponent(id)}/transfer/local-archive?${query}`, {
+        headers: { Authorization: `Bearer ${this.token}` },
+        redirect: 'error', signal: AbortSignal.timeout(300_000)
+      });
+    const bytes = await readBounded(response, MAX_ARCHIVE_BYTES);
+    if (!response.ok) throw httpError(response.status, bytes);
+    return { archive: bytes, resumeId: response.headers.get('x-agenthub-resume-id') };
+  }
+
+  async handBack(id, archive, { resume }) {
+    const response = await this.fetchImpl(
+      `${this.baseUrl}/api/remote/sessions/${encodeURIComponent(id)}/transfer/hand-back?resume=${resume ? 'true' : 'false'}`, {
+        method: 'PUT',
+        headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/gzip', Accept: 'application/json' },
+        body: archive, redirect: 'error', signal: AbortSignal.timeout(300_000)
+      });
+    const bytes = await readBounded(response, MAX_RESPONSE_BYTES);
+    if (!response.ok) throw httpError(response.status, bytes);
+    return JSON.parse(new TextDecoder().decode(bytes));
+  }
+
   listFiles(sessionId) {
     return this.#request('GET', `/api/remote/sessions/${encodeURIComponent(sessionId)}/files`, undefined, 1_000_000);
   }
@@ -207,19 +246,21 @@ export class AgentHubClient {
     }
     const response = await this.fetchImpl(`${this.baseUrl}${path}`, init);
     const bytes = await readBounded(response, maxBytes);
-    if (!response.ok) {
-      const error = new Error(`agenthub_http_${response.status}`);
-      // The one thing read from an error body: a code the backend chose (e.g. unknown_recipient).
-      // The message text is left behind on purpose — it is for people, and the tool answers with
-      // a fixed vocabulary.
-      const code = errorCode(bytes);
-      if (code !== undefined) error.code = code;
-      throw error;
-    }
+    if (!response.ok) throw httpError(response.status, bytes);
     if (response.status === 204 || bytes.length === 0) return null;
     try { return JSON.parse(new TextDecoder().decode(bytes)); }
     catch { throw new Error('agenthub_invalid_json'); }
   }
+}
+
+function httpError(status, bytes) {
+  const error = new Error(`agenthub_http_${status}`);
+  // The one thing read from an error body: a code the backend chose (e.g. unknown_recipient).
+  // The message text is left behind on purpose — it is for people, and the tool answers with
+  // a fixed vocabulary.
+  const code = errorCode(bytes);
+  if (code !== undefined) error.code = code;
+  return error;
 }
 
 function sharesPath(sessionId) {

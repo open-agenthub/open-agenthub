@@ -9,6 +9,7 @@ import { safeError, sharingErrorCode } from './errors.mjs';
 import { withExpiry } from './expiry.mjs';
 import { resolveAgentTarget } from './resolve.mjs';
 import { sanitizeSession } from './sanitize.mjs';
+import { localDirectory, packConversation, resumeCommand, writeConversation } from './transfer.mjs';
 import { waitForSession } from './wait.mjs';
 
 const text = value => ({
@@ -346,5 +347,84 @@ register('read_file', {
   description: 'Download an AgentHub session file to this computer and return localPath. Small images and text also appear inline.',
   inputSchema: z.object({ sessionId: z.string().regex(/^[A-Za-z0-9_-]{1,128}$/), fileId: z.string().regex(/^[a-f0-9]{32}$/) })
 }, input => readSessionFile(client, input));
+
+// ------------------------------------------------------------------ continue locally (#453)
+//
+// This process runs on the person's machine, so unlike the remote /mcp endpoint it writes the
+// conversation itself: no link, no command to paste. The hub does the retargeting and enforces
+// the rules (pause before download, nothing stored next to a live pod); see docs/session-transfer.md.
+
+const sessionIdSchema = z.string().regex(/^[A-Za-z0-9_-]{1,128}$/);
+const directorySchema = z.string().min(1).max(1024)
+  .describe('Absolute path of the local project directory, normally a checkout of the session\'s repository.');
+
+register('session_take_local', {
+  description: 'Continue a Claude Code session on this computer. Pauses the session (its pod saves the '
+    + 'conversation and stops, so it is never answered in two places), downloads the conversation and '
+    + 'writes it under ~/.claude/projects for directory, where claude --resume finds it. A live session '
+    + 'is only paused with confirm true — without it nothing happens and the answer lists the steps '
+    + '(confirmationRequired); ask the person first. Answers resumeCommand: tell the person to run it '
+    + 'in a new terminal (it cannot resume inside this conversation). A local transcript with other '
+    + 'content is not replaced (local_transcript_differs) unless overwrite is true. Hand it back with '
+    + 'session_hand_back.',
+  inputSchema: z.object({
+    sessionId: sessionIdSchema,
+    directory: directorySchema,
+    confirm: z.boolean().optional(),
+    overwrite: z.boolean().optional()
+  }),
+  annotations: { destructiveHint: true, idempotentHint: false }
+}, async ({ sessionId, directory, confirm, overwrite }) => {
+  const local = localDirectory(directory);
+  const plan = await client.takeLocal(sessionId, { directory: local, confirm });
+  if (plan?.confirmationRequired) return text(plan);
+  const { archive, resumeId } = await client.localArchive(sessionId, plan.directory);
+  const files = await writeConversation(archive, { overwrite: Boolean(overwrite) });
+  return text({
+    sessionId, directory: plan.directory, paused: Boolean(plan.paused), resumeId: resumeId ?? plan.resumeId,
+    steps: plan.steps, files,
+    resumeCommand: resumeCommand(plan.directory, resumeId ?? plan.resumeId),
+    next: 'Run resumeCommand in a new terminal. When done, quit that Claude Code and call session_hand_back.'
+  });
+});
+
+register('session_hand_back', {
+  description: 'Hand a session continued on this computer back to the hub: packs the local conversation '
+    + 'for directory, uploads it, and resumes the session with the local turns (resume false only '
+    + 'stores it). Quit the local Claude Code first so the transcript is complete. Fails with '
+    + 'session_live while the session runs in the hub (its pod would overwrite the upload), '
+    + 'local_transcript_missing when there is nothing for that directory, and transcript_unrelated '
+    + 'when the local transcript is not a continuation of the session. localSessionId picks another '
+    + 'local conversation than the one taken from the hub, e.g. after claude --fork-session.',
+  inputSchema: z.object({
+    sessionId: sessionIdSchema,
+    directory: directorySchema,
+    resume: z.boolean().optional(),
+    localSessionId: z.string().regex(/^[0-9a-fA-F-]{36}$/).optional()
+  }),
+  annotations: { destructiveHint: true, idempotentHint: false }
+}, async ({ sessionId, directory, resume, localSessionId }) => {
+  const local = localDirectory(directory);
+  const status = await client.transferStatus(sessionId);
+  if (status?.live) {
+    const error = new Error('session_live');
+    error.code = 'session_live';
+    throw error;
+  }
+  const id = localSessionId ?? status?.resumeId;
+  if (!id) {
+    const error = new Error('transcript_missing');
+    error.code = 'transcript_missing';
+    throw error;
+  }
+  const packed = await packConversation(local, id);
+  const result = await client.handBack(sessionId, packed.archive, { resume: resume !== false });
+  return text({
+    ...result, directory: local, uploadedFiles: packed.files,
+    next: result?.resumed
+      ? 'The session continues in the hub. Do not keep using the local copy; take it local again for another round.'
+      : 'Stored. Resume the session in the hub to continue it there.'
+  });
+});
 
 await server.connect(new StdioServerTransport());

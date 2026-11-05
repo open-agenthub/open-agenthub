@@ -705,6 +705,12 @@ once to a fresh launch if that chat is missing. OpenClaw resumes from restored
 fresh-session fallback when state is absent. OpenCode resumes with `--continue`, which picks the
 newest top-level session in the restored `~/.opencode` database and starts fresh when there is none.
 
+A **Claude Code** session can also be continued **on your own computer** and handed back: the
+**⇩ Continue locally** button on the session page gives a copyable `curl | tar` command (no API
+token needed), and the `session_take_local` / `session_hand_back` MCP tools do the same from a local
+Claude Code — the stdio server writes the files itself. The session is paused while it runs
+locally, so the conversation is never answered in two places (`docs/session-transfer.md`).
+
 A finished or paused **autonomous** session can be continued **interactively** — from the
 session page, `POST /api/sessions/{id}/convert`, the remote API, or the `session_convert` MCP
 tool. Whether the conversation survives depends on the runtime:

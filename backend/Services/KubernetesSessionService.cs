@@ -1612,14 +1612,27 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         catch (JsonException) { return content; }
     }
 
-    private async Task<SessionInfo> PauseAndResumeRuntimeCoreAsync(string owner, string id, CancellationToken ct)
+    public async Task WaitForPodGoneAsync(string owner, string id, CancellationToken ct = default)
     {
-        await PauseSessionCoreAsync(owner, id, ct);
-        // The old runtime uploads on termination; starting sooner can restore stale state.
+        _ = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException($"Session {id} not found.");
+        await WaitForPodGoneCoreAsync(id, ct);
+    }
+
+    /// <summary>Bounded by the grace period the pause gave the pod plus a margin; a pod still there
+    /// after that is stuck, and waiting on it would hold the caller's request open indefinitely.</summary>
+    private async Task WaitForPodGoneCoreAsync(string id, CancellationToken ct)
+    {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(TimeSpan.FromSeconds(_opts.PauseGracePeriodSeconds + 30));
         while (await TryReadPodAsync($"session-{id}", deadline.Token) is not null)
             await Task.Delay(250, deadline.Token);
+    }
+
+    private async Task<SessionInfo> PauseAndResumeRuntimeCoreAsync(string owner, string id, CancellationToken ct)
+    {
+        await PauseSessionCoreAsync(owner, id, ct);
+        // The old runtime uploads on termination; starting sooner can restore stale state.
+        await WaitForPodGoneCoreAsync(id, ct);
         var record = await _store.GetAsync(owner, id, ct) ?? throw new KeyNotFoundException();
         // Archives are keyed by the hashed owner key, like every other session object; the raw
         // owner name never matches one, so the update stopped here with the session paused.
@@ -1747,7 +1760,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await _store.UpsertAsync(rec, ct);
         rec.QuestionOpen = false;
         await _store.SetQuestionDialogAsync(id, false, null, ct);
-        _log.LogInformation("Paused session {Id} (pod removed, state uploaded to S3)", id);
+        _log.LogInformation("Paused session {Id} (pod removed, state uploaded to S3)", AgentHub.Api.Auth.ApiKeyFailureLimiter.LogSafe(id));
         return await ToInfoAsync(rec, phase: SessionStatus.Paused, podIp: null, ct: ct);
     }
 

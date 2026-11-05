@@ -126,6 +126,10 @@ builder.Services.AddSingleton<ISessionSharingService>(sp => new SessionSharingSe
 builder.Services.AddSingleton<IProjectShareStore>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<IProjectSharingService, ProjectSharingService>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ApiTokenStore>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.PostgresSessionTransferTicketStore>();
+builder.Services.AddSingleton<AgentHub.Api.Persistence.ISessionTransferTicketStore>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Persistence.PostgresSessionTransferTicketStore>());
+builder.Services.AddSingleton<AgentHub.Api.Services.SessionTransferService>();
 // Token/cost usage aggregates fed by the agent pods' OpenTelemetry exporter.
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IUsageStore, AgentHub.Api.Persistence.PostgresUsageStore>();
 // Monthly API budgets: personal limit (community) + admin limits (enterprise provider below).
@@ -551,6 +555,7 @@ await AgentHub.Api.Persistence.SchemaMigrationLock.RunAsync(app.Configuration, a
         await scope.ServiceProvider.GetRequiredService<SessionShareStore>().InitializeAsync();
         var tokenStore = scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.ApiTokenStore>();
         await tokenStore.InitializeAsync();
+        await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.PostgresSessionTransferTicketStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IWebhookTriggerStore>().InitializeAsync();
         await scope.ServiceProvider.GetRequiredService<AgentHub.Api.Persistence.IUsageStore>().InitializeAsync();
         // Thread deletion archives into the shared tombstone schema, so it must exist first.

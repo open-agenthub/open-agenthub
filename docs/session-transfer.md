@@ -45,18 +45,104 @@ carried back had been thrown away. Failing loudly beforehand is the only version
 honest. `SessionStatus.CanReplaceState` holds the rule, next to `CanPause` and `CanResume`, so it
 stays testable without a cluster and cannot disagree with them.
 
-## What the client has to do, and why it is not a copy
+## What the rewrite is, and why it is not a copy
 
 Claude Code finds a session by the directory it was recorded in: the project folder is the working
 directory with every character outside `[A-Za-z0-9]` replaced by a dash, and every transcript line
 repeats that directory in a `cwd` field. `/workspace/repo` in the pod and `C:\Users\…\project` on a
 workstation therefore disagree twice over, and a plain copy resumes nothing.
 
-That rewrite is client work, not hub work: only the client knows the directory the session is going
-to. It lives in a separate Claude Code plugin,
-[`agenthub-claude-plugin`](https://github.com/open-agenthub/agenthub-claude-plugin), rather than in
-this repository — it runs on a workstation, releases on its own schedule, and has no reason to move
-with `image.tag`.
+The first version left that rewrite to a separate Claude Code plugin,
+[`agenthub-claude-plugin`](https://github.com/open-agenthub/agenthub-claude-plugin), on the grounds
+that only the client knows the directory the session is going to. That is true, but the client can
+say it. Since #453 the hub does the rewrite (`SessionLocalTransfer`) for a directory the caller
+names, in both directions; see the next section for why.
+
+Only `cwd` (and, on the way back, `sessionId`) changes, and only on lines that carry it. The
+serializer keeps non-ASCII text and `<`, `>`, `&` unescaped, because a resuming pod compares the
+restored transcript with the hub's copy byte for byte (#146): a rewrite that re-escaped every
+umlaut would make the pod read its own history as "a different one". Claude Code's own records of
+the move — an "Environment update: Primary working directory: … (was …)" attachment on resume —
+are left alone. They are how the model learns it changed machines, and editing them would edit
+history.
+
+## Continuing locally without a token or a script (#453)
+
+The state endpoints made a transfer possible; using them still meant creating a personal API token,
+installing the plugin and running its script. The owner asked for this to be one step, from a
+local Claude Code over MCP and from the web app. There are three surfaces, and one service
+(`SessionTransferService`) behind all of them, so the rules are stated once:
+
+| Surface | Credential | Who writes `~/.claude` |
+|---|---|---|
+| stdio MCP (`mcp/agenthub`): `session_take_local`, `session_hand_back` | personal API token | the stdio process — it runs on the person's machine |
+| remote `/mcp`: the same two tools | OAuth sign-in | a `curl \| tar` command the caller runs |
+| web app: **⇩ Continue locally** on the session page | the login | the same command, pasted into a terminal |
+
+**Taking a session local** pauses it — only after an explicit `confirm`, because pausing interrupts
+whatever the agent is doing — and then *waits until the pod is gone* before reading the archive. A
+pause returns as soon as the pod has been told to stop; the pod writes its final state while it
+shuts down, so an archive read straight after the pause misses exactly the turns the person just
+watched. The same wait already guarded the runtime-image update (`WaitForPodGoneAsync`).
+
+**Downloading** is refused while a pod is live, like uploading always was: a copy taken next to a
+running pod is a fork, and the hand-back would later keep one branch. **Handing back** stores the
+uploaded conversation under the session's own folder and id and resumes the session; it refuses an
+upload that is not a continuation of the stored conversation (`transcript_unrelated`: the CLI only
+appends, so a continuation still holds the first message), and anything in the upload but one
+conversation's transcript and sidecar files, since those would land in the pod's home on resume.
+
+### Why the hub rewrites instead of each client
+
+The remote `/mcp` endpoint and the web app cannot run code on the workstation, so they can only hand
+over something a stock shell can use. If the hub served the raw archive, that something would have
+to be the rewrite — a script to download and run, or a dependency to install, which is the step the
+issue asked to remove. With the rewrite in the hub, the whole local side is `curl` and `tar`, which
+Linux, macOS and Windows 10+ all ship, and the archive it downloads is already laid out relative to
+the home directory. The stdio server then uses the same endpoint rather than a second
+implementation that could drift from it — the reason the curated export was rejected above.
+
+### Why links, and why in Postgres
+
+**The alternative was to accept the OAuth token or a session cookie in the command.** Pasting a
+bearer token into a shell puts it in the history file, and the OAuth access token is the MCP
+client's, not something to hand to `curl`. A transfer link instead grants exactly one transfer of
+one session in one direction, for 15 minutes, and is removed by its first use
+(`DELETE … RETURNING`, so two concurrent uses cannot both succeed). Every failure to redeem answers
+the same 404, so a probe cannot tell an expired link from one that never existed.
+
+**The secret travels in a header, not in the URL.** The commands call `/api/session-transfer` with
+`X-AgentHub-Transfer: <secret>`. The first version put the secret in the path
+(`/api/session-transfer/{secret}`). That was rejected in review: request lines are what ingress
+controllers and proxies write to their access logs, so anyone who could read such a log within the
+15 minutes could redeem the link before its owner and walk off with the conversation. A missing
+header is one more failure answered with the same 404. The PowerShell variant uses `curl.exe -H`
+too rather than `Invoke-WebRequest -Headers`: Windows PowerShell 5.1's `Invoke-WebRequest` buffers
+the whole download and is slowed by its progress bar, and one tool for both shells keeps the two
+commands the same apart from quoting.
+
+**The alternative storage was a signed link** (Data Protection). It was rejected because single use
+needs a record that the first redemption removes, and because the backend runs as several replicas:
+a link minted by one has to be honoured by the other, and the database is the one store both share.
+Only the SHA-256 of the link's secret is stored, as for API tokens.
+
+The link's origin is `FrontendOrigin`, never the request's Host header (the same reasoning as
+`SessionUrl`): the person's own shell sends their conversation to it. An instance without
+`FrontendOrigin` answers `origin_not_configured`; the stdio server needs no link and still works.
+
+### The commands
+
+- `tar -xzkf`: `-k` keeps a transcript that is already on the machine. It may hold turns taken there
+  since the last transfer; tar refusing, and stopping the `&&` chain, is the only warning there would
+  be. The stdio server refuses the same case with `local_transcript_differs` unless told to overwrite.
+- The hand-back packs the conversation's sidecar folder only if it exists; naming it unconditionally
+  makes tar fail for every session that never ran a subagent.
+- The PowerShell variant takes its temporary file from `[IO.Path]::GetTempPath()` and `Join-Path`,
+  not `"$env:TEMP\…"`: `TEMP` is unset in PowerShell on macOS and Linux, and a backslash there is part
+  of a file name. Found by running the commands under real `pwsh` (`tests/SessionTransferProof`).
+- The stdio server writes below `CLAUDE_CONFIG_DIR` when it is set — files written to `~/.claude`
+  regardless would sit where that CLI never looks. The pasted command cannot know that variable and
+  always writes `~/.claude`.
 
 ## What this does not do
 
@@ -65,3 +151,6 @@ with `image.tag`.
   per-provider (`claude-state.tgz`, `codex-state.tgz`, …) and only the Claude one holds something
   `--resume` can read.
 - **Files are not part of it.** Session files live under their own keys and have their own API.
+- **The repository is not part of it either.** The local directory should be a checkout of the same
+  repository; otherwise the conversation refers to files that are not there. The hand-back moves the
+  conversation only — commit and push code changes as usual.
