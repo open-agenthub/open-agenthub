@@ -17,7 +17,7 @@ public sealed record HandBackLinkRequest(string? Directory, bool Resume = true);
 /// <list type="bullet">
 /// <item><c>api/remote/…/transfer</c> — personal API token; the stdio MCP server writes the files itself.</item>
 /// <item><c>api/sessions/…/transfer</c> — the web app's login; returns single-use links and commands.</item>
-/// <item><c>api/session-transfer/{secret}</c> — the link those commands use, with no other credential.</item>
+/// <item><c>api/session-transfer</c> with the <c>X-AgentHub-Transfer</c> header — the link those commands use, with no other credential.</item>
 /// </list>
 /// The rules live in <see cref="SessionTransferService"/>; this class only authenticates and maps codes.
 /// [AllowAnonymous] sits on each token and link action, not on the class: on the class it would
@@ -94,24 +94,28 @@ public sealed class SessionTransferController : ControllerBase
 
     /// <summary>
     /// Every failure to redeem answers the same 404: the secret is the only credential here, and
-    /// telling an expired one from an unknown one would help someone guessing.
+    /// telling an expired one from an unknown one would help someone guessing. A missing header is
+    /// one more such failure. The secret is never part of the route: request lines land in ingress
+    /// and proxy access logs, and anyone reading one within the 15 minutes could redeem it first.
     /// </summary>
     [AllowAnonymous]
-    [HttpGet("api/session-transfer/{secret}")]
-    public async Task<IActionResult> LinkDownload(string secret, CancellationToken ct)
+    [HttpGet("api/session-transfer")]
+    public async Task<IActionResult> LinkDownload(
+        [FromHeader(Name = SessionTransferCommands.Header)] string? secret, CancellationToken ct)
     {
-        if (await _transfer.RedeemAsync(secret, SessionTransferDirection.TakeLocal, ct) is not { } ticket)
+        if (await _transfer.RedeemAsync(secret ?? "", SessionTransferDirection.TakeLocal, ct) is not { } ticket)
             return NotFound(new { code = "link_invalid", error = "The link is unknown, expired or already used. Create a new one." });
         return await Map(async () => Archive(
             await _transfer.LocalArchiveAsync(ticket.Owner, ticket.SessionId, ticket.Directory, ct), ticket.SessionId));
     }
 
     [AllowAnonymous]
-    [HttpPut("api/session-transfer/{secret}")]
+    [HttpPut("api/session-transfer")]
     [RequestSizeLimit(SessionStateTransfer.MaxArchiveBytes)]
-    public async Task<IActionResult> LinkUpload(string secret, CancellationToken ct)
+    public async Task<IActionResult> LinkUpload(
+        [FromHeader(Name = SessionTransferCommands.Header)] string? secret, CancellationToken ct)
     {
-        if (await _transfer.RedeemAsync(secret, SessionTransferDirection.HandBack, ct) is not { } ticket)
+        if (await _transfer.RedeemAsync(secret ?? "", SessionTransferDirection.HandBack, ct) is not { } ticket)
             return NotFound(new { code = "link_invalid", error = "The link is unknown, expired or already used. Create a new one." });
         return await Map(async () => Ok(await _transfer.HandBackAsync(ticket.Owner, ticket.SessionId, Request.Body, ticket.Resume, ct)));
     }

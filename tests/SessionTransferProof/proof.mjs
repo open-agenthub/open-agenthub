@@ -17,6 +17,7 @@ const { StdioClientTransport } = mcp('@modelcontextprotocol/sdk/client/stdio.js'
 const RIG = process.env.RIG || process.env.HOME + '/rig'
 const MODEL = RIG + '/model'
 const BASE = 'http://127.0.0.1:8080'
+const INGRESS = 'http://127.0.0.1:8081' // access-proxy.mjs, FrontendOrigin
 const sleep = ms => new Promise(r => setTimeout(r, ms))
 const results = []
 const check = (ok, what, detail = '') => { results.push(ok); console.log(`${ok ? 'PASS' : 'FAIL'} ${what}${detail ? ' — ' + detail : ''}`) }
@@ -143,24 +144,35 @@ fs.writeFileSync(shim + '/claude', `#!/bin/sh\nexec ${execSync('command -v claud
 const shell = command => execFileSync('bash', ['-c', command], { env: { ...claudeEnv(laptopB), PATH: `${shim}:${process.env.PATH}` }, encoding: 'utf8', timeout: 180000 })
 
 r = await api('POST', `/api/sessions/${id}/transfer/take-local`, { directory: projectB, confirm: true })
-check(r.status === 200 && r.json.link?.url.startsWith(`${BASE}/api/session-transfer/oat_`), 'web app take-local paused and returned a single-use link', r.json?.link?.url?.replace(/oat_\w+/, 'oat_…'))
-console.log('       command: ' + r.json.link.command.replace(/oat_\w+/, 'oat_…'))
+check(r.status === 200 && r.json.link?.url === `${INGRESS}/api/session-transfer` && r.json.link.secret?.startsWith('oat_')
+  && r.json.link.command.includes(`-H 'X-AgentHub-Transfer: ${r.json.link.secret}'`),
+  'web app take-local paused and returned a single-use link whose secret travels in a header, not the URL', r.json?.link?.url)
+const takeSecret = r.json.link.secret
+console.log('       command: ' + r.json.link.command.replace(/oat_\w+/g, 'oat_…'))
 before = requests()
 const out = shell(r.json.link.command)
 const bRequest = lastRequest()
 check(requests() === before + 1 && bRequest.includes('PINEAPPLE-7') && bRequest.includes('8443'),
   'the pasted command downloaded, unpacked and resumed: the real CLI sent the whole conversation', out.trim())
 let again = 0
-try { shell(`curl -fsS -o /dev/null -w '%{http_code}' ${r.json.link.url}`) } catch (e) { again = e.stdout?.toString() || e.status }
+try { shell(`curl -fsS -o /dev/null -w '%{http_code}' -H 'X-AgentHub-Transfer: ${takeSecret}' ${r.json.link.url}`) } catch (e) { again = e.stdout?.toString() || e.status }
 check(String(again).includes('404'), 'the link does not work a second time', String(again))
 
 const back = await api('POST', `/api/sessions/${id}/transfer/hand-back-link`, { directory: projectB, resume: true })
-console.log('       command: ' + back.json.link.command.replace(/oat_\w+/, 'oat_…'))
+console.log('       command: ' + back.json.link.command.replace(/oat_\w+/g, 'oat_…'))
 await podTurn('Summarise what happened on the second laptop.')
 before = requests()
 const uploaded = JSON.parse(shell(back.json.link.command))
 check(uploaded.resumed === true, 'the pasted hand-back command uploaded and resumed the session', JSON.stringify(uploaded))
 await waitForTurns(before + 1, 'the pod resumed after the link hand-back')
+// The links went through the ingress stand-in; its access log has every request line. Neither secret
+// may be in it, nor in the backend's own log.
+const accessLog = fs.readFileSync(RIG + '/access.log', 'utf8')
+const linkLines = accessLog.split('\n').filter(line => line.includes('/api/session-transfer'))
+const secrets = [takeSecret, back.json.link.secret]
+check(linkLines.length >= 3 && !secrets.some(secret => accessLog.includes(secret)),
+  'the ingress access log shows the link requests but neither secret', linkLines.slice(0, 3).map(l => l.split(' ').slice(1).join(' ')).join(' | '))
+check(!secrets.some(secret => fs.readFileSync(RIG + '/backend.log', 'utf8').includes(secret)), 'the backend log holds neither secret')
 check(lastRequest().includes('What was the code word, and the port?'), 'the resumed pod\'s real CLI sent the second laptop\'s turn too')
 
 console.log(`\n${results.filter(Boolean).length}/${results.length} checks passed`)

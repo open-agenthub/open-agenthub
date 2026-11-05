@@ -7,35 +7,39 @@ namespace AgentHub.Api.Services;
 /// </summary>
 public static class SessionTransferCommands
 {
+    /// <summary>Carries the link's secret. A header rather than the path: request lines are what
+    /// ingress controllers and proxies write to their access logs, headers are not.</summary>
+    public const string Header = "X-AgentHub-Transfer";
+
     public static string Resume(string resumeId) => $"claude --resume {resumeId}";
 
-    public static SessionTransferLink TakeLocal(string url, DateTimeOffset expires, string directory, string resumeId, string sessionId)
+    public static SessionTransferLink TakeLocal(string url, string secret, DateTimeOffset expires, string directory, string resumeId, string sessionId)
     {
         return new SessionTransferLink
         {
-            Url = url, ExpiresAt = expires,
+            Url = url, Secret = secret, ExpiresAt = expires,
             // -k: a transcript already on this machine is not overwritten. It may hold turns taken
             // here, and tar refusing (and stopping the chain) is the only warning there would be.
-            Command = $"mkdir -p {Sh(directory)} && curl -fsSL {Sh(url)} | tar -xzkf - -C \"$HOME\" && cd {Sh(directory)} && {Resume(resumeId)}",
+            Command = $"mkdir -p {Sh(directory)} && curl -fsSL -H {Sh($"{Header}: {secret}")} {Sh(url)} | tar -xzkf - -C \"$HOME\" && cd {Sh(directory)} && {Resume(resumeId)}",
             PowerShellCommand = $"New-Item -ItemType Directory -Force {Ps(directory)} | Out-Null; {Temp(sessionId)}; "
-                + $"curl.exe -fsSL {Ps(url)} -o $t; tar -xzkf $t -C \"$HOME\"; Remove-Item $t; "
+                + $"curl.exe -fsSL -H {Ps($"{Header}: {secret}")} {Ps(url)} -o $t; tar -xzkf $t -C \"$HOME\"; Remove-Item $t; "
                 + $"Set-Location {Ps(directory)}; {Resume(resumeId)}"
         };
     }
 
-    public static SessionTransferLink HandBack(string url, DateTimeOffset expires, string directory, string resumeId, string sessionId)
+    public static SessionTransferLink HandBack(string url, string secret, DateTimeOffset expires, string directory, string resumeId, string sessionId)
     {
         var folder = $"{SessionLocalTransfer.Projects}/{SessionLocalTransfer.ProjectFolder(directory)}/{resumeId}";
         return new SessionTransferLink
         {
-            Url = url, ExpiresAt = expires,
+            Url = url, Secret = secret, ExpiresAt = expires,
             // The folder next to the transcript holds subagent conversations and only exists once
             // one ran; naming it unconditionally makes tar fail for every session without one.
             Command = $"(cd \"$HOME\" && tar -czf - {Sh(folder + ".jsonl")} $(test -d {Sh(folder)} && echo {Sh(folder)}) "
-                + $"| curl -fsS -X PUT -H 'Content-Type: application/gzip' --data-binary @- {Sh(url)})",
+                + $"| curl -fsS -X PUT -H 'Content-Type: application/gzip' -H {Sh($"{Header}: {secret}")} --data-binary @- {Sh(url)})",
             PowerShellCommand = $"{Temp(sessionId)}; Push-Location $HOME; $f = @({Ps(folder + ".jsonl")}); if (Test-Path {Ps(folder)}) {{ $f += {Ps(folder)} }}; "
                 + $"tar -czf $t @f; Pop-Location; "
-                + $"curl.exe -fsS -X PUT -H 'Content-Type: application/gzip' --data-binary \"@$t\" {Ps(url)}; Remove-Item $t"
+                + $"curl.exe -fsS -X PUT -H 'Content-Type: application/gzip' -H {Ps($"{Header}: {secret}")} --data-binary \"@$t\" {Ps(url)}; Remove-Item $t"
         };
     }
 

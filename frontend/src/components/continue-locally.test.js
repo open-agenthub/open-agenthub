@@ -7,7 +7,7 @@ import { api } from '../api.js'
 import ContinueLocallyDialog from './ContinueLocallyDialog.vue'
 
 const link = (name) => ({
-  url: 'https://hub.example.com/api/session-transfer/oat_x', expiresAt: '2026-11-05T12:15:00Z',
+  url: 'https://hub.example.com/api/session-transfer', secret: 'oat_x', expiresAt: '2026-11-05T12:15:00Z',
   command: `${name} posix`, powerShellCommand: `${name} powershell`
 })
 const open = session => mount(ContinueLocallyDialog, { props: { session: { id: 's1', agent: 'Claude', ...session } } })

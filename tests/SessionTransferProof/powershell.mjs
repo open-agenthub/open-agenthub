@@ -22,12 +22,12 @@ const ps = command => execFileSync(pwsh, ['-NoProfile', '-NonInteractive', '-Com
 const post = async (p, body) => (await fetch(BASE + p, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).json()
 
 const take = await post(`/api/sessions/${id}/transfer/take-local`, { directory: project, confirm: true })
-console.log('take:   ' + take.link.powerShellCommand.replace(/oat_\w+/, 'oat_…'))
+console.log('take:   ' + take.link.powerShellCommand.replace(/oat_\w+/g, 'oat_…'))
 const answer = ps(take.link.powerShellCommand).trim()
 const file = `${home}/.claude/projects/${project.replace(/[^A-Za-z0-9]/g, '-')}/${take.resumeId}.jsonl`
 console.log(`${fs.existsSync(file) && /ANSWER-\d+/.test(answer) ? 'PASS' : 'FAIL'} PowerShell take-local wrote the transcript and the real CLI resumed it — ${answer}`)
 const back = await post(`/api/sessions/${id}/transfer/hand-back-link`, { directory: project, resume: false })
-console.log('back:   ' + back.link.powerShellCommand.replace(/oat_\w+/, 'oat_…'))
+console.log('back:   ' + back.link.powerShellCommand.replace(/oat_\w+/g, 'oat_…'))
 const result = JSON.parse(ps(back.link.powerShellCommand))
 console.log(`${result.sessionId === id && result.resumed === false ? 'PASS' : 'FAIL'} PowerShell hand-back uploaded — ${JSON.stringify(result)}`)
 console.log(`${fs.readdirSync(os.tmpdir()).some(f => f.startsWith('agenthub-' + id)) ? 'FAIL' : 'PASS'} the temporary archive was removed`)

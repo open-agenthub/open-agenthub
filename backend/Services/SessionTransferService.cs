@@ -36,7 +36,11 @@ public sealed record TakeLocalResult
 /// files itself (the remote MCP endpoint, the web app).</summary>
 public sealed record SessionTransferLink
 {
+    /// <summary>The endpoint. It does not carry the secret; see <see cref="Secret"/>.</summary>
     public required string Url { get; init; }
+    /// <summary>Sent as the <c>X-AgentHub-Transfer</c> header, never in the URL: a path or query
+    /// ends up in ingress and proxy access logs, and whoever reads one in time could redeem it first.</summary>
+    public required string Secret { get; init; }
     public required DateTimeOffset ExpiresAt { get; init; }
     /// <summary>bash or zsh (Linux, macOS, WSL, Git Bash).</summary>
     public required string Command { get; init; }
@@ -130,9 +134,9 @@ public sealed class SessionTransferService(
         SessionTransferLink? link = null;
         if (withLink)
         {
-            var (url, expires) = await MintAsync(new SessionTransferTicket(owner, id, SessionTransferDirection.TakeLocal,
+            var (url, secret, expires) = await MintAsync(new SessionTransferTicket(owner, id, SessionTransferDirection.TakeLocal,
                 local, Resume: false, DateTimeOffset.UtcNow + LinkLifetime), ct);
-            link = SessionTransferCommands.TakeLocal(url, expires, local, resumeId, id);
+            link = SessionTransferCommands.TakeLocal(url, secret, expires, local, resumeId, id);
         }
         return new TakeLocalResult
         {
@@ -203,7 +207,7 @@ public sealed class SessionTransferService(
             throw new SessionTransferException("session_live",
                 "The session is running in the hub, so a conversation continued elsewhere cannot be handed back. Pause it first.");
         var resumeId = await StoredResumeIdAsync(owner, id, ct);
-        var (url, expires) = await MintAsync(new SessionTransferTicket(owner, id, SessionTransferDirection.HandBack,
+        var (url, secret, expires) = await MintAsync(new SessionTransferTicket(owner, id, SessionTransferDirection.HandBack,
             local, resume, DateTimeOffset.UtcNow + LinkLifetime), ct);
         var steps = new List<string>
         {
@@ -215,7 +219,7 @@ public sealed class SessionTransferService(
         return new HandBackLinkResult
         {
             SessionId = id, Directory = local, ResumeId = resumeId, Steps = steps,
-            Link = SessionTransferCommands.HandBack(url, expires, local, resumeId, id)
+            Link = SessionTransferCommands.HandBack(url, secret, expires, local, resumeId, id)
         };
     }
 
@@ -245,7 +249,7 @@ public sealed class SessionTransferService(
         return SessionLocalTransfer.ResumeId(await BufferAsync(archive, ct));
     }
 
-    private async Task<(string Url, DateTimeOffset Expires)> MintAsync(SessionTransferTicket ticket, CancellationToken ct)
+    private async Task<(string Url, string Secret, DateTimeOffset Expires)> MintAsync(SessionTransferTicket ticket, CancellationToken ct)
     {
         // The link is run by the person's own shell, so its origin is the configured one, never the
         // request's Host header: a forwarded header must not decide where a conversation is sent.
@@ -254,7 +258,7 @@ public sealed class SessionTransferService(
             throw new SessionTransferException("origin_not_configured",
                 "FrontendOrigin is not configured on this instance, so no transfer link can be built. Use the stdio MCP server instead.");
         var secret = await tickets.MintAsync(ticket, ct);
-        return ($"{origin}/api/session-transfer/{secret}", ticket.ExpiresAt);
+        return ($"{origin}/api/session-transfer", secret, ticket.ExpiresAt);
     }
 
     private static SessionTransferException NoState() => new("transcript_missing",

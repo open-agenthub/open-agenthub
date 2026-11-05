@@ -12,8 +12,9 @@ const env = {
   ASPNETCORE_URLS: 'http://127.0.0.1:8080', ASPNETCORE_ENVIRONMENT: 'Production',
   Auth__InsecureDevMode: 'true',
   ConnectionStrings__Postgres: process.env.PG || 'Host=127.0.0.1;Port=54329;Username=postgres;Database=agenthub453',
-  // The links the hub hands out are built from this origin, never from the request's Host.
-  FrontendOrigin: 'http://127.0.0.1:8080',
+  // The links the hub hands out are built from this origin, never from the request's Host. It is
+  // access-proxy.mjs, the ingress stand-in whose access log the proof searches for secrets.
+  FrontendOrigin: 'http://127.0.0.1:8081',
   AgentHub__Namespace: 'agenthub-sessions', AgentHub__CallbackBaseUrl: 'http://127.0.0.1:8080',
   AgentHub__ClaudeAgentImage: 'registry.example.com/agent-claude:proof', AgentHub__CodexAgentImage: 'registry.example.com/agent-codex:proof',
   AgentHub__AgentImage: 'registry.example.com/agent:proof', AgentHub__PauseGracePeriodSeconds: '5',

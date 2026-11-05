@@ -256,7 +256,11 @@ public class SessionLocalTransferTests
             .TakeLocalAsync(Owner, SessionId, "/home/me/it's here", confirm: false, withLink: true);
 
         var link = result.Link!;
-        Assert.StartsWith("https://hub.example.com/api/session-transfer/oat_", link.Url);
+        // The secret travels in a header: a path ends up in ingress and proxy access logs.
+        Assert.Equal("https://hub.example.com/api/session-transfer", link.Url);
+        Assert.StartsWith("oat_", link.Secret);
+        Assert.Contains($"-H 'X-AgentHub-Transfer: {link.Secret}' 'https://hub.example.com/api/session-transfer' |", link.Command);
+        Assert.Contains($"-H 'X-AgentHub-Transfer: {link.Secret}' 'https://hub.example.com/api/session-transfer' -o $t", link.PowerShellCommand);
         Assert.Contains("mkdir -p '/home/me/it'\\''s here'", link.Command);
         Assert.Contains("tar -xzkf - -C \"$HOME\"", link.Command);
         Assert.Contains("Set-Location '/home/me/it''s here'", link.PowerShellCommand);
@@ -272,7 +276,7 @@ public class SessionLocalTransferTests
         var tickets = new MemoryTickets();
         var service = Service(sessions, tickets: tickets);
         var taken = await service.TakeLocalAsync(Owner, SessionId, LocalDir, confirm: false, withLink: true);
-        var secret = taken.Link!.Url.Split('/')[^1];
+        var secret = taken.Link!.Secret;
         var controller = Controller(service);
 
         var first = Assert.IsType<FileContentResult>(await controller.LinkDownload(secret, CancellationToken.None));
@@ -281,7 +285,9 @@ public class SessionLocalTransferTests
 
         var again = Assert.IsType<NotFoundObjectResult>(await Controller(service).LinkDownload(secret, CancellationToken.None));
         var unknown = Assert.IsType<NotFoundObjectResult>(await Controller(service).LinkDownload("oat_nope", CancellationToken.None));
+        var missing = Assert.IsType<NotFoundObjectResult>(await Controller(service).LinkDownload(null, CancellationToken.None));
         Assert.Equivalent(again.Value, unknown.Value);
+        Assert.Equivalent(again.Value, missing.Value);
         // An upload link does not download, and the reverse.
         Assert.IsType<NotFoundObjectResult>(await Controller(service).LinkUpload(secret, CancellationToken.None));
     }
@@ -302,6 +308,7 @@ public class SessionLocalTransferTests
         foreach (var method in typeof(SessionTransferController).GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
         {
             var route = method.GetCustomAttributes().OfType<Microsoft.AspNetCore.Mvc.Routing.HttpMethodAttribute>().Single().Template!;
+            Assert.DoesNotContain("secret", route, StringComparison.OrdinalIgnoreCase);
             var anonymous = method.GetCustomAttribute<AllowAnonymousAttribute>() is not null;
             var authorized = method.GetCustomAttribute<AuthorizeAttribute>() is not null;
             if (route.StartsWith("api/sessions/")) Assert.True(authorized && !anonymous, route);
@@ -328,6 +335,8 @@ public class SessionLocalTransferTests
         Assert.NotNull(taken.Link);
 
         var back = await tools.HandBack(SessionId, LocalDir);
+        Assert.DoesNotContain(back.Link.Secret, back.Link.Url);
+        Assert.Contains($"X-AgentHub-Transfer: {back.Link.Secret}", back.Link.Command);
         Assert.Contains($".claude/projects/{LocalFolder}/{ResumeId}.jsonl", back.Link.Command);
     }
 

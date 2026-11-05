@@ -111,6 +111,16 @@ one session in one direction, for 15 minutes, and is removed by its first use
 (`DELETE … RETURNING`, so two concurrent uses cannot both succeed). Every failure to redeem answers
 the same 404, so a probe cannot tell an expired link from one that never existed.
 
+**The secret travels in a header, not in the URL.** The commands call `/api/session-transfer` with
+`X-AgentHub-Transfer: <secret>`. The first version put the secret in the path
+(`/api/session-transfer/{secret}`). That was rejected in review: request lines are what ingress
+controllers and proxies write to their access logs, so anyone who could read such a log within the
+15 minutes could redeem the link before its owner and walk off with the conversation. A missing
+header is one more failure answered with the same 404. The PowerShell variant uses `curl.exe -H`
+too rather than `Invoke-WebRequest -Headers`: Windows PowerShell 5.1's `Invoke-WebRequest` buffers
+the whole download and is slowed by its progress bar, and one tool for both shells keeps the two
+commands the same apart from quoting.
+
 **The alternative storage was a signed link** (Data Protection). It was rejected because single use
 needs a record that the first redemption removes, and because the backend runs as several replicas:
 a link minted by one has to be honoured by the other, and the database is the one store both share.
