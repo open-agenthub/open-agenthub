@@ -252,6 +252,54 @@ function mergeServers(config, servers) {
   return out;
 }
 
+/**
+ * Moves the literal env and header values of the user's servers out of the config file.
+ *
+ * `~/.openclaw` is the state directory, archived into the session's state tar and uploaded, so a
+ * value written into openclaw.json was persisted in object storage although the next start
+ * regenerates it from the session's MCP document anyway (#446). Excluding the file instead would
+ * also drop what has to survive a resume: the agent's own settings and the servers it added with
+ * `openclaw mcp add`. So each literal becomes a `${AGENTHUB_MCP_VALUE_<n>}` reference — OpenClaw
+ * interpolates those from its environment, as it does for the callback token — and the values go
+ * to `envFile`, outside the state directory, for the entrypoint to export.
+ *
+ * A value that already contains a reference is left as it is: it holds no secret of its own, and
+ * a reference moved into the environment would no longer be interpolated.
+ */
+function externalizeValues(servers) {
+  const values = {};
+  let next = 1;
+  const reference = value => {
+    if (value.includes('${')) return value;
+    const name = `AGENTHUB_MCP_VALUE_${next++}`;
+    values[name] = value;
+    return '${' + name + '}';
+  };
+  const out = {};
+  for (const name of Object.keys(servers).sort()) {
+    const server = { ...servers[name] };
+    for (const field of ['env', 'headers']) {
+      if (!server[field]) continue;
+      server[field] = Object.fromEntries(Object.entries(server[field])
+        .map(([key, value]) => [key, reference(value)]));
+    }
+    out[name] = server;
+  }
+  return { servers: out, values };
+}
+
+function shellQuote(value) {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
+function writeEnvFile(envFile, values) {
+  const lines = Object.entries(values).map(([name, value]) => `${name}=${shellQuote(value)}\n`);
+  fs.mkdirSync(path.dirname(envFile), { recursive: true });
+  fs.writeFileSync(envFile, lines.join(''), { mode: 0o600 });
+  // writeFileSync applies the mode only when it creates the file.
+  fs.chmodSync(envFile, 0o600);
+}
+
 function readJson(file) {
   if (!file || !fs.existsSync(file)) return {};
   try {
@@ -266,10 +314,14 @@ function readJson(file) {
  * A malformed user document is fatal, matching the Codex and Cursor converters: a session that
  * silently drops the servers it was configured with looks like the tools are broken.
  */
-function writeConfig(configPath, userMcpPath, reservedServers = [], env = process.env) {
-  const userServers = userMcpPath && fs.existsSync(userMcpPath)
+function writeConfig(configPath, userMcpPath, reservedServers = [], env = process.env,
+  envFile = env.AGENTHUB_OPENCLAW_MCP_ENV_FILE) {
+  const converted = userMcpPath && fs.existsSync(userMcpPath)
     ? convertMcp(fs.readFileSync(userMcpPath, 'utf8'), reservedServers)
     : {};
+  const { servers: userServers, values } = externalizeValues(converted);
+  if (envFile) writeEnvFile(envFile, values);
+  else if (Object.keys(values).length) throw new Error('MCP values need an env file outside the state directory');
   const merged = mergeServers(readJson(configPath), { ...userServers, ...builtinServers(env) });
   fs.mkdirSync(path.dirname(configPath), { recursive: true });
   fs.writeFileSync(configPath, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
@@ -286,5 +338,5 @@ if (require.main === module) {
 }
 
 module.exports = {
-  convertMcp, builtinServers, mergeServers, writeConfig, MANAGED_FLAG, BUILTIN_SERVERS
+  convertMcp, builtinServers, mergeServers, writeConfig, externalizeValues, MANAGED_FLAG, BUILTIN_SERVERS
 };

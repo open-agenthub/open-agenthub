@@ -81,3 +81,26 @@ test('masks callback and inline MCP credentials including standalone URL userinf
   assert.equal(mask.mask('callback-token-434'), '[secret:AGENTHUB_CALLBACK_TOKEN]');
   fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('OpenClaw MCP values are masked once they live in the environment, not in its config', () => {
+  // #446: openclaw.json now holds ${AGENTHUB_MCP_VALUE_n} references; the values are in the
+  // environment the entrypoint exports and in the effective MCP document.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-mask-446-'));
+  const configPath = path.join(dir, 'openclaw.json');
+  const mcpPath = path.join(dir, 'agenthub-mcp.json');
+  const envFile = path.join(dir, 'openclaw-mcp.env');
+  fs.writeFileSync(mcpPath, JSON.stringify({ mcpServers: {
+    remote: { url: 'https://mcp.example.com/mcp', headers: { 'X-Api-Key': 'header-value-446' } }
+  } }));
+  require('../../openclaw/mcp-config').writeConfig(configPath, mcpPath, [], { RUNTIME: dir }, envFile);
+  const exported = Object.fromEntries(fs.readFileSync(envFile, 'utf8').trim().split('\n')
+    .map(line => [line.slice(0, line.indexOf('=')), line.slice(line.indexOf('=') + 2, -1)]));
+  assert.deepEqual(Object.values(exported), ['header-value-446']);
+
+  for (const env of [{ ...exported }, { ...exported, AGENTHUB_MCP_CONFIG: mcpPath }, { AGENTHUB_MCP_CONFIG: mcpPath }]) {
+    const mask = createSecretMask({ env });
+    mask.refresh();
+    assert.ok(!mask.mask('key header-value-446 sent').includes('header-value-446'), JSON.stringify(Object.keys(env)));
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+});

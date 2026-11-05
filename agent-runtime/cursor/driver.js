@@ -106,6 +106,10 @@ module.exports = {
   // authFilename: CLI file store (AGENT_CLI_CREDENTIAL_STORE=file, domain "cursor")
   // writes auth.json — confirmed from CLI package 2026.07.23-e383d2b source.
   name: 'Cursor', stateDir: '.cursor', authFilename: 'auth.json',
+  // mcp.json is rewritten at every start (the shared entrypoint always enables the files server,
+  // so entrypoint.sh always writes it), and holds the MCP servers' literal header values;
+  // archiving it only persisted those values in object storage.
+  stateExcludes: ['.cursor/mcp.json'],
   limitPatterns,
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),

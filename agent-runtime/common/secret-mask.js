@@ -73,6 +73,12 @@ function createSecretMask({ env = process.env, fs = require('node:fs') } = {}) {
     for (const name of String(env.AGENTHUB_SECRET_ENV || '').split(',').map(n => n.trim()).filter(Boolean)) {
       if (typeof env[name] === 'string') values.push([name, env[name]]);
     }
+    // OpenClaw's MCP values, moved out of its archived config into the environment (#446). The
+    // same values are in AGENTHUB_MCP_CONFIG below; named here too so masking does not depend on
+    // that file still being there.
+    for (const [name, value] of Object.entries(env)) {
+      if (name.startsWith('AGENTHUB_MCP_VALUE_') && typeof value === 'string') values.push([name, value]);
+    }
     if (typeof env.AGENTHUB_CALLBACK_TOKEN === 'string')
       values.push(['AGENTHUB_CALLBACK_TOKEN', env.AGENTHUB_CALLBACK_TOKEN]);
     // The entrypoint exports the effective config path; reread projected config on refresh too.
