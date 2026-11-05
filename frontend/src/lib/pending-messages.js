@@ -29,14 +29,18 @@ export function fleetLabel(message) {
 }
 
 // PTY submission changes CRLF to LF. Keep every other character: a quoted substring or different
-// indentation must not consume another pending message.
+// indentation must not consume another pending message. Only the outer whitespace is the CLI's to
+// drop — matching trims it on both sides (see matchesMessage).
 export function normalizeMessage(text) {
   return String(text ?? '').replace(/\r\n?/g, '\n')
 }
 
+// `wanted` arrives trimmed. Codex 0.166.0 records a submitted message without its leading and
+// trailing whitespace, so a message that ended in a newline never matched and stayed "waiting for
+// the agent to take it" after the agent had answered it (#452).
 function matchesMessage(item, wanted, fileIds) {
   if (item.role !== 'user') return false
-  const actual = normalizeMessage(item.text)
+  const actual = normalizeMessage(item.text).trim()
   if (!fileIds.length) return actual === wanted
   const ids = (item.attachments || []).map(file => file.id)
   if (ids.length !== fileIds.length || !fileIds.every(id => ids.includes(id))) return false
@@ -46,12 +50,12 @@ function matchesMessage(item, wanted, fileIds) {
   // verbatim, so an image caption cannot consume a send that merely appears inside it.
   const prefix = actual.slice(0, actual.length - wanted.length)
     .replace(/<image name=\[Image #\d+\] path="[^"\n]+">\n<\/image>\n/g, '')
-  return /^(?:\[Image #?\d+\] {1,2})+$/.test(prefix)
+  return /^(?:\[Image #?\d+\] +)+$/.test(prefix)
 }
 
 function occurrences(items, text, fileIds = []) {
-  const wanted = normalizeMessage(text)
-  if (!wanted.trim()) return 0
+  const wanted = normalizeMessage(text).trim()
+  if (!wanted) return 0
   return items.filter(item => matchesMessage(item, wanted, fileIds)).length
 }
 

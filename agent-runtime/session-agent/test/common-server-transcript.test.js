@@ -56,6 +56,67 @@ test('mask expansion stays within the wire limit without skipping records', asyn
   assert.equal(lines, 4);
 });
 
+// #452: Codex writes an image tool result (view_image, a browser screenshot) and a compaction
+// that carries images as one line of many megabytes. A record longer than the route's chunk has
+// no newline inside the chunk, and the cursor stayed in front of it for good: the hub never saw
+// another turn while the agent kept working.
+test('a record longer than one chunk is returned slimmed and the cursor moves past it', async () => {
+  const image = 'data:image/png;base64,' + 'iVBORw0KGgo'.repeat(900_000);
+  const big = JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', call_id: 'c1',
+    output: [{ type: 'input_text', text: 'viewed noise.png' }, { type: 'input_image', image_url: image }] } }) + '\n';
+  const after = JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'MSG-1 sent while the turn runs' }] } }) + '\n';
+  const before = '{"type":"session_meta","payload":{"id":"x"}}\n';
+  const raw = before + big + after;
+  assert.ok(Buffer.byteLength(big) > 8 * 1024 * 1024);
+  const harness = transcriptHarness({ [FILE]: raw });
+  let from = 0;
+  const lines = [];
+  for (let polls = 0; polls < 5 && from < Buffer.byteLength(raw); polls++) {
+    const page = await requestHttp(harness, 'GET', '/agenthub/transcript?from=' + from, auth);
+    assert.ok(Buffer.byteLength(page.body) <= 8 * 1024 * 1024);
+    lines.push(...page.body.split('\n').filter(Boolean));
+    const next = Number(page.headers['x-transcript-next']);
+    assert.ok(next > from, 'the cursor must move, it stayed at ' + from);
+    from = next;
+  }
+  assert.equal(from, Buffer.byteLength(raw));
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], before.trim());
+  assert.equal(lines[2], after.trim());
+  const slim = JSON.parse(lines[1]);
+  assert.equal(slim.payload.call_id, 'c1');
+  assert.equal(slim.payload.output[0].text, 'viewed noise.png');
+  assert.ok(slim.payload.output[1].image_url.length < 10_000);
+  assert.ok(Buffer.byteLength(lines[1]) < 2 * 1024 * 1024);
+});
+
+test('an oversized record is masked before it is cut, so no part of a secret leaves the pod', async () => {
+  const secret = 'oversized-secret-' + 'q'.repeat(40);
+  // Starts just before the 2,048 characters a cut string keeps, so cutting first would leave
+  // the secret's first characters in the page.
+  const text = 'z'.repeat(2040) + secret + 'z'.repeat(9 * 1024 * 1024);
+  const line = JSON.stringify({ type: 'response_item', payload: { type: 'function_call_output', output: text } }) + '\n';
+  const harness = transcriptHarness({ [FILE]: line, '/secrets/BIG_TOKEN': secret }, { AGENTHUB_SECRETS_DIR: '/secrets' });
+  const page = await requestHttp(harness, 'GET', '/agenthub/transcript?from=0', auth);
+  assert.equal(page.headers['x-transcript-next'], String(Buffer.byteLength(line)));
+  assert.equal(page.body.includes('oversize'), false);
+  assert.ok(page.body.includes('[secret:'));
+  assert.ok(JSON.parse(page.body).payload.output.startsWith('zzz'));
+});
+
+test('an oversized record still being written holds the cursor until its line ends', async () => {
+  const partial = '{"type":"response_item","payload":{"output":"' + 'a'.repeat(9 * 1024 * 1024);
+  const files = { [FILE]: partial };
+  const harness = transcriptHarness(files);
+  const waiting = await requestHttp(harness, 'GET', '/agenthub/transcript?from=0', auth);
+  assert.equal(waiting.headers['x-transcript-next'], '0');
+  assert.equal(waiting.body, '');
+  files[FILE] = partial + '"}}\n{"n":2}\n';
+  const done = await requestHttp(harness, 'GET', '/agenthub/transcript?from=0', auth);
+  assert.equal(done.headers['x-transcript-next'], String(Buffer.byteLength(partial + '"}}\n')));
+  assert.ok(JSON.parse(done.body).payload.output.length < 10_000);
+});
+
 test('transcript route refuses a caller without the callback token', async () => {
   const harness = transcriptHarness({ [FILE]: '{"a":1}\n' });
   const response = await requestHttp(harness, 'GET', '/agenthub/transcript?from=0', { 'X-Agent-Token': 'wrong' });

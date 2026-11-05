@@ -2,6 +2,7 @@
 const crypto = require('node:crypto');
 const { createWorkspaceDiff } = require('./workspace-diff');
 const { listSlashCommands } = require('./slash-commands');
+const { slimRecord } = require('./transcript-records');
 
 const { loadDriver, validateDriver } = require('./driver-contract');
 const { LocalFileStore, LocalFileError } = require('../files/local-store');
@@ -65,6 +66,10 @@ const URL_REFRESH_EVERY_TICKS = 720;
 // The most transcript one GET /agenthub/transcript returns. A first read of a long session
 // takes a few of these; the hub asks again from where the last one stopped.
 const MAX_TRANSCRIPT_CHUNK = 8 * 1024 * 1024;
+// The longest single transcript record the route reads in full to send a slimmed copy (#452).
+// Parsing it costs a few times its size in memory, once per follower; a longer one is passed
+// over so the cursor still moves.
+const MAX_OVERSIZED_RECORD = 32 * 1024 * 1024;
 // A POST /agenthub/attachments body: at most five 32-character file ids.
 const MAX_ATTACHMENT_REQUEST_BYTES = 4 * 1024;
 // What a path typed into a CLI's input box may contain. The CLIs recognise a pasted image path
@@ -1685,44 +1690,73 @@ function createCommonServer(options = {}) {
       response.end(body);
     };
     if (from >= size) return send(Math.min(from, size), Buffer.alloc(0));
-    const length = Math.min(size - from, MAX_TRANSCRIPT_CHUNK);
-    const chunk = Buffer.alloc(length);
-    let read = 0;
-    let start = 0;
-    for (const segment of segments) {
-      let fd;
-      try {
-        if (from + read >= start + segment.size || read >= length) continue;
-        fd = fs.openSync(segment.file, 'r');
-        let position = Math.max(0, from + read - start);
-        while (read < length && position < segment.size) {
-          const count = fs.readSync(fd, chunk, read, Math.min(length - read, segment.size - position), position);
-          if (count <= 0) break;
-          read += count;
-          position += count;
+    // The bytes at [position, position + length) of history and transcript read as one file;
+    // null when a segment could not be read.
+    const readAt = (position, length) => {
+      const buffer = Buffer.alloc(length);
+      let read = 0;
+      let start = 0;
+      for (const segment of segments) {
+        let fd;
+        try {
+          if (position + read >= start + segment.size || read >= length) continue;
+          fd = fs.openSync(segment.file, 'r');
+          let offset = Math.max(0, position + read - start);
+          while (read < length && offset < segment.size) {
+            const count = fs.readSync(fd, buffer, read, Math.min(length - read, segment.size - offset), offset);
+            if (count <= 0) break;
+            read += count;
+            offset += count;
+          }
+        } catch {
+          return null;
+        } finally {
+          if (fd !== undefined) try { fs.closeSync(fd); } catch {}
+          start += segment.size;
         }
-      } catch {
-        return send(from, Buffer.alloc(0));
-      } finally {
-        if (fd !== undefined) try { fs.closeSync(fd); } catch {}
-        start += segment.size;
       }
-    }
-    let whole = read ? chunk.lastIndexOf(0x0a, read - 1) + 1 : 0;
+      return buffer.subarray(0, read);
+    };
+    const mask = text => secretMask.mask(signInPrivacy.mask(text));
+    const chunk = readAt(from, Math.min(size - from, MAX_TRANSCRIPT_CHUNK));
+    if (!chunk) return send(from, Buffer.alloc(0));
+    let whole = chunk.length ? chunk.lastIndexOf(0x0a, chunk.length - 1) + 1 : 0;
     // Mask complete records before they leave the pod, including reads before the first upload
     // and newly projected secrets. Cursors must still count source bytes, not replacement bytes.
     secretMask.refresh();
-    let body = Buffer.from(secretMask.mask(signInPrivacy.mask(chunk.subarray(0, whole).toString('utf8'))));
+    let body = Buffer.from(mask(chunk.subarray(0, whole).toString('utf8')));
     // A short value can expand to a longer marker. Keep the wire body within the backend's
     // 8 MiB bound without splitting a record or advancing past a record we did not return.
     while (body.length > MAX_TRANSCRIPT_CHUNK && whole > 0) {
       const shorter = chunk.lastIndexOf(0x0a, Math.floor(whole / 2)) + 1;
       const first = chunk.indexOf(0x0a) + 1;
       whole = shorter || (first < whole ? first : 0);
-      body = Buffer.from(secretMask.mask(signInPrivacy.mask(chunk.subarray(0, whole).toString('utf8'))));
+      body = Buffer.from(mask(chunk.subarray(0, whole).toString('utf8')));
     }
+    // The first record alone is more than a page: its line does not end inside the chunk, or
+    // masking alone takes it past the bound. Answering "nothing new" left the cursor in front of
+    // it for good, so the Workspace stopped while the agent went on (#452).
+    if (whole === 0 && (chunk.length === MAX_TRANSCRIPT_CHUNK || chunk.indexOf(0x0a) >= 0)) return sendOversized(chunk);
     send(from + whole, body);
 
+    function sendOversized(head) {
+      let end = head.indexOf(0x0a) + 1;
+      for (let position = from + head.length; !end && position < size;) {
+        const part = readAt(position, Math.min(size - position, 1024 * 1024));
+        if (!part || !part.length) break;
+        const newline = part.indexOf(0x0a);
+        if (newline >= 0) end = position + newline + 1 - from;
+        position += part.length;
+      }
+      // Still being written: the record is returned whole once its line ends.
+      if (!end) return send(from, Buffer.alloc(0));
+      // Read in full only up to a bound; past it the record is passed over, never sent half.
+      const line = end <= MAX_OVERSIZED_RECORD ? readAt(from, end) : null;
+      // Masked before it is cut: a cut through a secret would leave its first part unmasked.
+      const slim = line && slimRecord(mask(line.toString('utf8')));
+      const out = slim === null || slim === undefined ? Buffer.alloc(0) : Buffer.from(slim + '\n');
+      send(from + end, out.length <= MAX_TRANSCRIPT_CHUNK ? out : Buffer.alloc(0));
+    }
   }
 
   async function handleMessageRequest(request, response) {
