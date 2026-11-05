@@ -63,8 +63,11 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/h
   AGENTHUB_WORKDIR=/workspace AGENTHUB_HAS_MCP=1 \
   AGENTHUB_BROWSER_ENABLED=1 AGENTHUB_SPAWN_MCP_ENABLED=1 AGENTHUB_NETWORK_MCP_ENABLED=1 \
   AGENTHUB_CONTAINERS_ENABLED=1 \
-  timeout 300 bash "$RT/openclaw/entrypoint.sh" 2>&1 | tail -n 150
-echo "===== entrypoint exit: ${PIPESTATUS[0]}"
+  timeout --kill-after=10 300 bash "$RT/openclaw/entrypoint.sh" > /tmp/entrypoint.log 2>&1
+echo "===== entrypoint exit: $?"
+tail -n 80 /tmp/entrypoint.log
+echo "===== wrapper log: OpenClaw's own MCP listing from the session agent's environment"
+cat /tmp/openclaw-wrapper.log
 
 echo "===== AFTER: mcp.servers written to openclaw.json (env references only)"
 node -e 'const c=require("/home/agent/.openclaw/openclaw.json"); console.log(JSON.stringify(c.mcp, null, 1))'

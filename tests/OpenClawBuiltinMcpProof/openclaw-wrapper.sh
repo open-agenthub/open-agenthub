@@ -7,6 +7,11 @@
 set -euo pipefail
 REAL=/usr/local/bin/openclaw
 if [ "${1:-}" = "agent" ]; then
+  # The session agent captures the CLI's output for the transcript, so this goes to a file the
+  # proof prints afterwards.
+  exec 3>&1 >>/tmp/openclaw-wrapper.log 2>&1
+  echo "===== environment variable names the CLI was started with"
+  env | cut -d= -f1 | sort | tr '\n' ' '; echo
   echo "===== openclaw mcp list"
   "$REAL" mcp list 2>&1 || true
   echo "===== openclaw mcp probe --json"
@@ -25,5 +30,6 @@ c.agents = c.agents || {}; c.agents.defaults = c.agents.defaults || {};
 c.agents.defaults.model = { primary: "mock/m1" };
 fs.writeFileSync(p, JSON.stringify(c, null, 2));'
   echo "===== openclaw $*"
+  exec 1>&3 2>&1 3>&-
 fi
 exec "$REAL" "$@"
