@@ -8,6 +8,7 @@ import SettingsDialog from './SettingsDialog.vue'
 import InterfaceSettings from './InterfaceSettings.vue'
 import AdminView from './AdminView.vue'
 import AdminLimitsView from './AdminLimitsView.vue'
+import McpConnectionPane from './McpConnectionPane.vue'
 import McpServersPane from './McpServersPane.vue'
 import SkillsPane from './SkillsPane.vue'
 import GroupsPane from './GroupsPane.vue'
@@ -28,6 +29,7 @@ const personalTabs = computed(() => [
   { key: 'account', label: 'Connected accounts', show: () => config.gitEnabled },
   { key: 'credentials', label: 'Credentials' },
   { key: 'secrets', label: 'Secrets' },
+  { key: 'mcp-connect', label: 'Connect to AgentHub', show: () => config.mcpEnabled || props.isAdmin },
   { key: 'mcp', label: 'MCP servers' },
   { key: 'skills', label: 'Skills' },
   { key: 'notifications', label: 'Notifications' },
@@ -138,6 +140,7 @@ async function deleteAccount() {
       <AccountDialog v-else-if="active === 'account'" embedded />
       <CredentialsDialog v-else-if="active === 'credentials'" embedded @accounts="select('account')" />
       <SecretsPane v-else-if="active === 'secrets'" />
+      <McpConnectionPane v-else-if="active === 'mcp-connect'" :is-admin="isAdmin" />
       <McpServersPane v-else-if="active === 'mcp'" :is-admin="isAdmin" mode="personal" />
       <SkillsPane v-else-if="active === 'skills'" :is-admin="isAdmin" />
       <GroupsPane v-else-if="active === 'groups'" />

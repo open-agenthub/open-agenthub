@@ -744,6 +744,9 @@ app.MapGet("/api/config", (IGitAuthService git, AgentHub.Api.Ee.Slack.SlackOptio
     scope = oidc["Scope"] ?? "openid profile email",
     // Lets the UI show the "Connect GitHub/GitLab" account section only when configured.
     gitEnabled = git.AnyConfigured,
+    // Use the configured issuer so copied client URLs agree with token audiences behind ingress.
+    mcpEnabled = mcpOptions.IsConfigured,
+    mcpUrl = mcpOptions.IsConfigured ? mcpOptions.McpResource : "",
     // Lets the UI show the per-user Slack settings section only when Slack is enabled.
     slackEnabled = slack.Enabled,
     // Same for the community Telegram/Signal integrations.
