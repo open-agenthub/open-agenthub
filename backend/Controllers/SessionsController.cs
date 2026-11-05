@@ -25,13 +25,15 @@ public sealed class SessionsController : ControllerBase
     private readonly ISessionMessageDelivery? _delivery;
     private readonly ILiveTranscriptReader? _liveTranscripts;
     private readonly ISessionContextClear? _contextClear;
+    private readonly ISharedSessionHistory _sharedHistory;
 
     public SessionsController(ISessionService svc, PermissionStore permissions,
         IEnumerable<IPermissionPromptEditor> promptEditors, ISessionMessageStore? messages = null,
         ISessionMessageDelivery? delivery = null, ILiveTranscriptReader? liveTranscripts = null,
         ISessionContextClear? contextClear = null, ISessionAccessService? access = null,
-        IBrowserService? browsers = null)
+        IBrowserService? browsers = null, ISharedSessionHistory? sharedHistory = null)
     {
+        _sharedHistory = sharedHistory ?? new SharedSessionHistory(svc, liveTranscripts);
         _svc = svc; _permissions = permissions; _promptEditors = promptEditors; _messages = messages; _delivery = delivery;
         _liveTranscripts = liveTranscripts;
         _contextClear = contextClear;
@@ -258,7 +260,9 @@ public sealed class SessionsController : ControllerBase
         var resolved = _access is null ? null : await _access.ResolveUserAsync(Owner, id, ct);
         if (_access is not null && resolved is null) return NotFound();
         var text = await _svc.GetTranscriptAsync(resolved?.Session.Owner ?? Owner, id, ct);
-        return text is null ? NotFound() : Content(text, "text/plain");
+        if (text is null) return NotFound();
+        return Content(resolved is { Level: not SessionAccessLevel.Owner }
+            ? SharedSessionHistory.SanitizeText(text, resolved.Session) : text, "text/plain");
     }
 
     /// <summary>
@@ -274,6 +278,10 @@ public sealed class SessionsController : ControllerBase
         // once more and then stops — rather than stopping with output missing.
         var resolved = _access is null ? null : await _access.ResolveUserAsync(Owner, id, ct);
         if (_access is not null && resolved is null) return NotFound();
+        // Everyone but the owner reads through the one shared-history service, so a named
+        // Viewer here gets exactly what a link holder or the MCP tools get (#427).
+        if (resolved is { Level: not SessionAccessLevel.Owner })
+            return Ok(await _sharedHistory.ReadAsync(resolved, offset, max, ct));
         var sessionOwner = resolved?.Session.Owner ?? Owner;
         var session = await _svc.GetSessionAsync(sessionOwner, id, ct);
         if (session is null) return NotFound();
