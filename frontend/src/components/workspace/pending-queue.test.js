@@ -8,7 +8,7 @@ import { workspaceDrafts, workspaceSent } from '../../lib/session-drafts.js'
 // #153: sent and fleet messages the agent has not taken yet are shown below the conversation.
 const mocks = vi.hoisted(() => ({
   api: { getConversation: vi.fn(), listPermissions: vi.fn().mockResolvedValue([]), listSessionMessages: vi.fn().mockResolvedValue([]), pushSessionMessage: vi.fn() },
-  send: vi.fn(), interruptQueue: vi.fn()
+  send: vi.fn(), interruptQueue: vi.fn(), status: null
 }))
 vi.mock('../../api.js', () => ({ api: mocks.api, getSharedConversation: vi.fn() }))
 vi.mock('../../lib/mermaid.js', () => ({ renderMermaidBlocks: vi.fn() }))
@@ -25,6 +25,7 @@ function view() {
         emits: ['status'],
         setup(_props, { emit, expose }) {
           expose({ submitMessage: mocks.send, interruptAgent: vi.fn(), interruptQueue: mocks.interruptQueue })
+          mocks.status = value => emit('status', value)
           onMounted(() => emit('status', 'connected'))
           return () => null
         }
@@ -68,6 +69,30 @@ describe('pending queue below the conversation', () => {
     await flushPromises()
     expect(wrapper.find('[data-pending-message]').exists()).toBe(false)
     expect(wrapper.findAll('[data-workspace-role=user]').some(el => el.text().includes('Also update the docs'))).toBe(true)
+  })
+
+  // #452: what the owner saw — the agent's terminal had taken the message, the Workspace still
+  // said "waiting" — with Codex's own record of it (outer whitespace dropped) and the agent
+  // socket dropping and coming back in between, without a reload.
+  it('a message Codex recorded trimmed leaves the queue, across a dropped and restored agent socket', async () => {
+    const wrapper = view()
+    await flushPromises()
+    await send(wrapper, 'Also update the docs\n')
+    expect(wrapper.get('[data-pending-message]').text()).toContain('waiting for the agent to take it')
+
+    mocks.status('disconnected')
+    mocks.api.getConversation.mockRejectedValue(new Error('Failed to fetch'))
+    await poll()
+    await flushPromises()
+    expect(wrapper.find('[data-pending-message]').exists()).toBe(true)
+
+    mocks.status('connected')
+    mocks.api.getConversation.mockResolvedValue(page([{ role: 'user', text: 'Build it' }, { role: 'assistant', text: 'Working on it' },
+      { role: 'user', text: 'Also update the docs' }, { role: 'assistant', text: 'Docs updated' }]))
+    await poll()
+    await flushPromises()
+    expect(wrapper.find('[data-pending-message]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-workspace-role=assistant]').some(el => el.text().includes('Docs updated'))).toBe(true)
   })
 
   it('does not follow a slash command, which no transcript records', async () => {

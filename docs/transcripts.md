@@ -171,6 +171,38 @@ every change instead of every 30 seconds — the pod would PUT the whole file to
 to Postgres several times per turn, for every session, whether or not anyone is looking. The live
 read costs nothing while nobody is.
 
+### A record longer than one page (#452)
+
+The route returns whole lines only, at most 8 MiB, and ends a page at its last newline. Codex
+writes an image tool result (`view_image`, a browser screenshot) as one line holding the image as
+a data url, and a compaction repeats every image of the history in one line. With the pinned
+Codex 0.166.0, one `view_image` of a 12 MB PNG wrote a 13 MB line. That page had no newline, so
+the route answered "nothing new" at the same offset on every poll: the hub never read another
+turn, the Workspace stopped while the agent went on, and every message sent after it stayed
+"waiting for the agent to take it" because its user turn never arrived.
+
+Now a first record longer than a page is read in full (up to 32 MiB), masked, and its longest
+strings are cut to 2,048 characters until the line is under 1 MiB (`common/transcript-records.js`).
+The cursor moves past the original bytes. Masking comes before the cut, because a cut through a
+secret would leave its first characters unmasked. A record still being written holds the cursor
+until its line ends, as any partial line does. Longer records, or ones that stay too large after
+cutting, are skipped, and the cursor still moves past them.
+
+Rejected: skipping every oversized record. A user turn that carries an image is one such line, and
+dropping it loses the person's words, which pending messages are matched against. Also rejected:
+a larger page. Some records are bigger than any bound the backend can buffer per viewer
+(*Multiple viewers and a slow pod*), and a large page only moves the point where the cursor
+stops. Nothing that is cut was shown anyway: the reader clips tool output to 2,000 characters
+and takes no image data from the transcript.
+
+### A sent message counts as taken without its outer whitespace (#452)
+
+A Workspace message stays pending until the conversation holds its user turn. Codex 0.166.0
+records a submitted message with its leading and trailing whitespace removed. Measured in the
+real TUI, `"a\n"`, `"a   "` and `"   a"` are all recorded as `"a"`. Composer text that ended in a
+newline therefore never matched. The match now trims both sides. Everything between them still
+has to be identical, so a quote or a whitespace variant of another message cannot consume it.
+
 ## A resumed pod catches its transcript up from the hub (#146)
 
 After a restart the Workspace briefly showed the previous run and then dropped its last turns.

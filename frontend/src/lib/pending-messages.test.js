@@ -15,6 +15,24 @@ describe('sent messages', () => {
     expect(stillPending(sent, [...before, user('Fix the\n  failing test '), user('continue')])).toEqual([])
   })
 
+  // #452: Codex 0.166.0 records a submitted message with its leading and trailing whitespace
+  // removed (measured in the real TUI: "a\n", "a   " and "   a" are all recorded as "a"). Matched
+  // byte for byte, such a message stayed "waiting for the agent to take it" for good.
+  it('counts as taken when the CLI recorded it without its outer whitespace', () => {
+    const sent = [sentEntry('a', 'MSG-T2 trailing newline\n', []), sentEntry('b', '   MSG-T4 leading spaces', []),
+      sentEntry('c', 'MSG-T3 trailing spaces   ', [])]
+    expect(stillPending(sent, [user('MSG-T2 trailing newline'), user('MSG-T4 leading spaces'), user('MSG-T3 trailing spaces')])).toEqual([])
+    // Inside the message every character still counts.
+    expect(stillPending([sentEntry('d', 'keep  both\nlines \n', [])], [user('keep both\nlines')])).toHaveLength(1)
+  })
+
+  it('counts the same text sent twice as two messages, whitespace or not', () => {
+    const first = sentEntry('a', 'continue\n', [user('continue')])
+    expect(first.baseline).toBe(1)
+    expect(stillPending([first], [user('continue')])).toHaveLength(1)
+    expect(stillPending([first], [user('continue'), user('continue')])).toEqual([])
+  })
+
   it('an assistant echo of the text does not count as taken', () => {
     const sent = [sentEntry('a', 'deploy now', [])]
     expect(stillPending(sent, [{ role: 'assistant', text: 'deploy now' }])).toHaveLength(1)
