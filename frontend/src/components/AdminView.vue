@@ -67,7 +67,7 @@ async function toggleSeat(u) {
   catch (e) { error.value = String(e.message || e) }
 }
 
-// --- "Get enterprise license" → Stripe checkout on the license service ---
+// --- "Get enterprise license" → hosted checkout on the license service ---
 const checkoutOpen = ref(false)
 const checkoutBusy = ref(false)
 const checkout = ref({ email: '', org: '', seats: 1 })
@@ -113,7 +113,7 @@ async function claimLicense() {
   finally { claiming.value = false }
 }
 
-// Billing portal without configuration: ask our backend for a fresh Stripe portal
+// Billing portal without configuration: ask our backend for a fresh billing portal
 // session (created by the license service for the licensed email) and open it.
 const portalBusy = ref(false)
 async function openPortal() {
@@ -167,8 +167,8 @@ function fmtDateTime(d) {
             </div>
             <div v-else class="checkout-form">
               <div class="cgrid">
-                <div class="field"><label>Billing email</label><input v-model="checkout.email" type="email" placeholder="billing@company.com" /></div>
-                <div class="field"><label>Organization</label><input v-model="checkout.org" placeholder="ACME GmbH" /></div>
+                <div class="field"><label>Billing email</label><input v-model="checkout.email" type="email" placeholder="billing@example.com" /></div>
+                <div class="field"><label>Organization</label><input v-model="checkout.org" placeholder="Example Company" /></div>
                 <div class="field seats-field"><label>Seats</label><input v-model.number="checkout.seats" type="number" min="1" /></div>
               </div>
               <div class="row start">
@@ -176,7 +176,7 @@ function fmtDateTime(d) {
                   {{ checkoutBusy ? 'Redirecting…' : 'Continue to checkout →' }}
                 </button>
                 <button @click="checkoutOpen = false">Cancel</button>
-                <span class="muted">You will be redirected to Stripe and back here afterwards — the license activates automatically.</span>
+                <span class="muted">You will be redirected to the payment provider and back here afterwards — the license activates automatically.</span>
               </div>
               <div class="row start">
                 <span class="muted">Already paid but not activated? Retrieve the license for this billing email:</span>

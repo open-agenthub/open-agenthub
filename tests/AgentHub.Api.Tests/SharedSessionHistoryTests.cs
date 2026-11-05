@@ -171,6 +171,24 @@ public class SharedSessionHistoryTests
     }
 
     [Fact]
+    public void Sanitize_MasksStandaloneUrlUserinfoAndQueryValues()
+    {
+        var record = new SessionRecord { Id = SessionId, Owner = Owner, CallbackToken = CallbackToken,
+            McpConfigJson = """
+                {"mcpServers":{"custom":{"url":"https://username-434:password%2F434@example.com/mcp?key=query%2Fvalue434&next=query+space434"}}}
+                """ };
+        foreach (var value in new[] { "username-434", "password%2F434", "password/434",
+            "query%2Fvalue434", "query/value434", "query+space434", "query space434" })
+        {
+            Assert.Equal("ordinary [redacted]", SharedSessionHistory.SanitizeText("ordinary " + value, record));
+            var page = SharedSessionHistory.Sanitize(ConversationPage.FromEntries(SessionId, "Stopped",
+                [new("assistant", value, null, Tool: value)], 0, null), record);
+            Assert.Equal("[redacted]", page.Entries[0].Text);
+            Assert.Equal("[redacted]", page.Entries[0].Tool);
+        }
+    }
+
+    [Fact]
     public void Sanitize_BoundsEntriesPerPage_KeepingTheNewestForTheRecentWindow()
     {
         var record = new SessionRecord { Id = SessionId, Owner = Owner, CallbackToken = CallbackToken };

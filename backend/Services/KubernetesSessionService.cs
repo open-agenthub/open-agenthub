@@ -334,8 +334,14 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         if (string.IsNullOrEmpty(text)) return text;
         var files = (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.FilesSecretName(sessionId), ct))?.Data;
         var env = (await ReadSecretOrNullAsync(SessionSecretDeliveryFactory.EnvSecretName(sessionId), ct))?.Data;
-        if (files is not { Count: > 0 } && env is not { Count: > 0 }) return text;
-        return SecretMask.Apply(text, (files ?? new Dictionary<string, byte[]>()).Concat(env ?? new Dictionary<string, byte[]>()));
+        var record = await _store.GetByIdAsync(sessionId, ct);
+        // Use the delivered config rather than regenerating gateway credentials for a read.
+        var mcp = (await ReadSecretOrNullAsync($"mcp-{sessionId}", ct))?.Data;
+        var config = mcp is not null && mcp.TryGetValue("mcp.json", out var raw)
+            ? Encoding.UTF8.GetString(raw) : record?.McpConfigJson;
+        return SecretMask.Apply(text, (files ?? new Dictionary<string, byte[]>())
+            .Concat(env ?? new Dictionary<string, byte[]>())
+            .Concat(SecretMask.SessionCredentials(record?.CallbackToken, config)));
     }
 
     /// <summary>

@@ -19,7 +19,9 @@ onMounted(async () => {
 
 const waiting = computed(() => props.sessions.filter(needsYou))
 const running = computed(() => props.sessions.filter(s => ['Running', 'Pending'].includes(s.phase)))
-const listed = computed(() => props.sessions.filter(s => !needsYou(s)).slice(0, 6))
+const shared = computed(() => props.sessions.filter(isShared))
+const listed = computed(() => props.sessions.filter(s => !isShared(s) && !needsYou(s)).slice(0, 6))
+function isShared(s) { return s.accessRole && s.accessRole !== 'Owner' }
 const paused = computed(() => props.sessions.filter(s => s.phase === 'Paused'))
 const headline = computed(() => {
   const n = waiting.value.length
@@ -59,6 +61,7 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
         <div class="ny-head"><span class="dot"></span>NEEDS YOU</div>
         <div v-for="s in waiting" :key="s.id" class="ny-card">
           <div class="ny-title">{{ s.title }}</div>
+          <div v-if="isShared(s)" class="ny-sub">{{ s.accessRole }} · shared by {{ s.sharedBy }}</div>
           <div class="ny-sub" :title="s.questionOpen ? s.questionTitle : null"><template v-if="s.questionOpen">Question open<template v-if="s.questionTitle">: {{ s.questionTitle }}</template></template><template v-else>The agent is waiting for your reply</template><template v-if="repoLabel(s)"> · <code>{{ repoLabel(s) }}</code></template></div>
           <div class="ny-actions"><button class="primary sm" @click="$emit('select', s.id)">Reply</button></div>
         </div>
@@ -84,6 +87,14 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
           <p v-else class="idle-text">No API spend recorded — subscription usage is on the Usage page.</p>
         </div>
       </div>
+    </div>
+    <div v-if="shared.length" class="card list" data-home-shared>
+      <div class="list-head">Shared with me</div>
+      <button v-for="s in shared" :key="s.id" class="row shared-row" :data-home-session="s.id" @click="$emit('select', s.id)">
+        <span class="pill" :style="{ color: statusStyle(s).color, background: statusStyle(s).bg }">{{ sessionStatus(s) }}</span>
+        <span class="row-title">{{ s.title }}</span>
+        <span class="shared-meta">{{ s.accessRole }} · shared by {{ s.sharedBy }}</span>
+      </button>
     </div>
     <div class="card list">
       <div class="list-head"><span>What your agents are up to</span><button class="ghost more" @click="$emit('sessions')">All sessions →</button></div>
@@ -137,6 +148,9 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
 .list { overflow: hidden; }
 .list-head { padding: 13px 18px; font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; align-items: center; color: var(--strong); }
 .row { padding: 11px 18px; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--border); cursor: pointer; }
+.shared-row { width: 100%; text-align: left; background: transparent; border-radius: 0; color: inherit; font: inherit; }
+.row.shared-row .pill { width: auto; min-width: 78px; white-space: nowrap; }
+.shared-meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .row:hover { background: var(--hover); }
 .row .pill { width: 78px; text-align: center; flex-shrink: 0; }
 .row-title { flex: 1; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

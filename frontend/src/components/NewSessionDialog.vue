@@ -289,7 +289,7 @@ async function submit() {
           </div>
           <div class="field">
             <label>Extra tools <span class="dim">— MCP servers the agent can use (.mcp.json)</span></label>
-            <textarea v-model="form.mcpConfigJson" placeholder='{ "mcpServers": { "snipe-it": { "url": "https://…/sse" } } }'></textarea>
+            <textarea v-model="form.mcpConfigJson" placeholder='{ "mcpServers": { "docs": { "url": "https://mcp.example.com/sse" } } }'></textarea>
           </div>
           <div class="field"><label>Container image</label><input v-model="form.image" class="mono" placeholder="default agent image" /></div>
           <SessionResourceFields v-model="resources" />

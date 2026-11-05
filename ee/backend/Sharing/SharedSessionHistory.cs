@@ -4,7 +4,6 @@
 // open-core. Source-available under the Open AgentHub Enterprise License
 // (see ee/LICENSE); a valid subscription is required for production use.
 // -----------------------------------------------------------------------------
-using System.Text.Json;
 using AgentHub.Api.Persistence;
 using AgentHub.Api.Services;
 
@@ -62,17 +61,12 @@ public sealed class SharedSessionHistory(ISessionService sessions, ILiveTranscri
         return Sanitize(page, record, offset == -1);
     }
 
-    /// <summary>
-    /// Withholds what the shared status withholds. Session secrets are masked by the pod before
-    /// any transcript leaves it; the callback token and the inline MCP configuration are not
-    /// secrets in that sense, so the pod leaves them alone — yet an agent that prints its
-    /// environment or its MCP config would hand a link holder the token that acts as the session
-    /// (agent_send, secret_request) and the owner's MCP credentials.
-    /// </summary>
+    /// <summary>Uses the same credential values as relay output, including historical pages
+    /// written before the pod's current source masking rules.</summary>
     public static ConversationPage Sanitize(ConversationPage page, SessionRecord record, bool recentWindow = false)
     {
-        var needles = Needles(record);
-        string Clean(string text) => Mask(text, needles);
+        var credentials = SecretMask.SessionCredentials(record.CallbackToken, record.McpConfigJson);
+        string Clean(string text) => SecretMask.Apply(text, credentials, Redacted);
 
         if (page.Source == ConversationPage.ScrollbackSource)
             return page with { Text = Clean(page.Text) };
@@ -98,67 +92,6 @@ public sealed class SharedSessionHistory(ISessionService sessions, ILiveTranscri
     }
 
     /// <summary>The same withholding for the plain scrollback text the replay endpoints return.</summary>
-    public static string SanitizeText(string text, SessionRecord record) => Mask(text, Needles(record));
-
-    private static IReadOnlyList<string> Needles(SessionRecord record)
-    {
-        var values = new List<string>();
-        if (!string.IsNullOrEmpty(record.CallbackToken)) values.Add(record.CallbackToken);
-        if (!string.IsNullOrWhiteSpace(record.McpConfigJson))
-        {
-            try
-            {
-                using var document = JsonDocument.Parse(record.McpConfigJson);
-                CollectCredentials(document.RootElement, false, values);
-            }
-            catch (JsonException)
-            {
-                // Unparseable configuration never reached a pod as MCP servers; nothing to mask.
-            }
-        }
-        return values
-            .Where(v => v.Trim().Length >= SecretMask.MinLength)
-            .Distinct(StringComparer.Ordinal)
-            .OrderByDescending(v => v.Length)
-            .ToList();
-    }
-
-    // Header and env values are where an MCP config carries credentials; urls carry them in a
-    // query string often enough that their whole value is withheld too. Names, commands and
-    // arguments stay readable: the conversation would otherwise lose every tool name.
-    private static void CollectCredentials(JsonElement element, bool credential, List<string> values)
-    {
-        switch (element.ValueKind)
-        {
-            case JsonValueKind.Object:
-                foreach (var property in element.EnumerateObject())
-                {
-                    var name = property.Name;
-                    var holds = credential
-                        || name.Equals("headers", StringComparison.OrdinalIgnoreCase)
-                        || name.Equals("env", StringComparison.OrdinalIgnoreCase)
-                        || name.Equals("url", StringComparison.OrdinalIgnoreCase);
-                    CollectCredentials(property.Value, holds, values);
-                }
-                break;
-            case JsonValueKind.Array:
-                foreach (var item in element.EnumerateArray()) CollectCredentials(item, credential, values);
-                break;
-            case JsonValueKind.String when credential:
-                var value = element.GetString() ?? "";
-                values.Add(value);
-                // "Bearer abc…": the token alone is what reappears in a curl the agent prints.
-                var space = value.LastIndexOf(' ');
-                if (space > 0) values.Add(value[(space + 1)..]);
-                break;
-        }
-    }
-
-    private static string Mask(string text, IReadOnlyList<string> needles)
-    {
-        if (string.IsNullOrEmpty(text)) return text;
-        foreach (var needle in needles)
-            text = text.Replace(needle, Redacted, StringComparison.Ordinal);
-        return text;
-    }
+    public static string SanitizeText(string text, SessionRecord record) =>
+        SecretMask.Apply(text, SecretMask.SessionCredentials(record.CallbackToken, record.McpConfigJson), Redacted);
 }
