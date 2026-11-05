@@ -168,3 +168,50 @@ whatever the role, because the row shows that status. "Waiting on you" and the q
 count it only for a collaborator: a viewer cannot answer, and a counter that a person can never
 bring down by doing something is noise. A viewer is still alerted when the session finishes or
 fails.
+
+## The history a shared reader gets (#427)
+
+Everyone a session is shared with — a named share, an inherited child, a project share, a link;
+Viewer and Collaborator alike — reads the same conversation the owner reads, through one service,
+`ISharedSessionHistory`. The web app's `/api/sessions/{id}/conversation` for a non-owner, the
+link's `/api/shared/{token}/conversation`, the token API's shared branch and the MCP read tools of
+#425/#426 all call it with the `SessionAccessResult` they resolved for that request; the service
+never resolves again, so a revoked share or an expired link is refused by the same call that
+refuses everything else, on the next request.
+
+**Where the history comes from.** A running session is read live from its pod, as the owner's
+Workspace is (`LiveTranscriptReader`); a stopped one from the stored copy. Before #427 the link and
+token paths read only the stored copy, to spare a Kubernetes read per poll. That copy is two
+pieces: the whole file in S3, written through a presigned url that expires after twelve hours,
+and the last `ScrollbackLimits.MaxChars` (1,000,000 characters) in Postgres. Once the url had
+expired, a long session's shared history was that Postgres tail — a few hours — while the owner
+saw everything. The pod is now asked only when the *stored* status is Running, so a stopped
+session still costs no Kubernetes read.
+
+**Bounded pages.** At most 500 entries and about 1,000,000 characters per page (fewer entries,
+`truncated: true`, `nextOffset` where it stopped; one oversized entry is still returned alone so
+the cursor always moves), and at most 100,000 characters of scrollback. `offset: -1` keeps the
+newest entries of the window; any other offset keeps the oldest, so following `nextOffset` has no
+gaps. The owner's own page keeps its larger bound — the owner can download the whole state anyway.
+
+**Sanitized like the shared status.** Session secrets are already masked by the pod before any
+transcript leaves it (`secret-mask.js`, `session-secrets.md`). What the pod does not mask, because
+they are not secrets in that sense, are the session's callback token and the inline MCP
+configuration — which `SharedSessionInfo` withholds (`mcpConfigJson: null`). An agent that prints
+its environment or its MCP config would otherwise hand a link holder the token that acts *as the
+session* (`agent_send`, `secret_request`) and the owner's MCP credentials. Both are replaced with
+`[redacted]` in entry text, tool lines, scrollback and the link's plain-text transcript. Header,
+`env` and `url` values of the MCP config are withheld whole; server names, commands and arguments
+stay readable. Values shorter than eight characters are left alone, for the reason `SecretMask`
+gives.
+
+**Rejected: a separate, pre-sanitized "shared transcript" written at upload time.** It would have
+doubled the stored history and, worse, gone stale the moment the owner changed the MCP config or
+a share was created after the upload. Sanitizing on read costs a string replace per page.
+
+**Not covered:** credentials of library MCP servers (resolved at pod start, not on the record)
+and the provider login the CLI keeps in its own files. The pod omits sign-in screens from uploads
+(`sign-in-privacy.js`), but an agent that prints its own credential file shows it to every reader
+of the history, the owner included; withholding those would need the hub to read the
+credential secret on every page, which is the per-poll Kubernetes read this design avoids for
+stopped sessions.
