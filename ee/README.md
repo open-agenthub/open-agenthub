@@ -10,14 +10,15 @@ subscription for production use.
 ## Enterprise features
 
 - **Slack integration** ✅ — when a session waits for input you are asked in a
-  Slack thread (with the new terminal output), and your thread replies are sent
+  Slack thread (with the agent message), and your thread replies are sent
   back to the agent; `!new [+repo …] <prompt>` starts a new autonomous session right
   from Slack (sender mapped via their workspace email; leading `+name` tokens attach
   GitHub/GitLab repositories) and `!repos [query]` lists your projects. Uses Socket
   Mode (no public
   endpoint). Backend sources under
   [`backend/Slack/`](./backend/Slack); configured via `ee.slack.*` and gated by a
-  valid license (`license.token` / `license.publicKey`). See the chart `values.yaml`.
+  valid license activated in the Admin area. The verification key is compiled into the backend;
+  it is not a chart value. See the chart `values.yaml`.
   (Telegram and Signal chat integrations are available license-free in the Community
   Edition — see the [top-level README](../README.md#chat-integrations).)
 

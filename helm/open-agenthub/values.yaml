@@ -277,7 +277,7 @@ browser:
 oidc:
   authority: ""
   # Expected "aud" claim of access tokens. Empty = skip audience validation
-  # (e.g. Keycloak without an audience mapper on the client).
+  # (e.g. a provider without an audience mapper on the client).
   audience: agenthub
   clientId: agenthub
   scope: openid profile email
@@ -304,15 +304,15 @@ auth:
 skillLibrary:
   mcp: true
   # Optional semantic (vector) search via an OpenAI-compatible /embeddings
-  # endpoint (OpenAI, Voyage, Ollama, LocalAI, ...). Empty = keyword search only.
+  # endpoint from a hosted or self-hosted model server. Empty = keyword search only.
   embeddings:
     endpoint: ""
     model: ""
     apiKey: ""
 
 # S3-compatible object storage for session state, scrollback, and artifacts.
-# Empty serviceUrl = AWS endpoints. Any S3-compatible server works; Garage and SeaweedFS are
-# both small enough for a single-node cluster.
+# Empty serviceUrl = AWS endpoints. Any S3-compatible server works; the bundled server
+# is small enough for a single-node cluster.
 s3:
   # Where the backend reaches object storage. Usually a cluster-internal address.
   serviceUrl: ""
@@ -403,11 +403,11 @@ ee:
   # Admin → Users & seats without a redeploy. Empty and nobody designated there (or via an
   # admin group) = every signed-in user is an admin (bootstrap). See docs/admin-roles.md.
   admins: ""
-  # Optional link to the billing portal (Stripe customer portal via the license service),
+  # Optional link to the billing portal (customer portal via the license service),
   # surfaced in the Admin area for subscription/invoice management.
   billingPortalUrl: ""
   # License service the instance reports its seat count to (heartbeat). Reporting renews
-  # the license token; the reported month-close count drives Stripe seat billing. Empty
+  # the license token; the reported month-close count drives seat billing. Empty
   # disables reporting. See the privacy policy — only an aggregate user count is sent.
   # Whatever URL is configured, tokens are only accepted if signed by the official
   # service key — the verifying public key is compiled into the backend binary.
@@ -436,7 +436,7 @@ git:
   #  - id: github
   #    type: github            # github | gitlab
   #    displayName: GitHub
-  #    baseUrl: ""             # e.g. https://github.example.com for GitHub Enterprise
+  #    baseUrl: ""             # e.g. https://git.example.com for GitHub Enterprise
   #    clientId: ""
   #    clientSecret: ""
   #    scopes: ""

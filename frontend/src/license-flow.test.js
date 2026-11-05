@@ -75,13 +75,13 @@ describe('license checkout return', () => {
 describe('AdminView license states', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    mocks.api.startLicenseCheckout.mockResolvedValue({ url: 'https://stripe.example/session' })
+    mocks.api.startLicenseCheckout.mockResolvedValue({ url: 'https://checkout.example.com/session' })
   })
 
   const overview = (valid) => ({
     isAdmin: true,
     license: valid
-      ? { valid: true, present: true, plan: 'subscription', seats: 5, org: 'ACME', validUntil: '2027-01-01' }
+      ? { valid: true, present: true, plan: 'subscription', seats: 5, org: 'Example Company', validUntil: '2027-01-01' }
       : { valid: false, present: false, reason: 'No license activated.' },
     seats: { used: 2, included: valid ? 5 : 0 },
     users: [
@@ -110,14 +110,14 @@ describe('AdminView license states', () => {
 
     await wrapper.get('[data-get-license]').trigger('click')
     const emailInput = wrapper.get('input[type="email"]')
-    await emailInput.setValue('billing@acme.dev')
-    await wrapper.get('.checkout-form input[placeholder="ACME GmbH"]').setValue('ACME')
+    await emailInput.setValue('billing@example.com')
+    await wrapper.get('.checkout-form input[placeholder="Example Company"]').setValue('Example Company')
     await wrapper.get('[data-start-checkout]').trigger('click')
     await flushPromises()
 
     expect(mocks.api.startLicenseCheckout).toHaveBeenCalledWith(expect.objectContaining({
-      email: 'billing@acme.dev',
-      org: 'ACME',
+      email: 'billing@example.com',
+      org: 'Example Company',
       returnUrl: `${origin}/license/activate`
     }))
   })

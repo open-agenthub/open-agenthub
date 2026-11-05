@@ -1,6 +1,6 @@
 export const agentOptions = [
-  { value: 'Claude', label: 'Claude', hint: 'Anthropic agent runtime' },
-  { value: 'Codex', label: 'Codex', hint: 'OpenAI agent runtime' },
+  { value: 'Claude', label: 'Claude', hint: 'Claude agent runtime' },
+  { value: 'Codex', label: 'Codex', hint: 'Codex agent runtime' },
   { value: 'Cursor', label: 'Cursor', hint: 'Cursor agent runtime' },
   { value: 'OpenClaw', label: 'OpenClaw', hint: 'OpenClaw agent runtime' },
   { value: 'OpenCode', label: 'OpenCode', hint: 'OpenCode agent runtime (OpenCode Go)' }
