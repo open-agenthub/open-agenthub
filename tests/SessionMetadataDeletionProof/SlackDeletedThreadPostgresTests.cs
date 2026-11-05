@@ -59,7 +59,10 @@ public class SlackDeletedThreadPostgresTests
         });
         using var receiver = new SlackSocketModeService(options, new EnabledLicense(), client, threads,
             new PermissionStore(db.Configuration), sessions, new UserDirectory(db.Configuration), null!,
-            new WorkingIndicator(), pods, db.Configuration, NullLogger<SlackSocketModeService>.Instance);
+            new WorkingIndicator(), pods,
+            // A deleted thread is answered before any sender check, so the gate is never asked.
+            new SlackSenderGate(client, new UserDirectory(db.Configuration), null!),
+            db.Configuration, NullLogger<SlackSocketModeService>.Instance);
         foreach (var text in new[] { "hello", "!status" })
         {
             await DispatchAsync(receiver, "channel", text);

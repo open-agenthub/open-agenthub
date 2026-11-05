@@ -69,6 +69,20 @@ describe('chat settings sections', () => {
     expect(mocks.api.unlinkTelegram).toHaveBeenCalled()
   })
 
+  it('warns that a Slack channel is read by others but only the owner can answer', async () => {
+    mocks.config.slackEnabled = true
+    mocks.api.slackMe.mockResolvedValue({ configured: true, enabled: true, channelOverride: '', email: 'a@example.com', connected: true })
+    const wrapper = mountDialog()
+    await flushPromises()
+    const input = wrapper.get('input[placeholder="auto (your Slack DM)"]')
+
+    expect(wrapper.find('[data-slack-channel-hint]').exists()).toBe(false)
+    await input.setValue('D0123ABCD')
+    expect(wrapper.find('[data-slack-channel-hint]').exists()).toBe(false)
+    await input.setValue('C0123ABCD')
+    expect(wrapper.get('[data-slack-channel-hint]').text()).toContain('Only you (and Collaborators')
+  })
+
   it('hides the telegram section when not configured', async () => {
     mocks.config.signalEnabled = true
     const wrapper = mountDialog()

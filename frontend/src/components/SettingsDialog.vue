@@ -42,6 +42,11 @@ async function toggleDesktop(e) {
 const slackEnabled = computed(() => config.slackEnabled)
 const slack = ref({ enabled: true, channelOverride: '', email: null, connected: false })
 const slackBusy = ref(false)
+// Slack DM ids start with D; anything else names a channel or group that other people read.
+const slackChannelIsShared = computed(() => {
+  const id = (slack.value.channelOverride || '').trim()
+  return id.length > 0 && !/^D/i.test(id)
+})
 const slackSaved = ref(false)
 
 async function loadSlack() {
@@ -329,6 +334,11 @@ const mcpSnippet = computed(() =>
         <div class="field">
           <label>Channel override (optional — a channel/DM id like C0123ABCD; leave empty to use your DM)</label>
           <input v-model="slack.channelOverride" placeholder="auto (your Slack DM)" :disabled="!slack.enabled" />
+          <p v-if="slackChannelIsShared" class="note" data-slack-channel-hint>
+            Everyone in this channel can read your session threads. Only you (and Collaborators of a shared
+            session) can reply to a session or answer its prompts there; Slack users are recognised by their
+            Slack email, which has to match their AgentHub account.
+          </p>
         </div>
         <div class="slack-actions">
           <button class="primary" :disabled="slackBusy" @click="saveSlack">{{ slackSaved ? 'Saved ✓' : slackBusy ? 'Saving…' : 'Save' }}</button>
