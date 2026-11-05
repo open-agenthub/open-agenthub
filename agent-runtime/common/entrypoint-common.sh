@@ -81,7 +81,7 @@ fi
 
 MERGED_MCP=0
 # A builtin is only merged when this image actually ships it. The runtimes do not all carry all of
-# them — the OpenClaw image has files/ and network/ but neither browser/ nor sessions/ — while the
+# them — the Cursor image has no browser/, and a custom image may leave out more — while the
 # enabling flags are instance-wide and not gated per agent. An unconditional `node` on a missing
 # module exits non-zero, and under `set -e` in a sourced script that aborts the entrypoint: on an
 # instance with the browser or the spawn MCP switched on, an OpenClaw session died with
