@@ -1,6 +1,7 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, mount } from '@vue/test-utils'
+import HomeView from './HomeView.vue'
 import SessionList from './SessionList.vue'
 import SessionsView from './SessionsView.vue'
 import { groupSessions, nestShared } from '../lib/projects.js'
@@ -88,5 +89,28 @@ describe('roles in counters and alerts', () => {
     expect(detectAlerts([before], [viewerAsking])).toEqual([])
     expect(detectAlerts([before], [{ ...before, phase: 'Succeeded' }])).toEqual([{ id: 'v', title: 'Release prep', kind: 'finished' }])
     expect(detectAlerts([{ ...collaboratorAsking, questionPending: false }], [collaboratorAsking])).toHaveLength(1)
+  })
+})
+
+
+describe('shared sessions on home', () => {
+  it('keeps direct, inherited and project shares visible beyond the owned preview', async () => {
+    const project = { ...parent, id: 'project', title: 'Project task', accessRole: 'Viewer', inheritedFromProjectId: 'project-id', questionOpen: true }
+    const wrapper = mount(HomeView, { props: { sessions: [
+      ...Array.from({ length: 8 }, (_, i) => ({ ...own, id: `own-${i}` })),
+      { ...parent, questionPending: true }, child, project
+    ] } })
+    const rows = wrapper.findAll('[data-home-shared] .row')
+    expect(rows.map(r => r.attributes('data-home-session'))).toEqual(['p', 'c', 'project'])
+    expect(rows[0].text()).toContain('Collaborator · shared by alice')
+    expect(rows[2].text()).toContain('Question open')
+    expect(rows[2].text()).toContain('Viewer · shared by alice')
+    expect(wrapper.find('.headline').text()).toBe('One agent wants a word with you.')
+    expect(wrapper.findAll('.ny-card')).toHaveLength(1)
+    expect(wrapper.find('.ny-card').text()).toContain('shared by alice')
+    await rows[2].trigger('click')
+    expect(wrapper.emitted('select')).toEqual([['project']])
+    await wrapper.setProps({ sessions: [own] })
+    expect(wrapper.find('[data-home-shared]').exists()).toBe(false)
   })
 })
