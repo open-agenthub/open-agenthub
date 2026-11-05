@@ -40,6 +40,8 @@ const output = process.env.OUT || '/tmp'
     assert((await bob.locator('.ny-card').innerText()).includes('Private notes'))
     assert.equal(await bob.locator('.headline').innerText(), 'One agent wants a word with you.')
     assert(!(await alice.locator('[data-home-shared]').count()))
+    const geometry = await bob.locator('[data-home-session="qa"]').evaluate(row => ({ badge: row.querySelector('.pill').getBoundingClientRect().right, title: row.querySelector('.row-title').getBoundingClientRect().left }))
+    assert(geometry.badge <= geometry.title, 'question status must not overlap the title')
     await bob.screenshot({ path: `${output}/home-shared-bob.png`, fullPage: true })
     await bob.locator('[data-home-session="notes"]').click()
     await bob.waitForURL('**/s/notes')

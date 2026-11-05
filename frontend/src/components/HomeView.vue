@@ -149,6 +149,7 @@ function repoLabel(s) { return repoShortName(s.repoUrl || s.repos?.[0]?.url || '
 .list-head { padding: 13px 18px; font-weight: 700; font-size: 14px; display: flex; justify-content: space-between; align-items: center; color: var(--strong); }
 .row { padding: 11px 18px; display: flex; align-items: center; gap: 12px; border-top: 1px solid var(--border); cursor: pointer; }
 .shared-row { width: 100%; text-align: left; background: transparent; border-radius: 0; color: inherit; font: inherit; }
+.shared-row .pill { width: auto; min-width: 78px; white-space: nowrap; }
 .shared-meta { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
 .row:hover { background: var(--hover); }
 .row .pill { width: 78px; text-align: center; flex-shrink: 0; }
