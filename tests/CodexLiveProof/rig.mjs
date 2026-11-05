@@ -22,9 +22,9 @@ const OUT = process.env.OUT || R + '/out';
 fs.mkdirSync(OUT, { recursive: true });
 const log = fs.createWriteStream(OUT + '/rig.log');
 const t0 = Date.now();
-// Logged values include what the model and the CLI sent; control characters are escaped so
-// one of them cannot start a forged line in rig.log.
-const say = (...a) => { const line = `[${((Date.now() - t0) / 1000).toFixed(1)}s] ` + a.join(' ').replace(/[\x00-\x1f\x7f]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0')); console.log(line); log.write(line + '\n'); };
+// Logged values include what the model and the CLI sent; JSON escaping turns a newline in them
+// into \n, so none of them can start a forged line in rig.log.
+const say = (...a) => { const line = `[${((Date.now() - t0) / 1000).toFixed(1)}s] ` + JSON.stringify(a.join(' ')).slice(1, -1); console.log(line); log.write(line + '\n'); };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const sse = events => events.map(e => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join('');
 
