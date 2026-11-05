@@ -24,7 +24,8 @@ public sealed class AgentHubMcpTools(
     ISessionMessageStore? messages = null,
     ISessionMessageDelivery? delivery = null,
     ISessionContextClear? contextClear = null,
-    ISessionAccessService? access = null, ISessionSharingService? sharing = null)
+    ISessionAccessService? access = null, ISessionSharingService? sharing = null,
+    SessionTransferService? transfer = null)
 {
     /// <summary>The calling user; see <see cref="McpCallerIdentity"/>.</summary>
     private readonly ExternalSessionAccess external = new(sessions, access, sharing);
@@ -345,6 +346,59 @@ public sealed class AgentHubMcpTools(
         catch (KeyNotFoundException) { throw new McpException("session_not_found"); }
         catch (InvalidOperationException e) { throw new McpException("session_not_convertible: " + e.Message); }
         catch (ArgumentException e) { throw new McpException("invalid_argument: " + e.Message); }
+    }
+
+    // ------------------------------------------------------------------ continue locally
+    //
+    // This endpoint runs in the hub, not on the caller's machine, so unlike the stdio server it cannot
+    // write ~/.claude. It answers with a single-use link and a curl | tar command the caller (or the
+    // agent behind the MCP client, which has a shell) runs locally — see docs/session-transfer.md.
+
+    [McpServerTool(Name = "session_take_local")]
+    [Description("Continue a Claude Code session on your own computer. Pauses the session (its pod saves "
+                 + "the conversation and stops, so it is never answered in two places) and returns a "
+                 + "single-use download link valid for 15 minutes with a command that writes the "
+                 + "conversation where claude --resume finds it for 'directory' and starts it. Run the "
+                 + "command in a local shell (bash/zsh: command; Windows: powerShellCommand). A live "
+                 + "session is only paused with confirm \"true\"; without it the answer lists the steps "
+                 + "and confirmationRequired. Hand it back with session_hand_back.")]
+    public async Task<TakeLocalResult> TakeLocal(
+        [Description("Session id.")] string sessionId,
+        [Description("Absolute path of the local project directory to continue in, e.g. /home/me/project "
+                     + "or C:\\Users\\me\\project — normally a checkout of the session's repository.")] string directory,
+        [Description("\"true\" to pause a running session. Ask the person first.")] string? confirm = null,
+        CancellationToken ct = default)
+    {
+        var service = transfer ?? throw new McpException("transfer_unavailable");
+        try
+        {
+            var result = await service.TakeLocalAsync(Owner, sessionId, directory, ParseFlag(confirm) ?? false, withLink: true, ct);
+            if (!result.ConfirmationRequired)
+                logger.LogInformation("MCP client took session {SessionId} local", sessionId);
+            return result;
+        }
+        catch (KeyNotFoundException) { throw new McpException("session_not_found"); }
+        catch (SessionTransferException e) { throw new McpException($"{e.Code}: {e.Message}"); }
+        catch (Exception e) when (e is InvalidOperationException or ArgumentException)
+        { throw new McpException("transfer_refused: " + e.Message); }
+    }
+
+    [McpServerTool(Name = "session_hand_back")]
+    [Description("Hand a session that was continued locally back to the hub. Returns a single-use upload "
+                 + "link valid for 15 minutes with a command that packs the local conversation for "
+                 + "'directory' and uploads it; the hub stores it and, unless resume is \"false\", resumes "
+                 + "the session with the local turns. Refused with session_live while the session runs "
+                 + "in the hub, because its pod would overwrite the upload when it stops.")]
+    public async Task<HandBackLinkResult> HandBack(
+        [Description("Session id.")] string sessionId,
+        [Description("The absolute local directory the conversation was continued in.")] string directory,
+        [Description("\"true\" (default) or \"false\": resume the session in the hub after the upload.")] string? resume = null,
+        CancellationToken ct = default)
+    {
+        var service = transfer ?? throw new McpException("transfer_unavailable");
+        try { return await service.HandBackLinkAsync(Owner, sessionId, directory, ParseFlag(resume) ?? true, ct); }
+        catch (KeyNotFoundException) { throw new McpException("session_not_found"); }
+        catch (SessionTransferException e) { throw new McpException($"{e.Code}: {e.Message}"); }
     }
 
     [McpServerTool(Name = "session_delete")]
