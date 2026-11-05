@@ -88,6 +88,48 @@ public class ExternalSessionsMcpPostgresTests
         Assert.Equal(0L, await db.ScalarAsync<long>("SELECT count(*) FROM cross_owner_message_audit"));
     }
 
+    [PostgreSqlFact]
+    public async Task LinksUseBearerRolesAndHistoryAndExternalAuditWithoutNamedAccess()
+    {
+        await using var db = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await db.AddSessionAsync("bob", "b");
+        var (remote, _, messages) = await Clients(db);
+        var service = DispatchProxy.Create<ISessionService, OwnedSessions>();
+        ((OwnedSessions)service).Store = db.Sessions;
+        var access = new SessionAccessService(db.Shares, new FakeEnterpriseLicense(true));
+        var links = new ExternalShareLinkService(access, new SharedSessionHistory(service), messages);
+        foreach (var role in new[] { ShareRole.Viewer, ShareRole.Collaborator })
+        {
+            var issued = await db.Shares.CreateLinkAsync("bob", "b", role, null);
+            foreach (var value in new[] { issued.Token, "https://example.com/shared/" + issued.Token })
+            {
+                var read = await links.ReadAsync(value, null, null, default);
+                Assert.NotNull(read);
+                Assert.Equal(role.ToString(), read.Session.AccessRole);
+                Assert.Equal("history", read.History.Text);
+            }
+            var sent = await links.SendAsync(issued.Token, "link message", default);
+            if (role == ShareRole.Viewer) Assert.Null(sent);
+            else
+            {
+                Assert.NotNull(sent);
+                var row = Assert.Single(await messages.ListPageAsync("bob", "b", null, 10));
+                Assert.Equal("via share link", row.FromTitle);
+                Assert.Null(row.FromSessionId);
+                Assert.Equal(1L, await db.ScalarAsync<long>("SELECT count(*) FROM cross_owner_message_audit WHERE sender_owner='via share link'"));
+            }
+            await db.Shares.DeleteLinkAsync("bob", "b", issued.Link.Id);
+            Assert.Null(await links.ReadAsync(issued.Token, null, null, default));
+            Assert.Null(await links.SendAsync(issued.Token, "revoked", default));
+        }
+        var expired = await db.Shares.CreateLinkAsync("bob", "b", ShareRole.Collaborator, null);
+        await db.ScalarAsync<long>("WITH expired AS (UPDATE session_share_links SET expires_at=now()-interval '1 minute' RETURNING id) SELECT count(*) FROM expired");
+        Assert.Null(await links.ReadAsync(expired.Token, null, null, default));
+        Assert.Null(await links.SendAsync(expired.Token, "expired", default));
+        Assert.IsType<NotFoundResult>((await remote.Get("b", default)).Result);
+        Assert.Null(await links.ReadAsync("invalid", null, null, default));
+    }
+
     private static async Task<(RemoteController, AgentHubMcpTools, PostgresSessionMessageStore)> Clients(PostgresSharingDatabase db)
     {
         var service = DispatchProxy.Create<ISessionService, OwnedSessions>();
@@ -121,6 +163,8 @@ public class ExternalSessionsMcpPostgresTests
             nameof(ISessionService.ListSessionsAsync) => List((string)args![0]!),
             nameof(ISessionService.GetSessionAsync) => Get((string)args![0]!, (string)args[1]!),
             nameof(ISessionService.TouchActivityAsync) => Task.CompletedTask,
+            nameof(ISessionService.GetConversationAsync) => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null),
+            nameof(ISessionService.GetTranscriptAsync) => Task.FromResult<string?>("history"),
             _ => throw new InvalidOperationException($"Unexpected service operation: {method?.Name}")
         };
         private async Task<IReadOnlyList<SessionInfo>> List(string owner)

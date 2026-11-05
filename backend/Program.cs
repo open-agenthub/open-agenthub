@@ -112,6 +112,7 @@ builder.Services.AddSingleton<ISessionMcpPolicyReader>(sp => sp.GetRequiredServi
 builder.Services.AddSingleton<ISessionShareStatus>(sp => sp.GetRequiredService<SessionShareStore>());
 builder.Services.AddSingleton<ISessionAccessService, SessionAccessService>();
 builder.Services.AddSingleton<ISharedSessionHistory, SharedSessionHistory>();
+builder.Services.AddSingleton<ExternalShareLinkService>();
 // Every sharing surface (web, token API, MCP) goes through this one service, which holds the
 // licence check — see docs/session-sharing-api.md. FrontendOrigin is what share-link URLs are
 // built from, for the same reason SessionInfo.Url is (never the request host).
@@ -398,10 +399,11 @@ if (mcpOptions.IsConfigured)
     var mcpEncryptionCertificate = mcpKeys.GetEncryptionCertificateAsync().GetAwaiter().GetResult();
 
     builder.Services.AddAntiforgery();
-    builder.Services.AddMcpServer().WithHttpTransport()
+    builder.Services.AddMcpServer().WithHttpTransport(ShareLinkMcpEndpoint.Configure)
         .WithTools<AgentHubMcpTools>()
         .WithTools<SessionFileMcpTools>()
-        .WithTools<SessionSharingMcpTools>();
+        .WithTools<SessionSharingMcpTools>()
+        .WithTools<ShareLinkMcpTools>();
 
     if (authEnabled)
     {
@@ -692,6 +694,7 @@ app.UseRateLimiter();
 if (mcpOptions.IsConfigured)
 {
     app.MapMcp("/mcp").RequireAuthorization("McpPolicy");
+    app.MapMcp("/mcp/shared").AllowAnonymous();
 
     // RFC 9728: tells MCP clients which authorization server guards this resource.
     app.MapGet("/.well-known/oauth-protected-resource", () => Results.Json(new

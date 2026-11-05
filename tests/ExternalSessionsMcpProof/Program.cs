@@ -17,7 +17,10 @@ builder.Services.AddControllers().AddApplicationPart(typeof(InternalController).
 builder.Services.AddSingleton<ISessionService>(service);
 builder.Services.AddSingleton<ApiTokenStore>();
 builder.Services.AddHttpContextAccessor();
-builder.Services.AddMcpServer().WithHttpTransport(o => o.Stateless = true).WithTools<AgentHubMcpTools>();
+builder.Services.AddMcpServer().WithHttpTransport(ShareLinkMcpEndpoint.Configure)
+    .WithTools<AgentHubMcpTools>().WithTools<ShareLinkMcpTools>();
+builder.Services.AddSingleton<ISharedSessionHistory>(new SharedSessionHistory(service));
+builder.Services.AddSingleton<ExternalShareLinkService>();
 builder.Services.AddSingleton<PostgresSessionStore>();
 builder.Services.AddSingleton<SessionShareStore>();
 builder.Services.AddSingleton<ISessionAccessStore>(s => s.GetRequiredService<SessionShareStore>());
@@ -39,7 +42,7 @@ var tokens = app.Services.GetRequiredService<ApiTokenStore>();
 await tokens.InitializeAsync();
 await tokens.CreateAsync("alice", "proof", "oah_external_proof_token");
 app.Use(async (ctx, next) => {
-    if (ctx.Request.Path.StartsWithSegments("/mcp"))
+    if (ctx.Request.Path.StartsWithSegments("/mcp") && !ctx.Request.Path.StartsWithSegments("/mcp/shared"))
     {
         var token = ctx.Request.Headers.Authorization.ToString().Replace("Bearer ", "");
         var caller = await tokens.FindCallerByTokenAsync(token);
@@ -49,6 +52,7 @@ app.Use(async (ctx, next) => {
     await next();
 });
 app.MapMcp("/mcp");
+app.MapMcp("/mcp/shared");
 var sessions = app.Services.GetRequiredService<PostgresSessionStore>();
 await sessions.InitializeAsync();
 var users = new UserDirectory(builder.Configuration);
@@ -64,7 +68,7 @@ await app.Services.GetRequiredService<ISessionMessageStore>().InitializeAsync();
 await sessions.UpsertAsync(new SessionRecord { Id = "a", Owner = "alice", Title = "Agent A", CallbackToken = "proof-a", Status = "Paused", ProjectId = "fleet", ParentSessionId = "parent" });
 foreach (var (id, project, parent) in new (string, string?, string?)[] { ("peer", "fleet", null), ("parent", null, null), ("child", null, "a"), ("sibling", "fleet", "parent"), ("outside", "other", null) })
     await sessions.UpsertAsync(new SessionRecord { Id = id, Owner = "alice", Title = id, CallbackToken = $"proof-{id}", Status = "Paused", ProjectId = project, ParentSessionId = parent });
-await sessions.UpsertAsync(new SessionRecord { Id = "b", Owner = "bob", Title = "Agent B", CallbackToken = "proof-b", Status = "Paused", McpConfigJson = "private" });
+await sessions.UpsertAsync(new SessionRecord { Id = "b", Owner = "bob", Title = "Agent B", CallbackToken = "proof-b-secret", Status = "Paused", McpConfigJson = "private" });
 await sessions.UpsertAsync(new SessionRecord { Id = "b-child", Owner = "bob", Title = "Agent B child", ParentSessionId = "b", CallbackToken = "proof-b-child", Status = "Paused" });
 app.MapControllers();
 // The fixture changes real grants; all MCP requests still use production callback authentication.
@@ -75,6 +79,18 @@ app.MapPost("/__role/{role}", async (string role) => {
     else if (role != "none") await shares.UpsertDirectAsync("bob", "b", "alice", Enum.Parse<ShareRole>(role));
     return Results.Ok();
 });
+app.MapPost("/__link/{role}", async (string role) =>
+    Results.Ok(await shares.CreateLinkAsync("bob", "b", Enum.Parse<ShareRole>(role), null)));
+app.MapPost("/__revoke/{id}", async (string id) => {
+    await shares.DeleteLinkAsync("bob", "b", id); return Results.Ok();
+});
+app.MapPost("/__expire/{id}", async (string id) => {
+    await using var connection = new Npgsql.NpgsqlConnection(builder.Configuration.GetConnectionString("Postgres"));
+    await connection.OpenAsync();
+    await using var command = new Npgsql.NpgsqlCommand("UPDATE session_share_links SET expires_at=now()-interval '1 minute' WHERE id=@id", connection);
+    command.Parameters.AddWithValue("id", id);
+    await command.ExecuteNonQueryAsync(); return Results.Ok();
+});
 app.Run("http://127.0.0.1:8410");
 
 public class EmptyService : DispatchProxy
@@ -84,6 +100,8 @@ public class EmptyService : DispatchProxy
     {
         nameof(ISessionService.ListSessionsAsync) => List((string)args![0]!),
         nameof(ISessionService.TouchActivityAsync) => Task.CompletedTask,
+        nameof(ISessionService.GetConversationAsync) => Task.FromResult<IReadOnlyList<TranscriptEntry>?>(null),
+        nameof(ISessionService.GetTranscriptAsync) => Task.FromResult<string?>("proof history proof-b-secret"),
         nameof(ISessionService.GetSessionAsync) => Get((string)args![0]!, (string)args[1]!),
         _ => throw new InvalidOperationException($"Unexpected service call: {method?.Name}")
     };
@@ -107,7 +125,7 @@ sealed class OnlyInternal : IApplicationFeatureProvider<ControllerFeature>
 {
     public void PopulateFeature(IEnumerable<ApplicationPart> parts, ControllerFeature feature)
     {
-        foreach (var type in feature.Controllers.Where(t => t.AsType() != typeof(InternalController) && t.AsType() != typeof(RemoteController)).ToArray())
+        foreach (var type in feature.Controllers.Where(t => t.AsType() != typeof(InternalController) && t.AsType() != typeof(RemoteController) && t.AsType() != typeof(RemoteShareLinkController)).ToArray())
             feature.Controllers.Remove(type);
     }
 }

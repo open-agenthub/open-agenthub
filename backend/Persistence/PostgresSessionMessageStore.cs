@@ -108,7 +108,7 @@ public sealed class PostgresSessionMessageStore : ISessionMessageStore
             INSERT INTO cross_owner_message_audit
                 (message_id, sender_owner, sender_session_id, recipient_owner, recipient_session_id, created_at)
             SELECT id, from_owner, from_session_id, owner, to_session_id, created_at
-            FROM inserted WHERE from_owner IS NOT NULL AND from_owner <> owner;
+            FROM inserted WHERE from_owner IS NOT NULL;
             """;
         await using var cmd = _db.CreateCommand(sql);
         cmd.Parameters.AddWithValue("id", m.Id);
