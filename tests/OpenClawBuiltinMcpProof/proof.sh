@@ -3,9 +3,11 @@
 set -uo pipefail
 REF="${1:?git ref, or a local checkout path}"
 if [ -d "$REF" ]; then
-  # Local mode (run-local.sh): a checkout instead of a download, and its own node_modules.
+  # Local mode (run-local.sh): a checkout instead of a download. node_modules comes from the
+  # session pod's own runtime — same base and node-pty build as the image — because node-pty does
+  # not compile in a pod without a toolchain.
   SRC="$REF"
-  MODULES="$SRC/agent-runtime/session-agent/node_modules"
+  MODULES=/opt/session-agent/node_modules
 else
   SRC=/tmp/src
   mkdir -p "$SRC"
