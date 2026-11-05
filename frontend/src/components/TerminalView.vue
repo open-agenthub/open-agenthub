@@ -5,6 +5,7 @@ import TerminalPane from './TerminalPane.vue'
 import SessionWorkspace from './SessionWorkspace.vue'
 import WorkspaceStream from './workspace/WorkspaceStream.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
+import ContinueLocallyDialog from './ContinueLocallyDialog.vue'
 import ConversationTimeline from './workspace/ConversationTimeline.vue'
 import WorkspaceComposer from './workspace/WorkspaceComposer.vue'
 import CliMenuNotice from './workspace/CliMenuNotice.vue'
@@ -54,7 +55,8 @@ async function pauseAndResumeRuntime() {
   } catch (error) { runtimeUpdateError.value = error.message || 'Pause and resume failed' }
   finally { runtimeUpdating.value = false }
 }
-const emit = defineEmits(['runtime-updated', 'back', 'resume', 'pause', 'edit', 'duplicate', 'converted'])
+const emit = defineEmits(['runtime-updated', 'back', 'resume', 'pause', 'edit', 'duplicate', 'converted', 'transferred'])
+const localOpen = ref(false)
 const capabilities = computed(() => sessionCapabilities(props.session))
 const isLive = computed(() => ['Running', 'Pending'].includes(props.session?.phase))
 const isStopped = computed(() => isSessionStopped(props.session))
@@ -610,11 +612,17 @@ function interruptWorkspaceAgent() {
         <button v-if="session.canResume" class="bar-btn" @click="$emit('resume', session.id)">▶ Resume</button>
         <button v-if="showMessages" class="bar-btn" data-send-message-toggle :class="{ on: sendOpen }" @click="sendOpen = !sendOpen">✉ Messages<span v-if="visibleMessages.length" class="msg-badge" data-message-badge>{{ visibleMessages.length }}</span></button>
         <button class="bar-btn" @click="$emit('edit', session.id)">✎ Edit session</button>
-        <button class="bar-btn primary" @click="shareOpen = !shareOpen">↗ Share</button>
+        <button v-if="(session.agent || 'Claude') === 'Claude' && !sharedToken" class="bar-btn" data-continue-locally-toggle
+          :class="{ on: localOpen }" @click="localOpen = !localOpen; shareOpen = false">⇩ Continue locally</button>
+        <button class="bar-btn primary" @click="shareOpen = !shareOpen; localOpen = false">↗ Share</button>
       </template>
       <span v-if="session.outdatedImage" class="status" data-outdated-image>outdated image</span>
       <button v-if="session.outdatedImage && capabilities.canManage && !sharedToken" class="bar-btn" :disabled="runtimeUpdating" @click="updateRuntime">Update now</button>
       <span class="status">{{ modern ? statuses.agent : statuses[activeTab] }}</span>
+      <div v-if="localOpen" class="share-pop" data-continue-locally-pop>
+        <div class="share-head"><span>Continue locally</span><button class="ghost" @click="localOpen = false">✕</button></div>
+        <ContinueLocallyDialog :session="session" @close="localOpen = false" @changed="$emit('transferred')" />
+      </div>
       <div v-if="shareOpen" class="share-pop">
         <div class="share-head"><span>Share session</span><button class="ghost" @click="shareOpen = false">✕</button></div>
         <ShareSessionDialog embedded :session="session" @close="shareOpen = false" />

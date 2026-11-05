@@ -161,6 +161,9 @@ export const api = {
   updateRuntimeImage: (id) => req('POST', `/sessions/${encodeURIComponent(id)}/update-runtime`),
   resumeSession: (id) => req('POST', `/sessions/${id}/resume`),
   pauseSession: (id) => req('POST', `/sessions/${id}/pause`),
+  // Continue locally (docs/session-transfer.md): the answer carries a single-use link and commands.
+  takeSessionLocal: (id, body) => req('POST', `/sessions/${id}/transfer/take-local`, body),
+  sessionHandBackLink: (id, body) => req('POST', `/sessions/${id}/transfer/hand-back-link`, body),
   // Continues a finished autonomous session interactively; 409 while it runs or is not autonomous.
   convertSession: (id, data) => req('POST', `/sessions/${encodeURIComponent(id)}/convert`, data),
   // Recent agent-to-agent messages sent to a session (read-only fleet inbox view).
