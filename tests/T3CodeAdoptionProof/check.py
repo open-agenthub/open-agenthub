@@ -37,6 +37,8 @@ license_text = (args.upstream / 'LICENSE').read_text()
 assert license_text.startswith('MIT License')
 notices = json.loads((args.upstream / 'third-party-licenses.config.json').read_text())
 assert notices['customNotices'] and notices['packageOverrides']
+custom_licenses = sorted({entry['license'] for entry in notices['customNotices']})
+assert 'OFL-1.1' in custom_licenses and 'CC0-1.0' in custom_licenses
 helper = (args.upstream / 'scripts/licenses/libatomic.LICENSE').read_text()
 assert 'GPL-3.0-or-later WITH GCC-exception-3.1' in helper
 print(json.dumps({'upstream': actual, 'drivers': len(drivers),
@@ -44,4 +46,5 @@ print(json.dumps({'upstream': actual, 'drivers': len(drivers),
                   'local_references': len(local_paths),
                   'custom_notices': len(notices['customNotices']),
                   'package_overrides': len(notices['packageOverrides']),
+                  'custom_license_expressions': custom_licenses,
                   'scope': 'source evidence only; no provider execution'}, indent=2))
