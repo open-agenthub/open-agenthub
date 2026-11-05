@@ -1,16 +1,24 @@
 #!/usr/bin/env bash
 # Runs inside the released OpenClaw runtime image (see README.md). Usage: proof.sh <git ref>
 set -uo pipefail
-REF="${1:?git ref}"
-SRC=/tmp/src
-mkdir -p "$SRC"
-curl -fsSL "https://codeload.github.com/open-agenthub/open-agenthub/tar.gz/$REF" | tar xz -C "$SRC" --strip-components=1
+REF="${1:?git ref, or a local checkout path}"
+if [ -d "$REF" ]; then
+  # Local mode (run-local.sh): a checkout instead of a download, and its own node_modules.
+  SRC="$REF"
+  MODULES="$SRC/agent-runtime/session-agent/node_modules"
+else
+  SRC=/tmp/src
+  mkdir -p "$SRC"
+  curl -fsSL "https://codeload.github.com/open-agenthub/open-agenthub/tar.gz/$REF" | tar xz -C "$SRC" --strip-components=1
+  MODULES=/opt/session-agent/node_modules
+fi
 PROOF="$SRC/tests/OpenClawBuiltinMcpProof"
 TOKEN=proof-callback-token-0001
 SID=sess-openclaw-proof
 export EXPECTED_TOKEN="$TOKEN"
 
 echo "===== image: openclaw $(openclaw --version 2>/dev/null | head -1)"
+if [ -d /opt/session-agent/openclaw ]; then
 echo "===== BEFORE: builtins shipped in the released image"
 ls /opt/session-agent
 
@@ -23,6 +31,7 @@ env RUNTIME=/opt/session-agent AGENTHUB_BROWSER_ENABLED=1 AGENTHUB_SPAWN_MCP_ENA
   node /opt/session-agent/openclaw/mcp-config.js "$BEFORE_CFG" ""
 env HOME=/tmp/before OPENCLAW_STATE_DIR=/tmp/before OPENCLAW_CONFIG_PATH="$BEFORE_CFG" \
   OPENCLAW_NO_AUTO_UPDATE=1 openclaw mcp list 2>&1
+fi
 
 echo "===== AFTER: the branch's runtime, laid out as its Dockerfile COPY lines say"
 # /opt/agenthub/session-agent is where the platform injects the runtime into a custom image;
@@ -37,7 +46,7 @@ grep -E '^COPY [a-z-]+(/[a-z.-]+)? /opt/session-agent/' "$SRC/agent-runtime/open
       cp -r "$SRC/agent-runtime/$from" "$dest"
       echo "COPY $from -> $dest"
     done
-ln -s /opt/session-agent/node_modules "$RT/node_modules"
+[ -e "$RT/node_modules" ] || ln -s "$MODULES" "$RT/node_modules"
 chmod +x "$RT"/common/*.sh "$RT"/openclaw/*.sh
 cp "$PROOF/openclaw-wrapper.sh" /opt/agenthub/bin/openclaw
 chmod +x /opt/agenthub/bin/openclaw
@@ -60,7 +69,7 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/h
   AGENTHUB_PROMPT="Tell the agent Peer hello." \
   AGENTHUB_AUTH_MODE=apikey OPENAI_API_KEY=sk-proof-not-a-real-key \
   AGENTHUB_CALLBACK_URL="http://127.0.0.1:18092/internal/sessions/$SID" AGENTHUB_CALLBACK_TOKEN="$TOKEN" \
-  AGENTHUB_WORKDIR=/workspace AGENTHUB_HAS_MCP=1 \
+  AGENTHUB_WORKDIR="${PROOF_WORKDIR:-/workspace}" AGENTHUB_HAS_MCP=1 \
   AGENTHUB_BROWSER_ENABLED=1 AGENTHUB_SPAWN_MCP_ENABLED=1 AGENTHUB_NETWORK_MCP_ENABLED=1 \
   AGENTHUB_CONTAINERS_ENABLED=1 \
   timeout --kill-after=10 300 bash "$RT/openclaw/entrypoint.sh" > /tmp/entrypoint.log 2>&1
@@ -76,4 +85,3 @@ grep -c "$TOKEN" /home/agent/.openclaw/openclaw.json | sed 's/^/literal callback
 echo "===== model log"; cat /tmp/model.log
 echo "===== hub log (sessions + skill-library requests)"; grep -E '/messages|/project-agents|/mcp' /tmp/hub.log
 echo "===== PROOF DONE"
-sleep 3600
