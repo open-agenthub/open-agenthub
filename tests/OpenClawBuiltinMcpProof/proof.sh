@@ -53,7 +53,11 @@ chmod +x /opt/agenthub/bin/openclaw
 ls "$RT"
 
 node "$PROOF/hub.mjs" > /tmp/hub.log 2>&1 &
+HUB_PID=$!
 node "$PROOF/model.mjs" > /tmp/model.log 2>&1 &
+MODEL_PID=$!
+# A leftover pair from an earlier run would keep the ports and answer into a deleted log.
+trap 'kill $HUB_PID $MODEL_PID 2>/dev/null' EXIT
 sleep 1
 
 # The hub's skill-library entry, as McpConfigAssembler injects it.
@@ -71,7 +75,7 @@ env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOME=/h
   AGENTHUB_CALLBACK_URL="http://127.0.0.1:18092/internal/sessions/$SID" AGENTHUB_CALLBACK_TOKEN="$TOKEN" \
   AGENTHUB_WORKDIR="${PROOF_WORKDIR:-/workspace}" AGENTHUB_HAS_MCP=1 \
   AGENTHUB_BROWSER_ENABLED=1 AGENTHUB_SPAWN_MCP_ENABLED=1 AGENTHUB_NETWORK_MCP_ENABLED=1 \
-  AGENTHUB_CONTAINERS_ENABLED=1 \
+  AGENTHUB_CONTAINERS_ENABLED=1 AGENTHUB_PORT="${PROOF_AGENT_PORT:-7681}" \
   timeout --kill-after=10 300 bash "$RT/openclaw/entrypoint.sh" > /tmp/entrypoint.log 2>&1
 echo "===== entrypoint exit: $?"
 tail -n 80 /tmp/entrypoint.log
