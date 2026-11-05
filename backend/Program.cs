@@ -245,6 +245,9 @@ builder.Services.AddSingleton(slackOpts);
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackThreadStore>();
 builder.Services.AddHostedService<AgentHub.Api.Ee.Slack.SlackThreadPruneService>();
 builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackClient>();
+builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.ISlackUserEmails>(sp =>
+    sp.GetRequiredService<AgentHub.Api.Ee.Slack.SlackClient>());
+builder.Services.AddSingleton<AgentHub.Api.Ee.Slack.SlackSenderGate>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.UserDirectory>();
 builder.Services.AddSingleton<AgentHub.Api.Permissions.PermissionStore>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.ISecretRequestStore, AgentHub.Api.Persistence.PostgresSecretRequestStore>();

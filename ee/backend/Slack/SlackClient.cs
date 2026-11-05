@@ -11,7 +11,7 @@ using System.Text.Json;
 namespace AgentHub.Api.Ee.Slack;
 
 /// <summary>Thin Slack Web API client (chat.postMessage + Socket Mode connection).</summary>
-public sealed class SlackClient
+public sealed class SlackClient : ISlackUserEmails
 {
     private readonly IHttpClientFactory _http;
     private readonly SlackOptions _opts;
@@ -51,6 +51,28 @@ public sealed class SlackClient
             return null;
         }
         catch (Exception ex) { _log.LogWarning(ex, "Slack chat.postMessage error"); return null; }
+    }
+
+    /// <summary>
+    /// Posts a message only <paramref name="user"/> sees (chat.postEphemeral). Used to refuse a
+    /// sender in a shared thread: a normal reply would show everyone in the channel who was
+    /// turned away, and keeps nothing worth keeping.
+    /// </summary>
+    public async Task<bool> PostEphemeralAsync(string channel, string user, string text, string? threadTs, CancellationToken ct)
+    {
+        var c = Client(_opts.BotToken);
+        var body = new Dictionary<string, object?> { ["channel"] = channel, ["user"] = user, ["text"] = text };
+        if (threadTs is not null) body["thread_ts"] = threadTs;
+        try
+        {
+            using var resp = await c.PostAsJsonAsync("https://slack.com/api/chat.postEphemeral", body, ct);
+            using var doc = JsonDocument.Parse(await resp.Content.ReadAsStringAsync(ct));
+            if (doc.RootElement.TryGetProperty("ok", out var ok) && ok.GetBoolean()) return true;
+            _log.LogWarning("Slack chat.postEphemeral failed: {Err}",
+                doc.RootElement.TryGetProperty("error", out var e) ? e.GetString() : "unknown");
+            return false;
+        }
+        catch (Exception ex) { _log.LogWarning(ex, "Slack chat.postEphemeral error"); return false; }
     }
 
     /// <summary>Posts a message with Block Kit blocks (e.g. buttons); returns its ts.</summary>
