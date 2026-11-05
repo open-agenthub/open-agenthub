@@ -168,3 +168,12 @@ whatever the role, because the row shows that status. "Waiting on you" and the q
 count it only for a collaborator: a viewer cannot answer, and a counter that a person can never
 bring down by doing something is noise. A viewer is still alerted when the session finishes or
 fails.
+
+## Shared sessions on the home screen
+
+Home lists all directly shared, inherited and project-shared sessions in a separate “Shared
+with me” section with owner, role and status. Mixing them into the six-session owned preview
+was rejected because recent owned sessions could hide every share. The existing access-role
+rule still controls “Needs you”: collaborators can answer, viewers can see an open question
+without increasing the waiting counter. The list follows the normal session refresh, including
+revocations; it does not cache grants independently.
