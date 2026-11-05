@@ -81,7 +81,8 @@ public sealed class SessionTransferService(
             await using (archive)
             {
                 try { resumeId = SessionLocalTransfer.ResumeId(await BufferAsync(archive, ct)); }
-                catch (SessionTransferException) { }
+                // No conversation stored yet: the status reports that as a null resumeId.
+                catch (SessionTransferException) { resumeId = null; }
             }
         }
         return new SessionTransferStatus
@@ -114,7 +115,7 @@ public sealed class SessionTransferService(
         if (live)
         {
             await sessions.PauseSessionAsync(owner, id, ct);
-            log.LogInformation("Paused session {Id} to take its conversation local", id);
+            log.LogInformation("Paused session {Id} to take its conversation local", Auth.ApiKeyFailureLimiter.LogSafe(id));
         }
         // A pause returns once the pod is told to stop; it uploads its final state while it shuts down.
         // Read sooner, the archive misses the last turns — the ones the person just watched happen.
@@ -177,7 +178,7 @@ public sealed class SessionTransferService(
             // The pod-phase check in the service is the last word: a resume between ours and the write.
             throw new SessionTransferException("session_live", error.Message);
         }
-        log.LogInformation("Stored a conversation handed back to session {Id} ({Bytes} bytes)", id, merged.Length);
+        log.LogInformation("Stored a conversation handed back to session {Id} ({Bytes} bytes)", Auth.ApiKeyFailureLimiter.LogSafe(id), merged.Length);
 
         var phase = info.Phase;
         if (resume)

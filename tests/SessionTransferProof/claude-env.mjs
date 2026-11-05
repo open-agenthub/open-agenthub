@@ -5,7 +5,8 @@ export const KEY = 'sk-ant-api03-' + 'x'.repeat(80)
 export function claudeHome(home, directories) {
   fs.mkdirSync(home, { recursive: true })
   const file = path.join(home, '.claude.json')
-  const config = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
+  let config = {}
+  try { config = JSON.parse(fs.readFileSync(file, 'utf8')) } catch { }
   config.hasCompletedOnboarding = true
   config.customApiKeyResponses = { approved: [KEY.slice(-20)], rejected: [] }
   config.projects = config.projects || {}

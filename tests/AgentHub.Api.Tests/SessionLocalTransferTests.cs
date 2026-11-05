@@ -214,7 +214,7 @@ public class SessionLocalTransferTests
         Assert.Equal("session_live", (await Assert.ThrowsAsync<SessionTransferException>(
             () => service.LocalArchiveAsync(Owner, SessionId, LocalDir))).Code);
         Assert.Equal("session_live", (await Assert.ThrowsAsync<SessionTransferException>(
-            () => service.HandBackAsync(Owner, SessionId, new MemoryStream(), resume: true))).Code);
+            () => service.HandBackAsync(Owner, SessionId, Stream.Null, resume: true))).Code);
         Assert.Equal("session_live", (await Assert.ThrowsAsync<SessionTransferException>(
             () => service.HandBackLinkAsync(Owner, SessionId, LocalDir, resume: true))).Code);
     }
@@ -233,7 +233,8 @@ public class SessionLocalTransferTests
         var sessions = new Sessions(SessionStatus.Paused);
         var local = SessionLocalTransfer.ForLocal(PodState(), LocalDir);
 
-        var result = await Service(sessions).HandBackAsync(Owner, SessionId, new MemoryStream(local.Archive), resume: true);
+        using var upload = new MemoryStream(local.Archive);
+        var result = await Service(sessions).HandBackAsync(Owner, SessionId, upload, resume: true);
 
         Assert.True(result.Resumed);
         Assert.Equal(1, sessions.Resumes);

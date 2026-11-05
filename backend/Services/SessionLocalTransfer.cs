@@ -258,9 +258,8 @@ public static partial class SessionLocalTransfer
         { throw new SessionTransferException("upload_invalid", "The upload is not a gzip-compressed tar archive."); }
 
         var regular = new List<ArchiveFile>();
-        foreach (var file in files)
+        foreach (var file in files.Where(file => file.Entry.EntryType is not TarEntryType.Directory))
         {
-            if (file.Entry.EntryType is TarEntryType.Directory) continue;
             if (file.Entry.EntryType is not (TarEntryType.RegularFile or TarEntryType.V7RegularFile) || Parse(file.Name) is null)
                 throw new SessionTransferException("upload_invalid",
                     $"Unexpected entry in the upload: {file.Name}. Send only {Projects}/<folder>/<id>.jsonl and its <id>/ folder.");
@@ -312,13 +311,13 @@ public static partial class SessionLocalTransfer
             var carriage = line.EndsWith('\r');
             if (TryObject(carriage ? line[..^1] : line) is not { } node) continue;
             var changed = false;
-            if (node.ContainsKey("cwd") && !(node["cwd"] is JsonValue c && c.TryGetValue<string>(out var current) && current == cwd))
+            if (node.TryGetPropertyValue("cwd", out var cwdNode) && !(cwdNode is JsonValue c && c.TryGetValue<string>(out var current) && current == cwd))
             {
                 node["cwd"] = cwd;
                 changed = true;
             }
-            if (sessionId is not null && node.ContainsKey("sessionId")
-                && !(node["sessionId"] is JsonValue s && s.TryGetValue<string>(out var id) && id == sessionId))
+            if (sessionId is not null && node.TryGetPropertyValue("sessionId", out var idNode)
+                && !(idNode is JsonValue s && s.TryGetValue<string>(out var id) && id == sessionId))
             {
                 node["sessionId"] = sessionId;
                 changed = true;

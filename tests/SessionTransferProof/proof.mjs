@@ -111,7 +111,7 @@ r = await call('session_take_local', { sessionId: id, directory: project, confir
 check(r.error && r.json.error === 'local_transcript_differs', 'taking it local again does not overwrite the local turns', r.json.error)
 
 // That detour put a pod turn into the hub copy; start the local round again from the hub's state.
-r = await call('session_take_local', { sessionId: id, directory: project, confirm: true, overwrite: true })
+await call('session_take_local', { sessionId: id, directory: project, confirm: true, overwrite: true })
 before = requests()
 localClaude(laptop, project, 'Local turn: the deploy uses port 8443.', resumeId)
 await podTurn('What did I say about the deploy port?')

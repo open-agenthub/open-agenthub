@@ -1760,7 +1760,7 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         await _store.UpsertAsync(rec, ct);
         rec.QuestionOpen = false;
         await _store.SetQuestionDialogAsync(id, false, null, ct);
-        _log.LogInformation("Paused session {Id} (pod removed, state uploaded to S3)", id);
+        _log.LogInformation("Paused session {Id} (pod removed, state uploaded to S3)", AgentHub.Api.Auth.ApiKeyFailureLimiter.LogSafe(id));
         return await ToInfoAsync(rec, phase: SessionStatus.Paused, podIp: null, ct: ct);
     }
 
