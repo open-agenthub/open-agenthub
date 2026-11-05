@@ -22,7 +22,11 @@ changing the global library path for the CLI and hook children.
 The twelve cases assert marker existence and the tool result sent back to the model:
 exec allow/deny/approval allow/approval deny; TUI normal command/native escalation
 rejection/delayed approval/approval allow/approval deny, plus expired approval,
-backend restart recovery and unavailable approval with an actionable denial reason. Branch cases also reject
+backend restart recovery and unavailable approval with an actionable denial reason.
+The interactive expiry case configures a one-second elapsed-time budget and asserts
+the distinct nobody-answered reason. Every case loads the shipped 1860-second
+managed hook timeout, proving the pinned CLI accepts and executes that setting.
+The proof does not wait the full default 30 minutes. Branch cases also reject
 hook failures and any native approval menu. A checkout attempting to disable hooks
 does not disable the managed gate. Each process group has a bounded timeout.
 

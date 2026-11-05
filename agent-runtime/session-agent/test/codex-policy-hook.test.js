@@ -8,7 +8,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const unavailableReason = 'AgentHub approval unavailable or unanswered; tool call denied. Retry when approval is available.';
+const timedOutReason = 'Nobody answered the AgentHub approval in time; tool call denied. Ask the agent to try again.';
+const unavailableReason = 'AgentHub approval unavailable; tool call denied. Retry when approval is available.';
 const hookPath = path.join(__dirname, '..', '..', 'codex', 'policy-hook.js');
 const requirementsPath = path.join(__dirname, '..', '..', 'codex', 'requirements.toml');
 
@@ -371,7 +372,7 @@ test('an unanswered unattended approval fails closed instead of running', async 
       assert.deepEqual(result.output, {
         hookSpecificOutput: {
           hookEventName: 'PermissionRequest',
-          decision: { behavior: 'deny', message: unavailableReason }
+          decision: { behavior: 'deny', message: name === 'poll budget' ? timedOutReason : unavailableReason }
         }
       }, name);
     } finally {
@@ -404,6 +405,7 @@ test('an unanswered interactive approval denies without a native prompt', async 
       AGENTHUB_APPROVAL_INTERVAL_MS: '10'
     });
     assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
+    assert.equal(result.output.hookSpecificOutput.decision.message, timedOutReason);
     assert.equal(result.stderr, '');
   } finally {
     await server.close();
@@ -522,7 +524,7 @@ test('system requirements own all tool hooks and exclude repository hooks', () =
   assert.match(requirements, /^hooks = true/m);
   assert.match(requirements, /^managed_dir = "\/opt\/session-agent\/codex"/m);
   assert.match(requirements, /\[\[hooks\.PreToolUse\]\][\s\S]*matcher = "\*"/m);
-  assert.match(requirements, /\[\[hooks\.PreToolUse\.hooks\]\][\s\S]*?timeout = 250/m);
+  assert.match(requirements, /\[\[hooks\.PreToolUse\.hooks\]\][\s\S]*?timeout = 1860/m);
   assert.match(requirements, /\[\[hooks\.PermissionRequest\]\][\s\S]*matcher = "\*"/m);
 });
 
@@ -594,5 +596,67 @@ test('unavailable approval gives the agent an actionable reason without duplicat
     assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
     assert.match(result.output.hookSpecificOutput.permissionDecisionReason, /AgentHub approval unavailable.*tool call denied.*Retry/);
     assert.deepEqual(server.requests.map(request => request.path), ['/agent-policy', '/permission']);
+  } finally { await server.close(); }
+});
+
+test('interactive approval accepts a late answer beyond the old 120-poll cap', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { body: '{"id":"late-answer"}' },
+    ...Array.from({ length: 121 }, () => ({ body: '{"decision":"pending"}' })),
+    { body: '{"decision":"allow"}' }, { body: '{"decision":"ask"}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive',
+      AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.stdout, '');
+    assert.equal(server.requests.filter(request => request.path === '/permission/late-answer').length, 122);
+  } finally { await server.close(); }
+});
+
+test('configured interactive deadline denies with a timeout reason, not an unavailable-service reason', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { body: '{"id":"short-budget"}' },
+    ...Array.from({ length: 200 }, () => ({ body: '{"decision":"pending"}' }))
+  ]);
+  try {
+    const started = Date.now();
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive',
+      AGENTHUB_CODEX_INTERACTIVE_APPROVAL_SECONDS: '1', AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.output.hookSpecificOutput.permissionDecisionReason, timedOutReason);
+    assert.ok(Date.now() - started >= 1000);
+    assert.ok(server.requests.filter(request => request.path === '/permission/short-budget').length < 200);
+  } finally { await server.close(); }
+});
+
+test('interactive setting does not shorten unattended approval', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { body: '{"id":"unattended-window"}' },
+    ...Array.from({ length: 121 }, () => ({ body: '{"decision":"pending"}' })),
+    { body: '{"decision":"allow"}' }, { body: '{"decision":"ask"}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous',
+      AGENTHUB_CODEX_INTERACTIVE_APPROVAL_SECONDS: '1', AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.stdout, '');
+    assert.equal(server.requests.filter(request => request.path === '/permission/unattended-window').length, 122);
+  } finally { await server.close(); }
+});
+
+test('backend expiry reports nobody answered rather than approval unavailable', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { body: '{"id":"expired-request"}' },
+    { body: '{"decision":"expired"}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive', AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.output.hookSpecificOutput.permissionDecisionReason, timedOutReason);
   } finally { await server.close(); }
 });

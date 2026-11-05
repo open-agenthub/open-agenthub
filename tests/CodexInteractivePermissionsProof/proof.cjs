@@ -150,7 +150,8 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
     '-c', 'model_providers.proof.supports_websockets=false', '-m', 'gpt-5.4'];
   args.splice(interactive ? 2 : 5, 0, ...config);
   const env = { PROOT_NO_SECCOMP: '1', PATH: process.env.PATH, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH, HOME: home, CODEX_HOME: home, TMPDIR: scratch, CODEX_API_KEY: 'synthetic-key',
-    AGENTHUB_APPROVAL_POLLS: exhaust ? '1' : '120',
+    AGENTHUB_APPROVAL_POLLS: exhaust && process.env.PROOF_RUNTIME ? '1' : '',
+    AGENTHUB_CODEX_INTERACTIVE_APPROVAL_SECONDS: exhaust ? '1' : '1800',
     AGENTHUB_APPROVAL_INTERVAL_MS: exhaust ? '10' : '2000',
     AGENTHUB_MODE: mode, AGENTHUB_CALLBACK_URL: `${base}/internal/sessions/proof`,
     AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback', AGENTHUB_SKILL_REMINDER: '0', TERM: 'xterm-256color' };
@@ -220,6 +221,7 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
       assert.doesNotMatch(output, /Hook failed/);
     }
     if (!escalated && (policy === 'deny' || (policy === 'ask' && approval === 'deny'))) assert.match(result, /blocked by PreToolUse hook/);
+    if (exhaust && !baseline) assert.match(result, /Nobody answered the AgentHub approval in time/);
     if (unavailable) assert.match(result, /AgentHub approval unavailable.*tool call denied/);
     if (outage) assert.equal(requests.filter(req => req.path === 'permission').length, 1);
     if (policy === 'ask' && !pending && !escalated && !unavailable) assert.deepEqual(requests.map(req => req.path), approval === 'allow'

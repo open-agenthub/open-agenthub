@@ -20,7 +20,7 @@ hard deny blocks the tool. With full access the CLI no longer raises
 `ask` in every session mode is resolved in `PreToolUse` through the same backend permission endpoint,
 including polling, redacted approval descriptions, and the final policy
 recheck. Missing or invalid answers fail closed. The managed pre-tool timeout
-matches the permission hook's approval budget. Interactive callback errors and expired approvals also deny the tool. Keeping
+covers the permission hook's approval budget. Interactive callback errors and expired approvals also deny the tool. Keeping
 a native-menu fallback would introduce a second decision path. The managed
 `PermissionRequest` hook remains as a defensive gate for CLI requests that still
 raise that event; ordinary full-access calls are decided in `PreToolUse`.
@@ -32,6 +32,37 @@ security exceptions. `read-only` still needs the unavailable namespace setup.
 We also rejected the combined approvals-and-sandbox bypass flag: selecting only
 the sandbox mode keeps approval behavior explicit and leaves managed hooks in
 place.
+
+## Approval wait budgets
+
+Interactive Codex waits up to 30 minutes for an owner answer. Set
+`AGENTHUB_CODEX_INTERACTIVE_APPROVAL_SECONDS` in the runtime environment to
+shorten that window (1–1800 seconds; invalid values use 1800 and values outside
+the range are clamped). Unattended sessions retain a 240-second window and
+ignore that interactive setting. The elapsed-time deadline includes polling
+and retry time; individual in-flight callbacks and final policy checks can add
+bounded overhead. The legacy `AGENTHUB_APPROVAL_POLLS` override can shorten a
+proof's poll count; it is not needed in normal deployments.
+
+Both managed policy hooks use `timeout = 1860` (31 minutes), leaving room for
+initial policy reads, creation, in-flight callback retries and the final policy
+recheck. This is compatible with the backend's 35-minute stale-request sweep.
+We rejected retaining the four-minute interactive budget: without a native menu
+fallback, a person stepping away briefly would lose their chance to approve.
+We cap the configurable interactive wait at 30 minutes to keep it below the
+managed hook timeout and the backend safety-net expiry.
+
+The pinned 0.166.0 source represents the hook timeout as `Option<u64>` in
+`codex-rs/protocol/src/hooks.rs`; `codex-rs/hooks/src/engine/mod.rs` applies only
+`.max(1)` and the command runner uses `Duration::from_secs(handler.timeout_sec)`
+without an upper clamp. The real TUI proof loads and executes the shipped
+1860-second setting successfully. No smaller maximum is imposed by those paths;
+we do not claim to have waited the full 30 minutes in the proof.
+
+An unanswered or backend-expired request tells the agent: "Nobody answered the
+AgentHub approval in time; tool call denied." An unreachable or invalid approval
+service instead reports "AgentHub approval unavailable; tool call denied."
+Both reasons are visible in the Workspace tool result and invite a retry.
 
 ## Real CLI proof
 

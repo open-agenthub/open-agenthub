@@ -6,7 +6,8 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 16 * 1024;
 const CALLBACK_TIMEOUT_MS = 3000;
 const DENY_REASON = 'Blocked by the session policy.';
-const APPROVAL_UNAVAILABLE = 'AgentHub approval unavailable or unanswered; tool call denied. Retry when approval is available.';
+const APPROVAL_TIMED_OUT = 'Nobody answered the AgentHub approval in time; tool call denied. Ask the agent to try again.';
+const APPROVAL_UNAVAILABLE = 'AgentHub approval unavailable; tool call denied. Retry when approval is available.';
 
 function emitDecision(eventName, behavior, reason = DENY_REASON) {
   if (eventName === 'PermissionRequest') {
@@ -168,19 +169,30 @@ async function handlePermissionRequest(tool, input, eventName = 'PermissionReque
     return;
   }
 
-  const polls = boundedInteger(process.env.AGENTHUB_APPROVAL_POLLS, 120, 1, 120);
+  const interactive = (process.env.AGENTHUB_MODE || 'interactive').toLowerCase() === 'interactive';
+  const seconds = interactive
+    ? boundedInteger(process.env.AGENTHUB_CODEX_INTERACTIVE_APPROVAL_SECONDS, 1800, 1, 1800)
+    : 240;
+  const deadline = Date.now() + seconds * 1000;
+  // Keep the legacy poll override for short proofs, but use elapsed time normally so slow
+  // replies and retries do not turn the interactive window into an unbounded wait.
+  const polls = boundedInteger(process.env.AGENTHUB_APPROVAL_POLLS, Number.MAX_SAFE_INTEGER, 1, interactive ? 900 : 120);
   const interval = boundedInteger(process.env.AGENTHUB_APPROVAL_INTERVAL_MS, 2000, 10, 2000);
-  for (let attempt = 0; attempt < polls; attempt++) {
-    await new Promise(resolve => setTimeout(resolve, interval));
+  for (let attempt = 0; attempt < polls && Date.now() < deadline; attempt++) {
+    await new Promise(resolve => setTimeout(resolve, Math.min(interval, deadline - Date.now())));
     const response = await requestJson(`/permission/${encodeURIComponent(initial.id)}`);
-    const decision = parseDecision(response, ['allow', 'allowAlways', 'deny', 'pending']);
+    const decision = parseDecision(response, ['allow', 'allowAlways', 'deny', 'pending', 'expired']);
+    if (decision === 'expired') {
+      emitDecision(eventName, 'deny', APPROVAL_TIMED_OUT);
+      return;
+    }
     if (decision === 'pending') continue;
     if (decision === 'deny') emitDecision(eventName, 'deny');
     else await emitApproved(tool, input, eventName);
     return;
   }
-  // Nobody answered inside the poll budget.
-  failClosed(eventName);
+  // A healthy approval service returning pending is different from an unavailable service.
+  emitDecision(eventName, 'deny', APPROVAL_TIMED_OUT);
 }
 
 async function main() {
