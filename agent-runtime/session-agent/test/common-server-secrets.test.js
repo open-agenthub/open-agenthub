@@ -69,7 +69,7 @@ test('common transport masks secret values in the scrollback and transcript it u
 });
 
 test('common transport uploads the transcript file as before when there is nothing to mask', async () => {
-  const harness = harnessWithSecrets({ AGENTHUB_SECRETS_DIR: '/nowhere', AGENTHUB_SECRET_ENV: '' });
+  const harness = harnessWithSecrets({ AGENTHUB_SECRETS_DIR: '/nowhere', AGENTHUB_SECRET_ENV: '', AGENTHUB_CALLBACK_TOKEN: '' });
   harness.terminals[0].emitData('plain output');
   harness.intervals[0].callback();
   await tick();

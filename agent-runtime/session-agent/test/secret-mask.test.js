@@ -54,3 +54,30 @@ test('leaves short values, a missing directory and no secrets alone', () => {
   assert.equal(mask.active(), false);
   assert.equal(mask.mask('pin 1234'), 'pin 1234');
 });
+
+test('masks callback and inline MCP credentials including standalone URL userinfo', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mcp-mask-'));
+  const file = path.join(dir, 'mcp.json');
+  const config = { mcpServers: { custom: {
+    command: 'ordinary-command', args: ['ordinary-argument'],
+    headers: { Authorization: 'Bearer header-token-434', Custom: 'custom-header-434' },
+    env: { CUSTOM: 'quoted-"credential-434', SHORT: '1234' },
+    url: 'https://username-434:password%2F434@example.com/mcp?key=query%2Fvalue434&next=query+space434'
+  } } };
+  fs.writeFileSync(file, JSON.stringify(config));
+  const mask = createSecretMask({ env: { AGENTHUB_CALLBACK_TOKEN: 'callback-token-434', AGENTHUB_MCP_CONFIG: file } });
+  mask.refresh();
+  for (const value of ['callback-token-434', 'header-token-434', 'custom-header-434',
+    'quoted-"credential-434', 'username-434', 'password%2F434', 'password/434', 'query%2Fvalue434', 'query/value434', 'query+space434', 'query space434']) {
+    assert.ok(!mask.mask(value).includes(value), value);
+    assert.ok(!mask.mask(JSON.stringify(value)).includes(JSON.stringify(value).slice(1, -1)), value);
+  }
+  assert.equal(mask.mask('ordinary-command ordinary-argument 1234'), 'ordinary-command ordinary-argument 1234');
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: { next: { env: { TOKEN: 'rotated-token-434' } } } }));
+  mask.refresh();
+  assert.equal(mask.mask('rotated-token-434'), '[secret:MCP]');
+  fs.writeFileSync(file, '{invalid');
+  assert.doesNotThrow(() => mask.refresh());
+  assert.equal(mask.mask('callback-token-434'), '[secret:AGENTHUB_CALLBACK_TOKEN]');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
