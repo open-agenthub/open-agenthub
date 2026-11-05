@@ -120,9 +120,33 @@ test('builtin servers carry env references, never literal secrets', () => {
   assert.equal(servers.agenthub_network.env.AGENTHUB_WORKDIR, undefined);
 });
 
+test('the browser and sessions servers are rendered like the other runtimes register them', () => {
+  const root = runtimeWith(['browser', 'sessions', 'files', 'network']);
+  const servers = mcp.builtinServers(builtinEnv(root, {
+    AGENTHUB_BROWSER_ENABLED: '1', AGENTHUB_SPAWN_MCP_ENABLED: '1',
+    AGENTHUB_SESSION_ID: 'sess-1', AGENTHUB_CONTAINERS_ENABLED: '1', HOME: '/home/agent'
+  }), '/usr/local/bin/node');
+
+  assert.deepEqual(Object.keys(servers).sort(),
+    ['agenthub_browser', 'agenthub_files', 'agenthub_network', 'agenthub_sessions']);
+  assert.deepEqual(servers.agenthub_browser.args, [`${root}/browser/server.mjs`]);
+  assert.equal(servers.agenthub_browser.command, '/usr/local/bin/node');
+  // The cleared child environment would otherwise leave the sessions server without the id every
+  // peer message is addressed from, and without the switch for the container tools.
+  assert.deepEqual(servers.agenthub_sessions.env, {
+    PATH: '${PATH}', RUNTIME: '${RUNTIME}',
+    AGENTHUB_CALLBACK_URL: '${AGENTHUB_CALLBACK_URL}',
+    AGENTHUB_CALLBACK_TOKEN: '${AGENTHUB_CALLBACK_TOKEN}',
+    AGENTHUB_SESSION_ID: '${AGENTHUB_SESSION_ID}',
+    AGENTHUB_CONTAINERS_ENABLED: '${AGENTHUB_CONTAINERS_ENABLED}',
+    HOME: '${HOME}'
+  });
+  assert.equal(JSON.stringify(servers).includes('sess-1'), false);
+});
+
 test('only the builtins this image ships and this session enabled are rendered', () => {
-  // The OpenClaw image carries files/ and network/ but neither browser/ nor sessions/, while the
-  // enabling flags are instance-wide. A server pointing at a missing module would fail every turn.
+  // The enabling flags are instance-wide, and a custom image may leave a server out. A server
+  // pointing at a missing module would fail every turn.
   const root = runtimeWith(['files']);
   const servers = mcp.builtinServers(builtinEnv(root, {
     AGENTHUB_BROWSER_ENABLED: '1', AGENTHUB_SPAWN_MCP_ENABLED: '1'
@@ -134,6 +158,33 @@ test('only the builtins this image ships and this session enabled are rendered',
     AGENTHUB_FILES_MCP_ENABLED: '0', AGENTHUB_NETWORK_MCP_ENABLED: '0'
   }));
   assert.deepEqual(disabled, {});
+});
+
+test('the skill-library proxy gets the environment OpenClaw would otherwise clear', () => {
+  // The shared entrypoint swaps the hub's http entry for `node <runtime>/skills/server.mjs` with no
+  // env. Converted as-is, OpenClaw started the proxy without a callback url or token.
+  const root = '/opt/session-agent';
+  const servers = mcp.convertMcp(JSON.stringify({
+    mcpServers: { 'skill-library': { command: 'node', args: [`${root}/skills/server.mjs`] } }
+  }), [], builtinEnv(root, { TMPDIR: '/home/agent/tmp' }), '/usr/local/bin/node');
+
+  assert.deepEqual(servers['skill-library'], {
+    enabled: true,
+    command: '/usr/local/bin/node',
+    args: [`${root}/skills/server.mjs`],
+    env: {
+      PATH: '${PATH}', RUNTIME: '${RUNTIME}',
+      AGENTHUB_CALLBACK_URL: '${AGENTHUB_CALLBACK_URL}',
+      AGENTHUB_CALLBACK_TOKEN: '${AGENTHUB_CALLBACK_TOKEN}',
+      TMPDIR: '${TMPDIR}'
+    }
+  });
+
+  // A skill-library server of the user's own is converted unchanged.
+  const own = mcp.convertMcp(JSON.stringify({
+    mcpServers: { 'skill-library': { command: 'node', args: ['/mine.mjs'] } }
+  }), [], builtinEnv(root));
+  assert.deepEqual(own['skill-library'], { enabled: true, command: 'node', args: ['/mine.mjs'] });
 });
 
 test('a server the agent added itself survives, a stale managed one does not', () => {
