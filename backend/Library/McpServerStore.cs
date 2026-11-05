@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using AgentHub.Api.Persistence;
 using Npgsql;
 
@@ -140,6 +141,7 @@ public sealed class McpServerStore : IMcpServerStore
             await using var reader = await cmd.ExecuteReaderAsync(ct);
             if (!await reader.ReadAsync(ct))
                 throw new KeyNotFoundException();
+            var secret = ReadSecret(reader.IsDBNull(2) ? null : reader.GetString(2));
             return new McpServerRecord
             {
                 Id = id,
@@ -148,7 +150,8 @@ public sealed class McpServerStore : IMcpServerStore
                 Description = description,
                 Kind = kind,
                 ConfigJson = config,
-                SecretJson = _secrets.Unprotect(reader.IsDBNull(2) ? null : reader.GetString(2)),
+                SecretJson = secret.Plaintext,
+                NeedsReentry = secret.NeedsReentry,
                 CreatedAt = reader.GetDateTime(0),
                 UpdatedAt = reader.GetDateTime(1)
             };
@@ -199,6 +202,7 @@ public sealed class McpServerStore : IMcpServerStore
         await using var reader = await cmd.ExecuteReaderAsync(ct);
         while (await reader.ReadAsync(ct))
         {
+            var secret = ReadSecret(reader.IsDBNull(6) ? null : reader.GetString(6));
             list.Add(new McpServerRecord
             {
                 Id = reader.GetString(0),
@@ -207,12 +211,19 @@ public sealed class McpServerStore : IMcpServerStore
                 Description = reader.GetString(3),
                 Kind = reader.GetString(4),
                 ConfigJson = reader.GetString(5),
-                SecretJson = _secrets.Unprotect(reader.IsDBNull(6) ? null : reader.GetString(6)),
+                SecretJson = secret.Plaintext,
+                NeedsReentry = secret.NeedsReentry,
                 CreatedAt = reader.GetDateTime(7),
                 UpdatedAt = reader.GetDateTime(8)
             });
         }
         return list;
+    }
+
+    private (string? Plaintext, bool NeedsReentry) ReadSecret(string? payload)
+    {
+        try { return (_secrets.Unprotect(payload), false); }
+        catch (CryptographicException) { return (null, true); }
     }
 
     /// <summary>Empty string means no secret on create (same as null).</summary>
