@@ -49,6 +49,11 @@ require("child_process").execFileSync("/bin/sh", ["-c", archiveScript(driver), "
   echo "token occurrences in the state archive: $(gunzip -c /tmp/state.tgz | grep -a -c "$TOKEN")"
 }
 
+if [ -n "${LEGACY_STATE:-}" ]; then
+  # An archive written by an older runtime: resume from it, then archive again.
+  cp "$LEGACY_STATE" /tmp/state.tgz
+  echo "===== LEGACY: token occurrences in the archive being restored: $(gunzip -c /tmp/state.tgz | grep -a -c "$TOKEN")"
+else
 echo "===== RUN 1: fresh session"
 RUN=1; start
 cat /tmp/openclaw-wrapper.log; : > /tmp/openclaw-wrapper.log
@@ -59,6 +64,7 @@ echo "===== the agent adds a server of its own, as a person in the terminal woul
 OPENCLAW_STATE_DIR=/home/agent/.openclaw OPENCLAW_CONFIG_PATH=/home/agent/.openclaw/openclaw.json HOME=/home/agent \
   OPENCLAW_NO_AUTO_UPDATE=1 /usr/local/bin/openclaw mcp set agent_added '{"command":"node","args":["-e","0"]}' 2>&1 | tail -2
 archive
+fi
 
 echo "===== RUN 2: resumed from that archive in an empty home"
 rm -rf /home/agent/* /home/agent/.[!.]* /tmp/agenthub-mcp.json /tmp/agenthub-openclaw-mcp.env /tmp/.state-restored

@@ -8,6 +8,9 @@ set -euo pipefail
 SRC="$(cd "${1:?checkout}" && pwd)"; S="${2:?scratch}"; OC="${3:?openclaw prefix}"
 PROOT="${PROOT:-$S/bin/proot}"
 rm -rf "$S/rig446"; mkdir -p "$S/rig446"/{opt,tmp,secrets,home,ws}
+# LEGACY_STATE=<state.tgz written by an older runtime> resumes from that archive instead of a run 1.
+LEGACY=""
+if [ -n "${LEGACY_STATE:-}" ]; then cp "$LEGACY_STATE" "$S/rig446/tmp/legacy-state.tgz"; LEGACY=/tmp/legacy-state.tgz; fi
 # node resolves a module's imports from its real path, so the package directory is bound and a
 # launcher stands in for the bin link.
 printf '#!/bin/sh\nexec node /usr/local/lib/node_modules/openclaw/openclaw.mjs "$@"\n' > "$S/rig446/openclaw"
@@ -16,4 +19,4 @@ chmod +x "$S/rig446/openclaw"
   -b "$S/rig446/home:/home/agent" \
   -b "$OC/lib/node_modules/openclaw:/usr/local/lib/node_modules/openclaw" \
   -b "$S/rig446/openclaw:/usr/local/bin/openclaw" \
-  env PROOF_WORKDIR="$S/rig446/ws" PROOF_AGENT_PORT=17682 bash "$SRC/tests/McpConfigStateProof/proof.sh" "$SRC"
+  env LEGACY_STATE="$LEGACY" PROOF_WORKDIR="$S/rig446/ws" PROOF_AGENT_PORT=17682 bash "$SRC/tests/McpConfigStateProof/proof.sh" "$SRC"

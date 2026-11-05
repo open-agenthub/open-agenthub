@@ -126,8 +126,8 @@ copies of either file: the pinned Codex keeps none (checked by having it rewrite
 carry one either way.
 
 **OpenClaw keeps backups.** The real CLI rotates `openclaw.json.bak` through `.bak.4` on every
-config write, and the entrypoint alone writes the config several times per start, so on `main` a
-fresh session's archive held the callback-protected header four times and a resumed one six. The
+config write, and the entrypoint alone writes the config several times per start, so before this
+change a fresh session's archive held the header value four times and a resumed one six. The
 copies are excluded and deleted at start; nothing reads them on a resume.
 
 **OpenClaw: references, not an exclude.** `openclaw.json` also holds what a resume has to bring
