@@ -7,10 +7,6 @@ const MAX_RESPONSE_BYTES = 16 * 1024;
 const CALLBACK_TIMEOUT_MS = 3000;
 const DENY_REASON = 'Blocked by the session policy.';
 
-function isInteractive() {
-  return (process.env.AGENTHUB_MODE || 'interactive').toLowerCase() === 'interactive';
-}
-
 function emitDecision(eventName, behavior) {
   if (eventName === 'PermissionRequest') {
     const decision = behavior === 'deny'
@@ -37,11 +33,7 @@ function isMcpTool(tool) {
 }
 
 function failClosed(eventName = 'PreToolUse') {
-  if (!isInteractive()) emitDecision(eventName, 'deny');
-}
-
-function failPolicyClosed(eventName, tool) {
-  if (!isInteractive() || isMcpTool(tool)) emitDecision(eventName, 'deny');
+  emitDecision(eventName, 'deny');
 }
 
 async function readInput() {
@@ -138,14 +130,12 @@ async function emitApproved(tool, input, eventName) {
     const recheck = await policyDecision(tool, input);
     emitDecision(eventName, recheck === 'deny' ? 'deny' : 'allow');
   } catch {
-    if (!isInteractive() || isMcpTool(tool)) emitDecision(eventName, 'deny');
-    // Non-MCP interactive failures preserve Codex's normal permission flow.
+    failClosed(eventName);
   }
 }
 
-// Leaving a PermissionRequest unanswered is only safe where a person can still answer it. In an
-// unattended session the absence of a decision is Codex's own approval policy deciding instead,
-// so every path out of here that has no answer ends in failClosed.
+// Native approvals are disabled, so an unavailable or unanswered backend decision must deny
+// in every mode rather than silently permit a tool or wait for a second approval surface.
 async function handlePermissionRequest(tool, input, eventName = 'PermissionRequest') {
   const initial = await requestJson('/permission', {
     method: 'POST', body: { tool, input: approvalDescriptor(tool) }
@@ -193,7 +183,7 @@ async function main() {
   if (!['PreToolUse', 'PermissionRequest'].includes(eventName)
       || typeof tool !== 'string' || tool.length === 0 || tool.length > 256
       || input === null || typeof input !== 'object' || Array.isArray(input)) {
-    failPolicyClosed(decisionEvent, tool);
+    failClosed(decisionEvent);
     return;
   }
 
@@ -201,7 +191,7 @@ async function main() {
   try {
     policy = await policyDecision(tool, input);
   } catch {
-    failPolicyClosed(eventName, tool);
+    failClosed(eventName);
     return;
   }
 
@@ -209,10 +199,10 @@ async function main() {
     emitDecision(eventName, 'deny');
     return;
   }
-  // Full-access exec never raises PermissionRequest on its own. Resolve an uncovered
-  // unattended call here so disabling the inner sandbox cannot skip backend approval.
+  // Full access does not raise PermissionRequest. Resolve policy questions here in every
+  // mode so the Workspace is the sole approval surface and no second CLI menu can hang.
   if (eventName === 'PreToolUse') {
-    if (policy === 'ask' && !isInteractive()) {
+    if (policy === 'ask') {
       try {
         await handlePermissionRequest(tool, input, eventName);
       } catch {
@@ -225,8 +215,6 @@ async function main() {
   try {
     await handlePermissionRequest(tool, input);
   } catch {
-    // Interactive callback failures deliberately leave the normal Codex prompt available;
-    // unattended there is no prompt to fall back on, so the call must not slip through.
     failClosed(eventName);
   }
 }

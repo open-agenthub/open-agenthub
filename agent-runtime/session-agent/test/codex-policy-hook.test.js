@@ -98,18 +98,24 @@ test('allowed PreToolUse exits silently so Codex continues', async () => {
   }
 });
 
-test('interactive ask and callback failure preserve normal Codex permission flow', async () => {
-  const server = await startServer([{ body: '{"decision":"ask","reason":"interactive"}' }]);
+test('interactive PreToolUse resolves approval and callback failures deny', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"ask"}' }
+  ]);
   try {
     const ask = await runHook(preTool(), { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive' });
     assert.equal(ask.stdout, '');
+    assert.deepEqual(server.requests.map(request => request.path),
+      ['/agent-policy', '/permission', '/agent-policy']);
   } finally {
     await server.close();
   }
   const failed = await runHook(preTool(), {
     AGENTHUB_CALLBACK_URL: 'http://127.0.0.1:1', AGENTHUB_MODE: 'interactive'
   });
-  assert.equal(failed.stdout, '');
+  assert.equal(failed.output.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(failed.stderr, '');
 });
 
@@ -165,13 +171,13 @@ test('interactive MCP invalid tool input denies before any callback or approval'
   }
 });
 
-test('interactive non-MCP missing tool input retains normal permission flow', async () => {
+test('interactive non-MCP missing tool input denies without native fallback', async () => {
   const server = await startServer([]);
   try {
     const result = await runHook({ hook_event_name: 'PermissionRequest', tool_name: 'Bash' }, {
       AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive'
     });
-    assert.equal(result.stdout, '');
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
     assert.equal(result.stderr, '');
     assert.deepEqual(server.requests, []);
   } finally {
@@ -297,8 +303,8 @@ test('an uncovered unattended call is auto-approved through the permission endpo
   }
 });
 
-test('unattended PreToolUse resolves approval before full-access execution', async () => {
-  for (const decision of ['allow', 'deny']) {
+test('PreToolUse in every mode resolves approval before full-access execution', async () => {
+  for (const [mode, decision] of ['interactive', 'autonomous'].flatMap(mode => ['allow', 'deny'].map(decision => [mode, decision]))) {
     const server = await startServer([
       { body: '{"decision":"ask"}' },
       { body: JSON.stringify({ decision }) },
@@ -306,7 +312,7 @@ test('unattended PreToolUse resolves approval before full-access execution', asy
     ]);
     try {
       const result = await runHook(preTool(), {
-        AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'autonomous'
+        AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: mode
       });
       if (decision === 'allow') assert.equal(result.stdout, '');
       else assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
@@ -379,7 +385,7 @@ test('an unanswered unattended approval fails closed instead of running', async 
   assert.equal(unreachable.output.hookSpecificOutput.decision.behavior, 'deny');
 });
 
-test('an unanswered interactive approval leaves the Codex prompt in place', async () => {
+test('an unanswered interactive approval denies without a native prompt', async () => {
   const server = await startServer([
     { body: '{"decision":"ask"}' },
     { body: '{"id":"request-8"}' },
@@ -396,7 +402,7 @@ test('an unanswered interactive approval leaves the Codex prompt in place', asyn
       AGENTHUB_APPROVAL_POLLS: '2',
       AGENTHUB_APPROVAL_INTERVAL_MS: '10'
     });
-    assert.equal(result.stdout, '');
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
     assert.equal(result.stderr, '');
   } finally {
     await server.close();
@@ -488,7 +494,7 @@ test('MCP policy recheck failure after approval fails closed', async () => {
   }
 });
 
-test('non-MCP policy recheck failure after approval preserves normal flow', async () => {
+test('non-MCP policy recheck failure after approval denies', async () => {
   const server = await startServer([
     { body: '{"decision":"ask"}' },
     { body: '{"decision":"allow"}' },
@@ -499,7 +505,7 @@ test('non-MCP policy recheck failure after approval preserves normal flow', asyn
       hook_event_name: 'PermissionRequest', tool_name: 'Bash',
       tool_input: { command: 'git status' }
     }, { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive' });
-    assert.equal(result.stdout, '');
+    assert.equal(result.output.hookSpecificOutput.decision.behavior, 'deny');
     assert.equal(result.stderr, '');
     assert.deepEqual(server.requests.map(request => request.path), [
       '/agent-policy', '/permission', '/agent-policy'
