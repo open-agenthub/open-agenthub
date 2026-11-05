@@ -18,3 +18,12 @@ revocation and expiration. Link history passes through the real shared-history s
 Inspect the host log for every token recorded by the driver in
 `/tmp/external-mcp-proof-tokens.txt`; no token may appear. Tokens are fixture capabilities and
 are never committed. Expiry uses a loopback fixture database update to avoid a timing-based test.
+
+## Unchanged-main comparison
+
+Create a separate detached worktree at the pre-fix main revision. Copy this host's initial
+#425-only fixture (commit b86df201) into it, remove `access` and `sharing` constructor arguments
+from the RemoteController registration, and listen on port 8411. Use a separate disposable
+database. Run the current driver with `BASELINE=1 PROOF_URL=http://127.0.0.1:8411`.
+It asserts the original named Collaborator discovery/status/send failures on both transports.
+Run the fixed host's normal driver afterwards; baseline mode never exercises link tools.

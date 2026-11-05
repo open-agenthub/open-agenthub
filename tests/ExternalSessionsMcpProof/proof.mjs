@@ -30,6 +30,18 @@ const call = async (client,name,args={}) => {
   return {error:r.isError===true,value};
 };
 const role = async value => assert.equal((await fetch(`${base}/__role/${value}`,{method:'POST'})).status,200);
+if (process.env.BASELINE === '1') {
+  try {
+    await role('Collaborator');
+    for (const client of clients) {
+      assert(!(await call(client,'agents_list')).value.some(s=>s.id==='b'));
+      assert.equal((await call(client,'session_get',{id:'b'})).error,true);
+      assert.equal((await call(client,'agent_send',{to:'b',message:'baseline denied'})).error,true);
+    }
+    console.log('PASS unchanged main reproduces missing named collaborator directory/status/send on both external MCP surfaces');
+  } finally { for (const c of clients) await c.close(); }
+  process.exit(0);
+}
 try {
   for (const [index, client] of clients.entries()) {
     await role('none');
