@@ -164,7 +164,7 @@ function convertServer(name, input) {
 }
 
 /** Converts an AgentHub MCP document to OpenClaw server entries, dropping runtime-owned names. */
-function convertMcp(agentHubJson, reservedServers = []) {
+function convertMcp(agentHubJson, reservedServers = [], env = process.env, nodeBin = process.execPath) {
   let parsed = agentHubJson;
   if (typeof agentHubJson === 'string') {
     try { parsed = JSON.parse(agentHubJson); } catch { throw new Error('MCP configuration must be valid JSON'); }
@@ -175,20 +175,33 @@ function convertMcp(agentHubJson, reservedServers = []) {
   }
   const servers = record(root.mcpServers, 'mcpServers');
   const reserved = new Set(reservedServers);
+  const runtime = env.RUNTIME || '/opt/session-agent';
   const out = {};
   for (const name of Object.keys(servers).sort()) {
     if (reserved.has(name)) continue;
-    out[name] = convertServer(name, servers[name]);
+    out[name] = isSkillProxy(name, servers[name], runtime)
+      ? localServer(servers[name].args[0], ['TMPDIR', 'HOME'], env, nodeBin)
+      : convertServer(name, servers[name]);
   }
   return out;
 }
 
-// Only the servers the OpenClaw image actually ships. It carries files/ and network/ but neither
-// browser/ nor sessions/, so rendering those would point OpenClaw at paths that do not exist.
+// The same builtins the Claude, Codex and OpenCode images register. Each entry still checks its
+// module exists before it is rendered, because a custom image may leave one out.
+//
+// extraEnv lists what a server reads beyond the callback pair, and has to be complete: OpenClaw
+// starts an MCP child with a cleared environment, so a variable not named here is simply unset in
+// the server. For agenthub_sessions that would have been AGENTHUB_SESSION_ID (every peer message
+// is addressed from it) and AGENTHUB_CONTAINERS_ENABLED (without it the container tools vanish).
 const BUILTIN_SERVERS = [
+  { name: 'agenthub_browser', dir: 'browser', flag: 'AGENTHUB_BROWSER_ENABLED', extraEnv: [] },
+  { name: 'agenthub_sessions', dir: 'sessions', flag: 'AGENTHUB_SPAWN_MCP_ENABLED',
+    extraEnv: ['AGENTHUB_SESSION_ID', 'AGENTHUB_CONTAINERS_ENABLED', 'AGENTHUB_SECRETS_DIR', 'HOME'] },
   { name: 'agenthub_files', dir: 'files', flag: 'AGENTHUB_FILES_MCP_ENABLED', extraEnv: ['AGENTHUB_WORKDIR', 'AGENTHUB_FILE_ROOT'] },
   { name: 'agenthub_network', dir: 'network', flag: 'AGENTHUB_NETWORK_MCP_ENABLED', extraEnv: [] }
 ];
+
+const SKILL_LIBRARY = 'skill-library';
 
 /**
  * The runtime-owned servers, as OpenClaw entries.
@@ -210,20 +223,37 @@ function builtinServers(env = process.env, nodeBin = process.execPath) {
     // Guarded the same way the shared entrypoint guards its own builtins: a custom image may not
     // ship one, and a server pointing at a missing file fails on every turn instead of once.
     if (!fs.existsSync(module)) continue;
-    // Only variables that are actually set. OpenClaw resolves each reference when it loads the
-    // config and reports an unset one as `Missing env var "X" - feature using this value will be
-    // unavailable`, which turns an optional variable such as AGENTHUB_FILE_ROOT into a warning on
-    // every command for no reason.
-    const names = ['PATH', 'RUNTIME', 'AGENTHUB_CALLBACK_URL', 'AGENTHUB_CALLBACK_TOKEN',
-      ...server.extraEnv].filter(name => env[name] !== undefined && env[name] !== '');
-    servers[server.name] = {
-      enabled: true,
-      command: nodeBin,
-      args: [module],
-      env: Object.fromEntries(names.map(name => [name, '${' + name + '}']))
-    };
+    servers[server.name] = localServer(module, server.extraEnv, env, nodeBin);
   }
   return servers;
+}
+
+function localServer(module, extraEnv, env, nodeBin) {
+  // Only variables that are actually set. OpenClaw resolves each reference when it loads the
+  // config and reports an unset one as `Missing env var "X" - feature using this value will be
+  // unavailable`, which turns an optional variable such as AGENTHUB_FILE_ROOT into a warning on
+  // every command for no reason.
+  const names = ['PATH', 'RUNTIME', 'AGENTHUB_CALLBACK_URL', 'AGENTHUB_CALLBACK_TOKEN', ...extraEnv]
+    .filter(name => env[name] !== undefined && env[name] !== '');
+  return {
+    enabled: true,
+    command: nodeBin,
+    args: [module],
+    env: Object.fromEntries(names.map(name => [name, '${' + name + '}']))
+  };
+}
+
+/**
+ * The skill-library entry as the shared entrypoint leaves it: the local proxy, `node
+ * <runtime>/skills/server.mjs`, with no environment. That is enough for the runtimes that pass
+ * their own environment on, but OpenClaw clears it, so the proxy started without a callback url
+ * or token and every library call failed. The entry is rebuilt like a builtin instead of being
+ * converted as a user server.
+ */
+function isSkillProxy(name, entry, runtime) {
+  return name === SKILL_LIBRARY && entry && typeof entry === 'object' && !Array.isArray(entry) &&
+    entry.url === undefined && Array.isArray(entry.args) && entry.args.length === 1 &&
+    entry.args[0] === `${runtime}/skills/server.mjs`;
 }
 
 /**
@@ -268,7 +298,7 @@ function readJson(file) {
  */
 function writeConfig(configPath, userMcpPath, reservedServers = [], env = process.env) {
   const userServers = userMcpPath && fs.existsSync(userMcpPath)
-    ? convertMcp(fs.readFileSync(userMcpPath, 'utf8'), reservedServers)
+    ? convertMcp(fs.readFileSync(userMcpPath, 'utf8'), reservedServers, env)
     : {};
   const merged = mergeServers(readJson(configPath), { ...userServers, ...builtinServers(env) });
   fs.mkdirSync(path.dirname(configPath), { recursive: true });

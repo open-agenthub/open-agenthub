@@ -242,8 +242,26 @@ Three things about OpenClaw forced decisions the other runtimes did not:
   as Claude's: the config returns from the state tar, so a withdrawn server has to disappear while a
   server the agent added itself with `openclaw mcp add` has to survive.
 
-Only `agenthub_files` and `agenthub_network` are rendered, because those are the only builtins the
-OpenClaw image ships — it carries neither `browser/` nor `sessions/`.
+The image ships all four builtins (`browser/`, `sessions/`, `files/`, `network/`) since #439, and
+all four are rendered — each still only when its flag is on and its module exists, because a custom
+image may leave one out. Before that only files and network were shipped, so OpenClaw sessions had
+no `agent_send`, no orchestration and no browser, unlike every other runtime but Cursor (no
+browser). Documenting OpenClaw as the runtime without them was the alternative; it was rejected
+because nothing in OpenClaw prevents it — the servers are plain stdio processes, and the pinned CLI
+lists, probes and calls them like any other.
+
+Two consequences of the cleared child environment surfaced while wiring them:
+
+- **`agenthub_sessions` needs more than the callback pair.** Its client refuses to start without
+  `AGENTHUB_SESSION_ID`, and registers the container tools only when `AGENTHUB_CONTAINERS_ENABLED`
+  is `1`; `secret_request` reads `AGENTHUB_SECRETS_DIR` (falling back to `$HOME/.secrets`). All of
+  these are listed as references in its entry.
+- **The skill-library proxy is rebuilt, not converted.** The shared entrypoint replaces the hub's
+  HTTP `skill-library` entry with `node <runtime>/skills/server.mjs` and no environment, which is
+  enough where the CLI passes its environment on. Under OpenClaw the proxy started without a
+  callback url or token and every library call failed, so `mcp-config.js` recognises exactly that
+  entry and gives it the same `${NAME}` references as a builtin. A `skill-library` server of the
+  user's own is converted unchanged.
 
 ### A builtin that is enabled but not in the image
 
@@ -258,9 +276,8 @@ OpenClaw session could therefore not start at all.
 and confirmed after it: with both flags on and an OpenClaw image layout, the entrypoint runs to the
 end and configures the two builtins it does have.
 
-Whether the OpenClaw image *should* ship `sessions/` (orchestration) or `browser/` is a separate
-decision — `browser/` additionally depends on the browser-runtime sidecar — and is deliberately not
-settled here.
+Whether the OpenClaw image should ship `sessions/` and `browser/` was left open here and settled in
+#439 (above): it does. `browser/` still depends on the browser-runtime sidecar like everywhere else.
 
 ## Which credentials the session gets
 
