@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
+const unavailableReason = 'AgentHub approval unavailable or unanswered; tool call denied. Retry when approval is available.';
 const hookPath = path.join(__dirname, '..', '..', 'codex', 'policy-hook.js');
 const requirementsPath = path.join(__dirname, '..', '..', 'codex', 'requirements.toml');
 
@@ -22,7 +23,7 @@ function runHook(input, environment = {}) {
     const timeout = setTimeout(() => {
       child.kill();
       reject(new Error('hook timed out'));
-    }, 5000);
+    }, 12000);
     child.stdout.on('data', chunk => { stdout += chunk; });
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('error', reject);
@@ -130,7 +131,7 @@ test('interactive MCP initial policy callback failure fails closed for every hoo
       assert.deepEqual(result.output, {
         hookSpecificOutput: {
           hookEventName: 'PermissionRequest',
-          decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+          decision: { behavior: 'deny', message: unavailableReason }
         }
       });
     }
@@ -157,7 +158,7 @@ test('interactive MCP invalid tool input denies before any callback or approval'
         assert.deepEqual(result.output, {
           hookSpecificOutput: {
             hookEventName: 'PermissionRequest',
-            decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+            decision: { behavior: 'deny', message: unavailableReason }
           }
         });
       } else {
@@ -370,7 +371,7 @@ test('an unanswered unattended approval fails closed instead of running', async 
       assert.deepEqual(result.output, {
         hookSpecificOutput: {
           hookEventName: 'PermissionRequest',
-          decision: { behavior: 'deny', message: 'Blocked by the session policy.' }
+          decision: { behavior: 'deny', message: unavailableReason }
         }
       }, name);
     } finally {
@@ -546,4 +547,52 @@ test('runtime-owned requirements projector emits only approved standard and cust
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
+});
+
+for (const mode of ['interactive', 'autonomous']) {
+  test(`${mode} policy reads recover across a brief backend restart`, async () => {
+    const server = await startServer([
+      { status: 503, body: '{}' },
+      { body: '{"decision":"ask"}' },
+      { body: '{"decision":"allow"}' },
+      { body: '{"decision":"ask"}' }
+    ]);
+    try {
+      const result = await runHook(preTool(), { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: mode });
+      assert.equal(result.stdout, '');
+      assert.deepEqual(server.requests.map(request => request.path),
+        ['/agent-policy', '/agent-policy', '/permission', '/agent-policy']);
+    } finally { await server.close(); }
+  });
+}
+
+test('approval polling recovers after backend restart without creating a second card', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' },
+    { body: '{"id":"request-retry"}' },
+    { status: 503, body: '{}' },
+    { body: '{"decision":"allow"}' },
+    { body: '{"decision":"ask"}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), {
+      AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive', AGENTHUB_APPROVAL_INTERVAL_MS: '10'
+    });
+    assert.equal(result.stdout, '');
+    assert.deepEqual(server.requests.map(request => request.path), [
+      '/agent-policy', '/permission', '/permission/request-retry', '/permission/request-retry', '/agent-policy'
+    ]);
+  } finally { await server.close(); }
+});
+
+test('unavailable approval gives the agent an actionable reason without duplicate cards', async () => {
+  const server = await startServer([
+    { body: '{"decision":"ask"}' }, { status: 503, body: '{}' }
+  ]);
+  try {
+    const result = await runHook(preTool(), { AGENTHUB_CALLBACK_URL: server.url, AGENTHUB_MODE: 'interactive' });
+    assert.equal(result.output.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(result.output.hookSpecificOutput.permissionDecisionReason, /AgentHub approval unavailable.*tool call denied.*Retry/);
+    assert.deepEqual(server.requests.map(request => request.path), ['/agent-policy', '/permission']);
+  } finally { await server.close(); }
 });

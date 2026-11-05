@@ -70,7 +70,13 @@ We rejected retaining a terminal fallback after callback failure because the
 single decision path must also hold when the backend is unavailable. We also
 rejected treating `never` as auto approve: managed hooks still request and poll
 AgentHub approval, recheck policy after approval, and deny invalid responses.
-No pod privileges or cluster security settings change.
+Policy reads and permission polls retry twice (one- and two-second backoff)
+across a brief backend restart. Exhausted retries return an actionable denial
+reason to the agent, visible in the Workspace tool result. Permission creation
+POSTs are not retried: a lost response may already have created a card, and a
+second POST would leave duplicate owner requests. The owner can ask the agent
+to retry a tool after service recovery. No pod privileges or cluster security
+settings change.
 
 `tests/CodexInteractivePermissionsProof/proof.cjs` exercises the real pinned
 0.166.0 TUI and managed hooks. Its matrix verifies shell execution, hard denial,
@@ -79,8 +85,9 @@ escalation requests. With the optional browser parameters, the real Workspace
 Allow button resolves the waiting hook; execution is checked before and after
 the click. Only the model and backend transports are synthetic.
 
-Main reproduces the namespace failure. Immediate and delayed backend approvals
-complete on the tested main revision; the owner's exact both-prompts-answered
+Main reproduces the namespace failure. Immediate and delayed backend approvals,
+and expired-card/native-menu approvals (card first or menu first) complete on
+the tested main revision. Esc between answers interrupts the turn; the owner's exact both-prompts-answered
 hang has not been reproduced. The regression asserts that the branch never
 opens a native approval menu and that the result reaches the model without Esc.
 This removes the competing path, without claiming an upstream TUI race fix.

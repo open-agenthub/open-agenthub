@@ -6,11 +6,12 @@ const MAX_REQUEST_BYTES = 64 * 1024;
 const MAX_RESPONSE_BYTES = 16 * 1024;
 const CALLBACK_TIMEOUT_MS = 3000;
 const DENY_REASON = 'Blocked by the session policy.';
+const APPROVAL_UNAVAILABLE = 'AgentHub approval unavailable or unanswered; tool call denied. Retry when approval is available.';
 
-function emitDecision(eventName, behavior) {
+function emitDecision(eventName, behavior, reason = DENY_REASON) {
   if (eventName === 'PermissionRequest') {
     const decision = behavior === 'deny'
-      ? { behavior: 'deny', message: DENY_REASON }
+      ? { behavior: 'deny', message: reason }
       : { behavior: 'allow' };
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName: 'PermissionRequest', decision }
@@ -22,7 +23,7 @@ function emitDecision(eventName, behavior) {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: DENY_REASON
+        permissionDecisionReason: reason
       }
     }));
   }
@@ -33,7 +34,7 @@ function isMcpTool(tool) {
 }
 
 function failClosed(eventName = 'PreToolUse') {
-  emitDecision(eventName, 'deny');
+  emitDecision(eventName, 'deny', APPROVAL_UNAVAILABLE);
 }
 
 async function readInput() {
@@ -77,6 +78,21 @@ async function readBoundedResponse(response) {
 }
 
 async function requestJson(pathname, options = {}) {
+  // Policy reads and permission polls are safe to retry across a backend restart. A permission
+  // POST may already have created a request, so retrying it could leave duplicate owner cards.
+  const retryable = pathname === '/agent-policy' || (!options.method && pathname.startsWith('/permission/'));
+  const attempts = retryable ? 3 : 1;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await requestJsonOnce(pathname, options);
+    } catch (error) {
+      if (attempt + 1 === attempts) throw error;
+      await new Promise(resolve => setTimeout(resolve, 1000 * (attempt + 1)));
+    }
+  }
+}
+
+async function requestJsonOnce(pathname, options = {}) {
   const { url, token } = callbackUrl(pathname);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), CALLBACK_TIMEOUT_MS);

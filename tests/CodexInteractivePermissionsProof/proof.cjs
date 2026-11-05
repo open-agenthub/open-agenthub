@@ -32,7 +32,7 @@ function stream(item, id) {
     } } });
 }
 
-async function run(label, { legacy = false, interactive = false, escalated = false, policy = 'allow', approval = 'allow', pending = false } = {}) {
+async function run(label, { legacy = false, interactive = false, escalated = false, policy = 'allow', approval = 'allow', pending = false, exhaust = false, outage = false, unavailable = false } = {}) {
   if (process.env.PROOF_ONLY && label !== process.env.PROOF_ONLY) return;
   const work = path.join(root, label);
   const home = path.join(work, 'home');
@@ -84,17 +84,29 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
     });
   }
   let nativeAnswered = false;
+  const failedPaths = new Set();
   const server = createServer((req, res) => {
     let body = '';
     req.on('data', chunk => { body += chunk; });
     req.on('end', () => {
       if (req.url.endsWith('/permission/proof-request')) {
         requests.push({ path: 'poll', body: null });
+        if (outage && !failedPaths.has('poll')) {
+          failedPaths.add('poll');
+          res.writeHead(503).end();
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ decision: approved ? approval : 'pending' }));
       } else if (req.url.endsWith('/agent-policy') || req.url.endsWith('/permission')) {
         assert.equal(req.headers['x-agent-token'], 'synthetic-callback');
         requests.push({ path: req.url.split('/').pop(), body: JSON.parse(body) });
+        if ((outage && req.url.endsWith('/agent-policy') && !failedPaths.has('policy'))
+            || (unavailable && req.url.endsWith('/permission'))) {
+          failedPaths.add('policy');
+          res.writeHead(503).end();
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         if (pending && req.url.endsWith('/permission')) {
           permissionOpen = true;
@@ -106,7 +118,7 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
               await page.screenshot({ path: path.join(root, 'workspace-approval.png') });
               await page.locator('.perm').getByRole('button', { name: 'Allow', exact: true }).click();
             })().catch(error => { console.error(error); kill(); });
-          } else setTimeout(() => { approved = true; }, 1500);
+          } else if (!exhaust) setTimeout(() => { approved = true; }, 1500);
           res.end(JSON.stringify({ id: 'proof-request' }));
         } else res.end(JSON.stringify({ decision: req.url.endsWith('/permission') ? approval : policy }));
       } else if (req.url === '/v1/responses' && req.method === 'POST') {
@@ -138,6 +150,8 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
     '-c', 'model_providers.proof.supports_websockets=false', '-m', 'gpt-5.4'];
   args.splice(interactive ? 2 : 5, 0, ...config);
   const env = { PROOT_NO_SECCOMP: '1', PATH: process.env.PATH, LD_LIBRARY_PATH: process.env.LD_LIBRARY_PATH, HOME: home, CODEX_HOME: home, TMPDIR: scratch, CODEX_API_KEY: 'synthetic-key',
+    AGENTHUB_APPROVAL_POLLS: exhaust ? '1' : '120',
+    AGENTHUB_APPROVAL_INTERVAL_MS: exhaust ? '10' : '2000',
     AGENTHUB_MODE: mode, AGENTHUB_CALLBACK_URL: `${base}/internal/sessions/proof`,
     AGENTHUB_CALLBACK_TOKEN: 'synthetic-callback', AGENTHUB_SKILL_REMINDER: '0', TERM: 'xterm-256color' };
   const direct = process.env.PROOF_DIRECT === '1';
@@ -158,9 +172,23 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
       if (data.includes('\x1b[c')) child.write('\x1b[?1;2c');
       if (!nativeAnswered && /Would you like to run|Do you want to run/.test(data)) {
         nativeAnswered = true;
-        setTimeout(() => child.write('y'), 200);
+        setTimeout(() => {
+          const order = process.env.PROOF_ORDER || 'hub-first';
+          if (order === 'native-first') {
+            child.write('y');
+            setTimeout(() => { approved = true; }, 50);
+          } else if (order === 'escape-between') {
+            approved = true;
+            child.write('\x1b');
+            setTimeout(() => child.write('y'), 50);
+          } else {
+            approved = true;
+            setTimeout(() => child.write('y'), 50);
+          }
+        }, 200);
       }
-      if (output.includes('proof complete')) kill();
+      if (output.includes('proof complete') || (process.env.PROOF_ORDER === 'escape-between' &&
+          output.includes('Conversation interrupted'))) kill();
     });
     done = new Promise(resolve => child.onExit(resolve));
   } else {
@@ -170,14 +198,18 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
   }
   try {
     const exit = await done;
+    fs.writeFileSync(path.join(root, `${label}-result.json`), JSON.stringify({requests, modelRequests, output, nativeAnswered, approved, order: process.env.PROOF_ORDER}, null, 2));
+    const interrupted = !!process.env.PROOF_RUNTIME && process.env.PROOF_ORDER === 'escape-between';
     assert.ok(!timedOut, `${label}: timed out: ${output.slice(-2000)}`);
     if (!interactive) assert.equal(exit, 0, output);
-    assert.ok(modelRequests.length >= 2, `${label}: tool result never reached model: ${output}`);
-    const result = JSON.stringify(modelRequests[1].input);
-    fs.writeFileSync(path.join(root, `${label}-result.json`), JSON.stringify({requests, modelRequests, output}, null, 2));
+    assert.ok(modelRequests.length >= (interrupted ? 1 : 2), `${label}: tool result never reached model: ${output}`);
+    const result = JSON.stringify(modelRequests[1]?.input || []);
     const baseline = !!process.env.PROOF_RUNTIME;
-    const shouldRun = !legacy && (!escalated || baseline) && policy !== 'deny' && !(policy === 'ask' && approval === 'deny');
-    assert.equal(fs.existsSync(marker), shouldRun, `${label}: unexpected execution`);
+    const cancelled = exhaust && !baseline;
+    const shouldRun = !legacy && !cancelled && !unavailable && (!escalated || baseline) && policy !== 'deny' && !(policy === 'ask' && approval === 'deny');
+    if (interrupted) assert.match(output, /Conversation interrupted/);
+    else assert.equal(fs.existsSync(marker), shouldRun, `${label}: unexpected execution`);
+    if (baseline && exhaust) assert.equal(nativeAnswered, true, 'baseline native menu never appeared');
     if (!interactive) {
       assert.equal(requests[0].body.tool, 'Bash');
       assert.equal(requests[0].body.input.command, command);
@@ -188,7 +220,9 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
       assert.doesNotMatch(output, /Hook failed/);
     }
     if (!escalated && (policy === 'deny' || (policy === 'ask' && approval === 'deny'))) assert.match(result, /blocked by PreToolUse hook/);
-    if (policy === 'ask' && !pending && !escalated) assert.deepEqual(requests.map(req => req.path), approval === 'allow'
+    if (unavailable) assert.match(result, /AgentHub approval unavailable.*tool call denied/);
+    if (outage) assert.equal(requests.filter(req => req.path === 'permission').length, 1);
+    if (policy === 'ask' && !pending && !escalated && !unavailable) assert.deepEqual(requests.map(req => req.path), approval === 'allow'
       ? ['agent-policy', 'permission', 'agent-policy'] : ['agent-policy', 'permission']);
     const context = modelRequests[0].input.filter(item => item.role === 'developer').map(item => JSON.stringify(item)).join('\n');
     fs.writeFileSync(path.join(root, `${label}-context.txt`), context);
@@ -210,8 +244,11 @@ async function run(label, { legacy = false, interactive = false, escalated = fal
   await run('full-access-deny', { policy: 'deny' });
   await run('full-access-approval-allow', { policy: 'ask' });
   await run('full-access-approval-deny', { policy: 'ask', approval: 'deny' });
+  await run('interactive-restart', { interactive: true, policy: 'ask', pending: true, outage: true });
+  await run('interactive-unavailable', { interactive: true, policy: 'ask', unavailable: true });
   await run('interactive-default', { interactive: true });
   await run('interactive-escalated', { interactive: true, escalated: true });
+  await run('interactive-expired-overlap', { interactive: true, escalated: !!process.env.PROOF_RUNTIME, policy: 'ask', pending: true, exhaust: true });
   await run('interactive-overlap', { interactive: true, escalated: !!process.env.PROOF_RUNTIME, policy: 'ask', pending: true });
   if (process.env.PROOF_RUNTIME) await run('interactive-native-fallback', { interactive: true, escalated: true, policy: 'ask', approval: 'ask' });
   await run('interactive-approval-allow', { interactive: true, policy: 'ask' });
