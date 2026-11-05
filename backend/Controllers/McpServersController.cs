@@ -172,9 +172,10 @@ public sealed class McpServersController : ControllerBase
         record.Kind,
         mine,
         mine ? record.ConfigJson : null,
-        HasSecret: !string.IsNullOrEmpty(record.SecretJson),
+        HasSecret: record.NeedsReentry || !string.IsNullOrEmpty(record.SecretJson),
         record.CreatedAt,
-        record.UpdatedAt);
+        record.UpdatedAt,
+        record.NeedsReentry);
 }
 
 /// <summary>Body for <c>POST /api/mcp-servers/from-api</c>.</summary>

@@ -85,6 +85,12 @@ public sealed class ApiMcpGatewayHandler
 
         server = accessible[0];
         var canInjectSecret = CanInjectUpstreamSecret(server, claims);
+        if (server.NeedsReentry)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await ctx.Response.WriteAsJsonAsync(new { error = "stored_secret_unavailable", hint = "The catalog owner must re-enter the MCP secret; ask an administrator to check the shared key ring." });
+            return;
+        }
         await HandleRpcAsync(ctx, server.ConfigJson, server.SecretJson, canInjectSecret, claims);
     }
 
@@ -129,6 +135,12 @@ public sealed class ApiMcpGatewayHandler
 
         // Ephemeral secrets are owned by the session owner (same as personal catalog).
         var canInjectSecret = string.Equals(claims.Owner, entry.Owner, StringComparison.Ordinal);
+        if (entry.NeedsReentry)
+        {
+            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await ctx.Response.WriteAsJsonAsync(new { error = "stored_secret_unavailable", hint = "Re-register this session API source with its secret, or ask an administrator to restore the original keys." });
+            return;
+        }
         await HandleRpcAsync(ctx, entry.ConfigJson, entry.SecretJson, canInjectSecret, claims);
     }
 

@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Collections.Concurrent;
 using AgentHub.Api.Persistence;
 using Npgsql;
@@ -10,7 +11,8 @@ public sealed record EphemeralApiMcpEntry(
     string Name,
     string Owner,
     string ConfigJson,
-    string? SecretJson);
+    string? SecretJson,
+    bool NeedsReentry = false);
 
 public interface IEphemeralApiMcpStore
 {
@@ -225,11 +227,12 @@ public sealed class EphemeralApiMcpStore : IEphemeralApiMcpStore
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
-    private EphemeralApiMcpEntry ReadEntry(NpgsqlDataReader reader) =>
-        new(
-            reader.GetString(0),
-            reader.GetString(1),
-            reader.GetString(2),
-            reader.GetString(3),
-            _secrets.Unprotect(reader.IsDBNull(4) ? null : reader.GetString(4)));
+    private EphemeralApiMcpEntry ReadEntry(NpgsqlDataReader reader)
+    {
+        string? secret = null;
+        var needsReentry = false;
+        try { secret = _secrets.Unprotect(reader.IsDBNull(4) ? null : reader.GetString(4)); }
+        catch (CryptographicException) { needsReentry = true; }
+        return new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), secret, needsReentry);
+    }
 }

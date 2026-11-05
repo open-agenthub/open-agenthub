@@ -17,6 +17,7 @@ namespace AgentHub.Api.Tests;
 [Collection(nameof(StartupConcurrencyPostgresTests))]
 public sealed class StartupConcurrencyPostgresTests
 {
+    private static readonly (string Certificate, string Key) WrappingCertificate = DataProtectionProof.Scenario.Certificate();
     private static readonly TimeSpan HealthyWithin = TimeSpan.FromSeconds(60);
 
     [PostgreSqlTheory]
@@ -219,6 +220,9 @@ public sealed class StartupConcurrencyPostgresTests
                 info.Environment["HTTPS_PROXY"] = "http://127.0.0.1:1";
                 info.Environment["NO_PROXY"] = "127.0.0.1,localhost";
             }
+            var certificate = WrappingCertificate;
+            info.Environment["DataProtection__CertificatePem"] = certificate.Certificate;
+            info.Environment["DataProtection__PrivateKeyPem"] = certificate.Key;
             _process = new Process { StartInfo = info };
             _process.OutputDataReceived += (_, e) => Append(e.Data);
             _process.ErrorDataReceived += (_, e) => Append(e.Data);

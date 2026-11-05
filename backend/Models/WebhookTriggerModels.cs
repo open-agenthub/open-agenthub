@@ -6,6 +6,7 @@ namespace AgentHub.Api.Models;
 /// </summary>
 public sealed record WebhookTriggerInfo
 {
+    public bool NeedsReentry { get; init; }
     public required string Id { get; init; }
     public required string Name { get; init; }
     /// <summary>Connected Git provider whose OAuth token authenticates the clone
