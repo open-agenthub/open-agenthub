@@ -8,7 +8,7 @@
 // that username nothing changed, otherwise a fresh lookup showed the same suggestion again — the
 // click had no visible effect either way. Here only typing changes `query`, so a selection never
 // starts a lookup, and the input shows the selected person instead of the text.
-import { computed, ref, watch } from 'vue'
+import { computed, ref, useId, watch } from 'vue'
 
 const props = defineProps({
   query: { type: String, default: '' },
@@ -25,7 +25,9 @@ const props = defineProps({
 defineOptions({ inheritAttrs: false })
 const emit = defineEmits(['update:query', 'update:selected', 'submit'])
 
-const uid = `recipient-${Math.random().toString(36).slice(2, 10)}`
+// Both dialogs can be mounted at once (the session view's panel and a project dialog), so the
+// listbox and option ids that aria-controls/aria-activedescendant point at must be unique.
+const uid = `recipient${useId()}`
 const listId = `${uid}-list`
 const open = ref(false)
 const active = ref(-1)
