@@ -112,8 +112,15 @@ describe('project sharing (#409)', () => {
     expect(apiMocks.api.findProjectShareRecipients).toHaveBeenCalledWith('p1', '')
 
     await wrapper.get('[data-project-share-kind]').setValue('group')
-    const ops = wrapper.findAll('[aria-label="Your groups"] button').find(button => button.text() === 'ops')
+    await wrapper.get('[data-project-share-subject]').trigger('focus')
+    expect(wrapper.get('[data-project-share-subject]').attributes('aria-expanded')).toBe('true')
+    const ops = wrapper.findAll('[aria-label="Your groups"] [role=option]').find(option => option.text() === 'ops')
     await ops.trigger('click')
+    // The pick is visible and closes the list; it does not share before Add.
+    expect(wrapper.get('[data-project-share-subject]').element.value).toBe('ops')
+    expect(wrapper.get('[data-recipient-chosen]').text()).toContain('ops (group)')
+    expect(wrapper.get('[data-project-share-subject]').attributes('aria-expanded')).toBe('false')
+    expect(apiMocks.api.upsertProjectShare).not.toHaveBeenCalled()
     await wrapper.get('[data-project-share-role]').setValue('Collaborator')
     await wrapper.get('[data-project-share-add]').trigger('click')
     await flushPromises()

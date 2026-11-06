@@ -5,6 +5,7 @@ import { initials } from '../lib/text.js'
 import { isLicenseError } from '../lib/license.js'
 import { gitPatHosts, gitPatName, gitPatSelectionFor } from '../lib/agent.js'
 import LicenseGate from './LicenseGate.vue'
+import RecipientPicker from './RecipientPicker.vue'
 
 // Which git identity the session pushes with (issue #132). Shared work usually belongs under a
 // group or project token rather than the owner's personal one, and this is the moment the owner
@@ -54,6 +55,9 @@ const emit = defineEmits(['close'])
 const data = ref({ users: [], links: [], policy: { blockedServers: [], blockedTools: [] } })
 const recipient = ref('')
 const recipientOptions = ref([])
+const recipientChoice = ref(null)
+const recipientSuggestions = computed(() => recipientOptions.value.map(person =>
+  ({ value: person.username, label: person.displayName || person.username, detail: `Username: ${person.username}` })))
 const recipientBusy = ref(false)
 const recipientChecked = ref(false)
 let recipientGeneration = 0
@@ -75,7 +79,6 @@ watch(recipient, value => {
     } finally { if (generation === recipientGeneration) recipientBusy.value = false }
   }, 250)
 })
-function chooseRecipient(person) { recipient.value = person.username }
 const role = ref('Viewer'); const expiresAt = ref('')
 const blockedServers = ref(''); const blockedTools = ref(''); const oneTimeUrl = ref(''); const error = ref('')
 const linkDrafts = ref({})
@@ -117,9 +120,16 @@ async function change(action) {
     else error.value = String(e.message || e)
   }
 }
+// A selected suggestion wins over the text: the input then shows the person's name, not the
+// username the backend needs. Without a selection the typed text goes as is, so an exact
+// username or email still works where the administrator turned suggestions off.
 async function addPerson() {
-  if (!recipient.value.trim()) return
-  await change(async () => { await api.createShareUser(props.session.id, { recipient: recipient.value.trim(), role: role.value }); recipient.value = '' })
+  const target = recipientChoice.value?.value || recipient.value.trim()
+  if (!target) return
+  await change(async () => {
+    await api.createShareUser(props.session.id, { recipient: target, role: role.value })
+    recipient.value = ''; recipientChoice.value = null
+  })
 }
 async function changePerson(person, value) {
   if (value === 'Remove') { await removePerson(person); return }
@@ -141,6 +151,7 @@ onMounted(() => { load(); loadGit() })
 function reset() {
   data.value = { users: [], links: [], policy: { blockedServers: [], blockedTools: [] } }
   recipient.value = ''
+  recipientChoice.value = null
   ++recipientGeneration
   clearTimeout(recipientTimer)
   recipientOptions.value = []
@@ -173,12 +184,15 @@ onUnmounted(() => { ++recipientGeneration; clearTimeout(recipientTimer) })
 
     <section>
       <p class="sub" id="recipient-help">Enter a name or username (at least two characters), or an exact email. Select the sign-in username to share. Suggestions may be disabled by your administrator.</p>
-      <div class="add-row"><input v-model="recipient" aria-label="Recipient username or email" placeholder="Name, username, or exact email…" autocomplete="off" aria-describedby="recipient-help" @keyup.enter="addPerson" /><select v-model="role" class="fit"><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button></div>
+      <div class="add-row">
+        <RecipientPicker v-model:query="recipient" v-model:selected="recipientChoice" :options="recipientSuggestions"
+          input-label="Recipient username or email" list-label="Matching recipients" placeholder="Name, username, or exact email…"
+          describedby="recipient-help" @submit="addPerson" />
+        <select v-model="role" class="fit" aria-label="Role"><option>Viewer</option><option>Collaborator</option></select><button @click="addPerson">Add</button>
+      </div>
       <p v-if="recipientBusy" class="sub" role="status">Checking recipient…</p>
-      <ul v-if="recipientOptions.length" aria-label="Matching recipients" class="recipient-options">
-        <li v-for="person in recipientOptions" :key="person.username"><button type="button" @click="chooseRecipient(person)">{{ person.displayName || person.username }} · Username: {{ person.username }}</button></li>
-      </ul>
-      <p v-else-if="recipientChecked" class="sub" role="status">No matching user. Try the exact sign-in username or email; the person must have signed in here before.</p>
+      <p v-if="recipientChoice" class="sub" role="status" data-recipient-chosen>Selected {{ recipientChoice.label }} (Username: {{ recipientChoice.value }}). Choose a role and press Add.</p>
+      <p v-else-if="recipientChecked && !recipientOptions.length" class="sub" role="status">No matching user. Try the exact sign-in username or email; the person must have signed in here before.</p>
       <div v-if="projectShares.length" class="project-shares" data-share-project-shares>
         <p class="sub">Also open to everyone the session's project is shared with. A role here can add to theirs, never take it away; change it in the project's settings.</p>
         <div v-for="share in projectShares" :key="share.subjectType + ':' + share.subject" class="person inherited">
@@ -254,8 +268,7 @@ section { margin-top: 6px; }
 section.bordered { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
 .add-row { display: flex; gap: 8px; align-items: center; margin: 8px 0 10px; }
 .add-row.tight { margin: 0; flex-wrap: wrap; }
-.add-row input { flex: 1; }
-.recipient-options { list-style: none; padding: 0; margin: 6px 0; }
+.add-row > input { flex: 1; }
 .fit { width: auto; }
 .exp { min-width: 170px; }
 .person { display: flex; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; }
