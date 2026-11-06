@@ -107,6 +107,9 @@ http.createServer((req, res) => {
     if (url.pathname === '/internal/sessions/s1/messages' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json' }); res.end('{"messages":[]}'); return;
     }
+    if (url.pathname === '/internal/sessions/s1/agent-policy' && req.method === 'POST') {
+      res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ decision: 'allow' })); return;
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end('{}');
   });
