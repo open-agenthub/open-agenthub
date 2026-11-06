@@ -18,6 +18,12 @@ Prerequisites, in a scratch `RIG_HOME` outside the repository:
 messages (bracketed paste + Enter) while it runs, and follows `GET /agenthub/transcript` the
 way `LiveTranscriptReader` does, once a second.
 
+The stand-in explicitly allows `/internal/sessions/s1/agent-policy` requests so the real
+managed PreToolUse hook can execute the scripted tools. Since #457, an empty `{}` policy
+response fails closed: the image scenario never opens its image and silently exercises only
+a small transcript. Keep the managed hook enabled rather than bypassing it; this proof tests
+transcript following, while `tests/CodexInteractivePermissionsProof` covers policy decisions.
+
 ```sh
 RIG_HOME=/abs/scratch SCENARIO=image AFTER=8000 node tests/CodexLiveProof/rig.mjs
 ```
