@@ -224,3 +224,31 @@ and the provider login the CLI keeps in its own files. The pod omits sign-in scr
 of the history, the owner included; withholding those would need the hub to read the
 credential secret on every page, which is the per-poll Kubernetes read this design avoids for
 stopped sessions.
+
+## Choosing a recipient (#470)
+
+Both share dialogs — the session's and the project's — take the recipient from one combobox
+(`RecipientPicker.vue`). Picking a suggestion, by click or with the arrow keys and Enter, *selects*
+that account: the input shows the person with a tick, a status line names the username, and the
+list closes. Nothing is shared until Add (or a second Enter), with the role chosen next to the
+field. Escape closes the list and leaves the dialog open.
+
+The alternative was click-to-add: a suggestion shares at once with the role currently set, the
+way the library's user multi-select adds a chip. It was rejected for the share dialogs because
+sharing grants access to a live terminal and its secrets — a stray click on the wrong row of a
+list that changes under the pointer as results arrive would hand that out, and the role select
+sits to the right of the field, so a click-to-add flow invites sharing before the role has been
+looked at. Select-then-Add keeps one deliberate step, and the same button serves a typed exact
+username or email, which is still needed where the administrator turned suggestions off. The
+library picker stays click-to-add: adding a reader there is a draft until its form is saved.
+
+The bug this replaced: choosing a suggestion wrote its username into the input, and that input
+is also what starts a lookup. If the typed text already was the username, nothing changed; if
+not, a new lookup showed the same suggestion again. Either way the click had no visible effect.
+The picker therefore keeps the typed text (`query`, the only thing that starts a lookup) apart
+from the selection, which Add prefers over the text. Typing again drops the selection.
+
+The list is an ARIA `listbox` of `option`s owned by an input with `role="combobox"`, with
+`aria-activedescendant` following the highlighted row, so focus never leaves the input and a
+screen reader announces the row the arrow keys reach. Options cancel `mousedown`, otherwise the
+input's blur would close the list before the click landed.

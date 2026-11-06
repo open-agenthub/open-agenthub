@@ -7,6 +7,7 @@ import { api } from '../api.js'
 import { initials } from '../lib/text.js'
 import { isLicenseError } from '../lib/license.js'
 import LicenseGate from './LicenseGate.vue'
+import RecipientPicker from './RecipientPicker.vue'
 
 const props = defineProps({ project: { type: Object, required: true } })
 defineEmits(['close'])
@@ -21,6 +22,13 @@ const role = ref('Viewer')
 const users = ref([])
 const groups = ref([])
 const searched = ref(false)
+const chosen = ref(null)
+const suggestions = computed(() => kind.value === 'user'
+  ? users.value.map(person => ({ value: person.username, label: person.displayName || person.username, detail: `Username: ${person.username}` }))
+  : groups.value.map(group => ({ value: group, label: group })))
+// A selection belongs to the kind it was made under; a user picked and then switched to Group
+// would otherwise be sent as a group name.
+watch(kind, () => { chosen.value = null })
 let generation = 0
 let timer
 
@@ -64,14 +72,13 @@ async function change(action) {
   }
 }
 async function add() {
-  const name = subject.value.trim()
+  const name = chosen.value?.value || subject.value.trim()
   if (!name) return
   await change(async () => {
     await api.upsertProjectShare(props.project.id, { subjectType: kind.value, subject: name, role: role.value })
-    subject.value = ''
+    subject.value = ''; chosen.value = null
   })
 }
-function choose(type, name) { kind.value = type; subject.value = name }
 async function setRole(share, value) {
   if (value === 'Remove') await change(() => api.deleteProjectShare(props.project.id, share.subjectType, share.subject))
   else await change(() => api.upsertProjectShare(props.project.id, { subjectType: share.subjectType, subject: share.subject, role: value }))
@@ -94,20 +101,17 @@ onUnmounted(() => { ++generation; clearTimeout(timer) })
 
         <div class="add-row">
           <select v-model="kind" class="fit" aria-label="Share with" data-project-share-kind><option value="user">User</option><option value="group">Group</option></select>
-          <input v-model="subject" :aria-label="kind === 'user' ? 'Username or email' : 'Group name'"
-            :placeholder="kind === 'user' ? 'Name, username, or exact email…' : 'One of your groups…'" autocomplete="off"
-            data-project-share-subject @keyup.enter="add" />
+          <RecipientPicker v-model:query="subject" v-model:selected="chosen" :options="suggestions"
+            :input-label="kind === 'user' ? 'Username or email' : 'Group name'"
+            :list-label="kind === 'user' ? 'Matching users' : 'Your groups'" :open-on-focus="kind === 'group'"
+            :placeholder="kind === 'user' ? 'Name, username, or exact email…' : 'One of your groups…'"
+            data-project-share-subject @submit="add" />
           <select v-model="role" class="fit" data-project-share-role><option>Viewer</option><option>Collaborator</option></select>
           <button data-project-share-add @click="add">Add</button>
         </div>
-        <ul v-if="kind === 'user' && users.length" class="options" aria-label="Matching users">
-          <li v-for="person in users" :key="person.username"><button type="button" @click="choose('user', person.username)">{{ person.displayName || person.username }} · Username: {{ person.username }}</button></li>
-        </ul>
-        <p v-else-if="kind === 'user' && searched" class="sub" role="status">No matching user. The person must have signed in here before.</p>
-        <ul v-if="kind === 'group' && groups.length" class="options" aria-label="Your groups">
-          <li v-for="group in groups" :key="group"><button type="button" @click="choose('group', group)">{{ group }}</button></li>
-        </ul>
-        <p v-else-if="kind === 'group' && loaded" class="sub" role="status">You can share with the groups you belong to; none match.</p>
+        <p v-if="chosen" class="sub" role="status" data-recipient-chosen>Selected {{ chosen.label }}{{ kind === 'user' ? ` (Username: ${chosen.value})` : ' (group)' }}. Choose a role and press Add.</p>
+        <p v-else-if="kind === 'user' && searched && !users.length" class="sub" role="status">No matching user. The person must have signed in here before.</p>
+        <p v-else-if="kind === 'group' && loaded && !groups.length" class="sub" role="status">You can share with the groups you belong to; none match.</p>
 
         <section class="bordered">
           <div class="sect-title">Who has access</div>
@@ -134,9 +138,7 @@ h3 { margin: 0 0 6px; font-size: 18px; }
 .sect-title { font-weight: 600; font-size: 13px; color: var(--text); margin-bottom: 4px; }
 section.bordered { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 14px; }
 .add-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0 10px; }
-.add-row input { flex: 1 1 160px; min-width: 0; }
 .fit { width: auto; }
-.options { list-style: none; padding: 0; margin: 6px 0; }
 .person { display: flex; gap: 10px; align-items: center; padding: 6px 0; font-size: 13px; }
 .avatar { width: 26px; height: 26px; border-radius: 50%; background: #3d3a33; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; color: #d6d1c8; font-weight: 700; flex-shrink: 0; }
 .pname { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
