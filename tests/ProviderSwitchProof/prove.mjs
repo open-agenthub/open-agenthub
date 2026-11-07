@@ -26,7 +26,14 @@ async function openTerminal(id){
   const socket=new WebSocket('ws://127.0.0.1:18880/ws/sessions/'+id+'/terminal',{headers:{Authorization:'Bearer '+key}});
   socket.on('message',data=>term.write(data.toString()));
   term.onData(data=>{if(socket.readyState===WebSocket.OPEN)socket.send(JSON.stringify({type:'input',data}));});
-  try{await new Promise((resolve,reject)=>{socket.once('open',resolve);socket.once('error',reject);socket.once('unexpected-response',(request,response)=>{response.resume();reject(new Error('terminal not ready'));});});}
+  try{await new Promise((resolve,reject)=>{
+   const timer=setTimeout(()=>reject(new Error('no upstream terminal output')),10000);
+   // Backend upgrade precedes its pod connection; wait for actual upstream bytes.
+   socket.once('message',()=>{clearTimeout(timer);resolve();});
+   socket.once('close',()=>{clearTimeout(timer);reject(new Error('upstream terminal closed'));});
+   socket.once('error',error=>{clearTimeout(timer);reject(error);});
+   socket.once('unexpected-response',(request,response)=>{clearTimeout(timer);response.resume();reject(new Error('terminal not ready'));});
+  });}
   catch{socket.terminate();term.dispose();return null;}
   socket.send(JSON.stringify({type:'resize',cols:120,rows:36}));
   return {socket,close(){socket.close();term.dispose();}};

@@ -27,3 +27,17 @@ object storage, Kubernetes API, kubelet, PVC mounts and native CLIs are real. Ge
 logs, transcripts, archives and workflow output are evidence artifacts, never repository
 content. Record the actual workflow outcome and limits in the PR; this script's presence
 alone is not a passing proof. Crash/recovery fault injection remains the next delivery step.
+
+Native subscription inference requires HTTPS workspace routing discovery in the pinned Codex
+CLI. The proof generates a private CA and a separately signed server leaf only in its scratch
+image context. Wrapper images trust that CA; TLS verification remains enabled. The fixture
+answers native account routing for the synthetic account and decodes native zstd requests.
+Its HTTP model transport is exercised through the CLI's ordinary WebSocket fallback.
+A plain HTTP fixture fails native workspace-origin validation; a CA certificate used directly
+as the server leaf fails native TLS validation. Neither is a product credential failure.
+
+The backend accepts a terminal WebSocket before connecting its upstream pod. The driver
+therefore waits for actual upstream bytes before accepting the connection and sending resize;
+a successful upgrade alone can be followed by an upstream startup failure. Native admission
+refuses a missing screen size. Bounded explicit owner retries cover a transient busy safe
+point, but do not bypass guards or replay a stopped source/uncertain target.

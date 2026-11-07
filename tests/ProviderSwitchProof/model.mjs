@@ -1,9 +1,10 @@
 import http from 'node:http';
+import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { gunzipSync } from 'node:zlib';
+import { gunzipSync, zstdDecompressSync } from 'node:zlib';
 const root = fs.mkdtempSync('/tmp/provider-switch-model-');
 for (const name of ['first', 'second']) {
  const work = path.join(root, name), bare = path.join(root, name + '.git');
@@ -17,15 +18,20 @@ for (const name of ['first', 'second']) {
 let sequence = 0;
 const records = [];
 const issued = new Set();
-http.createServer(async (req, res) => {
+const handle = async (req, res) => {
  try {
   const url = new URL(req.url, 'http://example.com');
+  if(req.headers.upgrade==='websocket'){res.statusCode=426;return res.end();}
   if (url.pathname === '/proof/requests') { res.setHeader('content-type', 'application/json'); return res.end(JSON.stringify(records)); }
   if (/^\/(first|second)\.git\//.test(url.pathname)) {
    const candidate = path.resolve(root, '.' + decodeURIComponent(url.pathname));
    if (!candidate.startsWith(root + path.sep)) { res.statusCode = 400; return res.end(); }
    try { res.setHeader('content-type','text/plain'); return res.end(fs.readFileSync(candidate)); }
    catch { res.statusCode = 404; return res.end(); }
+  }
+  if (url.pathname.endsWith('/wham/accounts/check')) {
+   res.setHeader('content-type','application/json');
+   return res.end(JSON.stringify({accounts:[{id:'proof-account',workspace_backend_origin:'NO_CONSTRAINT',account_routing_override:'NO_CONSTRAINT',plan_type:'plus'}]}));
   }
   if (url.pathname.endsWith('/models')) {
    const ids = ['gpt-6.1-sol', 'gpt-6-sol', 'claude-opus-4-8'];
@@ -35,6 +41,7 @@ http.createServer(async (req, res) => {
   const chunks=[];let size=0;
   for await (const chunk of req) {size+=chunk.length;if(size>4*1024*1024){res.statusCode=413;return res.end();}chunks.push(chunk);}
   let raw=Buffer.concat(chunks); if(req.headers['content-encoding']==='gzip')raw=gunzipSync(raw);
+  if(req.headers['content-encoding']==='zstd')raw=zstdDecompressSync(raw);
   const body=raw.length?JSON.parse(raw.toString()):{};
   const messages=JSON.stringify(body.messages??body.input??[]);
   const marker=[...messages.matchAll(/SWITCH-PROOF-\d+/g)].at(-1)?.[0]??'helper';
@@ -66,4 +73,6 @@ http.createServer(async (req, res) => {
   }
   res.setHeader('content-type','application/json');res.end('{}');
  }catch{res.statusCode=500;res.end('{}');console.error('Recording model fixture rejected a request.');}
-}).listen(Number(process.env.PROOF_MODEL_PORT || 8080),'0.0.0.0');
+};
+http.createServer(handle).listen(Number(process.env.PROOF_MODEL_PORT || 8080),'0.0.0.0');
+if(process.env.PROOF_TLS_CERT&&process.env.PROOF_TLS_KEY)https.createServer({cert:fs.readFileSync(process.env.PROOF_TLS_CERT),key:fs.readFileSync(process.env.PROOF_TLS_KEY)},handle).listen(Number(process.env.PROOF_TLS_PORT||8443),'0.0.0.0');
