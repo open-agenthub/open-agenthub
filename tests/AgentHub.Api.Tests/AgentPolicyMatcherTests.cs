@@ -77,7 +77,7 @@ public class AgentPolicyMatcherTests
     [Theory]
     [InlineData("mcp__agenthub_sessions__container_run", "allow")]
     [InlineData("mcp__docs__anything", "allow")]
-    [InlineData("mcp__agenthub_sessions__container_stop", "deny")]
+    [InlineData("mcp__agenthub_sessions__session_create", "deny")]
     [InlineData("mcp__other__tool", "deny")]
     public void Decide_HonoursMcpEntriesInTheGeneralAllowList(string tool, string expected)
     {
@@ -85,6 +85,18 @@ public class AgentPolicyMatcherTests
         using var input = JsonDocument.Parse("{}");
 
         Assert.Equal(expected, AgentPolicyMatcher.Decide(legacy, tool, input.RootElement).Decision);
+    }
+
+    [Theory]
+    [InlineData("mcp__agenthub_sessions__agent_inbox", "allow")]
+    [InlineData("mcp__agenthub_sessions__container_stop", "allow")]
+    [InlineData("mcp__agenthub_sessions__session_create", "deny")]
+    [InlineData("mcp__agenthub_sessions__container_run", "deny")]
+    [InlineData("mcp__other_server__agent_inbox", "deny")]
+    public void Decide_AllowsOnlySelfServiceBuiltInsWithoutAnEntry(string tool, string expected)
+    {
+        using var input = JsonDocument.Parse("{}");
+        Assert.Equal(expected, AgentPolicyMatcher.Decide(new AgentPolicy(), tool, input.RootElement).Decision);
     }
 
     [Fact]

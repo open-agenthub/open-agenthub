@@ -419,6 +419,11 @@ public sealed class InternalController : ControllerBase
         // (or off) applies to the running session without a restart. No request row is
         // created — there is nothing for anyone to decide.
         if (rec.AutoApprove) return Ok(new { decision = "allow" });
+        // An unattended Claude session reaches here for every MCP tool its --allowedTools does not
+        // cover; nobody would answer the request for a self-service built-in (#504), which Codex
+        // and OpenCode allow through AgentPolicyMatcher. The sharing block ran before this hook.
+        if (rec.Mode != SessionMode.Interactive && BuiltInSessionTools.IsSelfService(body.Tool?.Trim()))
+            return Ok(new { decision = "allow" });
         if (await _permissions.IsAlwaysAllowedAsync(id, tool, ct))
             return Ok(new { decision = "allow" });
 

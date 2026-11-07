@@ -40,6 +40,9 @@ public static class AgentPolicyMatcher
         // AllowedMcpTools, so the same session spec ran a tool under Claude and was refused it
         // under Codex and OpenCode. Matched with the MCP rules: a whole-server wildcard has to
         // name the server.
+        // The hub's self-service tools need no allow-list entry (#504, BuiltInSessionTools); the
+        // owner's MCP sharing block has already been applied by the caller.
+        if (BuiltInSessionTools.IsSelfService(tool)) return Allow();
         if (tool.StartsWith("mcp__", StringComparison.Ordinal))
             return Match(policy.AllowedMcpTools, tool, true)
                 || Match(policy.AllowedTools.Where(entry => entry.StartsWith("mcp__", StringComparison.Ordinal)).ToList(), tool, true)

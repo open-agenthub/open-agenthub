@@ -23,14 +23,18 @@ import { fileURLToPath } from 'node:url'
 const require = createRequire(import.meta.url)
 const here = path.dirname(fileURLToPath(import.meta.url))
 const repo = path.resolve(here, '../..')
-const driver = require(path.join(repo, 'agent-runtime/codex/driver.js'))
+// RUNTIME_SOURCE points at another checkout's agent-runtime (e.g. a release tag exported with
+// git archive) to run that release's driver, hook and requirements.toml against today's backend.
+const runtimeSource = process.env.RUNTIME_SOURCE || path.join(repo, 'agent-runtime')
+const driver = require(path.join(runtimeSource, 'codex/driver.js'))
+const requirementsFile = path.join(runtimeSource, 'codex/requirements.toml')
 
 const API = process.env.API || 'http://127.0.0.1:8080'
 const OUT = process.env.OUT || fs.mkdtempSync(path.join(os.tmpdir(), 'codex-builtin-'))
 const RUNTIME = process.env.RUNTIME
 const CODEX = process.env.CODEX_BIN
 if (!RUNTIME || !CODEX) throw new Error('RUNTIME and CODEX_BIN are required')
-const pin = /ARG CODEX_VERSION=(\S+)/.exec(fs.readFileSync(path.join(repo, 'agent-runtime/codex/Dockerfile'), 'utf8'))[1]
+const pin = /ARG CODEX_VERSION=(\S+)/.exec(fs.readFileSync(path.join(runtimeSource, 'codex/Dockerfile'), 'utf8'))[1]
 const version = execFileSync(CODEX, ['--version'], { encoding: 'utf8' }).trim()
 if (version !== `codex-cli ${pin}`) throw new Error(`pinned ${pin}, got ${version}`)
 
@@ -98,6 +102,31 @@ async function runCase(label, body) {
   }
   const podEnv = {}
   for (const e of pod.spec.containers.find(c => c.name === 'agent').env) if (e.value !== undefined) podEnv[e.name] = e.value
+  // FAULT=slow-once: the session's callbacks go through a pass-through proxy that holds the first
+  // /agent-policy request for container_stop 4 s, past the hook's 3 s callback timeout. One
+  // transient slow answer, as a busy backend or a rollout gives.
+  let faultProxy
+  if (process.env.FAULT === 'slow-once') {
+    const target = new URL(podEnv.AGENTHUB_CALLBACK_URL)
+    let delayed = false
+    faultProxy = createServer((req, res) => {
+      let raw = ''
+      req.on('data', c => { raw += c })
+      req.on('end', async () => {
+        if (!delayed && req.url.endsWith('/agent-policy') && raw.includes('container_stop')) {
+          delayed = true
+          await sleep(4000)
+        }
+        try {
+          const answer = await fetch(target.origin + req.url, { method: req.method, headers: Object.fromEntries(Object.entries(req.headers).filter(([k]) => !['host', 'content-length', 'connection'].includes(k))), body: raw || undefined })
+          res.writeHead(answer.status, { 'content-type': answer.headers.get('content-type') || 'application/json' })
+          res.end(Buffer.from(await answer.arrayBuffer()))
+        } catch { if (!res.headersSent) res.writeHead(502); res.end() }
+      })
+    })
+    await new Promise(resolve => faultProxy.listen(0, '127.0.0.1', resolve))
+    podEnv.AGENTHUB_CALLBACK_URL = `http://127.0.0.1:${faultProxy.address().port}${target.pathname}`
+  }
 
   const work = path.join(OUT, id)
   const home = path.join(work, 'home')
@@ -133,6 +162,7 @@ process.stdout.write(r.stdout)
   const requests = []
   let step = 0
   let searched = false
+  let finished = false
   const server = createServer((req, res) => {
     let raw = ''
     req.on('data', c => { raw += c })
@@ -152,8 +182,12 @@ process.stdout.write(r.stdout)
         return res.end(stream([{ type: 'tool_search_call', call_id: 'search-1', status: 'completed', execution: 'client',
           arguments: { query: 'agenthub_sessions agent_inbox container_run container_list container_stop', limit: 20 } }], 'search'))
       }
+      // The TUI sends side requests of its own (with tools, without the conversation); only the
+      // main thread carries the search above, and only it may spend a step.
+      if (!(payload.input || []).some(i => i.call_id === 'search-1'))
+        return res.end(stream([{ type: 'message', role: 'assistant', id: 'side', content: [{ type: 'output_text', text: 'ok' }] }], 'side'))
       const call = CALLS[step++]
-      if (!call) return res.end(stream([{ type: 'message', role: 'assistant', id: 'done', content: [{ type: 'output_text', text: 'done' }] }], `r${step}`))
+      if (!call) { finished = true; return res.end(stream([{ type: 'message', role: 'assistant', id: 'done', content: [{ type: 'output_text', text: 'done' }] }], `r${step}`)) }
       const found = toolName([...(payload.tools || []), ...discovered], call.tool)
       if (!found) return res.end(stream([{ type: 'message', role: 'assistant', id: 'missing', content: [{ type: 'output_text', text: `tool ${call.tool} not offered` }] }], `r${step}`))
       const item = { type: 'function_call', call_id: `call-${call.tool}`, name: found.name, arguments: JSON.stringify(call.args) }
@@ -163,23 +197,68 @@ process.stdout.write(r.stdout)
   })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   const base = `http://127.0.0.1:${server.address().port}`
-  // exec for every mode: the backend decides from the session record, not from the CLI's mode. An
-  // interactive pod runs the TUI, which this script does not drive; its hook path is the same.
-  const built = driver.buildCommand({ ...podEnv, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'Use the session tools.' }, false)
-  const args = [...built.args]
-  const at = args.findIndex(a => a === 'exec') + 1 || 0
-  args.splice(at, 0, '--disable', 'enable_request_compression', '-c', 'model_provider="proof"',
+  const tui = body.mode === 'Interactive' && process.env.TUI !== '0'
+  const provider = ['--disable', 'enable_request_compression', '-c', 'model_provider="proof"',
     '-c', 'model_providers.proof.name="proof"', '-c', `model_providers.proof.base_url="${base}/v1"`,
     '-c', 'model_providers.proof.wire_api="responses"', '-c', 'model_providers.proof.env_key="CODEX_API_KEY"',
-    '-c', 'model_providers.proof.supports_websockets=false', '-m', 'gpt-5.5')
-  const env = { PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`, HOME: home, CODEX_HOME: home,
-    TMPDIR: work, CODEX_API_KEY: 'synthetic-key', RUNTIME, ...podEnv, AGENTHUB_SKILL_REMINDER: '0' }
-  const child = spawn(CODEX, args, { cwd: work, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    '-c', 'model_providers.proof.supports_websockets=false', '-m', 'gpt-5.5']
   let output = ''
-  child.stdout.on('data', d => { output += d }); child.stderr.on('data', d => { output += d })
-  const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL') } catch {} }, 120000)
-  await new Promise(resolve => child.on('close', resolve))
-  clearTimeout(timer)
+  if (!tui) {
+    // exec for unattended sessions, as the driver runs them.
+    const args = [...driver.buildCommand({ ...podEnv, AGENTHUB_PROMPT: 'Use the session tools.' }, false).args]
+    args.splice(1, 0, ...provider)
+    const env = { PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`, HOME: home, CODEX_HOME: home,
+      TMPDIR: work, CODEX_API_KEY: 'synthetic-key', RUNTIME, ...podEnv, AGENTHUB_SKILL_REMINDER: '0' }
+    const child = spawn(CODEX, args, { cwd: work, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    child.stdout.on('data', d => { output += d }); child.stderr.on('data', d => { output += d })
+    const timer = setTimeout(() => { try { process.kill(-child.pid, 'SIGKILL') } catch {} }, 120000)
+    await new Promise(resolve => child.on('close', resolve))
+    clearTimeout(timer)
+  } else {
+    // An interactive pod runs the TUI with the driver's flags, and only managed hooks are trusted
+    // there. So the shipped requirements.toml goes to /etc/codex verbatim and a copy of the
+    // runtime to /opt/session-agent (proot binds, this child only), with the recorder standing in
+    // for policy-hook.js and calling the real one.
+    const managed = path.join(work, 'managed')
+    fs.mkdirSync(managed)
+    for (const dir of ['codex', 'sessions', 'network', 'common']) execFileSync('cp', ['-rL', path.join(RUNTIME, dir), managed])
+    fs.symlinkSync(fs.realpathSync(path.join(RUNTIME, 'node_modules')), path.join(managed, 'node_modules'))
+    fs.renameSync(path.join(managed, 'codex/policy-hook.js'), path.join(managed, 'codex/policy-hook.real.js'))
+    fs.writeFileSync(path.join(managed, 'codex/policy-hook.js'), `'use strict'
+const { spawnSync } = require('node:child_process'); const fs = require('node:fs')
+let input = ''; process.stdin.on('data', c => { input += c }).on('end', () => {
+  const r = spawnSync(process.execPath, [__dirname + '/policy-hook.real.js'], { input, encoding: 'utf8', env: process.env })
+  let p = {}; try { p = JSON.parse(input) } catch {}
+  fs.appendFileSync(${JSON.stringify(hookLog)}, JSON.stringify({ event: p.hook_event_name, tool: p.tool_name, input: p.tool_input, output: r.stdout, stderr: r.stderr }) + '\\n')
+  process.stdout.write(r.stdout)
+})
+`)
+    const builtinManaged = execFileSync(process.execPath, [path.join(RUNTIME, 'codex/mcp-config.js'), '--builtin'],
+      { encoding: 'utf8', env: { ...podEnv, RUNTIME: '/opt/session-agent', PATH: process.env.PATH } })
+    fs.writeFileSync(path.join(home, 'config.toml'), ['cli_auth_credentials_store = "file"',
+      `[projects.${JSON.stringify(work)}]`, 'trust_level = "trusted"', '', builtinManaged].join('\n'))
+    const args = [...driver.buildCommand({ ...podEnv, AGENTHUB_PROMPT: 'Use the session tools.' }, false).args]
+    args.splice(2, 0, ...provider)
+    const pty = require(process.env.NODE_PTY_MODULE || '/opt/session-agent/node_modules/node-pty')
+    const env = { PATH: `${path.dirname(process.execPath)}:${process.env.PATH}`, HOME: home, CODEX_HOME: home,
+      TMPDIR: work, CODEX_API_KEY: 'synthetic-key', ...podEnv, RUNTIME: '/opt/session-agent', AGENTHUB_SKILL_REMINDER: '0', TERM: 'xterm-256color' }
+    const child = pty.spawn(process.env.PROOT_BIN, ['-b', `${requirementsFile}:/etc/codex/requirements.toml`,
+      '-b', `${managed}:/opt/session-agent`, CODEX, ...args], { cwd: work, env, cols: 140, rows: 45 })
+    child.onData(data => {
+      output += data
+      if (data.includes('\x1b[6n')) child.write('\x1b[1;1R')
+      if (data.includes('\x1b[c')) child.write('\x1b[?1;2c')
+      // The CLI's model announcement popup sits in front of the prompt on a fresh home.
+      if (!dismissed && output.includes('Use existing model')) { dismissed = true; setTimeout(() => child.write('2'), 300) }
+    })
+    let dismissed = false
+    const exited = new Promise(resolve => child.onExit(resolve))
+    const deadline = Date.now() + 150000
+    while (!finished && Date.now() < deadline) await Promise.race([exited, sleep(500)])
+    await sleep(2000)
+    try { process.kill(-child.pid, 'SIGKILL') } catch { try { child.kill('SIGKILL') } catch {} }
+    fs.writeFileSync(path.join(work, 'terminal.txt'), output)
+  }
   server.close()
 
   // Keyed by the tools this script called, never by a name read off the request.
@@ -190,6 +269,7 @@ process.stdout.write(r.stdout)
   const hookRuns = fs.existsSync(hookLog) ? fs.readFileSync(hookLog, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []
   const offered = (requests.find(r => r.tools?.length)?.tools || []).flatMap(t => t.tools ? t.tools.map(i => `${t.name}/${i.name}`) : [t.name]).filter(n => /agenthub_sessions/.test(n))
   fs.writeFileSync(path.join(work, 'result.json'), JSON.stringify({ label, body, outputs, hookRuns, offered, output: output.slice(-4000) }, null, 2))
+  faultProxy?.close()
   await api('DELETE', `/sessions/${id}`)
   return { id, outputs, hookRuns, offered }
 }
