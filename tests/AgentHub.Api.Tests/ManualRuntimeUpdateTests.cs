@@ -29,6 +29,37 @@ namespace AgentHub.Api.Tests;
 public class ManualRuntimeUpdateTests
 {
     [Theory]
+    [InlineData(AgentKind.Claude)]
+    [InlineData(AgentKind.Codex)]
+    public async Task CompletedGenerationUpdateUsesItsArchiveAndSuppressesOriginalSourcePrompt(AgentKind agent)
+    {
+        await using var rig = await Rig.Start(agent, "terminal", false, 200);
+        rig.Record.ExecutionGeneration = 2;
+        rig.Record.Prompt = "Original source task must not run again.";
+        var update = rig.Http.PostAsync("/api/sessions/session/pause-and-resume-runtime", null);
+        await rig.DeleteStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        rig.OldPodGone = true;
+        using var response = await update;
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var env = Assert.Single(rig.CreatedPod!.Spec.Containers, item => item.Name == "agent").Env;
+        Assert.Contains(env, item => item.Name == "AGENTHUB_REQUIRE_NATIVE_RESUME" && item.Value == "1");
+        Assert.Contains(env, item => item.Name == "AGENTHUB_PROMPT" && item.Value == "");
+        Assert.Equal("conversation", rig.Record.AgentSessionId);
+    }
+
+    [Fact]
+    public async Task MissingCompletedGenerationArchiveRefusesResumeBeforeDeletingOrChangingStatus()
+    {
+        await using var rig = await Rig.Start(AgentKind.Codex, "terminal", false, 200);
+        rig.Record.ExecutionGeneration = 2;
+        rig.ArchiveAvailable = false;
+        using var response = await rig.Http.PostAsync("/api/sessions/session/resume", null);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.False(rig.Deleting);
+        Assert.Null(rig.CreatedPod);
+        Assert.Equal("Running", rig.Record.Status);
+    }
+    [Theory]
     [InlineData(AgentKind.Codex, "terminal", false, 404)]
     [InlineData(AgentKind.Claude, "chat", false, 404)]
     [InlineData(AgentKind.Claude, "chat", true, 200)]
@@ -171,7 +202,9 @@ public class ManualRuntimeUpdateTests
         // name, for instance) finds nothing, as it would against real object storage.
         private Task<ArtifactObjectInfo?> Head(string key) {
             ArchiveCheckedAfterDeletion = OldPodGone;
-            var uploaded = IArtifactStore.StateKey(KubernetesSessionService.OwnerKey(Record.Owner), Record.Id, Record.Agent);
+            var uploaded = Record.ExecutionGeneration == 0
+                ? IArtifactStore.StateKey(KubernetesSessionService.OwnerKey(Record.Owner), Record.Id, Record.Agent)
+                : IArtifactStore.ExecutionStateKey(KubernetesSessionService.OwnerKey(Record.Owner), Record.Id, Record.ExecutionGeneration, Record.Agent);
             return Task.FromResult(ArchiveAvailable && key == uploaded ? new ArtifactObjectInfo(1, "application/gzip") : null);
         }
         public async ValueTask DisposeAsync() { OldPodGone = true; Http.Dispose(); _cluster.Dispose(); await _app.DisposeAsync(); }

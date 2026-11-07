@@ -67,5 +67,21 @@ snapshot automation remain separate work.
 Publish owner recovery choices, retained-state limits and remaining unverified environments
 in a separate website PR. A failed ambiguous case is a held operation, not a passing recovery
 claim. Do not claim exactly-once model execution or enable a combination whose fault boundary
-has not been exercised. Operator PVC provisioning defaults need an explicit release decision;
+has not been exercised. The coordinator confirmed that `agent.workspaceVolume.persistent` remains false;
+enablement releases the proved combinations only when the operator opts in. A different
+operator PVC provisioning default needs a separate owner decision;
 acceptance alone must not silently change storage allocation for existing installations.
+
+## First reproduced fault: missing native state on completed resume
+
+The real Codex negative control started a fresh thread and sent the original source prompt
+when resume state was absent. The legacy fallback was valid for old single-provider sessions
+but loses the completed replacement generation. Require native restoration on resumed
+nonzero generations, suppress the original source prompt, refuse missing storage before
+deleting a surviving pod or changing status, and prevent fresh fallback if native resume
+fails. Runtime-update checks must use the same generation-specific archive as the pod.
+
+Retain legacy generation-zero behavior. Reject falling back to the latest provider archive:
+a return to the same provider can have several independently retained generations. Reject
+a fresh startup with the old task as recovery: neither visible history nor workspace files
+reconstruct the native conversation or authorize silently re-running that task.
