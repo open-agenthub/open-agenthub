@@ -1,6 +1,7 @@
 # Provider recovery proofs
 
-Track the acceptance matrix in `docs/design/provider-switching-recovery.md` and #529.
+Native resume decisions are in `docs/design/provider-switching-native-resume.md`.
+Track the wider acceptance matrix in `docs/design/provider-switching-recovery.md` and #529.
 No result is implied by the presence of these scripts.
 
 The first negative control uses the production session server and real pinned native CLIs:

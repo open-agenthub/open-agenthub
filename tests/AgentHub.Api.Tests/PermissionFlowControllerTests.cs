@@ -29,6 +29,19 @@ public class PermissionFlowControllerTests
         Assert.Equal(decision, Json(result).GetProperty("decision").GetString());
     }
 
+    /// <summary>#504: an unattended Claude session reaches /permission for every MCP tool its
+    /// --allowedTools does not cover. Nobody answers there, so a self-service built-in is allowed;
+    /// an interactive session still asks the person.</summary>
+    [Theory]
+    [InlineData(SessionMode.Autonomous, "mcp__agenthub_sessions__agent_inbox", "allow")]
+    [InlineData(SessionMode.Scheduled, "mcp__agenthub_sessions__container_stop", "allow")]
+    public async Task RequestPermission_AllowsSelfServiceBuiltInsInUnattendedSessions(SessionMode mode, string tool, string decision)
+    {
+        var result = await Internal(null!, mode).RequestPermission("session-1",
+            new InternalController.PermissionBody(tool, null), CancellationToken.None);
+        Assert.Equal(decision, Json(result).GetProperty("decision").GetString());
+    }
+
     [PostgreSqlFact]
     public async Task RequestPermission_StaysPendingWithoutMessengerTarget()
     {

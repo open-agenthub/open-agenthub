@@ -32,6 +32,40 @@ public class InternalAgentPolicyTests
         Assert.Equal("deny", Decision(result));
     }
 
+    /// <summary>#504: an unattended Codex session with auto-approve off and an allow list that
+    /// named container_run started a helper and was refused container_stop and its own inbox.
+    /// The self-service built-ins need no entry; capability-extending ones still do, and an
+    /// owner's sharing block still wins.</summary>
+    [Theory]
+    [InlineData("mcp__agenthub_sessions__container_stop", "allow")]
+    [InlineData("mcp__agenthub_sessions__agent_inbox", "allow")]
+    [InlineData("mcp__agenthub_network__port_list", "allow")]
+    [InlineData("mcp__agenthub_sessions__container_run", "allow")]
+    [InlineData("mcp__agenthub_sessions__session_create", "deny")]
+    [InlineData("mcp__agenthub_sessions__secret_request", "deny")]
+    [InlineData("mcp__agenthub_network__port_request", "deny")]
+    public async Task AgentPolicy_SelfServiceBuiltInsNeedNoAllowListEntry(string tool, string expected)
+    {
+        var policy = new AgentPolicy { AllowedMcpTools = ["mcp__agenthub_sessions__container_run"] };
+        var session = Session(SessionMode.Autonomous);
+        session.AgentPolicyJson = JsonSerializer.Serialize(policy);
+        var controller = Controller(session, new FakeMcpPolicyReader(null));
+
+        Assert.Equal(expected, Decision(await controller.AgentPolicy("session-1", Body(tool), CancellationToken.None)));
+    }
+
+    [Fact]
+    public async Task AgentPolicy_TheOwnersSharingBlockStillAppliesToSelfServiceBuiltIns()
+    {
+        var sharing = new FakeMcpPolicyReader(new SessionMcpPolicy([], ["mcp__agenthub_sessions__agent_inbox"], DateTime.UtcNow));
+        var controller = Controller(Session(SessionMode.Autonomous), sharing);
+
+        Assert.Equal("deny", Decision(await controller.AgentPolicy(
+            "session-1", Body("mcp__agenthub_sessions__agent_inbox"), CancellationToken.None)));
+        Assert.Equal("allow", Decision(await controller.AgentPolicy(
+            "session-1", Body("mcp__agenthub_sessions__container_stop"), CancellationToken.None)));
+    }
+
     [Theory]
     [InlineData(AgentKind.Codex)]
     [InlineData(AgentKind.OpenCode)]
