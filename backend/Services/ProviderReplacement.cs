@@ -289,7 +289,7 @@ public sealed partial class KubernetesSessionService
             }
             if (progress.Phase == "committing")
             {
-                var target = await RequireReplacementPodAsync(record, request, progress.TargetPodUid, ct);
+                await RequireReplacementPodAsync(record, request, progress.TargetPodUid, ct);
                 var history = await _executions!.ReadAsync(owner, id, ct) ?? throw new ProviderReplacementRefusedException("Execution history is missing.");
                 if (history.Current.Generation == request.SourceGeneration)
                     await _executions.AdvanceAsync(owner, id, request.SourceGeneration, request.Target.Agent,
