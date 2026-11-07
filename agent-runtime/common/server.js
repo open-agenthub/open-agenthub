@@ -2082,9 +2082,10 @@ function createCommonServer(options = {}) {
       const result = await atSafePoint(() => runModelSwitch(model));
       console.log('[agent] Model switched to ' + model);
       // The hub stores the model now, but this pod's environment still holds the one it started
-      // with, and an agent restart inside the pod (an account switch, a resume fallback) builds its
-      // command from that: Claude Code and Codex would come back on the old model while the
-      // Workspace shows the new one. The next restart starts from what the hub stores.
+      // with, and an agent restart inside the pod (an account switch, a resume fallback) builds
+      // its command from that: a CLI that reads its model at start would come back on the old
+      // one while the Workspace shows the new one. The next restart starts from what the hub
+      // stores.
       env.AGENTHUB_MODEL_NAME = model;
       agentEnv.AGENTHUB_MODEL_NAME = model;
       if (typeof driver.modelSwitch.childEnv === 'function') Object.assign(agentEnv, driver.modelSwitch.childEnv(model));
