@@ -394,7 +394,7 @@ public sealed class InternalController : ControllerBase
         return Content(await _svc.GetTranscriptFileAsync(rec.Owner, id, ct) ?? "", "application/x-ndjson");
     }
 
-    public record PermissionBody(string Tool, string? Input, string? Kind = null);
+    public record PermissionBody(string Tool, string? Input, string? Kind = null, string? Server = null);
     public record AgentPolicyBody(string Tool, JsonElement Input);
 
     /// <summary>
@@ -463,15 +463,22 @@ public sealed class InternalController : ControllerBase
         return Ok(new { decision = "expired" });
     }
 
-    /// <summary>Evaluates the live MCP restriction policy for this session.</summary>
+    /// <summary>
+    /// Evaluates the live MCP restriction policy for this session. The Claude runtime's
+    /// mcp-policy-hook.sh reads both fields: <c>decision</c> decides this call, and
+    /// <c>restricted</c> is remembered in the pod so that a later call made while this endpoint
+    /// is unreachable is denied instead of handed to an approval a participant could grant.
+    /// <c>server</c> in the body names the server of an MCP resource tool, which carries no
+    /// <c>mcp__</c> name to match.
+    /// </summary>
     [HttpPost("mcp-policy")]
     public async Task<IActionResult> McpPolicy(string id, [FromBody] PermissionBody body, CancellationToken ct)
     {
-        if (await AuthAsync(id, ct) is null) return Unauthorized();
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
         var policy = await _shares.GetMcpPolicyAsync(id, ct);
-        var blocked = policy is not null && McpPolicyMatcher.IsBlocked(
-            body.Tool ?? string.Empty, policy.BlockedServers, policy.BlockedTools);
-        return Ok(new { decision = blocked ? "deny" : "allow" });
+        var blocked = McpPolicyMatcher.IsBlocked(rec.Agent, body.Tool ?? string.Empty, body.Server, policy);
+        return Ok(new { restricted = McpPolicyMatcher.Restricts(policy), decision = blocked ? "deny" : "allow" });
     }
 
     /// <summary>Evaluates persisted Codex policy after the authoritative live sharing policy.</summary>
@@ -484,7 +491,7 @@ public sealed class InternalController : ControllerBase
         if ((body.Tool ?? string.Empty).StartsWith("mcp__", StringComparison.Ordinal))
         {
             var sharing = await _shares.GetMcpPolicyAsync(id, ct);
-            if (sharing is not null && McpPolicyMatcher.IsBlocked(
+            if (sharing is not null && McpPolicyMatcher.IsBlocked(rec.Agent,
                     body.Tool ?? string.Empty, sharing.BlockedServers, sharing.BlockedTools))
                 return Ok(new { decision = "deny", reason = "Blocked by the session MCP sharing policy." });
         }

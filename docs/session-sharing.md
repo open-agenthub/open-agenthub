@@ -139,6 +139,46 @@ owner; a session of another owner under a shared one inherits nothing
   sibling project files. A direct share on an ancestor opens the child, so the child counts as
   shared.
 
+## Enforcing the MCP policy when the backend cannot answer
+
+The policy is read live on every MCP call (`/internal/sessions/{id}/mcp-policy`), because the
+owner can add or lift blocks while the pod runs and the dialog promises the change applies on the
+next call. The answer carries two fields: `decision` settles the call, and `restricted` says
+whether the session blocks anything at all. The Claude hook denies on `decision: "deny"` alone;
+`restricted` is only remembered in the pod's private `TMPDIR`.
+
+What a call gets when the endpoint cannot be reached is the real choice. Handing it to the
+ordinary approval, as for an unrestricted session, would let a participant allow exactly the tool
+the owner blocked, and auto-approve would allow it with nobody asked. So the hook denies every
+MCP call during an outage if the session is known to be restricted — from `AGENTHUB_MCP_POLICY`,
+which the backend sets when it builds the pod, or from the last answer the hook saw. The
+environment is the floor: the agent can rewrite the state file but not its own pod's
+environment. A backend that cannot read the policy while building the pod sets the flag, since
+an unknown policy is treated like a restricted one.
+
+The limit of this: the hook runs as the agent's own uid, so the remembered state is a file the
+agent can delete. There is no place in the pod it cannot write to — the session agent's memory
+is reachable over loopback with a token from the same environment. An agent that removes the file
+during an outage drops back to the environment flag, so a restriction added after the pod
+started is then not enforced until the backend answers again. With the backend reachable the
+live answer decides every call, and nothing in the pod changes that.
+
+Rejected: denying every MCP call whenever the endpoint is unreachable. It would take user MCP
+servers away from unrestricted sessions for every backend blip, for no protection they asked for.
+Also rejected: the environment variable alone. It goes stale the moment the owner adds a block to
+a running session, which is the usual order (start, then share, then restrict).
+
+### MCP resource tools
+
+Claude Code reads MCP resources through built-in tools (`ListMcpResourcesTool`,
+`ReadMcpResourceTool`, `ReadMcpResourceDirTool`) that carry no `mcp__server__tool` name. They go to
+the same policy hook, which passes the `server` argument along, and the backend decides them as
+a server-level block (`McpPolicyMatcher.IsResourceTool`, `IsBlocked(agent, tool, server, policy)`).
+A call without a server lists every server's resources, so it is denied whenever any server is
+blocked. Tool-level blocks do not reach resources: a resource is not a tool, and the dialog asks
+for tool names. Rejected: letting the listing run and filtering its result per server. The
+blocked server would be contacted all the same, and the filter would act after the fact.
+
 ## Links stay link-only
 
 A link opens exactly the session it was made for, for whoever holds the token, and nothing else:

@@ -27,6 +27,12 @@ render_settings() {
   # default 1740s) has to fit inside it. With auto-approve on, /permission answers "allow"
   # on the first POST and nothing polls at all.
   #
+  # The MCP resource tools go to the policy hook with the mcp__ tools, not to the approval hook
+  # alone: they read from an MCP server, and a blocked server must not be readable through them.
+  # Matched by prefix, because Claude Code also matches a tool's aliases (ReadMcpResource for
+  # ReadMcpResourceTool): an exact-name exclusion let the alias through to the approval matcher,
+  # and every resource read filed an approval request beside the policy's deny.
+  #
   # PermissionRequest and PostToolUse on AskUserQuestion open and close a question for the
   # Workspace (#343), which shows its text from the tool input rather than from the screen.
   cat <<JSON
@@ -46,8 +52,8 @@ render_settings() {
       { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/notify-hook.sh" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 1900 } ] },
-      { "matcher": "^(?!mcp__).*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/pretooluse-hook.sh", "timeout": 1900 } ] }
+      { "matcher": "^(mcp__|ListMcpResources|ReadMcpResource)", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 1900 } ] },
+      { "matcher": "^(?!mcp__|ListMcpResources|ReadMcpResource)", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/pretooluse-hook.sh", "timeout": 1900 } ] }
     ],
     "PostToolUse": [
       { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit|Bash)$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark work", "timeout": 10 } ] },
@@ -84,22 +90,45 @@ continue_flow() {
   exit $?
 }
 
-tool="$(printf '%s' "$payload" | "$NODE_BIN" -e '
+# Claude Code's MCP resource tools reach an MCP server without the mcp__ prefix, so the policy
+# has to see them too; their "server" argument names the server, and the backend decides them as
+# a server-level block. Keep the list in step with the matchers in render_settings and with
+# McpPolicyMatcher.IsResourceTool.
+fields="$(printf '%s' "$payload" | "$NODE_BIN" -e '
   let data = "";
   process.stdin.on("data", chunk => data += chunk).on("end", () => {
     let payload = {};
     try { payload = JSON.parse(data); } catch {}
-    process.stdout.write(typeof payload.tool_name === "string" ? payload.tool_name : "");
+    const tool = typeof payload.tool_name === "string" ? payload.tool_name : "";
+    const server = payload.tool_input && typeof payload.tool_input.server === "string" ? payload.tool_input.server : "";
+    process.stdout.write(JSON.stringify({ tool, server }));
   });
 ')"
+tool="$(printf '%s' "$fields" | "$NODE_BIN" -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(JSON.parse(d).tool))')"
 
 case "$tool" in
-  mcp__*) ;;
+  mcp__*|ListMcpResources*|ReadMcpResource*) ;;
   *) continue_flow ;;
 esac
 
+# What the last answer of /mcp-policy said about the session being restricted. The owner can
+# add or lift restrictions while the pod runs, so AGENTHUB_MCP_POLICY (set when the pod was
+# built) alone goes stale. Kept under the pod's private TMPDIR, which no restored archive brings
+# back from an earlier pod.
+RESTRICTED_STATE="${TMPDIR:-/tmp}/agenthub-mcp-policy-restricted"
+
+remember_restricted() {
+  printf '%s' "$1" > "$RESTRICTED_STATE.$$" 2>/dev/null && mv -f "$RESTRICTED_STATE.$$" "$RESTRICTED_STATE" 2>/dev/null
+  rm -f "$RESTRICTED_STATE.$$" 2>/dev/null
+}
+
 fail_closed() {
-  if [ "${AGENTHUB_MCP_POLICY:-0}" = "1" ]; then
+  # No usable answer for this call. In a restricted session the ordinary approval is not a safe
+  # fallback: a participant could allow the very tool the owner blocked, and auto-approve would
+  # allow it without anyone asked. Either source saying "restricted" denies; the agent can
+  # rewrite the state file but not the pod's environment, so deleting the file cannot lift a
+  # restriction the pod started with.
+  if [ "${AGENTHUB_MCP_POLICY:-0}" = "1" ] || [ "$(cat "$RESTRICTED_STATE" 2>/dev/null)" = "1" ]; then
     emit_deny
   fi
   continue_flow
@@ -109,12 +138,7 @@ if [ -z "${AGENTHUB_CALLBACK_URL:-}" ]; then
   fail_closed
 fi
 
-request="$(printf '%s' "$tool" | "$NODE_BIN" -e '
-  let tool = "";
-  process.stdin.on("data", chunk => tool += chunk).on("end", () => {
-    process.stdout.write(JSON.stringify({ tool }));
-  });
-')"
+request="$fields"
 
 if ! response="$("$CURL_BIN" -fsS --connect-timeout 1 --max-time 3 \
   -X POST \
@@ -125,18 +149,27 @@ if ! response="$("$CURL_BIN" -fsS --connect-timeout 1 --max-time 3 \
   fail_closed
 fi
 
-if ! decision="$(printf '%s' "$response" | "$NODE_BIN" -e '
+# Prints "<decision> <restricted>", restricted being 1, 0 or "-" when the answer does not say.
+# A "deny" is honoured on its own; "restricted" only feeds the remembered state, so an answer
+# that carries the decision alone still decides the call.
+if ! parsed="$(printf '%s' "$response" | "$NODE_BIN" -e '
   let data = "";
   process.stdin.on("data", chunk => data += chunk).on("end", () => {
     let response;
     try { response = JSON.parse(data); } catch { process.exit(1); }
-    if (!response || typeof response.restricted !== "boolean" ||
-        !["allow", "deny"].includes(response.decision)) process.exit(1);
-    process.stdout.write(response.restricted && response.decision === "deny" ? "deny" : "allow");
+    if (!response || typeof response !== "object" || !["allow", "deny"].includes(response.decision))
+      process.exit(1);
+    const restricted = response.decision === "deny" || response.restricted === true ? "1"
+      : response.restricted === false ? "0" : "-";
+    process.stdout.write(response.decision + " " + restricted);
   });
 ')"; then
   fail_closed
 fi
+
+decision="${parsed%% *}"
+restricted="${parsed##* }"
+[ "$restricted" != "-" ] && remember_restricted "$restricted"
 
 if [ "$decision" = "deny" ]; then
   emit_deny
