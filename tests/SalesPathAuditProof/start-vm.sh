@@ -6,9 +6,9 @@ export QEMU_MODULE_DIR="$TASK_ROOT/root/usr/lib/x86_64-linux-gnu/qemu"
 node "$(dirname "$0")/cloud-seed.cjs" "$TASK_ROOT" &
 seed_pid=$!
 trap 'kill "$seed_pid" 2>/dev/null || true' EXIT
-# 10 GiB guest / 8 vCPUs on a 16-CPU / 20 GiB pod.
+# 10 GiB / 4 vCPUs: with 8 multi-threaded TCG vCPUs the guest hit RCU stalls and soft lockups as soon as k3s started.
 # Conservative CPU avoids the guest sigreturn/page-fault panic observed with cpu=max.
-"$TASK_ROOT/root/usr/bin/qemu-system-x86_64" -accel tcg,thread=multi -machine q35 -cpu Nehalem -smp 8 -m 10240 \
+"$TASK_ROOT/root/usr/bin/qemu-system-x86_64" -accel tcg,thread=multi -machine q35 -cpu Nehalem -smp 4 -m 10240 \
  -L "$TASK_ROOT/root/usr/share/qemu" -bios "$TASK_ROOT/root/usr/share/seabios/bios-256k.bin" \
  -display none -qmp "unix:$TASK_ROOT/qmp.sock,server=on,wait=off" -serial "file:$TASK_ROOT/console.log" -no-reboot \
  -drive "file=$TASK_ROOT/worker.qcow2,format=qcow2,if=virtio" \
