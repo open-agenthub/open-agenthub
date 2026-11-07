@@ -29,4 +29,14 @@ public class SeatUsageReporterTests
     [InlineData("{\"token\":123}")]
     public void TryParseRenewedToken_FalseOnBadOrEmpty(string json)
         => Assert.False(SeatUsageReporter.TryParseRenewedToken(json, out _));
+
+    [Fact]
+    public void SeatReport_SerializesWithTheFieldNamesTheLicenseServiceReads()
+    {
+        // PostAsJsonAsync uses the web defaults (camelCase); the service binds seats/instanceKey.
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            new SeatUsageReporter.SeatReport(7, "abc"),
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+        Assert.Equal("""{"seats":7,"instanceKey":"abc"}""", json);
+    }
 }

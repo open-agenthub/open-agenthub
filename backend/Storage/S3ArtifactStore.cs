@@ -64,6 +64,10 @@ public interface IArtifactStore
             AgentKind.OpenCode => "opencode-state.tgz",
             _ => throw new ArgumentOutOfRangeException(nameof(agent), agent, "Unknown agent kind.")
         }}";
+    static string ExecutionTranscriptKey(string owner, string id, long generation) =>
+        $"sessions/{owner}/{id}/executions/{generation}/transcript.jsonl";
+    static string ExecutionStateKey(string owner, string id, long generation, AgentKind agent) =>
+        $"sessions/{owner}/{id}/executions/{generation}/{agent.ToString().ToLowerInvariant()}-state.tgz";
     static string ScrollbackKey(string owner, string id) => $"sessions/{owner}/{id}/scrollback.log";
     /// <summary>The provider's own conversation file (JSONL), uploaded whole by the session agent.</summary>
     static string TranscriptKey(string owner, string id) => $"sessions/{owner}/{id}/transcript.jsonl";
