@@ -44,6 +44,8 @@ public sealed class LicenseStore : ILicenseStore
             -- Scheduled subscription cancellation, mirrored from the heartbeat response —
             -- shown in the admin UI so a cancellation is visible before features lapse.
             ALTER TABLE app_license ADD COLUMN IF NOT EXISTS cancel_at TIMESTAMPTZ;
+            ALTER TABLE app_license ADD COLUMN IF NOT EXISTS last_report_error TEXT;
+            ALTER TABLE app_license ADD COLUMN IF NOT EXISTS last_report_error_at TIMESTAMPTZ;
             """;
         await using var cmd = _db.CreateCommand(ddl);
         await cmd.ExecuteNonQueryAsync(ct);
@@ -121,9 +123,31 @@ public sealed class LicenseStore : ILicenseStore
     {
         await using var cmd = _db.CreateCommand("""
             INSERT INTO app_license (id, last_report_at) VALUES (1, @t)
-            ON CONFLICT (id) DO UPDATE SET last_report_at = EXCLUDED.last_report_at;
+            ON CONFLICT (id) DO UPDATE SET last_report_at = EXCLUDED.last_report_at,
+                last_report_error = NULL, last_report_error_at = NULL;
             """);
         cmd.Parameters.AddWithValue("t", whenUtc);
         await cmd.ExecuteNonQueryAsync(ct);
     }
+    public async Task<(string? Error, DateTime? At)> GetReportErrorAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand(
+            "SELECT last_report_error, last_report_error_at FROM app_license WHERE id = 1");
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return (null, null);
+        return (reader.IsDBNull(0) ? null : reader.GetString(0),
+            reader.IsDBNull(1) ? null : reader.GetDateTime(1));
+    }
+
+    public async Task SetReportErrorAsync(string error, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("""
+            INSERT INTO app_license (id, last_report_error, last_report_error_at) VALUES (1, @e, now())
+            ON CONFLICT (id) DO UPDATE SET last_report_error = EXCLUDED.last_report_error,
+                last_report_error_at = EXCLUDED.last_report_error_at;
+            """);
+        cmd.Parameters.AddWithValue("e", error);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
 }
