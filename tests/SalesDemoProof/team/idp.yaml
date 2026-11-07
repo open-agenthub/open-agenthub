@@ -1,0 +1,69 @@
+# Identity-provider stand-in for the team setup: Keycloak behind the cluster's own ingress at
+# https://id.example.com, with the stand-in CA's certificate. Realm "team": a public PKCE client
+# "agenthub" (redirects for https://hub.example.com), an audience mapper (the backend validates
+# aud=agenthub), a "groups" claim (Enterprise maps groups to roles) and three synthetic users:
+#   alice  group platform    the admin named in ee.admins, owns the demo session
+#   bob    group developers  takes over as Collaborator
+#   carol  group reviewers   gets a read-only (Viewer) link
+# Users carry offline_access because the hub always asks for a refresh token.
+apiVersion: v1
+kind: Namespace
+metadata: { name: idp }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: realm, namespace: idp }
+data:
+  realm.json: |
+    {"realm":"team","enabled":true,"sslRequired":"external",
+     "groups":[{"name":"platform"},{"name":"developers"},{"name":"reviewers"}],
+     "clients":[{"clientId":"agenthub","publicClient":true,"standardFlowEnabled":true,
+       "directAccessGrantsEnabled":true,
+       "redirectUris":["https://hub.example.com/*"],"webOrigins":["https://hub.example.com"],
+       "attributes":{"pkce.code.challenge.method":"S256","post.logout.redirect.uris":"https://hub.example.com/*"},
+       "protocolMappers":[
+         {"name":"aud","protocol":"openid-connect","protocolMapper":"oidc-audience-mapper",
+          "config":{"included.client.audience":"agenthub","access.token.claim":"true","id.token.claim":"false"}},
+         {"name":"groups","protocol":"openid-connect","protocolMapper":"oidc-group-membership-mapper",
+          "config":{"claim.name":"groups","full.path":"false","access.token.claim":"true","id.token.claim":"true","userinfo.token.claim":"true"}}]}],
+     "users":[
+       {"username":"alice","email":"alice@example.com","firstName":"Alice","lastName":"Demo","enabled":true,"emailVerified":true,"realmRoles":["offline_access"],"groups":["platform"],
+        "credentials":[{"type":"password","value":"alice-demo-pw","temporary":false}]},
+       {"username":"bob","email":"bob@example.com","firstName":"Bob","lastName":"Demo","enabled":true,"emailVerified":true,"realmRoles":["offline_access"],"groups":["developers"],
+        "credentials":[{"type":"password","value":"bob-demo-pw","temporary":false}]},
+       {"username":"carol","email":"carol@example.com","firstName":"Carol","lastName":"Demo","enabled":true,"emailVerified":true,"realmRoles":["offline_access"],"groups":["reviewers"],
+        "credentials":[{"type":"password","value":"carol-demo-pw","temporary":false}]}]}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: keycloak, namespace: idp }
+spec:
+  selector: { matchLabels: { app: keycloak } }
+  template:
+    metadata: { labels: { app: keycloak } }
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:26.0.7
+          # TLS ends at the ingress; Keycloak builds its URLs from the public hostname.
+          args: [start-dev, --import-realm, --http-port=8080, --hostname=https://id.example.com, --proxy-headers=xforwarded]
+          env:
+            - { name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin }
+            - { name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: demo-only-admin }
+          ports: [{ containerPort: 8080 }]
+          volumeMounts: [{ name: realm, mountPath: /opt/keycloak/data/import }]
+      volumes: [{ name: realm, configMap: { name: realm } }]
+---
+apiVersion: v1
+kind: Service
+metadata: { name: keycloak, namespace: idp }
+spec: { selector: { app: keycloak }, ports: [{ port: 80, targetPort: 8080 }] }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: { name: keycloak, namespace: idp }
+spec:
+  tls: [{ hosts: [id.example.com], secretName: id-tls }]
+  rules:
+    - host: id.example.com
+      http: { paths: [{ path: /, pathType: Prefix, backend: { service: { name: keycloak, port: { number: 80 } } } }] }
