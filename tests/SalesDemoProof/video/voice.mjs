@@ -17,11 +17,11 @@ const tts = new KokoroTTS(model, await AutoTokenizer.from_pretrained(MODEL, { re
 for (const s of script.scenes) {
   // Spoken forms the voice gets wrong as written; the captions keep the written text.
   const spoken = s.text.replace(/AgentHub/g, 'Agent Hub').replace(/\bMCP\b/g, 'M C P').replace(/\bAPI\b/g, 'A P I').replace(/\bTLS\b/g, 'T L S')
-  // One call per sentence: a whole paragraph is cut off silently at the model's input limit
+  // One call per sentence (a full stop only ends one before a space, so "1.19.0" stays whole): a whole paragraph is cut off silently at the model's input limit
   // (the session scene lost its last sentences that way).
   const parts = [], gap = 0.18
   let rate = 24000
-  for (const sentence of spoken.match(/[^.!?]+[.!?]+/g) || [spoken]) {
+  for (const sentence of spoken.match(/\S.*?[.!?](?=\s|$)/g) || [spoken]) {
     const a = await tts.generate(sentence.trim(), { voice: script.voice })
     rate = a.sampling_rate
     parts.push(a.audio, new Float32Array(Math.round(gap * rate)))

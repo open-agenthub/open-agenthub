@@ -106,7 +106,7 @@ const sped = n => `<div style="position:absolute;left:290px;top:66px;padding:10p
 
 // Sentences of a scene, timed by their share of the words (phrase timing, not forced alignment).
 function sentences(text, start, seconds) {
-  const parts = text.match(/[^.!?]+[.!?]+(\s|$)/g)?.map(s => s.trim()) || [text]
+  const parts = text.match(/\S.*?[.!?](?=\s|$)/g) || [text]
   const words = parts.map(p => p.split(/\s+/).length), total = words.reduce((a, b) => a + b, 0)
   let t = start
   return parts.map((p, i) => { const d = seconds * words[i] / total; const c = { text: p, start: t, end: t + d }; t += d; return c })
@@ -128,7 +128,10 @@ for (const id of order) {
       ? `<div style="font-size:84px;font-weight:800">Open AgentHub 1.19.0</div><div style="font-size:44px;margin-top:22px;color:#cfcfcf">Issue → pushed branch, with a colleague taking over</div>`
       : `<div style="font-size:60px;font-weight:800">Try it on your own cluster</div><div style="font-size:36px;margin-top:22px;color:#cfcfcf">Quickstart → hostname, TLS and single sign-on → first task.<br>Prospect checklist: steps, measured times, known limits.</div>`
     const card = await png(`<div style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;text-align:center">${title}</div>${label}`, `${outDir}/work/${id}-card.png`, false)
-    const ov = await Promise.all(cues.map((c, i) => png(caption(c.text), `${outDir}/work/${id}-cap${i}.png`)))
+    // One shared page renders every overlay, so they are made one after another; in parallel each
+    // screenshot caught whichever content was set last.
+    const ov = []
+    for (const [i, c] of cues.entries()) ov.push(await png(caption(c.text), `${outDir}/work/${id}-cap${i}.png`))
     const filter = ov.map((_, i) => `${i ? `[v${i}]` : '[0]'}[${i + 1}]overlay=enable='between(t,${cues[i].start.toFixed(2)},${cues[i].end.toFixed(2)})'[v${i + 1}]`).join(';')
     run(['-loop', '1', '-framerate', String(FPS), '-t', duration.toFixed(2), '-i', card, ...ov.flatMap(f => ['-i', f]),
       '-filter_complex', filter, '-map', `[v${ov.length}]`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-r', String(FPS), seg])
