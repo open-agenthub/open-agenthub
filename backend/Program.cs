@@ -857,8 +857,9 @@ app.Map("/ws/sessions/{id}/terminal", (HttpContext ctx, string id,
 // under the owner's identity.
 async Task ProxyResolvedWs(HttpContext ctx, SessionAccessResult resolved, ISessionService sessions, ILoggerFactory lf)
 {
-    var live = await sessions.GetSessionAsync(resolved.Session.Owner, resolved.Session.Id, ctx.RequestAborted);
-    if (live is null) { ctx.Response.StatusCode = 404; return; }
+    var live = await TerminalProxy.ReadForUpgradeAsync(ctx,
+        ct => sessions.GetSessionAsync(resolved.Session.Owner, resolved.Session.Id, ct), lf.CreateLogger("TerminalProxy"));
+    if (live is null) return;
     if (resolved.Level == SessionAccessLevel.Owner)
         try { await sessions.ClearQuestionAsync(resolved.Session.Owner, resolved.Session.Id, ctx.RequestAborted); } catch { }
     // Anyone allowed to type — owner or collaborator — keeps the idle countdown from running

@@ -33,6 +33,7 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
     private readonly AgentHub.Api.Permissions.PermissionStore? _switchPermissions;
     private readonly ISessionExecutionStore? _executions;
     private readonly SessionWorkspaceVolumes? _workspaceVolumes;
+    private readonly Ee.Sharing.ISessionMcpPolicyReader? _mcpPolicies;
     private readonly Kubernetes _k8s;
     private readonly ISessionExpiryLock? _runtimeUpdateLock;
     private readonly ISessionStore _store;
@@ -84,11 +85,13 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
         IAgentPodRequests? podRequests = null,
         Chat.IChatSessionCleanup? chatCleanup = null, ISessionExecutionStore? executions = null, ISessionWorkspaceStore? workspaceStore = null,
         IProviderSwitchStore? providerSwitches = null, IModelCatalogStore? switchCatalogs = null,
-        AgentHub.Api.Permissions.PermissionStore? switchPermissions = null, IExecutionUsageSnapshots? executionUsage = null, ISessionMessageStore? switchMessages = null, SessionMessageDelivery? switchDelivery = null)
+        AgentHub.Api.Permissions.PermissionStore? switchPermissions = null, IExecutionUsageSnapshots? executionUsage = null, ISessionMessageStore? switchMessages = null, SessionMessageDelivery? switchDelivery = null,
+        Ee.Sharing.ISessionMcpPolicyReader? mcpPolicies = null)
     {
         _switchMessages = switchMessages; _switchDelivery = switchDelivery;
         _executionUsage = executionUsage;
         _providerSwitches = providerSwitches; _switchCatalogs = switchCatalogs; _switchPermissions = switchPermissions;
+        _mcpPolicies = mcpPolicies;
         _executions = executions;
         _chatCleanup = chatCleanup;
         _podRequests = podRequests;
@@ -1208,7 +1211,8 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
             : await _library.ResolveMcpServersAsync(owner, ParseMcpServerIds(rec), strict: false, ct);
         if (_opts.SkillLibraryMcp)
             servers = servers.Append(SkillLibraryMcpConfig.BuildServer(_callbackBaseUrl, rec)).ToList();
-        return McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
+        var policy = _mcpPolicies is null ? null : await _mcpPolicies.GetMcpPolicyAsync(rec.Id, ct);
+        return McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral, policy?.BlockedServers);
     }
 
     private static List<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)> PrepareEphemeralSources(
@@ -2130,7 +2134,8 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
                 : await _ephemeralApiMcps.ListBySessionAsync(rec.Id, ct);
             var servers = await _library.ResolveMcpServersAsync(owner, idsToResolve, strict: true, ct);
             var ids = servers.Select(s => s.Id).ToList();
-            var effective = McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
+            var sharingPolicy = _mcpPolicies is null ? null : await _mcpPolicies.GetMcpPolicyAsync(rec.Id, ct);
+            var effective = McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral, sharingPolicy?.BlockedServers);
             if (req.McpServerIds is not null)
                 rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
 
@@ -2743,6 +2748,26 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
 
     // ---------------------------------------------------------------- Pod-Spec
 
+    /// <summary>
+    /// Seeds AGENTHUB_MCP_POLICY. The policy itself is read live on every MCP call; this only
+    /// decides what the Claude hook does when that read cannot reach the backend. A failed read
+    /// here counts as restricted: a pod whose restriction is unknown must not hand a blocked
+    /// tool to an approval a participant can grant.
+    /// </summary>
+    private async Task<bool> HasMcpRestrictionAsync(string sessionId, CancellationToken ct)
+    {
+        if (_mcpPolicies is null) return false;
+        try
+        {
+            return Ee.Sharing.McpPolicyMatcher.Restricts(await _mcpPolicies.GetMcpPolicyAsync(sessionId, ct));
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _log.LogWarning(ex, "Could not read the MCP policy of session {SessionId}; starting it as restricted", sessionId);
+            return true;
+        }
+    }
+
     private async Task<PodBuildContext> BuildPodContextAsync(
         string owner, SessionRecord record, bool resume, bool hasGitCredentials, CancellationToken ct)
     {
@@ -2787,10 +2812,14 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
         await _store.SetUsageBillingAsync(record.Id,
             UsageBilling.ForPod(record.AuthMode, record.Mode, keyStored, hasSubscription), ct);
 
+        var mcpRestricted = await HasMcpRestrictionAsync(record.Id, ct);
+
         var ownerKey = Sanitize(owner);
         var claudeImage = string.IsNullOrWhiteSpace(_opts.ClaudeAgentImage) ? _opts.AgentImage : _opts.ClaudeAgentImage;
         var artifactUrls = AgentSessionResourceOrchestrator.PresignArtifactUrls(
             _artifacts, ownerKey, record, resume, PresignTtl);
+        var mcpPolicy = _mcpPolicies is null ? null : await _mcpPolicies.GetMcpPolicyAsync(record.Id, ct);
+        var blockedServers = mcpPolicy?.BlockedServers ?? [];
         return new PodBuildContext
         {
             Owner = owner,
@@ -2804,6 +2833,7 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
             HasSelectedSubscriptionCredential = hasSubscription,
             SubscriptionAccountId = accountId,
             HasGitCredentials = hasGitCredentials,
+            McpRestricted = mcpRestricted,
             CallbackUrl = $"{_callbackBaseUrl}/internal/sessions/{record.Id}",
             StatePutUrl = artifactUrls.StatePutUrl,
             StateGetUrl = artifactUrls.StateGetUrl,
@@ -2816,6 +2846,7 @@ public sealed partial class KubernetesSessionService : ISessionService, IExecuti
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
+                BlockedMcpServers = blockedServers,
                 BrowserEnabled = _browserEnabled,
                 SpawnMcpEnabled = _spawnMcpEnabled,
                 NetworkMcpEnabled = _networkMcpEnabled,

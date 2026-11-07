@@ -60,6 +60,14 @@ test('MCP tools map to mcp__server__tool, longest server name first', async () =
   assert.deepEqual(mcpServerNames({}), []);
 });
 
+test('resource policy receives the selected server instead of an empty input', async () => {
+  for (const tool of ['read_mcp_resource', 'list_mcp_resources', 'list_mcp_resource_templates']) {
+    const { h, run } = await gate({ '/agent-policy': { decision: 'deny' } });
+    await assert.rejects(run(tool, { server: 'probe-srv', uri: 'proof://sample' }), /Blocked by the session policy/);
+    assert.deepEqual(h.calls[0].body, { tool, input: { server: 'probe-srv', uri: 'proof://sample' } });
+  }
+});
+
 test('an allowed call runs after a single policy check', async () => {
   const { h, run } = await gate({ '/agent-policy': { decision: 'allow' } });
   await run('bash', { command: 'git status' });

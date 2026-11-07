@@ -1,0 +1,13 @@
+# Exactly what the published "Move the quickstart to team login" steps ask for, on the stand-in
+# names. Kept literal on purpose: the measurement records what happens with only these values.
+ingress:
+  enabled: true
+  host: hub.example.com
+  tlsSecretName: hub-tls
+frontendOrigin: https://hub.example.com
+oidc:
+  authority: https://id.example.com/realms/team
+  clientId: agenthub
+  audience: agenthub
+ee:
+  admins: alice

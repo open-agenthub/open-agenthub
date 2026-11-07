@@ -19,13 +19,51 @@ public static class TerminalProxy
     /// </summary>
     public static readonly TimeSpan ActivityInterval = TimeSpan.FromMinutes(1);
 
+    /// <summary>
+    /// How long an upgrade may wait for the session read (pod phase and IP from the Kubernetes
+    /// API) before it is answered. The client's library would otherwise wait its full 100 s on a
+    /// slow API server, and the browser holds the handshake for as long: Chrome queues every
+    /// other WebSocket of the page to this host behind it, so the Workspace could not reconnect
+    /// at all (#520, docs/websocket-handshake-timeout.md). With the 5 s pod confirmation this
+    /// stays under the browser's 10 s handshake limit.
+    /// </summary>
+    public static readonly TimeSpan SessionReadTimeout = TimeSpan.FromSeconds(3);
+
+    /// <summary>
+    /// The session for a terminal upgrade, or null once the request has been answered: 404 for an
+    /// unknown session, 503 with Retry-After when the read did not finish in
+    /// <see cref="SessionReadTimeout"/>. A 503 fails the handshake like a starting pod's 409, so
+    /// the browser's ordinary retry takes it from there.
+    /// </summary>
+    public static async Task<SessionInfo?> ReadForUpgradeAsync(HttpContext ctx,
+        Func<CancellationToken, Task<SessionInfo?>> read, ILogger log, TimeSpan? timeout = null)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ctx.RequestAborted);
+        deadline.CancelAfter(timeout ?? SessionReadTimeout);
+        SessionInfo? session;
+        try
+        {
+            session = await read(deadline.Token);
+        }
+        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !ctx.RequestAborted.IsCancellationRequested)
+        {
+            log.LogWarning("Terminal upgrade answered 503: the session read took longer than {Timeout}", timeout ?? SessionReadTimeout);
+            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            ctx.Response.Headers.RetryAfter = "2";
+            await ctx.Response.WriteAsync("Session status not available yet; retry.");
+            return null;
+        }
+        if (session is null) ctx.Response.StatusCode = 404;
+        return session;
+    }
+
     public static async Task HandleAsync(HttpContext ctx, string owner, string sessionId,
         ISessionService sessions, IAgentPodRequests pods, ILoggerFactory lf, int agentPort, string upstreamPath = "/")
     {
         var log = lf.CreateLogger("TerminalProxy");
 
-        var session = await sessions.GetSessionAsync(owner, sessionId, ctx.RequestAborted);
-        if (session is null) { ctx.Response.StatusCode = 404; return; }
+        var session = await ReadForUpgradeAsync(ctx, ct => sessions.GetSessionAsync(owner, sessionId, ct), log);
+        if (session is null) return;
         if (string.IsNullOrEmpty(session.PodIp) || session.Phase != "Running")
         {
             ctx.Response.StatusCode = 409;

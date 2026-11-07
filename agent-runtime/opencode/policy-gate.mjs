@@ -59,7 +59,7 @@ export function mcpServerNames(env = process.env, fsImpl = fs) {
     const parsed = JSON.parse(fsImpl.readFileSync(env.AGENTHUB_MCP_CONFIG, 'utf8'));
     const servers = parsed && typeof parsed.mcpServers === 'object' && !Array.isArray(parsed.mcpServers)
       ? Object.keys(parsed.mcpServers) : [];
-    return servers.filter(name => /^[A-Za-z0-9_-]+$/.test(name)).sort((a, b) => b.length - a.length);
+    return servers.filter(name => /^[A-Za-z0-9_.-]+$/.test(name)).sort((a, b) => b.length - a.length);
   } catch {
     return [];
   }
@@ -71,6 +71,9 @@ export function mcpServerNames(env = process.env, fsImpl = fs) {
  * allow list match them exactly as they do for Claude.
  */
 export function hubTool(tool, args, servers = []) {
+  if (['read_mcp_resource', 'list_mcp_resources', 'list_mcp_resource_templates'].includes(tool)) {
+    return { name: tool, input: args || {} };
+  }
   if (tool === 'bash') {
     const command = args && typeof args.command === 'string' ? args.command : '';
     return { name: 'Bash', input: { command } };

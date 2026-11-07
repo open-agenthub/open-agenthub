@@ -95,6 +95,7 @@ const people = computed(() => data.value.users || data.value.directShares || [])
 let loadGeneration = 0
 const links = computed(() => data.value.links || [])
 const projectShares = computed(() => data.value.projectShares || [])
+const supportsToolRestrictions = computed(() => !['cursor', 'openclaw'].includes(String(props.session.agent).toLowerCase()))
 const serverNames = computed(() => { try { return Object.keys(JSON.parse(props.session.mcpConfigJson || '{}').mcpServers || {}) } catch { return [] } })
 function list(value) { return value.split(/[\n,]/).map(item => item.trim()).filter(Boolean) }
 async function load() {
@@ -254,10 +255,13 @@ onUnmounted(() => { ++recipientGeneration; clearTimeout(recipientTimer) })
 
     <section class="bordered">
       <div class="sect-title">MCP security</div>
-      <p class="sub">Restrictions apply to every participant, including you, on the next MCP call. Earlier transcript content may already contain tool results.</p>
+      <p class="sub">Restrictions apply to every participant, including you. Restart the session after changing blocked servers so its MCP configuration is rebuilt. Earlier transcript content may already contain tool results.</p>
+      <p class="sub">Built-in servers can also be blocked: agenthub_files, agenthub_browser, agenthub_network, agenthub_sessions, skill-library.</p>
+      <p class="sub" v-if="!supportsToolRestrictions">Tool-level restrictions are not available for {{ session.agent }}. Use blocked servers and restart the session.</p>
+      <p class="sub" v-else>Tool-level changes apply on the next MCP call.</p>
       <p v-if="serverNames.length" class="servers">Configured servers: {{ serverNames.join(', ') }}</p>
       <div class="field"><label>Blocked servers (one per line)</label><textarea v-model="blockedServers" data-blocked-servers placeholder="server-name"></textarea></div>
-      <div class="field"><label>Blocked exact tool names (one per line)</label><textarea v-model="blockedTools" data-blocked-tools placeholder="mcp__server__tool"></textarea></div>
+      <div class="field"><label>Blocked exact tool names (one per line)</label><textarea v-model="blockedTools" :disabled="!supportsToolRestrictions" data-blocked-tools placeholder="mcp__server__tool"></textarea></div>
       <button @click="savePolicy">Save MCP policy</button>
     </section>
     </template>

@@ -32,6 +32,23 @@ public class InternalAgentPolicyTests
         Assert.Equal("deny", Decision(result));
     }
 
+    [Theory]
+    [InlineData(AgentKind.Codex)]
+    [InlineData(AgentKind.OpenCode)]
+    public async Task AgentPolicy_ResourceCallsUseTheirServerArgument(AgentKind agent)
+    {
+        var session = Session(SessionMode.Interactive);
+        session.Agent = agent;
+        var sharing = new FakeMcpPolicyReader(new SessionMcpPolicy(["probe-srv"], [], DateTime.UtcNow));
+        var controller = Controller(session, sharing);
+        Assert.Equal("deny", Decision(await controller.AgentPolicy("session-1",
+            Body("read_mcp_resource", new { server = "probe-srv", uri = "proof://sample" }), CancellationToken.None)));
+        Assert.Equal("ask", Decision(await controller.AgentPolicy("session-1",
+            Body("read_mcp_resource", new { server = "allowed", uri = "proof://sample" }), CancellationToken.None)));
+        Assert.Equal("deny", Decision(await controller.AgentPolicy("session-1",
+            Body("list_mcp_resources"), CancellationToken.None)));
+    }
+
     [Fact]
     public async Task AgentPolicy_InteractivePreservesNormalApprovalFlow()
     {
@@ -156,7 +173,7 @@ public class InternalAgentPolicyTests
             Task.FromResult(policy);
     }
 
-    private sealed class CallbackSessionStore(SessionRecord session) : ISessionStore
+    internal sealed class CallbackSessionStore(SessionRecord session) : ISessionStore
     {
         public Task InitializeAsync(CancellationToken ct = default) => Task.CompletedTask;
         public Task UpsertAsync(SessionRecord record, CancellationToken ct = default) => Task.CompletedTask;
