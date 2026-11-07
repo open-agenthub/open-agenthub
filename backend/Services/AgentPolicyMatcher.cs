@@ -34,8 +34,18 @@ public static class AgentPolicyMatcher
         if (string.IsNullOrWhiteSpace(tool)) return Deny("Blocked by tool policy.");
         if (string.Equals(tool, "Bash", StringComparison.Ordinal))
             return DecideCommand(policy.AllowedCommands, input, autoApprove);
+        // An MCP entry in the general allow list counts as well (#504). Sessions created with
+        // the legacy allowedTools field carry every entry there, and Claude passes that list to
+        // --allowedTools, where an mcp__ name allows the tool; this matcher only read
+        // AllowedMcpTools, so the same session spec ran a tool under Claude and was refused it
+        // under Codex and OpenCode. Matched with the MCP rules: a whole-server wildcard has to
+        // name the server.
+        // The hub's self-service tools need no allow-list entry (#504, BuiltInSessionTools); the
+        // owner's MCP sharing block has already been applied by the caller.
+        if (BuiltInSessionTools.IsSelfService(tool)) return Allow();
         if (tool.StartsWith("mcp__", StringComparison.Ordinal))
             return Match(policy.AllowedMcpTools, tool, true)
+                || Match(policy.AllowedTools.Where(entry => entry.StartsWith("mcp__", StringComparison.Ordinal)).ToList(), tool, true)
                 ? Allow() : NotCovered("MCP policy", autoApprove);
         return Match(policy.AllowedTools, tool, false)
             ? Allow() : NotCovered("tool policy", autoApprove);
