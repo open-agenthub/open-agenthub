@@ -59,6 +59,22 @@ describe('ShareSessionDialog MCP policy', () => {
     })
   })
 
+  it.each(['Cursor', 'OpenClaw'])('shows %s capabilities and preserves saved tool rules', async agent => {
+    apiMocks.api.listSessionShares.mockResolvedValue({ users: [], links: [],
+      mcpPolicy: { blockedServers: [], blockedTools: ['mcp__docs__write'] } })
+    const wrapper = mount(ShareSessionDialog, { props: { session: { ...session, agent } } })
+    await flushPromises()
+    expect(wrapper.get('[data-blocked-tools]').element.disabled).toBe(true)
+    expect(wrapper.text()).toContain(`Tool-level restrictions are not available for ${agent}`)
+    expect(wrapper.text()).toContain('Restart the session')
+    await wrapper.get('[data-blocked-servers]').setValue('docs')
+    await wrapper.findAll('button').find(b => b.text() === 'Save MCP policy').trigger('click')
+    await flushPromises()
+    expect(apiMocks.api.updateMcpPolicy).toHaveBeenCalledWith('s1', {
+      blockedServers: ['docs'], blockedTools: ['mcp__docs__write']
+    })
+  })
+
   it('shows empty policy fields when the session has no policy', async () => {
     apiMocks.api.listSessionShares.mockResolvedValue({ users: [], links: [], mcpPolicy: null })
     const wrapper = mount(ShareSessionDialog, { props: { session } })

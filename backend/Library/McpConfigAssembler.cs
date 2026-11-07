@@ -34,7 +34,8 @@ public static class McpConfigAssembler
         string? inlineJson,
         IEnumerable<McpServerRecord> servers,
         McpGatewayAssembleOptions? gateway = null,
-        IEnumerable<EphemeralApiMcpEntry>? ephemeral = null)
+        IEnumerable<EphemeralApiMcpEntry>? ephemeral = null,
+        IReadOnlyCollection<string>? blockedServers = null)
     {
         JsonObject root;
         if (string.IsNullOrWhiteSpace(inlineJson))
@@ -64,9 +65,14 @@ public static class McpConfigAssembler
             root["mcpServers"] = inlineServers;
         }
 
+        // Filter before assembling entries so omitted servers never receive gateway tokens.
+        var blocked = new HashSet<string>(blockedServers ?? [], StringComparer.Ordinal);
+        foreach (var name in blocked)
+            inlineServers.Remove(name);
+
         foreach (var server in servers)
         {
-            if (inlineServers.ContainsKey(server.Name))
+            if (blocked.Contains(server.Name) || inlineServers.ContainsKey(server.Name))
                 continue; // inline definition wins
             inlineServers[server.Name] = BuildServerEntry(server, gateway);
         }
@@ -75,7 +81,7 @@ public static class McpConfigAssembler
         {
             foreach (var entry in ephemeral)
             {
-                if (inlineServers.ContainsKey(entry.Name))
+                if (blocked.Contains(entry.Name) || inlineServers.ContainsKey(entry.Name))
                     continue; // inline definition wins
                 if (entry.NeedsReentry)
                     throw new ArgumentException($"Session API source '{entry.Name}' needs its secret registered again.");

@@ -77,6 +77,32 @@ describe('terminal fit/resize stability', () => {
     globalThis.cancelAnimationFrame = () => {}
   })
 
+  // #520: a handshake the path held (a starved replica behind the ingress) never opened and never
+  // closed, and the pane only retries from onclose, so it stayed "disconnected" until a reload.
+  it('gives up on a handshake that never completes and connects again', async () => {
+    vi.useFakeTimers()
+    class Pending extends MockSocket {
+      constructor(url) { super(url); this.readyState = 0; this.listeners = {} }
+      addEventListener(type, callback) { (this.listeners[type] ||= []).push(callback) }
+      close() { if (this.readyState === 0) { this.readyState = 3; this.listeners.close?.forEach(cb => cb()); this.onclose?.() } }
+    }
+    globalThis.WebSocket = Pending
+    const wrapper = mount(TerminalPane, { props: { session: { id: 's1', phase: 'Running' } } })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(mocks.sockets).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(mocks.sockets).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(wrapper.emitted('status')?.at(-1)).toEqual(['disconnected'])
+    await vi.advanceTimersByTimeAsync(2000)
+    expect(mocks.sockets).toHaveLength(2)
+    mocks.sockets[1].readyState = MockSocket.OPEN
+    mocks.sockets[1].onopen()
+    expect(wrapper.emitted('status').at(-1)).toEqual(['connected'])
+    wrapper.unmount()
+    vi.useRealTimers()
+  })
+
   it('consumes activity frames without rendering them as terminal text', async () => {
     const wrapper = await mountRunningPane()
     const socket = mocks.sockets[0]

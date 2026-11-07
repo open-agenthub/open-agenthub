@@ -11,6 +11,7 @@ public sealed record AgentRuntimeImages(
 
 public sealed record AgentPodRuntimeSettings
 {
+    public IReadOnlyCollection<string> BlockedMcpServers { get; init; } = [];
     public int AgentPort { get; init; } = 7681;
     public string GitCloneImage { get; init; } = "alpine/git:2.45.2";
     public string ImagePullSecret { get; init; } = "";
@@ -206,6 +207,7 @@ public static class AgentPodSpecFactory
             },
             new() { Name = "AGENTHUB_HAS_REPO", Value = hasRepo ? "1" : "0" },
             new() { Name = "AGENTHUB_WORKDIR", Value = repos.Count == 1 ? "/workspace/repo" : "/workspace" },
+            new() { Name = "AGENTHUB_BLOCKED_MCP_SERVERS", Value = System.Text.Json.JsonSerializer.Serialize(context.Runtime.BlockedMcpServers) },
             new() { Name = "AGENTHUB_HAS_MCP", Value = hasMcp ? "1" : "0" },
             new() { Name = "AGENTHUB_BROWSER_ENABLED", Value = context.Runtime.BrowserEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },
             new() { Name = "AGENTHUB_SPAWN_MCP_ENABLED", Value = context.Runtime.SpawnMcpEnabled && request.Mode != SessionMode.Scheduled ? "1" : "0" },

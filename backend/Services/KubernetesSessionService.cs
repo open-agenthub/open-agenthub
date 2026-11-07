@@ -1188,7 +1188,8 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
             : await _library.ResolveMcpServersAsync(owner, ParseMcpServerIds(rec), strict: false, ct);
         if (_opts.SkillLibraryMcp)
             servers = servers.Append(SkillLibraryMcpConfig.BuildServer(_callbackBaseUrl, rec)).ToList();
-        return McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
+        var policy = _mcpPolicies is null ? null : await _mcpPolicies.GetMcpPolicyAsync(rec.Id, ct);
+        return McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral, policy?.BlockedServers);
     }
 
     private static List<(EphemeralApiSource Source, string ConfigJson, string? SecretJson)> PrepareEphemeralSources(
@@ -2100,7 +2101,8 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
                 : await _ephemeralApiMcps.ListBySessionAsync(rec.Id, ct);
             var servers = await _library.ResolveMcpServersAsync(owner, idsToResolve, strict: true, ct);
             var ids = servers.Select(s => s.Id).ToList();
-            var effective = McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral);
+            var sharingPolicy = _mcpPolicies is null ? null : await _mcpPolicies.GetMcpPolicyAsync(rec.Id, ct);
+            var effective = McpConfigAssembler.Merge(rec.McpConfigJson, servers, gateway, ephemeral, sharingPolicy?.BlockedServers);
             if (req.McpServerIds is not null)
                 rec.McpServerIdsJson = ids.Count == 0 ? null : JsonSerializer.Serialize(ids);
 
@@ -2761,6 +2763,8 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         var claudeImage = string.IsNullOrWhiteSpace(_opts.ClaudeAgentImage) ? _opts.AgentImage : _opts.ClaudeAgentImage;
         var artifactUrls = AgentSessionResourceOrchestrator.PresignArtifactUrls(
             _artifacts, ownerKey, record, resume, PresignTtl);
+        var mcpPolicy = _mcpPolicies is null ? null : await _mcpPolicies.GetMcpPolicyAsync(record.Id, ct);
+        var blockedServers = mcpPolicy?.BlockedServers ?? [];
         return new PodBuildContext
         {
             Owner = owner,
@@ -2787,6 +2791,7 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
             Runtime = new AgentPodRuntimeSettings
             {
                 AgentPort = _opts.AgentPort,
+                BlockedMcpServers = blockedServers,
                 BrowserEnabled = _browserEnabled,
                 SpawnMcpEnabled = _spawnMcpEnabled,
                 NetworkMcpEnabled = _networkMcpEnabled,

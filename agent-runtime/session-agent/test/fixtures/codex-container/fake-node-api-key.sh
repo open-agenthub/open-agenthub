@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+# Startup policy is evaluated before MCP configurators in every session.
+if [ "$1" = "/opt/session-agent/common/mcp-startup-policy.js" ]; then
+  exec /usr/local/bin/node "$@"
+fi
 if [ "$1" = "/opt/session-agent/common/server.js" ]; then
   test -z "${CODEX_API_KEY+x}"
   test ! -e /tmp/watcher-called

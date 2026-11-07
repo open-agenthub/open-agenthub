@@ -59,7 +59,8 @@ chmod 600 "$CURSOR_CONFIG_DIR/hooks.json"
 if [ "${AGENTHUB_HAS_MCP:-0}" = "1" ] && [ -f /secrets/mcp/mcp.json ]; then
   node "$RUNTIME/cursor/mcp-config.js" /secrets/mcp/mcp.json agenthub_sessions agenthub_files agenthub_network > "$CURSOR_CONFIG_DIR/mcp.json"
   chmod 600 "$CURSOR_CONFIG_DIR/mcp.json"
-elif [ "${AGENTHUB_SPAWN_MCP_ENABLED:-0}" = "1" ] || [ "${AGENTHUB_FILES_MCP_ENABLED:-0}" = "1" ] || [ "${AGENTHUB_NETWORK_MCP_ENABLED:-0}" = "1" ]; then
+else
+  # A restored configuration must also be replaced when every server is omitted.
   printf '%s\n' '{"mcpServers":{}}' > "$CURSOR_CONFIG_DIR/mcp.json"
   chmod 600 "$CURSOR_CONFIG_DIR/mcp.json"
 fi
