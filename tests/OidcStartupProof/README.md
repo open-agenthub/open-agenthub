@@ -29,3 +29,9 @@ become ready with `backend.trustedCaConfigMap`. PKCE, refresh and a real authent
 admin request prove discovery and signing-key TLS retrieval. The ConfigMap is in the
 release namespace; no host trust store is modified. The previous release is restored.
 Generated keys and logs stay in a temporary directory and are never committed.
+
+The private-CA case also runs the managed `BackendCaProof` client inside the installed
+backend container with its actual `SSL_CERT_FILE`. The mounted bundle must contain
+exactly the generated private root (no public roots). The same HttpClient must fetch
+the private issuer and `https://example.com` successfully. This verifies that the
+runtime image retains its public certificate directory alongside the supplied bundle.

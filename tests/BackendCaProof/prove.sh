@@ -18,5 +18,5 @@ if SSL_CERT_FILE=/dev/null dotnet "$output/app/BackendCaProof.dll" >"$output/unt
   echo 'Unexpected trust of private root' >&2; exit 1
 fi
 grep -Eq 'UntrustedRoot|PartialChain' "$output/untrusted.log"
-SSL_CERT_FILE="$output/ca.crt" dotnet "$output/app/BackendCaProof.dll"
+PROOF_PUBLIC_TLS_URL=https://example.com SSL_CERT_FILE="$output/ca.crt" dotnet "$output/app/BackendCaProof.dll"
 echo 'PASS: same .NET client fails without the private root and succeeds with SSL_CERT_FILE'

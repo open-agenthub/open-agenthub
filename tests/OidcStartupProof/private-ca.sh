@@ -25,6 +25,25 @@ grep -q 'FATAL: OIDC startup validation failed' "$output/untrusted-pods.log"
 grep -Ei 'certificate|SSL|TLS|UntrustedRoot' "$output/untrusted-pods.log"
 helm rollback agenthub "$previous" -n agenthub --wait --timeout 3m
 helm upgrade "${args[@]}" --set backend.trustedCaConfigMap=backend-proof-ca --wait --timeout 3m
+# Run in the installed backend image, so host trust or an SDK image cannot hide a
+# regression where the private-only bundle replaces the runtime's public roots.
+mkdir -p "$output/client"
+docker run --rm --user "$(id -u):$(id -g)" --env DOTNET_CLI_HOME=/tmp \
+  --volume "$PWD:/src:ro" --volume "$output/client:/out" \
+  mcr.microsoft.com/dotnet/sdk:10.0 \
+  dotnet publish /src/tests/BackendCaProof/BackendCaProof.csproj \
+    --artifacts-path /tmp/build -o /out
+backend_pod=$(kubectl get pods -n agenthub -l app=agenthub-backend -o json | jq -r '.items[] | select(any(.status.conditions[]?; .type == "Ready" and .status == "True")) | .metadata.name' | head -1)
+test -n "$backend_pod"
+kubectl exec -n agenthub "$backend_pod" -- sh -c 'test "$SSL_CERT_FILE" = /etc/agenthub/ca/ca.crt && cat "$SSL_CERT_FILE"' >"$output/mounted-ca.crt"
+cmp "$output/ca.crt" "$output/mounted-ca.crt"
+test "$(grep -c 'BEGIN CERTIFICATE' "$output/mounted-ca.crt")" = 1
+for file in BackendCaProof.dll BackendCaProof.deps.json BackendCaProof.runtimeconfig.json; do
+  kubectl exec -i -n agenthub "$backend_pod" -- sh -c 'mkdir -p /tmp/backend-ca-proof; cat > "/tmp/backend-ca-proof/$1"' sh "$file" <"$output/client/$file"
+done
+kubectl exec -n agenthub "$backend_pod" -- env \
+  "PROOF_ISSUER=$PROOF_ISSUER" PROOF_PUBLIC_TLS_URL=https://example.com \
+  dotnet /tmp/backend-ca-proof/BackendCaProof.dll
 kubectl port-forward -n agenthub svc/agenthub-frontend 18080:80 >"$output/proxy.log" 2>&1 &
 proxy_pid=$!
 for i in $(seq 1 30); do if curl -fsS http://127.0.0.1:18080/api/config >/dev/null; then break; fi; sleep 1; done
