@@ -156,6 +156,7 @@ builder.Services.AddTransient<IWorkspaceDiffReader, WorkspaceDiffReader>();
 builder.Services.AddTransient<ISessionCommandsReader, SessionCommandsReader>();
 builder.Services.AddSingleton<AgentHub.Api.Persistence.IModelCatalogStore, AgentHub.Api.Persistence.PostgresModelCatalogStore>();
 builder.Services.AddTransient<ISessionModelCatalogs, SessionModelCatalogs>();
+builder.Services.AddTransient<ISessionModelSwitch, SessionModelSwitch>();
 builder.Services.AddTransient<ISessionTerminalAttachments, SessionTerminalAttachments>();
 // A singleton, unlike the services above: it holds each followed session's offset and entries.
 builder.Services.AddSingleton<ILiveTranscriptReader>(sp => new LiveTranscriptReader(

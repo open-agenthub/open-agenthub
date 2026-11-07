@@ -145,6 +145,12 @@ public interface ISessionStore
     /// state on purpose: usage ingest reads it from here, never from anything the pod sends.
     /// </summary>
     Task SetUsageBillingAsync(string id, string billing, CancellationToken ct = default) => Task.CompletedTask;
+    /// <summary>
+    /// Records the model a session runs on after a switch from the Workspace (#478). A column
+    /// update for the same reason as <see cref="SetCredentialIdAsync"/>: a collaborator switches
+    /// while the owner may be editing the session.
+    /// </summary>
+    Task SetModelNameAsync(string id, string? model, CancellationToken ct = default) => Task.CompletedTask;
     /// <summary>Stores the terminal scrollback so transcripts work without S3.</summary>
     Task SetScrollbackAsync(string id, string text, CancellationToken ct = default);
     Task<string?> GetScrollbackAsync(string id, CancellationToken ct = default);
@@ -379,6 +385,14 @@ public sealed class PostgresSessionStore : ISessionStore
     {
         await using var cmd = _db.CreateCommand("UPDATE sessions SET usage_billing=@b WHERE id=@id");
         cmd.Parameters.AddWithValue("b", billing);
+        cmd.Parameters.AddWithValue("id", id);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    public async Task SetModelNameAsync(string id, string? model, CancellationToken ct = default)
+    {
+        await using var cmd = _db.CreateCommand("UPDATE sessions SET model_name=@m, updated_at=now() WHERE id=@id");
+        cmd.Parameters.AddWithValue("m", (object?)model ?? DBNull.Value);
         cmd.Parameters.AddWithValue("id", id);
         await cmd.ExecuteNonQueryAsync(ct);
     }
