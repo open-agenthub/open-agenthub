@@ -19,6 +19,7 @@ app.MapPost("/{agent}/agent-policy", async (string agent, InternalController.Age
     var result = await controller.AgentPolicy("proof", body, http.RequestAborted);
     return result is ObjectResult value ? Results.Json(value.Value) : Results.Unauthorized();
 });
+app.MapPost("/{agent}/permission", () => Results.Json(new { decision = "allow" }));
 app.MapGet("/config", (string fixture, bool blocked = true) =>
 {
     var inline = JsonSerializer.Serialize(new { mcpServers = new Dictionary<string, object>

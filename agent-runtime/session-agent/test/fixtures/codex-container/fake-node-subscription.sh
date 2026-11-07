@@ -1,5 +1,9 @@
 #!/bin/sh
 set -eu
+# Startup policy is evaluated before MCP configurators in every session.
+if [ "$1" = "/opt/session-agent/common/mcp-startup-policy.js" ]; then
+  exec /usr/local/bin/node "$@"
+fi
 if [ "$1" = "-e" ]; then
   exec /usr/local/bin/node "$@"
 fi
