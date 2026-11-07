@@ -132,9 +132,8 @@ public static partial class ModelCatalogSanitizer
     {
         var models = new List<CatalogModel>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var model in raw.Models ?? [])
+        foreach (var model in (raw.Models ?? []).Where(model => model?.Id is not null && ModelId().IsMatch(model.Id) && seen.Add(model.Id)))
         {
-            if (model?.Id is null || !ModelId().IsMatch(model.Id) || !seen.Add(model.Id)) continue;
             models.Add(new CatalogModel
             {
                 Id = model.Id,

@@ -363,7 +363,7 @@ public class ModelDiscoveryTests
     {
         public int Calls;
         public Store? Store;
-        public List<string> Sessions = [];
+        public readonly List<string> Sessions = [];
         public Task RecordAsync(SessionRecord session, ModelCatalog catalog, CancellationToken ct) => Task.CompletedTask;
         public async Task<ModelCatalog?> ProbeAsync(SessionRecord session, bool refresh, CancellationToken ct)
         {
@@ -385,7 +385,7 @@ public class ModelDiscoveryTests
 
     private sealed class Pod(string body) : HttpMessageHandler
     {
-        public List<(string Uri, string Token)> Requests = [];
+        public readonly List<(string Uri, string Token)> Requests = [];
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
         {
             Requests.Add((request.RequestUri!.ToString(), request.Headers.GetValues("X-Agent-Token").Single()));

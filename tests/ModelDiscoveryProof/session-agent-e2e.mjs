@@ -25,6 +25,8 @@ const base = 20000 + Math.floor(Math.random() * 20000);
 const children = [];
 
 function check(name, ok, detail = '') {
+  // Details quote pod and mock answers: one line each, so an answer cannot forge a PASS line.
+  detail = String(detail).replace(/[\r\n\u2028\u2029]+/g, ' ');
   results.push({ name, ok, detail });
   console.log(`${ok ? 'PASS' : 'FAIL'} ${name}${detail ? ' — ' + detail : ''}`);
 }
@@ -106,7 +108,7 @@ let answer = await models(base);
 check('GET answers account A from the pod cache', ids(answer.body) === 'gpt-6.1-sol,gpt-6-luna', ids(answer.body));
 
 const put = async auth => { const r = await fetch(`http://127.0.0.1:${base}/agenthub/credentials`, { method: 'PUT',
-  headers: { 'X-Agent-Token': token, 'X-Agent-Provider': 'codex', 'Content-Type': 'application/json' }, body: auth }); const text = await r.text();  return r.status; };
+  headers: { 'X-Agent-Token': token, 'X-Agent-Provider': 'codex', 'Content-Type': 'application/json' }, body: auth }); await r.text(); return r.status; };
 check('account switch to B is installed', [200, 202].includes(await put(authB)));
 answer = await models(base);
 check('after the switch the same GET answers account B (no refresh flag)', ids(answer.body) === 'gpt-6-astra' && answer.body.verified, ids(answer.body));
@@ -137,7 +139,6 @@ const everything = logs.join('\n');
 const leaked = secrets.filter(secret => everything.includes(secret));
 check('no credential in responses, hub requests or server logs', leaked.length === 0, leaked.length ? `${leaked.length} leaked` : `${secrets.length} values scanned`);
 
-if (process.env.DUMP) console.log(logs.filter(l => /\[agent\]|rror/.test(l)).join('').slice(0, 3000));
 for (const child of children) if (child.exitCode === null) { child.kill('SIGKILL'); }
 hub.close();
 fs.rmSync(work, { recursive: true, force: true });
