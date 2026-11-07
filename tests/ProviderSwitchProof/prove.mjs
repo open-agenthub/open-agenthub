@@ -210,7 +210,9 @@ try{
     assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);assert.equal(fingerprint(),baseline);
     const restoredEnv=resumed.spec.containers.find(item=>item.name==='agent').env;
     assert.equal(restoredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
-    assert.equal(restoredEnv.find(item=>item.name==='AGENTHUB_PROMPT').value,'');
+    assert(!restoredEnv.find(item=>item.name==='AGENTHUB_PROMPT').valueFrom);
+    assert.equal(restoredEnv.find(item=>item.name==='AGENTHUB_PROMPT').value??'','');
+    assert.equal(exec(`node -e 'process.stdout.write(String(!process.env.AGENTHUB_PROMPT))'`),'true');
     terminal=await openTerminal(id);
     await until(()=>terminal.screen().some(line=>/^\s*[›❯]/.test(line)&&!line.includes('SWITCH-PROOF-')),'resumed native composer');
     const nativeState=JSON.parse(exec(`node -e 'fetch("http://127.0.0.1:7681/agenthub/provider-switch",{headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN}}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));
@@ -237,7 +239,9 @@ try{
      assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);assert.equal(fingerprint(),baseline);
      const recoveredEnv=recovered.spec.containers.find(item=>item.name==='agent').env;
      assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
-     assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_PROMPT').value,'');
+     assert(!recoveredEnv.find(item=>item.name==='AGENTHUB_PROMPT').valueFrom);
+     assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_PROMPT').value??'','');
+     assert.equal(exec(`node -e 'process.stdout.write(String(!process.env.AGENTHUB_PROMPT))'`),'true');
      terminal=await openTerminal(id);
      await until(()=>terminal.screen().some(line=>/^\s*[›❯]/.test(line)&&!line.includes('SWITCH-PROOF-')),'recovered native composer');
      const recoveredState=JSON.parse(exec(`node -e 'fetch("http://127.0.0.1:7681/agenthub/provider-switch",{headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN}}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));
