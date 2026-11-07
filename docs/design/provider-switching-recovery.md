@@ -130,3 +130,18 @@ The existing panel renders unavailable reasons without offering the review form;
 UI readiness state is needed. The lazy generation-zero history remains untagged until its
 first committed replacement; held-history proofs check retained content independently of
 those optional legacy tags.
+
+
+## Damaged checkpoint metadata must not disable ordinary persistence
+
+The real ordinary Claude pause control reproduced an archive being skipped when an optional
+checkpoint file contained invalid JSON. An active transcript can repair invalid metadata,
+anchored to the committed native ID when known. If the helper file remains unwritable,
+ordinary archive saves log a warning and continue; discarding native state because its helper
+cannot be saved was rejected. Replacement checkpoints still require successful metadata I/O.
+Restored invalid or mismatched metadata still refuses strict resume before launching the CLI:
+repair during an active checkpoint does not authorize guessing a restored conversation.
+The actual ordinary Claude/Codex pause controls cover invalid, oversized and unwritable paths.
+
+Availability polls every two seconds only while the switch panel is open or an operation is
+active. Closed idle panels do not poll, and pending operations avoid the pod-read path.

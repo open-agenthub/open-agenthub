@@ -32,8 +32,11 @@ function resolve(env, directory, fs, legacyId) {
 
 function save(env, directory, fs, nativeId) {
   if (!UUID.test(nativeId || '')) return;
-  const prior = read(directory, fs);
-  const base = prior?.baseNativeId || (env.AGENTHUB_REQUIRE_NATIVE_RESUME === '1' && UUID.test(env.AGENTHUB_NATIVE_SESSION_ID || '')
+  let prior;
+  // An active native transcript establishes the identity for a new checkpoint. Damaged
+  // helper metadata must not disable ordinary pause; restored metadata stays strict in resolve.
+  try { prior = read(directory, fs); } catch { prior = null; }
+  const base = prior?.baseNativeId || (UUID.test(env.AGENTHUB_NATIVE_SESSION_ID || '')
     ? env.AGENTHUB_NATIVE_SESSION_ID : nativeId);
   if (prior?.nativeId === nativeId) return;
   const file = path.join(directory, FILE);

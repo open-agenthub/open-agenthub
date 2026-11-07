@@ -73,6 +73,8 @@ try {
   assert(agents.length&&agents.every(agent=>['claude','codex'].includes(agent)));
   for (const agent of agents) {
     const ordinaryNew=process.env.PROOF_ORDINARY_NEW_RESUME==='1';
+    const corruptNormal=process.env.PROOF_CORRUPT_NORMAL_CHECKPOINT;
+    if(corruptNormal)assert(['invalid','oversized','unwritable'].includes(corruptNormal)&&process.env.PROOF_SOURCE_PREPARE!=='1');
     if(ordinaryNew)assert(agent==='codex'&&process.env.PROOF_SOURCE_PREPARE==='1','ordinary /new acceptance requires the managed Codex source rig');
     const root = path.join(out, agent); const home = path.join(root, 'home'); const work = path.join(root, 'work');
     for (const dir of [work, path.join(home, '.claude'), path.join(home, '.codex'), path.join(root, 'tmp')]) fs.mkdirSync(dir, { recursive: true });
@@ -132,7 +134,7 @@ try {
       Object.assign(env,{AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_RESUME:'1',AGENTHUB_STATE_RESTORED:'0'});
       delete env.AGENTHUB_PROVIDER_SWITCH_ID;
     }
-    if(ordinaryNew)delete env.AGENTHUB_PROVIDER_SWITCH_ID;
+    if(ordinaryNew||corruptNormal)delete env.AGENTHUB_PROVIDER_SWITCH_ID;
     let command = process.execPath, args = [path.join(repo, 'agent-runtime/session-agent/server.js')];
     if (process.env.PROOF_SOURCE_PREPARE === '1' && agent === 'codex') {
       assert(process.env.PROOF_PROOT && path.isAbsolute(process.env.PROOF_PROOT), 'managed source proof requires PROOF_PROOT');
@@ -196,8 +198,27 @@ try {
       const route = 'http://127.0.0.1:18674/agenthub/provider-switch';
       const state = await until(async () => {
         const current = await (await fetch(route, { headers: authority })).json();
-        return current.ready && (ordinaryNew||current.markerSeen) && current.nativeId && current;
+        return current.ready && (ordinaryNew||corruptNormal||current.markerSeen) && current.nativeId && current;
       });
+      if(corruptNormal){
+        assert(!env.AGENTHUB_PROVIDER_SWITCH_ID&&!env.AGENTHUB_REQUIRE_NATIVE_RESUME);
+        const directory=path.join(home,agent==='claude'?'.claude':'.codex');
+        if(corruptNormal==='unwritable')fs.mkdirSync(path.join(directory,'agenthub-native-checkpoint.json'));
+        else fs.writeFileSync(path.join(directory,'agenthub-native-checkpoint.json'),corruptNormal==='invalid'?'{':'x'.repeat(2049));
+        const before=archives.filter(item=>item.route==='/state/'+agent).length;
+        const stopped=new Promise(resolve=>child.once('exit',resolve));process.kill(-child.pid,'SIGTERM');await stopped;
+        assert.equal(child.exitCode,0);
+        const saved=archives.filter(item=>item.route==='/state/'+agent);assert(saved.length>before,'corrupt checkpoint must not block ordinary pause/archive upload');
+        const archive=path.join(root,'normal-pause.tgz');fs.writeFileSync(archive,saved.at(-1).bytes);
+        const restored=path.join(root,'normal-pause-restore');fs.mkdirSync(restored);execFileSync('tar',['xzf',archive,'-C',restored]);
+        if(corruptNormal!=='unwritable'){
+          const checkpoint=JSON.parse(fs.readFileSync(path.join(restored,agent==='claude'?'.claude':'.codex','agenthub-native-checkpoint.json'),'utf8'));
+          assert.equal(checkpoint.nativeId,state.nativeId);assert.equal(checkpoint.baseNativeId,state.nativeId);
+        }
+        assert(fs.readdirSync(restored,{recursive:true}).filter(file=>file.endsWith('.jsonl')).some(file=>fs.readFileSync(path.join(restored,file),'utf8').includes('HISTORY-'+agent+'-0')),'actual uploaded archive retains the native user turn');
+        console.log(agent+': '+corruptNormal+' checkpoint tolerated; ordinary runtime SIGTERM/pause uploaded real native archive with the same identity');
+        continue;
+      }
       let resumeNativeId=state.nativeId;
       let resumeHistory='HISTORY-'+agent+'-0';
       if(process.env.PROOF_CRASH_NATIVE_TARGET==='1'){

@@ -160,7 +160,7 @@ instead stay held without replay or another pod. A separate source-pod-loss case
 before source stop and checks generation, queue, acknowledged source archive and no target.
 Read-only inspector pods compare actual retained repository bytes after pod loss.
 
-These worker outcomes remain pending until the explicit dispatch succeeds. No production
+Worker run 42413821998 passed all eight cases and its full workflow: two storage repairs, two ambiguous target losses, two source losses and two scheduler holds. The budget row uses the AgentHub per-user budget (stand-in model), not real provider access. No production
 fault route, credential bypass or host policy change is introduced. The held source/target
 cases may need administrator preservation/deletion; no automatic rollback or migration is
 claimed. Generated output stays outside Git.
@@ -168,4 +168,14 @@ claimed. Generated output stays outside Git.
 The held scope also covers real scheduler refusal on a cordoned disposable worker node,
 restored scheduling of the same target UID, duplicate request idempotency, changed-review
 refusal, unknown endpoint model capacity and the personal Claude API-budget gate. These
-additional rows require their own successful worker dispatch; syntax checking is not acceptance.
+additional rows passed in worker run 42413821998; syntax checking alone is not acceptance.
+
+## Ordinary pause with damaged checkpoint metadata
+
+`PROOF_CORRUPT_NORMAL_CHECKPOINT=invalid` in the real CLI capture starts an ordinary
+session without provider-switch or strict-resume flags, damages its checkpoint after the
+real answer, and sends the real runtime SIGTERM used by pause. Require a new successful
+archive upload, extract it with real tar, and inspect its native turn and repaired identity.
+Repeat with `oversized` and `unwritable` (a directory occupying the checkpoint path).
+Both pinned CLIs pass all three variants; the pre-fix invalid Claude control uploaded no
+archive. This proves local normal-session persistence, not a new cluster crash matrix.
