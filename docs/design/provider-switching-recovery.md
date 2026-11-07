@@ -97,7 +97,7 @@ or mismatched checkpoint metadata refuses startup.
 
 Reject registry-ID-only binding: explicit context clear can change the current native ID
 without changing the registry. Restoring the original ID would restore cleared context. A
-real managed Codex clear→checkpoint→stop→fresh-home restore→resume proof verifies the new
+real managed Claude and Codex clear→checkpoint→stop→fresh-home restore→resume proofs verify the new
 identity and follow-up reach the model without the cleared earlier task. Multiple clears keep
 the same base anchor and checkpoint the new active identity each time. Metadata lives beside
 opaque native state; native resume files and transcript formats are not translated.

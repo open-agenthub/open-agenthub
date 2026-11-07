@@ -96,6 +96,8 @@ PROOF_CLI_BIN=/absolute/pinned/cli/bin node tests/ProviderRuntimeProof/capture.m
 ```
 
 The managed real CLI clears its context, creates a new native ID, checkpoints and exits.
+The same control passes for Claude with `PROOF_AGENTS=claude` and without PROOF_PROOT;
+Codex needs the managed requirements mounted through the proot rig.
 The archive is restored into fresh home contents under the same path and managed runtime.
 Resume must select the checkpoint's active ID, not the original registry ID. The new owner
 request must include the post-clear task and omit the earlier cleared task. The local hub

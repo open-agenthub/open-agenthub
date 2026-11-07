@@ -233,18 +233,18 @@ try {
         await until(()=>Array.from({length:term.rows},(_,index)=>term.buffer.active.getLine(term.buffer.active.viewportY+index)?.translateToString(true)??'').some(line=>/^\s*›/.test(line)&&!line.includes('HISTORY-')));
         socket.send(JSON.stringify({type:'input',data:'HISTORY-codex-1'}));await sleep(200);
         socket.send(JSON.stringify({type:'input',data:'\r'}));
-        const changed=await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.nativeId&&current.nativeId!==state.nativeId&&(await transcript()).includes('Answer HISTORY-codex-1')&&current;});
-        resumeNativeId=changed.nativeId;resumeHistory='HISTORY-codex-1';
+        const changed=await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.nativeId&&current.nativeId!==state.nativeId&&(await transcript()).includes('Answer HISTORY-'+agent+'-1')&&current;});
+        resumeNativeId=changed.nativeId;resumeHistory='HISTORY-'+agent+'-1';
         assert((await transcript()).includes('HISTORY-codex-0'),'Workspace history retains the earlier conversation across /new');
         console.log('codex: ordinary generation-zero /new changed native identity and Workspace transcript');
       }
       if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1'){
-        assert(agent==='codex'&&process.env.PROOF_SOURCE_PREPARE==='1','native clear proof requires the managed Codex source rig');
-        const cleared=await fetch('http://127.0.0.1:18674/agenthub/context-clear',{method:'POST',headers:authority,body:JSON.stringify({followUp:'HISTORY-codex-1'})});
+        assert(process.env.PROOF_SOURCE_PREPARE==='1','native clear proof requires the managed source rig');
+        const cleared=await fetch('http://127.0.0.1:18674/agenthub/context-clear',{method:'POST',headers:authority,body:JSON.stringify({followUp:'HISTORY-'+agent+'-1'})});
         assert.equal(cleared.status,202,await cleared.clone().text());
-        const changed=await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.nativeId&&current.nativeId!==state.nativeId&&(await transcript()).includes('Answer HISTORY-codex-1')&&current;});
-        resumeNativeId=changed.nativeId;resumeHistory='HISTORY-codex-1';
-        console.log('codex: actual context clear created a new native identity before archive recovery');
+        const changed=await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.nativeId&&current.nativeId!==state.nativeId&&(await transcript()).includes('Answer HISTORY-'+agent+'-1')&&current;});
+        resumeNativeId=changed.nativeId;resumeHistory='HISTORY-'+agent+'-1';
+        console.log(agent+': actual context clear created a new native identity before archive recovery');
       }
       if (process.env.PROOF_SOURCE_PREPARE === '1'&&!ordinaryNew) {
         const nextRequest = '22222222-2222-4222-8222-222222222222';
@@ -346,7 +346,7 @@ try {
           resumedSocket.send(JSON.stringify({type:'input',data:'\r'}));
           await until(()=>requests.some(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')&&item.text.includes(resumeHistory)));
           assert(!requests.some(item=>item.text.includes('STALE-SOURCE-PROMPT-MUST-NOT-RUN')));
-          if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('HISTORY-codex-0')));
+          if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('HISTORY-'+agent+'-0')));
           if(ordinaryNew)assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('HISTORY-codex-0')),'ordinary resume must continue the /new thread');
           if(agent==='codex'&&process.env.PROOF_POISON_NATIVE_POINTER==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('OTHER-NATIVE-CONVERSATION')));
           await until(async()=>(await transcript()).includes('FOLLOWUP-AFTER-NATIVE-RESUME'));
