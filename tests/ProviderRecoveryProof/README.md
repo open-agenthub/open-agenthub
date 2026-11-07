@@ -72,15 +72,17 @@ committed identity. Both histories come from actual CLI execution. The resumed m
 receive the original conversation and new owner turn without the other conversation's text.
 This checks native identity selection, not a crash/replica result.
 
-The external coordinator queues for the production lifecycle advisory key before killing a
+The external coordinator polls for the production lifecycle advisory key before killing a
 backend. It briefly parks competing workers on that advisory lease while the replacement
-initializes, then releases it; it holds no table or row lock during startup. A held journal
+initializes, then releases it; it holds no application table or row lock during startup. A held journal
 write plus queued schema DDL can otherwise block the proof's own observer. The real-PostgreSQL
 self-test reproduces that convoy and verifies handoff, schema completion and worker yield.
 The installed host can deny PostgreSQL backend-termination signals. A disconnected client
 also does not necessarily interrupt its deliberately unbounded query. The rig therefore
 waits for the separate lifecycle lease to prove backend death, then raises a SQL exception
-only inside the orphaned proof trigger. Advisory handoff exits through a separate SQL release
+only inside the orphaned proof trigger. Blocking advisory waiters can also remain asleep after their lock is granted when the host
+denies database wakeup signals. Acquire through a short `pg_try_advisory_lock` polling loop
+instead, matching the product’s nonblocking lock primitive. Advisory handoff exits through a separate SQL release
 flag, without database signals. This models an interrupted uncommitted write explicitly; it
 does not claim that all real SQL automatically rolls back immediately on TCP disconnect.
 Observer commands have statement/lock/process deadlines, and cleanup commits gate release

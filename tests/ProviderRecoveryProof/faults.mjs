@@ -21,16 +21,16 @@ export function createRecoveryFaults({json,control='agenthub'}){
  async function park(id,sequence){
   assert(/^[a-z0-9-]{1,64}$/i.test(id));
   const name='provider_recovery_handoff_'+sequence;
-  // Queue before the crash, ahead of replicas trying the nonblocking lifecycle lease.
-  // The lease holds no journal/table lock while a replacement runs schema initialization.
-  const child=spawn('kubectl',[...psql,`SET application_name='${name}'; SELECT pg_advisory_lock(hashtextextended('${id}',1)); DO $$ BEGIN WHILE NOT EXISTS(SELECT 1 FROM provider_recovery_proof_gates WHERE sequence=${sequence} AND handoff_released) LOOP PERFORM pg_sleep(0.1); END LOOP; END $$; SELECT pg_advisory_unlock(hashtextextended('${id}',1));`],{stdio:['ignore','pipe','pipe']});
+  // Poll before the crash: blocking waiters may never wake under host signal confinement.
+  // The lease holds no application table lock while a replacement runs schema initialization.
+  const child=spawn('kubectl',[...psql,`SET application_name='${name}'; DO $$ BEGIN WHILE NOT pg_try_advisory_lock(hashtextextended('${id}',1)) LOOP PERFORM pg_sleep(0.001); END LOOP; WHILE NOT EXISTS(SELECT 1 FROM provider_recovery_proof_gates WHERE sequence=${sequence} AND handoff_released) LOOP PERFORM pg_sleep(0.1); END LOOP; END $$; SELECT pg_advisory_unlock(hashtextextended('${id}',1));`],{stdio:['ignore','pipe','pipe']});
   child.stdout.resume();let stderr='';child.stderr.on('data',bytes=>{stderr+=bytes;});
   child.on('error',error=>{failure=error;});
   child.once('exit',(code,signal)=>console.log('Recovery lease '+name+': client exit '+code+'/'+signal+(stderr?' ('+stderr.trim()+')':'')));
   const lease={child,name,sequence};leases.add(lease);
-  lease.pid=await wait(()=>sql(`SELECT a.pid FROM pg_stat_activity a JOIN pg_locks l ON l.pid=a.pid WHERE a.application_name='${name}' AND l.locktype='advisory' AND NOT l.granted;`),'external lifecycle waiter queues');
+  lease.pid=await wait(()=>sql(`SELECT pid FROM pg_stat_activity WHERE application_name='${name}' AND state='active';`),'external lifecycle polling client starts');
   assert(/^\d+$/.test(lease.pid));
-  console.log('Recovery lease '+name+': queued database PID '+lease.pid);
+  console.log('Recovery lease '+name+': polling database PID '+lease.pid);
   return lease;
  }
  async function unpark(lease){

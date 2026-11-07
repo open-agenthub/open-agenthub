@@ -27,8 +27,8 @@ try{
  await wait("SELECT EXISTS(SELECT 1 FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.application_name='proof529-lifecycle' AND l.locktype='advisory' AND l.granted);",'t');
  const writer=client("UPDATE session_provider_switches SET phase='prepared';");
  await wait("SELECT count(*) FROM pg_locks WHERE locktype='advisory' AND classid=529 AND objid=1 AND granted;",'1');
- const handoff=client("SET application_name='proof529-handoff'; SELECT pg_advisory_lock(hashtextextended('proof529-session',1)); DO $$ BEGIN WHILE NOT EXISTS(SELECT 1 FROM provider_recovery_proof_gates WHERE sequence=1 AND handoff_released) LOOP PERFORM pg_sleep(0.1); END LOOP; END $$; SELECT pg_advisory_unlock(hashtextextended('proof529-session',1));");
- await wait("SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.application_name='proof529-handoff' AND l.locktype='advisory' AND NOT l.granted;",'1');
+ const handoff=client("SET application_name='proof529-handoff'; DO $$ BEGIN WHILE NOT pg_try_advisory_lock(hashtextextended('proof529-session',1)) LOOP PERFORM pg_sleep(0.001); END LOOP; WHILE NOT EXISTS(SELECT 1 FROM provider_recovery_proof_gates WHERE sequence=1 AND handoff_released) LOOP PERFORM pg_sleep(0.1); END LOOP; END $$; SELECT pg_advisory_unlock(hashtextextended('proof529-session',1));");
+ await wait("SELECT count(*) FROM pg_stat_activity WHERE application_name='proof529-handoff' AND state='active';",'1');
  const startup=client('ALTER TABLE session_provider_switches ADD COLUMN proof_initialized BOOLEAN;');
  await wait("SELECT count(*) FROM pg_locks WHERE relation='session_provider_switches'::regclass AND mode='AccessExclusiveLock' AND NOT granted;",'1');
  assert.throws(()=>sql(url.toString(),"SET statement_timeout='300ms'; SELECT phase FROM session_provider_switches;"),/timeout/);
