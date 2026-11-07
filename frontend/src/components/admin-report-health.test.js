@@ -1,3 +1,4 @@
+// @vitest-environment happy-dom
 import { mount, flushPromises } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ adminOverview: vi.fn() }))
