@@ -36,8 +36,7 @@ public sealed class McpSigningKeyStore
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(McpSigningKeyStore), ddl, ct);
     }
 
     public Task<X509Certificate2> GetSigningCertificateAsync(CancellationToken ct = default)

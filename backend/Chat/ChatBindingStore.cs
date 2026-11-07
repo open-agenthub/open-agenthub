@@ -93,8 +93,7 @@ public sealed class ChatBindingStore : IChatSessionCleanup
             );
             CREATE INDEX IF NOT EXISTS idx_chat_pins_owner ON chat_pins(owner);
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(ChatBindingStore), ddl, ct);
     }
 
     public async Task UpsertAsync(ChatBinding b, CancellationToken ct = default)

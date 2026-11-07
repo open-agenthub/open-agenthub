@@ -47,8 +47,7 @@ public sealed class LicenseStore : ILicenseStore
             ALTER TABLE app_license ADD COLUMN IF NOT EXISTS last_report_error TEXT;
             ALTER TABLE app_license ADD COLUMN IF NOT EXISTS last_report_error_at TIMESTAMPTZ;
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(LicenseStore), ddl, ct);
     }
 
     public async Task<string?> GetTokenAsync(CancellationToken ct = default)

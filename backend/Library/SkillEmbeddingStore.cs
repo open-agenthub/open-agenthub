@@ -37,8 +37,7 @@ public sealed class SkillEmbeddingStore : ISkillEmbeddingStore
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(SkillEmbeddingStore), ddl, ct);
     }
 
     public async Task UpsertAsync(

@@ -43,18 +43,13 @@ public sealed class LibraryShareStore : ILibraryShareStore
                 key   TEXT PRIMARY KEY,
                 value TEXT NOT NULL
             );
-            """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
-
-        // Widen item_type check if an older MCP-only constraint exists.
-        await using var alter = _db.CreateCommand("""
+            -- Widens an older MCP-only check. It used to run separately with its errors ignored,
+            -- for replicas initialising at the same time; SchemaMigrationLock serialises those now.
             ALTER TABLE library_shares DROP CONSTRAINT IF EXISTS library_shares_item_type_check;
             ALTER TABLE library_shares ADD CONSTRAINT library_shares_item_type_check
                 CHECK (item_type IN ('mcp', 'skill'));
-            """);
-        try { await alter.ExecuteNonQueryAsync(ct); }
-        catch (PostgresException) { /* concurrent init / already correct */ }
+            """;
+        await SchemaScript.ApplyAsync(_db, nameof(LibraryShareStore), ddl, ct);
     }
 
     public async Task<LibraryShares> GetSharesAsync(

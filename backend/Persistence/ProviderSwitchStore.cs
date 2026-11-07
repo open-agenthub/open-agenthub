@@ -33,7 +33,7 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var command = _db.CreateCommand("""
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresProviderSwitchStore), """
             CREATE TABLE IF NOT EXISTS session_provider_switches (
                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 request_id UUID NOT NULL, request JSONB NOT NULL, progress JSONB NOT NULL,
@@ -42,8 +42,7 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
             );
             CREATE UNIQUE INDEX IF NOT EXISTS session_provider_switch_active
                 ON session_provider_switches(session_id) WHERE phase NOT IN ('completed','cancelled');
-            """);
-        await command.ExecuteNonQueryAsync(ct);
+            """, ct);
     }
 
     public async Task CreateAsync(string owner, ProviderSwitchRequest request, CancellationToken ct = default)

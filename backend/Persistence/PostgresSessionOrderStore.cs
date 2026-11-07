@@ -8,15 +8,14 @@ public sealed class PostgresSessionOrderStore(IConfiguration configuration)
 
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var command = _db.CreateCommand("""
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresSessionOrderStore), """
             CREATE TABLE IF NOT EXISTS session_sidebar_order (
                 owner TEXT NOT NULL,
                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 position INTEGER NOT NULL,
                 PRIMARY KEY (owner, session_id)
             );
-            """);
-        await command.ExecuteNonQueryAsync(ct);
+            """, ct);
     }
 
     public async Task<IReadOnlyList<string>> GetAsync(string owner, CancellationToken ct = default)

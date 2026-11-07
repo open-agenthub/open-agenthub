@@ -213,8 +213,7 @@ public sealed class PostgresUsageStore : IUsageStore, IExecutionUsageStore
                 PRIMARY KEY (owner, month)
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresUsageStore), ddl, ct);
     }
 
     public async Task<bool> AddDeltaAsync(SessionUsageDelta delta, CancellationToken ct = default)

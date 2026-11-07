@@ -124,8 +124,7 @@ public sealed class EphemeralApiMcpStore : IEphemeralApiMcpStore
             CREATE INDEX IF NOT EXISTS idx_ephemeral_api_mcp_session
                 ON ephemeral_api_mcp(session_id);
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(EphemeralApiMcpStore), ddl, ct);
     }
 
     public async Task RegisterAsync(EphemeralApiMcpEntry entry, CancellationToken ct = default)

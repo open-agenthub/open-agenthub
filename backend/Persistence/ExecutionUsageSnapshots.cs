@@ -18,7 +18,7 @@ public sealed class PostgresExecutionUsageSnapshots(IConfiguration configuration
     private readonly NpgsqlDataSource _db = PostgresDataSources.Shared(configuration);
     public async Task InitializeAsync(CancellationToken ct = default)
     {
-        await using var command = _db.CreateCommand("""
+        await SchemaScript.ApplyAsync(_db, nameof(PostgresExecutionUsageSnapshots), """
             CREATE TABLE IF NOT EXISTS session_execution_usage (
                 session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
                 generation BIGINT NOT NULL, agent TEXT NOT NULL, credential_id TEXT, billing TEXT NOT NULL,
@@ -27,8 +27,7 @@ public sealed class PostgresExecutionUsageSnapshots(IConfiguration configuration
                 cost_usd DOUBLE PRECISION NOT NULL, api_cost_usd DOUBLE PRECISION NOT NULL, estimated_cost_usd DOUBLE PRECISION NOT NULL,
                 PRIMARY KEY(session_id,generation)
             )
-            """);
-        await command.ExecuteNonQueryAsync(ct);
+            """, ct);
     }
     public async Task CaptureAsync(string owner, string id, long generation, CancellationToken ct = default)
     {

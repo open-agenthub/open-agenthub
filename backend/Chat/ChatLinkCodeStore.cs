@@ -31,8 +31,7 @@ public sealed class ChatLinkCodeStore
                 created_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(ChatLinkCodeStore), ddl, ct);
     }
 
     /// <summary>

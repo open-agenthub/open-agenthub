@@ -72,11 +72,7 @@ public sealed class SlackThreadStore
                 END IF;
             END $migration$;
             """;
-        await using var connection = await _db.OpenConnectionAsync(ct);
-        await using var transaction = await connection.BeginTransactionAsync(ct);
-        await using var cmd = new NpgsqlCommand(ddl, connection, transaction);
-        await cmd.ExecuteNonQueryAsync(ct);
-        await transaction.CommitAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(SlackThreadStore), ddl, ct);
         await PruneDeletedAsync(ct);
     }
 

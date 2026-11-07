@@ -56,6 +56,9 @@ public static class SchemaMigrationLock
         // Connection recovery and lock contention share one budget: two independent ten-minute
         // waits would let the startup probe kill a replica that is making progress.
         await WaitAsync(conn, logger, budget - started.Elapsed, ct);
+        // The stores apply their scripts without a logger of their own; this is how a replica's
+        // log says which table it is waiting for (#538).
+        SchemaScript.Logger.Value = logger;
         try
         {
             await migrate();

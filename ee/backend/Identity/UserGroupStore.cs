@@ -46,8 +46,7 @@ public sealed class UserGroupStore
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
             );
             """;
-        await using var cmd = _db.CreateCommand(ddl);
-        await cmd.ExecuteNonQueryAsync(ct);
+        await SchemaScript.ApplyAsync(_db, nameof(UserGroupStore), ddl, ct);
     }
 
     /// <summary>Replaces the owner's memberships with the groups from the current token.</summary>
