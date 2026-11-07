@@ -50,6 +50,9 @@ spec:
           env:
             - { name: KC_BOOTSTRAP_ADMIN_USERNAME, value: admin }
             - { name: KC_BOOTSTRAP_ADMIN_PASSWORD, value: demo-only-admin }
+            # Rig only: under QEMU's emulated CPU the JVM's optimising compilers crashed it in a
+            # loop (SIGABRT in a JIT frame). One C1 compiler thread got it up.
+            - { name: JAVA_OPTS_APPEND, value: "-XX:TieredStopAtLevel=1 -XX:CICompilerCount=1" }
           ports: [{ containerPort: 8080 }]
           volumeMounts: [{ name: realm, mountPath: /opt/keycloak/data/import }]
       volumes: [{ name: realm, configMap: { name: realm } }]

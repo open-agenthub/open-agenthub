@@ -13,11 +13,11 @@ apiVersion: v1
 kind: ConfigMap
 metadata: { name: coredns-custom, namespace: kube-system }
 data:
+  # A second "hosts" plugin in the main block crash-loops CoreDNS ("can only be used once per
+  # Server Block"), which takes all cluster DNS down; a rewrite to the ingress Service does not.
   demo.override: |
-    hosts {
-      $IP hub.example.com id.example.com
-      fallthrough
-    }
+    rewrite name hub.example.com traefik.kube-system.svc.cluster.local
+    rewrite name id.example.com traefik.kube-system.svc.cluster.local
 YAML
 kubectl -n kube-system rollout restart deploy/coredns >/dev/null; echo "names -> $IP"
 GUEST
