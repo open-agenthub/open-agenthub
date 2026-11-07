@@ -164,3 +164,8 @@ These worker outcomes remain pending until the explicit dispatch succeeds. No pr
 fault route, credential bypass or host policy change is introduced. The held source/target
 cases may need administrator preservation/deletion; no automatic rollback or migration is
 claimed. Generated output stays outside Git.
+
+The held scope also covers real scheduler refusal on a cordoned disposable worker node,
+restored scheduling of the same target UID, duplicate request idempotency, changed-review
+refusal, unknown endpoint model capacity and the personal Claude API-budget gate. These
+additional rows require their own successful worker dispatch; syntax checking is not acceptance.

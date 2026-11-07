@@ -14,3 +14,6 @@ startup command timeout. Release the writer and verify initialization succeeds. 
 uses the actual production data-source and initialization code. No Kubernetes or native
 CLI is involved, and it does not identify the actual lock holder of a failed worker run.
 Keep generated logs outside Git. Allow about 30 seconds after compilation.
+
+This invokes the store method directly. From #539, normal application startup skips unchanged
+schemas using its schema-version coordinator; this diagnostic does not test that skip path.

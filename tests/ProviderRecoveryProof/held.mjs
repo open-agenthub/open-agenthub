@@ -22,9 +22,9 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
     try{await until(()=>{const value=json('-n',ns,'get','pod',inspector);const state=value.status.containerStatuses?.find(item=>item.name==='inspect')?.state?.terminated;if(state&&state.exitCode!==0)throw Object.assign(new Error('read-only workspace inspector failed'),{fatal:true});return state;},'read-only retained workspace verification');assert.equal(kubectl('-n',ns,'logs',inspector,'-c','inspect'),baseline);}
     finally{kubectl('-n',ns,'delete','pod',inspector,'--wait=true');}
  }
- let id,terminal,subscriptions=false;
+ let id,terminal,subscriptions=false,cordonedNode;
  try{
-  for(const sourceAgent of ['Claude','Codex'])for(const loss of [false,true,'source']){
+  for(const sourceAgent of ['Claude','Codex'])for(const loss of [false,true,'source','schedule']){
    selector(originalSelector);
    const target=sourceAgent==='Claude'?'Codex':'Claude';
    const created=await api('sessions','POST',{title:'Held recovery '+sourceAgent+' '+loss,agent:sourceAgent,authMode:'ApiKey',mode:'Interactive',prompt:'SWITCH-PROOF-0',autoApprove:false,
@@ -62,6 +62,21 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
      if(mode==='ApiKey'){const current=json('-n',ns,'get','secret',secretName);current.data=stored.data;replace(current);}else create(stored);
     }
    }
+   if(loss===false){
+    const unknown={...selection,requestId:crypto.randomUUID(),target:{...selection.target,authMode:'CustomEndpoint',modelEndpointUrl:'https://model.example.com/v1',modelName:'unlisted-proof-model'}};
+    await denied(id,'/preview',unknown,/catalog|capacity/i);
+    if(target==='Claude'){
+     const prior=await api('usage/limit');
+     const reviewed=await api('sessions/'+id+'/provider-switch/preview','POST',selection);
+     try{
+      const limited=await api('usage/limit','PUT',{limitUsd:0});assert.equal(limited.blocked,true);
+      await denied(id,'/preview',selection,/Monthly API budget reached/);
+      await denied(id,'',{...selection,reviewHash:reviewed.reviewHash},/Monthly API budget reached/);
+     }finally{await api('usage/limit','PUT',{limitUsd:prior.personalLimitUsd??null});}
+    }
+    assert.equal(pod().metadata.uid,first.metadata.uid);assert.equal((await api('sessions/'+id)).executionGeneration,0);assert.equal(fingerprint(),baseline);
+    console.log(sourceAgent+': unknown endpoint model capacity'+(target==='Claude'?' and reached personal API budget':'')+' refused before source stop.');
+   }
    // A stale registry UID must not authorize a different claim even with the same name.
    const stale=crypto.randomUUID();sql(`UPDATE session_workspaces SET claim_uid='${stale}' WHERE session_id='${id}';`);
    try{await denied(id,'/preview',selection,/workspace|claim/i);assert.equal(pod().metadata.uid,first.metadata.uid);assert.equal(fingerprint(),baseline);}
@@ -91,6 +106,36 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
     console.log(sourceAgent+': source pod lost before stop stays held with generation/queue/native archive and byte-identical read-only workspace; no target is created.');
     await api('sessions/'+id,'DELETE',undefined,204);id=null;
     await until(()=>{try{json('-n',ns,'get','pvc',claim);return false;}catch{return true;}},'lost-source claim cleanup');
+    continue;
+   }
+   if(loss==='schedule'){
+    // Cordon only this disposable worker; existing source/backend pods keep running.
+    const node=first.spec.nodeName;assert(node);assert.notEqual(json('get','node',node).spec.unschedulable,true);
+    kubectl('cordon',node);cordonedNode=node;
+    const review=await api('sessions/'+id+'/provider-switch/preview','POST',selection);
+    const start={...selection,reviewHash:review.reviewHash};await api('sessions/'+id+'/provider-switch','POST',start);
+    const queued='HELD-CHECKPOINT-'+sourceAgent+'-schedule';await api('sessions/'+id+'/messages','POST',{body:queued,priority:true});
+    terminal.close();terminal=null;
+    let retries=0;
+    const pending=await until(async()=>{
+     const state=await api('sessions/'+id+'/provider-switch');
+     if(state.operation?.progress.phase==='requested'&&state.operation.progress.error?.startsWith('Finish the current turn')&&retries++<10)await api('sessions/'+id+'/provider-switch/retry','POST',{requestId:selection.requestId});
+     try{const value=pod();return value.metadata.uid!==first.metadata.uid&&value.status.conditions?.some(item=>item.type==='PodScheduled'&&item.status==='False'&&item.reason==='Unschedulable')&&value;}catch{return false;}
+    },'real scheduler holds target on cordoned worker');
+    const duplicate=await api('sessions/'+id+'/provider-switch','POST',start);assert.equal(duplicate.request.requestId,selection.requestId);
+    await denied(id,'',{...start,reviewHash:'changed-proof-review'},/different review/);
+    await api('sessions/'+id+'/provider-switch/retry','POST',{requestId:selection.requestId});
+    assert.equal(pod().metadata.uid,pending.metadata.uid);assert.equal(json('-n',ns,'get','pvc',claim).metadata.uid,claimUid);
+    assert((await api('sessions/'+id+'/messages')).some(message=>message.body===queued&&message.deliveredAt==null));
+    kubectl('uncordon',node);cordonedNode=null;
+    await until(()=>{const value=pod();return value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready);},'same target becomes schedulable');
+    terminal=await openTerminal(id);
+    await until(async()=>{const state=await api('sessions/'+id+'/provider-switch');return state.operation?.progress.phase==='completed';},'scheduled target completes without a second admission');
+    assert.equal(pod().metadata.uid,pending.metadata.uid);assert.equal(fingerprint(),baseline);
+    const page=await api('sessions/'+id+'/conversation?offset=0&max=500');assert.equal(page.entries.filter(entry=>entry.generation===1&&entry.role==='user'&&entry.text===review.text).length,1);
+    console.log(sourceAgent+'→'+target+': scheduler refusal retains target UID/claim/queue; duplicate request is idempotent, changed review refused, uncordon completes one handover.');
+    terminal.close();terminal=null;await api('sessions/'+id,'DELETE',undefined,204);id=null;
+    await until(()=>{try{json('-n',ns,'get','pvc',claim);return false;}catch{return true;}},'scheduler case claim cleanup');
     continue;
    }
    kubectl('-n',ns,'label','pod',podName,'provider-proof-storage=allowed','--overwrite');
@@ -144,6 +189,7 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
   if(id){try{console.error('Held operation:',JSON.stringify(await api('sessions/'+id+'/provider-switch')));}catch{}try{console.error(kubectl('-n',ns,'logs','session-'+id,'-c','agent','--tail=80'));}catch{}}
   throw error;
  }finally{
+  if(cordonedNode)kubectl('uncordon',cordonedNode);
   selector(originalSelector);terminal?.close();if(id){try{await api('sessions/'+id,'DELETE',undefined,204);}catch{console.error('Held proof cleanup retained session for diagnostics.');}}
  }
 }
