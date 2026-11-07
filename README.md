@@ -139,7 +139,7 @@ helm install agenthub agenthub/open-agenthub -n agenthub --create-namespace \
   --set ingress.host=hub.your-org.example
 ```
 
-Keep the generated Postgres password: on a later `helm upgrade` pass `--reuse-values` (or
+Keep the generated Postgres password: on a later `helm upgrade` pass `--reset-then-reuse-values` (or
 the same password) — Postgres keeps the password it was initialised with.
 
 > **Object storage is strongly recommended.** Without it the hub runs, but sessions cannot
@@ -182,7 +182,7 @@ storage can be skipped with `AGENTHUB_OBJECT_STORAGE=0` — not recommended.
 3. **For more than one person, enable OIDC.** See the
    [provider examples below](#configuring-oauthoidc-login), then:
    ```bash
-   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reset-then-reuse-values \
      --set oidc.authority=<issuer-url> \
      --set oidc.clientId=<client-id> \
      --set oidc.audience=<expected-audience>
@@ -222,7 +222,7 @@ own:
 
 ```bash
 AK=GK$(openssl rand -hex 12); SK=$(openssl rand -hex 32)   # keep these for later upgrades
-helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+helm upgrade agenthub agenthub/open-agenthub -n agenthub --reset-then-reuse-values \
   --set objectStorage.enabled=true \
   --set-string objectStorage.accessKey=$AK,objectStorage.secretKey=$SK \
   --set-string objectStorage.rpcSecret=$(openssl rand -hex 32),objectStorage.adminToken=$(openssl rand -hex 16)
@@ -265,14 +265,44 @@ key. Register the following in your provider:
 Register a public OIDC client with Authorization Code Flow and PKCE method `S256`.
 Configure the provider to issue JWT access tokens for this application's audience and to
 include a stable `preferred_username` claim. If it requires a dedicated API scope, add
-that scope to `oidc.scope` alongside `openid profile email`.
+that scope to `oidc.scope` alongside `openid profile email`. The browser also always requests
+`offline_access` to renew sessions after idle periods; allow it and issue refresh tokens for
+this public client. Providers must return JWT access tokens, publish discovery and signing keys,
+and allow browser requests to their token endpoint. Support depends on these capabilities;
+providers that return opaque access tokens need a compatible identity broker.
 
 ```bash
-helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+helm upgrade agenthub agenthub/open-agenthub -n agenthub --reset-then-reuse-values \
   --set oidc.authority=https://identity.example.com \
   --set oidc.clientId=agenthub \
   --set oidc.audience=agenthub
 ```
+
+Before switching a quickstart to team login:
+
+1. Give the instance a stable hostname, for example `hub.example.com`, with DNS pointing at
+   your ingress and a trusted TLS certificate. Set `ingress.enabled=true`, `ingress.host`,
+   `ingress.tlsSecretName` to your certificate Secret. Update
+   `frontendOrigin` to `https://hub.example.com`. Keep the existing release name and namespace.
+2. Register the HTTPS redirects and origin above at the issuer. Both the browser and backend
+   must reach the issuer hostname and trust its TLS certificate; cluster-only DNS is insufficient.
+3. Save these settings with the OIDC values in your values file, then run `helm upgrade agenthub
+   agenthub/open-agenthub -n agenthub --reset-then-reuse-values -f team-values.yaml --wait --timeout 5m`.
+   OIDC takes precedence over the quickstart API key. Sign in as a configured administrator
+   (`ee.admins`) before sharing the URL with your team. Existing API-key-owned sessions keep
+   their original owner; changing login does not migrate ownership.
+
+`oidc.requireHttpsMetadata` defaults to `true`. Keep it enabled for team deployments.
+For an isolated HTTP issuer in a local test only, set it to `false`; this changes backend
+metadata retrieval, not browser mixed-content restrictions or TLS trust. The backend validates
+issuer metadata and signing keys before serving traffic. If it cannot fetch them within 20
+seconds, it exits with one startup error. Check `kubectl logs -n agenthub deployment/agenthub-backend`
+for DNS, TLS and issuer configuration; correct the values and retry the upgrade.
+
+If an interrupted upgrade leaves the release in `pending-upgrade`, stop the original upgrade
+process first. Run `helm history agenthub -n agenthub`, identify the previous successful
+revision, then `helm rollback agenthub <revision> -n agenthub --wait --timeout 5m`. Correct the
+OIDC values before upgrading again. Do not delete release Secrets to bypass the lock.
 
 Opaque access tokens are not supported. An identity broker can supply compatible JWT
 access tokens when an upstream provider cannot. An ID token alone does not satisfy the
@@ -369,7 +399,7 @@ verified against the pinned CLIs: [`docs/chat-relay.md`](docs/chat-relay.md).
 1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token.
 2. Enable it:
    ```bash
-   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reset-then-reuse-values \
      --set chat.telegram.enabled=true --set chat.telegram.botToken=<token> \
      --set backend.replicas=1
    ```
@@ -400,7 +430,7 @@ conflicts on `getUpdates`).
    [signal-cli-rest-api](https://github.com/bbernhard/signal-cli-rest-api) with a
    persistent volume for the account keys:
    ```bash
-   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reuse-values \
+   helm upgrade agenthub agenthub/open-agenthub -n agenthub --reset-then-reuse-values \
      --set chat.signal.enabled=true --set-string chat.signal.number=+15551234567 \
      --set backend.replicas=1
    ```
@@ -778,7 +808,7 @@ instance runs itself. Off by default. See [Remote MCP server](docs/mcp-server.md
 - **Job status detail view** for finished CronJob runs (`pods/log`).
 - node-pty ABI: builder and runtime image must use the same Node major version (22 here).
 - Custom images must be glibc-based (Debian/Ubuntu/Fedora…); Alpine/musl is not supported.
-- **Google login** requires ID-token validation (see the provider notes above) — open issue.
+- **OIDC compatibility:** providers that only return opaque access tokens need a compatible identity broker (see the provider notes above).
 - Automated tests & coverage reporting are still being built out — the coverage badge will
   light up once the first test suite lands.
 
