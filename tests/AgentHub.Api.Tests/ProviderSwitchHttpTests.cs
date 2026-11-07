@@ -94,12 +94,15 @@ public class ProviderSwitchHttpTests
         {
             using var http = new HttpClient { BaseAddress = new Uri(app.Urls.Single()) };
             http.DefaultRequestHeaders.Add("X-Proof-Owner", "alice");
-            var response = await http.PutAsync("/state", new ByteArrayContent([1, 2, 3]));
+            using var content = new ByteArrayContent([1, 2, 3]);
+            using var response = await http.PutAsync("/state", content);
             Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
             Assert.Contains("Provider replacement is pending", await response.Content.ReadAsStringAsync());
             Assert.Equal("native", (await database.Sessions.GetAsync("alice", "s"))!.AgentSessionId);
             http.DefaultRequestHeaders.Remove("X-Proof-Owner"); http.DefaultRequestHeaders.Add("X-Proof-Owner", "bob");
-            Assert.Equal(HttpStatusCode.NotFound, (await http.PutAsync("/state", new ByteArrayContent([1]))).StatusCode);
+            using var otherContent = new ByteArrayContent([1]);
+            using var otherResponse = await http.PutAsync("/state", otherContent);
+            Assert.Equal(HttpStatusCode.NotFound, otherResponse.StatusCode);
         }
         finally { await app.StopAsync(); }
     }
