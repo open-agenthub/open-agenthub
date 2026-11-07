@@ -297,7 +297,8 @@ docker push $REG/agent-runtime-claude:$TAG && docker push $REG/agent-runtime-cod
 docker push $REG/agent-runtime-cursor:$TAG && docker push $REG/agent-runtime-openclaw:$TAG && docker push $REG/agent-runtime-opencode:$TAG
 docker push $REG/browser:$TAG
 
-# image.registry/image.tag select all seven defaults. Full runtime overrides are
+# image.registry/image.tag select all seven defaults; without image.tag the chart's
+# appVersion is used, so a chart version installs exactly that release. Full runtime overrides are
 # agent.images.claude, agent.images.codex, agent.images.cursor, agent.images.openclaw, and agent.images.opencode. Browser uses its
 # explicit repository override. For a private registry, create the pull secret in BOTH
 # namespaces and set image.pullSecret.

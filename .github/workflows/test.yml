@@ -169,6 +169,9 @@ jobs:
       - name: Verify the Postgres pool size value
         shell: pwsh
         run: ./tests/helm/database-values.ps1
+      - name: Verify image tags follow the chart version
+        shell: pwsh
+        run: ./tests/helm/image-tag-values.ps1
       - name: Verify deployment parity
         shell: pwsh
         run: ./tests/helm/deployment-parity.ps1

@@ -4,6 +4,10 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $chartPath = Join-Path $repoRoot 'helm/open-agenthub'
 $devValuesPath = Join-Path $chartPath 'values-dev.yaml'
+# The default tag is the chart's appVersion (#491); read it rather than spell out a version
+# that every release bump would turn into a red build.
+$appVersion = (Select-String -Path (Join-Path $chartPath 'Chart.yaml') -Pattern '^appVersion:\s*"?([^"\s]+)"?').Matches[0].Groups[1].Value
+if (-not $appVersion) { throw 'could not read appVersion from Chart.yaml' }
 
 if (-not (Get-Command helm -ErrorAction SilentlyContinue)) {
     throw 'helm is required to run the rendered-chart assertions.'
@@ -93,11 +97,11 @@ function Assert-ImageSet {
 
 $default = Render-Chart
 Assert-ImageSet $default `
-    'ghcr.io/open-agenthub/open-agenthub/agent-runtime-claude:latest' `
-    'ghcr.io/open-agenthub/open-agenthub/agent-runtime-codex:latest' `
-    'ghcr.io/open-agenthub/open-agenthub/agent-runtime-cursor:latest' `
-    'ghcr.io/open-agenthub/open-agenthub/agent-runtime-openclaw:latest' `
-    'ghcr.io/open-agenthub/open-agenthub/agent-runtime-opencode:latest' `
+    "ghcr.io/open-agenthub/open-agenthub/agent-runtime-claude:$appVersion" `
+    "ghcr.io/open-agenthub/open-agenthub/agent-runtime-codex:$appVersion" `
+    "ghcr.io/open-agenthub/open-agenthub/agent-runtime-cursor:$appVersion" `
+    "ghcr.io/open-agenthub/open-agenthub/agent-runtime-openclaw:$appVersion" `
+    "ghcr.io/open-agenthub/open-agenthub/agent-runtime-opencode:$appVersion" `
     'default values'
 
 $dev = Render-Chart @('--values', $devValuesPath)

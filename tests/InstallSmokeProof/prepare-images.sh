@@ -21,9 +21,12 @@ fi
 # creates the cluster. No registry credentials or published PR packages are needed.
 sudo mkdir -p /var/lib/rancher/k3s/agent/images
 docker save "${images[@]}" | sudo tee /var/lib/rancher/k3s/agent/images/install-smoke.tar >/dev/null
-# The installer accepts a chart path but no image override. Pin only its local
-# chart copy; keep the same pin for the subsequent upgrade-in-place.
+# The installer accepts a chart path but no image override. Give the local chart copy the
+# checkout's tag as its appVersion and leave image.tag at its empty default, so the install
+# takes the same path as a released chart: chart X selects the images of X (#491).
 # Quoted: a short SHA such as 4317158e6 is a float to YAML and became the tag "4.317158e+06".
-sed -i "s/^  tag: latest$/  tag: \"$tag\"/" helm/open-agenthub/values.yaml
-echo "Testing checkout $GITHUB_SHA with locally built images (no :latest fallback):"
+grep -q '^  tag: ""$' helm/open-agenthub/values.yaml ||
+  { echo "::error::image.tag is no longer empty by default; this proof would not test the default" >&2; exit 1; }
+sed -i "s/^appVersion:.*/appVersion: \"$tag\"/" helm/open-agenthub/Chart.yaml
+echo "Testing checkout $GITHUB_SHA with locally built images via the chart appVersion:"
 printf '  %s\n' "${images[@]}"

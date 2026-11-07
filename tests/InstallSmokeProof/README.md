@@ -7,6 +7,14 @@ installer. Its identity step prints deployment image references and pod image ID
 Backend and frontend deployments are required; the renderer is disabled by default,
 but its image is available if chart changes enable it. The existing smoke and upgrade-in-place checks then exercise that checkout.
 
+The images are selected the way a released chart selects them (#491): `image.tag` stays at its
+empty default and `prepare-images.sh` sets the local chart's `appVersion` to the commit tag.
+`verify-images.sh <tag>` then checks the deployments, every running pod's project image and the
+runtime images in the backend configuration. After the upgrade-in-place,
+`upgrade-images.sh` adds the same images under `<sha>-next` inside k3s and moves `appVersion`
+to it, as the next release would; the installer runs again and `verify-images.sh` must find
+every image moved.
+
 The container workflow publishes SHA tags on pushes, but its PR builds are
 cache-only. Building locally was chosen over polling for PR tags that never appear
 or falling back to latest, which would hide backend startup regressions. This also
