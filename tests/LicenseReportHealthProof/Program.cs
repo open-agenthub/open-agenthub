@@ -38,6 +38,7 @@ service.MapPost("/api/usage/report", async (HttpContext ctx) => {
     Check(ctx.Request.Headers.Authorization.ToString().StartsWith("Bearer "), "Reporter omitted bearer");
     using var body = await JsonDocument.ParseAsync(ctx.Request.Body);
     Check(body.RootElement.GetProperty("instanceKey").GetString()!.Length == 64, "Missing instance binding");
+    if (mode == "timeout") await Task.Delay(TimeSpan.FromSeconds(3));
     return mode switch {
         "reject" => Results.Text("private upstream diagnostic", statusCode: 503),
         "missing" => Results.Json(new { ok = true }),
@@ -56,7 +57,7 @@ try {
     var users = new UserDirectory(cfg); await users.InitializeAsync();
     var license = new EnterpriseLicense(store, NullLogger<EnterpriseLicense>.Instance, signing.ExportSubjectPublicKeyInfoPem());
     var initialExpiry = DateTime.UtcNow.AddDays(3); var initialToken = Token(initialExpiry); await store.SetTokenAsync(initialToken); await license.ReloadAsync();
-    using var httpServices = new ServiceCollection().AddHttpClient().BuildServiceProvider();
+    using var httpServices = new ServiceCollection().AddHttpClient().ConfigureHttpClientDefaults(b => b.ConfigureHttpClient(c => c.Timeout = TimeSpan.FromSeconds(1))).BuildServiceProvider();
     var reporter = new SeatUsageReporter(license, store, users, httpServices.GetRequiredService<IHttpClientFactory>(), cfg, NullLogger<SeatUsageReporter>.Instance);
     var hostBuilder = WebApplication.CreateBuilder(); hostBuilder.Logging.ClearProviders(); var apiPort = Port();
     hostBuilder.WebHost.UseUrls($"http://127.0.0.1:{apiPort}");
@@ -95,6 +96,17 @@ try {
     Check(healthy.GetProperty("lastCheckIn").ValueKind == JsonValueKind.String, "Success missing timestamp");
     Check(!healthy.GetProperty("reportWarning").GetBoolean(), "Fresh 45 day token should not warn");
     var lastSuccess = await store.GetLastReportAsync();
+    mode = "timeout";
+    try { await reporter.ReportOnceAsync(default); throw new Exception("Expected request timeout"); }
+    catch (OperationCanceledException) { }
+    Check((await store.GetReportErrorAsync()).Error!.Contains("request failed"), "Timeout missing");
+    var beforeShutdown = await store.GetReportErrorAsync();
+    using (var shutdown = new CancellationTokenSource()) {
+        shutdown.Cancel();
+        try { await reporter.ReportOnceAsync(shutdown.Token); throw new Exception("Expected shutdown cancellation"); }
+        catch (OperationCanceledException) { }
+    }
+    Check(await store.GetReportErrorAsync() == beforeShutdown, "Shutdown recorded as failure");
     await service.StopAsync();
     try { await reporter.ReportOnceAsync(default); throw new Exception("Expected connectivity failure"); }
     catch (HttpRequestException) { }

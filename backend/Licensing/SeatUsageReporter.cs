@@ -46,14 +46,22 @@ public sealed class SeatUsageReporter(
     {
         try { await ReportCoreAsync(ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception)
+        catch (HttpRequestException)
         {
-            // Exception text and remote response bodies can include credentials. Persist only
-            // fixed diagnostic categories that are safe to display to administrators.
-            await store.SetReportErrorAsync("License service request failed. Check connectivity and service availability.", ct);
+            await RecordRequestFailureAsync(ct);
+            throw;
+        }
+        catch (OperationCanceledException)
+        {
+            await RecordRequestFailureAsync(ct);
             throw;
         }
     }
+
+    // Exception text and remote response bodies can include credentials. Persist only a
+    // fixed transport failure category; database and programming failures still propagate.
+    private Task RecordRequestFailureAsync(CancellationToken ct) => store.SetReportErrorAsync(
+        "License service request failed. Check connectivity and service availability.", ct);
 
     private async Task ReportCoreAsync(CancellationToken ct)
     {
