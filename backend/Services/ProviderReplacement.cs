@@ -41,6 +41,7 @@ public sealed partial class KubernetesSessionService
         var reason = Unavailable(record, _opts.WorkspaceVolumePersistent)
             ?? (_workspaceVolumes is null || _providerSwitches is null || _executions is null || !_artifacts.IsConfigured || _runtimeUpdateLock is null || _podRequests is null || _switchMessages is null || _switchDelivery is null
                 ? "Switching requires configured state storage and lifecycle services." : null);
+        if (reason is null) reason = SourceRuntimeReason(record, await TryReadPodAsync("session-" + id, ct), null);
         return new(reason is null, reason ?? "Available at a completed-turn safe point after review.",
             _providerSwitches is null ? null : await _providerSwitches.GetAsync(owner, id, ct),
             _executionUsage is null ? null : await _executionUsage.ReadAsync(owner, id, ct));
@@ -127,14 +128,32 @@ public sealed partial class KubernetesSessionService
         return ProviderHandoverCapacity.Check(target.Agent, target.AuthMode, text, model?.Capabilities?.ContextWindow);
     }
 
+    private const string SourceStartingReason = "The session is still starting. Try again in a moment.";
+
+    private static string? SourceRuntimeReason(SessionRecord record, V1Pod? pod, string? expectedUid)
+    {
+        // Readiness may lag a visible native answer. An identity change is a separate
+        // refusal: waiting for that unrelated runtime must never retarget this operation.
+        if (pod is not null && expectedUid is not null && pod.Metadata.Uid != expectedUid)
+            return "The original session runtime has changed. This replacement is held; uncertain work is not replayed.";
+        if (pod is null)
+            return record.ProviderSwitchPending
+                ? "The original session runtime is unavailable. This replacement is held; uncertain work is not replayed."
+                : record.Status == "Pending" ? SourceStartingReason : "Resume the session before switching providers.";
+        if (pod.Metadata.DeletionTimestamp is not null)
+            return "The session is stopping. Wait for it to finish before switching providers.";
+        if (pod.Status?.Phase is "Failed" or "Succeeded")
+            return "Resume the session before switching providers.";
+        return pod.Status?.Phase != "Running" || pod.Status.ContainerStatuses?.Any(item => item.Name == "agent" && item.Ready) != true
+            ? SourceStartingReason : null;
+    }
+
     private async Task<V1Pod> RequireSourcePodAsync(SessionRecord record, string? expectedUid, CancellationToken ct)
     {
         var pod = await TryReadPodAsync("session-" + record.Id, ct);
-        if (pod is null || pod.Metadata.DeletionTimestamp is not null || pod.Status?.Phase != "Running"
-            || pod.Status.ContainerStatuses?.Any(item => item.Name == "agent" && item.Ready) != true
-            || (expectedUid is not null && pod.Metadata.Uid != expectedUid))
-            throw new ProviderReplacementRefusedException("The source execution is not the recorded ready pod.");
-        return pod;
+        if (SourceRuntimeReason(record, pod, expectedUid) is { } reason)
+            throw new ProviderReplacementRefusedException(reason);
+        return pod!;
     }
 
     private async Task<IAsyncDisposable> SwitchLockAsync(string id, CancellationToken ct) =>

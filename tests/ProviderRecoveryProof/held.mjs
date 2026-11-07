@@ -32,6 +32,8 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
    id=created.id;assert(/^[a-z0-9]+$/i.test(id));const podName='session-'+id;
    const pod=()=>json('-n',ns,'get','pod',podName);
    const exec=script=>kubectl('-n',ns,'exec',podName,'-c','agent','--','/bin/sh','-ec',script);
+   const starting=await api('sessions/'+id+'/provider-switch');assert.equal(starting.available,false);assert.match(starting.reason,/still starting/);
+   await denied(id,'/preview',{requestId:crypto.randomUUID(),target:{agent:target,authMode:'ApiKey',credentialId:null,modelEndpointUrl:null,modelName:null},handover:{target,task:'Check startup readiness'}},/still starting/);
    terminal=await openTerminal(id);
    await until(async()=>{const page=await api('sessions/'+id+'/conversation?offset=0&max=500');return page.entries.some(entry=>entry.text.includes('Answer SWITCH-PROOF-0'));},'held source native answer');
    const first=await until(()=>{const value=pod();return value.status.phase==='Running'&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'held source kubelet readiness');
@@ -79,7 +81,7 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
     }finally{await shell.close();}
     terminal.close();terminal=null;kubectl('-n',ns,'delete','pod',podName,'--grace-period=0','--wait=true');
     await api('sessions/'+id+'/provider-switch/retry','POST',{requestId:selection.requestId});
-    const held=await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='requested'&&value.operation.progress.error?.includes('source execution')&&value;},'lost source stays durably held');
+    const held=await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='requested'&&value.operation.progress.error?.includes('original session runtime is unavailable')&&value;},'lost source stays durably held');
     assert.equal(held.operation.progress.sourceStopAcknowledged,false);
     assert((await api('sessions/'+id+'/messages')).some(message=>message.body==='HELD-SOURCE-'+sourceAgent&&message.deliveredAt==null));
     assert.equal((await api('sessions/'+id)).executionGeneration,0);assert.equal(json('-n',ns,'get','pvc',claim).metadata.uid,claimUid);
@@ -108,7 +110,9 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
     if(progress?.error)throw Object.assign(new Error('Unexpected held phase '+progress.phase+': '+progress.error),{fatal:true});return false;
    },'real denied state upload holds target before commit');
    const heldHistory=await api('sessions/'+id+'/conversation?offset=0&max=500');
-   assert(heldHistory.entries.some(entry=>entry.generation===0&&entry.agent===sourceAgent&&entry.text.includes('SWITCH-PROOF-0')));
+   const sourceRows=heldHistory.entries.filter(entry=>entry.text.includes('SWITCH-PROOF-0'));
+   assert(sourceRows.some(entry=>entry.role==='user'),'saved source conversation remains visible while target checkpoint is held');
+   for(const entry of sourceRows){if(entry.generation!=null)assert.equal(entry.generation,0);if(entry.agent!=null)assert.equal(entry.agent,sourceAgent);}
    assert(!heldHistory.entries.some(entry=>entry.generation===0&&entry.role==='user'&&entry.text===review.text),'uncommitted target handover must not be labelled as the source generation');
    assert(held.operation.progress.sourceStopAcknowledged);assert.equal(pod().metadata.uid,targetPod.metadata.uid);assert.equal(fingerprint(),baseline);
    assert((await api('sessions/'+id+'/messages')).some(message=>message.body===queued&&message.deliveredAt===null));
@@ -118,7 +122,7 @@ export async function proveHeldRecovery({api,json,kubectl,openTerminal,openSourc
     await api('sessions/'+id+'/provider-switch/retry','POST',{requestId:selection.requestId});
     await until(async()=>{const value=await api('sessions/'+id+'/provider-switch');return value.operation?.progress.phase==='target-started'&&value.operation.progress.error?.includes('uncertain start')&&value;},'lost target remains held without replay');
     await denied(id,'/cancel',{requestId:selection.requestId},/Source stop has begun/);
-    const retained=await api('sessions/'+id+'/conversation?offset=0&max=500');assert(retained.entries.some(entry=>entry.generation===0&&entry.agent===sourceAgent&&entry.text.includes('SWITCH-PROOF-0')));
+    const retained=await api('sessions/'+id+'/conversation?offset=0&max=500');assert(retained.entries.some(entry=>entry.role==='user'&&entry.text.includes('SWITCH-PROOF-0')));
     await new Promise(resolve=>setTimeout(resolve,5000));assert.throws(()=>pod());
     assert.equal(json('-n',ns,'get','pvc',claim).metadata.uid,claimUid);
     await inspectWorkspace(id,claim,baseline);

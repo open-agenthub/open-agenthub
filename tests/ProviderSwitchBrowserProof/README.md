@@ -11,7 +11,8 @@ With the session's integrated browser running, set `PROOF_CDP` to its returned e
 scratch output directory. Run `node tests/ProviderSwitchBrowserProof/run.mjs`.
 
 The maintained page mounts the actual product component with isolated API fixtures. Real
-Chromium checks explicit ephemeral-workspace refusal, exact handover review, review
+Chromium checks explicit ephemeral-workspace refusal, a clear starting reason with no review
+form until availability succeeds, exact handover review, review
 invalidation after edits, request-ID generation over an insecure HTTP origin, pending input,
 cancellation before source stop, retry afterwards, and desktop/phone wrapping. Screenshots
 stay in scratch space or Files, never Git. The proof uses the managed browser's default

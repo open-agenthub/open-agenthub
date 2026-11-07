@@ -17,6 +17,13 @@ try {
  await page.getByText(/workspace uses emptyDir/).waitFor();
  assert.equal(await page.locator('form').count(),0);
  await page.getByRole('button',{name:'Close',exact:true}).click();
+ await page.evaluate(()=>window.proof.starting());
+ await page.getByRole('button',{name:'Switch provider',exact:true}).click();
+ await page.getByText('The session is still starting. Try again in a moment.',{exact:true}).waitFor();
+ assert.equal(await page.locator('form').count(),0);
+ assert.equal(await page.getByRole('button',{name:'Review exact handover'}).count(),0);
+ await page.screenshot({path:path.join(process.env.PROOF_OUT,'starting-desktop.png')});
+ await page.getByRole('button',{name:'Close',exact:true}).click();
  await page.evaluate(()=>window.proof.enable());
  await page.getByRole('button',{name:'Switch provider',exact:true}).click();
  await page.getByLabel('Instructions to preserve').fill('Preserve the policy and dirty files.');

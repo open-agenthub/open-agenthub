@@ -118,3 +118,15 @@ termination diagnostic. Planned source shutdown and deliberate runtime restarts 
 existing branches before this classification. Reject inferring success from code zero alone:
 a killed target is not a completed native execution. The real pinned Claude/Codex controls
 verify unsuccessful transport exit and no second startup/handover request.
+
+
+## Visible answers do not establish runtime readiness
+
+A real worker exposed its first native answer before kubelet marked the container ready.
+Availability now checks that readiness and presents a starting message before showing review;
+preview/start still recheck it. Keep changed pod identity a distinct held-operation refusal.
+Reject using a visible answer or Running phase alone: both can precede startup readiness.
+The existing panel renders unavailable reasons without offering the review form; no second
+UI readiness state is needed. The lazy generation-zero history remains untagged until its
+first committed replacement; held-history proofs check retained content independently of
+those optional legacy tags.
