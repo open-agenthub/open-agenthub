@@ -35,17 +35,15 @@ public static class McpPolicyMatcher
             if (string.IsNullOrEmpty(server))
                 continue;
 
-            if (IsResourceTool(toolName))
-            {
-                // Unscoped discovery can contact every configured server. If the runtime
-                // omits attribution, require a server before allowing this operation.
-                if (input.ValueKind != JsonValueKind.Object
+            // Unscoped discovery can contact every configured server. If the runtime
+            // omits attribution, require a server before allowing this operation.
+            if (IsResourceTool(toolName)
+                && (input.ValueKind != JsonValueKind.Object
                     || !input.TryGetProperty("server", out var argument)
                     || argument.ValueKind != JsonValueKind.String
                     || string.IsNullOrEmpty(argument.GetString())
-                    || Normalize(argument.GetString()!) == Normalize(server))
-                    return true;
-            }
+                    || Normalize(argument.GetString()!) == Normalize(server)))
+                return true;
 
             var serverTool = $"mcp__{Normalize(server)}";
             if (string.Equals(normalizedTool, serverTool, StringComparison.Ordinal)

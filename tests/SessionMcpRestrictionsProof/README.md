@@ -30,3 +30,12 @@ The Chromium component proof bundles the actual Vue dialog with Vite, loads that
 into real Chromium, and supplies synthetic overview responses. It verifies restart text,
 built-in names and agent-specific disabled controls. Its script and screenshots are in
 session Files, alongside the private runtime transport scripts.
+
+To verify replacing an archived Cursor configuration when all servers are omitted:
+
+```sh
+node tests/SessionMcpRestrictionsProof/cursor-empty-config.cjs "$PWD" /tmp/cursor-empty-proof
+```
+
+The script executes the actual entrypoint configuration section, stopping before login.
+Point the login-free `agent mcp list` command at that output via `CURSOR_CONFIG_DIR`.
