@@ -25,6 +25,7 @@ namespace AgentHub.Api.Controllers;
 [Route("internal/sessions/{id}")]
 public sealed class InternalController : ControllerBase
 {
+    private readonly IProviderSwitchStore? _providerSwitches;
     private readonly ISessionExecutionStore? _executions;
     private readonly ISessionStore _store;
     private readonly IEnumerable<INotifier> _notifiers;
@@ -58,8 +59,9 @@ public sealed class InternalController : ControllerBase
         ISessionMessageDelivery? delivery = null, IAccountFailover? accountFailover = null,
         IClaudeLoginSync? loginSync = null, ISecretRequestStore? secretRequests = null,
         ISessionContextClear? contextClear = null, ISessionAccessService? access = null, ISessionSharingService? sharing = null,
-        ISessionModelCatalogs? modelCatalogs = null, ISessionExecutionStore? executions = null)
+        ISessionModelCatalogs? modelCatalogs = null, ISessionExecutionStore? executions = null, IProviderSwitchStore? providerSwitches = null)
     {
+        _providerSwitches = providerSwitches;
         _executions = executions;
         _modelCatalogs = modelCatalogs;
         _contextClear = contextClear;
@@ -1084,7 +1086,9 @@ public sealed class InternalController : ControllerBase
         IReadOnlyList<SessionMessageRecord> taken;
         while (true)
         {
-            if ((await _store.GetByIdAsync(id, ct))?.ProviderSwitchPending == true)
+            var current = await _store.GetByIdAsync(id, ct);
+            if (current?.ProviderSwitchPending == true && (_providerSwitches is null ||
+                !await _providerSwitches.CanConsumeInboxAsync(current.Owner, id, current.ExecutionGeneration, ct)))
                 return Ok(new { messages = Array.Empty<AgentMessageInfo>() });
             taken = await _messages.TakeUndeliveredAsync(id, AgentMessaging.InboxBatchLimit, takenVia, ct);
             if (taken.Count > 0 || DateTime.UtcNow >= deadline) break;

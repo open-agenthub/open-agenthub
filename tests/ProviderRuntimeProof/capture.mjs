@@ -160,7 +160,14 @@ try {
         assert(prepared.checkpointed && prepared.draining);
         const cancelled = await fetch(route, { method: 'DELETE', headers: authority, body: JSON.stringify({ requestId: nextRequest }) });
         assert.equal(cancelled.status, 200);
-        console.log(agent + ': actual native prompt/Stop hooks, completed safe-point reservation, final archive and cancellation passed');
+        const stopRequest = '33333333-3333-4333-8333-333333333333';
+        await until(async () => (await fetch(route, { method: 'POST', headers: authority, body: JSON.stringify({ requestId: stopRequest, action: 'prepare' }) })).ok);
+        const stopped = await fetch(route, { method: 'POST', headers: authority, body: JSON.stringify({ requestId: stopRequest, action: 'stop' }) });
+        assert.equal(stopped.status, 200, await stopped.clone().text());
+        assert((await stopped.json()).stopped);
+        const lateCancel = await fetch(route, { method: 'DELETE', headers: authority, body: JSON.stringify({ requestId: stopRequest }) });
+        assert.equal(lateCancel.status, 409);
+        console.log(agent + ': actual native prompt/Stop hooks, source reservation/cancellation, graceful native quit, acknowledged final archive/usage and refused late cancellation passed');
       }
       const text = await transcript();
       fs.writeFileSync(path.join(out, agent + '.jsonl'), text);

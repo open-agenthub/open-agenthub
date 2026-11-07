@@ -100,8 +100,7 @@ public sealed partial class KubernetesSessionService
         {
             var secret = await ReadSecretOrNullAsync(ProviderSecretName(source.Owner, target.Agent), ct);
             var accounts = ProviderAccountSecret.Read(secret?.Data, target.Agent);
-            credential = target.CredentialId is null ? ProviderAccountSecret.ResolveId(accounts, null, DateTime.UtcNow)
-                : accounts.Find(target.CredentialId) is { } account && !ProviderAccountSecret.IsExhausted(account, DateTime.UtcNow) ? account.Id : null;
+            credential = ProviderSwitchCredentials.SelectAccount(accounts, target.CredentialId, DateTime.UtcNow);
             if (credential is null) throw new ProviderReplacementRefusedException("A usable target provider account is required before stopping the source.");
         }
         else if (target.CredentialId is not null) throw new ArgumentException("A provider account applies only to subscription authentication.");
@@ -200,7 +199,7 @@ public sealed partial class KubernetesSessionService
                 var source = await RequireSourcePodAsync(record, request.SourcePodUid, ct);
                 var reserved = await RuntimeSwitchAsync(record, source, HttpMethod.Post, new { requestId = request.RequestId, action = "prepare" }, ct);
                 if (!reserved.Checkpointed || string.IsNullOrWhiteSpace(reserved.NativeId)) throw new ProviderReplacementRefusedException("Source checkpoint was not acknowledged.");
-                var sourceText = await GetTranscriptFileAsync(owner, id, ct);
+                var sourceText = await ReadTargetTranscriptAsync(record, source, ct, tail: true);
                 if (string.IsNullOrEmpty(sourceText) || NativeTranscript.Parse(sourceText).Count == 0)
                     throw new ProviderReplacementRefusedException("Source transcript checkpoint is unavailable.");
                 var entries = RetainedSource(NativeTranscript.Parse(sourceText), request.SourceGeneration, request.SourceAgent);
@@ -214,6 +213,23 @@ public sealed partial class KubernetesSessionService
                 await PreflightProviderTargetAsync(record, request.Target, ct);
                 await TargetCapacityAsync(owner, request.Target, request.Handover, ct);
                 await RefuseReplacementHelpersAsync(record, ct);
+                progress = progress with { Phase = "stopping" };
+                await _providerSwitches.MoveAsync(owner, id, request.RequestId, "prepared", progress, ct);
+            }
+            if (progress.Phase == "stopping")
+            {
+                if (!progress.SourceStopAcknowledged)
+                {
+                    var nativeSource = await RequireSourcePodAsync(record, request.SourcePodUid, ct);
+                    var stopped = await RuntimeSwitchAsync(record, nativeSource, HttpMethod.Post,
+                        new { requestId = request.RequestId, action = "stop" }, ct);
+                    if (!stopped.Stopped || !stopped.Checkpointed || stopped.NativeId != progress.SourceNativeId)
+                        throw new ProviderReplacementRefusedException("The native source stop and final checkpoint were not acknowledged.");
+                    var finalText = await ReadTargetTranscriptAsync(record, nativeSource, ct, tail: true);
+                    if (string.IsNullOrEmpty(finalText)) throw new ProviderReplacementRefusedException("The final source transcript is unavailable.");
+                    progress = progress with { SourceStopAcknowledged = true, SourceEntries = RetainedSource(NativeTranscript.Parse(finalText), request.SourceGeneration, request.SourceAgent) };
+                    await _providerSwitches.MoveAsync(owner, id, request.RequestId, "stopping", progress, ct);
+                }
                 await _browsers.StopAsync(id, ct);
                 if (_containerCleanup is not null) await _containerCleanup.CleanupSessionAsync(id, ct);
                 var source = await TryReadPodAsync("session-" + id, ct);
@@ -226,7 +242,7 @@ public sealed partial class KubernetesSessionService
                 }
                 await WaitForWorkspaceConsumersAsync(workspace.ClaimName, ct);
                 progress = progress with { Phase = "source-stopped" };
-                await _providerSwitches.MoveAsync(owner, id, request.RequestId, "prepared", progress, ct);
+                await _providerSwitches.MoveAsync(owner, id, request.RequestId, "stopping", progress, ct);
             }
             if (progress.Phase == "source-stopped")
             {
@@ -278,10 +294,16 @@ public sealed partial class KubernetesSessionService
                         progress.TargetNativeId!, request.Target.CredentialId, progress.SourceEntries ?? throw new ProviderReplacementRefusedException("Source checkpoint is missing."), ct);
                 else if (history.Current.Generation != request.SourceGeneration + 1 || history.Current.NativeId != progress.TargetNativeId)
                     throw new ProviderReplacementRefusedException("The committed execution does not match this replacement.");
+                progress = progress with { Phase = "releasing" };
+                await _providerSwitches.MoveAsync(owner, id, request.RequestId, "committing", progress, ct);
+            }
+            if (progress.Phase == "releasing")
+            {
+                var target = await RequireReplacementPodAsync(record, request, progress.TargetPodUid, ct);
                 var released = await RuntimeSwitchAsync(record, target, HttpMethod.Post,
                     new { requestId = request.RequestId, action = "release", nativeId = progress.TargetNativeId }, ct);
                 if (!released.Checkpointed || released.Draining) throw new ProviderReplacementRefusedException("Target release was not acknowledged.");
-                await _providerSwitches.MoveAsync(owner, id, request.RequestId, "committing", progress with { Phase = "completed", Error = null }, ct);
+                await _providerSwitches.MoveAsync(owner, id, request.RequestId, "releasing", progress with { Phase = "completed", Error = null }, ct);
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -330,7 +352,7 @@ public sealed partial class KubernetesSessionService
     }
 
     private sealed record RuntimeSwitchError(string Error);
-    private sealed record RuntimeSwitchState(bool Ready, string? NativeId, string? RequestId, bool Draining, bool MarkerSeen, bool Checkpointed);
+    private sealed record RuntimeSwitchState(bool Ready, string? NativeId, string? RequestId, bool Draining, bool MarkerSeen, bool Checkpointed, bool Stopped = false);
     private async Task<RuntimeSwitchState> RuntimeSwitchAsync(SessionRecord record, V1Pod pod, HttpMethod method, object? body, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(pod.Status?.PodIP)) throw new ProviderReplacementRefusedException("Runtime address is unavailable.");
@@ -345,6 +367,7 @@ public sealed partial class KubernetesSessionService
             throw new ProviderReplacementRefusedException(code switch
             {
                 "source_not_at_safe_point" => "Finish the current turn, clear draft input and menus, close shell terminals and resolve approvals before retrying this replacement.",
+                "source_stop_unconfirmed" => "The source CLI has not confirmed a graceful stop and final usage/state checkpoint. No target is started; retry checks the same stop without forcing it.",
                 "source_archive_unavailable" => "The source native archive is unavailable. Restore state storage before retrying; the source has not been stopped.",
                 "provider_state_upload_failed" => "The native state checkpoint could not be saved. Restore state storage, then retry the same replacement.",
                 "handover_not_confirmed" => "The target native handover has not been confirmed. Retry checks the same target; it does not replay input.",
@@ -354,9 +377,25 @@ public sealed partial class KubernetesSessionService
         return await response.Content.ReadFromJsonAsync<RuntimeSwitchState>(ct) ?? throw new ProviderReplacementRefusedException("Runtime confirmation is missing.");
     }
 
-    private async Task<string> ReadTargetTranscriptAsync(SessionRecord record, V1Pod pod, CancellationToken ct)
+    private async Task<string> ReadTargetTranscriptAsync(SessionRecord record, V1Pod pod, CancellationToken ct, bool tail = false)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Get, new UriBuilder("http", pod.Status.PodIP, _opts.AgentPort, "agenthub/transcript").Uri);
+        var uri = new UriBuilder("http", pod.Status.PodIP, _opts.AgentPort, "agenthub/transcript");
+        long offset = 0;
+        if (tail)
+        {
+            // Probe the frozen native file directly: a best-effort periodic artifact may be stale.
+            // The explicit history boundary accounts for records omitted by this bounded tail.
+            uri.Query = "from=999999999999999";
+            using var probe = new HttpRequestMessage(HttpMethod.Get, uri.Uri);
+            probe.Headers.Add("X-Agent-Token", record.CallbackToken);
+            using var sizeResponse = await _podRequests!.SendAsync(record.Id, probe, HttpCompletionOption.ResponseHeadersRead, TimeSpan.FromSeconds(10), ct);
+            sizeResponse.EnsureSuccessStatusCode();
+            if (!sizeResponse.Headers.TryGetValues("X-Transcript-Size", out var sizes) || !long.TryParse(sizes.SingleOrDefault(), out var size) || size < 0)
+                throw new ProviderReplacementRefusedException("Source native transcript size is unavailable.");
+            offset = Math.Max(0, size - 750_000);
+            uri.Query = "from=" + offset;
+        }
+        using var request = new HttpRequestMessage(HttpMethod.Get, uri.Uri);
         request.Headers.Add("X-Agent-Token", record.CallbackToken);
         using var response = await _podRequests!.SendAsync(record.Id, request, HttpCompletionOption.ResponseHeadersRead, TimeSpan.FromSeconds(10), ct);
         response.EnsureSuccessStatusCode();
@@ -370,7 +409,13 @@ public sealed partial class KubernetesSessionService
             length += count;
         }
         if (length > 1_000_000) throw new ProviderReplacementRefusedException("Target handover evidence exceeds the checkpoint bound.");
-        return new string(buffer, 0, length);
+        var text = new string(buffer, 0, length);
+        if (offset > 0)
+        {
+            var firstNewline = text.IndexOf('\n');
+            text = firstNewline < 0 ? "" : text[(firstNewline + 1)..];
+        }
+        return text;
     }
 
     private static IReadOnlyList<TranscriptEntry> RetainedSource(IReadOnlyList<TranscriptEntry> entries, long generation, AgentKind agent)
@@ -401,4 +446,15 @@ public sealed partial class KubernetesSessionService
         McpConfigJson = record.McpConfigJson,
         McpServerIds = ParseMcpServerIds(record)
     };
+}
+
+public static class ProviderSwitchCredentials
+{
+    public static string? SelectAccount(ProviderAccountSet accounts, string? requested, DateTime now)
+    {
+        bool Usable(ProviderAccount account) => account.LoginRejectedAt is null && !ProviderAccountSecret.IsExhausted(account, now);
+        if (requested is not null) return accounts.Find(requested) is { } pinned && Usable(pinned) ? pinned.Id : null;
+        if (accounts.Default is { } preferred && Usable(preferred)) return preferred.Id;
+        return accounts.Accounts.FirstOrDefault(Usable)?.Id;
+    }
 }

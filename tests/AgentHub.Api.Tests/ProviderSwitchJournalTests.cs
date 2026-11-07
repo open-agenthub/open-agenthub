@@ -41,7 +41,9 @@ public class ProviderSwitchJournalTests
         Assert.True((await database.Sessions.GetAsync("alice", "s"))!.ProviderSwitchPending);
         await Assert.ThrowsAsync<InvalidOperationException>(() => reopened.AdmitTargetAsync("alice", "s", request.RequestId));
         await reopened.MoveAsync("alice", "s", request.RequestId, "requested", new("prepared", SourceNativeId: "source-native"));
-        await reopened.MoveAsync("alice", "s", request.RequestId, "prepared", new("source-stopped", SourceNativeId: "source-native"));
+        await reopened.MoveAsync("alice", "s", request.RequestId, "prepared", new("stopping", SourceNativeId: "source-native"));
+        await Assert.ThrowsAsync<ArgumentException>(() => reopened.MoveAsync("alice", "s", request.RequestId, "stopping", new("source-stopped", SourceNativeId: "source-native")));
+        await reopened.MoveAsync("alice", "s", request.RequestId, "stopping", new("source-stopped", SourceNativeId: "source-native", SourceStopAcknowledged: true));
         await using (var callback = await fence.ReadAsync("s", default))
         {
             var admission = reopened.AdmitTargetAsync("alice", "s", request.RequestId);
@@ -69,7 +71,13 @@ public class ProviderSwitchJournalTests
         var confirmedNative = Guid.NewGuid().ToString();
         await reopened.MoveAsync("alice", "s", request.RequestId, "target-started", new("committing", TargetPodUid: "target-pod", TargetNativeId: confirmedNative));
         Assert.Equal(confirmedNative, (await database.Sessions.GetAsync("alice", "s"))!.AgentSessionId);
-        await reopened.MoveAsync("alice", "s", request.RequestId, "committing", new("completed", TargetNativeId: confirmedNative));
+        Assert.False(await reopened.CanConsumeInboxAsync("alice", "s", 1));
+        await reopened.MoveAsync("alice", "s", request.RequestId, "committing", new("releasing", TargetNativeId: confirmedNative));
+        Assert.True(await reopened.CanConsumeInboxAsync("alice", "s", 1));
+        Assert.False(await reopened.CanConsumeInboxAsync("bob", "s", 1));
+        Assert.False(await reopened.CanConsumeInboxAsync("alice", "s", 0));
+        Assert.True((await database.Sessions.GetAsync("alice", "s"))!.ProviderSwitchPending);
+        await reopened.MoveAsync("alice", "s", request.RequestId, "releasing", new("completed", TargetNativeId: confirmedNative));
         Assert.False((await database.Sessions.GetAsync("alice", "s"))!.ProviderSwitchPending);
         await database.Sessions.DeleteAsync("s");
         Assert.Null(await reopened.GetAsync("alice", "s"));

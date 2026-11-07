@@ -250,6 +250,7 @@ function resetFromJson(match, text, { secondsFromNow }) {
 
 module.exports = {
   supportsProviderSwitch: true,
+  providerSwitchExitKeys: ['/exit', '\r'],
   nativeIdentity: ({ file, env, fs: fileSystem }) => rememberedThreadId(env, fileSystem) ||
     (/-([0-9a-f-]{36})\.jsonl$/i.exec(path.basename(file)) || [])[1] || path.basename(file),
   modelCatalog: require('./model-catalog'),

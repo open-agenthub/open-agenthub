@@ -1047,10 +1047,11 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         sessions.question_pending, sessions.callback_token, sessions.created_at,
         sessions.updated_at, sessions.image, sessions.run_as_root, sessions.cpu,
         sessions.memory, sessions.mcp_config, sessions.repos, sessions.question_open,
-        sessions.question_title, sessions.parent_session_id
+        sessions.question_title, sessions.parent_session_id, sessions.agent, sessions.ui_mode,
+        sessions.execution_generation, sessions.provider_switch_pending
         """;
     // The first column a query adds after SessionColumns.
-    private const int AfterSession = 21;
+    private const int AfterSession = 25;
 
     private static SessionRecord MapSession(NpgsqlDataReader reader) => new()
     {
@@ -1075,6 +1076,8 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         ReposJson = reader.IsDBNull(17) ? null : reader.GetString(17),
         QuestionOpen = reader.GetBoolean(18),
         QuestionTitle = reader.IsDBNull(19) ? null : reader.GetString(19),
-        ParentSessionId = reader.IsDBNull(20) ? null : reader.GetString(20)
+        ParentSessionId = reader.IsDBNull(20) ? null : reader.GetString(20),
+        Agent = Enum.Parse<AgentKind>(reader.GetString(21)), UiMode = reader.GetString(22),
+        ExecutionGeneration = reader.GetInt64(23), ProviderSwitchPending = reader.GetBoolean(24)
     };
 }

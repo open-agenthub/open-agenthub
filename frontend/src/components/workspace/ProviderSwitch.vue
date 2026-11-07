@@ -21,8 +21,8 @@ const active = computed(() => operation.value && !['completed', 'cancelled'].inc
 const choices = computed(() => accounts.value[target.value] || [])
 const models = computed(() => catalog.value?.catalog?.models || [])
 const phaseLabel = computed(() => ({ requested: 'Waiting for a safe point', prepared: 'Source saved',
-  'source-stopped': 'Starting the new provider', 'target-admitted': 'Starting the new provider',
-  'target-starting': 'Starting the new provider', 'target-started': 'Confirming the handover', committing: 'Finishing the replacement' })[operation.value?.progress.phase] || 'Replacement pending')
+  stopping: 'Stopping the source', 'source-stopped': 'Starting the new provider', 'target-admitted': 'Starting the new provider',
+  'target-starting': 'Starting the new provider', 'target-started': 'Confirming the handover', committing: 'Finishing the replacement', releasing: 'Activating the new provider' })[operation.value?.progress.phase] || 'Replacement pending')
 const reviewedAccount = computed(() => choices.value.find(account => account.id === review.value?.target.credentialId)?.label
   || review.value?.target.credentialId || (review.value?.target.authMode === 'ApiKey' ? 'Stored API key' : 'Custom endpoint'))
 const canCancel = computed(() => active.value && ['requested', 'prepared'].includes(operation.value.progress.phase))
@@ -31,7 +31,9 @@ async function load() {
   try {
     const value = await props.client.providerSwitchStatus(props.session.id)
     if (disposed) return
+    const previousPhase = status.value?.operation?.progress.phase
     status.value = value
+    if (value.operation?.progress.phase !== previousPhase && ['completed', 'cancelled'].includes(value.operation?.progress.phase)) emit('updated')
     emit('pending', !!(value.operation && !['completed', 'cancelled'].includes(value.operation.progress.phase)))
   } catch (failure) { if (!disposed) error.value = failure.message || 'Could not read provider replacement status.' }
 }
@@ -90,6 +92,7 @@ async function toggle() {
   try { accounts.value = await props.client.listProviderAccounts() } catch { accounts.value = {} }
   await loadCatalog()
 }
+watch(target, () => { credential.value = '' })
 watch([auth, credential, endpoint, target], () => { model.value = ''; void loadCatalog() })
 watch(() => JSON.stringify(selection()), () => { review.value = null })
 watch(() => props.session.executionGeneration, () => { review.value = null; requestId.value = newRequestId(); void load() })

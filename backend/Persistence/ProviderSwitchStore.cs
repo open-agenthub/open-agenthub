@@ -12,7 +12,7 @@ public sealed record ProviderSwitchTarget(AgentKind Agent, AgentAuthMode AuthMod
 public sealed record ProviderSwitchRequest(Guid RequestId, string SessionId, long SourceGeneration,
     AgentKind SourceAgent, string SourcePodUid, string ClaimUid, ProviderSwitchTarget Target, string Handover, string? ReviewHash = null);
 public sealed record ProviderSwitchProgress(string Phase, string? TargetPodUid = null,
-    string? SourceNativeId = null, IReadOnlyList<TranscriptEntry>? SourceEntries = null, string? Error = null, string? TargetNativeId = null);
+    string? SourceNativeId = null, IReadOnlyList<TranscriptEntry>? SourceEntries = null, string? Error = null, string? TargetNativeId = null, bool SourceStopAcknowledged = false);
 public sealed record ProviderSwitchOperation(ProviderSwitchRequest Request, ProviderSwitchProgress Progress);
 
 public interface IProviderSwitchStore
@@ -20,6 +20,7 @@ public interface IProviderSwitchStore
     Task InitializeAsync(CancellationToken ct = default);
     Task CreateAsync(string owner, ProviderSwitchRequest request, CancellationToken ct = default);
     Task<ProviderSwitchOperation?> GetAsync(string owner, string id, CancellationToken ct = default);
+    Task<bool> CanConsumeInboxAsync(string owner, string id, long generation, CancellationToken ct = default);
     Task<IReadOnlyList<(string Owner, string SessionId)>> PendingAsync(CancellationToken ct = default);
     Task MoveAsync(string owner, string id, Guid requestId, string expectedPhase, ProviderSwitchProgress progress, CancellationToken ct = default);
     Task AdmitTargetAsync(string owner, string id, Guid requestId, CancellationToken ct = default);
@@ -97,13 +98,25 @@ public sealed class PostgresProviderSwitchStore(IConfiguration configuration, IE
         return result;
     }
 
+    public async Task<bool> CanConsumeInboxAsync(string owner, string id, long generation, CancellationToken ct = default)
+    {
+        await using var command = _db.CreateCommand("""
+            SELECT EXISTS(SELECT 1 FROM session_provider_switches p JOIN sessions s ON s.id=p.session_id
+                WHERE s.id=@id AND s.owner=@owner AND s.execution_generation=@generation
+                AND p.phase='releasing' AND (p.request->>'sourceGeneration')::bigint+1=@generation)
+            """);
+        command.Parameters.AddWithValue("owner", owner); command.Parameters.AddWithValue("id", id);
+        command.Parameters.AddWithValue("generation", generation);
+        return (bool)(await command.ExecuteScalarAsync(ct))!;
+    }
+
     public async Task MoveAsync(string owner, string id, Guid requestId, string expectedPhase, ProviderSwitchProgress progress, CancellationToken ct = default)
     {
         var allowed = expectedPhase == progress.Phase || (expectedPhase, progress.Phase) is
             ("requested", "prepared") or ("requested", "cancelled") or ("prepared", "cancelled")
-            or ("prepared", "source-stopped") or ("target-admitted", "target-starting") or ("target-starting", "target-started")
-            or ("target-started", "committing") or ("committing", "completed");
-        if (!allowed || (progress.Phase == "committing" && !Guid.TryParse(progress.TargetNativeId, out _)))
+            or ("prepared", "stopping") or ("stopping", "source-stopped") or ("target-admitted", "target-starting") or ("target-starting", "target-started")
+            or ("target-started", "committing") or ("committing", "releasing") or ("releasing", "completed");
+        if (!allowed || (progress.Phase == "source-stopped" && !progress.SourceStopAcknowledged) || (progress.Phase == "committing" && !Guid.TryParse(progress.TargetNativeId, out _)))
             throw new ArgumentException("Invalid replacement transition or target native identity.");
         await using var command = _db.CreateCommand("""
             WITH moved AS (

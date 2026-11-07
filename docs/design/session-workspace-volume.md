@@ -176,6 +176,13 @@ The source's checkpointed native conversation is retained with an explicit cover
 note; it is not copied into target-native files. An unknown or busy state is refused instead
 of forcibly interrupting the agent.
 
+Persist `stopping` before submitting the native `/exit` command, separating its text and
+Enter for native paste detection. Wait for actual PTY exit, final state persistence and
+acknowledged native cumulative usage. Do not force kill or resend an uncertain quit. Read
+the stopped native transcript directly, retaining a bounded tail with an explicit omission
+boundary instead of trusting a periodic upload. A failed stop remains held for explicit
+retry and cannot be cancelled into a live conversation after the native process may have quit.
+
 Before source stop and again before target admission, resolve the pinned target credential
 and capacity afresh. Source deletion uses its recorded UID. The replacement waits for every
 pod mounting the claim to disappear, including terminating or differently labelled consumers;
@@ -187,7 +194,10 @@ replay input.
 Confirm actual native identity and require the first parsed target user turn to equal the
 reviewed handover. Checkpoint target native state and transcript before advancing history.
 A retry after history commit checks the same generation/native identity and uses idempotent
-runtime release. Only after release acknowledgement clear pending state. Cancellation is
+runtime release. A durable `releasing` phase opens inbox consumption for only the admitted
+target generation before waking its runtime; lifecycle maintenance stays blocked until the
+release acknowledgement clears pending state. This prevents an idle target from missing the
+only wake-up while the registry still reports replacement pending. Cancellation is
 limited to a still-live, identical source before source-stop progress. Error text uses known
 local refusals or constant fallback text; provider response bodies and credential-bearing
 addresses are not reflected into the owner flow.

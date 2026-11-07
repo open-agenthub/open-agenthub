@@ -40,6 +40,9 @@ function validateDriver(driver) {
   if (driver.inputReadyScreen !== undefined && typeof driver.inputReadyScreen !== 'function') {
     throw new Error('Agent driver inputReadyScreen must be a function');
   }
+  if (driver.providerSwitchExitKeys !== undefined && (!Array.isArray(driver.providerSwitchExitKeys) ||
+      !driver.providerSwitchExitKeys.length || driver.providerSwitchExitKeys.some(value => typeof value !== 'string' || !value.length || value.length > 32)))
+    throw new Error('Agent driver providerSwitchExitKeys must be bounded native quit keys');
   if (driver.findTranscript !== undefined && typeof driver.findTranscript !== 'function') {
     throw new Error('Agent driver findTranscript must be a function');
   }

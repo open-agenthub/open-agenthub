@@ -231,6 +231,8 @@ function createCommonServer(options = {}) {
   let outstandingRuntimeTurns = 0;
   const providerTargetRequest = env.AGENTHUB_PROVIDER_SWITCH_ID || '';
   let providerSourceRequest = null;
+  let providerStopping = false, providerNativeStopped = false, providerStopPromise = null;
+  const providerExitWaiters = new Set();
   let providerTargetReleased = false;
   let providerPromptUsed = false;
   let runtimeDraining = Boolean(providerTargetRequest);
@@ -1061,21 +1063,23 @@ function createCommonServer(options = {}) {
   // The body is rebuilt here from a fixed list of numeric fields, whatever the driver returned:
   // the files it reads hold the whole conversation, and none of it may reach the hub this way.
   let lastUsageReport = '';
-  function postUsage(done) {
+  function postUsage(done, required = false) {
     if (!callback || !token || typeof driver.readUsage !== 'function') return done();
     let totals = null;
     try { totals = driver.readUsage({ env, home, fs }); } catch (error) {
       console.log('[agent] Usage not read: ' + (error && error.message ? error.message : error));
+      if (required) return done(new Error('native_usage_unavailable'));
     }
-    if (!totals || typeof totals !== 'object') return done();
+    if (!totals || typeof totals !== 'object') return done(required ? new Error('native_usage_unavailable') : undefined);
     const body = JSON.stringify(usageReportBody(totals));
     if (body === lastUsageReport) return done();
+    let failure = null;
     fetchImpl(callback + '/usage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Agent-Token': token },
       body
-    }).then(response => { if (response && response.ok) lastUsageReport = body; })
-      .catch(() => {}).finally(() => done());
+    }).then(response => { if (response && response.ok) lastUsageReport = body; else if (required) failure = new Error('native_usage_not_acknowledged'); })
+      .catch(() => { if (required) failure = new Error('native_usage_not_acknowledged'); }).finally(() => done(failure));
   }
 
   function postStatus(status, done) {
@@ -1168,6 +1172,12 @@ function createCommonServer(options = {}) {
   }
 
   function handleAgentExit(exitCode, signal) {
+    if (providerStopping) {
+      exited = true; providerNativeStopped = true;
+      for (const resolve of providerExitWaiters) resolve();
+      providerExitWaiters.clear(); publishActivity();
+      return;
+    }
     if (restartReason !== null) {
       const message = restartMessage(restartReason);
       restartReason = null;
@@ -2300,7 +2310,7 @@ function createCommonServer(options = {}) {
     const prompt = env.AGENTHUB_PROMPT || '';
     return { ready: agentReady && !exited && restartReason === null,
       nativeId, requestId: providerSourceRequest || (providerTargetReleased ? null : providerTargetRequest), draining: runtimeDraining,
-      markerSeen: Boolean(providerTargetRequest && prompt && raw.includes(JSON.stringify(prompt).slice(1, -1))) };
+      stopped: providerNativeStopped, markerSeen: Boolean(providerTargetRequest && prompt && raw.includes(JSON.stringify(prompt).slice(1, -1))) };
   }
 
   async function handleProviderSwitchRequest(request, response) {
@@ -2313,9 +2323,39 @@ function createCommonServer(options = {}) {
     let body; try { body = raw && JSON.parse(raw.toString('utf8')); } catch {}
     if (!body || !/^[0-9a-f-]{36}$/i.test(body.requestId || '')) return fileError(response, 400, 'invalid_switch_request');
     if (request.method === 'DELETE') {
-      if ((providerTargetRequest && !providerTargetReleased) || providerSourceRequest !== body.requestId) return fileError(response, 409, 'switch_not_cancellable');
+      if (providerStopping || (providerTargetRequest && !providerTargetReleased) || providerSourceRequest !== body.requestId) return fileError(response, 409, 'switch_not_cancellable');
       providerSourceRequest = null; runtimeDraining = false; nextTurn?.suspend(false); publishActivity();
       return sendJson(response, 200, { cancelled: true });
+    }
+    if (body.action === 'stop') {
+      if (providerSourceRequest !== body.requestId || !Array.isArray(driver.providerSwitchExitKeys))
+        return fileError(response, 409, 'source_stop_not_reserved');
+      if (!providerStopPromise) {
+        providerStopPromise = (async () => {
+          if (!providerStopping) {
+            providerStopping = true;
+            // The native quit path runs CLI cleanup/exporters before the pod is removed.
+            // There is deliberately no force kill or replay of an uncertain stop request.
+            for (const keys of driver.providerSwitchExitKeys) {
+              term.write(keys);
+              // Separate text from Enter so native paste detection cannot swallow submission.
+              await new Promise(resolve => setTimeoutImpl(resolve, 150));
+            }
+          }
+          if (!providerNativeStopped) await new Promise((resolve, reject) => {
+            let timer;
+            const finish = () => { clearTimeoutImpl(timer); resolve(); };
+            timer = setTimeoutImpl(() => { providerExitWaiters.delete(finish); reject(new Error('source_stop_unconfirmed')); }, 45_000);
+            providerExitWaiters.add(finish);
+          });
+          await new Promise(resolve => flushCredentialWatcher(resolve));
+          await new Promise((resolve, reject) => persistAll(error => error ? reject(error) : resolve(), true));
+          await new Promise((resolve, reject) => postUsage(error => error ? reject(error) : resolve(), true));
+        })().catch(error => { providerStopPromise = null; throw error; });
+      }
+      try { await providerStopPromise; }
+      catch { return fileError(response, 503, 'source_stop_unconfirmed'); }
+      return sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
     }
     if (body.action === 'prepare') {
       if ((providerTargetRequest && !providerTargetReleased) || (providerSourceRequest && providerSourceRequest !== body.requestId))
@@ -2332,15 +2372,17 @@ function createCommonServer(options = {}) {
         providerSourceRequest = body.requestId; runtimeDraining = true; nextTurn.suspend(true); publishActivity();
       }
     } else if (['checkpoint', 'release'].includes(body.action)) {
-      if (body.action === 'release' && providerTargetReleased && providerTargetRequest === body.requestId)
+      if (body.action === 'release' && providerTargetReleased && providerTargetRequest === body.requestId) {
+        if (!providerSourceRequest) nextTurn?.accept();
         return sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
+      }
       const state = providerNativeState();
       if (!statePut || stateWithheld || providerTargetRequest !== body.requestId || !state.ready || !state.nativeId || !state.markerSeen ||
           (body.nativeId && body.nativeId !== state.nativeId)) return fileError(response, 409, 'handover_not_confirmed');
     } else return fileError(response, 400, 'invalid_switch_action');
     return persistAll(error => {
       if (error || stateWithheld) return fileError(response, 503, 'provider_state_upload_failed');
-      if (body.action === 'release') { providerTargetReleased = true; runtimeDraining = false; nextTurn?.suspend(false); publishActivity(); }
+      if (body.action === 'release') { providerTargetReleased = true; runtimeDraining = false; nextTurn?.suspend(false); nextTurn?.accept(); publishActivity(); }
       sendJson(response, 200, { ...providerNativeState(), checkpointed: true });
     }, true);
   }

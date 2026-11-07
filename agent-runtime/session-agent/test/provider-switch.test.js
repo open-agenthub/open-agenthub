@@ -81,3 +81,31 @@ test('an open shell is a known workload that must close before source reservatio
   shell.emit('close');
   assert.equal((await route(h, 'prepare')).status, 200);
 });
+
+test('native source quit is submitted once and failed final usage acknowledgment holds the stop', async () => {
+  const file = '/home/agent/.test-agent/conversation.jsonl';
+  let clock = 10_000, acceptUsage = false;
+  const h = createHarness({ ...env, AGENTHUB_CALLBACK_URL: 'https://example.com/internal/session' },
+    { supportsProviderSwitch: true, turnHooks: true, providerSwitchExitKeys: ['/exit', '\r'],
+      findTranscript: () => file, nativeIdentity: () => 'source-native', readUsage: () => ({ inputTokens: 10 }) },
+    { files: { [file]: '{"type":"user","message":{"role":"user","content":"source"}}\n' }, now: () => clock,
+      fetchResponse: url => ({ ok: !url.endsWith('/usage') || acceptUsage, text: async () => '' }) });
+  const socket = new FakeSocket(); h.runtime.webSocketServer.connect(socket, '/');
+  socket.emit('message', JSON.stringify({ type: 'resize', cols: 120, rows: 36 }));
+  clock = 11_000;
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'prompt' }), '127.0.0.1');
+  clock = 14_000;
+  await requestHttp(h, 'POST', '/agenthub/turn', headers, JSON.stringify({ event: 'stop' }), '127.0.0.1');
+  assert.equal((await route(h, 'prepare')).status, 200);
+  const terminal = h.terminals[0], write = terminal.write.bind(terminal);
+  terminal.write = data => { write(data); if (data === '\r') terminal.emitExit({ exitCode: 0 }); };
+  assert.equal((await route(h, 'stop')).status, 503);
+  assert.equal((await requestHttp(h, 'DELETE', '/agenthub/provider-switch', headers, JSON.stringify({ requestId }))).status, 409);
+  assert.equal(terminal.killed, false);
+  acceptUsage = true;
+  const retried = await route(h, 'stop');
+  assert.equal(retried.status, 200);
+  assert.equal(JSON.parse(retried.body).stopped, true);
+  assert.equal(terminal.writes.filter(value => value === '/exit').length, 1);
+  assert.equal(terminal.killed, false);
+});

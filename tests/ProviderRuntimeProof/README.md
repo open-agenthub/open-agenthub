@@ -41,7 +41,9 @@ private `/tmp` and image-owned managed hooks. It binds the isolated proof home/w
 pinned CLI installation separately so the private `/tmp` cannot hide them. No native turn
 events are injected: real UserPromptSubmit/Stop hooks establish the completed safe point.
 After target release, each CLI reserves a subsequent source request, checkpoints its archive,
-and cancels that source reservation. Shell/background and concurrent guards have separate
+and cancels that source reservation. It then reserves again, submits the native `/exit` command
+with text and Enter separated to avoid paste detection, waits for actual PTY exit and
+acknowledged final persistence, and checks cancellation is refused after shutdown starts. Shell/background and concurrent guards have separate
 runtime regressions; no real provider account is used.
 
 `node tests/ProviderRuntimeProof/signature-mode.mjs` exercises actual filesystem metadata

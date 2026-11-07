@@ -13,6 +13,21 @@ namespace AgentHub.Api.Tests;
 public class SessionExecutionTests
 {
     [Fact]
+    public void TargetAccountAdmissionNeverFallsBackToAnExhaustedOrRejectedDefault()
+    {
+        var now = DateTime.UtcNow;
+        var accounts = new ProviderAccountSet();
+        accounts.Accounts.Add(new() { Id = "default", IsDefault = true, ExhaustedUntil = now.AddHours(1) });
+        accounts.Accounts.Add(new() { Id = "rejected", LoginRejectedAt = now });
+        accounts.Accounts.Add(new() { Id = "usable" });
+        Assert.Equal("usable", ProviderSwitchCredentials.SelectAccount(accounts, null, now));
+        Assert.Null(ProviderSwitchCredentials.SelectAccount(accounts, "default", now));
+        Assert.Null(ProviderSwitchCredentials.SelectAccount(accounts, "rejected", now));
+        accounts.Accounts.RemoveAt(2);
+        Assert.Null(ProviderSwitchCredentials.SelectAccount(accounts, null, now));
+    }
+
+    [Fact]
     public void NativeFloorAdmitsBoundedMultilingualHandoverWithoutOptionalWindowMetadata()
     {
         foreach (var agent in new[] { AgentKind.Claude, AgentKind.Codex })
