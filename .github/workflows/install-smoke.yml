@@ -150,6 +150,10 @@ jobs:
         env:
           KUBECONFIG: /etc/rancher/k3s/k3s.yaml
         run: bash tests/OidcStartupProof/install.sh
+      - name: Prove team login through quickstart ingress
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: bash tests/TeamIngressProof/prove.sh
       # A chart upgrade must move every image with the chart's appVersion (#491); the old
       # "latest" default left a release on whatever its nodes had pulled first.
       - name: Upgrade to a newer chart moves the images
