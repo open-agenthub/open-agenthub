@@ -64,3 +64,9 @@ mod appends a second priority message. The proof releases the model, requires it
 to contain that message, and records native row metadata. The pinned CLI writes the appended
 user row with `isMeta: true`; the Workspace parser intentionally filters it. Model receipt,
 not visibility as an ordinary user row, proves that busy delivery reached native context.
+
+`PROOF_AGENTS=claude PROOF_SUBSCRIPTION=1 PROOF_CLAUDE_MOD=1` with the source flags
+checks the pinned interactive subscription path using a synthetic native credential and
+profile cache. Unlike print mode, interactive startup needs account-profile metadata. The
+recording model and cached profile replace provider services; sign-in/entitlement is outside
+this proof. The actual CLI, hooks, mod, checkpoint and native exit remain in use.

@@ -102,6 +102,13 @@ try {
       delete env.CODEX_API_KEY;
 
     }
+    if(agent==='claude'&&process.env.PROOF_SUBSCRIPTION==='1'){
+      delete env.ANTHROPIC_API_KEY;
+      fs.writeFileSync(path.join(home,'.claude/.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'synthetic-claude-subscription',refreshToken:'synthetic-refresh',expiresAt:Date.now()+86400000,scopes:['user:inference','user:profile','user:sessions:claude_code'],subscriptionType:'pro',rateLimitTier:'default_claude_pro'}}));
+      const config=JSON.parse(fs.readFileSync(path.join(home,'.claude.json'),'utf8'));
+      config.oauthAccount={accountUuid:'11111111-1111-4111-8111-111111111111',emailAddress:'proof@example.com',organizationUuid:'22222222-2222-4222-8222-222222222222',organizationName:'Proof workspace'};
+      fs.writeFileSync(path.join(home,'.claude.json'),JSON.stringify(config));
+    }
     if(agent==='claude'&&process.env.PROOF_CLAUDE_MOD==='1'){
       const mod=path.join(root,'fleet-mod');
       fs.cpSync(path.join(repo,'agent-runtime/claude/mods/agenthub-fleet'),mod,{recursive:true,filter:file=>!file.includes('node_modules')});
@@ -178,7 +185,14 @@ try {
         const cancelled = await fetch(route, { method: 'DELETE', headers: authority, body: JSON.stringify({ requestId: nextRequest }) });
         assert.equal(cancelled.status, 200);
         if(agent==='codex')await until(async()=> (await transcript()).includes('CANCEL-QUEUED-native-codex'));
-        if(agent==='claude'&&process.env.PROOF_CLAUDE_MOD==='1'){
+        if(agent==='claude'&&process.env.PROOF_SUBSCRIPTION==='1'){
+      delete env.ANTHROPIC_API_KEY;
+      fs.writeFileSync(path.join(home,'.claude/.credentials.json'),JSON.stringify({claudeAiOauth:{accessToken:'synthetic-claude-subscription',refreshToken:'synthetic-refresh',expiresAt:Date.now()+86400000,scopes:['user:inference','user:profile','user:sessions:claude_code'],subscriptionType:'pro',rateLimitTier:'default_claude_pro'}}));
+      const config=JSON.parse(fs.readFileSync(path.join(home,'.claude.json'),'utf8'));
+      config.oauthAccount={accountUuid:'11111111-1111-4111-8111-111111111111',emailAddress:'proof@example.com',organizationUuid:'22222222-2222-4222-8222-222222222222',organizationName:'Proof workspace'};
+      fs.writeFileSync(path.join(home,'.claude.json'),JSON.stringify(config));
+    }
+    if(agent==='claude'&&process.env.PROOF_CLAUDE_MOD==='1'){
           const pushed=await fetch('http://127.0.0.1:18674/agenthub/messages',{method:'POST',headers:authority,body:JSON.stringify({id:'cancel-mod',body:'CANCEL-QUEUED-native-claude',priority:true,fromTitle:'Proof'})});
           assert.equal(pushed.status,200);
           assert.equal((await pushed.json()).delivered,'queued-for-mod');

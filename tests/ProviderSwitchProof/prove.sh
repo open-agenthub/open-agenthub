@@ -8,7 +8,7 @@ fi
 proof_model_url=http://provider-switch-model.agenthub.svc.cluster.local:8080
 proof_native_url=https://provider-switch-model.agenthub.svc.cluster.local:8443
 proof_context=$(mktemp -d /tmp/provider-switch-images.XXXXXX)
-cp tests/ProviderSwitchProof/{Claude.Dockerfile,Codex.Dockerfile,Model.Dockerfile,codex-native.sh,model.mjs} "$proof_context/"
+cp tests/ProviderSwitchProof/{Claude.Dockerfile,Codex.Dockerfile,Model.Dockerfile,codex-native.sh,claude-fixture-entrypoint.sh,model.mjs} "$proof_context/"
 openssl req -x509 -newkey rsa:2048 -nodes -keyout "$proof_context/ca.key" -out "$proof_context/proof.crt" \
   -days 2 -subj /CN=provider-proof-ca >/dev/null 2>&1
 openssl req -newkey rsa:2048 -nodes -keyout "$proof_context/server.key" -out "$proof_context/server.csr" \

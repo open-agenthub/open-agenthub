@@ -47,7 +47,7 @@ function seedSubscriptions(ownerKey){
  const claims={email:'proof@example.com',exp:Math.floor(future/1000),'https://api.openai.com/auth':{chatgpt_account_id:'proof-account',chatgpt_user_id:'proof-user',user_id:'proof-user',chatgpt_plan_type:'plus'}};
  const idToken=Buffer.from('{"alg":"none"}').toString('base64url')+'.'+Buffer.from(JSON.stringify(claims)).toString('base64url')+'.proof';
  const native={
-  claude:{claudeAiOauth:{accessToken:'synthetic-claude-subscription',refreshToken:'synthetic-refresh',expiresAt:future,scopes:['user:inference','user:profile'],subscriptionType:'pro',rateLimitTier:'default_claude_pro'}},
+  claude:{claudeAiOauth:{accessToken:'synthetic-claude-subscription',refreshToken:'synthetic-refresh',expiresAt:future,scopes:['user:inference','user:profile','user:sessions:claude_code'],subscriptionType:'pro',rateLimitTier:'default_claude_pro'}},
   codex:{auth_mode:'chatgpt',tokens:{id_token:idToken,access_token:'synthetic-codex-subscription',refresh_token:'synthetic-refresh',account_id:'proof-account'},last_refresh:new Date().toISOString()}
  };
  for(const provider of ['claude','codex']){

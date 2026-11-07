@@ -63,3 +63,10 @@ visible conversation checks. A busy Claude mod append is a native `isMeta` user 
 Workspace intentionally hides. Requiring it to appear as an ordinary visible user entry
 would falsely report failed delivery. The reviewed first handover and earlier owner turns
 must still appear in the same visible history.
+
+The Claude subscription fixture also seeds a synthetic native `oauthAccount` profile cache
+before invoking the unchanged shipped entrypoint. Its compiled profile host is independent
+of the redirected model base. A print-mode probe can work without that cache while an
+interactive subscription startup waits for profile completion. The cache contains only the
+selected synthetic account metadata, never prior native conversation or source state. This
+fixture does not prove real profile fetching, OAuth sign-in, renewal or account entitlement.
