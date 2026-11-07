@@ -784,7 +784,7 @@ instance runs itself. Off by default. See [Remote MCP server](docs/mcp-server.md
 
 ## Assumptions
 
-- **Auth**: any OIDC provider works. Client `agenthub`, claim `preferred_username` as the
+- **Auth**: compatible OIDC providers must issue JWT access tokens and support the client requirements above. Client `agenthub`, claim `preferred_username` as the
   tenant key.
 - **Provider access**: each user supplies their own Claude, Codex, Cursor, OpenClaw, or OpenCode subscription
   login or API key. OpenClaw ApiKey billing reuses Anthropic, OpenAI, or Cursor keys.

@@ -158,6 +158,11 @@ jobs:
           sh /tmp/install.sh
           bash /tmp/install-smoke.sh default
 
+      - name: Prove quickstart migration to OIDC and recovery
+        env:
+          KUBECONFIG: /etc/rancher/k3s/k3s.yaml
+        run: bash tests/OidcStartupProof/install.sh
+
       - name: Diagnostics
         if: failure()
         env:
