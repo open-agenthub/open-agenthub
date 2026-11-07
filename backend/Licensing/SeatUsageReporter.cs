@@ -44,6 +44,19 @@ public sealed class SeatUsageReporter(
 
     public async Task ReportOnceAsync(CancellationToken ct)
     {
+        try { await ReportCoreAsync(ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception)
+        {
+            // Exception text and remote response bodies can include credentials. Persist only
+            // fixed diagnostic categories that are safe to display to administrators.
+            await store.SetReportErrorAsync("License service request failed. Check connectivity and service availability.", ct);
+            throw;
+        }
+    }
+
+    private async Task ReportCoreAsync(CancellationToken ct)
+    {
         var token = await store.GetTokenAsync(ct);
         if (string.IsNullOrWhiteSpace(token))
             return; // no license activated — nothing to report
@@ -52,6 +65,7 @@ public sealed class SeatUsageReporter(
         if (license.Status.LicenseId is null)
         {
             log.LogWarning("License token has no license id — re-activate it to enable seat metering.");
+            await store.SetReportErrorAsync("License token has no license id. Re-activate it to enable reporting.", ct);
             return;
         }
 
@@ -72,7 +86,8 @@ public sealed class SeatUsageReporter(
             // 403 = subscription no longer active, 409 = license bound to another instance,
             // 401 = token expired too long ago. Either way the stored token lapses and gates
             // features off; the service's message says which.
-            log.LogWarning("Seat report rejected ({Status}) — {Body}", (int)resp.StatusCode, body);
+            await store.SetReportErrorAsync($"License service rejected the report (HTTP {(int)resp.StatusCode}).", ct);
+            log.LogWarning("Seat report rejected ({Status}).", (int)resp.StatusCode);
             return;
         }
 
@@ -90,6 +105,7 @@ public sealed class SeatUsageReporter(
                     license.Status.Reason);
                 await store.SetTokenAsync(token, ct);
                 await license.ReloadAsync(ct);
+                await store.SetReportErrorAsync("Renewed license token failed verification; previous token retained.", ct);
                 return;
             }
             await store.SetLastReportAsync(DateTime.UtcNow, ct);
@@ -100,6 +116,7 @@ public sealed class SeatUsageReporter(
         }
         else
         {
+            await store.SetReportErrorAsync("License service returned no renewal token.", ct);
             log.LogWarning("Seat report accepted but no token was returned.");
         }
     }

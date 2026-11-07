@@ -41,28 +41,27 @@ public sealed class AdminController : ControllerBase
     public sealed record Overview(
         bool IsAdmin, LicenseStatus License, SeatInfo Seats,
         IReadOnlyList<AdminUser> Users, string? BillingPortalUrl, DateTime? LastCheckIn,
-        DateTime? CancelAt);
+        DateTime? CancelAt, DateTime? FeaturesStopAt = null, string? LastReportError = null,
+        DateTime? LastReportErrorAt = null, int ReportWarningDays = 7, bool ReportWarning = false);
 
     [HttpGet("overview")]
     public async Task<IActionResult> GetOverview(CancellationToken ct)
     {
         if (!await IsAdminAsync(ct)) return Forbid();
+        // Reports and activation can land on another replica. Re-read before displaying the
+        // signed expiry so the warning reflects the token shared by all replicas.
+        await _license.ReloadAsync(ct);
         var status = _license.Status;
-        // Claims are cached per process: right after an activation handled by another
-        // replica this one would still say "unlicensed". Before claiming that on the
-        // admin page, re-read the store once (cheap, admin-only traffic).
-        if (!status.Valid)
-        {
-            await _license.ReloadAsync(ct);
-            status = _license.Status;
-        }
         var used = await _dir.CountLicensedAsync(ct);
         var users = await _dir.ListAsync(ct);
         var lastCheckIn = await _store.GetLastReportAsync(ct);
         var cancelAt = await _store.GetCancelAtAsync(ct);
+        var reportError = await _store.GetReportErrorAsync(ct);
+        var warningDays = Math.Clamp(_cfg.GetValue("Ee:License:ReportWarningDays", 7), 0, 365);
         return Ok(new Overview(
             true, status, new SeatInfo(used, status.Seats), users, _cfg["Ee:BillingPortalUrl"], lastCheckIn,
-            cancelAt));
+            cancelAt, status.ValidUntil, reportError.Error, reportError.At, warningDays,
+            status.ValidUntil is { } stop && stop <= DateTime.UtcNow.AddDays(warningDays)));
     }
 
     public sealed record CheckoutReq(string Email, string Org, int Seats, string? ReturnUrl);

@@ -414,6 +414,8 @@ ee:
   license:
     serviceUrl: "https://license.instances.open-agenthub.on-mb.com"
     reportIntervalHours: 24
+    # Warn admins this many days before the signed token expires without renewal (0–365).
+    reportWarningDays: 7
   # Slack integration: asks you in a Slack thread whenever a session waits for input,
   # and turns your thread replies into the agent's answer. Uses Socket Mode.
   slack:
