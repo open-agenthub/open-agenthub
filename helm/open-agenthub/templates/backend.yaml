@@ -37,6 +37,10 @@ spec:
             - configMapRef: { name: agenthub-config }
             - secretRef:    { name: agenthub-secrets }
           env:
+          {{- if .Values.backend.trustedCaConfigMap }}
+            - name: SSL_CERT_FILE
+              value: /etc/agenthub/ca/ca.crt
+          {{- end }}
             - name: DataProtection__CertificatePem
               valueFrom:
                 secretKeyRef:
@@ -76,7 +80,20 @@ spec:
             initialDelaySeconds: 15
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+          {{- if .Values.backend.trustedCaConfigMap }}
+            - name: trusted-ca
+              mountPath: /etc/agenthub/ca
+              readOnly: true
+          {{- end }}
       volumes:
+      {{- if .Values.backend.trustedCaConfigMap }}
+        - name: trusted-ca
+          configMap:
+            name: {{ .Values.backend.trustedCaConfigMap | quote }}
+            items:
+              - key: ca.crt
+                path: ca.crt
+      {{- end }}
         - name: tmp
           emptyDir: {}
 ---

@@ -80,6 +80,9 @@ watch([() => props.items, () => props.pending, query], async () => {
         <p v-else-if="!visible.length" class="empty">No matching messages.</p>
         <template v-for="item in visible" :key="item.index">
           <div v-if="item.role === 'boundary'" class="conversation-boundary" role="separator" data-conversation-boundary>{{ item.text }}</div>
+          <!-- Something the CLI did on its own, such as a model switch: a line of the record, not a turn. -->
+          <p v-else-if="item.role === 'note'" class="conversation-note" data-conversation-note>{{ item.text }}<time v-if="item.at" class="message-time"
+            :datetime="isoMessageTime(item.at)" :title="fullMessageTime(item.at)">{{ shortMessageTime(item.at) }}</time></p>
           <WorkLog v-else-if="item.role === 'tool' || item.role === 'result'" :label="item.label" :state="item.role === 'result' ? 'output' : ''">
             <pre>{{ item.text }}</pre>
           </WorkLog>
@@ -127,6 +130,7 @@ watch([() => props.items, () => props.pending, query], async () => {
 .timeline { display: flex; flex-direction: column; max-width: 840px; margin: auto; padding: 16px 32px 36px; gap: 12px; }
 .conversation-boundary { display: flex; align-items: center; gap: 12px; color: var(--muted-3); font-size: 12px; padding: 16px 0; }
 .conversation-boundary::before, .conversation-boundary::after { content: ""; flex: 1; border-top: 1px solid var(--border-2); }
+.conversation-note { margin: 0; color: var(--muted-3); font-size: 12px; text-align: center; overflow-wrap: anywhere; }
 .message { min-width: 0; font-size: 14px; line-height: 1.7; padding: 10px 0; }
 .message-label { display: block; margin-bottom: 8px; color: var(--muted-3); font-size: 11px; font-weight: 600; }
 .message-user { align-self: flex-end; max-width: 88%; padding: 14px 18px; border: 1px solid var(--border); background: var(--panel-2); border-radius: 16px; }

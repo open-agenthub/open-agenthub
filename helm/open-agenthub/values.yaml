@@ -52,6 +52,9 @@ ingress:
   bodySize: 55m
 
 backend:
+  # Existing ConfigMap in the release namespace with a PEM CA bundle under ca.crt.
+  # Adds backend outbound TLS trust; restart the deployment after changing the bundle.
+  trustedCaConfigMap: ""
   replicas: 2
   environment: Production
   # Narrow these to the ingress source ranges; all pods in these networks are trusted proxies.

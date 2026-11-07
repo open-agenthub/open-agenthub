@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 import ProjectSidebar from './ProjectSidebar.vue'
 import ShareSessionDialog from './ShareSessionDialog.vue'
 import SharedSessionView from './SharedSessionView.vue'
@@ -24,6 +24,10 @@ vi.mock('../api.js', () => ({
   api: apiMocks.api,
   getSharedSession: apiMocks.getSharedSession
 }))
+
+// The share dialogs debounce their lookups by 250 ms and the shared page polls every 2 s; a
+// wrapper left mounted keeps those running into the next test, after its mocks were cleared (#518).
+enableAutoUnmount(afterEach)
 
 describe('shared-session UI', () => {
   beforeEach(() => {
@@ -61,6 +65,71 @@ describe('shared-session UI', () => {
       role: 'Collaborator',
       expiresAt: '2030-01-02T03:04'
     })
+  })
+
+  // #519: one picker served both people and links, so a person added as Collaborator turned the
+  // next link into a Collaborator link without the owner touching it.
+  it('keeps the link role at Viewer after a person is added as Collaborator', async () => {
+    apiMocks.api.createShareUser.mockResolvedValue({})
+    apiMocks.api.createShareLink.mockResolvedValue({ link: { id: 'link-2', role: 'Viewer' }, url: '/shared/t' })
+    const wrapper = mount(ShareSessionDialog, { props: { session: { id: 's1', title: 'Owner session' } } })
+    await flushPromises()
+    await wrapper.get('[data-person-role]').setValue('Collaborator')
+    await wrapper.get('input[aria-label="Recipient username or email"]').setValue('bob')
+    await wrapper.findAll('button').find(b => b.text() === 'Add').trigger('click')
+    await flushPromises()
+    expect(apiMocks.api.createShareUser).toHaveBeenCalledWith('s1', { recipient: 'bob', role: 'Collaborator' })
+
+    expect(wrapper.get('[data-new-link-role]').element.value).toBe('Viewer')
+    expect(wrapper.get('[data-create-link]').text()).toBe('Create Viewer link')
+    await wrapper.get('[data-create-link]').trigger('click')
+    await flushPromises()
+    expect(apiMocks.api.createShareLink).toHaveBeenCalledWith('s1', { role: 'Viewer', expiresAt: null })
+    expect(wrapper.get('[data-one-time-link-role]').text()).toBe('Viewer')
+  })
+
+  it('shows a chosen Collaborator link role before and after creating, then falls back to Viewer', async () => {
+    apiMocks.api.createShareLink.mockResolvedValue({ link: { id: 'link-2', role: 'Collaborator' }, url: '/shared/t' })
+    const wrapper = mount(ShareSessionDialog, { props: { session: { id: 's1', title: 'Owner session' } } })
+    await flushPromises()
+    await wrapper.get('[data-new-link-role]').setValue('Collaborator')
+    expect(wrapper.get('[data-create-link]').text()).toBe('Create Collaborator link')
+    expect(wrapper.get('[data-new-link-role-note]').text()).toContain('can type into the terminal')
+    // The person picker is untouched by the link choice.
+    expect(wrapper.get('[data-person-role]').element.value).toBe('Viewer')
+
+    await wrapper.get('[data-create-link]').trigger('click')
+    await flushPromises()
+    expect(apiMocks.api.createShareLink).toHaveBeenCalledWith('s1', { role: 'Collaborator', expiresAt: null })
+    expect(wrapper.get('[data-one-time-link-role]').text()).toBe('Collaborator')
+    expect(wrapper.get('[data-new-link-role]').element.value).toBe('Viewer')
+  })
+
+  it('starts the link role at Viewer every time the dialog opens', async () => {
+    const first = mount(ShareSessionDialog, { props: { session: { id: 's1', title: 'Owner session' } } })
+    await flushPromises()
+    await first.get('[data-new-link-role]').setValue('Collaborator')
+    first.unmount()
+    const second = mount(ShareSessionDialog, { props: { session: { id: 's1', title: 'Owner session' } } })
+    await flushPromises()
+    expect(second.get('[data-new-link-role]').element.value).toBe('Viewer')
+
+    // The embedded page keeps the component and swaps the session instead.
+    await second.get('[data-new-link-role]').setValue('Collaborator')
+    await second.setProps({ session: { id: 's2', title: 'Other session' } })
+    await flushPromises()
+    expect(second.get('[data-new-link-role]').element.value).toBe('Viewer')
+  })
+
+  it('labels every existing link with its saved role', async () => {
+    apiMocks.api.listSessionShares.mockResolvedValue({
+      users: [], mcpPolicy: null,
+      links: [{ id: 'link-v', role: 'Viewer', expiresAt: null }, { id: 'link-c', role: 'Collaborator', expiresAt: null }]
+    })
+    const wrapper = mount(ShareSessionDialog, { props: { session: { id: 's1', title: 'Owner session' } } })
+    await flushPromises()
+    expect(wrapper.get('[data-link-role-badge="link-v"]').text()).toBe('Viewer · read only')
+    expect(wrapper.get('[data-link-role-badge="link-c"]').text()).toBe('Collaborator · can type')
   })
 
   it('collapses and reopens a project group', async () => {

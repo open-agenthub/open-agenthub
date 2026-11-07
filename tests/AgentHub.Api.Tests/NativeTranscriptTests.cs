@@ -145,6 +145,61 @@ public class NativeTranscriptTests
         Assert.Equal("see this <div>\nline 0 <b>keep</b>\nline 1 <b>keep</b>\nline 2 <b>keep</b>\nand reply", entry.Text);
     }
 
+    [Fact]
+    public void Claude_ShowsALiveModelSwitchAsANoteWithoutTheCommandMarkup()
+    {
+        // The lines Claude Code 2.1.318 wrote for `/model claude-sonnet-5-5` while ANTHROPIC_MODEL
+        // was set, trimmed to the fields the reader looks at: the caveat, the command, and its
+        // confirmation with the SGR codes it styles the hint with.
+        const string jsonl =
+            """
+            {"type":"user","message":{"role":"user","content":"<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request.</local-command-caveat>"},"isMeta":true,"promptId":"p1","uuid":"u1","timestamp":"2026-11-07T13:56:06.595Z"}
+            {"type":"user","message":{"role":"user","content":"<command-name>/model</command-name>\n            <command-message>model</command-message>\n            <command-args>claude-sonnet-5-5</command-args>"},"promptId":"p1","uuid":"u2","timestamp":"2026-11-07T13:56:06.595Z"}
+            {"type":"user","message":{"role":"user","content":"<local-command-stdout>Set model to `Sonnet 5.5` and saved as your default for new sessions\u001b[2m\u001b[22m\n\u001b[2m     ANTHROPIC_MODEL is set to \u001b[22m`Opus 5.5`\u001b[2m — new sessions use that while it is set\u001b[22m</local-command-stdout>"},"promptId":"p1","uuid":"u3","timestamp":"2026-11-07T13:56:06.595Z"}
+            {"type":"user","message":{"role":"user","content":"Which word?"},"origin":{"kind":"human"},"promptSource":"typed","uuid":"u4","timestamp":"2026-11-07T13:56:10.000Z"}
+            """;
+
+        var entries = NativeTranscript.Parse(jsonl);
+
+        Assert.Equal([("note", "Model switched to Sonnet 5.5"), ("user", "Which word?")], entries.Select(e => (e.Role, e.Text)));
+        Assert.Equal(new DateTime(2026, 11, 7, 13, 56, 6, 595, DateTimeKind.Utc), entries[0].At);
+        Assert.Contains("## Note\nModel switched to Sonnet 5.5\n", NativeTranscript.Render(entries));
+    }
+
+    [Theory]
+    // Without backticks or the "saved" tail, and the answer to a picker closed on the current model.
+    [InlineData("<local-command-stdout>\u001b[1mSet model to Haiku 5.5\u001b[22m</local-command-stdout>", "note", "Model switched to Haiku 5.5")]
+    [InlineData("<local-command-stdout>Kept model as `Opus 5.5`</local-command-stdout>", null, null)]
+    [InlineData("<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>", null, null)]
+    // Other local commands, and text that only contains the markup, stay as they were.
+    [InlineData("<local-command-stdout>Total cost: $0.01</local-command-stdout>", "user", "<local-command-stdout>Total cost: $0.01</local-command-stdout>")]
+    [InlineData("<command-name>/model</command-name> typed by hand", "user", "<command-name>/model</command-name> typed by hand")]
+    [InlineData("Why does <local-command-stdout>Set model to `X`</local-command-stdout> appear?", "user", "Why does <local-command-stdout>Set model to `X`</local-command-stdout> appear?")]
+    public void Claude_RecognisesOnlyTheModelCommandsOwnLines(string content, string? role, string? text)
+    {
+        var line = System.Text.Json.JsonSerializer.Serialize(new { type = "user", message = new { role = "user", content } });
+
+        var entries = NativeTranscript.Parse(line);
+
+        Assert.Equal(role is null ? [] : [(role, text!)], entries.Select(e => (e.Role, e.Text)));
+    }
+
+    [Fact]
+    public void Claude_KeepsTheExactCommandMarkupWhenThePersonTypedIt()
+    {
+        // Claude Code 2.1.318 records a typed prompt with origin.kind "human" even when it is the
+        // exact markup its own command lines carry; the person's words stay a user turn.
+        const string typed = "<local-command-stdout>Set model to `Haiku`</local-command-stdout>";
+        var line = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            type = "user", message = new { role = "user", content = typed }, origin = new { kind = "human" }, promptSource = "typed"
+        });
+
+        var entry = Assert.Single(NativeTranscript.Parse(line));
+
+        Assert.Equal(("user", typed), (entry.Role, entry.Text));
+    }
+
     [Theory]
     [InlineData("a\n\n<pasted_content id=\"00ff\">\none\n</pasted_content id=\"00ff\">\n\n b", "a one b")]
     [InlineData("<pasted_content id=\"0a0a\">\nx\ny\n</pasted_content id=\"0a0a\">\n\n<pasted_content id=\"0b0b\">\nz\n</pasted_content id=\"0b0b\">", "x\ny\nz")]

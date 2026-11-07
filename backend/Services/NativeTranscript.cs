@@ -10,7 +10,8 @@ public sealed record TranscriptAttachment(string Id, string Name);
 /// One turn of a conversation, read from the provider's own transcript file.
 /// </summary>
 /// <param name="Role"><c>user</c>, <c>assistant</c>, <c>tool</c> (a call, with <paramref name="Tool"/>
-/// naming it) or <c>result</c> (what the call returned).</param>
+/// naming it), <c>result</c> (what the call returned), <c>boundary</c> (a cleared conversation or a
+/// provider change) or <c>note</c> (something the CLI did on its own, such as switching the model).</param>
 /// <param name="Text">The text of the turn; tool arguments and results are cut to
 /// <see cref="NativeTranscript.MaxToolChars"/>.</param>
 /// <param name="At">The provider's timestamp for the line, when it recorded one.</param>
@@ -108,6 +109,7 @@ public static partial class NativeTranscript
                 "assistant" => "Assistant",
                 "tool" => "Tool: " + (entry.Tool ?? "?"),
                 "result" => "Result",
+                "note" => "Note",
                 _ => entry.Role
             }).Append('\n').Append(entry.Text.TrimEnd()).Append('\n');
         }
@@ -171,6 +173,11 @@ public static partial class NativeTranscript
             if (type == "user" && value is not null &&
                 (value.StartsWith("<command-name>/clear</command-name>", StringComparison.Ordinal) ||
                  value.StartsWith("<command-name>/new</command-name>", StringComparison.Ordinal))) return;
+            if (type == "user" && value is not null && !TypedByPerson(root) && ModelCommand(value, out var note))
+            {
+                if (note is not null) entries.Add(new TranscriptEntry("note", note, at));
+                return;
+            }
             AddText(entries, type, type == "user" ? UnwrapPastes(value) : value, at);
             return;
         }
@@ -223,6 +230,50 @@ public static partial class NativeTranscript
                     entries[index] = WithAttachments(entries[index] with { PromptId = StringOr(root, "promptId") },
                         PathAttachments(entries[index].Text).Concat(files).ToArray());
         }
+    }
+
+    // A live model switch (#478) types `/model <id>` into Claude Code, which records the command
+    // and its confirmation as two user lines of exactly this shape. Shown as they are, the
+    // Workspace put a markup block, ANSI escapes and all, under "User" as if the person had
+    // written it. Anchored on the whole message, so a prompt that merely mentions the tags
+    // stays the person's words.
+    [GeneratedRegex(@"^<command-name>/model</command-name>\s*<command-message>model</command-message>\s*<command-args>[^<]*</command-args>$")]
+    private static partial Regex ModelCommandLine();
+
+    [GeneratedRegex(@"^<local-command-stdout>([\s\S]*)</local-command-stdout>$")]
+    private static partial Regex LocalCommandStdout();
+
+    // The confirmation names the model as the CLI labels it, in backticks, and styles the rest of
+    // the line with SGR codes (a dim hint when ANTHROPIC_MODEL is set, for one). "Kept model as"
+    // is the same command changing nothing.
+    [GeneratedRegex(@"^(?:Set model to (?:`([^`\n]+)`|([^\n]+?))(?: and saved\b|\n|$)|Kept model as\b)")]
+    private static partial Regex ModelOutcome();
+
+    [GeneratedRegex(@"\x1B(?:\[[0-?]*[ -/]*[@-~]|\][^\x07\x1B]*(?:\x07|\x1B\\)|[@-Z\\-_])")]
+    private static partial Regex AnsiEscape();
+
+    // Claude Code marks what the person typed with origin.kind "human"; the lines it records for
+    // a local command carry no origin. Typing the exact command markup by hand stays a prompt.
+    private static bool TypedByPerson(JsonElement root)
+        => root.TryGetProperty("origin", out var origin) && StringOr(origin, "kind") == "human";
+
+    /// <summary>
+    /// Whether <paramref name="value"/> is one of the lines Claude Code records for <c>/model</c>.
+    /// The command line and a "kept" answer are dropped (<paramref name="note"/> null); a switch
+    /// becomes the note "Model switched to …". Other local commands are left as they were.
+    /// </summary>
+    private static bool ModelCommand(string value, out string? note)
+    {
+        note = null;
+        if (ModelCommandLine().IsMatch(value)) return true;
+        var stdout = LocalCommandStdout().Match(value);
+        if (!stdout.Success) return false;
+        var outcome = ModelOutcome().Match(AnsiEscape().Replace(stdout.Groups[1].Value, "").TrimStart());
+        if (!outcome.Success) return false;
+        if (!outcome.Value.StartsWith("Set model to ", StringComparison.Ordinal)) return true;
+        var model = (outcome.Groups[1].Success ? outcome.Groups[1].Value : outcome.Groups[2].Value).Trim();
+        note = model.Length == 0 ? "Model switched" : "Model switched to " + model;
+        return true;
     }
 
     /// <summary>
