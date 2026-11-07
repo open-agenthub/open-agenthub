@@ -34,6 +34,10 @@ public sealed record ConversationPage(
     {
         var length = entries.Count;
         var boundary = entries.FirstOrDefault(entry => entry.Role == "boundary")?.Tool;
+        // Switching native projections can replace earlier entries while increasing length.
+        // Carry the pod source identity to the browser so its entry cursor resets too.
+        var sourceId = entries.FirstOrDefault()?.SourceId;
+        if (sourceId is not null) boundary = sourceId + ":" + boundary;
         var images = string.Join(',', entries.SelectMany((entry, index) =>
             (entry.Attachments ?? []).Select(file => index + ":" + file.Id)));
         var limit = Math.Clamp(max ?? DefaultMaxEntries, 1, MaxEntries);

@@ -12,6 +12,7 @@ const REFRESH_SCRIPT = path.join(__dirname, 'refresh-config.sh');
 // Set by installCredential, consumed by the next buildCommand. Kept on the server's env object
 // rather than the child's, which is fixed when the server starts.
 const REFRESH_FLAG = 'AGENTHUB_OPENCODE_REFRESH_CONFIG';
+let nativeHistoryUnavailable = false;
 
 function prepare(env) {
   if (env.AGENTHUB_STATE_RESTORED === undefined) {
@@ -155,11 +156,26 @@ module.exports = {
   stateExcludes: ['.opencode/mcp-auth.json', '.opencode/log', '.opencode/bin'],
   attachmentCapabilities: Object.freeze({
     nativeImages: false, localImagePaths: true, mcpImages: true }),
+  sameTranscriptConversation(previous, next) {
+    return path.basename(previous) === path.basename(next);
+  },
+  transcriptIdentity(file) {
+    return path.basename(path.dirname(file)) + ':' + path.basename(file);
+  },
   findTranscript({ env, home, fs: fileSystem }) {
     const id = rememberedSession(env);
     if (!id) return null;
-    const file = path.join(home, '.opencode', 'agenthub-transcripts', id + '.jsonl');
-    try { return fileSystem.statSync(file).isFile() ? file : null; } catch { return null; }
+    let unavailable = false;
+    const native = require('./store-transcript').exportTranscript({ home, sessionID: id, fsImpl: fileSystem, env,
+      onUnavailable() {
+        unavailable = true;
+        if (!nativeHistoryUnavailable) console.log('[agent] Native OpenCode history unavailable; using snapshot history (store missing, busy or schema changed).');
+        nativeHistoryUnavailable = true;
+      } });
+    if (!unavailable) nativeHistoryUnavailable = false;
+    if (native) return native;
+    const snapshot = path.join(home, '.opencode', 'agenthub-transcripts', id + '.jsonl');
+    try { return fileSystem.statSync(snapshot).isFile() ? snapshot : null; } catch { return null; }
   },
   // The session database is OpenCode's own record of every response (docs/usage-tracking.md).
   readUsage({ env, home, fs: fileSystem }) {

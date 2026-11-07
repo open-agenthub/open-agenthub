@@ -640,7 +640,11 @@ function createCommonServer(options = {}) {
     if (typeof found === 'string' && found && !/["'$`\\\s]/.test(found)) {
       if (found === transcriptFile) return transcriptFile;
       const previous = transcriptFile || env.AGENTHUB_PREVIOUS_TRANSCRIPT;
-      const switched = previous && previous !== found;
+      // A provider can replace a projection with another source for the same native
+      // session. Treating that as /clear duplicates its history on every fallback.
+      const sameConversation = previous && typeof driver.sameTranscriptConversation === 'function' &&
+        driver.sameTranscriptConversation(previous, found);
+      const switched = previous && previous !== found && !sameConversation;
       if (switched) {
         let history = '';
         try {
@@ -1691,7 +1695,9 @@ function createCommonServer(options = {}) {
     const send = (next, body) => {
       response.statusCode = 200;
       response.setHeader('Content-Type', 'application/x-ndjson');
-      response.setHeader('X-Transcript-Id', segments[0]?.size ? 'agenthub-history' : file ? require('node:path').basename(file) : '');
+      const projectionId = file && typeof driver.transcriptIdentity === 'function' ? driver.transcriptIdentity(file) : null;
+      response.setHeader('X-Transcript-Id', segments[0]?.size ? 'agenthub-history' + (projectionId ? ':' + projectionId : '') :
+        projectionId || (file ? require('node:path').basename(file) : ''));
       response.setHeader('X-Transcript-Size', String(size));
       response.setHeader('X-Transcript-Next', String(next));
       response.setHeader('Content-Length', body.length);

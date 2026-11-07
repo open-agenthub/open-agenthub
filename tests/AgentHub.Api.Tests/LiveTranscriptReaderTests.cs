@@ -16,6 +16,25 @@ namespace AgentHub.Api.Tests;
 /// </summary>
 public class LiveTranscriptReaderTests
 {
+    [Fact]
+    public async Task Projection_switch_resets_browser_entry_cursor_even_when_new_history_is_larger()
+    {
+        var pod = new Pod { TranscriptId = "snapshot:ses_test" };
+        pod.Append(Line("user", "recent snapshot"));
+        using var http = new HttpClient(pod);
+        var reader = new LiveTranscriptReader(TestPods.Using(http, new Identity()), new Store(), new ConfigurationBuilder().Build());
+        var session = Running();
+        var before = await reader.ReadAsync(session, default);
+        var first = ConversationPage.FromEntries("s1", SessionStatus.Running, before!, 0, 40);
+        pod.TranscriptId = "native:ses_test";
+        pod.File = [];
+        pod.Append(Line("user", "older native history") + Line("assistant", "new native history"));
+        var after = await reader.ReadAsync(session, default);
+        var second = ConversationPage.FromEntries("s1", SessionStatus.Running, after!, 1, 40);
+        Assert.NotEqual(first.ConversationId, second.ConversationId);
+        Assert.Equal("older native history", after![0].Text);
+    }
+
     private const string Token = "callback-token";
 
     private static string Line(string role, string text) =>
