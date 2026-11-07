@@ -1,4 +1,5 @@
-// A stdio MCP server with the tools search, read and get-data.v2 (a dotted, hyphenated name), that appends every request it receives to
+// A stdio MCP server with the tools search, read and get-data.v2 (a dotted, hyphenated name) and
+// one resource, that appends every request it receives to
 // $DOCS_MCP_LOG. A tool the policy blocks must never show up there as tools/call.
 // Newline-delimited JSON-RPC, no SDK, so the proof does not depend on the session agent's modules.
 import fs from 'node:fs'
@@ -19,8 +20,12 @@ readline.createInterface({ input: process.stdin }).on('line', line => {
   log(`${request.method}${request.method === 'tools/call' ? ' ' + request.params?.name : ''}`)
   if (request.id === undefined) return
   if (request.method === 'initialize')
-    send({ id: request.id, result: { protocolVersion: request.params?.protocolVersion || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name, version: '1.0.0' } } })
+    send({ id: request.id, result: { protocolVersion: request.params?.protocolVersion || '2025-06-18', capabilities: { tools: {}, resources: {} }, serverInfo: { name, version: '1.0.0' } } })
   else if (request.method === 'tools/list') send({ id: request.id, result: { tools } })
+  else if (request.method === 'resources/list')
+    send({ id: request.id, result: { resources: [{ uri: `doc://${name}/readme`, name: 'readme' }] } })
+  else if (request.method === 'resources/read')
+    send({ id: request.id, result: { contents: [{ uri: request.params?.uri, text: `RESOURCE ${name}` }] } })
   else if (request.method === 'tools/call')
     send({ id: request.id, result: { content: [{ type: 'text', text: `EXECUTED ${name}/${request.params?.name}` }] } })
   else send({ id: request.id, error: { code: -32601, message: 'method not found' } })

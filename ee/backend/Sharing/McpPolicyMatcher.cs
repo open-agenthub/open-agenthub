@@ -53,6 +53,37 @@ public static partial class McpPolicyMatcher
     }
 
     /// <summary>
+    /// Whether <paramref name="tool"/> is one of <paramref name="agent"/>'s built-in tools that
+    /// read MCP resources. Those reach an MCP server under their own name, not as
+    /// <c>mcp__server__tool</c>, and name the server in a "server" argument instead.
+    /// Claude Code 2.1.318 (verified with the real CLI): ListMcpResourcesTool, ReadMcpResourceTool,
+    /// ReadMcpResourceDirTool, and the aliases its binary carries for them.
+    /// </summary>
+    public static bool IsResourceTool(AgentKind agent, string tool) => agent switch
+    {
+        AgentKind.Claude => tool is "ListMcpResourcesTool" or "ReadMcpResourceTool" or "ReadMcpResourceDirTool"
+            or "ListMcpResources" or "ReadMcpResource" or "ReadMcpResourceDir",
+        _ => false
+    };
+
+    /// <summary>
+    /// The decision for one tool call against a policy, resource tools included: a resource tool
+    /// is a server-level read, so it is blocked when its <paramref name="server"/> is a blocked
+    /// server. Without a server it would list every server's resources, the blocked ones among
+    /// them, so it is blocked whenever any server is.
+    /// </summary>
+    public static bool IsBlocked(AgentKind agent, string toolName, string? server, SessionMcpPolicy? policy)
+    {
+        ArgumentNullException.ThrowIfNull(toolName);
+        if (policy is null) return false;
+        if (!IsResourceTool(agent, toolName))
+            return IsBlocked(agent, toolName, policy.BlockedServers, policy.BlockedTools);
+        if (!policy.BlockedServers.Any(blocked => !string.IsNullOrEmpty(blocked))) return false;
+        return string.IsNullOrEmpty(server)
+            || IsBlocked(agent, $"mcp__{server}", policy.BlockedServers, []);
+    }
+
+    /// <summary>
     /// A server name, or a whole <c>mcp__server__tool</c> name, spelled the way
     /// <paramref name="agent"/>'s runtime spells it in the tool names it reports. Idempotent, so
     /// a name the runtime already normalised passes unchanged.

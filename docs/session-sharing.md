@@ -168,6 +168,17 @@ servers away from unrestricted sessions for every backend blip, for no protectio
 Also rejected: the environment variable alone. It goes stale the moment the owner adds a block to
 a running session, which is the usual order (start, then share, then restrict).
 
+### MCP resource tools
+
+Claude Code reads MCP resources through built-in tools (`ListMcpResourcesTool`,
+`ReadMcpResourceTool`, `ReadMcpResourceDirTool`) that carry no `mcp__server__tool` name. They go to
+the same policy hook, which passes the `server` argument along, and the backend decides them as
+a server-level block (`McpPolicyMatcher.IsResourceTool`, `IsBlocked(agent, tool, server, policy)`).
+A call without a server lists every server's resources, so it is denied whenever any server is
+blocked. Tool-level blocks do not reach resources: a resource is not a tool, and the dialog asks
+for tool names. Rejected: letting the listing run and filtering its result per server. The
+blocked server would be contacted all the same, and the filter would act after the fact.
+
 ## Links stay link-only
 
 A link opens exactly the session it was made for, for whoever holds the token, and nothing else:

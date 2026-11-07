@@ -8,7 +8,8 @@
 // The model calls, one after the other, one MCP tool per PLAN entry and then ends its turn. An
 // entry is a pattern matched against the tool names the CLI offers, because the CLI decides how a
 // server or tool name with "." or "-" is spelled; with no offered match the entry's literal text
-// is called. model.log gets the offered names, each resolved call and every tool result.
+// is called. Then it reads one resource per RESOURCE_READS entry (tool@server). model.log gets
+// the offered names, each resolved call and every tool result.
 //
 // Run: node pod.mjs <sessionId> <scratch dir>   (env: KUBECTL, KUBECONFIG_ADMIN, REPO, CLAUDE_BIN_DIR)
 import http from 'node:http'
@@ -36,6 +37,7 @@ fs.symlinkSync('/opt/session-agent/node_modules', path.join(SA, 'session-agent/n
 // ---------------------------------------------------------------- mock model
 const PLAN = (process.env.PLAN || '^mcp__docs__search$,^mcp__docs__read$,^mcp__team-docs__search$,^mcp__docs__get.data.v2$,^mcp__ops.tools__search$').split(',')
 let resolved = null
+const RESOURCE_READS = (process.env.RESOURCE_READS || 'ReadMcpResourceTool@ops.tools,ReadMcpResourceTool@docs').split(',').filter(Boolean)
 const loggedResults = new Set()
 http.createServer((req, res) => {
   let body = ''
@@ -45,7 +47,8 @@ http.createServer((req, res) => {
     if (!req.url.startsWith('/v1/messages')) { res.writeHead(404); return res.end() }
     if (req.url.includes('count_tokens')) { res.writeHead(200, { 'content-type': 'application/json' }); return res.end('{"input_tokens":10}') }
     const blocks = (json.messages || []).flatMap(m => Array.isArray(m.content) ? m.content : [])
-    const uses = Object.fromEntries(blocks.filter(b => b.type === 'tool_use').map(b => [b.id, b.name]))
+    // A resource read is keyed by tool and server (ReadMcpResourceTool@ops.tools): one tool, two calls.
+    const uses = Object.fromEntries(blocks.filter(b => b.type === 'tool_use').map(b => [b.id, b.name + (b.input?.server ? '@' + b.input.server : '')]))
     const results = blocks.filter(b => b.type === 'tool_result').map(b => ({ name: uses[b.tool_use_id],
       text: typeof b.content === 'string' ? b.content : (b.content || []).map(c => c.text || '').join('') }))
     // Side requests (title, suggestions) carry no tools; only the agent's own turn does.
@@ -75,6 +78,7 @@ http.createServer((req, res) => {
       log('model.log', `offered ${offered.join(' ')}`)
       resolved = PLAN.map(entry => offered.find(n => new RegExp(entry).test(n)) || entry.replace(/^\^|\$$/g, ''))
       for (const [i, entry] of PLAN.entries()) log('model.log', `plan ${entry} -> ${resolved[i]}`)
+      resolved.push(...RESOURCE_READS)
     }
     const done = new Set(results.map(r => r.name))
     for (const r of results) if (!loggedResults.has(r.name) && loggedResults.add(r.name)) log('model.log', `tool_result ${r.name}: ${r.text.replace(/\s+/g, ' ').slice(0, 300)}`)
@@ -84,8 +88,10 @@ http.createServer((req, res) => {
     const next = (resolved || []).find(name => !done.has(name))
     if (next) {
       log('model.log', `tool_use ${next}`)
-      ev('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'toolu_' + crypto.randomUUID().replace(/-/g, ''), name: next, input: {} } })
-      ev('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify({ query: 'proof' }) } })
+      const [name, server] = next.split('@')
+      const input = server ? { server, uri: `doc://${server}/readme` } : { query: 'proof' }
+      ev('content_block_start', { index: 0, content_block: { type: 'tool_use', id: 'toolu_' + crypto.randomUUID().replace(/-/g, ''), name, input: {} } })
+      ev('content_block_delta', { index: 0, delta: { type: 'input_json_delta', partial_json: JSON.stringify(input) } })
       ev('content_block_stop', { index: 0 })
       ev('message_delta', { delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 1 } })
     } else {

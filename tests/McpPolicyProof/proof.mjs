@@ -12,7 +12,6 @@ import path from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
 
 const [scratch] = process.argv.slice(2)
-const REPO = process.env.REPO
 const BASE = 'http://127.0.0.1:8080'
 const here = path.dirname(new URL(import.meta.url).pathname)
 const sleep = ms => new Promise(r => setTimeout(r, ms))
@@ -98,11 +97,18 @@ async function scenario(label, autoApprove) {
     check(/Blocked by the session MCP sharing policy/.test(result(name)) && !ran,
       `${label}: ${what}, called as ${name}, denied and never reached the server`, result(name))
   }
+  // Resource reads name their server in an argument rather than in an mcp__ name.
+  check(/Blocked by the session MCP sharing policy/.test(result('ReadMcpResourceTool@ops.tools'))
+      && !calls.split('\n').some(l => l.includes(' ops.tools resources/read')),
+    `${label}: ReadMcpResourceTool on the blocked server ops.tools denied, never reached the server`, result('ReadMcpResourceTool@ops.tools'))
+  check(/RESOURCE docs/.test(result('ReadMcpResourceTool@docs')) && calls.split('\n').some(l => l.includes(' docs resources/read')),
+    `${label}: ReadMcpResourceTool on the allowed server docs ran`, result('ReadMcpResourceTool@docs'))
   // ToolSearch is an ordinary built-in tool and asks like one in an interactive session.
-  const tools = asked.map(a => a.tool).filter(t => t.startsWith('mcp__'))
-  const blockedAsked = tools.filter(t => t !== 'mcp__docs__read')
-  check(blockedAsked.length === 0 && (autoApprove ? tools.length === 0 : tools.length === 1),
-    `${label}: no approval for a blocked tool; ${autoApprove ? 'none at all (auto-approve)' : 'the allowed tool asked the owner'}`, JSON.stringify(tools))
+  const tools = asked.map(a => a.tool).filter(t => t.startsWith('mcp__') || /McpResource/.test(t))
+  // Interactive: the allowed tool and the read on the allowed server ask the owner, nothing else.
+  const expected = autoApprove ? [] : ['ReadMcpResourceTool', 'mcp__docs__read']
+  check(JSON.stringify([...tools].sort()) === JSON.stringify(expected),
+    `${label}: no approval for a blocked call; ${autoApprove ? 'none at all (auto-approve)' : 'only the allowed tool and the allowed resource read asked the owner'}`, JSON.stringify(tools))
   return { id, model, calls, asked: tools }
 }
 

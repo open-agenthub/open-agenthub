@@ -33,7 +33,10 @@ public sealed class McpPolicyHookContractTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_scratch, recursive: true); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        // Best effort: a leftover temp directory must not fail a test that already passed.
+        try { Directory.Delete(_scratch, recursive: true); }
+        catch (IOException ex) { Console.Error.WriteLine($"Could not remove {_scratch}: {ex.Message}"); }
+        catch (UnauthorizedAccessException ex) { Console.Error.WriteLine($"Could not remove {_scratch}: {ex.Message}"); }
     }
 
     [Fact]
@@ -59,6 +62,18 @@ public sealed class McpPolicyHookContractTests : IDisposable
 
         Assert.Equal("deny", (await RunHookAsync(backend.Url, "mcp__ops_tools__search")).Decision);
         Assert.Equal("deny", (await RunHookAsync(backend.Url, "mcp__docs__get-data_v2")).Decision);
+    }
+
+    [Fact]
+    public async Task ResourceToolOnABlockedServer_IsDenied_OnAnAllowedServer_GoesToTheApproval()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        _policy = new SessionMcpPolicy(["ops.tools"], [], DateTime.UtcNow);
+        await using var backend = await StartBackendAsync();
+
+        Assert.Equal("deny", (await RunHookAsync(backend.Url, "ReadMcpResourceTool", input: new { server = "ops.tools", uri = "secret://token" })).Decision);
+        Assert.Equal("deny", (await RunHookAsync(backend.Url, "ListMcpResourcesTool", input: new { })).Decision);
+        Assert.Equal(ApprovalMarker, (await RunHookAsync(backend.Url, "ReadMcpResourceTool", input: new { server = "docs", uri = "doc://readme" })).Reason);
     }
 
     [Fact]
@@ -192,7 +207,7 @@ public sealed class McpPolicyHookContractTests : IDisposable
         return File.Exists(path) ? File.ReadAllText(path) : "";
     }
 
-    private async Task<HookResult> RunHookAsync(string callbackUrl, string tool, bool podStartedRestricted = false)
+    private async Task<HookResult> RunHookAsync(string callbackUrl, string tool, bool podStartedRestricted = false, object? input = null)
     {
         var approval = Path.Join(_scratch, "approval-hook.sh");
         if (!File.Exists(approval))
@@ -216,7 +231,7 @@ public sealed class McpPolicyHookContractTests : IDisposable
         using var process = Process.Start(start)!;
         await process.StandardInput.WriteAsync(JsonSerializer.Serialize(new
         {
-            hook_event_name = "PreToolUse", tool_name = tool, tool_input = new { }
+            hook_event_name = "PreToolUse", tool_name = tool, tool_input = input ?? new { }
         }));
         process.StandardInput.Close();
         var output = process.StandardOutput.ReadToEndAsync();

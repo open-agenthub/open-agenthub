@@ -27,6 +27,12 @@ render_settings() {
   # default 1740s) has to fit inside it. With auto-approve on, /permission answers "allow"
   # on the first POST and nothing polls at all.
   #
+  # The MCP resource tools go to the policy hook with the mcp__ tools, not to the approval hook
+  # alone: they read from an MCP server, and a blocked server must not be readable through them.
+  # Matched by prefix, because Claude Code also matches a tool's aliases (ReadMcpResource for
+  # ReadMcpResourceTool): an exact-name exclusion let the alias through to the approval matcher,
+  # and every resource read filed an approval request beside the policy's deny.
+  #
   # PermissionRequest and PostToolUse on AskUserQuestion open and close a question for the
   # Workspace (#343), which shows its text from the tool input rather than from the screen.
   cat <<JSON
@@ -46,8 +52,8 @@ render_settings() {
       { "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/notify-hook.sh" } ] }
     ],
     "PreToolUse": [
-      { "matcher": "mcp__.*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 1900 } ] },
-      { "matcher": "^(?!mcp__).*", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/pretooluse-hook.sh", "timeout": 1900 } ] }
+      { "matcher": "^(mcp__|ListMcpResources|ReadMcpResource)", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/mcp-policy-hook.sh", "timeout": 1900 } ] },
+      { "matcher": "^(?!mcp__|ListMcpResources|ReadMcpResource)", "hooks": [ { "type": "command", "command": "${AGENTHUB_RUNTIME:-/opt/session-agent/claude/hooks}/pretooluse-hook.sh", "timeout": 1900 } ] }
     ],
     "PostToolUse": [
       { "matcher": "^(Edit|Write|MultiEdit|NotebookEdit|Bash)$", "hooks": [ { "type": "command", "command": "$SKILL_REMINDER --mark work", "timeout": 10 } ] },
@@ -84,17 +90,24 @@ continue_flow() {
   exit $?
 }
 
-tool="$(printf '%s' "$payload" | "$NODE_BIN" -e '
+# Claude Code's MCP resource tools reach an MCP server without the mcp__ prefix, so the policy
+# has to see them too; their "server" argument names the server, and the backend decides them as
+# a server-level block. Keep the list in step with the matchers in render_settings and with
+# McpPolicyMatcher.IsResourceTool.
+fields="$(printf '%s' "$payload" | "$NODE_BIN" -e '
   let data = "";
   process.stdin.on("data", chunk => data += chunk).on("end", () => {
     let payload = {};
     try { payload = JSON.parse(data); } catch {}
-    process.stdout.write(typeof payload.tool_name === "string" ? payload.tool_name : "");
+    const tool = typeof payload.tool_name === "string" ? payload.tool_name : "";
+    const server = payload.tool_input && typeof payload.tool_input.server === "string" ? payload.tool_input.server : "";
+    process.stdout.write(JSON.stringify({ tool, server }));
   });
 ')"
+tool="$(printf '%s' "$fields" | "$NODE_BIN" -e 'let d="";process.stdin.on("data",c=>d+=c).on("end",()=>process.stdout.write(JSON.parse(d).tool))')"
 
 case "$tool" in
-  mcp__*) ;;
+  mcp__*|ListMcpResources*|ReadMcpResource*) ;;
   *) continue_flow ;;
 esac
 
@@ -125,12 +138,7 @@ if [ -z "${AGENTHUB_CALLBACK_URL:-}" ]; then
   fail_closed
 fi
 
-request="$(printf '%s' "$tool" | "$NODE_BIN" -e '
-  let tool = "";
-  process.stdin.on("data", chunk => tool += chunk).on("end", () => {
-    process.stdout.write(JSON.stringify({ tool }));
-  });
-')"
+request="$fields"
 
 if ! response="$("$CURL_BIN" -fsS --connect-timeout 1 --max-time 3 \
   -X POST \

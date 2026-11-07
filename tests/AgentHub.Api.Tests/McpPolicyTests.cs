@@ -55,4 +55,32 @@ public class McpPolicyTests
     [Fact]
     public void NormalizeMcpName_LeavesOtherRuntimesVerbatimUntilTheirRuleIsVerified()
         => Assert.Equal("mcp__docs__get-data.v2", McpPolicyMatcher.NormalizeMcpName(AgentKind.Codex, "mcp__docs__get-data.v2"));
+
+    // ReadMcpResourceTool and its siblings name the server in an argument; the decision is the
+    // server-level block, and a call without a server would list every server's resources.
+    [Theory]
+    [InlineData("ReadMcpResourceTool", "ops.tools", true)]
+    [InlineData("ReadMcpResourceTool", "ops_tools", true)]
+    [InlineData("ReadMcpResourceDirTool", "ops.tools", true)]
+    [InlineData("ListMcpResourcesTool", "ops.tools", true)]
+    [InlineData("ListMcpResourcesTool", null, true)]
+    [InlineData("ReadMcpResourceTool", "docs", false)]
+    [InlineData("mcp__docs__search", null, true)]
+    [InlineData("mcp__docs__read", null, false)]
+    public void Claude_ResourceToolsAreDecidedByTheirServer(string tool, string? server, bool expected)
+        => Assert.Equal(expected, McpPolicyMatcher.IsBlocked(AgentKind.Claude, tool, server,
+            new SessionMcpPolicy(["ops.tools"], ["mcp__docs__search"], DateTime.UtcNow)));
+
+    [Fact]
+    public void ResourceTools_AreNotBlockedByToolLevelBlocksAlone()
+        => Assert.False(McpPolicyMatcher.IsBlocked(AgentKind.Claude, "ListMcpResourcesTool", null,
+            new SessionMcpPolicy([], ["mcp__docs__search"], DateTime.UtcNow)));
+
+    [Fact]
+    public void IsResourceTool_KnowsOnlyVerifiedNames()
+    {
+        Assert.True(McpPolicyMatcher.IsResourceTool(AgentKind.Claude, "ReadMcpResourceTool"));
+        Assert.False(McpPolicyMatcher.IsResourceTool(AgentKind.Claude, "read_mcp_resource"));
+        Assert.False(McpPolicyMatcher.IsResourceTool(AgentKind.Codex, "ReadMcpResourceTool"));
+    }
 }
