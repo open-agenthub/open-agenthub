@@ -15,6 +15,20 @@ public class LegacyExecutionMigrationTests
     private const string Native = "{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"keep the native conversation\"}}\n";
 
     [PostgreSqlFact]
+    public async Task NullLegacyNativeIdStillResolvesOwnerThroughSharingAccessStore()
+    {
+        await using var database = await PostgresSharingDatabase.CreateAsync(pooling: false);
+        await database.Sessions.UpsertAsync(new SessionRecord { Id = "legacy-access", Owner = "alice", CallbackToken = "synthetic", AgentSessionId = "native" });
+        await using var connection = new NpgsqlConnection(database.Configuration.GetConnectionString("Postgres"));
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand("ALTER TABLE sessions ALTER COLUMN agent_session_id DROP NOT NULL; UPDATE sessions SET agent_session_id=NULL WHERE id='legacy-access'", connection);
+        await command.ExecuteNonQueryAsync();
+        var access = await database.Shares.FindUserAccessAsync("alice", "legacy-access");
+        Assert.Equal("", access!.Session.AgentSessionId);
+        Assert.Null(await database.Shares.FindUserAccessAsync("bob", "legacy-access"));
+    }
+
+    [PostgreSqlFact]
     public async Task NullLegacyNativeIdAdaptsAndStoredConversationRemainsReadable()
     {
         await using var database = await Scenario.CreateAsync();

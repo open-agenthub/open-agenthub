@@ -67,3 +67,24 @@ remote/MCP tests cover the shared conversation path and context-clear boundaries
 
 Limits: no provider-switch API, new pod, volume mount, native context transfer, real target
 login, target window admission or fault recovery is exercised. Those belong to steps 2–3.
+
+## HTTP legacy-migration fault proof
+
+After starting this host against an isolated local `proof466final` database, install a
+scratch SQL client and run:
+
+```sh
+npm install --prefix /tmp/provider-tooling/sql pg
+PROOF_URL=http://127.0.0.1:8082 PROOF_CAPTURE=/tmp/history-capture \
+  node tests/ProviderSwitchHistoryProof/legacy.mjs
+```
+
+`PROOF_PG_PACKAGE` overrides the scratch npm prefix; `PROOF_PG_URL` overrides the default
+local Postgres URL. The script refuses a non-loopback/non-proof466 database. It temporarily
+relaxes the native-ID constraint, inserts only synthetic proof sessions containing real CLI
+history, rejects one lazy insert with a database trigger, and temporarily renames the ledger.
+It asserts HTTP 200 with retained native text for all faults, checks retry after the trigger
+is removed, then restores the schema and deletes its rows in finally. Do not run concurrent
+schema-changing proofs against that database. The host logs warnings for the rejected insert
+and missing-ledger reads. Rerun verify.mjs afterwards to confirm the original multi-provider
+conversation and sharing paths still work. No product endpoint injects these faults.

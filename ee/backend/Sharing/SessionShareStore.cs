@@ -1060,7 +1060,8 @@ public sealed class SessionShareStore : ISessionAccessStore, ISessionMcpPolicyRe
         Mode = Enum.Parse<SessionMode>(reader.GetString(3)),
         RepoUrl = reader.IsDBNull(4) ? null : reader.GetString(4),
         Schedule = reader.IsDBNull(5) ? null : reader.GetString(5),
-        AgentSessionId = reader.GetString(6),
+        // Access checks must tolerate the same missing legacy resume ID as native history reads.
+        AgentSessionId = reader.IsDBNull(6) ? "" : reader.GetString(6),
         Status = reader.GetString(7),
         QuestionPending = reader.GetBoolean(8),
         CallbackToken = reader.GetString(9),

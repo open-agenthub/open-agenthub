@@ -15,7 +15,7 @@ advance; no API, callback or peer tool can create a new generation in this relea
 Existing sessions adapt lazily as generation zero. The supported schema enforces a nonnull
 `agent_session_id`, and session creation assigns a GUID before admission for every mode and
 provider. For partial/older schemas, adaptation coalesces a missing ID to empty and record
-mapping tolerates that legacy value. Ledger read/insert failures log a warning and retain the
+mapping in both the session and sharing access stores tolerates that legacy value. Ledger read/insert failures log a warning and retain the
 existing stored/live native conversation; caller cancellation still propagates. A failed lazy
 insert is retried on a later read, rather than becoming a permanent failure cache. Rejecting
 all reads until the new metadata can be written was rejected because it would turn a schema
@@ -88,5 +88,7 @@ contract. It checks owner/link/named-viewer paging, stored/live composition, pro
 masking and revocation, preview authorization/bounds and restart readback. Authentication,
 model replies and cluster discovery are stand-ins. It does not prove pod replacement,
 workspace persistence, target model capacity, real provider sign-in or switch recovery.
+The HTTP fault script additionally verifies NULL-ID reads through owner access resolution,
+rejected lazy inserts, retry and unavailable ledger tables on the running production controller.
 Generated logs/results remain outside Git. Database tests additionally exercise concurrent
 advances, owner scoping, stale snapshots, return generations and cascading deletion.
