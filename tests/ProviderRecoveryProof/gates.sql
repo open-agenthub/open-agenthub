@@ -20,6 +20,9 @@ BEGIN
             END IF;
             PERFORM pg_sleep(0.1);
         END LOOP;
+        IF EXISTS(SELECT 1 FROM provider_recovery_proof_gates WHERE sequence=gate_sequence AND aborted) THEN
+            RAISE EXCEPTION 'external proof transaction aborted';
+        END IF;
     END IF;
     RETURN NEW;
 END $$;
