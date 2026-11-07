@@ -140,4 +140,24 @@ public class McpConfigAssemblerTests
         Assert.Throws<ArgumentException>(() =>
             McpConfigAssembler.Merge(null, [RawServer("bad", "not-json")]));
     }
+    [Fact]
+    public void StartupPolicy_OmitsAllSourcesBeforeIssuingTokens()
+    {
+        var issued = new List<string>();
+        var gateway = new McpGatewayAssembleOptions
+        {
+            BaseUrl = "https://example.com", SessionId = "session",
+            IssueToken = id => { issued.Add(id); return "test-token"; },
+            IssueEphemeralToken = name => { issued.Add(name); return "test-token"; }
+        };
+        var json = McpConfigAssembler.Merge(
+            """{"mcpServers":{"inline":{"command":"unused"},"allowed":{"command":"node"}}}""",
+            [ApiServer("catalog", "catalog-id"), ApiServer("kept", "kept-id")], gateway,
+            [new EphemeralApiMcpEntry("session", "temporary", "owner", "{}", null)],
+            ["inline", "catalog", "temporary"]);
+        using var doc = JsonDocument.Parse(json!);
+        var names = doc.RootElement.GetProperty("mcpServers").EnumerateObject().Select(p => p.Name).ToArray();
+        Assert.Equal(["allowed", "kept"], names);
+        Assert.Equal(["kept-id"], issued);
+    }
 }

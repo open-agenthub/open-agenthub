@@ -463,14 +463,21 @@ public sealed class InternalController : ControllerBase
         return Ok(new { decision = "expired" });
     }
 
+    private static JsonElement ParseMcpInput(string? input)
+    {
+        try { return JsonSerializer.Deserialize<JsonElement>(input ?? "{}"); }
+        catch (JsonException) { return default; }
+    }
+
     /// <summary>Evaluates the live MCP restriction policy for this session.</summary>
     [HttpPost("mcp-policy")]
     public async Task<IActionResult> McpPolicy(string id, [FromBody] PermissionBody body, CancellationToken ct)
     {
-        if (await AuthAsync(id, ct) is null) return Unauthorized();
+        var rec = await AuthAsync(id, ct);
+        if (rec is null) return Unauthorized();
         var policy = await _shares.GetMcpPolicyAsync(id, ct);
         var blocked = policy is not null && McpPolicyMatcher.IsBlocked(
-            body.Tool ?? string.Empty, policy.BlockedServers, policy.BlockedTools);
+            body.Tool ?? string.Empty, policy.BlockedServers, policy.BlockedTools, rec.Agent, ParseMcpInput(body.Input));
         return Ok(new { decision = blocked ? "deny" : "allow" });
     }
 
@@ -481,11 +488,12 @@ public sealed class InternalController : ControllerBase
         var rec = await AuthAsync(id, ct);
         if (rec is null) return Unauthorized();
 
-        if ((body.Tool ?? string.Empty).StartsWith("mcp__", StringComparison.Ordinal))
+        if ((body.Tool ?? string.Empty).StartsWith("mcp__", StringComparison.Ordinal)
+            || McpPolicyMatcher.IsResourceTool(body.Tool ?? string.Empty))
         {
             var sharing = await _shares.GetMcpPolicyAsync(id, ct);
             if (sharing is not null && McpPolicyMatcher.IsBlocked(
-                    body.Tool ?? string.Empty, sharing.BlockedServers, sharing.BlockedTools))
+                    body.Tool ?? string.Empty, sharing.BlockedServers, sharing.BlockedTools, rec.Agent, body.Input))
                 return Ok(new { decision = "deny", reason = "Blocked by the session MCP sharing policy." });
         }
 
