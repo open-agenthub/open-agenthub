@@ -230,6 +230,7 @@ try{
  }
  console.log('PASS: real backend + Postgres + object storage + kubelet + pinned CLIs, API-key and synthetic subscription Claude→Codex→Claude, both native model lists without supplied context-window metadata.');
 }catch(error){
+ console.error('Native provider proof failed:',error.message);
  if(id){try{console.error('Pod status:',JSON.stringify(json('-n',ns,'get','pod','session-'+id).status));}catch{}try{console.error(kubectl('-n',ns,'logs','session-'+id,'-c','agent','--tail=100'));}catch{}try{console.error('Operation:',JSON.stringify(await api('sessions/'+id+'/provider-switch')));}catch{}try{console.error('Model receipts:',kubectl('-n',ns,'exec','session-'+id,'-c','agent','--','node','-e',`fetch(${JSON.stringify(process.env.PROOF_MODEL_URL+'/proof/requests')}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))`));}catch{}}
  throw error;
 }finally{

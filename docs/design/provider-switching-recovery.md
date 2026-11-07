@@ -89,9 +89,21 @@ reconstruct the native conversation or authorize silently re-running that task.
 ## Native identity selection within an archive
 
 A real Codex archive can contain more than one CLI-created conversation. The recovery proof
-creates a second real native conversation and changes the archive pointer; the baseline then
-selects that other thread. A strict completed-generation resume now seeds the pointer from
-the registry's committed native identity before discovery. If that rollout is missing, it
-refuses to discover a different recent rollout. Explicit native context changes can still
-update the active process marker after startup. The original missing-state fix is shipped
-separately by #533; this identity binding and the wider fault matrix stay in #529/#530.
+creates a second real conversation and changes the native pointer. Archive checkpoints now
+record the execution's base native identity and the active native identity observed when the
+state is saved. Strict resume validates the base and selects that checkpointed active identity;
+a missing selected rollout never authorizes discovering an unrelated recent one. Malformed
+or mismatched checkpoint metadata refuses startup.
+
+Reject registry-ID-only binding: explicit context clear can change the current native ID
+without changing the registry. Restoring the original ID would restore cleared context. A
+real managed Codex clear→checkpoint→stop→fresh-home restore→resume proof verifies the new
+identity and follow-up reach the model without the cleared earlier task. Multiple clears keep
+the same base anchor and checkpoint the new active identity each time. Metadata lives beside
+opaque native state; native resume files and transcript formats are not translated.
+
+Older archives without metadata retain their native current pointer for compatibility,
+including explicit clears. New checkpoints migrate that selection into metadata anchored to
+the recorded execution. Missing native state still fails closed under #533. Legacy pointer
+integrity is not retroactively proved by the new metadata. The wider fault matrix remains
+in #529/#530, and storage provisioning stays default off.

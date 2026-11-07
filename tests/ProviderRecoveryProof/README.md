@@ -71,3 +71,26 @@ its actual native ID, points the restored native metadata at it, then resumes us
 committed identity. Both histories come from actual CLI execution. The resumed model must
 receive the original conversation and new owner turn without the other conversation's text.
 This checks native identity selection, not a crash/replica result.
+
+The external coordinator queues for the production lifecycle advisory key before killing a
+backend. It briefly parks competing workers on that advisory lease while the replacement
+initializes, then releases it; it holds no table or row lock during startup. A held journal
+write plus queued schema DDL can otherwise block the proof's own observer. The real-PostgreSQL
+self-test reproduces that convoy and verifies handoff, schema completion and worker yield.
+Observer commands have statement/lock/process deadlines, and cleanup commits gate release
+before dropping the trigger. The application exposes no fault-control endpoint.
+
+## Explicit context clear before native recovery
+
+```sh
+PROOF_AGENTS=codex PROOF_CONTEXT_CLEAR_BEFORE_RESUME=1 \
+PROOF_SOURCE_PREPARE=1 PROOF_RESUME_ARCHIVE=1 PROOF_NATIVE_DEFAULT=1 \
+PROOF_PROOT=/absolute/proot PROOF_OUT=/absolute/scratch/path \
+PROOF_CLI_BIN=/absolute/pinned/cli/bin node tests/ProviderRuntimeProof/capture.mjs
+```
+
+The managed real CLI clears its context, creates a new native ID, checkpoints and exits.
+The archive is restored into fresh home contents under the same path and managed runtime.
+Resume must select the checkpoint's active ID, not the original registry ID. The new owner
+request must include the post-clear task and omit the earlier cleared task. The local hub
+policy/model callbacks are fixtures; this does not establish backend replica recovery.

@@ -194,6 +194,8 @@ try {
         const current = await (await fetch(route, { headers: authority })).json();
         return current.ready && current.markerSeen && current.nativeId && current;
       });
+      let resumeNativeId=state.nativeId;
+      let resumeHistory='HISTORY-'+agent+'-0';
       assert(state.draining);
       socket.send(JSON.stringify({ type: 'input', data: 'BLOCKED-BEFORE-RELEASE\r' }));
       await sleep(500);
@@ -204,6 +206,14 @@ try {
       assert.equal((await release.json()).draining, false);
       assert(archives.some(item => item.route === '/state/' + agent && item.bytes.length > 0));
       fs.writeFileSync(path.join(root, 'state.tgz'), archives.filter(item => item.route === '/state/' + agent).at(-1).bytes);
+      if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1'){
+        assert(agent==='codex'&&process.env.PROOF_SOURCE_PREPARE==='1','native clear proof requires the managed Codex source rig');
+        const cleared=await fetch('http://127.0.0.1:18674/agenthub/context-clear',{method:'POST',headers:authority,body:JSON.stringify({followUp:'HISTORY-codex-1'})});
+        assert.equal(cleared.status,202,await cleared.clone().text());
+        const changed=await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.nativeId&&current.nativeId!==state.nativeId&&(await transcript()).includes('Answer HISTORY-codex-1')&&current;});
+        resumeNativeId=changed.nativeId;resumeHistory='HISTORY-codex-1';
+        console.log('codex: actual context clear created a new native identity before archive recovery');
+      }
       if (process.env.PROOF_SOURCE_PREPARE === '1') {
         const nextRequest = '22222222-2222-4222-8222-222222222222';
         if(process.env.PROOF_SOURCE_SHELL==='1'){
@@ -264,10 +274,10 @@ try {
         for(const name of agent==='claude'?['.claude.json']:['.codex/config.toml','.codex/auth.json']){
           const source=path.join(previousHome,name);if(fs.existsSync(source))fs.copyFileSync(source,path.join(resumedHome,name));
         }
-        const resumedEnv={...env,HOME:resumedHome,AGENTHUB_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',
+        const resumedEnv={...env,HOME:process.env.PROOF_SOURCE_PREPARE==='1'&&agent==='codex'?env.HOME:resumedHome,AGENTHUB_RESUME:'1',AGENTHUB_STATE_RESTORED:'1',
           AGENTHUB_REQUIRE_NATIVE_RESUME:'1',AGENTHUB_CLAUDE_SESSION_ID:state.nativeId,AGENTHUB_NATIVE_SESSION_ID:state.nativeId,
           AGENTHUB_PROMPT:'STALE-SOURCE-PROMPT-MUST-NOT-RUN'};
-        if(agent==='codex')resumedEnv.CODEX_HOME=path.join(resumedHome,'.codex');
+        if(agent==='codex')resumedEnv.CODEX_HOME=process.env.PROOF_SOURCE_PREPARE==='1'?env.CODEX_HOME:path.join(resumedHome,'.codex');
         delete resumedEnv.AGENTHUB_PROVIDER_SWITCH_ID;
         if(agent==='codex'&&process.env.PROOF_POISON_NATIVE_POINTER==='1'){
           const sessions=path.join(resumedHome,'.codex/sessions');
@@ -282,7 +292,7 @@ try {
           fs.writeFileSync(path.join(resumedHome,'.codex/agenthub-thread-id'),metadata.payload.id+'\n');
         }
 
-        child=spawn(process.execPath,[path.join(repo,'agent-runtime/session-agent/server.js')],{env:resumedEnv,cwd:work,detached:true,stdio:['ignore',log,log]});
+        child=spawn(command,args,{env:resumedEnv,cwd:work,detached:true,stdio:['ignore',log,log]});
         await until(async()=>{await transcript();return true;});
         const resumedTerm=new Terminal({cols:120,rows:36,allowProposedApi:true});
         const resumedSocket=new WebSocket('ws://127.0.0.1:18674/');
@@ -296,13 +306,14 @@ try {
             console.log('codex: committed native identity matches selected archive identity='+String(selected.nativeId===state.nativeId));
             assert.equal(selected.nativeId,state.nativeId,'Strict resume must select the committed native identity, not another archived thread');
           }
-          await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.ready&&current.nativeId===state.nativeId;});
+          await until(async()=>{const current=await(await fetch(route,{headers:authority})).json();return current.ready&&current.nativeId===resumeNativeId;});
           await until(()=>Array.from({length:resumedTerm.rows},(_,index)=>resumedTerm.buffer.active.getLine(resumedTerm.buffer.active.viewportY+index)?.translateToString(true)??'').some(line=>/^\s*[›❯]/.test(line)&&!line.includes('HISTORY-')));
-          const prior=await transcript();assert(prior.includes('HISTORY-'+agent+'-0'));
+          const prior=await transcript();assert(prior.includes(resumeHistory));
           resumedSocket.send(JSON.stringify({type:'input',data:'FOLLOWUP-AFTER-NATIVE-RESUME'}));await sleep(200);
           resumedSocket.send(JSON.stringify({type:'input',data:'\r'}));
-          await until(()=>requests.some(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')&&item.text.includes('HISTORY-'+agent+'-0')));
+          await until(()=>requests.some(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')&&item.text.includes(resumeHistory)));
           assert(!requests.some(item=>item.text.includes('STALE-SOURCE-PROMPT-MUST-NOT-RUN')));
+          if(process.env.PROOF_CONTEXT_CLEAR_BEFORE_RESUME==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('HISTORY-codex-0')));
           if(agent==='codex'&&process.env.PROOF_POISON_NATIVE_POINTER==='1')assert(!requests.filter(item=>item.text.includes('FOLLOWUP-AFTER-NATIVE-RESUME')).some(item=>item.text.includes('OTHER-NATIVE-CONVERSATION')));
           await until(async()=>(await transcript()).includes('FOLLOWUP-AFTER-NATIVE-RESUME'));
           text=await transcript();
@@ -317,7 +328,7 @@ try {
       const reconnect = new WebSocket('ws://127.0.0.1:18674/');
       await new Promise((resolve, reject) => { reconnect.once('open', resolve); reconnect.once('error', reject); });
       if(process.env.PROOF_RESUME_ARCHIVE==='1'){
-        const continued=await transcript();assert(continued.includes('HISTORY-'+agent+'-0'));assert(continued.includes('FOLLOWUP-AFTER-NATIVE-RESUME'));
+        const continued=await transcript();assert(continued.includes(resumeHistory));assert(continued.includes('FOLLOWUP-AFTER-NATIVE-RESUME'));
       }else assert.equal(await transcript(), text); reconnect.close();
       console.log(agent + ': native target handover, reserved input, state archive, release and reconnect passed');
     } finally {

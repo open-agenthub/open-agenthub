@@ -30,13 +30,8 @@ function prepare(env) {
   if (env.AGENTHUB_STATE_RESTORED === undefined) {
     env.AGENTHUB_STATE_RESTORED = fs.existsSync('/tmp/.state-restored') ? '1' : '0';
   }
-  if (env.AGENTHUB_REQUIRE_NATIVE_RESUME === '1' && env.AGENTHUB_STATE_RESTORED === '1') {
-    const expected = env.AGENTHUB_NATIVE_SESSION_ID;
-    if (!UUID.test(expected || '')) throw new Error('The committed native conversation identity is unavailable.');
-    // An archive can contain shell-created conversations too. Bind the initial resume to
-    // the registry's current identity before discovery can follow an unrelated pointer.
-    fs.writeFileSync(path.join(codexHome(env), THREAD_ID_FILE), expected + '\n', { mode: 0o600 });
-  }
+  const selected = require('../common/native-checkpoint').resolve(env, codexHome(env), fs, rememberedThreadId(env, fs));
+  if (selected) fs.writeFileSync(path.join(codexHome(env), THREAD_ID_FILE), selected + '\n', { mode: 0o600 });
 
   // Scoped to the agent child in every mode. This used to skip interactive sessions on the
   // assumption that those are always subscription logins, which an autonomous run converted to
@@ -204,6 +199,7 @@ function findTranscript({ env, fs: fileSystem, launchedAt, cwd, pid }) {
     const match = rollouts.find(entry => entry.file.endsWith('-' + remembered + '.jsonl'));
     if (match) return match.file;
   }
+  // Another recent rollout is not evidence for the committed generation.
   if (env.AGENTHUB_REQUIRE_NATIVE_RESUME === '1') return null;
   // Only rollouts written since this process started: the restored archive may hold threads
   // from a shell-tab `codex`, and the one touched after launch is the one the agent is in.
@@ -256,11 +252,17 @@ function resetFromJson(match, text, { secondsFromNow }) {
   return after ? secondsFromNow(Number(after[1])) : null;
 }
 
+function nativeIdentity({ file, env, fs: fileSystem }) {
+  return rememberedThreadId(env, fileSystem) ||
+    (/-([0-9a-f-]{36})\.jsonl$/i.exec(path.basename(file)) || [])[1] || path.basename(file);
+}
+
 module.exports = {
   supportsProviderSwitch: true,
   providerSwitchExitKeys: ['/exit', '\r'],
-  nativeIdentity: ({ file, env, fs: fileSystem }) => rememberedThreadId(env, fileSystem) ||
-    (/-([0-9a-f-]{36})\.jsonl$/i.exec(path.basename(file)) || [])[1] || path.basename(file),
+  nativeIdentity,
+  checkpointNativeIdentity: context => require('../common/native-checkpoint').save(
+    context.env, codexHome(context.env), context.fs, nativeIdentity(context)),
   modelCatalog: require('./model-catalog'),
   failedTurnEnded: require('./turn-activity').failedTurnEnded,
   // /clear, not /new: both start a fresh thread and keep the old one resumable, but from 0.165.0
