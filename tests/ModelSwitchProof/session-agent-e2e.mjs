@@ -128,19 +128,29 @@ await wait(2_500)
 dump('2-turn1')
 result.firstTurn = requests().filter(r => r.stream).at(-1)
 
+const turnsBeforeSwitch = requests().filter(r => r.stream).length
 result.switch = await switchTo(PLAN.target)
 await wait(1_000)
 dump('3-after-switch')
 
+// The switch itself starts no turn: nothing it typed reached the model as a prompt.
+result.switchStartedNoTurn = requests().filter(r => r.stream).length === turnsBeforeSwitch
 const before = requests().length
-await sendTurn('Which word did I ask you to remember?')
+const question = 'Which word did I ask you to remember?'
+await sendTurn(question)
 await until(() => requests().slice(before).some(r => r.stream && r.model === PLAN.sent), 60_000, 'the turn after the switch')
 await wait(2_500)
 dump('4-turn2')
-const second = requests().slice(before).filter(r => r.stream).at(-1)
+// The turn's own request: Claude Code also sends side requests (a prompt suggestion) afterwards.
+const second = requests().slice(before).filter(r => r.stream && r.lastUserText.includes(question)).at(-1)
 result.turnAfterSwitch = second
 result.contextKept = !!second?.markerInRequest
 result.reachedNewModel = second?.model === PLAN.sent
+// And it left nothing in the prompt box: the person's text ends the turn on a line of its own,
+// with nothing typed in front of it. What comes before may be the CLI's own record — Claude Code
+// adds its local command and output (<local-command-stdout>Set model to …) to the next message,
+// as it does for any /model typed in its terminal; OpenClaw prefixes a timestamp.
+result.promptLeftClean = !!second && new RegExp('(^|\\n|\\] )' + question.replace(/[?.]/g, '\\$&') + '$').test(second.lastUserText)
 
 // A switch while a turn runs: refused, and nothing typed into the CLI for it.
 const beforeSlow = requests().length
@@ -162,6 +172,7 @@ result.wrongToken = (await fetch(`http://127.0.0.1:${agentPort}/agenthub/model`,
 dump('6-end')
 result.hubCalls = [...new Set(hubCalls)]
 result.ok = result.switch.status === 200 && result.reachedNewModel && result.contextKept &&
+  result.switchStartedNoTurn && result.promptLeftClean &&
   result.whileRunning.status === 409 && result.nothingTypedWhileRunning && result.slowTurnModel === PLAN.sent &&
   result.invalidId.status === 400 && result.wrongToken === 401
 fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(result, null, 2))

@@ -56,7 +56,8 @@ async function run(model, tools, { now, wait, ModelSwitchError, CONFIRM_TIMEOUT_
   await tools.type('/models');
   const shownBy = now() + DIALOG_TIMEOUT_MS;
   while (!(await tools.screen()).some(row => DIALOG.test(row))) {
-    if (now() >= shownBy) throw new ModelSwitchError('model_picker_not_shown');
+    // Escape anyway: a picker that opens late would read the next typed message as its search.
+    if (now() >= shownBy) { await tools.keys(ESCAPE); throw new ModelSwitchError('model_picker_not_shown'); }
     await wait(POLL_MS);
   }
   // Key by key: the search field is a plain input, and the picker filters on each key.

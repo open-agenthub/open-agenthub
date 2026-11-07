@@ -73,3 +73,10 @@ test('ids outside the catalog, without a provider, or with a name two rows share
     { code: 'model_name_ambiguous' });
   assert.deepEqual(picker.sent, []);
 });
+
+test('a picker that never shows is still sent Escape, and nothing is typed into the prompt', async () => {
+  const picker = fakePicker()
+  picker.tools.type = async text => { picker.sent.push(text) }
+  await assert.rejects(switchTo('mock/mock-b', picker), { code: 'model_picker_not_shown' })
+  assert.deepEqual(picker.sent, ['/models', '\x1b'])
+})

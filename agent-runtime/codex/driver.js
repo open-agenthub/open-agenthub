@@ -89,6 +89,9 @@ function buildCommand(env, allowResume) {
     // prompt to start the session", and it keeps the TUI, so an API-created session is already
     // working when a person opens it. Left out on a resume: `resume` is a subcommand there and a
     // trailing prompt would both fail to parse and restate a task the thread already contains.
+    // A fresh start inside a running pod (a resume that found nothing) reads config.toml, which
+    // the entrypoint wrote with the model the pod started on; a live switch since then is newer.
+    if (!restoredResume) args.push(...resumeModelArgs(env));
     const initialPrompt = env.AGENTHUB_PROMPT || '';
     if (initialPrompt && !restoredResume) args.push(initialPrompt);
     if (env.AGENTHUB_CODEX_DEVICE_AUTH === '1') {

@@ -239,7 +239,12 @@ module.exports = {
   modelSwitch: {
     command: model => '/model ' + model,
     confirm: () => /^\s*(?:⎿\s*)?Set model to /,
-    dialogs: [{ screen: /^\s*Switch model\?\s*$/, keys: '\r' }]
+    dialogs: [{ screen: /^\s*Switch model\?\s*$/, keys: '\r' }],
+    // What prepare() would have put into the CLI's environment had the session started on it. The
+    // CLI also saves the switch as its default in ~/.claude/settings.json; the entrypoint rewrites
+    // that file at every pod start, and ANTHROPIC_MODEL wins over it at an agent restart (checked
+    // on 2.1.318), so the model the hub stores is the one a restart comes back on.
+    childEnv: model => ({ ANTHROPIC_MODEL: model })
   },
   contextClearCommand: '/clear',
   turnHooks: true,

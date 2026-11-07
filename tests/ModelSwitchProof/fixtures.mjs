@@ -30,7 +30,14 @@ export async function startMock({ log, slowMs = 10_000 }) {
       const text = JSON.stringify(json.messages || json.input || '')
       // Only the last user turn decides whether this one is slow; the history repeats earlier ones.
       const lastUser = JSON.stringify((json.messages || json.input || []).filter?.(m => m.role === 'user').at?.(-1) || '')
-      const entry = { at: new Date().toISOString(), url: req.url.split('?')[0], model: json.model, stream: !!json.stream, markerInRequest: text.includes(MARKER) }
+      // The last user message as the model got it: a switch must not leave anything in the prompt
+      // that the next turn would carry (a typed command, a picker search).
+      const lastUserMessage = (json.messages || json.input || []).filter?.(m => m.role === 'user').at?.(-1)
+      const content = lastUserMessage?.content
+      const lastUserText = (typeof content === 'string' ? content
+        : Array.isArray(content) ? content.map(part => part?.text || '').join('\n') : '').slice(-300)
+      const entry = { at: new Date().toISOString(), url: req.url.split('?')[0], model: json.model, stream: !!json.stream,
+        markerInRequest: text.includes(MARKER), lastUserText }
       fs.appendFileSync(log, JSON.stringify(entry) + '\n')
       const delay = lastUser.includes(SLOW) ? slowMs : 0
       setTimeout(() => answer(req, res, json, entry), delay)

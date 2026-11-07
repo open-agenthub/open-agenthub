@@ -330,7 +330,11 @@ test('a resumed Codex thread is moved to the session\'s model, and the command s
   const exec = driver.buildCommand({ ...env, AGENTHUB_MODE: 'autonomous', AGENTHUB_PROMPT: 'report' }, true);
   assert.deepEqual(exec.args.slice(-5), ['resume', '--last', '--model', 'gpt-6-luna', 'report']);
   assert.equal(driver.isResumeCommand(exec), true);
-  // A fresh start takes the model from config.toml, as before.
-  assert.equal(driver.buildCommand({ ...env, AGENTHUB_RESUME: '0' }, true).args.includes('--model'), false);
+  // A fresh start passes it too: config.toml holds the model the pod started on, and a live switch
+  // since then (#478) is newer. Without a model the command is as before.
+  const fresh = driver.buildCommand({ ...env, AGENTHUB_RESUME: '0', AGENTHUB_PROMPT: 'task' }, true);
+  assert.deepEqual(fresh.args.slice(-3), ['--model', 'gpt-6-luna', 'task']);
+  assert.equal(driver.isResumeCommand(fresh), false);
+  assert.equal(driver.buildCommand({ ...env, AGENTHUB_RESUME: '0', AGENTHUB_MODEL_NAME: '' }, true).args.includes('--model'), false);
   assert.equal(driver.isResumeCommand({ cmd: 'codex', args: [...tui.args.slice(0, -1)] }), false);
 });

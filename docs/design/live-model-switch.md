@@ -55,6 +55,27 @@ reported with its own words; no confirmation within 15 seconds is an error, neve
 confirmed, the hub stores the model as the session's model, so the next start resumes on it —
 Claude Code and Codex would otherwise go back to the one the session started on.
 
+The hub's value is also what an agent restart *inside* the pod comes back on (an account switch,
+the resume fallback). Those rebuild the command from the environment the pod started with, which
+still named the old model; the session agent updates it on every confirmed switch
+(`AGENTHUB_MODEL_NAME`, and `ANTHROPIC_MODEL` for Claude Code's child), and Codex passes `--model`
+on a fresh start as well, since its `config.toml` was written at pod start. Claude Code's own saved
+default cannot contradict it either: the entrypoint rewrites `~/.claude/settings.json` (hooks only)
+at every pod start, and `ANTHROPIC_MODEL` wins over the saved default at an agent restart.
+
+Claude Code records the switch in the conversation itself: the next user message carries its
+`/model` command and the `Set model to …` output, as for any `/model` typed in its terminal, so the
+model is told it was switched.
+
+OpenCode's picker walk never types `/models <id>`, which would be sent to the model as a prompt. A
+picker that does not open in five seconds is sent Escape anyway (it might open late and read the
+next message as its search); one that is still open when no pick was confirmed is closed with
+Escape; either way the switch reports an error. The confirmation is OpenCode's state file plus the
+closed picker rather than the footer, which cannot tell "Mock A" from "Mock A Pro". Because none of
+this is a stable interface, CI runs the switch against the pinned CLI in the built OpenCode image on
+every change (`session-agent-e2e.mjs opencode` in `test.yml`): a version bump that moves the picker
+fails there, not in a session.
+
 **Restart** (Cursor, Codex on a custom endpoint, Claude Code in chat mode, and Claude Code or
 Codex while the session is not running): the hub stores the model, and the next start passes it
 and resumes the conversation. OpenCode and OpenClaw have no restart path — OpenCode's resume keeps
@@ -125,9 +146,10 @@ own `/model` does the same. Viewers read the current model; the hub refuses thei
   model with a changed config, `resume <id> --model` moving Codex, Claude Code resuming on a changed
   `ANTHROPIC_MODEL`, OpenClaw keeping a switch across a resume.
 - Real session agent with each pinned CLI (`session-agent-e2e.mjs`, Claude Code, Codex, OpenCode,
-  OpenClaw): the switch confirmed through `POST /agenthub/model`, the next turn on the new model with
-  the first turn still in it, a refusal during a running turn with nothing typed, an invalid id
-  and a wrong token refused.
+  OpenClaw): the switch confirmed through `POST /agenthub/model`, no turn started by the switch,
+  the next turn on the new model with the first turn still in it and nothing typed in front of the
+  person's text, a refusal during a running turn with nothing typed, an invalid id and a wrong token
+  refused. OpenCode's run is repeated in CI inside the built image.
 - Chromium against the real `SessionModelsController` and `SessionModelSwitch` on Postgres, the real
   session agent and the real Codex CLI (`browser-proof.mjs`, 17 checks): the account's list, the
   live switch and its confirmation, the stored model, the next turn, the refusal while working, a
