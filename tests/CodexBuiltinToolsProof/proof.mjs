@@ -182,9 +182,11 @@ process.stdout.write(r.stdout)
   clearTimeout(timer)
   server.close()
 
-  const outputs = {}
-  for (const r of requests) for (const i of r.input || [])
-    if (/_call_output$/.test(i.type) && i.call_id?.startsWith('call-')) outputs[i.call_id.slice(5)] = typeof i.output === 'string' ? i.output : JSON.stringify(i.output)
+  // Keyed by the tools this script called, never by a name read off the request.
+  const outputs = Object.fromEntries(CALLS.map(call => {
+    const item = requests.flatMap(r => r.input || []).find(i => /_call_output$/.test(i.type) && i.call_id === `call-${call.tool}`)
+    return [call.tool, item === undefined ? undefined : typeof item.output === 'string' ? item.output : JSON.stringify(item.output)]
+  }))
   const hookRuns = fs.existsSync(hookLog) ? fs.readFileSync(hookLog, 'utf8').trim().split('\n').filter(Boolean).map(l => JSON.parse(l)) : []
   const offered = (requests.find(r => r.tools?.length)?.tools || []).flatMap(t => t.tools ? t.tools.map(i => `${t.name}/${i.name}`) : [t.name]).filter(n => /agenthub_sessions/.test(n))
   fs.writeFileSync(path.join(work, 'result.json'), JSON.stringify({ label, body, outputs, hookRuns, offered, output: output.slice(-4000) }, null, 2))
@@ -201,8 +203,9 @@ for (const [label, body] of Object.entries(CASES)) {
     const out = r.outputs[call.tool]
     const hook = r.hookRuns.filter(h => (h.tool || '').includes(call.tool))
     const verdict = out === undefined ? 'not called' : /Blocked by the session policy/.test(out) ? 'BLOCKED' : 'ran'
-    console.log(`  ${call.tool}: ${verdict}; hook events: ${hook.map(h => `${h.event}:${h.tool}->${h.output ? JSON.parse(h.output).hookSpecificOutput?.permissionDecision || JSON.parse(h.output).hookSpecificOutput?.decision?.behavior : 'allow(no output)'}`).join(' ') || 'none'}`)
-    console.log(`    result: ${(out || '').slice(0, 160).replace(/\s+/g, ' ')}`)
+    const events = hook.map(h => `${h.event}:${h.tool}->${h.output ? JSON.parse(h.output).hookSpecificOutput?.permissionDecision || JSON.parse(h.output).hookSpecificOutput?.decision?.behavior : 'allow(no output)'}`)
+    console.log(`  ${call.tool}: ${verdict}; hook events: ${JSON.stringify(events)}`)
+    console.log(`    result: ${JSON.stringify((out || '').slice(0, 160))}`)
     rows.push({ label, tool: call.tool, verdict, hook: hook.length })
   }
 }
