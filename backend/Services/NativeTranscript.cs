@@ -17,6 +17,8 @@ public sealed record TranscriptAttachment(string Id, string Name);
 /// <param name="Tool">The tool a <c>tool</c> entry called.</param>
 public sealed record TranscriptEntry(string Role, string Text, DateTime? At, string? Tool = null)
 {
+    public long? Generation { get; init; }
+    public string? Agent { get; init; }
     public IReadOnlyList<TranscriptAttachment>? Attachments { get; init; }
     [System.Text.Json.Serialization.JsonIgnore]
     public string? PromptId { get; init; }

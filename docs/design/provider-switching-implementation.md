@@ -2,7 +2,12 @@
 
 Plan for #466 and reopened #345, based on `provider-switching.md` and source at
 39293baa (1.18.0). This milestone changes no product code. Implementation awaits
-owner confirmation of step 1. Estimates are engineering days, including proofs and
+owner confirmation of step 1.
+
+Owner confirmed step 1 on 2026-11-07. Persistent workspace support remains default off
+until recovery acceptance; existing ephemeral sessions require a clear unavailability
+reason, and migration is separate scope. See `provider-switching-history.md` for the
+implemented foundation contract and its bounded history-view limitation. Estimates are engineering days, including proofs and
 review fixes; steps are sequential and total 13–18 days.
 
 ## Current contracts and gaps

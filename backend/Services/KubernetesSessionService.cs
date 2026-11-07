@@ -23,8 +23,9 @@ namespace AgentHub.Api.Services;
 /// Security: no root, no capabilities, read-only rootfs, dedicated namespace,
 /// the agent pod gets no S3 creds (only presigned URLs) and no K8s token.
 /// </summary>
-public sealed class KubernetesSessionService : ISessionService, IProviderLoginRepository, IGitSessionCredentials
+public sealed class KubernetesSessionService : ISessionService, IExecutionConversationSource, IProviderLoginRepository, IGitSessionCredentials
 {
+    private readonly ISessionExecutionStore? _executions;
     private readonly Kubernetes _k8s;
     private readonly ISessionExpiryLock? _runtimeUpdateLock;
     private readonly ISessionStore _store;
@@ -74,8 +75,9 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         ISecretRequestStore? secretRequests = null,
         Kubernetes? cluster = null,
         IAgentPodRequests? podRequests = null,
-        Chat.IChatSessionCleanup? chatCleanup = null)
+        Chat.IChatSessionCleanup? chatCleanup = null, ISessionExecutionStore? executions = null)
     {
+        _executions = executions;
         _chatCleanup = chatCleanup;
         _podRequests = podRequests;
         _secretRequests = secretRequests;
@@ -2483,6 +2485,11 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
     public async Task<string?> GetTranscriptFileAsync(string owner, string id, CancellationToken ct = default)
     {
         if (await _store.GetAsync(owner, id, ct) is null) return null;
+        var history = _executions is null ? null : await _executions.ReadAsync(owner, id, ct);
+        if (history is { Current.Generation: > 0 })
+            return await TranscriptReader.ReadTranscriptAsync(
+                token => _artifacts.GetTextAsync(history.Current.TranscriptKey, token),
+                _ => Task.FromResult<string?>(history.CurrentTranscript), ct);
         var key = IArtifactStore.TranscriptKey(Sanitize(owner), id);
         return await TranscriptReader.ReadTranscriptAsync(
             token => _artifacts.GetTextAsync(key, token),
@@ -2499,9 +2506,22 @@ public sealed class KubernetesSessionService : ISessionService, IProviderLoginRe
         // readable conversation instead of raw JSON on the remote API and the MCP tools.
         if (string.IsNullOrEmpty(jsonl) && string.Equals(rec.UiMode, "chat", StringComparison.OrdinalIgnoreCase))
             jsonl = await GetScrollbackAsync(owner, id, ct);
-        if (string.IsNullOrEmpty(jsonl)) return null;
-        var entries = NativeTranscript.Parse(jsonl);
+        var entries = await ComposeExecutionHistoryAsync(owner, id, NativeTranscript.Parse(jsonl), ct);
         return entries.Count == 0 ? null : entries;
+    }
+
+    public async Task<IReadOnlyList<TranscriptEntry>> ComposeExecutionHistoryAsync(string owner, string id,
+        IReadOnlyList<TranscriptEntry> current, CancellationToken ct = default)
+    {
+        if (_executions is null) return current;
+        var history = await _executions.ReadAsync(owner, id, ct);
+        if (history is null)
+        {
+            if (await _executions.EnsureLegacyAsync(owner, id, ct) is null) return [];
+            return current;
+        }
+        if (history.Current.Generation == 0) return current;
+        return ExecutionConversation.Compose(history, current);
     }
 
     public async Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
