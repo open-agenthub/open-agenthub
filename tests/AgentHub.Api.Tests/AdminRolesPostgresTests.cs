@@ -91,22 +91,24 @@ public class AdminRolesPostgresTests
     }
 
     [PostgreSqlFact]
-    public async Task SetRole_PromotesAKnownUser_EndsBootstrap_AndIsAudited()
+    public async Task SetRole_PromotesAKnownUser_AndIsAudited()
     {
         await using var db = await AdminRolesDatabase.CreateAsync();
-        await db.SignInAsync("alice", "bob");
-        var access = db.Access("");
-        var controller = db.RolesController(access, "alice");
+        await db.SignInAsync("root", "alice", "bob");
+        var access = db.Access("root");
 
-        var result = await controller.SetRole("bob", new("admin"), default);
+        // Without a designation alice cannot reach the endpoint at all (#492).
+        Assert.IsType<ForbidResult>(await db.RolesController(access, "alice").SetRole("bob", new("admin"), default));
+
+        var result = await db.RolesController(access, "root").SetRole("bob", new("admin"), default);
 
         var body = Assert.IsType<AdminRolesController.RolesOverview>(Assert.IsType<OkObjectResult>(result).Value);
-        Assert.False(body.Bootstrap);
         Assert.Equal(("admin", RoleSources.User), Row(body, "bob"));
         Assert.Equal(("user", RoleSources.Default), Row(body, "alice"));
-        Assert.False(await access.IsAdminAsync("alice")); // takes effect on the next request
+        Assert.True(await access.IsAdminAsync("bob")); // takes effect on the next request
+        Assert.False(await access.IsAdminAsync("alice"));
         var entry = Assert.Single(await db.Roles.ListAuditAsync(10));
-        Assert.Equal(("alice", "user", "bob", "admin"), (entry.Actor, entry.SubjectKind, entry.Subject, entry.NewRole));
+        Assert.Equal(("root", "user", "bob", "admin"), (entry.Actor, entry.SubjectKind, entry.Subject, entry.NewRole));
         Assert.Null(entry.OldRole);
     }
 
@@ -180,7 +182,7 @@ public class AdminRolesPostgresTests
         var access = db.Access("", licensed: true);
         var controller = db.GroupController(access, "alice");
 
-        // alice is the only admin, through "leads"; "ops" keeps bootstrap off.
+        // alice is the only admin, through "leads"; "ops" is mapped but has no members.
         var refused = await controller.SetGroupRole("leads", new("user"), default);
         Assert.IsType<ConflictObjectResult>(refused);
         Assert.Equal("admin", await db.Groups.GetGroupRoleAsync("leads"));

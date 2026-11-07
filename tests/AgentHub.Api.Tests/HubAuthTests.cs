@@ -309,7 +309,18 @@ public class HubAuthTests
         Assert.True(await access.IsAdminAsync("admin"));
         Assert.True(await access.IsAdminAsync("alice"));
         Assert.False(await access.IsAdminAsync("mallory"));
-        // The owner counts as a configured admin, so bootstrap mode — everyone is admin — is off.
-        Assert.False(access.Bootstrap);
+    }
+
+    [Fact]
+    public async Task The_key_holder_and_the_insecure_dev_user_are_admins_without_Ee_Admins()
+    {
+        var apiKey = new AdminAccess(Config(), NullLogger<AdminAccess>.Instance, [],
+            hubAuth: HubAuthOptions.ForApiKey(Key, "admin"));
+        Assert.True(await apiKey.IsAdminAsync("admin"));
+        Assert.True(await apiKey.IsAdminDesignatedAsync());
+
+        var dev = new AdminAccess(Config(("Auth:InsecureDevMode", "true")), NullLogger<AdminAccess>.Instance, [],
+            hubAuth: HubAuthOptions.Resolve(Config(("Auth:InsecureDevMode", "true"))));
+        Assert.True(await dev.IsAdminAsync(HubAuthOptions.InsecureDevUser));
     }
 }

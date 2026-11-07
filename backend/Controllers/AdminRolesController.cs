@@ -34,7 +34,7 @@ public sealed class AdminRolesController : ControllerBase
         string Role, string Source, IReadOnlyList<string> Groups, string? ExplicitRole);
 
     public sealed record RolesOverview(
-        bool Bootstrap, bool GroupMapping, IReadOnlyCollection<string> ValuesAdmins,
+        bool GroupMapping, IReadOnlyCollection<string> ValuesAdmins,
         IReadOnlyList<UserRoleRow> Users);
 
     [HttpGet("roles")]
@@ -62,11 +62,10 @@ public sealed class AdminRolesController : ControllerBase
 
         await using (await _roles.LockAsync(ct))
         {
-            var bootstrapBefore = await _access.IsBootstrapActiveAsync(ct);
             var previous = await _roles.SetRoleAsync(target.Owner, req.Role, ct);
             // The precedence rules live in AdminAccess alone; checking the outcome rather than
             // predicting it keeps them from being restated (and drifting) here.
-            if (!await _access.KeepsAnAdminAsync(bootstrapBefore, known.Select(u => u.Owner), ct))
+            if (!await _access.KeepsAnAdminAsync(known.Select(u => u.Owner), ct))
             {
                 await _roles.SetRoleAsync(target.Owner, previous, ct);
                 return Conflict(new { error = "This would leave no admin. Make someone else an admin first." });
@@ -88,15 +87,14 @@ public sealed class AdminRolesController : ControllerBase
     {
         var users = await _dir.ListAsync(ct);
         var explicitRoles = await _roles.ListRolesAsync(ct);
-        var bootstrap = await _access.IsBootstrapActiveAsync(ct);
         var rows = new List<UserRoleRow>(users.Count);
         foreach (var u in users)
         {
             explicitRoles.TryGetValue(u.Owner, out var explicitRole);
-            var resolved = await _access.ResolveAsync(u.Owner, explicitRole, bootstrap, ct);
+            var resolved = await _access.ResolveAsync(u.Owner, explicitRole, ct);
             rows.Add(new UserRoleRow(u.Owner, u.Email, u.DisplayName,
                 resolved.Role, resolved.Source, resolved.Groups, explicitRole));
         }
-        return new RolesOverview(bootstrap, _license.Enabled, _access.ValuesAdmins, rows);
+        return new RolesOverview(_license.Enabled, _access.ValuesAdmins, rows);
     }
 }

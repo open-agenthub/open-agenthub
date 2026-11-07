@@ -400,8 +400,9 @@ telemetry:
 ee:
   # Comma-separated list of admin usernames (preferred_username): break-glass admins that
   # the admin area cannot demote. Everyone else can be made an admin or a regular user in
-  # Admin → Users & seats without a redeploy. Empty and nobody designated there (or via an
-  # admin group) = every signed-in user is an admin (bootstrap). See docs/admin-roles.md.
+  # Admin → Users & seats without a redeploy. With OIDC, set at least one here: nobody is an
+  # admin by default, and until someone is designated the admin area is closed to everyone.
+  # The API-key owner is always an admin. See docs/admin-bootstrap.md.
   admins: ""
   # Optional link to the billing portal (customer portal via the license service),
   # surfaced in the Admin area for subscription/invoice management.

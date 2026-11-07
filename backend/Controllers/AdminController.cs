@@ -35,7 +35,14 @@ public sealed class AdminController : ControllerBase
     [HttpGet("access")]
     // The user name lets the API-key login show who the key acts as; nothing else tells the
     // browser, since a static key carries no profile the way an OIDC token does.
-    public async Task<object> Access(CancellationToken ct) => new { isAdmin = await IsAdminAsync(ct), user = Owner };
+    // adminDesignated is answered to every signed-in user, not only admins: while it is false
+    // nobody is an admin, so the only people who can see the notice are the ones who are not.
+    public async Task<object> Access(CancellationToken ct) => new
+    {
+        isAdmin = await IsAdminAsync(ct),
+        user = Owner,
+        adminDesignated = await _access.IsAdminDesignatedAsync(ct)
+    };
 
     public sealed record SeatInfo(int Used, int Included);
     public sealed record Overview(
