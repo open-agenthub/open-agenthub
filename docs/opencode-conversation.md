@@ -8,7 +8,8 @@ login, menus, input and the managed policy plugin keep their existing paths.
 The transport exports completed native messages to the existing append-only JSONL conversation
 path. Message IDs determine ordering, with native part IDs determining order within a message.
 A page contains at most 100 messages. An incomplete assistant message stops export at that
-position so later messages cannot overtake it. Text, tool input and tool output are bounded;
+position so later messages cannot overtake it. User messages wait for a subsequent assistant
+record because the CLI persists their parts after their message row. Text, tool input and tool output are bounded;
 omissions are visible. Oversized individual fields are omitted rather than prefix-cut before
 masking; bounded fields pass through the existing secret masker before any further clipping.
 A per-page character budget also stops large records from accumulating across 100 messages. The journal stores the native cursor with each append, allowing a

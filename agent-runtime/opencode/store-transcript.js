@@ -19,7 +19,9 @@ function readPage(db, sessionID, cursor) {
     const messages = db.prepare(`SELECT id, time_created,
       json_extract(data, '$.role') AS role,
       json_extract(data, '$.time.completed') AS completed,
-      substr(json_extract(data, '$.error.name'), 1, 255) AS error
+      substr(json_extract(data, '$.error.name'), 1, 255) AS error,
+      EXISTS(SELECT 1 FROM message successor WHERE successor.session_id = message.session_id
+        AND successor.id > message.id AND json_extract(successor.data, '$.role') = 'assistant') AS has_reply
       FROM message WHERE session_id = ? AND id > ? ORDER BY id LIMIT ?`).all(sessionID, cursor, PAGE_MESSAGES);
     const parts = db.prepare(`SELECT id,
       json_extract(data, '$.type') AS type, json_extract(data, '$.synthetic') AS synthetic,
@@ -40,6 +42,9 @@ function readPage(db, sessionID, cursor) {
       // Completion freezes streaming text/tool state. Do not allow a later user prompt to
       // overtake an unfinished answer and permanently strand it behind the durable cursor.
       if (message.role === 'assistant' && !message.completed && !message.error) break;
+      // Native user parts are persisted after their message row. The assistant is created
+      // only after those writes, so waiting for it prevents freezing a half-written prompt.
+      if (message.role === 'user' && !message.has_reply) break;
       const nativeParts = parts.all(message.id, MAX_PARTS + 1);
       if (!nativeParts.length && message.role === 'user') break;
       page.push({ ...message, parts: nativeParts });

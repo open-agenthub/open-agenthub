@@ -14,7 +14,7 @@ function fixture(t) {
   db.exec('CREATE TABLE session(id TEXT PRIMARY KEY, parent_id TEXT); CREATE TABLE message(id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT); CREATE TABLE part(id TEXT PRIMARY KEY, message_id TEXT, data TEXT)');
   db.prepare('INSERT INTO session VALUES (?, NULL)').run('ses_test');
   t.after(() => { db.close(); fs.rmSync(home, { recursive: true, force: true }); });
-  const insert = (n, role = 'user', parts = [{ type: 'text', text: 'message ' + n }], completed = 1) => {
+  const insert = (n, role = 'assistant', parts = [{ type: 'text', text: 'message ' + n }], completed = 1) => {
     const id = 'msg_' + String(n).padStart(8, '0');
     db.prepare('INSERT INTO message VALUES (?, ?, ?, ?)').run(id, 'ses_test', n, JSON.stringify({ role, time: { completed } }));
     for (let i = 0; i < parts.length; i++) db.prepare('INSERT INTO part VALUES (?, ?, ?)').run('prt_' + id + '_' + String(i).padStart(3, '0'), id, JSON.stringify(parts[i]));
@@ -69,7 +69,8 @@ test('a user row created before its parts cannot advance the durable cursor', t 
   f.insert(1, 'user', []);
   assert.equal(f.record(), null);
   f.db.prepare('INSERT INTO part VALUES (?, ?, ?)').run('prt_1', 'msg_00000001', JSON.stringify({ type: 'text', text: 'now persisted' }));
-  assert.equal(f.rows().length, 1);
+  f.insert(2);
+  assert.equal(f.rows().length, 2);
 });
 
 test('schema mismatch falls back to the existing snapshot with a diagnostic and no crash', t => {
@@ -115,4 +116,15 @@ test('masking precedes truncation and oversized fields never expose a partial cr
   assert(!raw.includes(secret));
   assert(!raw.includes('private-'));
   assert(raw.includes('Large content not shown'));
+});
+
+test('multipart user messages wait for native prompt persistence before becoming immutable', t => {
+  const f = fixture(t);
+  f.insert(1, 'user', [{ type: 'text', text: 'first part' }]);
+  assert.equal(f.record(), null);
+  f.db.prepare('INSERT INTO part VALUES (?, ?, ?)').run('prt_z', 'msg_00000001', JSON.stringify({ type: 'text', text: 'second part' }));
+  f.insert(2);
+  const rows = f.rows();
+  assert.equal(rows[0].message.content.length, 2);
+  assert.equal(rows[0].message.content[1].text, 'second part');
 });
