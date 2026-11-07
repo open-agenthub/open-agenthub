@@ -1196,6 +1196,9 @@ function createCommonServer(options = {}) {
       return;
     }
 
+    // PTY termination can report code zero alongside a fatal signal. Treating only
+    // the code as authoritative would publish a killed target as successful.
+    if (signal && !exitCode) exitCode = Number.isInteger(signal) ? 128 + signal : 1;
     const elapsedMs = now() - launchedAt;
     if (!nativeResumeRequired && !providerTargetRequest && attemptedResume && !retriedFresh &&
         driver.isMissingResume(attemptOutput, exitCode, elapsedMs)) {
