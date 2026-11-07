@@ -57,10 +57,11 @@ public sealed class PostgresSessionExecutionStore(IConfiguration configuration) 
 
     public async Task<SessionExecution?> EnsureLegacyAsync(string owner, string id, CancellationToken ct = default)
     {
-        // Read adaptation avoids a full-table migration and leaves existing upload URLs valid.
+        // Read adaptation preserves existing upload URLs. A missing legacy native ID must not
+        // prevent reading its transcript while an older schema is being upgraded.
         await using var command = _db.CreateCommand("""
             INSERT INTO session_executions(session_id, generation, agent, native_id, credential_id, transcript_key, state_key)
-            SELECT id, 0, agent, agent_session_id, resolved_credential_id,
+            SELECT id, 0, agent, COALESCE(agent_session_id, ''), resolved_credential_id,
                 @prefix || '/transcript.jsonl', @prefix || '/' || lower(agent) || '-state.tgz'
             FROM sessions WHERE id=@id AND owner=@owner
             ON CONFLICT DO NOTHING;

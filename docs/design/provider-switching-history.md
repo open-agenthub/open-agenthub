@@ -12,7 +12,15 @@ its successor is one transaction under the session row lock, with expected-gener
 comparison. Failed/racing advances roll back. Only an internal lifecycle contract may
 advance; no API, callback or peer tool can create a new generation in this release.
 
-Existing sessions adapt lazily as generation zero. Their existing object names and upload
+Existing sessions adapt lazily as generation zero. The supported schema enforces a nonnull
+`agent_session_id`, and session creation assigns a GUID before admission for every mode and
+provider. For partial/older schemas, adaptation coalesces a missing ID to empty and record
+mapping tolerates that legacy value. Ledger read/insert failures log a warning and retain the
+existing stored/live native conversation; caller cancellation still propagates. A failed lazy
+insert is retried on a later read, rather than becoming a permanent failure cache. Rejecting
+all reads until the new metadata can be written was rejected because it would turn a schema
+or permission rollout into loss of access to otherwise available conversations.
+ Their existing object names and upload
 URLs stay valid. New execution references include the generation so returning to an agent
 cannot overwrite its earlier archive. A generation-scoped database transcript snapshot
 supports deployments without object storage. Late saves to a sealed generation are rejected.

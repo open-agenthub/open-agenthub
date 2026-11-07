@@ -2485,7 +2485,12 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
     public async Task<string?> GetTranscriptFileAsync(string owner, string id, CancellationToken ct = default)
     {
         if (await _store.GetAsync(owner, id, ct) is null) return null;
-        var history = _executions is null ? null : await _executions.ReadAsync(owner, id, ct);
+        ExecutionHistory? history = null;
+        try { if (_executions is not null) history = await _executions.ReadAsync(owner, id, ct); }
+        catch (Exception error) when (!ct.IsCancellationRequested && ExecutionHistoryUnavailable(error))
+        {
+            _log.LogWarning(error, "Could not read execution history for session {SessionId}; using the existing transcript.", id);
+        }
         if (history is { Current.Generation: > 0 })
             return await TranscriptReader.ReadTranscriptAsync(
                 token => _artifacts.GetTextAsync(history.Current.TranscriptKey, token),
@@ -2514,15 +2519,28 @@ public sealed class KubernetesSessionService : ISessionService, IExecutionConver
         IReadOnlyList<TranscriptEntry> current, CancellationToken ct = default)
     {
         if (_executions is null) return current;
-        var history = await _executions.ReadAsync(owner, id, ct);
-        if (history is null)
+        try
         {
-            if (await _executions.EnsureLegacyAsync(owner, id, ct) is null) return [];
+            var history = await _executions.ReadAsync(owner, id, ct);
+            if (history is null)
+            {
+                if (await _executions.EnsureLegacyAsync(owner, id, ct) is null) return [];
+                return current;
+            }
+            if (history.Current.Generation == 0) return current;
+            return ExecutionConversation.Compose(history, current);
+        }
+        catch (Exception error) when (!ct.IsCancellationRequested && ExecutionHistoryUnavailable(error))
+        {
+            // The ledger is a lazy addition to existing sessions, not a prerequisite for
+            // reading a working native conversation during a schema or permissions rollout.
+            _log.LogWarning(error, "Could not adapt execution history for session {SessionId}; keeping the current conversation.", id);
             return current;
         }
-        if (history.Current.Generation == 0) return current;
-        return ExecutionConversation.Compose(history, current);
     }
+
+    private static bool ExecutionHistoryUnavailable(Exception error) => error is
+        Npgsql.NpgsqlException or InvalidOperationException or ArgumentException or JsonException or IOException or TimeoutException;
 
     public async Task<string?> GetScrollbackAsync(string owner, string id, CancellationToken ct = default)
     {

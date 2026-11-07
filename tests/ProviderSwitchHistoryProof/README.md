@@ -57,9 +57,12 @@ scratch database to start a wholly new capture; do not reuse it with unrelated c
 Generated results, native JSONL, logs and terminal screens stay in scratch space or Files.
 Only these scripts and project sources belong in Git.
 
-Run `SessionExecutionTests` with `AGENTHUB_TEST_POSTGRES_CONNECTION_STRING` for real database
+Run `SessionExecutionTests` and `LegacyExecutionMigrationTests` with `AGENTHUB_TEST_POSTGRES_CONNECTION_STRING` for real database
 races, expected-generation rejection, owner scoping, return generations, rejected stale
-snapshot writes, account/artifact references and deletion cascade. Existing transcript and
+snapshot writes, account/artifact references and deletion cascade. The legacy-migration tests
+first verify the current schema rejects NULL native IDs, then simulate a partial older schema
+with a real NULL row. They also force insert rejection and omit the ledger table to prove stored
+and live native readback survive, warnings are logged, retries work, and cancellation propagates. Existing transcript and
 remote/MCP tests cover the shared conversation path and context-clear boundaries.
 
 Limits: no provider-switch API, new pod, volume mount, native context transfer, real target
