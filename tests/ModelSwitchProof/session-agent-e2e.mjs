@@ -118,66 +118,76 @@ async function switchTo(model) {
 }
 
 const result = { agent, cli: prepared.cmd }
-await until(() => PLAN.ready.test(screen()), 120_000, 'the CLI to draw its prompt')
-await wait(2_000)
-dump('1-ready')
+// A failure, an exception included, prints what CI cannot show otherwise: the session agent's
+// own log and the last screen.
+try {
+  await until(() => PLAN.ready.test(screen()), 120_000, 'the CLI to draw its prompt')
+  await wait(2_000)
+  dump('1-ready')
 
-await sendTurn(`Remember the word ${MARKER}. Reply briefly.`)
-await until(() => /MODEL=/.test(screen()), 60_000, 'the first answer')
-await wait(2_500)
-dump('2-turn1')
-result.firstTurn = requests().filter(r => r.stream).at(-1)
+  await sendTurn(`Remember the word ${MARKER}. Reply briefly.`)
+  await until(() => /MODEL=/.test(screen()), 60_000, 'the first answer')
+  await wait(2_500)
+  dump('2-turn1')
+  result.firstTurn = requests().filter(r => r.stream).at(-1)
 
-const turnsBeforeSwitch = requests().filter(r => r.stream).length
-result.switch = await switchTo(PLAN.target)
-await wait(1_000)
-dump('3-after-switch')
+  const turnsBeforeSwitch = requests().filter(r => r.stream).length
+  result.switch = await switchTo(PLAN.target)
+  await wait(1_000)
+  dump('3-after-switch')
 
-// The switch itself starts no turn: nothing it typed reached the model as a prompt.
-result.switchStartedNoTurn = requests().filter(r => r.stream).length === turnsBeforeSwitch
-const before = requests().length
-const question = 'Which word did I ask you to remember?'
-await sendTurn(question)
-await until(() => requests().slice(before).some(r => r.stream && r.model === PLAN.sent), 60_000, 'the turn after the switch')
-await wait(2_500)
-dump('4-turn2')
-// The turn's own request: Claude Code also sends side requests (a prompt suggestion) afterwards.
-const second = requests().slice(before).filter(r => r.stream && r.lastUserText.includes(question)).at(-1)
-result.turnAfterSwitch = second
-result.contextKept = !!second?.markerInRequest
-result.reachedNewModel = second?.model === PLAN.sent
-// And it left nothing in the prompt box: the person's text ends the turn on a line of its own,
-// with nothing typed in front of it. What comes before may be the CLI's own record — Claude Code
-// adds its local command and output (<local-command-stdout>Set model to …) to the next message,
-// as it does for any /model typed in its terminal; OpenClaw prefixes a timestamp.
-result.promptLeftClean = !!second && new RegExp('(^|\\n|\\] )' + question.replace(/[?.]/g, '\\$&') + '$').test(second.lastUserText)
+  // The switch itself starts no turn: nothing it typed reached the model as a prompt.
+  result.switchStartedNoTurn = requests().filter(r => r.stream).length === turnsBeforeSwitch
+  const before = requests().length
+  const question = 'Which word did I ask you to remember?'
+  await sendTurn(question)
+  await until(() => requests().slice(before).some(r => r.stream && r.model === PLAN.sent), 60_000, 'the turn after the switch')
+  await wait(2_500)
+  dump('4-turn2')
+  // The turn's own request: Claude Code also sends side requests (a prompt suggestion) afterwards.
+  const second = requests().slice(before).filter(r => r.stream && r.lastUserText.includes(question)).at(-1)
+  result.turnAfterSwitch = second
+  result.contextKept = !!second?.markerInRequest
+  result.reachedNewModel = second?.model === PLAN.sent
+  // And it left nothing in the prompt box: the person's text ends the turn on a line of its own,
+  // with nothing typed in front of it. What comes before may be the CLI's own record — Claude Code
+  // adds its local command and output (<local-command-stdout>Set model to …) to the next message,
+  // as it does for any /model typed in its terminal; OpenClaw prefixes a timestamp.
+  result.promptLeftClean = !!second && new RegExp('(^|\\n|\\] )' + question.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$').test(second.lastUserText)
 
-// A switch while a turn runs: refused, and nothing typed into the CLI for it.
-const beforeSlow = requests().length
-await sendTurn(`${SLOW}: take your time.`)
-await until(() => requests().length > beforeSlow, 30_000, 'the slow turn to reach the model')
-await wait(2_000)
-dump('5-turn-running')
-const typedBefore = screen()
-result.whileRunning = await switchTo(PLAN.other)
-await wait(500)
-result.nothingTypedWhileRunning = !screen().includes('/model ' + PLAN.other) && !typedBefore.includes('/model ' + PLAN.other)
-await until(() => (screen().match(/MODEL=/g) || []).length >= 3, 30_000, 'the slow turn to end')
-await wait(2_500)
-result.slowTurnModel = requests().slice(beforeSlow).filter(r => r.stream).at(-1)?.model
+  // A switch while a turn runs: refused, and nothing typed into the CLI for it.
+  const beforeSlow = requests().length
+  await sendTurn(`${SLOW}: take your time.`)
+  await until(() => requests().length > beforeSlow, 30_000, 'the slow turn to reach the model')
+  await wait(2_000)
+  dump('5-turn-running')
+  const typedBefore = screen()
+  result.whileRunning = await switchTo(PLAN.other)
+  await wait(500)
+  result.nothingTypedWhileRunning = !screen().includes('/model ' + PLAN.other) && !typedBefore.includes('/model ' + PLAN.other)
+  await until(() => (screen().match(/MODEL=/g) || []).length >= 3, 30_000, 'the slow turn to end')
+  await wait(2_500)
+  result.slowTurnModel = requests().slice(beforeSlow).filter(r => r.stream).at(-1)?.model
 
-result.invalidId = await switchTo('two words')
-result.wrongToken = (await fetch(`http://127.0.0.1:${agentPort}/agenthub/model`, {
-  method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Agent-Token': 'nope' }, body: '{"model":"x"}' })).status
-dump('6-end')
-result.hubCalls = [...new Set(hubCalls)]
-result.ok = result.switch.status === 200 && result.reachedNewModel && result.contextKept &&
-  result.switchStartedNoTurn && result.promptLeftClean &&
-  result.whileRunning.status === 409 && result.nothingTypedWhileRunning && result.slowTurnModel === PLAN.sent &&
-  result.invalidId.status === 400 && result.wrongToken === 401
+  result.invalidId = await switchTo('two words')
+  result.wrongToken = (await fetch(`http://127.0.0.1:${agentPort}/agenthub/model`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Agent-Token': 'nope' }, body: '{"model":"x"}' })).status
+  dump('6-end')
+  result.hubCalls = [...new Set(hubCalls)]
+  result.ok = result.switch.status === 200 && result.reachedNewModel && result.contextKept &&
+    result.switchStartedNoTurn && result.promptLeftClean &&
+    result.whileRunning.status === 409 && result.nothingTypedWhileRunning && result.slowTurnModel === PLAN.sent &&
+    result.invalidId.status === 400 && result.wrongToken === 401
+} catch (error) {
+  result.ok = false
+  result.error = error.message
+}
 fs.writeFileSync(path.join(out, 'result.json'), JSON.stringify(result, null, 2))
 console.log(JSON.stringify(result, null, 2))
-
+if (!result.ok) {
+  console.log('==== last screen\n' + screen().split('\n').filter(line => line.trim()).join('\n'))
+  console.log('==== session agent log (tail)\n' + fs.readFileSync(path.join(out, 'session-agent.log'), 'utf8').split('\n').slice(-80).join('\n'))
+}
 socket.close()
 server.kill('SIGTERM')
 await wait(3_000)

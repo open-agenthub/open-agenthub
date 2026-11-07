@@ -187,21 +187,21 @@ test('a submitted line, a cleared box, keys and dialog answers leave no draft be
 test('after a confirmed switch, an agent restart inside the pod starts on the new model', async () => {
   // Claude: the CLI child's ANTHROPIC_MODEL; every driver: AGENTHUB_MODEL_NAME, which buildCommand reads.
   // The restart is the resume fallback: the CLI says its conversation is gone and exits.
-  const restarting = { modelSwitch: claude.modelSwitch, extra: { isResumeCommand: () => true, isMissingResume: () => true } }
+  const restarting = { modelSwitch: claude.modelSwitch, extra: { isResumeCommand: () => true, isMissingResume: () => true } };
   const { harness } = switchHarness(restarting, {
     answer: line => line.includes('/model claude-sonnet-5-5') ? '\r\n  ⎿  Set model to Sonnet 5.5\r\n' : null
   });
   assert.equal((await post(harness, { model: 'claude-sonnet-5-5' })).status, 200);
   harness.terminals[0].emitExit({ exitCode: 1 });
   for (let i = 0; i < 50 && harness.spawns.length < 2; i++) await new Promise(resolve => setTimeout(resolve, 20));
-  const restarted = harness.spawns.at(-1)
+  const restarted = harness.spawns.at(-1);
   assert.equal(harness.spawns.length, 2);
   assert.equal(restarted.options.env.ANTHROPIC_MODEL, 'claude-sonnet-5-5');
   assert.equal(restarted.options.env.AGENTHUB_MODEL_NAME, 'claude-sonnet-5-5');
 });
 
 test('a refused or unconfirmed switch leaves what a restart starts on alone', async () => {
-  const restarting = { modelSwitch: codex.modelSwitch, extra: { isResumeCommand: () => true, isMissingResume: () => true } }
+  const restarting = { modelSwitch: codex.modelSwitch, extra: { isResumeCommand: () => true, isMissingResume: () => true } };
   const { harness } = switchHarness(restarting, { environment: { AGENTHUB_MODEL_NAME: 'gpt-6.1-sol' },
     answer: () => "\r\n■ Model 'mock-b' is unavailable.\r\n" });
   assert.equal((await post(harness, { model: 'mock-b' })).status, 422);

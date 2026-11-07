@@ -6,7 +6,7 @@
 //
 // usage: node cli-switch.mjs <claude|codex|opencode|openclaw> '<steps json>' [outdir]
 // steps: {"paste":"text"} composer path (bracketed paste, 150 ms, CR) | {"type":"/mo"} key by key
-//        {"keys":"\u001b"} | {"wait":ms} | {"dump":"name"} | {"ready":"regex","ms":N}
+//        {"keys":"\u001b"} | {"wait":ms} | {"dump":"name"} | {"ready":"text|other text","ms":N}
 // env:   CLIS=<dir with node_modules/.bin/{codex,opencode,openclaw}>  XTERM=<dir with @xterm/headless>
 //        START_MODEL, CUSTOM_ENDPOINT=1, REUSE=<earlier outdir> with EXTRA_ARGS='["resume","--last"]'
 import fs from 'node:fs'
@@ -60,11 +60,14 @@ const dump = name => {
   fs.writeFileSync(path.join(out, name + '.txt'), screen())
   console.log('==== ' + name + (exited ? ' (exited ' + JSON.stringify(exited) + ')' : '') + '\n' + screen().split('\n').filter(l => l.trim()).join('\n'))
 }
+// "ready" is a plain text to wait for, with "|" between alternatives — not a regular expression,
+// which would be built from the command line.
+const shows = alternatives => alternatives.split('|').some(text => screen().includes(text))
 for (const step of steps) {
   if (step.ready) {
     const end = Date.now() + (step.ms || 90000)
-    while (!new RegExp(step.ready).test(screen()) && Date.now() < end && !exited) await wait(250)
-    if (!new RegExp(step.ready).test(screen())) console.log('!! not ready: ' + step.ready)
+    while (!shows(step.ready) && Date.now() < end && !exited) await wait(250)
+    if (!shows(step.ready)) console.log('!! not ready: ' + step.ready)
     await wait(step.settle ?? 1500)
   } else if (step.paste !== undefined) { p.write('\x1b[200~' + step.paste + '\x1b[201~'); await wait(150); p.write('\r') }
   else if (step.type !== undefined) { for (const ch of step.type) { p.write(ch); await wait(40) } }

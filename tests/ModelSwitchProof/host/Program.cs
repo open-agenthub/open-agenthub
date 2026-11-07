@@ -71,8 +71,8 @@ sealed class Only : IApplicationFeatureProvider<ControllerFeature>
 {
     public void PopulateFeature(IEnumerable<ApplicationPart> parts, ControllerFeature feature)
     {
-        foreach (var controller in feature.Controllers.ToList())
-            if (controller.AsType() != typeof(SessionModelsController)) feature.Controllers.Remove(controller);
+        foreach (var controller in feature.Controllers.Where(c => c.AsType() != typeof(SessionModelsController)).ToList())
+            feature.Controllers.Remove(controller);
     }
 }
 

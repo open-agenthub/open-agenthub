@@ -23,7 +23,7 @@ One pinned CLI in a real PTY, driven by steps:
 
 ```bash
 node cli-switch.mjs claude '[{"ready":"for shortcuts|auto mode"},{"paste":"Remember the word PAPAYA42."},
-  {"ready":"MODEL="},{"paste":"/model claude-sonnet-5-5"},{"ready":"Switch model\\?","ms":5000},{"keys":"\r"},
+  {"ready":"MODEL="},{"paste":"/model claude-sonnet-5-5"},{"ready":"Switch model?","ms":5000},{"keys":"\r"},
   {"ready":"Set model to"},{"paste":"Which word?"},{"ready":"MODEL=claude-sonnet"},{"dump":"turn2"}]' out-claude
 ```
 
