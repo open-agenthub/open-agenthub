@@ -40,6 +40,10 @@ jobs:
           -- xunit.maxParallelThreads=3
         env:
           AGENTHUB_TEST_POSTGRES_CONNECTION_STRING: "Host=localhost;Port=5432;Username=postgres;Password=test;Database=agenthub_test"
+      - name: Prove licence report health through real HTTP and Postgres
+        run: dotnet run --project tests/LicenseReportHealthProof -c Release
+        env:
+          AGENTHUB_TEST_POSTGRES_CONNECTION_STRING: "Host=localhost;Port=5432;Username=postgres;Password=test;Database=agenthub_test"
       - name: Stop PostgreSQL
         if: always()
         run: docker rm -f test-postgres

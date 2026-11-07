@@ -216,6 +216,17 @@ function fmtDateTime(d) {
               license stops renewing. Resume it any time through the billing portal.
             </p>
 
+            <div v-if="lic.present" class="kv" data-report-health>
+              <div><span>Last successful report</span><b>{{ data.lastCheckIn ? fmtDateTime(data.lastCheckIn) : 'never' }}</b></div>
+              <div><span>Enterprise features stop without renewal</span><b>{{ data.featuresStopAt ? fmtDateTime(data.featuresStopAt) : 'unknown — activate a valid token' }}</b></div>
+              <div><span>Last report error</span><b>{{ data.lastReportError || 'none' }}<template v-if="data.lastReportErrorAt"> ({{ fmtDateTime(data.lastReportErrorAt) }})</template></b></div>
+            </div>
+            <p v-if="data.reportWarning" class="cancel-warn" role="alert" data-report-warning>
+              Enterprise features stop at {{ fmtDateTime(data.featuresStopAt) }} unless the license renews.
+              Check connectivity to the license service and your subscription in Billing.
+            </p>
+            <button v-if="lic.present" data-refresh-report :disabled="loading" @click="load">Refresh license status</button>
+
             <div class="field">
               <label>License token</label>
               <textarea v-model="token" placeholder="eyJ… (paste the license token)"></textarea>
@@ -239,7 +250,7 @@ function fmtDateTime(d) {
             </div>
             <p v-if="lic.valid" class="note">
               Every user who signs in gets a seat automatically. Revoke a seat to free it up.
-              The seat count is reported to the license service as a monthly heartbeat, which
+              The seat count is reported to the license service as a periodic heartbeat, which
               also renews the license token; the count at month close is what gets billed.
               <br />Last check-in: <b>{{ data.lastCheckIn ? fmtDateTime(data.lastCheckIn) : 'never' }}</b>
               <span v-if="overBooked" class="reason">You are over your licensed seat count — reduce seats or upgrade your plan.</span>
