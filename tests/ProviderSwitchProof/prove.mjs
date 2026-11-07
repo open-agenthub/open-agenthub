@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import { execFileSync, spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { killNativeChild } from '../ProviderRecoveryProof/native-child.mjs';
 const require = createRequire('/tmp/provider-switch-tools/package.json');
 const WebSocket = require('ws'), { Terminal } = require('@xterm/headless');
 const ns = 'agenthub-sessions', control = 'agenthub';
@@ -83,7 +84,7 @@ function seedSubscriptions(ownerKey){
   proofSecrets.push(name);
  }
 }
-if(process.env.PROOF_RECOVERY==='1'){
+if(process.env.PROOF_RECOVERY==='1'&&process.env.PROOF_RECOVERY_SCOPE!=='runtime'){
  const {createRecoveryFaults}=await import('../ProviderRecoveryProof/faults.mjs');
  recovery=createRecoveryFaults({api,json});
 }
@@ -199,7 +200,7 @@ try{
    assert(gone>=0&&added>gone,'actual kubelet/API watch must observe source deletion before target creation');
    assert.equal((await api('sessions/'+id)).agent,target);
    console.log(authMode+' generation '+generation+': actual '+target+' pod, same dirty repos/PVC, fresh native/home/target-only auth, handover first, queued input afterwards, retired callback401 and native archive passed.');
-   if(recovery){
+   if(process.env.PROOF_RECOVERY==='1'){
     terminal.close();terminal=null;
     await api('sessions/'+id+'/pause','POST');
     await until(()=>{try{pod();return false;}catch{return true;}},'completed native pod pause');
@@ -221,6 +222,34 @@ try{
     assert.equal(continued.entries.filter(entry=>entry.generation===generation&&entry.role==='user'&&entry.text===review.text).length,1);
     assert.equal((await api('sessions/'+id)).executionGeneration,generation);
     console.log(authMode+' generation '+generation+': real native archive resume, same native identity/PVC/history, one handover and new owner turn passed.');
+    if(process.env.PROOF_RECOVERY_SCOPE==='runtime'){
+     await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');const at=value.entries.findIndex(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(followup));return at>=0&&value.entries.slice(at+1).some(entry=>entry.generation===generation&&entry.role==='assistant');},'owner turn finishes before native death');
+     assert.equal(resumed.spec.restartPolicy,'Never');terminal.close();terminal=null;
+     const fault=`const fs=require("node:fs");const killNativeChild=${killNativeChild.toString()};killNativeChild(1,${JSON.stringify(target.toLowerCase())});`;
+     kubectl('-n',ns,'exec',podName,'-c','agent','--','node','-e',fault);
+     const failed=await until(async()=>{const value=pod(),agent=value.status.containerStatuses?.find(item=>item.name==='agent');return agent?.state?.terminated&&(await api('sessions/'+id)).phase==='Failed'&&value;},'real kubelet observes failed native container');
+     assert.equal(failed.metadata.uid,resumed.metadata.uid);assert.equal(failed.status.containerStatuses.find(item=>item.name==='agent').restartCount,0);
+     await sleep(5000);
+     const held=pod();assert.equal(held.metadata.uid,resumed.metadata.uid);assert.equal(held.status.containerStatuses.find(item=>item.name==='agent').restartCount,0);
+     assert(held.status.containerStatuses.find(item=>item.name==='agent').state.terminated,'Never policy prevents automatic same-pod replay');
+     await api('sessions/'+id+'/resume','POST');
+     const recovered=await until(()=>{const value=pod();return value.metadata.uid!==held.metadata.uid&&value.status.containerStatuses?.some(item=>item.name==='agent'&&item.ready)&&value;},'owner explicitly resumes failed native generation');
+     assert.equal(json('-n',ns,'get','pvc',claimName).metadata.uid,claimUid);assert.equal(fingerprint(),baseline);
+     const recoveredEnv=recovered.spec.containers.find(item=>item.name==='agent').env;
+     assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_REQUIRE_NATIVE_RESUME').value,'1');
+     assert.equal(recoveredEnv.find(item=>item.name==='AGENTHUB_PROMPT').value,'');
+     terminal=await openTerminal(id);
+     await until(()=>terminal.screen().some(line=>/^\s*[›❯]/.test(line)&&!line.includes('SWITCH-PROOF-')),'recovered native composer');
+     const recoveredState=JSON.parse(exec(`node -e 'fetch("http://127.0.0.1:7681/agenthub/provider-switch",{headers:{"X-Agent-Token":process.env.AGENTHUB_CALLBACK_TOKEN}}).then(response=>response.json()).then(value=>process.stdout.write(JSON.stringify(value)))'`));
+     assert.equal(recoveredState.nativeId,native);
+     const afterCrash='OWNER-AFTER-CRASH-'+authMode+'-'+generation;
+     terminal.socket.send(JSON.stringify({type:'input',data:afterCrash}));await sleep(200);terminal.socket.send(JSON.stringify({type:'input',data:'\r'}));
+     const history=await until(async()=>{const value=await api('sessions/'+id+'/conversation?offset=0&max=500');return value.entries.some(entry=>entry.generation===generation&&entry.role==='user'&&entry.text.includes(afterCrash))&&value;},'new owner turn after explicit crash recovery');
+     assert.equal(history.entries.filter(entry=>entry.generation===generation&&entry.role==='user'&&entry.text===review.text).length,1);
+     assert.equal((await api('sessions/'+id)).executionGeneration,generation);
+     console.log(authMode+' generation '+generation+': actual native/container failure, Never policy/no same-pod restart, owner resume with same native identity/PVC/history and one handover passed.');
+    }
+
    }
 
   }

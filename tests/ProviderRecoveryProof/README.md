@@ -122,3 +122,18 @@ fresh CLI or making another handover request. The signal fix is isolated in #537
 exit classification; before the fix, the real PTY supplied code zero plus signal 9 and the
 runtime incorrectly reported success. This proves native-process handling, not kubelet
 restart policy, pod-loss reconciliation or backend crash recovery.
+
+## Native/container death and explicit owner resume
+
+Dispatch the same workflow with `prove_provider_recovery=true` and
+`provider_recovery_scope=runtime`. This skips journal crash gates and runs the real native
+replacement path plus planned pause/resume, then kills the isolated agent's exact direct
+native PTY child. The same selector is first proved against both real local CLIs.
+
+The worker must observe the actual container terminate and session Failed. Its shipped
+Never restart policy must retain zero same-pod restarts during a further observation window.
+Only an explicit owner Resume may create another pod; assert the same native identity,
+strict archive requirement, empty startup prompt, same claim/dirty repositories, one visible
+handover and a new owner turn in the same generation. Run API-key and synthetic subscription
+Claude→Codex→Claude. This acceptance result remains pending until its worker dispatch passes.
+This does not model kernel OOM, node loss or a target dying before generation commitment.

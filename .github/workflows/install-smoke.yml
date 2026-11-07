@@ -21,6 +21,11 @@ on:
         description: "Crash backend replicas at every saved native replacement phase"
         type: boolean
         default: false
+      provider_recovery_scope:
+        description: "Recovery proof: journal backend crashes or native runtime death/resume"
+        type: choice
+        options: [journal, runtime]
+        default: journal
       prove_workspace_pvc:
         description: "Prove persistent session workspace mounts and pause/resume on real kubelet"
         type: boolean
@@ -185,6 +190,7 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && (inputs.prove_provider_switch || inputs.prove_provider_recovery)
         env:
           PROOF_RECOVERY: ${{ inputs.prove_provider_recovery && '1' || '0' }}
+          PROOF_RECOVERY_SCOPE: ${{ inputs.provider_recovery_scope || 'journal' }}
         run: bash tests/ProviderSwitchProof/prove.sh
 
       - name: Upgrade in place keeps the release healthy

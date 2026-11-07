@@ -7,6 +7,7 @@ import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
+import { killNativeChild } from '../ProviderRecoveryProof/native-child.mjs';
 const repo = path.resolve(import.meta.dirname, '../..');
 const out = process.env.PROOF_OUT;
 const bins = process.env.PROOF_CLI_BIN;
@@ -201,12 +202,10 @@ try {
       let resumeHistory='HISTORY-'+agent+'-0';
       if(process.env.PROOF_CRASH_NATIVE_TARGET==='1'){
         assert(process.env.PROOF_SOURCE_PREPARE!=='1','native crash control uses the direct production server');
-        const native=fs.readFileSync(`/proc/${child.pid}/task/${child.pid}/children`,'utf8').trim().split(/\s+/).map(Number);
-        assert.equal(native.length,1,'identify the single real PTY child before faulting it');
         const inference=()=>requests.filter(item=>item.text.includes(resumeHistory)&&!item.route.includes('count_tokens'));
         const before=inference().length;assert(before>0);
         const exited=new Promise(resolve=>child.once('exit',resolve));
-        process.kill(native[0],'SIGKILL');
+        killNativeChild(child.pid,agent);
         let timer;
         try{await Promise.race([exited,new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('native crash did not terminate the runtime')),20000);})]);}
         finally{clearTimeout(timer);}
